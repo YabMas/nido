@@ -1,0 +1,37 @@
+{:min-bb-version "1.3.181"
+ :paths ["src"]
+
+ :tasks
+ {:requires ([tasks.nido-session :as nido-session])
+
+  nido:session:start
+  {:doc "Start an isolated nido session for a target project/worktree"
+   :task (apply nido-session/start *command-line-args*)}
+
+  nido:session:status
+  {:doc "Show status for one target project/worktree"
+   :task (apply nido-session/status *command-line-args*)}
+
+  nido:session:stop
+  {:doc "Stop the nido session for one target project/worktree"
+   :task (apply nido-session/stop *command-line-args*)}
+
+  nido:session:list
+  {:doc "List all sessions tracked by nido"
+   :task (nido-session/list-sessions)}
+
+  agent:session:start
+  {:doc "Alias for nido:session:start"
+   :task (apply nido-session/start *command-line-args*)}
+
+  agent:session:status
+  {:doc "Alias for nido:session:status"
+   :task (apply nido-session/status *command-line-args*)}
+
+  agent:session:stop
+  {:doc "Alias for nido:session:stop"
+   :task (apply nido-session/stop *command-line-args*)}
+
+  agent:session:list
+  {:doc "Alias for nido:session:list"
+   :task (nido-session/list-sessions)}}}
