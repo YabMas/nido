@@ -3,7 +3,9 @@
    [babashka.fs :as fs]
    [babashka.process :refer [shell]]
    [clojure.edn :as edn]
-   [clojure.string :as str]))
+   [clojure.string :as str]
+   [nido.core :as core]
+   [nido.io :as io]))
 
 (def codex-home
   (or (System/getenv "CODEX_HOME")
@@ -17,10 +19,10 @@
 (def default-tailwind-output "resources/public/dist/tailwind.css")
 
 (defn- log-step [message]
-  (println (str "[nido] " message)))
+  (core/log-step message))
 
 (defn- now-iso []
-  (str (java.time.Instant/now)))
+  (core/now-iso))
 
 (defn- parse-opts
   "Parse EDN key/value CLI args, e.g. :project-dir \"/path\" :app-port 3901."
@@ -44,13 +46,10 @@
                          :error (ex-message e)}))))))
 
 (defn- read-edn-file [path]
-  (when (fs/exists? path)
-    (edn/read-string (slurp path))))
+  (io/read-edn path))
 
 (defn- write-edn-file! [path data]
-  (when-let [parent (fs/parent path)]
-    (fs/create-dirs parent))
-  (spit path (str (pr-str data) "\n")))
+  (io/write-edn! path data))
 
 (defn- quoted [s]
   (str "'" (str/replace s "'" "'\"'\"'") "'"))

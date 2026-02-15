@@ -2,7 +2,28 @@
  :paths ["src"]
 
  :tasks
- {:requires ([tasks.nido-session :as nido-session])
+ {:requires ([tasks.nido-session :as nido-session]
+             [tasks.nido-project :as nido-project])
+
+  nido:init
+  {:doc "Create ~/.nido/ skeleton directory structure"
+   :task (nido-project/init)}
+
+  nido:project:add
+  {:doc "Register a project: <name> <directory> [:providers [:claude-code]]"
+   :task (apply nido-project/add *command-line-args*)}
+
+  nido:project:list
+  {:doc "List registered projects"
+   :task (nido-project/list-cmd)}
+
+  nido:project:remove
+  {:doc "Unregister a project: <name>"
+   :task (apply nido-project/remove-cmd *command-line-args*)}
+
+  nido:project:sync
+  {:doc "Generate workspace configs: <name> [:provider :claude-code]"
+   :task (apply nido-project/sync *command-line-args*)}
 
   nido:session:start
   {:doc "Start an isolated nido session for a target project/worktree"
