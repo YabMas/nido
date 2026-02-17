@@ -6,7 +6,9 @@
    [nido.core :as core]
    [nido.process :as proc]
    [nido.session.service :as service]
-   [nido.session.state :as state]))
+   [nido.session.state :as state])
+  (:import
+   [java.util.zip CRC32]))
 
 (defn- find-pg-bin-dir []
   (let [result (shell {:continue true :out :string :err :string} "which" "initdb")]
@@ -30,6 +32,54 @@
 (defn- pg-cmd [bin-dir cmd]
   (let [full (str (fs/path bin-dir cmd))]
     (if (fs/exists? full) full cmd)))
+
+(defn- flyway-checksum
+  "Computes a Flyway-compatible CRC32 checksum over a SQL file.
+   Reads line-by-line, converts each line to UTF-8 bytes, updates CRC32."
+  [file-path]
+  (let [crc (CRC32.)
+        content (slurp file-path)]
+    (doseq [line (str/split-lines content)]
+      (let [bytes (.getBytes ^String line "UTF-8")]
+        (.update crc bytes 0 (alength bytes))))
+    (unchecked-int (.getValue crc))))
+
+(defn- load-baseline!
+  "Loads a baseline SQL dump via psql and inserts a Flyway history record."
+  [{:keys [bin-dir pg-port db-user db-name schema baseline project-dir]}]
+  (let [{:keys [file version description]
+         :or {version "1" description "baseline"}} baseline
+        sql-path (str (fs/path project-dir file))
+        checksum (flyway-checksum sql-path)]
+    (core/log-step (str "Loading baseline: " file))
+    (let [result (shell {:continue true :out :string :err :string}
+                        (pg-cmd bin-dir "psql")
+                        "-h" "127.0.0.1" "-p" (str pg-port) "-U" db-user "-d" db-name
+                        "-f" sql-path)]
+      (when-not (zero? (:exit result))
+        (throw (ex-info "Baseline SQL load failed"
+                        {:error (:err result) :output (:out result)}))))
+    (let [flyway-table (if schema
+                         (str schema ".flyway_schema_history")
+                         "flyway_schema_history")
+          search-path-sql (when schema
+                            (str "ALTER DATABASE " db-name
+                                 " SET search_path TO " schema ", public; "))
+          insert-sql (str "INSERT INTO " flyway-table
+                          " (installed_rank, version, description, type, script,"
+                          " checksum, installed_by, execution_time, success)"
+                          " VALUES (1, '" version "', '" description "', 'SQL',"
+                          " 'V" version "__" description ".sql', "
+                          checksum ", '" db-user "', 0, true);")
+          sql (str search-path-sql insert-sql)
+          result (shell {:continue true :out :string :err :string}
+                        (pg-cmd bin-dir "psql")
+                        "-h" "127.0.0.1" "-p" (str pg-port) "-U" db-user "-d" db-name
+                        "-c" sql)]
+      (when-not (zero? (:exit result))
+        (throw (ex-info "Flyway baseline record insert failed"
+                        {:error (:err result) :output (:out result)}))))
+    (core/log-step "Baseline loaded and Flyway history record inserted")))
 
 (defmethod service/start-service! :postgresql
   [service-def ctx _opts]
@@ -88,24 +138,28 @@
       (when-not (zero? (:exit result))
         (throw (ex-info "createdb failed" {:error (:err result) :output (:out result)}))))
 
-    ;; Schema and extensions via psql
-    (when (or schema (seq extensions))
-      (core/log-step (str "Setting up schema/extensions for " db-name "..."))
-      (let [schema-sql (when schema
-                         (str "CREATE SCHEMA IF NOT EXISTS " schema "; "
-                              "ALTER DATABASE " db-name " SET search_path TO " schema ", public; "))
-            ext-sql (str/join " "
-                              (for [ext extensions]
-                                (str "DO $$ BEGIN CREATE EXTENSION IF NOT EXISTS " ext "; "
-                                     "EXCEPTION WHEN OTHERS THEN RAISE NOTICE '"
-                                     ext " not available: %', SQLERRM; END $$;")))
-            psql-cmd (str schema-sql ext-sql)
-            result (shell {:continue true :out :string :err :string}
-                          (pg-cmd bin-dir "psql")
-                          "-h" "127.0.0.1" "-p" (str pg-port) "-U" db-user "-d" db-name
-                          "-c" psql-cmd)]
-        (when-not (zero? (:exit result))
-          (core/log-step (str "WARNING: psql schema setup had issues: " (:err result))))))
+    ;; Baseline or manual schema/extensions
+    (if-let [baseline (:baseline service-def)]
+      (load-baseline! {:bin-dir bin-dir :pg-port pg-port :db-user db-user
+                       :db-name db-name :schema schema :baseline baseline
+                       :project-dir project-dir})
+      (when (or schema (seq extensions))
+        (core/log-step (str "Setting up schema/extensions for " db-name "..."))
+        (let [schema-sql (when schema
+                           (str "CREATE SCHEMA IF NOT EXISTS " schema "; "
+                                "ALTER DATABASE " db-name " SET search_path TO " schema ", public; "))
+              ext-sql (str/join " "
+                                (for [ext extensions]
+                                  (str "DO $$ BEGIN CREATE EXTENSION IF NOT EXISTS " ext "; "
+                                       "EXCEPTION WHEN OTHERS THEN RAISE NOTICE '"
+                                       ext " not available: %', SQLERRM; END $$;")))
+              psql-cmd (str schema-sql ext-sql)
+              result (shell {:continue true :out :string :err :string}
+                            (pg-cmd bin-dir "psql")
+                            "-h" "127.0.0.1" "-p" (str pg-port) "-U" db-user "-d" db-name
+                            "-c" psql-cmd)]
+          (when-not (zero? (:exit result))
+            (core/log-step (str "WARNING: psql schema setup had issues: " (:err result)))))))
 
     ;; Read PG pid
     (let [pid-file (str (fs/path data-dir "postmaster.pid"))
