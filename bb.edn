@@ -4,7 +4,8 @@
  :tasks
  {:requires ([tasks.nido-session :as nido-session]
              [tasks.nido-project :as nido-project]
-             [tasks.nido-vsdd :as nido-vsdd])
+             [tasks.nido-vsdd :as nido-vsdd]
+             [tasks.nido-ui :as nido-ui])
 
   nido:init
   {:doc "Create ~/.nido/ skeleton directory structure"
@@ -37,6 +38,10 @@
   nido:session:list
   {:doc "List all sessions tracked by nido"
    :task (nido-session/list-sessions)}
+
+  nido:ui
+  {:doc "Start the nido dashboard [:port 8800]"
+   :task (apply nido-ui/start *command-line-args*)}
 
   nido:vsdd:run
   {:doc "Run VSDD loop: :project-dir <path> :module-path <path>"
