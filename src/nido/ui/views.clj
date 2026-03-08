@@ -129,8 +129,8 @@
              [:td
               (when (:verdict judge)
                 [:span (name (:verdict judge))
-                 (when (:severity judge)
-                   (str " (" (name (:severity judge)) ")"))])]]
+                 (when (:structural? judge)
+                   " (structural)")])]]
             (when arch
               [:tr [:td.meta "architect"]
                [:td (or (:session-id arch) "—")

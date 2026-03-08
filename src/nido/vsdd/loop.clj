@@ -10,12 +10,9 @@
      :artifacts-dir   — base directory for run artifacts (e.g. \".vsdd\")
      :roles           — {:implementer {:agent \"module-owner\"}
                           :critic      {:agent \"critic\"}
-                          :architect   {:agent \"architect\" :budget 2}}
-     :max-iterations  — circuit breaker (default 3)
-     :judge           — {:model \"haiku\"
-                          :severity-gate {:cosmetic :auto
-                                          :clarification :auto-logged
-                                          :structural :escalate}}
+                          :architect   {:agent \"architect\"}}
+     :max-iterations  — circuit breaker (default 10)
+     :judge           — {:model \"haiku\"}
      :env             — additional env vars passed to all agents
      :prompts         — {:implementer (fn [module-path feedback] ...)
                           :critic      (fn [module-path run-dir iteration] ...)
@@ -31,13 +28,7 @@
 ;; ---------------------------------------------------------------------------
 ;; Defaults
 
-(def ^:private default-max-iterations 3)
-(def ^:private default-architect-budget 2)
-
-(def ^:private default-severity-gate
-  {:cosmetic      :auto
-   :clarification :auto-logged
-   :structural    :escalate})
+(def ^:private default-max-iterations 10)
 
 ;; ---------------------------------------------------------------------------
 ;; Prompt defaults
@@ -182,11 +173,7 @@
    action is :converged, :route-to-impl, :escalated, or :unknown.
    For :route-to-impl, the manifest has the iteration appended but is not finalized."
   [config module-path run-dir iteration impl-result critic-result mfst]
-  (let [architect-budget (or (get-in config [:roles :architect :budget])
-                             default-architect-budget)
-        severity-gate (or (get-in config [:judge :severity-gate])
-                          default-severity-gate)
-        report-edn (or (read-critic-report run-dir module-path iteration)
+  (let [report-edn (or (read-critic-report run-dir module-path iteration)
                        "{:findings [] :verdict :converged}")
         judge-result (run-judge config report-edn module-path iteration)
         iteration-record {:iteration iteration
@@ -197,12 +184,10 @@
                                                      "/critic-report-"
                                                      iteration ".edn")}
                           :judge {:verdict (:verdict judge-result)
-                                  :severity (:severity judge-result)
+                                  :structural? (:structural? judge-result)
                                   :session-id (:session-id judge-result)}
                           :architect nil}
-        mfst (manifest/add-iteration mfst iteration-record)
-        ;; Count architect uses from all iterations
-        architect-uses (count (filter :architect (:iterations mfst)))]
+        mfst (manifest/add-iteration mfst iteration-record)]
 
     (case (:verdict judge-result)
       :converged
@@ -219,23 +204,17 @@
         [:route-to-impl mfst (:result judge-result)])
 
       :route-to-spec
-      (let [severity (:severity judge-result)
-            can-auto? (and (get-in config [:roles :architect :agent])
-                           (judge/auto-resolvable? severity severity-gate)
-                           (< architect-uses architect-budget))]
-        (if can-auto?
+      (let [structural? (:structural? judge-result)
+            has-architect? (get-in config [:roles :architect :agent])]
+        (if (and has-architect? (not structural?))
+          ;; Architect auto-resolves
           (do
-            (println (str "  Spec issue (" (name severity)
-                          ") — invoking architect (use "
-                          (inc architect-uses) "/" architect-budget ")"))
-            (when (= severity :clarification)
-              (println "  [logged] Architect clarification — review in manifest"))
+            (println "  Spec issue — invoking architect")
             (let [arch-result (run-architect config module-path report-edn)
-                  updated-record (assoc-in (last (:iterations mfst))
-                                           [:architect]
-                                           {:session-id (:session-id arch-result)
-                                            :severity severity
-                                            :auto-resolved true})
+                  updated-record (assoc (last (:iterations mfst))
+                                        :architect
+                                        {:session-id (:session-id arch-result)
+                                         :auto-resolved true})
                   mfst (update mfst :iterations
                                #(conj (vec (butlast %)) updated-record))]
               (if (zero? (:exit arch-result))
@@ -248,12 +227,10 @@
                   (let [final (manifest/finalize mfst :route-to-spec)]
                     (manifest/save! final)
                     [:escalated final])))))
+          ;; Escalate to human
           (do
-            (println (str "Module " module-path
-                          " needs spec review — "
-                          (if (>= architect-uses architect-budget)
-                            "architect budget exhausted"
-                            (str "severity: " (name (or severity :structural))))))
+            (println (str "Module " module-path " needs spec review — "
+                          (if structural? "structural change required" "no architect configured")))
             (let [final (manifest/finalize mfst :route-to-spec)]
               (manifest/save! final)
               [:escalated final]))))
@@ -382,8 +359,8 @@
      :module-path    — module to verify (required)
      :artifacts-dir  — base dir for artifacts (default \".vsdd\")
      :roles          — agent role config (required, at minimum :implementer and :critic)
-     :max-iterations — circuit breaker limit (default 3)
-     :judge          — {:model \"haiku\" :severity-gate {...}}
+     :max-iterations — circuit breaker limit (default 10)
+     :judge          — {:model \"haiku\"}
      :env            — extra env vars for agents
      :prompts        — custom prompt functions per role
 

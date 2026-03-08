@@ -1,56 +1,34 @@
 (ns nido.vsdd.judge
-  "Verdict parsing and severity classification for the VSDD judge."
+  "Verdict parsing for the VSDD judge."
   (:require [clojure.string :as str]))
 
-(def verdicts
-  "All recognized verdict keywords."
-  #{:converged :route-to-impl :route-to-spec})
-
-(def severity-levels
-  "Severity levels for ROUTE_TO_SPEC, ordered from least to most severe."
-  #{:cosmetic :clarification :structural})
-
 (defn parse-verdict
-  "Extract verdict and optional severity from judge output.
-   Returns {:verdict :keyword :severity :keyword-or-nil :reasoning string}.
+  "Extract verdict from judge output.
+   Returns {:verdict :keyword :reasoning string}.
 
    Expects first line to contain one of:
      CONVERGED
      ROUTE_TO_IMPL
-     ROUTE_TO_SPEC
-     ROUTE_TO_SPEC:cosmetic
-     ROUTE_TO_SPEC:clarification
-     ROUTE_TO_SPEC:structural"
+     ROUTE_TO_SPEC — auto-resolvable spec issue, architect handles it
+     ROUTE_TO_SPEC:structural — needs human review"
   [output]
   (let [lines (str/split-lines (str output))
         first-line (or (first lines) "")
         reasoning (str/join "\n" (rest lines))]
     (cond
       (str/includes? first-line "CONVERGED")
-      {:verdict :converged :severity nil :reasoning reasoning}
+      {:verdict :converged :reasoning reasoning}
 
       (str/includes? first-line "ROUTE_TO_IMPL")
-      {:verdict :route-to-impl :severity nil :reasoning reasoning}
+      {:verdict :route-to-impl :reasoning reasoning}
 
       (str/includes? first-line "ROUTE_TO_SPEC")
-      (let [severity (cond
-                       (str/includes? first-line "cosmetic")      :cosmetic
-                       (str/includes? first-line "clarification") :clarification
-                       (str/includes? first-line "structural")    :structural
-                       :else                                      :structural)]
-        {:verdict :route-to-spec :severity severity :reasoning reasoning})
+      {:verdict :route-to-spec
+       :structural? (str/includes? first-line "structural")
+       :reasoning reasoning}
 
       :else
-      {:verdict :unknown :severity nil :reasoning (str output)})))
-
-(defn auto-resolvable?
-  "Can the architect auto-resolve this severity without human intervention?"
-  [severity severity-gate]
-  (let [gate (or severity-gate
-                 {:cosmetic :auto
-                  :clarification :auto-logged
-                  :structural :escalate})]
-    (not= :escalate (get gate severity :escalate))))
+      {:verdict :unknown :reasoning (str output)})))
 
 (defn build-judge-prompt
   "Build the judge prompt from a critic report."
@@ -71,8 +49,7 @@
        "\n"
        "CONVERGED — spec, tests, and implementation are aligned\n"
        "ROUTE_TO_IMPL — implementation needs fixes, route back to implementer\n"
-       "ROUTE_TO_SPEC:cosmetic — spec needs trivial fixes (naming, formatting, missing doc)\n"
-       "ROUTE_TO_SPEC:clarification — spec needs clarification but no structural changes\n"
-       "ROUTE_TO_SPEC:structural — spec needs architectural changes with trade-offs\n"
+       "ROUTE_TO_SPEC — spec needs minor fixes the architect can handle (naming, clarity, missing detail)\n"
+       "ROUTE_TO_SPEC:structural — spec needs architectural changes with trade-offs (escalate to human)\n"
        "\n"
        "Then explain your reasoning briefly on subsequent lines."))
