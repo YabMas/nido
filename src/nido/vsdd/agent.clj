@@ -1,6 +1,10 @@
 (ns nido.vsdd.agent
   "Spawns claude subprocesses for VSDD agent roles.
-   Parses stream-json output for progress display and result capture."
+   Parses stream-json output for progress display and result capture.
+
+   Supports two invocation modes:
+     1. Project agent: --agent <name> (resolves .claude/agents/<name>.md in working-dir)
+     2. Nido-managed: --append-system-prompt <content> + --tools <list>"
   (:require [babashka.process :as p]
             [cheshire.core :as json]
             [clojure.java.io :as io]
@@ -63,32 +67,52 @@
     {:result @result-text
      :session-id @session-id}))
 
+(defn- build-base-env
+  "Build the base environment for agent subprocesses."
+  [extra-env]
+  (-> (into {} (System/getenv))
+      (dissoc "CLAUDECODE")
+      (merge (or extra-env {}))))
+
 (defn invoke-agent
-  "Spawn a claude subprocess with an agent definition.
+  "Spawn a claude subprocess for a VSDD role.
    Streams progress to terminal. Returns {:exit int :result string :session-id string}.
 
-   Options:
-     :agent-name  — name of the .claude/agents/<name>.md agent definition
-     :prompt      — the prompt text
-     :env         — additional environment variables (merged with system env)
-     :working-dir — directory to run claude in (where .claude/agents/ lives)
-     :model       — optional model override"
-  [{:keys [agent-name prompt env working-dir model]}]
-  (let [base-env (-> (into {} (System/getenv))
-                     (dissoc "CLAUDECODE")
-                     (merge (or env {})))
-        cmd (cond-> ["claude" "-p" prompt
-                     "--agent" agent-name
-                     "--permission-mode" "bypassPermissions"
-                     "--verbose"
-                     "--output-format" "stream-json"]
+   Two modes:
+     1. Project agent — set :agent-name to use .claude/agents/<name>.md
+     2. Nido-managed — set :system-prompt for role instructions, :allowed-tools for restrictions
+
+   Common options:
+     :prompt      — the task prompt text
+     :env         — additional environment variables
+     :working-dir — project directory to run in
+     :model       — optional model override
+     :display-name — name shown in progress output (defaults to agent-name or \"agent\")"
+  [{:keys [agent-name system-prompt prompt env working-dir model
+           allowed-tools display-name]}]
+  (let [base-env (build-base-env env)
+        label (or display-name agent-name "agent")
+        cmd (cond-> ["claude" "-p" prompt]
+              ;; Mode 1: project agent
+              agent-name
+              (into ["--agent" agent-name])
+              ;; Mode 2: nido-managed
+              (and system-prompt (not agent-name))
+              (into ["--append-system-prompt" system-prompt])
+              ;; Tool restrictions (nido-managed mode)
+              (and allowed-tools (not agent-name))
+              (into ["--tools" (if (empty? allowed-tools) "" (str/join "," allowed-tools))])
+              ;; Common flags
+              true (into ["--permission-mode" "bypassPermissions"
+                          "--verbose"
+                          "--output-format" "stream-json"])
               model (into ["--model" model]))
         proc (apply p/process {:env base-env
                                :dir working-dir
                                :err :inherit
                                :in ""}
                     cmd)
-        stream-result (read-stream (:out proc) agent-name)]
+        stream-result (read-stream (:out proc) label)]
     @proc
     (assoc stream-result :exit (:exit @proc))))
 
@@ -101,8 +125,7 @@
      :model       — model to use (default \"haiku\")
      :working-dir — directory to run in"
   [{:keys [prompt model working-dir]}]
-  (let [env (-> (into {} (System/getenv))
-                (dissoc "CLAUDECODE"))
+  (let [env (build-base-env nil)
         proc (p/process {:env env
                          :dir working-dir
                          :err :inherit

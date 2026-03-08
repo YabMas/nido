@@ -1,5 +1,5 @@
 {:min-bb-version "1.3.181"
- :paths ["src"]
+ :paths ["src" "resources"]
 
  :tasks
  {:requires ([tasks.nido-session :as nido-session]
@@ -50,6 +50,10 @@
   nido:vsdd:resume
   {:doc "Resume an interrupted VSDD run: :project-dir <path> :run-id <id>"
    :task (apply nido-vsdd/resume *command-line-args*)}
+
+  nido:vsdd:analyze
+  {:doc "Analyze a VSDD run: :project-dir <path> :run-id <id> [:model opus]"
+   :task (apply nido-vsdd/analyze *command-line-args*)}
 
   agent:session:start
   {:doc "Alias for nido:session:start"

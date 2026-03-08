@@ -24,7 +24,8 @@
             [nido.io :as io]
             [nido.vsdd.agent :as agent]
             [nido.vsdd.judge :as judge]
-            [nido.vsdd.manifest :as manifest]))
+            [nido.vsdd.manifest :as manifest]
+            [nido.vsdd.prompts :as prompts]))
 
 ;; ---------------------------------------------------------------------------
 ;; Defaults
@@ -117,32 +118,47 @@
 ;; ---------------------------------------------------------------------------
 ;; Phase runners
 
+(defn- invoke-role
+  "Invoke an agent for a VSDD role. Uses project agent if configured,
+   otherwise uses nido's built-in prompt for the role."
+  [config role prompt]
+  (let [agent-name (get-in config [:roles role :agent])]
+    (if agent-name
+      ;; Project-local agent
+      (agent/invoke-agent
+       {:agent-name   agent-name
+        :prompt       prompt
+        :env          (:env config)
+        :working-dir  (:working-dir config)
+        :display-name (name role)})
+      ;; Nido-managed agent
+      (agent/invoke-agent
+       {:system-prompt (prompts/load-agent-prompt role)
+        :allowed-tools (or (get-in config [:roles role :tools])
+                           (prompts/tools-for-role role))
+        :prompt        prompt
+        :env           (:env config)
+        :working-dir   (:working-dir config)
+        :display-name  (name role)}))))
+
 (defn- run-implementer
   "Run the implementer agent with a critic report. Returns agent result map."
   [config module-path critic-report run-dir iteration]
-  (let [prompt-fn (get-prompt-fn config :implementer)
-        agent-name (get-in config [:roles :implementer :agent])]
+  (let [prompt-fn (get-prompt-fn config :implementer)]
     (print-phase "Implementer" module-path)
-    (agent/invoke-agent
-     {:agent-name  agent-name
-      :prompt      (prompt-fn module-path critic-report run-dir iteration)
-      :env         (:env config)
-      :working-dir (:working-dir config)})))
+    (invoke-role config :implementer
+                 (prompt-fn module-path critic-report run-dir iteration))))
 
 (defn- run-critic
   "Run the critic agent. Returns agent result map."
   [config module-path run-dir iteration]
   (let [prompt-fn (get-prompt-fn config :critic)
-        agent-name (get-in config [:roles :critic :agent])
-        slug-dir (str run-dir "/" (module-slug module-path))]
+        slug-dir (str run-dir "/" (module-slug module-path))
+        config (update config :env merge {"VSDD_RUN_DIR" run-dir})]
     (.mkdirs (jio/file slug-dir))
     (print-phase "Critic" module-path)
-    (agent/invoke-agent
-     {:agent-name  agent-name
-      :prompt      (prompt-fn module-path run-dir iteration)
-      :env         (merge (:env config)
-                          {"VSDD_RUN_DIR" run-dir})
-      :working-dir (:working-dir config)})))
+    (invoke-role config :critic
+                 (prompt-fn module-path run-dir iteration))))
 
 (defn- run-judge
   "Run the judge. Returns parsed verdict map."
@@ -171,14 +187,10 @@
   "Run the architect agent for auto-resolvable spec issues.
    Returns agent result map."
   [config module-path findings]
-  (let [prompt-fn (get-prompt-fn config :architect)
-        agent-name (get-in config [:roles :architect :agent])]
+  (let [prompt-fn (get-prompt-fn config :architect)]
     (print-phase "Architect" module-path)
-    (agent/invoke-agent
-     {:agent-name  agent-name
-      :prompt      (prompt-fn module-path findings)
-      :env         (:env config)
-      :working-dir (:working-dir config)})))
+    (invoke-role config :architect
+                 (prompt-fn module-path findings))))
 
 ;; ---------------------------------------------------------------------------
 ;; Judge + route handling (extracted for reuse by resume)
@@ -220,8 +232,8 @@
 
       :route-to-spec
       (let [structural? (:structural? judge-result)
-            has-architect? (get-in config [:roles :architect :agent])]
-        (if (and has-architect? (not structural?))
+            architect-disabled? (get-in config [:roles :architect :disabled?])]
+        (if (and (not architect-disabled?) (not structural?))
           ;; Architect auto-resolves
           (do
             (println "  Spec issue — invoking architect")

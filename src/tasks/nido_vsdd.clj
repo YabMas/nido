@@ -2,6 +2,7 @@
   "CLI entry points for VSDD orchestration."
   (:require [clojure.edn :as edn]
             [nido.io :as io]
+            [nido.vsdd.analyst :as analyst]
             [nido.vsdd.loop :as vsdd]))
 
 (defn- parse-args
@@ -57,3 +58,16 @@
                                  {:module-path module-path
                                   :run-id run-id})]
     (vsdd/resume config)))
+
+(defn analyze
+  "Analyze a completed VSDD run for efficiency improvements.
+   Usage: bb nido:vsdd:analyze :project-dir <path> :run-id <id> [:model opus]"
+  [& args]
+  (let [opts (parse-args args)
+        project-dir (or (:project-dir opts)
+                        (throw (ex-info "Missing :project-dir" {:args args})))
+        run-id (or (:run-id opts)
+                    (throw (ex-info "Missing :run-id" {:args args})))]
+    (analyst/analyze {:project-dir project-dir
+                      :run-id      run-id
+                      :model       (:model opts)})))
