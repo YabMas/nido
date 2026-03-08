@@ -131,7 +131,6 @@
           [:h3 (str "Iteration " n)]
           [:table
            [:tbody
-            [:tr [:td.meta "implementer"] [:td (or (get-in iter [:implementer :session-id]) "—")]]
             [:tr [:td.meta "critic"]
              [:td (or (get-in iter [:critic :session-id]) "—")
               " "
@@ -143,6 +142,8 @@
                 [:span (name (:verdict judge))
                  (when (:structural? judge)
                    " (structural)")])]]
+            (when (get-in iter [:implementer :session-id])
+              [:tr [:td.meta "implementer"] [:td (get-in iter [:implementer :session-id])]])
             (when arch
               [:tr [:td.meta "architect"]
                [:td (or (:session-id arch) "—")

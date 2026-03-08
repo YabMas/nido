@@ -1,7 +1,8 @@
 (ns nido.vsdd.loop
   "Generic VSDD orchestration loop.
 
-   Runs: implementer → critic → judge → route
+   Runs: critic → judge → implementer → critic → ...
+   Critic assesses, judge routes, implementer acts on findings.
    With optional architect invocation for spec-level findings.
 
    Project-specific behavior is injected via the config map:
@@ -14,7 +15,7 @@
      :max-iterations  — circuit breaker (default 10)
      :judge           — {:model \"haiku\"}
      :env             — additional env vars passed to all agents
-     :prompts         — {:implementer (fn [module-path feedback] ...)
+     :prompts         — {:implementer (fn [module-path critic-report] ...)
                           :critic      (fn [module-path run-dir iteration] ...)
                           :architect   (fn [module-path findings] ...)}"
   (:require [clojure.java.io :as jio]
@@ -33,20 +34,20 @@
 ;; ---------------------------------------------------------------------------
 ;; Prompt defaults
 
-(defn- default-implementer-prompt [module-path feedback]
+(defn- default-implementer-prompt [module-path critic-report]
   (str "MODULE: " module-path "\n"
        "\n"
-       "Assess the spec-implementation gap for this module and bring them into alignment.\n"
-       "Read the spec, existing tests, and implementation. Determine the situation "
-       "(green field, partial implementation, spec changed, broader than spec, or seemingly aligned) "
-       "and act accordingly. Your goal: every spec rule has a test, every test passes, "
-       "no code exists without spec justification."
-       (when feedback
-         (str "\n\n"
-              "FEEDBACK FROM CRITIC (fix these issues):\n"
-              "---\n"
-              feedback "\n"
-              "---"))))
+       "The critic has reviewed this module and produced the report below. "
+       "Fix every issue identified. Do not re-assess the situation — the critic "
+       "has already done that. Focus on making the changes needed to resolve the findings.\n"
+       "\n"
+       "Your goal: every spec rule has a test, every test passes, "
+       "no code exists without spec justification.\n"
+       "\n"
+       "CRITIC REPORT:\n"
+       "---\n"
+       critic-report "\n"
+       "---"))
 
 (defn- module-slug [module-path]
   (-> module-path
@@ -103,14 +104,14 @@
 ;; Phase runners
 
 (defn- run-implementer
-  "Run the implementer agent. Returns agent result map."
-  [config module-path feedback]
+  "Run the implementer agent with a critic report. Returns agent result map."
+  [config module-path critic-report]
   (let [prompt-fn (get-prompt-fn config :implementer)
         agent-name (get-in config [:roles :implementer :agent])]
     (print-phase "Implementer" module-path)
     (agent/invoke-agent
      {:agent-name  agent-name
-      :prompt      (prompt-fn module-path feedback)
+      :prompt      (prompt-fn module-path critic-report)
       :env         (:env config)
       :working-dir (:working-dir config)})))
 
@@ -169,23 +170,23 @@
 ;; Judge + route handling (extracted for reuse by resume)
 
 (defn- handle-judge-and-route
-  "Run judge, then route based on verdict. Returns [action updated-manifest] where
-   action is :converged, :route-to-impl, :escalated, or :unknown.
-   For :route-to-impl, the manifest has the iteration appended but is not finalized."
-  [config module-path run-dir iteration impl-result critic-result mfst]
+  "Run judge on the critic report, then route based on verdict.
+   Returns [action updated-manifest & args] where action is
+   :converged, :route-to-impl, :escalated, or :unknown.
+   For :route-to-impl, args contains [manifest critic-report-edn]."
+  [config module-path run-dir iteration critic-result mfst]
   (let [report-edn (or (read-critic-report run-dir module-path iteration)
                        "{:findings [] :verdict :converged}")
         judge-result (run-judge config report-edn module-path iteration)
+        report-path (str run-dir "/" (module-slug module-path)
+                         "/critic-report-" iteration ".edn")
         iteration-record {:iteration iteration
-                          :implementer {:session-id (:session-id impl-result)}
                           :critic {:session-id (:session-id critic-result)
-                                   :report-path (str run-dir "/"
-                                                     (module-slug module-path)
-                                                     "/critic-report-"
-                                                     iteration ".edn")}
+                                   :report-path report-path}
                           :judge {:verdict (:verdict judge-result)
                                   :structural? (:structural? judge-result)
                                   :session-id (:session-id judge-result)}
+                          :implementer nil
                           :architect nil}
         mfst (manifest/add-iteration mfst iteration-record)]
 
@@ -199,9 +200,9 @@
 
       :route-to-impl
       (do
-        (println "  Routing back to implementer with critic feedback")
+        (println "  Routing to implementer with critic report")
         (manifest/save! mfst)
-        [:route-to-impl mfst (:result judge-result)])
+        [:route-to-impl mfst report-edn])
 
       :route-to-spec
       (let [structural? (:structural? judge-result)
@@ -219,9 +220,10 @@
                                #(conj (vec (butlast %)) updated-record))]
               (if (zero? (:exit arch-result))
                 (do
-                  (println "  Architect done — routing back to implementer")
+                  (println "  Architect done — routing back to critic")
                   (manifest/save! mfst)
-                  [:route-to-impl mfst nil])
+                  ;; After architect fixes spec, re-run critic to re-assess
+                  [:route-to-critic mfst])
                 (do
                   (println "  Architect failed — escalating to human")
                   (let [final (manifest/finalize mfst :route-to-spec)]
@@ -246,21 +248,20 @@
 ;; Main loop
 
 (defn- run-cycle
-  "Run the implementer→critic→judge loop for a module.
+  "Run the critic→judge→implementer loop for a module.
    Accepts optional start-phase to resume mid-iteration.
-   start-phase: :implementer (default), :critic, or :judge
+   start-phase: :critic (default), :judge, or :implementer
    Returns the final manifest."
   [config module-path run-dir initial-manifest
-   & {:keys [start-iteration start-phase start-feedback]
-      :or {start-iteration 1 start-phase :implementer start-feedback nil}}]
+   & {:keys [start-iteration start-phase start-critic-report]
+      :or {start-iteration 1 start-phase :critic start-critic-report nil}}]
   (let [max-iter (or (:max-iterations config) default-max-iterations)]
     (loop [iteration start-iteration
            phase start-phase
-           feedback start-feedback
            mfst initial-manifest
            ;; Carry forward partial results for mid-iteration resume
-           impl-result nil
-           critic-result nil]
+           critic-result nil
+           critic-report start-critic-report]
 
       (when (> iteration max-iter)
         (println)
@@ -271,21 +272,12 @@
           (throw (ex-info "Circuit breaker: max iterations reached"
                           {:module module-path :iterations max-iter}))))
 
-      (when (= phase :implementer)
+      (when (= phase :critic)
         (println)
         (println (str "---- Iteration " iteration "/" max-iter
                       " for " module-path " ----")))
 
       (case phase
-        :implementer
-        (let [result (run-implementer config module-path feedback)]
-          (when-not (zero? (:exit result))
-            (let [final (manifest/finalize mfst :error)]
-              (manifest/save! final)
-              (throw (ex-info "Implementer agent failed"
-                              {:module module-path :exit (:exit result)}))))
-          (recur iteration :critic feedback mfst result nil))
-
         :critic
         (let [result (run-critic config module-path run-dir iteration)]
           (when-not (zero? (:exit result))
@@ -293,60 +285,81 @@
               (manifest/save! final)
               (throw (ex-info "Critic agent failed"
                               {:module module-path :exit (:exit result)}))))
-          (recur iteration :judge feedback mfst impl-result result))
+          (recur iteration :judge mfst result nil))
 
         :judge
         (let [[action & args] (handle-judge-and-route
                                 config module-path run-dir iteration
-                                impl-result critic-result mfst)]
+                                critic-result mfst)]
           (case action
             :converged (first args)
             :escalated (first args)
             :unknown (first args)
             :route-to-impl
-            (let [[updated-mfst new-feedback] args]
-              (recur (inc iteration) :implementer new-feedback
-                     updated-mfst nil nil))))))))
+            (let [[updated-mfst report-edn] args]
+              (recur iteration :implementer updated-mfst
+                     critic-result report-edn))
+            :route-to-critic
+            (let [[updated-mfst] args]
+              (recur (inc iteration) :critic updated-mfst nil nil))))
+
+        :implementer
+        (let [result (run-implementer config module-path critic-report)]
+          (when-not (zero? (:exit result))
+            (let [final (manifest/finalize mfst :error)]
+              (manifest/save! final)
+              (throw (ex-info "Implementer agent failed"
+                              {:module module-path :exit (:exit result)}))))
+          ;; Record implementer in the current iteration
+          (let [updated-record (assoc (last (:iterations mfst))
+                                      :implementer
+                                      {:session-id (:session-id result)})
+                mfst (update mfst :iterations
+                             #(conj (vec (butlast %)) updated-record))]
+            (manifest/save! mfst)
+            (recur (inc iteration) :critic mfst nil nil)))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Resume analysis
 
 (defn- analyze-resume-point
   "Determine where to resume a run from its manifest.
-   Returns {:iteration N :phase :implementer|:critic|:judge :feedback string|nil}
+   Flow is critic→judge→implementer, so resume accordingly.
+   Returns {:iteration N :phase :critic|:judge|:implementer}
    or nil if the run cannot be resumed."
   [manifest]
   (when (#{:in-progress :interrupted} (:status manifest))
     (let [iterations (:iterations manifest)]
       (if (empty? iterations)
         ;; No iterations completed — start from scratch
-        {:iteration 1 :phase :implementer :feedback nil}
+        {:iteration 1 :phase :critic}
         ;; Check the last iteration
         (let [last-iter (last iterations)
               n (:iteration last-iter)
-              has-impl? (get-in last-iter [:implementer :session-id])
               has-critic? (get-in last-iter [:critic :session-id])
-              has-judge? (get-in last-iter [:judge :verdict])]
+              has-judge? (get-in last-iter [:judge :verdict])
+              has-impl? (get-in last-iter [:implementer :session-id])]
           (cond
-            ;; Last iteration fully completed with route-to-impl — start next iteration
-            (and has-judge? (= :route-to-impl (get-in last-iter [:judge :verdict])))
-            {:iteration (inc n) :phase :implementer :feedback nil}
+            ;; Full iteration done (impl completed) — start next from critic
+            has-impl?
+            {:iteration (inc n) :phase :critic}
 
-            ;; Judge ran but with unknown/other result — retry from implementer
+            ;; Judge routed to impl but impl didn't run — resume from implementer
+            (and has-judge? (= :route-to-impl (get-in last-iter [:judge :verdict])))
+            {:iteration n :phase :implementer
+             :critic-report-path (get-in last-iter [:critic :report-path])}
+
+            ;; Judge ran but not route-to-impl — start fresh next iteration
             has-judge?
-            {:iteration (inc n) :phase :implementer :feedback nil}
+            {:iteration (inc n) :phase :critic}
 
             ;; Critic completed but judge didn't — resume from judge
             has-critic?
-            {:iteration n :phase :judge :feedback nil}
+            {:iteration n :phase :judge}
 
-            ;; Implementer completed but critic didn't — resume from critic
-            has-impl?
-            {:iteration n :phase :critic :feedback nil}
-
-            ;; Nothing completed in last iteration — restart that iteration
+            ;; Nothing completed — restart this iteration
             :else
-            {:iteration n :phase :implementer :feedback nil}))))))
+            {:iteration n :phase :critic}))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Public API
@@ -435,9 +448,12 @@
             ;; If resuming mid-iteration, pop the incomplete iteration record
             ;; so the loop can rebuild it cleanly
             mfst (if (and (seq (:iterations mfst))
-                          (not= :implementer (:phase resume-point)))
+                          (not= :critic (:phase resume-point)))
                    (update mfst :iterations #(vec (butlast %)))
-                   mfst)]
+                   mfst)
+            ;; Recover critic report from disk if resuming into implementer phase
+            critic-report (when-let [path (:critic-report-path resume-point)]
+                            (io/read-text path))]
 
         (manifest/save! mfst)
 
@@ -452,7 +468,7 @@
                        (run-cycle config module-path run-dir mfst
                                   :start-iteration (:iteration resume-point)
                                   :start-phase (:phase resume-point)
-                                  :start-feedback (:feedback resume-point))
+                                  :start-critic-report critic-report)
                        (catch Exception e
                          (let [final (manifest/finalize mfst :error)]
                            (manifest/save! (assoc final :error (ex-message e)))
