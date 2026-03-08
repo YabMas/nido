@@ -47,7 +47,9 @@
         .finding-nitpick { border-left-color: #555; }
         .meta { color: #666; font-size: 12px; }
         .project-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
-        .empty { color: #666; font-style: italic; }"]]
+        .empty { color: #666; font-style: italic; }
+        @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .pulse { animation: pulse 2s ease-in-out infinite; }"]]
      [:body body]])))
 
 ;; ---------------------------------------------------------------------------
@@ -55,16 +57,85 @@
 
 (defn- status-badge [status]
   (let [label (name (or status :unknown))
-        css (str "status status-" label)]
-    [:span {:class css} label]))
-
-(defn- severity-span [severity]
-  [:span {:class (str "severity-" (name (or severity :minor)))}
-   (name (or severity :unknown))])
+        css (str "status status-" label)
+        pulsing? (= status :in-progress)]
+    [:span {:class (str css (when pulsing? " pulse"))} label]))
 
 (defn- breadcrumb [& parts]
   [:div.breadcrumb
    (interpose " / " parts)])
+
+(defn- module-slug [module-path]
+  (-> (str module-path)
+      (str/replace #"/$" "")
+      (str/split #"/")
+      last))
+
+;; ---------------------------------------------------------------------------
+;; Fragments (for SSE updates)
+
+(defn vsdd-runs-table-fragment
+  "Just the table body — used for both initial render and SSE updates."
+  [project-name runs]
+  (str
+   (h/html
+    (if (seq runs)
+      [:tbody {:id "vsdd-runs-body"}
+       (for [{:keys [run-id manifest]} runs
+             :let [{:keys [module status iterations started-at]} manifest]]
+         [:tr
+          [:td [:a {:href (str "/" project-name "/vsdd/" run-id)} run-id]]
+          [:td module]
+          [:td (status-badge status)]
+          [:td (count iterations)]
+          [:td [:span.meta started-at]]])]
+      [:tbody {:id "vsdd-runs-body"}
+       [:tr [:td {:colspan "5"} [:span.empty "No VSDD runs found."]]]]))))
+
+(defn vsdd-run-detail-fragment
+  "Run detail content — used for both initial render and SSE updates."
+  [project-name run-id manifest]
+  (str
+   (h/html
+    [:div {:id "vsdd-run-detail"}
+     [:div.card
+      [:div [:strong "Module: "] (:module manifest)]
+      [:div [:strong "Status: "] (status-badge (:status manifest))]
+      [:div [:strong "Started: "] [:span.meta (:started-at manifest)]]
+      (when (:finished-at manifest)
+        [:div [:strong "Finished: "] [:span.meta (:finished-at manifest)]])
+      (when (:error manifest)
+        [:div {:style "color: #f87171; margin-top: 8px"} "Error: " (:error manifest)])]
+
+     [:h2 "Iterations"]
+     (if (seq (:iterations manifest))
+       (for [iter (:iterations manifest)
+             :let [n (:iteration iter)
+                   judge (:judge iter)
+                   arch (:architect iter)
+                   slug (module-slug (:module manifest))]]
+         [:div.card
+          [:h3 (str "Iteration " n)]
+          [:table
+           [:tbody
+            [:tr [:td.meta "implementer"] [:td (or (get-in iter [:implementer :session-id]) "—")]]
+            [:tr [:td.meta "critic"]
+             [:td (or (get-in iter [:critic :session-id]) "—")
+              " "
+              [:a {:href (str "/" project-name "/vsdd/" run-id "/report/" slug "/" n)}
+               "view report"]]]
+            [:tr [:td.meta "judge"]
+             [:td
+              (when (:verdict judge)
+                [:span (name (:verdict judge))
+                 (when (:severity judge)
+                   (str " (" (name (:severity judge)) ")"))])]]
+            (when arch
+              [:tr [:td.meta "architect"]
+               [:td (or (:session-id arch) "—")
+                (when (:auto-resolved arch)
+                  [:span.meta " (auto-resolved)"])]])]]])
+       [:p.empty "No iterations yet."])])))
 
 ;; ---------------------------------------------------------------------------
 ;; Pages
@@ -86,82 +157,38 @@
 
 (defn vsdd-runs-page
   "VSDD runs list for a project."
-  [project-name runs]
+  [project-name runs has-in-progress?]
   (layout
    (str project-name " — vsdd")
    (breadcrumb [:a {:href "/"} "nido"]
                project-name
                "vsdd")
    [:h1 (str project-name " — VSDD Runs")]
-   (if (seq runs)
-     [:table
-      [:thead
-       [:tr [:th "run"] [:th "module"] [:th "status"] [:th "iterations"] [:th "started"]]]
-      [:tbody
-       (for [{:keys [run-id manifest]} runs
-             :let [{:keys [module status iterations started-at]} manifest]]
-         [:tr
-          [:td [:a {:href (str "/" project-name "/vsdd/" run-id)} run-id]]
-          [:td module]
-          [:td (status-badge status)]
-          [:td (count iterations)]
-          [:td [:span.meta started-at]]])]]
-     [:p.empty "No VSDD runs found."])))
+   [:div (when has-in-progress?
+           {:data-on-interval__duration.3s (str "@get('/" project-name "/vsdd/_fragment/runs')")})
+    [:table
+     [:thead
+      [:tr [:th "run"] [:th "module"] [:th "status"] [:th "iterations"] [:th "started"]]]
+     (h/raw (vsdd-runs-table-fragment project-name runs))]]))
 
 (defn vsdd-run-detail-page
   "Detail page for a single VSDD run."
   [project-name run-id manifest]
-  (layout
-   (str run-id " — vsdd")
-   (breadcrumb [:a {:href "/"} "nido"]
-               [:a {:href (str "/" project-name "/vsdd/")} project-name]
-               run-id)
-   [:h1 (str "Run " run-id)]
-   [:div.card
-    [:div [:strong "Module: "] (:module manifest)]
-    [:div [:strong "Status: "] (status-badge (:status manifest))]
-    [:div [:strong "Started: "] [:span.meta (:started-at manifest)]]
-    (when (:finished-at manifest)
-      [:div [:strong "Finished: "] [:span.meta (:finished-at manifest)]])
-    (when (:error manifest)
-      [:div {:style "color: #f87171; margin-top: 8px"} "Error: " (:error manifest)])]
-
-   [:h2 "Iterations"]
-   (if (seq (:iterations manifest))
-     (for [iter (:iterations manifest)
-           :let [n (:iteration iter)
-                 judge (:judge iter)
-                 arch (:architect iter)
-                 module-slug (-> (:module manifest)
-                                 (str/replace #"/$" "")
-                                 (str/split #"/")
-                                 last)]]
-       [:div.card
-        [:h3 (str "Iteration " n)]
-        [:table
-         [:tbody
-          [:tr [:td.meta "implementer"] [:td (or (get-in iter [:implementer :session-id]) "—")]]
-          [:tr [:td.meta "critic"]
-           [:td (or (get-in iter [:critic :session-id]) "—")
-            " "
-            [:a {:href (str "/" project-name "/vsdd/" run-id "/report/" module-slug "/" n)}
-             "view report"]]]
-          [:tr [:td.meta "judge"]
-           [:td
-            (when (:verdict judge)
-              [:span (name (:verdict judge))
-               (when (:severity judge)
-                 (str " (" (name (:severity judge)) ")"))])]]
-          (when arch
-            [:tr [:td.meta "architect"]
-             [:td (or (:session-id arch) "—")
-              (when (:auto-resolved arch)
-                [:span.meta " (auto-resolved)"])]])]]])
-     [:p.empty "No iterations yet."])))
+  (let [in-progress? (= (:status manifest) :in-progress)]
+    (layout
+     (str run-id " — vsdd")
+     (breadcrumb [:a {:href "/"} "nido"]
+                 [:a {:href (str "/" project-name "/vsdd/")} project-name]
+                 run-id)
+     [:h1 (str "Run " run-id)]
+     [:div (when in-progress?
+             {:data-on-interval__duration.2s
+              (str "@get('/" project-name "/vsdd/" run-id "/_fragment/detail')")})
+      (h/raw (vsdd-run-detail-fragment project-name run-id manifest))])))
 
 (defn vsdd-report-page
   "Critic report detail page."
-  [project-name run-id module-slug iteration report]
+  [project-name run-id _module-slug iteration report]
   (layout
    (str "report " iteration " — " run-id)
    (breadcrumb [:a {:href "/"} "nido"]
