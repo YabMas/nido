@@ -45,8 +45,8 @@
   (str "MODULE: " module-path "\n"
        "\n"
        "The critic has reviewed this module and produced the report below. "
-       "Fix every issue identified. Do not re-assess the situation — the critic "
-       "has already done that. Focus on making the changes needed to resolve the findings.\n"
+       "Focus on :findings-for-impl — these are the findings you can address. "
+       "Ignore :findings-for-spec (those are for the architect, not you).\n"
        "\n"
        "Your goal: every spec rule has a test, every test passes, "
        "no code exists without spec justification.\n"
@@ -63,10 +63,12 @@
        "{:files-modified\n"
        " [{:path \"src/example/file.clj\"\n"
        "   :changes [\"Description of change 1\" \"Description of change 2\"]}]\n"
-       " :findings-addressed [1 2 3]}\n"
+       " :findings-addressed [1 2 3]\n"
+       " :findings-skipped [{:finding 4 :reason \"spec-level, cannot modify spec\"}]}\n"
        "\n"
-       ":findings-addressed is a vector of finding numbers from the critic report "
-       "that you addressed. :files-modified lists every file you touched with a "
+       ":findings-addressed is a vector of finding numbers from :findings-for-impl "
+       "that you addressed. :findings-skipped lists findings you did not address with "
+       "a reason for each. :files-modified lists every file you touched with a "
        "brief description of each change."))
 
 

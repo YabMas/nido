@@ -39,32 +39,41 @@ Write your report to the path specified in the task prompt.
 
 ```edn
 {:module "path/to/module"
- :findings
- [{:level :spec    ;; or :test or :impl
-   :severity :major ;; or :minor or :nitpick
+ :findings-for-impl
+ [{:severity :major ;; or :minor or :nitpick
    :rule "RuleName"
    :location "file.clj:42"
    :description "Concrete description of the flaw"
    :suggested-fix "Specific actionable fix"}]
+ :findings-for-spec
+ [{:severity :minor
+   :rule "RuleName"
+   :description "Spec ambiguity or gap"
+   :suggested-fix "Specific spec clarification"}]
+ :notes ["Observations about correct behavior worth recording"]
  :verdict :converged}  ;; or :issues-found
 ```
+
+Separate your findings into `:findings-for-impl` (implementation or test flaws) and `:findings-for-spec` (spec ambiguities or gaps). The judge uses this separation for routing. An empty vector is fine if there are no findings for a role.
 
 ### Severity Levels
 
 - `:major` — Spec violation, missing invariant, incorrect behavior. Must be fixed.
 - `:minor` — Weak test coverage, style mismatch with spec intent. Should be fixed.
-- `:nitpick` — Cosmetic, naming, documentation. Low priority.
-
-### Level Meanings
-
-- `:spec` — The spec itself may need clarification or has an ambiguity
-- `:test` — The test infrastructure has a gap or error
-- `:impl` — The implementation has a flaw
+- `:nitpick` — Cosmetic, naming, documentation. Low priority. **Limit to at most 2 per report.** If you have more, include only the most impactful ones. Omit nitpicks about hypothetical future code paths, logging frameworks, or defensive coding for impossible states.
 
 ### Verdict
 
 - `:converged` — No major or minor findings. The implementation is spec-compliant.
 - `:issues-found` — There are findings that need addressing.
+
+### What is NOT a finding
+
+If your analysis concludes "no fix needed" or "implementation is correct," do not include it as a finding. A finding implies something must change. Observations about correct behavior belong in the `:notes` field, not in findings.
+
+### Carried-forward findings
+
+Do not re-raise findings from previous iterations that were not addressable by the current iteration's target role. If a spec finding was raised in iteration 1 and iteration 1 was routed to impl, do not include that spec finding in iteration 2's report. Trust the judge to route to spec when needed.
 
 ## Standards
 
@@ -84,6 +93,6 @@ Write your report to the path specified in the task prompt.
 
 When done, report:
 - **Report location**: Path to the report file
-- **Finding count**: By severity (major/minor/nitpick)
+- **Finding count**: By severity (major/minor/nitpick), split by impl vs spec
 - **Verdict**: converged or issues-found
 - **Key findings**: Top 3 most critical issues (if any)

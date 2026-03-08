@@ -79,10 +79,13 @@ The report must be an EDN map:
 {:files-modified
  [{:path "src/example/file.clj"
    :changes ["Description of change 1" "Description of change 2"]}]
- :findings-addressed [1 2 3]}
+ :findings-addressed [1 2 3]
+ :findings-skipped [{:finding 4 :reason "spec-level, cannot modify spec"}]}
 ```
 
-`:findings-addressed` is a vector of finding numbers from the critic report that you addressed. `:files-modified` lists every file you touched with a brief description of each change.
+- `:findings-addressed` — vector of finding numbers from the critic report that you addressed
+- `:files-modified` — every file you touched with a brief description of each change
+- `:findings-skipped` — findings you did not address, with a reason for each (e.g. spec-level finding, no fix needed per critic's own assessment). This helps the judge route correctly.
 
 Also report in your text output:
 - **Files modified:** List each file and what changed
