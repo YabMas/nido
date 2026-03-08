@@ -418,7 +418,10 @@
           result (try
                    (run-cycle config module-path run-dir mfst)
                    (catch Exception e
-                     (let [final (manifest/finalize mfst :error)]
+                     ;; Read latest manifest from disk — the loop may have
+                     ;; saved iterations before the error was thrown.
+                     (let [latest (or (manifest/load-manifest run-dir) mfst)
+                           final (manifest/finalize latest :error)]
                        (manifest/save! (assoc final :error (ex-message e)))
                        (throw e))))]
 
@@ -488,7 +491,8 @@
                                   :start-phase (:phase resume-point)
                                   :start-critic-report critic-report)
                        (catch Exception e
-                         (let [final (manifest/finalize mfst :error)]
+                         (let [latest (or (manifest/load-manifest run-dir) mfst)
+                               final (manifest/finalize latest :error)]
                            (manifest/save! (assoc final :error (ex-message e)))
                            (throw e))))]
 
