@@ -320,6 +320,8 @@
    Returns the final manifest."
   [config]
   (let [module-path (:module-path config)
+        ;; Auto-set MODULE_PATH env var for hook scripts
+        config (update config :env merge {"MODULE_PATH" module-path})
         artifacts-dir (or (:artifacts-dir config) ".vsdd")
         run-id (.format (java.time.LocalDateTime/now)
                         (java.time.format.DateTimeFormatter/ofPattern "yyyyMMdd-HHmmss"))

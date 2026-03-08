@@ -83,11 +83,11 @@
                      "--verbose"
                      "--output-format" "stream-json"]
               model (into ["--model" model]))
-        proc (p/process {:env base-env
-                         :dir working-dir
-                         :err :inherit
-                         :in ""}
-                        cmd)
+        proc (apply p/process {:env base-env
+                               :dir working-dir
+                               :err :inherit
+                               :in ""}
+                    cmd)
         stream-result (read-stream (:out proc) agent-name)]
     @proc
     (assoc stream-result :exit (:exit @proc))))
