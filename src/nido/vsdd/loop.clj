@@ -337,6 +337,7 @@
     (let [mfst (manifest/create {:run-id run-id
                                  :module-path module-path
                                  :run-dir run-dir})
+          _ (manifest/save! mfst)
           result (try
                    (run-cycle config module-path run-dir mfst)
                    (catch Exception e
