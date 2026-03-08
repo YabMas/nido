@@ -5,11 +5,10 @@
 
 (defn add!
   "Register a project. Creates project definition dir under ~/.nido/projects/<name>/."
-  [name directory & {:keys [providers]}]
+  [name directory]
   (let [directory (str (fs/absolutize (fs/path directory)))
-        providers (or providers (:default-providers (config/read-config)))
         projects (config/read-projects)
-        entry {:directory directory :providers (vec providers)}]
+        entry {:directory directory}]
     (when-not (fs/exists? directory)
       (throw (ex-info "Project directory does not exist" {:directory directory})))
     (config/write-projects! (assoc projects name entry))
@@ -25,7 +24,7 @@
   (config/read-projects))
 
 (defn remove!
-  "Unregister a project. Does not delete definitions or workspace."
+  "Unregister a project. Does not delete definitions."
   [name]
   (let [projects (config/read-projects)]
     (if (contains? projects name)

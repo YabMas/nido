@@ -16,7 +16,7 @@
 (def skeleton-dirs
   ["definitions" "definitions/rules" "definitions/commands"
    "definitions/skills" "definitions/agents"
-   "projects" "workspaces" "state"])
+   "projects" "state"])
 
 (defn ensure-nido-home!
   "Creates the ~/.nido/ skeleton directory structure."
@@ -27,8 +27,3 @@
     (log-step (str "Ensured nido home at " home))
     home))
 
-(defn workspace-dir
-  "Returns the workspace directory for a project and provider.
-   e.g. ~/.nido/workspaces/brian-next/claude-code"
-  [project-name provider]
-  (str (fs/path (nido-home) "workspaces" project-name (name provider))))
