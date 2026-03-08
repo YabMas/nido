@@ -263,61 +263,61 @@
            critic-result nil
            critic-report start-critic-report]
 
-      (when (> iteration max-iter)
-        (println)
-        (println (str "CIRCUIT BREAKER: " module-path " did not converge after "
-                      max-iter " iterations."))
-        (let [final (manifest/finalize mfst :error)]
-          (manifest/save! final)
-          (throw (ex-info "Circuit breaker: max iterations reached"
-                          {:module module-path :iterations max-iter}))))
-
-      (when (= phase :critic)
-        (println)
-        (println (str "---- Iteration " iteration "/" max-iter
-                      " for " module-path " ----")))
-
-      (case phase
-        :critic
-        (let [result (run-critic config module-path run-dir iteration)]
-          (when-not (zero? (:exit result))
-            (let [final (manifest/finalize mfst :error)]
+      (if (> iteration max-iter)
+        (do (println)
+            (println (str "CIRCUIT BREAKER: " module-path " did not converge after "
+                          max-iter " iterations."))
+            (let [final (manifest/finalize mfst :exhausted)]
               (manifest/save! final)
-              (throw (ex-info "Critic agent failed"
-                              {:module module-path :exit (:exit result)}))))
-          (recur iteration :judge mfst result nil))
+              final))
 
-        :judge
-        (let [[action & args] (handle-judge-and-route
-                                config module-path run-dir iteration
-                                critic-result mfst)]
-          (case action
-            :converged (first args)
-            :escalated (first args)
-            :unknown (first args)
-            :route-to-impl
-            (let [[updated-mfst report-edn] args]
-              (recur iteration :implementer updated-mfst
-                     critic-result report-edn))
-            :route-to-critic
-            (let [[updated-mfst] args]
-              (recur (inc iteration) :critic updated-mfst nil nil))))
+        (do
+          (when (= phase :critic)
+            (println)
+            (println (str "---- Iteration " iteration "/" max-iter
+                          " for " module-path " ----")))
 
-        :implementer
-        (let [result (run-implementer config module-path critic-report)]
-          (when-not (zero? (:exit result))
-            (let [final (manifest/finalize mfst :error)]
-              (manifest/save! final)
-              (throw (ex-info "Implementer agent failed"
-                              {:module module-path :exit (:exit result)}))))
-          ;; Record implementer in the current iteration
-          (let [updated-record (assoc (last (:iterations mfst))
-                                      :implementer
-                                      {:session-id (:session-id result)})
-                mfst (update mfst :iterations
-                             #(conj (vec (butlast %)) updated-record))]
-            (manifest/save! mfst)
-            (recur (inc iteration) :critic mfst nil nil)))))))
+          (case phase
+            :critic
+            (let [result (run-critic config module-path run-dir iteration)]
+              (when-not (zero? (:exit result))
+                (let [final (manifest/finalize mfst :error)]
+                  (manifest/save! final)
+                  (throw (ex-info "Critic agent failed"
+                                  {:module module-path :exit (:exit result)}))))
+              (recur iteration :judge mfst result nil))
+
+            :judge
+            (let [[action & args] (handle-judge-and-route
+                                    config module-path run-dir iteration
+                                    critic-result mfst)]
+              (case action
+                :converged (first args)
+                :escalated (first args)
+                :unknown (first args)
+                :route-to-impl
+                (let [[updated-mfst report-edn] args]
+                  (recur iteration :implementer updated-mfst
+                         critic-result report-edn))
+                :route-to-critic
+                (let [[updated-mfst] args]
+                  (recur (inc iteration) :critic updated-mfst nil nil))))
+
+            :implementer
+            (let [result (run-implementer config module-path critic-report)]
+              (when-not (zero? (:exit result))
+                (let [final (manifest/finalize mfst :error)]
+                  (manifest/save! final)
+                  (throw (ex-info "Implementer agent failed"
+                                  {:module module-path :exit (:exit result)}))))
+              ;; Record implementer in the current iteration
+              (let [updated-record (assoc (last (:iterations mfst))
+                                          :implementer
+                                          {:session-id (:session-id result)})
+                    mfst (update mfst :iterations
+                                 #(conj (vec (butlast %)) updated-record))]
+                (manifest/save! mfst)
+                (recur (inc iteration) :critic mfst nil nil)))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Resume analysis
@@ -412,6 +412,7 @@
                     (case (:status result)
                       :converged "CONVERGED"
                       :escalated "NEEDS SPEC REVIEW"
+                      :exhausted "EXHAUSTED (did not converge)"
                       :error "ERROR"
                       (str (:status result)))))
       (println (str "  Iterations: " (count (:iterations result))))

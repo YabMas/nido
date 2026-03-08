@@ -35,6 +35,7 @@
         .status-converged { background: #1a3a2a; color: #4ade80; }
         .status-in-progress { background: #2a2a1a; color: #facc15; }
         .status-escalated { background: #3a1a1a; color: #f87171; }
+        .status-exhausted { background: #2a2a1a; color: #fb923c; }
         .status-error { background: #3a1a1a; color: #f87171; }
         .status-interrupted { background: #2a1a2a; color: #c084fc; }
         .severity-major { color: #f87171; }

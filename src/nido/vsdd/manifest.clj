@@ -42,6 +42,7 @@
          :status (case verdict
                    :converged :converged
                    :route-to-spec :escalated
+                   :exhausted :exhausted
                    :error :error
                    :halted)
          :finished-at (str (java.time.Instant/now))
