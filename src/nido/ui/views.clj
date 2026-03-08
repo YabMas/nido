@@ -131,17 +131,18 @@
           [:h3 (str "Iteration " n)]
           [:table
            [:tbody
-            [:tr [:td.meta "critic"]
-             [:td (or (get-in iter [:critic :session-id]) "—")
-              " "
-              [:a {:href (str "/" project-name "/vsdd/" run-id "/report/" slug "/" n)}
-               "view report"]]]
-            [:tr [:td.meta "judge"]
-             [:td
-              (when (:verdict judge)
+            (when (get-in iter [:critic :session-id])
+              [:tr [:td.meta "critic"]
+               [:td (get-in iter [:critic :session-id])
+                " "
+                [:a {:href (str "/" project-name "/vsdd/" run-id "/report/" slug "/" n)}
+                 "view report"]]])
+            (when (:verdict judge)
+              [:tr [:td.meta "judge"]
+               [:td
                 [:span (name (:verdict judge))
                  (when (:structural? judge)
-                   " (structural)")])]]
+                   " (structural)")]]])
             (when (get-in iter [:implementer :session-id])
               [:tr [:td.meta "implementer"] [:td (get-in iter [:implementer :session-id])]])
             (when arch
