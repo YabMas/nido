@@ -42,10 +42,22 @@
         .severity-nitpick { color: #888; }
         .card { background: #16213e; border: 1px solid #2a2a4a; border-radius: 6px;
                 padding: 16px; margin: 8px 0; }
-        .finding { border-left: 3px solid #2a2a4a; padding: 8px 12px; margin: 6px 0; }
+        .finding { border-left: 3px solid #2a2a4a; padding: 12px 16px; margin: 12px 0;
+                   background: #16213e; border-radius: 0 6px 6px 0; }
         .finding-major { border-left-color: #f87171; }
         .finding-minor { border-left-color: #facc15; }
         .finding-nitpick { border-left-color: #555; }
+        .finding-header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+        .finding-desc { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+                        font-size: 13.5px; line-height: 1.7; color: #c8c8c8; }
+        .finding-fix { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+                       font-size: 13.5px; line-height: 1.7;
+                       margin-top: 10px; padding: 10px 12px;
+                       background: rgba(126, 184, 218, 0.08); border-radius: 4px;
+                       color: #7eb8da; }
+        .finding-fix-label { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+                             font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
+                             color: #5a9ab8; margin-bottom: 2px; }
         .meta { color: #666; font-size: 12px; }
         .project-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
         .empty { color: #666; font-style: italic; }
@@ -212,14 +224,16 @@
            [:h2 (str (name sev) " (" (count items) ")")]
            (for [f items]
              [:div {:class (str "finding finding-" (name sev))}
-              [:div [:strong (:rule f)] " "
+              [:div.finding-header
+               [:strong (:rule f)]
                (when (:level f)
                  [:span.meta (str "[" (name (:level f)) "]")])]
               (when (:location f)
-                [:div.meta (:location f)])
-              [:div (:description f)]
+                [:div.meta {:style "margin-bottom: 8px"} (:location f)])
+              [:div.finding-desc (:description f)]
               (when (:suggested-fix f)
-                [:div {:style "color: #7eb8da; margin-top: 4px"}
+                [:div.finding-fix
+                 [:div.finding-fix-label "suggested fix"]
                  (:suggested-fix f)])])])]
        [:p.empty "No findings."]))))
 
