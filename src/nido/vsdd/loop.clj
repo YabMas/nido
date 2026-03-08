@@ -31,10 +31,16 @@
 
 (def ^:private default-max-iterations 99)
 
+(defn- module-slug [module-path]
+  (-> module-path
+      (str/replace #"/$" "")
+      (str/split #"/")
+      last))
+
 ;; ---------------------------------------------------------------------------
 ;; Prompt defaults
 
-(defn- default-implementer-prompt [module-path critic-report]
+(defn- default-implementer-prompt [module-path critic-report run-dir iteration]
   (str "MODULE: " module-path "\n"
        "\n"
        "The critic has reviewed this module and produced the report below. "
@@ -47,13 +53,21 @@
        "CRITIC REPORT:\n"
        "---\n"
        critic-report "\n"
-       "---"))
+       "---\n"
+       "\n"
+       "When you are done, write a completion summary to:\n"
+       run-dir "/" (module-slug module-path) "/impl-report-" iteration ".edn\n"
+       "\n"
+       "The summary must be an EDN map with this structure:\n"
+       "{:files-modified\n"
+       " [{:path \"src/example/file.clj\"\n"
+       "   :changes [\"Description of change 1\" \"Description of change 2\"]}]\n"
+       " :findings-addressed [1 2 3]}\n"
+       "\n"
+       ":findings-addressed is a vector of finding numbers from the critic report "
+       "that you addressed. :files-modified lists every file you touched with a "
+       "brief description of each change."))
 
-(defn- module-slug [module-path]
-  (-> module-path
-      (str/replace #"/$" "")
-      (str/split #"/")
-      last))
 
 (defn- default-critic-prompt [module-path run-dir iteration]
   (str "MODULE: " module-path "\n"
@@ -105,13 +119,13 @@
 
 (defn- run-implementer
   "Run the implementer agent with a critic report. Returns agent result map."
-  [config module-path critic-report]
+  [config module-path critic-report run-dir iteration]
   (let [prompt-fn (get-prompt-fn config :implementer)
         agent-name (get-in config [:roles :implementer :agent])]
     (print-phase "Implementer" module-path)
     (agent/invoke-agent
      {:agent-name  agent-name
-      :prompt      (prompt-fn module-path critic-report)
+      :prompt      (prompt-fn module-path critic-report run-dir iteration)
       :env         (:env config)
       :working-dir (:working-dir config)})))
 
@@ -304,16 +318,19 @@
                   (recur (inc iteration) :critic updated-mfst nil nil))))
 
             :implementer
-            (let [result (run-implementer config module-path critic-report)]
+            (let [result (run-implementer config module-path critic-report run-dir iteration)]
               (when-not (zero? (:exit result))
                 (let [final (manifest/finalize mfst :error)]
                   (manifest/save! final)
                   (throw (ex-info "Implementer agent failed"
                                   {:module module-path :exit (:exit result)}))))
               ;; Record implementer in the current iteration
-              (let [updated-record (assoc (last (:iterations mfst))
+              (let [slug (module-slug module-path)
+                    report-path (str run-dir "/" slug "/impl-report-" iteration ".edn")
+                    updated-record (assoc (last (:iterations mfst))
                                           :implementer
-                                          {:session-id (:session-id result)})
+                                          {:session-id (:session-id result)
+                                           :report-path report-path})
                     mfst (update mfst :iterations
                                  #(conj (vec (butlast %)) updated-record))]
                 (manifest/save! mfst)

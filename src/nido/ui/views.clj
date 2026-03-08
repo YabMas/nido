@@ -145,7 +145,11 @@
                  (when (:structural? judge)
                    " (structural)")]]])
             (when (get-in iter [:implementer :session-id])
-              [:tr [:td.meta "implementer"] [:td (get-in iter [:implementer :session-id])]])
+              [:tr [:td.meta "implementer"]
+               [:td (get-in iter [:implementer :session-id])
+                " "
+                [:a {:href (str "/" project-name "/vsdd/" run-id "/impl-report/" slug "/" n)}
+                 "view report"]]])
             (when arch
               [:tr [:td.meta "architect"]
                [:td (or (:session-id arch) "—")
@@ -239,6 +243,35 @@
                  [:div.finding-fix-label "suggested fix"]
                  (:suggested-fix f)])])])]
        [:p.empty "No findings."]))))
+
+(defn vsdd-impl-report-page
+  "Implementer completion report page."
+  [project-name run-id _module-slug iteration report]
+  (layout
+   (str "impl report " iteration " — " run-id)
+   (breadcrumb [:a {:href "/"} "nido"]
+               [:a {:href (str "/" project-name "/vsdd/")} project-name]
+               [:a {:href (str "/" project-name "/vsdd/" run-id)} run-id]
+               (str "impl report " iteration))
+   [:h1 (str "Implementer Report — Iteration " iteration)]
+
+   (when-let [findings (:findings-addressed report)]
+     [:div.card
+      [:strong "Findings addressed: "]
+      (str/join ", " (map str findings))])
+
+   (let [files (:files-modified report)]
+     (if (seq files)
+       [:div
+        [:h2 (str "Files modified (" (count files) ")")]
+        (for [f files]
+          [:div.card
+           [:div [:strong (:path f)]]
+           (when (seq (:changes f))
+             [:ul
+              (for [c (:changes f)]
+                [:li c])])])]
+       [:p.empty "No files listed."]))))
 
 (defn not-found-page []
   (layout "404" [:h1 "Not found"]))

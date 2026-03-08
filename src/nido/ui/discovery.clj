@@ -38,6 +38,14 @@
                                   (str "critic-report-" iteration ".edn")))]
     (io/read-edn report-file)))
 
+(defn load-impl-report
+  "Load an implementer completion report EDN file."
+  [project-dir run-id module-slug iteration]
+  (let [report-file (str (fs/path project-dir ".vsdd" run-id
+                                  module-slug
+                                  (str "impl-report-" iteration ".edn")))]
+    (io/read-edn report-file)))
+
 (defn project-context
   "Build context for a project by name. Returns {:name :directory :entry} or nil."
   [project-name]

@@ -94,6 +94,19 @@
                     (html-response 200 (views/vsdd-report-page project-name run-id module-slug iteration report))
                     (html-response 404 (views/not-found-page))))
 
+                ;; GET /:project/vsdd/:run-id/impl-report/:module-slug/:iteration — implementer report
+                (and (= 5 (count rest-segs))
+                     (= "vsdd" (first rest-segs))
+                     (= "impl-report" (nth rest-segs 2)))
+                (let [run-id (second rest-segs)
+                      module-slug (nth rest-segs 3)
+                      iteration (parse-long (nth rest-segs 4))
+                      report (when iteration
+                               (discovery/load-impl-report dir run-id module-slug iteration))]
+                  (if report
+                    (html-response 200 (views/vsdd-impl-report-page project-name run-id module-slug iteration report))
+                    (html-response 404 (views/not-found-page))))
+
                 :else
                 (html-response 404 (views/not-found-page)))))
           (html-response 404 (views/not-found-page)))))))
