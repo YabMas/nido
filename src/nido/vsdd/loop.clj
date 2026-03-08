@@ -29,7 +29,7 @@
 ;; ---------------------------------------------------------------------------
 ;; Defaults
 
-(def ^:private default-max-iterations 10)
+(def ^:private default-max-iterations 99)
 
 ;; ---------------------------------------------------------------------------
 ;; Prompt defaults
