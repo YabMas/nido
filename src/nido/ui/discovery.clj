@@ -2,7 +2,8 @@
   "Discovers VSDD runs and other artifacts from registered projects."
   (:require [babashka.fs :as fs]
             [nido.io :as io]
-            [nido.project :as project]))
+            [nido.project :as project]
+            [nido.vsdd.manifest :as manifest]))
 
 (defn list-vsdd-runs
   "List all VSDD runs for a project, sorted by most recent first.
@@ -14,18 +15,20 @@
            (filter fs/directory?)
            (keep (fn [run-dir]
                    (let [manifest-file (str (fs/path run-dir "manifest.edn"))
-                         manifest (io/read-edn manifest-file)]
-                     (when manifest
+                         raw (io/read-edn manifest-file)]
+                     (when raw
                        {:run-id (str (fs/file-name run-dir))
-                        :manifest manifest}))))
+                        :manifest (manifest/check-liveness raw)}))))
            (sort-by :run-id #(compare %2 %1))
            vec))))
 
 (defn load-vsdd-run
   "Load a specific VSDD run manifest for a project."
   [project-dir run-id]
-  (let [manifest-file (str (fs/path project-dir ".vsdd" run-id "manifest.edn"))]
-    (io/read-edn manifest-file)))
+  (let [manifest-file (str (fs/path project-dir ".vsdd" run-id "manifest.edn"))
+        raw (io/read-edn manifest-file)]
+    (when raw
+      (manifest/check-liveness raw))))
 
 (defn load-critic-report
   "Load a critic report EDN file."

@@ -1,7 +1,8 @@
 (ns nido.vsdd.manifest
   "VSDD run manifest — the structured record of a complete VSDD run.
    Manifests are the data model for introspection (UI, history, debugging)."
-  (:require [nido.io :as io]))
+  (:require [nido.io :as io]
+            [nido.process :as proc]))
 
 (defn create
   "Create a new run manifest."
@@ -9,10 +10,25 @@
   {:run-id run-id
    :module module-path
    :run-dir run-dir
+   :pid (.pid (java.lang.ProcessHandle/current))
    :started-at (str (java.time.Instant/now))
    :status :in-progress
    :iterations []
    :final-verdict nil})
+
+(defn check-liveness
+  "Check if an in-progress manifest's process is still alive.
+   Returns the manifest with :status updated to :interrupted if the
+   owning process is gone or PID is missing. Does not mutate the file on disk."
+  [manifest]
+  (if (= :in-progress (:status manifest))
+    (if-let [pid (:pid manifest)]
+      (if (proc/process-alive? pid)
+        manifest
+        (assoc manifest :status :interrupted))
+      ;; No PID recorded — can't verify liveness, assume interrupted
+      (assoc manifest :status :interrupted))
+    manifest))
 
 (defn add-iteration
   "Append an iteration record to the manifest."

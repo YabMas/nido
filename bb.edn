@@ -47,6 +47,10 @@
   {:doc "Run VSDD loop: :project-dir <path> :module-path <path>"
    :task (apply nido-vsdd/run *command-line-args*)}
 
+  nido:vsdd:resume
+  {:doc "Resume an interrupted VSDD run: :project-dir <path> :run-id <id>"
+   :task (apply nido-vsdd/resume *command-line-args*)}
+
   agent:session:start
   {:doc "Alias for nido:session:start"
    :task (apply nido-session/start *command-line-args*)}

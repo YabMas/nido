@@ -38,3 +38,22 @@
                                    (:max-iterations opts)
                                    (assoc :max-iterations (:max-iterations opts))))]
     (vsdd/run config)))
+
+(defn resume
+  "Resume an interrupted VSDD run.
+   Usage: bb nido:vsdd:resume :project-dir <path> :run-id <id>"
+  [& args]
+  (let [opts (parse-args args)
+        project-dir (or (:project-dir opts)
+                        (throw (ex-info "Missing :project-dir" {:args args})))
+        run-id (or (:run-id opts)
+                    (throw (ex-info "Missing :run-id" {:args args})))
+        ;; Load the manifest to get the module-path
+        manifest-file (str project-dir "/.vsdd/" run-id "/manifest.edn")
+        manifest (or (nido.io/read-edn manifest-file)
+                     (throw (ex-info "Manifest not found" {:run-id run-id})))
+        module-path (:module manifest)
+        config (load-vsdd-config project-dir
+                                 {:module-path module-path
+                                  :run-id run-id})]
+    (vsdd/resume config)))

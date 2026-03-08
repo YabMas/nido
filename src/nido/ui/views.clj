@@ -36,6 +36,7 @@
         .status-in-progress { background: #2a2a1a; color: #facc15; }
         .status-escalated { background: #3a1a1a; color: #f87171; }
         .status-error { background: #3a1a1a; color: #f87171; }
+        .status-interrupted { background: #2a1a2a; color: #c084fc; }
         .severity-major { color: #f87171; }
         .severity-minor { color: #facc15; }
         .severity-nitpick { color: #888; }
