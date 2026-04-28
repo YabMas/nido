@@ -23,6 +23,7 @@
    [nido.ci.isolated-pg :as isolated-pg]
    [nido.ci.isolation :as isolation]
    [nido.ci.local-edn :as local-edn]
+   [nido.ci.lockfile :as lockfile]
    [nido.ci.manifest :as manifest]
    [nido.ci.paths :as paths]
    [nido.ci.run :as run]
@@ -521,6 +522,13 @@
     ;; in is one fs/exists? check.
     (when (some :isolated-pg? selected-steps)
       (ci-template/ensure! session))
+    ;; Drift between the source worktree's lockfile(s) and its install
+    ;; tree (e.g. node_modules) silently propagates into every step's
+    ;; clone, since clones happen wholesale from the worktree. Running
+    ;; the project's sync commands here, once, before the fan-out, costs
+    ;; one round of `npm ci` on the rare drift case and is free when
+    ;; everything is already in sync.
+    (lockfile/verify-and-sync! session (:lockfile-checks config))
     (swap! run-atom run/begin)
     (manifest/sync-run! @run-atom)
     (let [futures
