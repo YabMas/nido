@@ -41,17 +41,14 @@
 
 (defn- pg-context
   "Build the {{pg.*}} bindings for template substitution. Pulls
-   defaults from session.edn `:services :postgresql :isolated-config`
-   (then `:shared-config`), overlaying the step's allocated port."
+   defaults from session.edn `:services :postgresql`, overlaying the
+   step's allocated port."
   [session-edn isolation]
-  (let [pg-svc  (find-postgresql-service session-edn)
-        iso-cfg (or (:isolated-config pg-svc) {})
-        shared  (or (:shared-config pg-svc) {})]
-    {:port (or (:pg-port isolation)
-               (:port shared))
-     :db-name (or (:db-name iso-cfg) (:db-name shared) "postgres")
-     :db-user (or (:db-user iso-cfg) (:db-user shared) "user")
-     :db-password (or (:db-password iso-cfg) (:db-password shared) "password")
+  (let [pg-svc (find-postgresql-service session-edn)]
+    {:port (:pg-port isolation)
+     :db-name (or (:db-name pg-svc) "postgres")
+     :db-user (or (:db-user pg-svc) "user")
+     :db-password (or (:db-password pg-svc) "password")
      ;; Always false for CI step-isolated mode — the --ci template
      ;; ships with every migration applied; running flyway again on
      ;; each test JVM mount would just re-baseline the same schema.

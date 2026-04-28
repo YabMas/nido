@@ -5,7 +5,7 @@
  {:requires ([tasks.nido-session :as nido-session]
              [tasks.nido-project :as nido-project]
              [tasks.nido-template :as nido-template]
-             [tasks.nido-workspace :as nido-workspace]
+             [tasks.nido-reclaim :as nido-reclaim]
              [tasks.nido-vsdd :as nido-vsdd]
              [tasks.nido-ui :as nido-ui]
              [tasks.nido-ci :as nido-ci]
@@ -73,6 +73,10 @@
   {:doc "Restart a session: :project <p> <session>"
    :task (apply nido-session/restart *command-line-args*)}
 
+  nido:session:refresh
+  {:doc "Refresh a session's DB: :project <p> <session> — stop, drop PGDATA, re-clone template, restart"
+   :task (apply nido-session/refresh *command-line-args*)}
+
   nido:session:destroy
   {:doc "Destroy a session: :project <p> <session> — stop + remove worktree"
    :task (apply nido-session/destroy *command-line-args*)}
@@ -101,25 +105,9 @@
   {:doc "Delete the template cluster for a project"
    :task (apply nido-template/destroy *command-line-args*)}
 
-  nido:workspace:pg:start
-  {:doc "Start the shared workspace Postgres cluster for a project"
-   :task (apply nido-workspace/start *command-line-args*)}
-
-  nido:workspace:pg:stop
-  {:doc "Stop the shared workspace Postgres cluster (refuses while sessions attached)"
-   :task (apply nido-workspace/stop *command-line-args*)}
-
-  nido:workspace:pg:status
-  {:doc "Show workspace PG status for a project"
-   :task (apply nido-workspace/status *command-line-args*)}
-
-  nido:workspace:pg:refresh
-  {:doc "Refresh the workspace PG via project-declared :refresh-steps"
-   :task (apply nido-workspace/refresh *command-line-args*)}
-
-  nido:workspace:reclaim
+  nido:reclaim
   {:doc "List (or with :force? true, delete) per-instance state dirs not tracked in the registry"
-   :task (apply nido-workspace/reclaim *command-line-args*)}
+   :task (apply nido-reclaim/run *command-line-args*)}
 
   nido:bench:memory
   {:doc "Run the memory-bench lever matrix for a project: :project <name> [:levers [kw...]] [:session <name>]"
@@ -168,6 +156,10 @@
   agent:session:restart
   {:doc "Alias for nido:session:restart"
    :task (apply nido-session/restart *command-line-args*)}
+
+  agent:session:refresh
+  {:doc "Alias for nido:session:refresh"
+   :task (apply nido-session/refresh *command-line-args*)}
 
   agent:session:destroy
   {:doc "Alias for nido:session:destroy"

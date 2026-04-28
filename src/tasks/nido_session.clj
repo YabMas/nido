@@ -11,6 +11,7 @@
      bb nido:session:init    :project brian feat-auth :jvm-heap-max 1500m
      bb nido:session:stop    :project brian feat-auth
      bb nido:session:restart :project brian feat-auth
+     bb nido:session:refresh :project brian feat-auth
      bb nido:session:destroy :project brian feat-auth :delete-branch? true
      bb nido:session:status  :project brian feat-auth
      bb nido:session:list    :project brian"
@@ -82,6 +83,16 @@
         _project (require-project opts)
         session (require-session-name pos)]
     (lifecycle/restart! session opts)))
+
+(defn refresh
+  "Stop the named session, drop its PGDATA, and start it again so it
+   re-clones a fresh PGDATA from the current template. Use after
+   `bb nido:template:pg:refresh` to bring sessions up to date."
+  [& args]
+  (let [[pos opts] (split-args args)
+        _project (require-project opts)
+        session (require-session-name pos)]
+    (lifecycle/refresh! session opts)))
 
 (defn destroy
   "Stop the named session and remove its worktree.

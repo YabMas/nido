@@ -192,21 +192,6 @@
   (println "  state file:" (state/session-state-file
                             (get-in ctx [:session :instance-id]))))
 
-(defn- resolve-pg-mode
-  "Normalize PG mode from opts + session-edn defaults into {:shared|:isolated}.
-   Order of precedence: CLI flag > defaults > :shared.
-   CLI spellings (any of):
-     :pg-mode :shared | :isolated
-     :isolated-pg? true     (sugar for :pg-mode :isolated)
-     :shared-pg?   true     (sugar for :pg-mode :shared — legacy)"
-  [session-edn opts]
-  (cond
-    (keyword? (:pg-mode opts)) (:pg-mode opts)
-    (true? (:isolated-pg? opts)) :isolated
-    (true? (:shared-pg? opts)) :shared
-    (keyword? (get-in session-edn [:defaults :pg-mode])) (get-in session-edn [:defaults :pg-mode])
-    :else :shared))
-
 (defn- resolve-jvm-config
   "Merge nido-controlled JVM knobs from session-edn :defaults :jvm with
    per-invocation opts. Flat CLI-friendly keys (:jvm-heap-max,
@@ -241,15 +226,11 @@
   (core/log-step (str "Starting session " instance-id " (" project-dir ")"))
   (let [pre-allocated (pre-allocate-ports (:services session-edn) project-dir)
         jvm-cfg (resolve-jvm-config (:defaults session-edn) opts)
-        pg-mode (resolve-pg-mode session-edn opts)
-        ;; Normalize pg-mode downstream: services dispatch on (:pg-mode opts).
-        opts+ (assoc opts :pg-mode pg-mode)
         init-ctx (merge pre-allocated
                         {:session {:project-dir project-dir
                                    :project-name project-name
                                    :instance-id instance-id
-                                   :jvm jvm-cfg
-                                   :pg-mode pg-mode}})
+                                   :jvm jvm-cfg}})
         ;; Run setup steps
         _ (doseq [step (:setup session-edn)]
             (run-setup-step! step project-dir))
@@ -265,7 +246,7 @@
                   (fn [{:keys [ctx service-states]} svc-def]
                     (let [svc-name (:name svc-def)
                           resolved-def (ctx/substitute ctx svc-def)
-                          {:keys [state context]} (service/start-service! resolved-def ctx opts+)
+                          {:keys [state context]} (service/start-service! resolved-def ctx opts)
                           new-ctx (ctx/merge-context ctx (keyword svc-name) context)]
                       (swap! started conj {:resolved-def resolved-def :state state})
                       {:ctx new-ctx
@@ -296,8 +277,7 @@
                       :service-defs (:services session-edn)
                       :service-states service-states
                       :context final-ctx
-                      :created-at (core/now-iso)
-                      :pg-mode pg-mode}]
+                      :created-at (core/now-iso)}]
     ;; Write session state
     (state/write-session! instance-id session-data)
     ;; Upsert registry for backward compat
@@ -309,7 +289,6 @@
                            :app-port (get-in final-ctx [:app :port])
                            :nrepl-port (get-in final-ctx [:repl :port])
                            :repl-pid (get-in final-ctx [:repl :pid])
-                           :pg-mode pg-mode
                            :created-at (core/now-iso)}
                           (when-let [p (get-in final-ctx [:pg :port])]
                             {:pg-port p}))]
@@ -330,10 +309,7 @@
 
 (defn start-session!
   "Start a session for a project directory using its session.edn definition.
-   opts: {:pg-mode :shared|:isolated (default :shared),
-          :isolated-pg? bool  (sugar for :pg-mode :isolated),
-          :jvm-heap-max string, :jvm-aliases [kw], :jvm-extra-opts [str],
-          ...}"
+   opts: {:jvm-heap-max string, :jvm-aliases [kw], :jvm-extra-opts [str], ...}"
   [project-dir opts]
   (let [project-name (resolve-project-name project-dir)
         instance-id  (resolve-instance-id project-dir)

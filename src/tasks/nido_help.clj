@@ -11,6 +11,7 @@
     :tasks [["nido:session:init"       "Create worktree (if missing) + start services"]
             ["nido:session:stop"       "Tear everything down; worktree stays on disk"]
             ["nido:session:restart"    "Restart services for a session"]
+            ["nido:session:refresh"    "Stop + drop PGDATA + re-clone template + restart"]
             ["nido:session:destroy"    "Stop + remove the worktree"]
             ["nido:session:status"     "Show session status"]
             ["nido:session:list"       ":project <p> — list sessions for a project"]]}
@@ -21,12 +22,8 @@
             ["nido:template:pg:status"  "Show template cluster status"]
             ["nido:template:pg:destroy" "Delete the template cluster"]]}
 
-   {:title "Workspace Postgres  (shared cluster for :pg-mode :shared)"
-    :tasks [["nido:workspace:pg:start"   "Start the shared workspace cluster"]
-            ["nido:workspace:pg:stop"    "Stop it (refuses while sessions attached)"]
-            ["nido:workspace:pg:status"  "Show workspace PG status"]
-            ["nido:workspace:pg:refresh" "Refresh via project-declared :refresh-steps"]
-            ["nido:workspace:reclaim"    "List orphan state dirs (:force? true to delete)"]]}
+   {:title "Reclaim"
+    :tasks [["nido:reclaim"             "List orphan state dirs (:force? true to delete)"]]}
 
    {:title "Bench"
     :tasks [["nido:bench:memory"        ":project <name> [:levers [kw...]] [:session <name>]"]
@@ -49,6 +46,7 @@
     :tasks [["agent:session:init"    ""]
             ["agent:session:stop"    ""]
             ["agent:session:restart" ""]
+            ["agent:session:refresh" ""]
             ["agent:session:destroy" ""]
             ["agent:session:status"  ""]
             ["agent:session:list"    ""]]}])
@@ -57,7 +55,7 @@
   ["bb nido:project:add brian ~/Code/brian"
    "bb nido:template:pg:init :project brian"
    "bb nido:session:init :project brian feature-x"
-   "bb nido:session:init :project brian migration-spike :isolated-pg? true"
+   "bb nido:session:refresh :project brian feature-x"
    "bb nido:session:init :project brian foo :jvm-heap-max 1500m"
    "bb nido:session:list :project brian"])
 

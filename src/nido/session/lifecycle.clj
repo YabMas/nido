@@ -177,6 +177,21 @@
   (let [{:keys [wt-path]} (with-context name opts)]
     (engine/start-session! wt-path opts)))
 
+(defn refresh!
+  "Refresh a session's database from the project's current template:
+   stop the session (which deletes its PGDATA), then start it again so
+   the :postgresql service re-clones a fresh PGDATA. Use after
+   `bb nido:template:pg:refresh` to pick up new data without losing the
+   worktree."
+  [name opts]
+  (let [{:keys [wt-path]} (with-context name opts)]
+    (when-not (fs/exists? wt-path)
+      (throw (ex-info "Worktree does not exist" {:path wt-path :name name})))
+    (try (engine/stop-session! wt-path)
+         (catch Exception e
+           (core/log-step (str "warning: stop during refresh: " (ex-message e)))))
+    (engine/start-session! wt-path opts)))
+
 (defn destroy!
   "Stop the named session and remove its worktree.
    opts: {... :delete-branch? bool (default false)}

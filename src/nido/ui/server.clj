@@ -120,8 +120,8 @@
   "Build table rows for all sessions visible to a project. Combines the
    filesystem list (all worktrees), the nido registry, a live TCP check
    on the app port, and the in-flight app-states atom. Resident-set
-   sizes are sampled via `ps` for the repl and (isolated) PG pids so
-   the UI can show an at-a-glance memory footprint per session."
+   sizes are sampled via `ps` for the repl and PG pids so the UI can
+   show an at-a-glance memory footprint per session."
   [project-name project-dir]
   (let [base (lifecycle/worktrees-dir project-name project-dir)
         registry (state/read-registry)]
@@ -136,14 +136,13 @@
                         live? (and (pos-int? port) (proc/tcp-open? port))
                         instance-id (instance-id-for project-name name)
                         pending (current-app-state instance-id)
-                        pg-mode (:pg-mode entry)
                         ;; RSS is only meaningful while the session is alive.
                         repl-rss (when (and live? (:repl-pid entry))
                                    (proc/rss-bytes (:repl-pid entry)))
                         session (when live? (state/read-session instance-id))
                         pg-pid (when session
                                  (get-in session [:service-states :pg :pg-pid]))
-                        pg-rss (when (and live? pg-pid (= pg-mode :isolated))
+                        pg-rss (when (and live? pg-pid)
                                  (proc/rss-bytes pg-pid))
                         heap-max (when session
                                    (get-in session [:context :session :jvm :heap-max]))]
@@ -152,7 +151,6 @@
                      :entry entry
                      :live? live?
                      :pending-state pending
-                     :pg-mode pg-mode
                      :repl-rss repl-rss
                      :pg-rss pg-rss
                      :heap-max heap-max})))

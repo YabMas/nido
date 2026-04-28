@@ -234,7 +234,7 @@
    on top of the TCP-derived state so actions in flight and terminal
    failures show through."
   [project-name {:keys [name entry live? pending-state
-                        pg-mode repl-rss pg-rss heap-max]}]
+                        repl-rss pg-rss heap-max]}]
   (let [app-port (:app-port entry)
         pg-port (:pg-port entry)
         repl-port (:nrepl-port entry)
@@ -252,10 +252,6 @@
         action-base (str "/" project-name "/sessions/" name)
         transient? (#{:starting :stopping :restarting} state)
         failed?    (= state :failed)
-        mode-label (case pg-mode
-                     :shared "shared"
-                     :isolated "iso"
-                     nil)
         pg-rss-str (process/human-bytes pg-rss)
         jvm-rss-str (process/human-bytes repl-rss)]
     [:tr
@@ -265,9 +261,7 @@
             [:a {:href url :target "_blank"} url]
             [:span.meta "—"])]
      [:td.mono (or pg-port "—")
-      (when mode-label [:div.meta mode-label])
-      (when (and (= pg-mode :isolated) pg-rss)
-        [:div.meta pg-rss-str])]
+      (when pg-rss [:div.meta pg-rss-str])]
      [:td.mono (or repl-port "—")
       (when repl-rss [:div.meta jvm-rss-str])
       (when heap-max [:div.meta (str "max " heap-max)])]

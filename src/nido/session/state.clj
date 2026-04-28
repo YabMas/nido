@@ -73,33 +73,6 @@
   [project-name]
   (str (fs/path (project-template-dir project-name) "pg.log")))
 
-;; ---------------------------------------------------------------------------
-;; Workspace (shared-PG) paths — one long-lived cluster per project, shared
-;; across all sessions started with :pg-mode :shared (the default).
-;; ---------------------------------------------------------------------------
-
-(defn workspace-dir
-  "Root workspaces directory: ~/.nido/workspaces/"
-  []
-  (str (fs/path (core/nido-home) "workspaces")))
-
-(defn project-workspace-dir
-  "Per-project workspace directory: ~/.nido/workspaces/<project-name>/"
-  [project-name]
-  (str (fs/path (workspace-dir) project-name)))
-
-(defn workspace-pg-data-dir
-  "Workspace PostgreSQL data directory:
-   ~/.nido/workspaces/<project-name>/pg-data/"
-  [project-name]
-  (str (fs/path (project-workspace-dir project-name) "pg-data")))
-
-(defn workspace-pg-log-file
-  "Workspace PostgreSQL log file:
-   ~/.nido/workspaces/<project-name>/pg.log"
-  [project-name]
-  (str (fs/path (project-workspace-dir project-name) "pg.log")))
-
 (defn read-template-meta [project-name]
   (io/read-edn (template-meta-file project-name)))
 
@@ -148,19 +121,3 @@
 (defn remove-from-registry! [project-dir]
   (write-registry! (dissoc (read-registry) project-dir)))
 
-;; ---------------------------------------------------------------------------
-;; Workspace PG attach counting — registry entries carry :pg-mode, set by the
-;; :postgresql service. :shared entries are "attached" to the workspace PG;
-;; workspace:pg:stop refuses while any exist.
-;; ---------------------------------------------------------------------------
-
-(defn attached-sessions
-  "Return the sequence of registry entries currently attached to the
-   workspace PG for a given project. An entry is attached iff its
-   :pg-mode is :shared and its :project-name matches."
-  [project-name]
-  (->> (read-registry)
-       vals
-       (filter (fn [entry]
-                 (and (= :shared (:pg-mode entry))
-                      (= project-name (:project-name entry)))))))
