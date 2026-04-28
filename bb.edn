@@ -61,24 +61,20 @@
   {:doc "Unregister a project: <name>"
    :task (apply nido-project/remove-cmd *command-line-args*)}
 
-  nido:session:init
-  {:doc "Init a session: :project <p> <session> — create worktree (if missing) + start services"
-   :task (apply nido-session/init *command-line-args*)}
+  nido:session:up
+  {:doc "Bring a session up: :project <p> <session> — worktree if missing + start PG/JVM/app (idempotent)"
+   :task (apply nido-session/up *command-line-args*)}
 
-  nido:session:stop
-  {:doc "Stop a session: :project <p> <session> (worktree left in place)"
-   :task (apply nido-session/stop *command-line-args*)}
+  nido:session:down
+  {:doc "Stop a session: :project <p> <session> — worktree + state preserved"
+   :task (apply nido-session/down *command-line-args*)}
 
-  nido:session:restart
-  {:doc "Restart a session: :project <p> <session>"
-   :task (apply nido-session/restart *command-line-args*)}
-
-  nido:session:refresh
-  {:doc "Refresh a session's DB: :project <p> <session> — stop, drop PGDATA, re-clone template, restart"
-   :task (apply nido-session/refresh *command-line-args*)}
+  nido:session:reset
+  {:doc "Nuclear recovery: :project <p> <session> — down, drop PGDATA, re-clone template, up"
+   :task (apply nido-session/reset *command-line-args*)}
 
   nido:session:destroy
-  {:doc "Destroy a session: :project <p> <session> — stop + remove worktree"
+  {:doc "Destroy a session: :project <p> <session> — down + remove worktree"
    :task (apply nido-session/destroy *command-line-args*)}
 
   nido:session:status
@@ -145,30 +141,4 @@
   {:doc "Re-run failed steps from last Run: :project <p> <session> [:from <run-id>]"
    :task (apply nido-ci/rerun *command-line-args*)}
 
-  agent:session:init
-  {:doc "Alias for nido:session:init"
-   :task (apply nido-session/init *command-line-args*)}
-
-  agent:session:stop
-  {:doc "Alias for nido:session:stop"
-   :task (apply nido-session/stop *command-line-args*)}
-
-  agent:session:restart
-  {:doc "Alias for nido:session:restart"
-   :task (apply nido-session/restart *command-line-args*)}
-
-  agent:session:refresh
-  {:doc "Alias for nido:session:refresh"
-   :task (apply nido-session/refresh *command-line-args*)}
-
-  agent:session:destroy
-  {:doc "Alias for nido:session:destroy"
-   :task (apply nido-session/destroy *command-line-args*)}
-
-  agent:session:status
-  {:doc "Alias for nido:session:status"
-   :task (apply nido-session/status *command-line-args*)}
-
-  agent:session:list
-  {:doc "Alias for nido:session:list"
-   :task (apply nido-session/list-sessions *command-line-args*)}}}
+  }}

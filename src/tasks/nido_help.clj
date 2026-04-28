@@ -8,11 +8,10 @@
             ["nido:project:remove"     "<name> — unregister a project"]]}
 
    {:title "Sessions  (all take :project <p> <session>)"
-    :tasks [["nido:session:init"       "Create worktree (if missing) + start services"]
-            ["nido:session:stop"       "Tear everything down; worktree stays on disk"]
-            ["nido:session:restart"    "Restart services for a session"]
-            ["nido:session:refresh"    "Stop + drop PGDATA + re-clone template + restart"]
-            ["nido:session:destroy"    "Stop + remove the worktree"]
+    :tasks [["nido:session:up"         "Worktree (if missing) + start PG/JVM/app — idempotent"]
+            ["nido:session:down"       "Stop the session; worktree + state preserved"]
+            ["nido:session:reset"      "Nuclear: down + drop PGDATA + re-clone template + up"]
+            ["nido:session:destroy"    "Down + remove the worktree"]
             ["nido:session:status"     "Show session status"]
             ["nido:session:list"       ":project <p> — list sessions for a project"]]}
 
@@ -42,21 +41,14 @@
    {:title "UI"
     :tasks [["nido:ui" "[:port 8800] — start the nido dashboard"]]}
 
-   {:title "Aliases  (agent:* → nido:session:*)"
-    :tasks [["agent:session:init"    ""]
-            ["agent:session:stop"    ""]
-            ["agent:session:restart" ""]
-            ["agent:session:refresh" ""]
-            ["agent:session:destroy" ""]
-            ["agent:session:status"  ""]
-            ["agent:session:list"    ""]]}])
+])
 
 (def ^:private examples
   ["bb nido:project:add brian ~/Code/brian"
    "bb nido:template:pg:init :project brian"
-   "bb nido:session:init :project brian feature-x"
-   "bb nido:session:refresh :project brian feature-x"
-   "bb nido:session:init :project brian foo :jvm-heap-max 1500m"
+   "bb nido:session:up :project brian feature-x"
+   "bb nido:session:reset :project brian feature-x"
+   "bb nido:session:up :project brian foo :jvm-heap-max 1500m"
    "bb nido:session:list :project brian"])
 
 (defn- pad [s n]

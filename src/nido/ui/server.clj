@@ -185,11 +185,11 @@
     (try
       (case action
         ["start"]
-        (do (lifecycle/init! session-name opts)
-            ;; If init! didn't throw and the app port IS listening →
-            ;; success. If it didn't throw but the port isn't up, init
-            ;; timed out silently — surface :failed without a specific
-            ;; message.
+        (do (lifecycle/up! session-name opts)
+            ;; If up! didn't throw and the app port IS listening →
+            ;; success. If it didn't throw but the port isn't up, the
+            ;; boot timed out silently — surface :failed without a
+            ;; specific message.
             (let [port (app-port-for-instance instance-id)]
               (if (and (pos-int? port) (proc/tcp-open? port))
                 (clear-app-state! instance-id)
@@ -197,7 +197,7 @@
                                 "App did not open its port within the timeout — see eval log"))))
 
         ["stop"]
-        (do (lifecycle/stop! session-name opts)
+        (do (lifecycle/down! session-name opts)
             (clear-app-state! instance-id))
 
         ["restart"]

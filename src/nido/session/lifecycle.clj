@@ -7,15 +7,16 @@
    `nido.session.engine/resolve-instance-id`).
 
    The worktree is an implementation detail — what the user manages here is
-   the *session*. Lifecycle (single-phase: init boots the app; stop
-   tears everything down):
+   the *session*. Lifecycle:
 
-     init     — create worktree (if missing) + start session (PG + JVM + app)
-     stop     — stop session, leave worktree
-     restart  — stop + start session in existing worktree
-     destroy  — stop session + remove worktree
+     up       — create worktree (if missing) + start session (PG + JVM + app);
+                idempotent (no-op for an already-running session)
+     down     — stop session, leave worktree + state on disk
+     reset    — nuclear: down → drop PGDATA → re-clone template → up
+     destroy  — down + remove the worktree
      status   — print state for one named session
      list-all — list all sessions for a project"
+  (:refer-clojure :exclude [reset!])
   (:require
    [babashka.fs :as fs]
    [babashka.process :refer [shell]]
@@ -152,9 +153,10 @@
      :base base
      :instance-id instance-id}))
 
-(defn init!
-  "Create the named session's worktree (if missing) and start the session.
-   Idempotent: existing worktree → just start the session."
+(defn up!
+  "Bring the named session up: create its worktree if missing, then start
+   PG + JVM + app. Idempotent — running on an existing live session is a
+   no-op (engine/start-session! detects and short-circuits)."
   [name opts]
   (let [{:keys [project-dir wt-path branch base]} (with-context name opts)]
     (if (fs/exists? wt-path)
@@ -162,8 +164,8 @@
       (create-git-worktree! project-dir wt-path branch base))
     (engine/start-session! wt-path opts)))
 
-(defn stop!
-  "Stop the named session. The worktree is left in place."
+(defn down!
+  "Stop the named session. Worktree and on-disk state are preserved."
   [name opts]
   (let [{:keys [wt-path]} (with-context name opts)]
     (when-not (fs/exists? wt-path)
@@ -171,29 +173,31 @@
     (engine/stop-session! wt-path)))
 
 (defn restart!
-  "Stop then start the named session (worktree must exist)."
+  "Internal: stop then start the named session (worktree must exist).
+   Used by the dashboard's restart button. Not exposed as a bb task —
+   `bb nido:session:down` followed by `:up` covers the CLI case."
   [name opts]
-  (stop! name opts)
+  (down! name opts)
   (let [{:keys [wt-path]} (with-context name opts)]
     (engine/start-session! wt-path opts)))
 
-(defn refresh!
-  "Refresh a session's database from the project's current template:
-   stop the session (which deletes its PGDATA), then start it again so
-   the :postgresql service re-clones a fresh PGDATA. Use after
-   `bb nido:template:pg:refresh` to pick up new data without losing the
-   worktree."
+(defn reset!
+  "Nuclear recovery for a session in a bad state: stop the session
+   (which drops its PGDATA), then start it again so the :postgresql
+   service re-clones a fresh PGDATA from the current template. Same
+   shape as the previous `refresh!` — renamed because the operation
+   destroys local DB state."
   [name opts]
   (let [{:keys [wt-path]} (with-context name opts)]
     (when-not (fs/exists? wt-path)
       (throw (ex-info "Worktree does not exist" {:path wt-path :name name})))
     (try (engine/stop-session! wt-path)
          (catch Exception e
-           (core/log-step (str "warning: stop during refresh: " (ex-message e)))))
+           (core/log-step (str "warning: stop during reset: " (ex-message e)))))
     (engine/start-session! wt-path opts)))
 
 (defn destroy!
-  "Stop the named session and remove its worktree.
+  "Bring the named session down and remove its worktree.
    opts: {... :delete-branch? bool (default false)}
    Also accepts :delete-branch (no `?`) since `?` is a zsh glob char."
   [name opts]

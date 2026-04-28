@@ -3,8 +3,8 @@
    'Idle' is determined by TCP sampling: the watchdog counts
    ESTABLISHED connections on each running app's port; if zero for
    longer than idle-timeout-ms, the entire session (app + JVM + any
-   isolated PG) is torn down via lifecycle/stop!. Wake is user-driven:
-   idle-stopped sessions stay down until the next `session:init`."
+   isolated PG) is torn down via lifecycle/down!. Wake is user-driven:
+   idle-stopped sessions stay down until the next `session:up`."
   (:require
    [babashka.fs :as fs]
    [babashka.process :refer [shell]]
@@ -77,7 +77,7 @@
                                 (quot idle-ms 1000) "s (> "
                                 (quot timeout 1000) "s) — stopping " instance-id))
             (try
-              (lifecycle/stop! session-name {:project project-name})
+              (lifecycle/down! session-name {:project project-name})
               (swap! last-seen-atom dissoc instance-id)
               (catch Exception e
                 (println "[watchdog] stop failed for" instance-id ":" (ex-message e))))))))))

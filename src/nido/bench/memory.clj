@@ -50,7 +50,7 @@
      :name         - short kw identifier (row key in results.csv)
      :doc          - human description
      :cp-only?     - true → classpath-size only, don't boot
-     :aliases      - :jvm-aliases override for session:init (defaults to
+     :aliases      - :jvm-aliases override for session:up (defaults to
                      session.edn :defaults :jvm :aliases if absent)
      :extra-opts   - extra JVM opts appended to the default NMT flag
      :heap-max     - :jvm-heap-max override (string, e.g. \"2g\")
@@ -248,7 +248,7 @@
 ;; ---------------------------------------------------------------------------
 
 (defn- resolve-opts
-  "Translate a lever into nido session:init opts. Merges NMT-summary into
+  "Translate a lever into nido session:up opts. Merges NMT-summary into
    :jvm-extra-opts by default so every boot-measurable lever produces
    NMT data."
   [session-edn-defaults {:keys [aliases extra-opts heap-max]}]
@@ -266,13 +266,13 @@
                                          []))))))
 
 (defn- wait-for-repl-pid
-  "After lifecycle/init! returns, the repl pid is in the registry. Pull it
-   out once (init! already blocked on app start per B2)."
+  "After lifecycle/up! returns, the repl pid is in the registry. Pull it
+   out once (up! already blocked on app start per B2)."
   [project-dir]
   (-> (state/read-registry) (get project-dir) :repl-pid))
 
 (def ^:private default-settle-ms
-  "Default time between successful init! return and the memory snapshot.
+  "Default time between successful up! return and the memory snapshot.
    5s is enough for the post-mount GC to settle in the common case; for
    slow-boot levers where background thread pools are still ramping up,
    pass a higher value via :settle-ms."
@@ -297,13 +297,13 @@
     (try
       (apply-deps-patch! deps-path (select-keys lever [:remove-deps :remove-alias-deps]))
       ;; Make sure no stale session is running.
-      (try (lifecycle/stop! session-name opts) (catch Exception _))
+      (try (lifecycle/down! session-name opts) (catch Exception _))
       (let [t-start (System/currentTimeMillis)
-            _ (lifecycle/init! session-name opts)
+            _ (lifecycle/up! session-name opts)
             t-booted (System/currentTimeMillis)
             pid (wait-for-repl-pid (str (fs/path worktree-dir)))
             _ (when-not pid
-                (throw (ex-info "no repl pid after init"
+                (throw (ex-info "no repl pid after boot"
                                 {:lever (:name lever)})))
             snap (settle-and-snapshot! pid settle-ms)]
         (-> snap
@@ -314,7 +314,7 @@
                    :settle-ms settle-ms
                    :repl-pid pid)))
       (finally
-        (try (lifecycle/stop! session-name opts) (catch Exception _))
+        (try (lifecycle/down! session-name opts) (catch Exception _))
         (restore-deps! deps-path backup-path)))))
 
 (defn- run-cp-lever!
@@ -346,10 +346,10 @@
         wt-path (lifecycle/worktree-path project-name directory session-name)]
     (when-not (fs/exists? wt-path)
       (core/log-step (str "Creating bench worktree at " wt-path))
-      ;; init! creates the worktree and starts the session. We immediately
-      ;; stop so subsequent levers start from a clean slate.
-      (lifecycle/init! session-name {:project project-name})
-      (try (lifecycle/stop! session-name {:project project-name}) (catch Exception _)))
+      ;; up! creates the worktree and starts the session. We immediately
+      ;; bring it down so subsequent levers start from a clean slate.
+      (lifecycle/up! session-name {:project project-name})
+      (try (lifecycle/down! session-name {:project project-name}) (catch Exception _)))
     wt-path))
 
 ;; ---------------------------------------------------------------------------
@@ -396,7 +396,7 @@
    facts. Single positional arg: project-name. Options:
      :session-name  session name to use (default \"perf-bench\")
      :levers        vector of lever names to run (default: all)
-     :settle-ms     ms to wait after init! before snapshot (default 5000).
+     :settle-ms     ms to wait after up! before snapshot (default 5000).
                     Raise this when testing slow-boot levers — the snapshot
                     then reflects steady-state rather than still-ramping-up
                     background thread pools."

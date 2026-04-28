@@ -4,14 +4,21 @@
    and takes a single positional <session-name> (= git branch = worktree leaf).
    Kwargs and the positional may appear in any order.
 
+   Surface (four destructive verbs + two read-only):
+     up       create worktree (if missing) + start PG/JVM/app — idempotent
+     down     stop the session, leave worktree + state on disk
+     reset    nuclear: down → drop PGDATA → re-clone template → up
+     destroy  down + remove worktree
+     status   per-session liveness + ports
+     list     project-wide overview
+
    Examples:
-     bb nido:session:init    :project brian feat-auth
-     bb nido:session:init    :project brian feat-auth :base develop
-     bb nido:session:init    :project brian fix-bug   :branch existing-branch
-     bb nido:session:init    :project brian feat-auth :jvm-heap-max 1500m
-     bb nido:session:stop    :project brian feat-auth
-     bb nido:session:restart :project brian feat-auth
-     bb nido:session:refresh :project brian feat-auth
+     bb nido:session:up      :project brian feat-auth
+     bb nido:session:up      :project brian feat-auth :base develop
+     bb nido:session:up      :project brian fix-bug   :branch existing-branch
+     bb nido:session:up      :project brian feat-auth :jvm-heap-max 1500m
+     bb nido:session:down    :project brian feat-auth
+     bb nido:session:reset   :project brian feat-auth
      bb nido:session:destroy :project brian feat-auth :delete-branch? true
      bb nido:session:status  :project brian feat-auth
      bb nido:session:list    :project brian"
@@ -60,42 +67,36 @@
     (throw (ex-info "Unexpected positional args; this command takes only kwargs"
                     {:positionals positionals}))))
 
-(defn init
-  "Create the named session's worktree (if missing) and start its services."
+(defn up
+  "Bring the named session up: worktree if missing, then PG/JVM/app.
+   Idempotent — running on a live session is a no-op."
   [& args]
   (let [[pos opts] (split-args args)
         _project (require-project opts)
         session (require-session-name pos)]
-    (lifecycle/init! session opts)))
+    (lifecycle/up! session opts)))
 
-(defn stop
-  "Stop the named session, leaving the worktree in place."
+(defn down
+  "Stop the named session. Worktree and on-disk state are preserved."
   [& args]
   (let [[pos opts] (split-args args)
         _project (require-project opts)
         session (require-session-name pos)]
-    (lifecycle/stop! session opts)))
+    (lifecycle/down! session opts)))
 
-(defn restart
-  "Stop then start the named session."
+(defn reset
+  "Nuclear recovery: bring the session down, drop its PGDATA, then bring
+   it back up against a fresh template clone. Use after
+   `bb nido:template:pg:refresh` or when a session has wedged into a
+   bad state."
   [& args]
   (let [[pos opts] (split-args args)
         _project (require-project opts)
         session (require-session-name pos)]
-    (lifecycle/restart! session opts)))
-
-(defn refresh
-  "Stop the named session, drop its PGDATA, and start it again so it
-   re-clones a fresh PGDATA from the current template. Use after
-   `bb nido:template:pg:refresh` to bring sessions up to date."
-  [& args]
-  (let [[pos opts] (split-args args)
-        _project (require-project opts)
-        session (require-session-name pos)]
-    (lifecycle/refresh! session opts)))
+    (lifecycle/reset! session opts)))
 
 (defn destroy
-  "Stop the named session and remove its worktree.
+  "Bring the named session down and remove its worktree.
    Pass :delete-branch? true to also drop the git branch."
   [& args]
   (let [[pos opts] (split-args args)

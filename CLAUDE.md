@@ -10,25 +10,26 @@ Session lifecycle management (`src/tasks/nido_session.clj`): spinning up isolate
 
 ## Session lifecycle
 
-Four verbs, no app sub-lifecycle:
+Four destructive verbs + two read-only. All take `:project <project>` plus a positional `<session>` (any order):
 
-All session commands take `:project <project>` plus a positional `<session>` (any order):
+- `bb nido:session:up :project <p> <session>` — create the worktree if missing, start PG + JVM + app. Idempotent: running on a live session is a no-op.
+- `bb nido:session:down :project <p> <session>` — stop the session; worktree + on-disk state preserved.
+- `bb nido:session:reset :project <p> <session>` — nuclear recovery. Down → drop PGDATA → re-clone from the current template → up. The "I'm wedged, fix it" button.
+- `bb nido:session:destroy :project <p> <session>` — down + remove the worktree.
+- `bb nido:session:status` / `nido:session:list` — read-only.
 
-- `bb nido:session:init :project <p> <session>` — create the worktree if missing, start PG + JVM + app (one call, fully running)
-- `bb nido:session:stop :project <p> <session>` — tear everything down; worktree stays on disk
-- `bb nido:session:refresh :project <p> <session>` — stop, drop PGDATA, re-clone from the current template, restart
-- `bb nido:session:destroy :project <p> <session>` — stop + remove the worktree
+There is no `restart` task — use `down` then `up` (or just `up`, since it's idempotent on a running session and a no-op there). The dashboard's restart button still exists; it's an internal UI-only path.
 
-Plus `restart`, `status`, `list`. The UI watchdog fully stops idle sessions (default 30 min of zero ESTABLISHED connections on the app port); wake is user-driven — an idle-stopped session stays down until the next `session:init`.
+The UI watchdog fully stops idle sessions (default 30 min of zero ESTABLISHED connections on the app port); wake is user-driven — an idle-stopped session stays down until the next `session:up`.
 
 ## PostgreSQL topology
 
 Two clusters per project. Every session gets its own database — there is no shared runtime cluster.
 
 - **Template cluster** — long-lived APFS clone source at `~/.nido/templates/<project>/pg-data/`. Initialized with `bb nido:template:pg:init :project <name>`; refreshed from a dump with `bb nido:template:pg:refresh`. Must always be stopped when not actively being refreshed (clones need a clean `postmaster.pid` absence).
-- **Per-session cluster** — own cluster under `~/.nido/state/<instance-id>/pg-data/`, APFS-cloned from the template at `session:init` and torn down on `session:stop`. Each session runs Flyway against its own DB on app boot, so destructive migrations can't leak between sessions.
+- **Per-session cluster** — own cluster under `~/.nido/state/<instance-id>/pg-data/`, APFS-cloned from the template at `session:up` and torn down on `session:down`. Each session runs Flyway against its own DB on app boot, so destructive migrations can't leak between sessions.
 
-After a `template:pg:refresh`, running sessions still hold their original clone — use `bb nido:session:refresh :project <p> <session>` to drop their PGDATA and re-clone from the new template. APFS clones are essentially free, so this is fast.
+After a `template:pg:refresh`, running sessions still hold their original clone — use `bb nido:session:reset :project <p> <session>` to drop their PGDATA and re-clone from the new template. APFS clones are essentially free, so this is fast.
 
 ### session.edn shape
 
@@ -74,8 +75,8 @@ The `:process` service accepts a `:command-template` (vector of tokens) that nid
 ```
 
 ```
-bb nido:session:init :project brian foo :jvm-heap-max 1500m
-bb nido:session:init :project brian foo :jvm-aliases [dev cider/nrepl]
+bb nido:session:up :project brian foo :jvm-heap-max 1500m
+bb nido:session:up :project brian foo :jvm-aliases [dev cider/nrepl]
 ```
 
 These produce `-J-Xmx...` and `-M:a:b:c` on the `clojure` command line without any change to brian. The UI session list surfaces live RSS for the repl JVM and the PG process next to the port columns.

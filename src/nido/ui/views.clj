@@ -298,7 +298,7 @@
        (for [row rows]
          (session-row project-name row))]
       [:tbody {:id "sessions-body"}
-       [:tr [:td {:colspan "7"} [:span.empty "No sessions yet — run `bb nido:session:init <name>`."]]]]))))
+       [:tr [:td {:colspan "7"} [:span.empty "No sessions yet — run `bb nido:session:up <name>`."]]]]))))
 
 (defn log-tail-fragment
   "Just the log content div — for SSE refresh."

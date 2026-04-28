@@ -9,7 +9,7 @@
 
    `<session>` is optional. With a positional session name, the run
    uses that running nido session as its source worktree (start one
-   with `bb nido:session:init :project <p> <session>`). Without one,
+   with `bb nido:session:up :project <p> <session>`). Without one,
    the run defaults to the project's main directory — useful for
    pre-merge sanity checks or fast iteration without spinning up a
    worktree first. Steps with `:isolated-pg?` / `:isolated-app?` get

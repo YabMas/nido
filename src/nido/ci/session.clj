@@ -30,7 +30,7 @@
     (when-not session
       (throw (ex-info (str "No running session for instance-id '" instance-id "'")
                       {:instance-id instance-id
-                       :hint "Run `bb nido:session:init <name>` first."})))
+                       :hint "Run `bb nido:session:up <name>` first."})))
     (let [ctx (:context session)
           project-name (:project-name session)
           [low high] default-ci-port-range]

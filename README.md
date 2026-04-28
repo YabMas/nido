@@ -12,41 +12,48 @@ Run from this project:
 bb tasks
 ```
 
-### Start a session
+### Bring a session up
 
 ```bash
-bb nido:session:start :project-dir "/Users/yabmas/Code/brian-next"
+bb nido:session:up :project brian feature-x
 ```
 
-Optional overrides:
+Optional overrides (heap, aliases, branch, base):
 
 ```bash
-bb nido:session:start \
-  :project-dir "/Users/yabmas/.codex/worktrees/6aa4/brian-next" \
-  :app-port 3901
+bb nido:session:up :project brian feature-x :jvm-heap-max 1500m
+bb nido:session:up :project brian feature-x :base develop
 ```
 
 ### Check status
 
 ```bash
-bb nido:session:status :project-dir "/Users/yabmas/.codex/worktrees/6aa4/brian-next"
+bb nido:session:status :project brian feature-x
 ```
 
-### Stop a session
+### Bring a session down (worktree preserved)
 
 ```bash
-bb nido:session:stop :project-dir "/Users/yabmas/.codex/worktrees/6aa4/brian-next"
+bb nido:session:down :project brian feature-x
 ```
 
-### List all tracked sessions
+### Nuclear recovery (drops PGDATA, re-clones template)
 
 ```bash
-bb nido:session:list
+bb nido:session:reset :project brian feature-x
 ```
 
-## Backward compatibility
+### Destroy a session (down + remove worktree)
 
-`agent:session:*` task names are still available as aliases.
+```bash
+bb nido:session:destroy :project brian feature-x
+```
+
+### List all sessions for a project
+
+```bash
+bb nido:session:list :project brian
+```
 
 ## Notes
 
