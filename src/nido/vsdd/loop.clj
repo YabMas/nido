@@ -72,6 +72,19 @@
        "brief description of each change."))
 
 
+(defn- format-routing-history
+  "Format iteration routing history for the critic prompt."
+  [manifest]
+  (when (seq (:iterations manifest))
+    (str "\nROUTING HISTORY:\n"
+         (str/join "\n"
+                   (map (fn [{:keys [iteration judge]}]
+                          (str "  Iteration " iteration " → "
+                               (when-let [v (:verdict judge)]
+                                 (name v))))
+                        (:iterations manifest)))
+         "\n")))
+
 (defn- default-critic-prompt [module-path run-dir iteration]
   (str "MODULE: " module-path "\n"
        "RUN_DIR: " run-dir "\n"
@@ -153,14 +166,15 @@
 
 (defn- run-critic
   "Run the critic agent. Returns agent result map."
-  [config module-path run-dir iteration]
+  [config module-path run-dir iteration manifest]
   (let [prompt-fn (get-prompt-fn config :critic)
         slug-dir (str run-dir "/" (module-slug module-path))
-        config (update config :env merge {"VSDD_RUN_DIR" run-dir})]
+        config (update config :env merge {"VSDD_RUN_DIR" run-dir})
+        base-prompt (prompt-fn module-path run-dir iteration)
+        prompt (str base-prompt (format-routing-history manifest))]
     (.mkdirs (jio/file slug-dir))
     (print-phase "Critic" module-path)
-    (invoke-role config :critic
-                 (prompt-fn module-path run-dir iteration))))
+    (invoke-role config :critic prompt)))
 
 (defn- run-judge
   "Run the judge. Returns parsed verdict map."
@@ -195,6 +209,29 @@
                  (prompt-fn module-path findings))))
 
 ;; ---------------------------------------------------------------------------
+;; Unresolved spec finding collection
+
+(defn- collect-unresolved-spec-findings
+  "Scan all critic reports and find spec findings that were never routed
+   to the architect. Returns a vector of finding maps with :iteration added."
+  [manifest run-dir module-path]
+  (let [slug (module-slug module-path)
+        spec-routed-iters (set (keep (fn [{:keys [iteration judge architect]}]
+                                       (when (or (= :route-to-spec (:verdict judge))
+                                                 (:auto-resolved architect))
+                                         iteration))
+                                     (:iterations manifest)))]
+    (->> (:iterations manifest)
+         (remove #(spec-routed-iters (:iteration %)))
+         (mapcat (fn [{:keys [iteration]}]
+                   (let [report-file (str run-dir "/" slug "/critic-report-" iteration ".edn")
+                         report (io/read-edn report-file)]
+                     (when (seq (:findings-for-spec report))
+                       (map #(assoc % :from-iteration iteration)
+                            (:findings-for-spec report))))))
+         vec)))
+
+;; ---------------------------------------------------------------------------
 ;; Judge + route handling (extracted for reuse by resume)
 
 (defn- handle-judge-and-route
@@ -222,7 +259,16 @@
       :converged
       (do
         (println (str "Module " module-path " converged on iteration " iteration))
-        (let [final (manifest/finalize mfst :converged)]
+        (let [unresolved (collect-unresolved-spec-findings mfst run-dir module-path)
+              mfst (assoc mfst :unresolved-spec-findings unresolved)
+              final (manifest/finalize mfst :converged)]
+          (when (seq unresolved)
+            (println)
+            (println (str "  ⚠ " (count unresolved) " unresolved spec finding(s):"))
+            (doseq [{:keys [rule description from-iteration]} unresolved]
+              (println (str "    - [iter " from-iteration "] "
+                            (when rule (str rule ": "))
+                            description))))
           (manifest/save! final)
           [:converged final]))
 
@@ -295,7 +341,15 @@
         (do (println)
             (println (str "CIRCUIT BREAKER: " module-path " did not converge after "
                           max-iter " iterations."))
-            (let [final (manifest/finalize mfst :exhausted)]
+            (let [unresolved (collect-unresolved-spec-findings mfst run-dir module-path)
+                  mfst (assoc mfst :unresolved-spec-findings unresolved)
+                  final (manifest/finalize mfst :exhausted)]
+              (when (seq unresolved)
+                (println (str "  ⚠ " (count unresolved) " unresolved spec finding(s):"))
+                (doseq [{:keys [rule description from-iteration]} unresolved]
+                  (println (str "    - [iter " from-iteration "] "
+                                (when rule (str rule ": "))
+                                description))))
               (manifest/save! final)
               final))
 
@@ -307,7 +361,7 @@
 
           (case phase
             :critic
-            (let [result (run-critic config module-path run-dir iteration)]
+            (let [result (run-critic config module-path run-dir iteration mfst)]
               (when-not (zero? (:exit result))
                 (let [final (manifest/finalize mfst :error)]
                   (manifest/save! final)

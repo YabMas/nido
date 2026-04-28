@@ -7,8 +7,16 @@
   (or (System/getenv "NIDO_HOME")
       (str (fs/path (System/getProperty "user.home") ".nido"))))
 
-(defn log-step [message]
-  (println (str "[nido] " message)))
+(def ^:private log-lock (Object.))
+
+(defn log-step
+  "Print a single nido status line. Synchronised so concurrent step-run
+   futures can't interleave their messages — without the lock, parallel
+   `println` calls corrupt each other (\"[nido] step-run a starting[nido] step-run b starting\")."
+  [message]
+  (locking log-lock
+    (println (str "[nido] " message))
+    (flush)))
 
 (defn now-iso []
   (str (java.time.Instant/now)))

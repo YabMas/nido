@@ -50,3 +50,27 @@
    service-name is a keyword, contributions is a map."
   [ctx service-name contributions]
   (assoc ctx service-name contributions))
+
+(defn prepare-jvm
+  "Derive joined-string forms for JVM config so service-def templates can
+   reference them directly without a walk-time join step.
+
+   In:  {:heap-max \"2g\" :aliases [:dev :cider/nrepl] :extra-opts [\"-XX:+Foo\"]}
+   Out: {:heap-max \"2g\" :aliases [...] :extra-opts [...]
+         :aliases-joined \"dev:cider/nrepl\"
+         :extra-opts-joined \"-XX:+Foo\"}
+
+   Aliases are joined with ':' (the `-M:a:b:c` convention). Extra JVM opts
+   are space-joined. Keys already present in the input map are preserved."
+  [jvm]
+  (let [aliases (seq (:aliases jvm))
+        extra-opts (seq (:extra-opts jvm))]
+    (assoc jvm
+           :aliases-joined
+           (if aliases
+             (str/join ":"
+                       (map (fn [a] (if (keyword? a) (subs (str a) 1) (str a)))
+                            aliases))
+             "")
+           :extra-opts-joined
+           (if extra-opts (str/join " " extra-opts) ""))))

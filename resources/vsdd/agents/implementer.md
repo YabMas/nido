@@ -86,6 +86,9 @@ The report must be an EDN map:
 - `:findings-addressed` — vector of finding numbers from the critic report that you addressed
 - `:files-modified` — every file you touched with a brief description of each change
 - `:findings-skipped` — findings you did not address, with a reason for each (e.g. spec-level finding, no fix needed per critic's own assessment). This helps the judge route correctly.
+- `:workaround-risks` — (optional) if any fix works for the known case but may overcorrect in other cases (e.g., searching both directions when only one is correct per-context), note the risk here. This helps the critic and judge assess whether a broader fix is needed.
+
+Example: `{:finding 2 :risk "Fix searches both directions unconditionally; may overcount when source has edges in both directions"}`
 
 Also report in your text output:
 - **Files modified:** List each file and what changed

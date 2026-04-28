@@ -34,26 +34,48 @@
                        (+ now 5000)
                        next-log-at)))))))))
 
+(defn- resolve-command
+  "Return the shell command string this process service should exec.
+   Prefers :command-template (vector of pre-substituted tokens;
+   blank/nil tokens dropped) over :command (literal string). Tokens may
+   still contain whitespace — they are joined with single spaces; quoting
+   is the author's responsibility."
+  [service-def]
+  (if-let [tmpl (:command-template service-def)]
+    (str/join " " (remove (fn [t] (or (nil? t) (and (string? t) (str/blank? t)))) tmpl))
+    (:command service-def)))
+
 (defmethod service/start-service! :process
   [service-def ctx _opts]
-  (let [{:keys [command port-file port-timeout-ms]
+  (let [{:keys [port-file port-timeout-ms]
          svc-name :name
          :or {port-timeout-ms 120000}} service-def
+        command (resolve-command service-def)
         project-name (get-in ctx [:session :project-name])
         project-dir (get-in ctx [:session :project-dir])
-        log-path (state/log-file project-name svc-name)]
+        instance-id (or (get-in ctx [:session :instance-id]) project-name)
+        log-path (state/log-file instance-id svc-name)]
 
-    (fs/create-dirs (state/log-dir project-name))
+    (when (str/blank? command)
+      (throw (ex-info ":process service missing :command or :command-template"
+                      {:service-name svc-name})))
+
+    (fs/create-dirs (state/log-dir instance-id))
 
     ;; Delete existing port file
     (when port-file
       (fs/delete-if-exists (str (fs/path project-dir port-file))))
 
-    ;; Start background process
+    ;; Start background process. :shutdown nil disables the destroy-tree
+    ;; JVM shutdown hook babashka.process/shell registers by default — that
+    ;; hook hangs the bb process at exit when the spawned bash leaves a
+    ;; long-running detached descendant (the JVM here is intentionally
+    ;; supposed to outlive bb).
     (let [cmd (str "nohup " command " > "
                    (proc/quoted log-path)
                    " 2>&1 & echo $!")
-          result (shell {:continue true :out :string :err :string :dir project-dir}
+          result (shell {:continue true :out :string :err :string
+                         :dir project-dir :shutdown nil}
                         "bash" "-lc" cmd)
           pid (some-> (:out result) str/trim parse-long)]
       (when-not (zero? (:exit result))

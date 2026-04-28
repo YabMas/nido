@@ -1,0 +1,756 @@
+-- allium: 2
+-- local_ci.allium
+--
+-- Scope: Local CI execution on the host for fast pre-push iteration
+-- Includes: Step definitions, service graphs, healthchecks, step-run
+--           lifecycle, run (multi-step) orchestration, isolation
+--           guarantees, status manifest and log file layout, rerun of
+--           failed steps, optional viewer attachment
+-- Excludes:
+--   - Container runtimes (Docker, Apple container CLI)
+--   - Cross-machine reproducibility (real CI is the source of truth;
+--     local/remote divergence is a signal for offline investigation,
+--     not a state this spec models)
+--   - The real CI system itself (GitHub Actions, etc.)
+--   - Project-specific step definitions (what "unit", "integ", "e2e"
+--     mean for a given project lives in project config)
+--   - CLI surface and argument parsing
+--   - Loading and parsing of .nido/ci.edn
+--   - Session management primitives (worktree allocation, per-session
+--     Postgres, port allocation) -- provided by the existing nido
+--     session layer
+--   - Tool-version management (delegated to project-local mise/asdf)
+
+------------------------------------------------------------
+-- External Entities
+------------------------------------------------------------
+
+external entity Session {
+    worktree_path: String
+
+    -- Per-session state directory the session layer owns. Run artifacts
+    -- (status manifests, step-run logs, isolation dirs) are rooted here
+    -- rather than inside the worktree, so they do not appear as git
+    -- detritus and survive worktree removal.
+    instance_state_dir: String
+
+    pg_port: Integer
+    app_port_range_start: Integer
+    app_port_range_end: Integer
+}
+
+external entity StepDefinition {
+    name: String
+    service_defs: Set<ServiceDefinition>
+    command: String
+    working_dir: String
+
+    -- Step-level deps: this step may only start once every step named
+    -- in `after` has reached a terminal state. Analogous to, but one
+    -- level above, ServiceDefinition.depends_on.
+    after: Set<String>
+}
+
+external entity ServiceDefinition {
+    name: String
+    start_command: String
+    healthcheck: HealthcheckDefinition
+    depends_on: Set<String>
+}
+
+external entity HealthcheckDefinition {
+    probe: HealthProbe
+    timeout: Duration
+    interval: Duration
+    consecutive_successes_required: Integer
+}
+
+------------------------------------------------------------
+-- Value Types
+------------------------------------------------------------
+
+value HealthProbe {
+    kind: ProbeKind
+    command: String?
+    port: Integer?
+}
+
+value RunPaths {
+    -- On-disk layout for a Run (the aggregate), rooted at
+    -- <session.instance_state_dir>/<runs_root>/<run_id>/
+    root: String
+    status_manifest_path: String
+}
+
+value StepRunPaths {
+    -- On-disk layout for one StepRun within its Run, rooted at
+    -- <run.paths.root>/steps/<step_name>/
+    root: String
+    status_manifest_path: String
+    logs_dir: String
+}
+
+value ServiceLogPath {
+    -- <step_run.paths.logs_dir>/<service_name>.log
+    service_name: String
+    path: String
+}
+
+value IsolationEnv {
+    -- Environment overrides established during a StepRun's preparing
+    -- phase and torn down during tearing_down
+    tmpdir: String
+    xdg_cache_home: String
+    process_group_id: Integer
+}
+
+------------------------------------------------------------
+-- Enumerations
+------------------------------------------------------------
+
+enum ProbeKind { command | port_ready }
+
+enum RunState {
+    pending
+    | running
+    | tearing_down
+    | done
+}
+
+enum StepRunState {
+    pending
+    | preparing
+    | starting_services
+    | running_command
+    | tearing_down
+    | done
+}
+
+enum RunOutcome { passed | failed | errored | interrupted }
+
+enum StepRunOutcome { passed | failed | errored | interrupted }
+
+enum ServiceState {
+    not_started
+    | starting
+    | ready
+    | exited
+    | killed
+}
+
+enum ViewerKind { mprocs | tmux | none }
+
+------------------------------------------------------------
+-- Entities
+------------------------------------------------------------
+
+-- The aggregate: one Run covers a set of StepRuns fanned out in
+-- parallel (modulo step-level `after` deps). A Run is the user-facing
+-- unit; StepRun is the internal unit that owns a process tree.
+
+entity Run {
+    run_id: String
+    session: Session
+    state: RunState
+    outcome: RunOutcome? when state = done
+    started_at: Timestamp
+    finished_at: Timestamp when state = done
+
+    -- On-disk layout.
+    paths: RunPaths
+
+    -- StepRuns belonging to this Run. The set is fixed at Run creation
+    -- (derived from the step selection the user passed and the ci.edn).
+    step_runs: StepRun with run = this
+
+    -- Error detail for a Run-level failure that is not attributable to
+    -- any single StepRun (e.g. the user SIGINT'd the whole run while
+    -- step-runs were still pending). StepRun-level errors live on the
+    -- StepRun itself.
+    error_message: String? when state = tearing_down | done
+
+    -- Rerun lineage: when this Run was launched via `rerun`, the
+    -- run_id of the previous Run it re-executes failed steps from.
+    rerun_of: String?
+
+    -- Optional viewer attachment; lifecycle-independent.
+    viewer: Viewer with run = this
+
+    transitions state {
+        pending -> running
+        pending -> tearing_down
+        running -> tearing_down
+        tearing_down -> done
+        terminal: done
+    }
+
+    -- Derived
+    is_terminal: state = done
+    passed: state = done and outcome = passed
+    all_step_runs_terminal: step_runs.all(sr => sr.is_terminal)
+    any_step_run_failed:    step_runs.any(sr => sr.outcome = failed)
+    any_step_run_errored:   step_runs.any(sr => sr.outcome = errored)
+    any_step_run_interrupted: step_runs.any(sr => sr.outcome = interrupted)
+}
+
+-- One step's execution inside a Run. Owns its process group, services,
+-- isolation env and status manifest. This entity is what the earlier
+-- version of this spec called Run.
+
+entity StepRun {
+    run: Run
+    step: StepDefinition
+    step_run_id: String
+    state: StepRunState
+    outcome: StepRunOutcome? when state = done
+    started_at: Timestamp
+    finished_at: Timestamp when state = done
+
+    -- Isolation environment established during preparing; present for
+    -- the remainder of the step-run's life.
+    isolation: IsolationEnv when state = preparing | starting_services | running_command | tearing_down | done
+
+    -- On-disk layout (nested inside the Run's paths).
+    paths: StepRunPaths
+
+    -- Services belonging to this step-run.
+    services: Service with step_run = this
+
+    -- Command exit code once the command has run.
+    command_exit_code: Integer? when state = running_command | tearing_down | done
+
+    -- Error detail for the errored outcome.
+    error_message: String? when state = tearing_down | done
+
+    transitions state {
+        pending -> preparing
+        preparing -> starting_services
+        preparing -> tearing_down
+        starting_services -> running_command
+        starting_services -> tearing_down
+        running_command -> tearing_down
+        tearing_down -> done
+        terminal: done
+    }
+
+    -- Derived
+    is_terminal: state = done
+    passed: state = done and outcome = passed
+    all_services_ready: services.all(s => s.state = ready)
+    any_service_down: services.any(s => s.state = exited or s.state = killed)
+}
+
+entity Service {
+    step_run: StepRun
+    definition: ServiceDefinition
+    state: ServiceState
+    pid: Integer when state = starting | ready | exited | killed
+    started_at: Timestamp when state = starting | ready | exited | killed
+    ready_at: Timestamp when state = ready | exited | killed
+    exited_at: Timestamp when state = exited | killed
+    exit_code: Integer when state = exited
+    log_path: ServiceLogPath
+
+    transitions state {
+        not_started -> starting
+        starting -> ready
+        starting -> exited
+        starting -> killed
+        ready -> exited
+        ready -> killed
+        terminal: exited, killed
+    }
+
+    -- Derived
+    is_ready: state = ready
+    is_down: state = exited or state = killed
+}
+
+entity Viewer {
+    run: Run
+    kind: ViewerKind
+    attached_at: Timestamp
+    detached_at: Timestamp?
+
+    -- Derived
+    is_attached: detached_at = null
+}
+
+------------------------------------------------------------
+-- Config
+------------------------------------------------------------
+
+config {
+    -- Directory, relative to the session's instance_state_dir, under
+    -- which per-run artifacts are written. Each Run gets a
+    -- subdirectory: <session.instance_state_dir>/<runs_root>/<run_id>/.
+    -- StepRun artifacts nest further under .../steps/<step_name>/.
+    runs_root: String = "runs"
+
+    -- Default healthcheck parameters used when a ServiceDefinition
+    -- does not override them.
+    default_healthcheck_timeout: Duration = 60.seconds
+    default_healthcheck_interval: Duration = 1.seconds
+    default_consecutive_successes: Integer = 2
+
+    -- Maximum wall-clock duration a single StepRun is allowed to take
+    -- before the orchestrator forces its teardown. End-to-end, not
+    -- per phase. Applies per StepRun, not to the Run as a whole.
+    step_run_timeout: Duration = 30.minutes
+
+    -- Viewer selection used when the caller does not specify one.
+    default_viewer: ViewerKind = none
+}
+
+------------------------------------------------------------
+-- Rules
+------------------------------------------------------------
+
+-- Run lifecycle (aggregate)
+
+rule StartRun {
+    when: StartRun(session, run_id, paths, step_defs, rerun_of)
+
+    ensures: Run.created(
+        run_id: run_id,
+        session: session,
+        state: pending,
+        started_at: now,
+        paths: paths,
+        rerun_of: rerun_of
+    )
+    ensures: for step_def in step_defs:
+        StepRun.created(
+            run: Run(run_id),
+            step: step_def,
+            step_run_id: step_def.name,
+            state: pending,
+            started_at: now,
+            paths: StepRunPaths(
+                root: paths.root + "/steps/" + step_def.name,
+                status_manifest_path: paths.root + "/steps/" + step_def.name + "/status.edn",
+                logs_dir: paths.root + "/steps/" + step_def.name + "/logs"
+            )
+        )
+
+    @guidance
+        -- step_defs is the already-resolved set of StepDefinitions the
+        -- Run will execute (after the user's :only filter / rerun
+        -- filter have been applied). The full ci.edn step set is not
+        -- the Run's concern.
+        -- rerun_of is nil for a fresh run, or the previous run_id when
+        -- this Run was launched via `rerun`.
+}
+
+rule BeginRun {
+    when: BeginRun(run)
+
+    requires: run.state = pending
+
+    ensures: run.state = running
+
+    @guidance
+        -- Once the Run is running, eligible StepRuns (those whose
+        -- `after` dependencies are satisfied) may begin their own
+        -- preparing phase. StepRuns execute in parallel; the Run only
+        -- orchestrates the fan-out, it does not itself spawn services
+        -- or run commands.
+}
+
+rule RunCompletes {
+    when: run: Run.state = running and run.all_step_runs_terminal
+
+    ensures: run.state = tearing_down
+
+    @guidance
+        -- Fires when the last StepRun reaches its terminal state.
+        -- Teardown at the Run level is mostly bookkeeping — the
+        -- StepRuns already tore down their own process groups — but it
+        -- is still a distinct state so that viewer integrations and
+        -- post-processing can observe the transition.
+}
+
+rule TearDownRun {
+    when: run: Run.state transitions_to tearing_down
+
+    ensures: for step_run in run.step_runs where not step_run.is_terminal:
+        step_run.state = tearing_down
+        step_run.error_message = "run interrupted"
+
+    ensures: run.state = done
+    ensures: run.finished_at = now
+    ensures:
+        if run.any_step_run_interrupted or run.error_message = "interrupted":
+            run.outcome = interrupted
+        else if run.any_step_run_errored or run.error_message != null:
+            run.outcome = errored
+        else if run.any_step_run_failed:
+            run.outcome = failed
+        else:
+            run.outcome = passed
+
+    @guidance
+        -- The Run's outcome is derived from its step-runs' outcomes.
+        -- Worst outcome wins with interrupted > errored > failed >
+        -- passed. A Run-level error_message (set by InterruptRun or
+        -- RunTimeout) also routes to errored/interrupted.
+        -- StepRuns already-terminal keep their existing outcome.
+}
+
+-- StepRun lifecycle (what the previous version of this spec called
+-- simply Run). A StepRun's state transitions are independent per step,
+-- subject to the `after` constraint enforced at start time.
+
+rule StartStepRun {
+    when: StartStepRun(step_run)
+
+    requires: step_run.state = pending
+    requires: step_run.run.state = running
+    requires: step_run.run.step_runs.all(
+        sr => sr.step.name in step_run.step.after implies sr.is_terminal)
+
+    ensures: step_run.state = preparing
+
+    @guidance
+        -- A StepRun may only begin preparing once every step named in
+        -- its `after` set has reached a terminal state. Steps without
+        -- `after` start immediately when the Run enters running.
+}
+
+rule PrepareStepRun {
+    when: PrepareStepRun(step_run, isolation)
+
+    requires: step_run.state = preparing
+
+    ensures: step_run.isolation = isolation
+
+    @guidance
+        -- Preparation sets G4 (own TMPDIR and XDG_CACHE_HOME per
+        -- step-run) and establishes the process group under which
+        -- services and the command will run (G5). The worktree,
+        -- Postgres instance and port range (G1, G2, G3) come from the
+        -- Session and are not established here.
+        -- The orchestrator creates logs_dir and writes an initial
+        -- step-run status manifest as part of preparation.
+}
+
+rule PreparationFails {
+    when: PreparationFails(step_run, message)
+
+    requires: step_run.state = preparing
+
+    ensures: step_run.state = tearing_down
+    ensures: step_run.error_message = message
+}
+
+rule BeginServiceStartup {
+    when: BeginServiceStartup(step_run)
+
+    requires: step_run.state = preparing
+
+    ensures: step_run.state = starting_services
+    ensures: for service_def in step_run.step.service_defs:
+        Service.created(
+            step_run: step_run,
+            definition: service_def,
+            state: not_started,
+            log_path: ServiceLogPath(service_name: service_def.name, path: step_run.paths.logs_dir)
+        )
+}
+
+rule StartService {
+    when: StartService(service)
+
+    requires: service.step_run.state = starting_services
+    requires: service.state = not_started
+    requires: service.step_run.services.all(
+        s => s.definition.name in service.definition.depends_on implies s.state = ready)
+
+    ensures: service.state = starting
+    ensures: service.started_at = now
+
+    @guidance
+        -- A service may only start once every service it depends on
+        -- is ready. The orchestrator performs a topological walk;
+        -- services with satisfied dependencies are started in parallel.
+        -- Service stdout and stderr are redirected to
+        -- service.log_path.path. The service inherits the step-run's
+        -- isolation env (TMPDIR, XDG_CACHE_HOME, process group).
+}
+
+rule ServiceBecomesReady {
+    when: ServiceBecomesReady(service)
+
+    requires: service.state = starting
+
+    ensures: service.state = ready
+    ensures: service.ready_at = now
+
+    @guidance
+        -- A service is ready when its healthcheck probe succeeds
+        -- consecutive_successes_required times within timeout. The
+        -- probe is evaluated every interval.
+        -- A port_ready probe checks TCP connectability on the
+        -- declared port. A command probe runs the declared command
+        -- and treats exit 0 as success.
+}
+
+rule ServiceFailsToBecomeReady {
+    when: ServiceFailsToBecomeReady(service, exit_code)
+
+    requires: service.state = starting
+
+    ensures: service.state = exited
+    ensures: service.exited_at = now
+    ensures: service.exit_code = exit_code
+    ensures: service.step_run.state = tearing_down
+    ensures: service.step_run.error_message = "service failed healthcheck"
+
+    @guidance
+        -- Healthcheck timeout or a service process exiting before
+        -- becoming ready both land here. The step-run is torn down
+        -- and will resolve with outcome = errored. The Run itself is
+        -- NOT torn down — sibling step-runs keep executing. (Fail-fast
+        -- across the Run can be added in a follow-up if the default
+        -- "run everything to see all failures" proves wrong.)
+}
+
+rule AllServicesReady {
+    when: service: Service.state transitions_to ready
+
+    requires: service.step_run.state = starting_services
+    requires: service.step_run.all_services_ready
+
+    ensures: service.step_run.state = running_command
+
+    @guidance
+        -- Fires on the last service to become ready. The command is
+        -- then launched under the step-run's process group with the
+        -- step-run's isolation env applied.
+}
+
+rule CommandCompletes {
+    when: CommandCompletes(step_run, exit_code)
+
+    requires: step_run.state = running_command
+
+    ensures: step_run.command_exit_code = exit_code
+    ensures: step_run.state = tearing_down
+}
+
+rule TearDownStepRun {
+    when: step_run: StepRun.state transitions_to tearing_down
+
+    ensures: for service in step_run.services where not service.is_down:
+        service.state = killed
+        service.exited_at = now
+
+    ensures: step_run.state = done
+    ensures: step_run.finished_at = now
+    ensures:
+        if step_run.error_message = "interrupted" or step_run.error_message = "run interrupted":
+            step_run.outcome = interrupted
+        else if step_run.error_message != null:
+            step_run.outcome = errored
+        else if step_run.command_exit_code = 0:
+            step_run.outcome = passed
+        else:
+            step_run.outcome = failed
+
+    @guidance
+        -- Teardown kills the step-run's process group (G5), which
+        -- terminates every service and any descendants the command
+        -- spawned. Teardown is mandatory: it runs on normal completion,
+        -- on service failure, on command failure and on interruption.
+        -- The log files and status manifest survive teardown for
+        -- post-mortem inspection.
+}
+
+-- Interruption and timeouts
+
+rule InterruptRun {
+    when: InterruptRun(run)
+
+    requires: not run.is_terminal
+    requires: run.state != tearing_down
+
+    ensures: run.state = tearing_down
+    ensures: run.error_message = "interrupted"
+
+    @guidance
+        -- External interruption (SIGINT, parent process exit, nido
+        -- shutdown). The Run short-circuits to teardown; TearDownRun
+        -- marks any non-terminal step-runs with "run interrupted" so
+        -- they resolve as interrupted via TearDownStepRun.
+}
+
+rule StepRunTimeout {
+    when: step_run: StepRun.started_at + config.step_run_timeout <= now
+
+    requires: not step_run.is_terminal
+    requires: step_run.state != tearing_down
+
+    ensures: step_run.state = tearing_down
+    ensures: step_run.error_message = "step-run exceeded step_run_timeout"
+}
+
+-- Viewer attachment (orthogonal to lifecycle). Attaches to the Run;
+-- internally the viewer exposes each step-run as its own pane or tab.
+
+rule AttachViewer {
+    when: AttachViewer(run, kind)
+
+    requires: not run.is_terminal
+    requires: kind != none
+    requires: run.viewer = null
+
+    ensures: Viewer.created(
+        run: run,
+        kind: kind,
+        attached_at: now
+    )
+
+    @guidance
+        -- The viewer is a passive consumer: it tails step-run service
+        -- log files and reads the aggregate + per-step status
+        -- manifests. It does not own any process lifecycle. Attaching
+        -- and detaching a viewer has no effect on the Run.
+}
+
+rule DetachViewer {
+    when: DetachViewer(viewer)
+
+    requires: viewer.is_attached
+
+    ensures: viewer.detached_at = now
+}
+
+------------------------------------------------------------
+-- Invariants
+------------------------------------------------------------
+
+-- Isolation guarantees. G1, G2, G3 are provided by the session layer
+-- (an external entity in this spec); G4, G5 are established by each
+-- StepRun's Preparing phase; G6 is delegated to project tooling; G7
+-- is derived from G1-G4 and applies across concurrent Runs.
+
+invariant G4_OwnTmpAndCache {
+    -- Every non-pending step-run has a populated isolation env.
+    for step_run in StepRuns:
+        step_run.state != pending implies step_run.isolation != null
+}
+
+invariant G4_IsolationEnvsAreDistinct {
+    -- Two concurrent non-terminal step-runs do not share TMPDIR or
+    -- XDG_CACHE_HOME directories, whether inside the same Run or
+    -- across different Runs.
+    for a in StepRuns:
+        for b in StepRuns:
+            a != b and not a.is_terminal and not b.is_terminal
+                implies a.isolation.tmpdir != b.isolation.tmpdir
+                    and a.isolation.xdg_cache_home != b.isolation.xdg_cache_home
+}
+
+invariant G5_OwnProcessGroup {
+    -- Every running service belongs to its step-run's process group.
+    -- Two concurrent non-terminal step-runs have distinct process
+    -- groups, so teardown of one cannot terminate services of another.
+    for a in StepRuns:
+        for b in StepRuns:
+            a != b and not a.is_terminal and not b.is_terminal
+                implies a.isolation.process_group_id != b.isolation.process_group_id
+}
+
+invariant G7_ConcurrentRunsDoNotCollide {
+    -- Two concurrent Runs do not share a Session (and therefore not a
+    -- worktree). Session isolation (G1, G2, G3) combined with G4 then
+    -- implies non-collision across all isolation dimensions.
+    for a in Runs:
+        for b in Runs:
+            a != b and not a.is_terminal and not b.is_terminal
+                implies a.session != b.session
+}
+
+-- Structural invariants
+
+invariant ServiceDepsReadyBeforeStart {
+    -- A service may not have been started before every service it
+    -- depends on had become ready.
+    for service in Services:
+        service.started_at != null implies
+            service.step_run.services.all(
+                s => s.definition.name in service.definition.depends_on
+                    implies s.ready_at != null
+                        and s.ready_at <= service.started_at)
+}
+
+invariant StepRunAfterDepsRespected {
+    -- A step-run may not have started before every step it lists in
+    -- `after` reached a terminal state.
+    for sr in StepRuns:
+        sr.state != pending implies
+            sr.run.step_runs.all(
+                other => other.step.name in sr.step.after
+                    implies other.is_terminal
+                        and other.finished_at <= sr.started_at)
+}
+
+invariant TerminalStepRunsFinished {
+    for sr in StepRuns:
+        sr.is_terminal implies sr.finished_at != null and sr.outcome != null
+}
+
+invariant TerminalRunsFinished {
+    for run in Runs:
+        run.is_terminal implies run.finished_at != null
+            and run.outcome != null
+            and run.all_step_runs_terminal
+}
+
+invariant TeardownKillsAllServices {
+    -- A done step-run has no live services left.
+    for sr in StepRuns:
+        sr.state = done implies sr.services.all(s => s.is_down)
+}
+
+invariant OutcomeFromCommandExitCode {
+    -- The step-run's outcome is derived from the command's exit code,
+    -- not from service states. Services are plumbing; they are
+    -- expected to stay up for the duration of the command.
+    for sr in StepRuns:
+        sr.state = done and sr.error_message = null
+            implies (sr.outcome = passed) = (sr.command_exit_code = 0)
+}
+
+invariant RunOutcomeDerivedFromStepRuns {
+    -- A Run's outcome is the worst-of across its step-runs, with any
+    -- Run-level error_message downgrading no further than errored (or
+    -- interrupted if the message is "interrupted").
+    for run in Runs:
+        run.state = done implies (
+            (run.outcome = interrupted) =
+                (run.any_step_run_interrupted or run.error_message = "interrupted")
+            and (run.outcome = passed) =
+                (not run.any_step_run_failed
+                 and not run.any_step_run_errored
+                 and not run.any_step_run_interrupted
+                 and run.error_message = null))
+}
+
+invariant OneViewerPerRun {
+    -- At most one viewer is attached to a Run at any time.
+    for run in Runs:
+        run.viewer.count <= 1
+}
+
+------------------------------------------------------------
+-- Open Questions
+------------------------------------------------------------
+
+open question "Should a service be restartable within a single step-run, or is one-shot lifecycle the only supported mode?"
+
+open question "Should the orchestrator surface a structured diff when a Run passes locally but an equivalent real-CI run failed, or is that strictly out of scope as an offline human task?"
+
+open question "Should healthcheck probes themselves time out independently of the overall healthcheck timeout, to avoid a slow probe command stalling readiness detection?"
+
+open question "Should a StepRun's healthcheck failure also abort sibling StepRuns (fail-fast), or is running them all to completion the right default for surfacing maximum information per Run?"

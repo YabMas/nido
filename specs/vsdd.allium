@@ -1,0 +1,582 @@
+-- allium: 2
+-- vsdd.allium
+--
+-- Scope: VSDD (Verification-Spec-Dev-Dev) feedback loop
+-- Includes: Run lifecycle, iteration cycle, finding classification,
+--           verdict routing, resumption, post-run analysis,
+--           parallel sweep orchestration
+-- Excludes:
+--   - Agent subprocess mechanics (process spawning, stream parsing)
+--   - File I/O and artifact storage layout
+--   - Prompt construction and template substitution
+--   - CLI entry points and configuration loading
+--   - Session management (separate spec)
+--   - UI dashboard (separate spec)
+
+------------------------------------------------------------
+-- External Entities
+------------------------------------------------------------
+
+external entity Module {
+    path: String
+}
+
+------------------------------------------------------------
+-- Value Types
+------------------------------------------------------------
+
+value Finding {
+    severity: Severity
+    rule: String?
+    location: String?
+    description: String
+    suggested_fix: String?
+    from_iteration: Integer?
+}
+
+value ImplementerOutcome {
+    files_modified: List<FileChange>
+    findings_addressed: List<Integer>
+    findings_skipped: List<SkippedFinding>
+}
+
+value FileChange {
+    path: String
+    changes: List<String>
+}
+
+value SkippedFinding {
+    finding: Integer
+    reason: String
+}
+
+------------------------------------------------------------
+-- Enumerations
+------------------------------------------------------------
+
+enum Severity { major | minor | nitpick }
+
+enum Verdict { converged | route_to_impl | route_to_spec }
+
+enum RunStatus { in_progress | converged | escalated | exhausted | error | interrupted }
+
+enum SweepStatus { completed | partial }
+
+enum ModuleOutcome { converged | escalated | error | skipped }
+
+enum CriticVerdict { clean | issues_found }
+
+------------------------------------------------------------
+-- Entities and Variants
+------------------------------------------------------------
+
+entity Sweep {
+    modules: List<Module>
+    status: SweepStatus
+    started_at: Timestamp
+    finished_at: Timestamp?
+    module_results: List<ModuleResult>
+
+    -- Derived
+    dirty_modules: modules where needs_run(module)
+    converged_modules: module_results where outcome = converged
+    is_complete: status = completed
+}
+
+entity ModuleResult {
+    sweep: Sweep
+    module: Module
+    outcome: ModuleOutcome
+    run: Run?
+    change_id: String?
+}
+
+value ConvergenceTrailer {
+    module_path: String
+    -- Line in commit description: "vsdd-converged: <module_path>"
+}
+
+entity Run {
+    module: Module
+    status: RunStatus
+    started_at: Timestamp
+    finished_at: Timestamp?
+    iterations: Iteration with run = this
+    unresolved_spec_findings: Set<Finding>
+    error_message: String?
+
+    -- Derived
+    iteration_count: iterations.count
+    is_active: status = in_progress
+    is_terminal: status in {converged, escalated, exhausted, error}
+    is_resumable: status in {in_progress, interrupted}
+}
+
+entity Iteration {
+    run: Run
+    number: Integer
+    critic: CriticPhase?
+    judge: JudgePhase?
+    implementer: ImplementerPhase?
+    architect: ArchitectPhase?
+}
+
+entity CriticPhase {
+    report: CriticReport?
+}
+
+entity CriticReport {
+    module: Module
+    findings_for_impl: Set<Finding>
+    findings_for_spec: Set<Finding>
+    notes: List<String>
+    verdict: CriticVerdict
+}
+
+entity JudgePhase {
+    verdict: Verdict
+    structural: Boolean
+    reasoning: String?
+}
+
+entity ImplementerPhase {
+    outcome: ImplementerOutcome?
+}
+
+entity ArchitectPhase {
+    auto_resolved: Boolean
+}
+
+------------------------------------------------------------
+-- Config
+------------------------------------------------------------
+
+config {
+    max_iterations: Integer = 99
+    judge_model: String = "haiku"
+    architect_enabled: Boolean = true
+    modules: List<String> = []
+}
+
+------------------------------------------------------------
+-- Rules
+------------------------------------------------------------
+
+-- Run lifecycle
+
+rule StartRun {
+    when: StartRun(module)
+
+    ensures: Run.created(
+        module: module,
+        status: in_progress,
+        started_at: now
+    )
+}
+
+rule CriticReviews {
+    when: CriticReviews(run, iteration_number)
+
+    requires: run.status = in_progress
+    requires: iteration_number <= config.max_iterations
+
+    ensures: Iteration.created(
+        run: run,
+        number: iteration_number
+    )
+
+    @guidance
+        -- The critic reads the module's specification, tests, and
+        -- implementation, then checks three alignments:
+        -- spec<->test, test<->impl, spec<->impl.
+        -- Findings are split into findings_for_impl and findings_for_spec.
+        -- Carried-forward findings from prior iterations are only
+        -- re-raised if their target role was never routed.
+}
+
+rule CriticProducesReport {
+    when: CriticProducesReport(iteration, report)
+
+    ensures: iteration.critic = CriticPhase.created(report: report)
+    ensures: JudgeRoutes(iteration.run, iteration)
+}
+
+rule JudgeRoutes {
+    when: JudgeRoutes(run, iteration)
+
+    requires: run.status = in_progress
+    requires: iteration.critic != null
+    requires: iteration.critic.report != null
+
+    let report = iteration.critic.report
+
+    ensures:
+        if report.findings_for_impl.any(f => f.severity in {major, minor})
+            and report.verdict = issues_found:
+            iteration.judge = JudgePhase.created(
+                verdict: route_to_impl,
+                structural: false
+            )
+        else if report.findings_for_spec.any(f => f.severity in {major, minor})
+            and report.verdict = issues_found:
+            iteration.judge = JudgePhase.created(
+                verdict: route_to_spec,
+                structural: false
+            )
+        else:
+            iteration.judge = JudgePhase.created(
+                verdict: converged,
+                structural: false
+            )
+
+    @guidance
+        -- The judge is a lightweight LLM call (no tools).
+        -- It may also mark spec findings as structural, meaning
+        -- they require architectural changes with trade-offs
+        -- that a human must review.
+        -- Convergence criteria: no major findings, diminishing
+        -- returns, last iteration produced no new findings.
+}
+
+rule RouteToImplementer {
+    when: iteration: Iteration.judge becomes route_to_impl
+
+    requires: iteration.run.status = in_progress
+
+    ensures: iteration.implementer = ImplementerPhase.created(
+        outcome: null
+    )
+
+    @guidance
+        -- The implementer reads the critic report's findings_for_impl,
+        -- addresses each finding, then reports what was addressed
+        -- and what was skipped.
+        -- Boundary: may modify module source and tests,
+        -- may not modify spec files.
+}
+
+rule ImplementerCompletes {
+    when: ImplementerCompletes(iteration, outcome)
+
+    ensures: iteration.implementer.outcome = outcome
+    ensures: CriticReviews(iteration.run, iteration.number + 1)
+}
+
+rule RouteToSpec {
+    when: iteration: Iteration.judge becomes route_to_spec
+
+    requires: iteration.run.status = in_progress
+    requires: not iteration.judge.structural
+    requires: config.architect_enabled
+
+    ensures: iteration.architect = ArchitectPhase.created(
+        auto_resolved: false
+    )
+
+    @guidance
+        -- The architect may refine existing spec rules
+        -- (clarify wording, fix naming, add detail) but
+        -- may not add or remove rules.
+        -- Boundary: may only read and write spec files.
+}
+
+rule ArchitectResolves {
+    when: ArchitectResolves(iteration)
+
+    requires: iteration.architect != null
+
+    ensures: iteration.architect.auto_resolved = true
+    ensures: CriticReviews(iteration.run, iteration.number + 1)
+}
+
+rule ArchitectFails {
+    when: ArchitectFails(iteration)
+
+    requires: iteration.architect != null
+
+    ensures: iteration.run.status = escalated
+    ensures: iteration.run.finished_at = now
+}
+
+-- Escalation
+
+rule EscalateStructural {
+    when: iteration: Iteration.judge becomes route_to_spec
+
+    requires: iteration.run.status = in_progress
+    requires: iteration.judge.structural
+
+    ensures: iteration.run.status = escalated
+    ensures: iteration.run.finished_at = now
+
+    @guidance
+        -- Structural spec changes require human judgement.
+        -- Examples: adding new entity types, changing invariant
+        -- boundaries, redesigning rule interactions.
+}
+
+rule EscalateNoArchitect {
+    when: iteration: Iteration.judge becomes route_to_spec
+
+    requires: iteration.run.status = in_progress
+    requires: not config.architect_enabled
+
+    ensures: iteration.run.status = escalated
+    ensures: iteration.run.finished_at = now
+}
+
+-- Convergence
+
+rule RunConverges {
+    when: iteration: Iteration.judge becomes converged
+
+    requires: iteration.run.status = in_progress
+
+    ensures: iteration.run.status = converged
+    ensures: iteration.run.finished_at = now
+
+    @guidance
+        -- On convergence, any spec findings from iterations
+        -- that were never routed to the architect are collected
+        -- as unresolved_spec_findings on the run for human review.
+}
+
+-- Circuit breaker
+
+rule CircuitBreaker {
+    when: CriticReviews(run, iteration_number)
+
+    requires: iteration_number > config.max_iterations
+
+    ensures: run.status = exhausted
+    ensures: run.finished_at = now
+}
+
+-- Error handling
+
+rule AgentError {
+    when: AgentError(run, error_message)
+
+    requires: run.status = in_progress
+
+    ensures: run.status = error
+    ensures: run.error_message = error_message
+    ensures: run.finished_at = now
+}
+
+-- Interruption detection
+
+rule DetectInterruption {
+    when: RunAbandoned(run)
+
+    requires: run.status = in_progress
+
+    ensures: run.status = interrupted
+
+    @guidance
+        -- A run is considered abandoned when its owning
+        -- process is no longer alive.
+}
+
+-- Resumption
+
+rule ResumeRun {
+    when: ResumeRun(run)
+
+    requires: run.is_resumable
+
+    ensures: run.status = in_progress
+
+    @guidance
+        -- Resume picks up from the last incomplete phase:
+        -- - No iterations: start from critic iteration 1
+        -- - Implementer completed: next critic iteration
+        -- - Judge routed to impl but no implementer: implementer phase
+        -- - Judge completed (non-impl): next critic iteration
+        -- - Critic completed, no judge: judge phase
+        -- - Nothing completed in last iteration: restart iteration
+}
+
+-- Post-run analysis
+
+rule AnalyzeRun {
+    when: AnalyzeRun(run)
+
+    requires: run.is_terminal
+
+    @guidance
+        -- The analyst reviews the complete run history:
+        -- convergence efficiency, critic effectiveness,
+        -- implementer effectiveness, judge routing accuracy,
+        -- and inter-phase communication quality.
+        -- Produces recommendations for prompt and flow changes.
+        -- The analyst has no tools: read-only analysis.
+
+}
+
+-- Sweep orchestration
+
+rule DetectDirtyModules {
+    when: DetectDirtyModules(sweep)
+
+    requires: sweep.modules.count > 0
+
+    ensures: for each module in sweep.modules:
+        if no ConvergenceTrailer exists for module:
+            module in sweep.dirty_modules with reason = no_prior_run
+        else if files_changed_since(last_converged_commit(module), module):
+            module in sweep.dirty_modules with reason = changed
+        else:
+            module not in sweep.dirty_modules
+
+    @guidance
+        -- Dirty detection uses jj commit trailers.
+        -- A module is dirty if no "vsdd-converged: <path>" trailer
+        -- exists in any ancestor commit, or if files under the module
+        -- path changed since the commit bearing that trailer.
+}
+
+rule StartSweep {
+    when: StartSweep(modules)
+
+    requires: modules.count > 0
+
+    ensures: Sweep.created(
+        modules: modules,
+        status: partial,
+        started_at: now
+    )
+    ensures: DetectDirtyModules(sweep)
+
+    @guidance
+        -- Each dirty module gets its own jj workspace.
+        -- Workspace location: <project-dir>-workspaces/vsdd-<slug>
+        -- Clean modules are skipped entirely.
+}
+
+rule RunModulesInParallel {
+    when: RunModulesInParallel(sweep)
+
+    requires: sweep.dirty_modules.count > 0
+
+    ensures: for each module in sweep.dirty_modules:
+        Run.created in module's workspace
+
+    @guidance
+        -- Each module runs in an isolated jj workspace via futures.
+        -- The base VSDD config (roles, judge, max-iterations) is
+        -- shared across all module runs.
+        -- A failing module does not affect other modules.
+}
+
+rule RebaseConverged {
+    when: RebaseConverged(sweep)
+
+    requires: sweep.converged_modules.count > 0
+
+    ensures: for each converged module (in config.modules order):
+        module's workspace change is rebased onto the previous
+        converged change (or trunk for the first)
+    ensures: each rebased change has "vsdd-converged: <path>" trailer
+    ensures: new empty working copy created on top of last rebased change
+
+    @guidance
+        -- Rebase sequence:
+        -- 1. Abandon empty default @
+        -- 2. For each converged module in :modules order:
+        --    rebase workspace change onto previous (or trunk)
+        -- 3. Describe each with vsdd-converged trailer
+        -- 4. jj new <last> to create new default @
+        -- Non-converged modules are not rebased.
+        -- Module order from config.modules is preserved to ensure
+        -- deterministic commit ordering.
+}
+
+rule SweepCompletes {
+    when: SweepCompletes(sweep)
+
+    ensures:
+        if all modules converged or skipped:
+            sweep.status = completed
+        else:
+            sweep.status = partial
+    ensures: sweep.finished_at = now
+
+    @guidance
+        -- After completion:
+        -- - Artifacts from each workspace are preserved under
+        --   .vsdd/sweeps/<sweep-id>/<module-slug>/
+        -- - Workspaces are forgotten and their directories removed
+        -- - A sweep manifest is written to
+        --   .vsdd/sweeps/<sweep-id>/sweep-manifest.edn
+}
+
+rule WorkspaceCreationFails {
+    when: WorkspaceCreationFails(sweep, module)
+
+    ensures: module skipped with warning
+    ensures: other modules proceed normally
+
+    @guidance
+        -- Workspace creation failure is non-fatal.
+        -- The module is skipped and reported in the summary.
+}
+
+rule RebaseFails {
+    when: RebaseFails(sweep, module)
+
+    ensures: rebase chain stops at failing module
+    ensures: workspaces preserved for manual resolution
+
+    @guidance
+        -- If a rebase fails, we stop the chain and leave
+        -- workspaces intact so the user can resolve manually.
+}
+
+------------------------------------------------------------
+-- Invariants
+------------------------------------------------------------
+
+invariant NitpickLimit {
+    -- Each critic report contains at most 2 nitpick findings per target
+    for report in CriticReports:
+        report.findings_for_impl.count(f => f.severity = nitpick) <= 2
+        and report.findings_for_spec.count(f => f.severity = nitpick) <= 2
+}
+
+invariant SweepModuleOrder {
+    -- Rebased commits follow config.modules order
+    for sweep in Sweeps:
+        sweep.converged_modules are ordered by
+            their position in config.modules
+}
+
+invariant SweepTrailerPresent {
+    -- Every converged module in a sweep has a convergence trailer
+    for result in ModuleResults:
+        result.outcome = converged implies
+            result.change_id != null
+            and commit(result.change_id).description contains
+                "vsdd-converged: " + result.module.path
+}
+
+invariant WorkspaceIsolation {
+    -- Parallel module runs do not share working directories
+    for sweep in Sweeps:
+        all workspace paths in sweep.dirty_modules are distinct
+}
+
+invariant TerminalRunsComplete {
+    for run in Runs:
+        run.is_terminal implies run.finished_at != null
+}
+
+------------------------------------------------------------
+-- Open Questions
+------------------------------------------------------------
+
+open question "Should the analyst be able to trigger a follow-up run with adjusted prompts?"
+
+open question "Should there be a finding deduplication mechanism across iterations?"
+
+open question "Should convergence require N consecutive clean iterations rather than just one?"

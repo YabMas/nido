@@ -3,7 +3,8 @@
   (:require [clojure.edn :as edn]
             [nido.io :as io]
             [nido.vsdd.analyst :as analyst]
-            [nido.vsdd.loop :as vsdd]))
+            [nido.vsdd.loop :as vsdd]
+            [nido.vsdd.sweep :as vsdd-sweep]))
 
 (defn- parse-args
   "Parse CLI args as EDN key/value pairs."
@@ -71,3 +72,13 @@
     (analyst/analyze {:project-dir project-dir
                       :run-id      run-id
                       :model       (:model opts)})))
+
+(defn sweep
+  "Run VSDD across all changed modules in parallel.
+   Usage: bb nido:vsdd:sweep :project-dir <path> [opts...]"
+  [& args]
+  (let [opts (parse-args args)
+        project-dir (or (:project-dir opts)
+                        (throw (ex-info "Missing :project-dir" {:args args})))
+        config (load-vsdd-config project-dir opts)]
+    (vsdd-sweep/sweep config)))

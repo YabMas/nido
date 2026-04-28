@@ -1,74 +1,109 @@
 (ns tasks.nido-session
+  "Bb task entry points for the bundled session lifecycle. Every command
+   requires `:project <name>` (the project registered via `nido:project:add`)
+   and takes a single positional <session-name> (= git branch = worktree leaf).
+   Kwargs and the positional may appear in any order.
+
+   Examples:
+     bb nido:session:init    :project brian feat-auth
+     bb nido:session:init    :project brian feat-auth :base develop
+     bb nido:session:init    :project brian fix-bug   :branch existing-branch
+     bb nido:session:init    :project brian feat-auth :jvm-heap-max 1500m
+     bb nido:session:stop    :project brian feat-auth
+     bb nido:session:restart :project brian feat-auth
+     bb nido:session:destroy :project brian feat-auth :delete-branch? true
+     bb nido:session:status  :project brian feat-auth
+     bb nido:session:list    :project brian"
   (:require
-   [babashka.fs :as fs]
    [clojure.edn :as edn]
-   [nido.session.engine :as engine]))
+   [nido.session.lifecycle :as lifecycle]))
 
-(defn- parse-opts
-  "Parse EDN key/value CLI args, e.g. :project-dir \"/path\" :app-port 3901."
+(defn- parse-token [tok]
+  (try (edn/read-string tok) (catch Exception _ tok)))
+
+(defn- keyword-token? [tok]
+  (and (string? tok) (.startsWith ^String tok ":")))
+
+(defn- split-args
+  "Split CLI args into [positionals opts-map]. A token starting with ':' is
+   a kwarg key and consumes the next token as its value; every other token
+   is a positional. Preserves positional order."
   [args]
-  (if (empty? args)
-    {}
-    (try
-      (let [parse-arg
-            (fn [arg]
-              (try
-                (edn/read-string arg)
-                (catch Exception _
-                  arg)))
-            values (map parse-arg args)]
-        (when (odd? (count values))
-          (throw (ex-info "Options must be key/value pairs" {:args args})))
-        (apply hash-map values))
-      (catch Exception e
-        (throw (ex-info "Failed to parse task options"
-                        {:args args
-                         :error (ex-message e)}))))))
+  (loop [xs args, pos [], opts {}]
+    (if (empty? xs)
+      [pos opts]
+      (let [x (first xs)]
+        (if (keyword-token? x)
+          (let [k (parse-token x)
+                v (second xs)]
+            (when-not (some? v)
+              (throw (ex-info (str "Missing value for " x) {:args args})))
+            (recur (drop 2 xs) pos (assoc opts k (parse-token v))))
+          (recur (rest xs) (conj pos x) opts))))))
 
-(defn- resolve-project-dir [opts]
-  (let [raw (or (:project-dir opts) (:dir opts))]
-    (when-not raw
-      (throw (ex-info "Missing :project-dir"
-                      {:hint "Pass :project-dir \"/abs/or/relative/path\"."})))
-    (let [project-dir (-> raw fs/path fs/absolutize fs/normalize str)]
-      (when-not (fs/exists? project-dir)
-        (throw (ex-info "Project directory does not exist" {:project-dir project-dir})))
-      project-dir)))
+(defn- require-project [opts]
+  (or (some-> (:project opts) name)
+      (throw (ex-info "Missing :project <name>"
+                      {:hint "Pass :project <project-name> — the name used in `bb nido:project:add`."}))))
 
-(defn start
-  "Start an isolated session for a project worktree.
+(defn- require-session-name [positionals]
+  (case (count positionals)
+    0 (throw (ex-info "Missing session name (positional)"
+                      {:hint "Usage: bb nido:session:<cmd> :project <project> <session>"}))
+    1 (str (first positionals))
+    (throw (ex-info "Too many positional args; expected one session name"
+                    {:positionals positionals}))))
 
-   Required args:
-     :project-dir \"/path/to/worktree\"
+(defn- require-no-positional [positionals]
+  (when (seq positionals)
+    (throw (ex-info "Unexpected positional args; this command takes only kwargs"
+                    {:positionals positionals}))))
 
-   Optional args:
-     :shared-pg? true"
+(defn init
+  "Create the named session's worktree (if missing) and start its services."
   [& args]
-  (let [opts (parse-opts args)
-        project-dir (resolve-project-dir opts)]
-    (engine/start-session! project-dir opts)))
-
-(defn status
-  "Show status for a project session.
-
-   Usage:
-     bb nido:session:status :project-dir \"/path/to/worktree\""
-  [& args]
-  (let [opts (parse-opts args)
-        project-dir (resolve-project-dir opts)]
-    (engine/session-status project-dir)))
+  (let [[pos opts] (split-args args)
+        _project (require-project opts)
+        session (require-session-name pos)]
+    (lifecycle/init! session opts)))
 
 (defn stop
-  "Stop a project session.
-
-   Usage:
-     bb nido:session:stop :project-dir \"/path/to/worktree\""
+  "Stop the named session, leaving the worktree in place."
   [& args]
-  (let [opts (parse-opts args)
-        project-dir (resolve-project-dir opts)]
-    (engine/stop-session! project-dir)))
+  (let [[pos opts] (split-args args)
+        _project (require-project opts)
+        session (require-session-name pos)]
+    (lifecycle/stop! session opts)))
+
+(defn restart
+  "Stop then start the named session."
+  [& args]
+  (let [[pos opts] (split-args args)
+        _project (require-project opts)
+        session (require-session-name pos)]
+    (lifecycle/restart! session opts)))
+
+(defn destroy
+  "Stop the named session and remove its worktree.
+   Pass :delete-branch? true to also drop the git branch."
+  [& args]
+  (let [[pos opts] (split-args args)
+        _project (require-project opts)
+        session (require-session-name pos)]
+    (lifecycle/destroy! session opts)))
+
+(defn status
+  "Print status for the named session."
+  [& args]
+  (let [[pos opts] (split-args args)
+        _project (require-project opts)
+        session (require-session-name pos)]
+    (lifecycle/status session opts)))
 
 (defn list-sessions
-  "List all sessions tracked by the nido registry."
-  [& _]
-  (engine/list-sessions))
+  "List every session for a project."
+  [& args]
+  (let [[pos opts] (split-args args)
+        _project (require-project opts)]
+    (require-no-positional pos)
+    (lifecycle/list-all opts)))

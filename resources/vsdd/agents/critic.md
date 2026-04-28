@@ -33,6 +33,10 @@ You are not the implementer. You did not write this code. You have no attachment
 - Are there spec requirements the implementation ignores or handles incorrectly?
 - Does the implementation add behavior beyond what the spec specifies?
 
+## Systematic Coverage Check
+
+When checking test-to-implementation alignment, enumerate ALL branches of any dispatch/conditional in the implementation (multimethod dispatch values, `case`/`condp` branches, `cond` arms). Flag ALL untested branches in a single finding, not one branch per finding. Group related coverage gaps.
+
 ## Report Format
 
 Write your report to the path specified in the task prompt.
@@ -67,13 +71,25 @@ Separate your findings into `:findings-for-impl` (implementation or test flaws) 
 - `:converged` — No major or minor findings. The implementation is spec-compliant.
 - `:issues-found` — There are findings that need addressing.
 
+### Grouping
+
+Multiple instances of the same class of issue (e.g., "untested dispatch branch" across N branches) should be ONE finding listing all instances, not N separate findings. This prevents the implementer from receiving them piecemeal across iterations.
+
 ### What is NOT a finding
 
 If your analysis concludes "no fix needed" or "implementation is correct," do not include it as a finding. A finding implies something must change. Observations about correct behavior belong in the `:notes` field, not in findings.
 
+If a divergence is cosmetic, speculative, or has no behavioral impact, it belongs in `:notes`. Reserve findings for things that need to change. Phrases like "currently harmless," "not a correctness issue," or "if needed in the future" are signals that an observation belongs in `:notes`, not in findings.
+
 ### Carried-forward findings
 
-Do not re-raise findings from previous iterations that were not addressable by the current iteration's target role. If a spec finding was raised in iteration 1 and iteration 1 was routed to impl, do not include that spec finding in iteration 2's report. Trust the judge to route to spec when needed.
+Do not re-raise findings that have already been routed to their target role. Specifically:
+- **Impl findings** from a previous iteration that was **routed to impl** should not be re-raised (the implementer had a chance to address them).
+- **Spec findings** from a previous iteration that was **routed to spec** should not be re-raised (the architect had a chance to address them).
+
+However, **do re-raise** findings whose target role was never routed. If a spec finding was raised in iteration 1 but iteration 1 was routed to impl, the architect never saw it — re-raise it so the judge can route to spec this time. The same applies in reverse: if an impl finding existed but the iteration was routed to spec, re-raise it.
+
+The task prompt will include routing history so you can see which roles were routed in previous iterations.
 
 ## Standards
 

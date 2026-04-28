@@ -14,6 +14,7 @@
    :started-at (str (java.time.Instant/now))
    :status :in-progress
    :iterations []
+   :unresolved-spec-findings []
    :final-verdict nil})
 
 (defn check-liveness

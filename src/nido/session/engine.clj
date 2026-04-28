@@ -8,14 +8,16 @@
    [nido.core :as core]
    [nido.io :as io]
    [nido.process :as proc]
+   [nido.session.agent-guidance :as agent-guidance]
    [nido.session.context :as ctx]
    [nido.session.service :as service]
-   [nido.session.state :as state]
-   ;; Load service implementations
+   ;; Load service implementations (must be loaded before state for the
+   ;; defmethods to register; state itself has no transitive deps on them).
+   nido.session.services.config-file
+   nido.session.services.eval
    nido.session.services.postgresql
    nido.session.services.process
-   nido.session.services.eval
-   nido.session.services.config-file))
+   [nido.session.state :as state]))
 
 ;; ---------------------------------------------------------------------------
 ;; Setup step dispatch
@@ -37,6 +39,14 @@
              (keep :local/root)
              distinct)))))
 
+(defn- path-present?
+  "True if the path exists (file or directory) OR if it's a symlink — even
+   one whose target no longer resolves. fs/exists? alone follows links and
+   reports false for dangling symlinks, which then trips `ln -s`."
+  [path]
+  (or (fs/exists? path)
+      (fs/sym-link? path)))
+
 (defn- link-path! [source-path target-path]
   (when-let [parent (fs/parent target-path)]
     (fs/create-dirs parent))
@@ -55,7 +65,7 @@
         missing (atom [])]
     (doseq [local-root local-roots
             :let [target-path (str (fs/normalize (fs/path project-dir local-root)))]
-            :when (not (fs/exists? target-path))]
+            :when (not (path-present? target-path))]
       (if source-project-root
         (let [source-path (str (fs/normalize (fs/path source-project-root local-root)))]
           (if (fs/exists? source-path)
@@ -80,7 +90,7 @@
     (let [source-path (str (fs/path source-project-root rel-path))
           target-path (str (fs/path project-dir rel-path))]
       (when (and (fs/exists? source-path)
-                 (not (fs/exists? target-path)))
+                 (not (path-present? target-path)))
         (link-path! source-path target-path)
         (core/log-step (str "Linked " rel-path " -> " source-path))))))
 
@@ -115,17 +125,27 @@
   (core/log-step (str "WARNING: Unknown setup step type: " (:type step))))
 
 ;; ---------------------------------------------------------------------------
-;; Project name resolution
+;; Session lifecycle
 ;; ---------------------------------------------------------------------------
 
-(defn- resolve-project-name [project-dir]
+(defn load-session-edn [project-name]
+  (let [path (str (fs/path (core/nido-home) "projects" project-name "session.edn"))]
+    (when-not (fs/exists? path)
+      (throw (ex-info (str "No session.edn found for project '" project-name "'")
+                      {:path path
+                       :hint "Create a session.edn in ~/.nido/projects/<name>/session.edn"})))
+    (io/read-edn path)))
+
+(defn resolve-project-name
+  "Resolve a project-dir to its registered project name, falling back to the
+   leaf path component."
+  [project-dir]
   (let [projects (config/read-projects)]
     (or (some (fn [[name entry]]
                 (when (= (str (fs/normalize (fs/path (:directory entry))))
                          (str (fs/normalize (fs/path project-dir))))
                   name))
               projects)
-        ;; For worktrees, check if project-dir is under a registered project's directory
         (some (fn [[name entry]]
                 (let [common-root (git-common-project-root project-dir)
                       reg-dir (str (fs/normalize (fs/path (:directory entry))))]
@@ -134,25 +154,33 @@
                                 reg-dir))
                     name)))
               projects)
-        ;; Fallback: use the last path component
         (str (fs/file-name (fs/path project-dir))))))
 
-;; ---------------------------------------------------------------------------
-;; Session lifecycle
-;; ---------------------------------------------------------------------------
+(defn- main-checkout?
+  "True when project-dir is the registered project's canonical directory
+   (i.e. not a worktree)."
+  [project-dir project-name]
+  (let [projects (config/read-projects)
+        reg-dir (some-> (get projects project-name) :directory)]
+    (and reg-dir
+         (= (str (fs/normalize (fs/path project-dir)))
+            (str (fs/normalize (fs/path reg-dir)))))))
 
-(defn- load-session-edn [project-name]
-  (let [path (str (fs/path (core/nido-home) "projects" project-name "session.edn"))]
-    (when-not (fs/exists? path)
-      (throw (ex-info (str "No session.edn found for project '" project-name "'")
-                      {:path path
-                       :hint "Create a session.edn in ~/.nido/projects/<name>/session.edn"})))
-    (io/read-edn path)))
+(defn resolve-instance-id
+  "Resolve a project-dir to a unique instance identifier. For the main
+   checkout this equals the project-name; for a worktree it is
+   `<project-name>--<leaf-of-project-dir>` so per-worktree state is isolated."
+  [project-dir]
+  (let [project-name (resolve-project-name project-dir)]
+    (if (main-checkout? project-dir project-name)
+      project-name
+      (str project-name "--" (fs/file-name (fs/path project-dir))))))
 
-(defn- print-session-summary [session-data ctx]
+(defn- print-session-summary [_session-data ctx]
   (println "nido session:")
   (println "  project:" (get-in ctx [:session :project-dir]))
   (println "  project-name:" (get-in ctx [:session :project-name]))
+  (println "  instance-id:" (get-in ctx [:session :instance-id]))
   (when-let [url (get-in ctx [:app :url])]
     (println "  url:" url))
   (when-let [p (get-in ctx [:app :port])]
@@ -162,56 +190,134 @@
   (when-let [p (get-in ctx [:pg :port])]
     (println "  pg port:" p))
   (println "  state file:" (state/session-state-file
-                            (get-in ctx [:session :project-name]))))
+                            (get-in ctx [:session :instance-id]))))
 
-(defn- start-services! [project-dir project-name session-edn opts]
-  (core/log-step (str "Starting session for " project-name " (" project-dir ")"))
-  (let [init-ctx {:session {:project-dir project-dir
-                            :project-name project-name}}
+(defn- resolve-pg-mode
+  "Normalize PG mode from opts + session-edn defaults into {:shared|:isolated}.
+   Order of precedence: CLI flag > defaults > :shared.
+   CLI spellings (any of):
+     :pg-mode :shared | :isolated
+     :isolated-pg? true     (sugar for :pg-mode :isolated)
+     :shared-pg?   true     (sugar for :pg-mode :shared — legacy)"
+  [session-edn opts]
+  (cond
+    (keyword? (:pg-mode opts)) (:pg-mode opts)
+    (true? (:isolated-pg? opts)) :isolated
+    (true? (:shared-pg? opts)) :shared
+    (keyword? (get-in session-edn [:defaults :pg-mode])) (get-in session-edn [:defaults :pg-mode])
+    :else :shared))
+
+(defn- resolve-jvm-config
+  "Merge nido-controlled JVM knobs from session-edn :defaults :jvm with
+   per-invocation opts. Flat CLI-friendly keys (:jvm-heap-max,
+   :jvm-aliases, :jvm-extra-opts) are supported alongside a nested :jvm
+   map in opts. Returns a map enriched with :aliases-joined and
+   :extra-opts-joined so service-def templates can reference them
+   directly."
+  [defaults opts]
+  (let [base (or (:jvm defaults) {})
+        flat (cond-> {}
+               (:jvm-heap-max opts)   (assoc :heap-max (:jvm-heap-max opts))
+               (:jvm-aliases opts)    (assoc :aliases (:jvm-aliases opts))
+               (:jvm-extra-opts opts) (assoc :extra-opts (:jvm-extra-opts opts)))]
+    (ctx/prepare-jvm (merge base flat (:jvm opts)))))
+
+(defn- pre-allocate-ports
+  "Pre-allocate ports for services that need their port known by other
+   services BEFORE they run (e.g. the :eval service's app port is
+   referenced from the :config-file template, which runs first). Seeds
+   `(keyword svc-name)` → {:port N} into the context."
+  [services project-dir]
+  (reduce (fn [acc svc-def]
+            (if (and (= :eval (:type svc-def)) (:name svc-def))
+              (let [[low high] (or (:port-range svc-def) [3100 5100])
+                    pref (proc/deterministic-port project-dir low high)
+                    port (proc/find-available-port pref (- high low))]
+                (assoc acc (keyword (:name svc-def)) {:port port}))
+              acc))
+          {} services))
+
+(defn- start-services! [project-dir project-name instance-id session-edn opts]
+  (core/log-step (str "Starting session " instance-id " (" project-dir ")"))
+  (let [pre-allocated (pre-allocate-ports (:services session-edn) project-dir)
+        jvm-cfg (resolve-jvm-config (:defaults session-edn) opts)
+        pg-mode (resolve-pg-mode session-edn opts)
+        ;; Normalize pg-mode downstream: services dispatch on (:pg-mode opts).
+        opts+ (assoc opts :pg-mode pg-mode)
+        init-ctx (merge pre-allocated
+                        {:session {:project-dir project-dir
+                                   :project-name project-name
+                                   :instance-id instance-id
+                                   :jvm jvm-cfg
+                                   :pg-mode pg-mode}})
         ;; Run setup steps
         _ (doseq [step (:setup session-edn)]
             (run-setup-step! step project-dir))
-        ;; Start services in order
+        ;; Start services in order. `started` accumulates
+        ;; {:resolved-def ... :state ...} in start order so we can roll
+        ;; back (stop in reverse) if any later service throws. Without
+        ;; this, a mid-init failure would leave PG/JVM/etc. orphaned
+        ;; because session state isn't persisted until after the reduce.
         services (:services session-edn)
-        result (reduce
-                (fn [{:keys [ctx service-states]} svc-def]
-                  (let [svc-name (:name svc-def)
-                        resolved-def (ctx/substitute ctx svc-def)
-                        skip? (and (= (:type svc-def) :postgresql)
-                                   (:shared-pg? opts))]
-                    (if skip?
-                      (do
-                        (core/log-step (str "Skipping " (name svc-name) " (shared-pg? true)"))
-                        {:ctx ctx :service-states service-states})
-                      (let [{:keys [state context]} (service/start-service! resolved-def ctx opts)
-                            new-ctx (ctx/merge-context ctx (keyword svc-name) context)]
-                        {:ctx new-ctx
-                         :service-states (assoc service-states svc-name state)}))))
-                {:ctx init-ctx :service-states {}}
-                services)
+        started (atom [])
+        result (try
+                 (reduce
+                  (fn [{:keys [ctx service-states]} svc-def]
+                    (let [svc-name (:name svc-def)
+                          resolved-def (ctx/substitute ctx svc-def)
+                          {:keys [state context]} (service/start-service! resolved-def ctx opts+)
+                          new-ctx (ctx/merge-context ctx (keyword svc-name) context)]
+                      (swap! started conj {:resolved-def resolved-def :state state})
+                      {:ctx new-ctx
+                       :service-states (assoc service-states svc-name state)}))
+                  {:ctx init-ctx :service-states {}}
+                  services)
+                 (catch Exception e
+                   (let [n (count @started)]
+                     (core/log-step
+                      (str "Session start failed: " (ex-message e)
+                           " — rolling back " n " started service(s)")))
+                   (doseq [{:keys [resolved-def state]} (reverse @started)]
+                     (let [svc-name (:name resolved-def)]
+                       (try
+                         (core/log-step (str "Rolling back " (name svc-name) "..."))
+                         (service/stop-service! resolved-def state)
+                         (catch Exception e2
+                           (println (str "warning: rollback of " (name svc-name)
+                                         " threw: " (ex-message e2)))))))
+                   ;; No session state was persisted; re-throw so the
+                   ;; caller sees the original failure.
+                   (throw e)))
         final-ctx (:ctx result)
         service-states (:service-states result)
         session-data {:project-dir project-dir
                       :project-name project-name
+                      :instance-id instance-id
                       :service-defs (:services session-edn)
                       :service-states service-states
                       :context final-ctx
                       :created-at (core/now-iso)
-                      :shared-pg? (boolean (:shared-pg? opts))}]
+                      :pg-mode pg-mode}]
     ;; Write session state
-    (state/write-session! project-name session-data)
+    (state/write-session! instance-id session-data)
     ;; Upsert registry for backward compat
     (let [registry-entry (merge
                           {:project-dir project-dir
                            :project-name project-name
+                           :instance-id instance-id
                            :url (get-in final-ctx [:app :url])
                            :app-port (get-in final-ctx [:app :port])
                            :nrepl-port (get-in final-ctx [:repl :port])
                            :repl-pid (get-in final-ctx [:repl :pid])
+                           :pg-mode pg-mode
                            :created-at (core/now-iso)}
                           (when-let [p (get-in final-ctx [:pg :port])]
                             {:pg-port p}))]
       (state/upsert-registry! project-dir registry-entry))
+    (try (agent-guidance/write! final-ctx)
+         (catch Exception e
+           (core/log-step (str "warning: failed to write agent CLAUDE.md: "
+                               (ex-message e)))))
     (print-session-summary session-data final-ctx)
     session-data))
 
@@ -224,16 +330,20 @@
 
 (defn start-session!
   "Start a session for a project directory using its session.edn definition.
-   opts: {:shared-pg? bool, ...}"
+   opts: {:pg-mode :shared|:isolated (default :shared),
+          :isolated-pg? bool  (sugar for :pg-mode :isolated),
+          :jvm-heap-max string, :jvm-aliases [kw], :jvm-extra-opts [str],
+          ...}"
   [project-dir opts]
   (let [project-name (resolve-project-name project-dir)
-        session-edn (load-session-edn project-name)]
+        instance-id  (resolve-instance-id project-dir)
+        session-edn  (load-session-edn project-name)]
     ;; Check for existing running session
-    (if-let [existing (state/read-session project-name)]
+    (if-let [existing (state/read-session instance-id)]
       (if (session-alive? existing)
-        (do (println "Session already running for" project-name) nil)
-        (start-services! project-dir project-name session-edn opts))
-      (start-services! project-dir project-name session-edn opts))))
+        (do (println "Session already running for" instance-id) nil)
+        (start-services! project-dir project-name instance-id session-edn opts))
+      (start-services! project-dir project-name instance-id session-edn opts))))
 
 ;; ---------------------------------------------------------------------------
 ;; Legacy session detection
@@ -246,8 +356,8 @@
 (defn stop-session!
   "Stop a session for a project directory."
   [project-dir]
-  (let [project-name (resolve-project-name project-dir)
-        session (or (state/read-session project-name)
+  (let [instance-id (resolve-instance-id project-dir)
+        session (or (state/read-session instance-id)
                     ;; Legacy fallback
                     (when-let [legacy (read-legacy-session project-dir)]
                       (core/log-step "Found legacy session format, converting...")
@@ -256,7 +366,7 @@
       (println "No session to stop for" project-dir)
       (let [service-defs (or (:service-defs session) [])
             service-states (or (:service-states session) {})]
-        (core/log-step (str "Stopping session for " project-dir))
+        (core/log-step (str "Stopping session " instance-id))
         ;; Stop services in reverse order
         (doseq [svc-def (reverse service-defs)]
           (let [svc-name (:name svc-def)
@@ -269,20 +379,26 @@
                   (println (str "warning: error stopping " (name svc-name) ": "
                                 (ex-message e))))))))
         ;; Clean up state
-        (state/delete-session! project-name)
+        (state/delete-session! instance-id)
         (state/remove-from-registry! project-dir)
         ;; Clean up legacy session file if it exists
         (let [legacy-file (str (fs/path project-dir ".codex" "session.edn"))]
           (fs/delete-if-exists legacy-file))
         ;; Clean up .nrepl-port
         (fs/delete-if-exists (str (fs/path project-dir ".nrepl-port")))
-        (println "Stopped session for" project-dir)))))
+        ;; Remove nido-managed CLAUDE.md
+        (try (agent-guidance/remove! project-dir)
+             (catch Exception e
+               (core/log-step (str "warning: failed to remove agent CLAUDE.md: "
+                                   (ex-message e)))))
+        (println "Stopped session" instance-id)))))
 
 (defn session-status
   "Show status for a project session."
   [project-dir]
   (let [project-name (resolve-project-name project-dir)
-        session (or (state/read-session project-name)
+        instance-id (resolve-instance-id project-dir)
+        session (or (state/read-session instance-id)
                     (read-legacy-session project-dir))]
     (if-not session
       (println "No session found for" project-dir)
@@ -291,6 +407,7 @@
         (println "nido session:")
         (println "  project:" project-dir)
         (println "  project-name:" project-name)
+        (println "  instance-id:" instance-id)
         (doseq [svc-def service-defs]
           (let [svc-name (:name svc-def)
                 saved-state (get service-states svc-name)]
@@ -302,7 +419,7 @@
                 (println (str "  " (name svc-name) ":"))
                 (doseq [[k v] (sort-by key status)]
                   (println (str "    " (name k) ": " v)))))))
-        (println "  state file:" (state/session-state-file project-name))))))
+        (println "  state file:" (state/session-state-file instance-id))))))
 
 (defn list-sessions
   "List all sessions tracked by the nido registry."

@@ -4,8 +4,46 @@
  :tasks
  {:requires ([tasks.nido-session :as nido-session]
              [tasks.nido-project :as nido-project]
+             [tasks.nido-template :as nido-template]
+             [tasks.nido-workspace :as nido-workspace]
              [tasks.nido-vsdd :as nido-vsdd]
-             [tasks.nido-ui :as nido-ui])
+             [tasks.nido-ui :as nido-ui]
+             [tasks.nido-ci :as nido-ci]
+             [tasks.nido-bench :as nido-bench]
+             [tasks.nido-help :as nido-help])
+
+  :init (do
+          ;; Disable babashka.process/shell's default destroy-tree JVM
+          ;; shutdown hook globally for all nido task code. The hook walks
+          ;; the spawned child's process tree on JVM exit; on macOS / bb
+          ;; 1.12.x it parks indefinitely after the child has already
+          ;; terminated, leaving `bb nido:*` stuck forever in shutdown
+          ;; (work + output complete, but the bb process never returns —
+          ;; pipes don't EOF, outer `timeout` watchdogs hang waiting).
+          ;; The two existing `:shutdown nil` annotations on daemon-
+          ;; spawning shell calls (`process.clj`, `postgresql.clj`)
+          ;; remain explicit so a future reader knows they intentionally
+          ;; orphan their child; everything else now defaults safely.
+          (require '[babashka.process])
+          (alter-var-root
+           (var babashka.process/shell)
+           (fn [orig]
+             (fn shell-no-destroy-tree-default [& xs]
+               (let [[opts cmd] (if (map? (first xs))
+                                  [(first xs) (rest xs)]
+                                  [{} xs])
+                     opts'      (if (contains? opts :shutdown)
+                                  opts
+                                  (assoc opts :shutdown nil))]
+                 (apply orig opts' cmd)))))
+          (binding [*err* *err*]
+            (.println ^java.io.PrintWriter *err*
+                      (str "[nido :init] shell altered: "
+                           (str babashka.process/shell)))))
+
+  nido:help
+  {:doc "Show a grouped overview of nido tasks with examples"
+   :task (apply nido-help/show *command-line-args*)}
 
   nido:init
   {:doc "Create ~/.nido/ skeleton directory structure"
@@ -23,21 +61,73 @@
   {:doc "Unregister a project: <name>"
    :task (apply nido-project/remove-cmd *command-line-args*)}
 
-  nido:session:start
-  {:doc "Start an isolated nido session for a target project/worktree"
-   :task (apply nido-session/start *command-line-args*)}
-
-  nido:session:status
-  {:doc "Show status for one target project/worktree"
-   :task (apply nido-session/status *command-line-args*)}
+  nido:session:init
+  {:doc "Init a session: :project <p> <session> — create worktree (if missing) + start services"
+   :task (apply nido-session/init *command-line-args*)}
 
   nido:session:stop
-  {:doc "Stop the nido session for one target project/worktree"
+  {:doc "Stop a session: :project <p> <session> (worktree left in place)"
    :task (apply nido-session/stop *command-line-args*)}
 
+  nido:session:restart
+  {:doc "Restart a session: :project <p> <session>"
+   :task (apply nido-session/restart *command-line-args*)}
+
+  nido:session:destroy
+  {:doc "Destroy a session: :project <p> <session> — stop + remove worktree"
+   :task (apply nido-session/destroy *command-line-args*)}
+
+  nido:session:status
+  {:doc "Session status: :project <p> <session>"
+   :task (apply nido-session/status *command-line-args*)}
+
   nido:session:list
-  {:doc "List all sessions tracked by nido"
-   :task (nido-session/list-sessions)}
+  {:doc "List sessions: :project <p>"
+   :task (apply nido-session/list-sessions *command-line-args*)}
+
+  nido:template:pg:init
+  {:doc "Initialize a per-project Postgres template cluster (empty schema)"
+   :task (apply nido-template/init *command-line-args*)}
+
+  nido:template:pg:refresh
+  {:doc "Refresh the template from a fresh dump via project-declared :refresh-steps"
+   :task (apply nido-template/refresh *command-line-args*)}
+
+  nido:template:pg:status
+  {:doc "Show template cluster status for a project"
+   :task (apply nido-template/status *command-line-args*)}
+
+  nido:template:pg:destroy
+  {:doc "Delete the template cluster for a project"
+   :task (apply nido-template/destroy *command-line-args*)}
+
+  nido:workspace:pg:start
+  {:doc "Start the shared workspace Postgres cluster for a project"
+   :task (apply nido-workspace/start *command-line-args*)}
+
+  nido:workspace:pg:stop
+  {:doc "Stop the shared workspace Postgres cluster (refuses while sessions attached)"
+   :task (apply nido-workspace/stop *command-line-args*)}
+
+  nido:workspace:pg:status
+  {:doc "Show workspace PG status for a project"
+   :task (apply nido-workspace/status *command-line-args*)}
+
+  nido:workspace:pg:refresh
+  {:doc "Refresh the workspace PG via project-declared :refresh-steps"
+   :task (apply nido-workspace/refresh *command-line-args*)}
+
+  nido:workspace:reclaim
+  {:doc "List (or with :force? true, delete) per-instance state dirs not tracked in the registry"
+   :task (apply nido-workspace/reclaim *command-line-args*)}
+
+  nido:bench:memory
+  {:doc "Run the memory-bench lever matrix for a project: :project <name> [:levers [kw...]] [:session <name>]"
+   :task (apply nido-bench/memory *command-line-args*)}
+
+  nido:bench:memory:levers
+  {:doc "List known bench levers"
+   :task (apply nido-bench/levers *command-line-args*)}
 
   nido:ui
   {:doc "Start the nido dashboard [:port 8800]"
@@ -55,18 +145,38 @@
   {:doc "Analyze a VSDD run: :project-dir <path> :run-id <id> [:model opus]"
    :task (apply nido-vsdd/analyze *command-line-args*)}
 
-  agent:session:start
-  {:doc "Alias for nido:session:start"
-   :task (apply nido-session/start *command-line-args*)}
+  nido:vsdd:sweep
+  {:doc "Run VSDD across all changed modules: :project-dir <path>"
+   :task (apply nido-vsdd/sweep *command-line-args*)}
 
-  agent:session:status
-  {:doc "Alias for nido:session:status"
-   :task (apply nido-session/status *command-line-args*)}
+  nido:ci:run
+  {:doc "Run ci.edn: :project <p> <session> [:only <step-or-vec>] (all steps by default, parallel)"
+   :task (apply nido-ci/run *command-line-args*)}
+
+  nido:ci:rerun
+  {:doc "Re-run failed steps from last Run: :project <p> <session> [:from <run-id>]"
+   :task (apply nido-ci/rerun *command-line-args*)}
+
+  agent:session:init
+  {:doc "Alias for nido:session:init"
+   :task (apply nido-session/init *command-line-args*)}
 
   agent:session:stop
   {:doc "Alias for nido:session:stop"
    :task (apply nido-session/stop *command-line-args*)}
 
+  agent:session:restart
+  {:doc "Alias for nido:session:restart"
+   :task (apply nido-session/restart *command-line-args*)}
+
+  agent:session:destroy
+  {:doc "Alias for nido:session:destroy"
+   :task (apply nido-session/destroy *command-line-args*)}
+
+  agent:session:status
+  {:doc "Alias for nido:session:status"
+   :task (apply nido-session/status *command-line-args*)}
+
   agent:session:list
   {:doc "Alias for nido:session:list"
-   :task (nido-session/list-sessions)}}}
+   :task (apply nido-session/list-sessions *command-line-args*)}}}
