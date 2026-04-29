@@ -109,6 +109,18 @@
                        (str "refs/heads/" branch)]
                       :continue? true))))
 
+(defn- fetch-base!
+  "If base is an origin/* ref, fetch it so the worktree branches from the
+   fresh upstream tip. For local refs, no-op. Best-effort: a failed fetch
+   logs a warning rather than aborting (so offline work still functions)."
+  [project-dir base]
+  (when-let [[_ remote-branch] (re-matches #"origin/(.+)" base)]
+    (core/log-step (str "git fetch origin " remote-branch))
+    (let [r (git! project-dir ["fetch" "origin" remote-branch] :continue? true)]
+      (when-not (zero? (:exit r))
+        (core/log-step (str "warning: fetch failed, using local " base
+                            (when-let [e (:err r)] (str " — " (str/trim e)))))))))
+
 (defn- create-git-worktree!
   "Create a git worktree at wt-path. Checks out branch if it exists locally,
    otherwise creates a new branch from base."
@@ -119,6 +131,7 @@
       (core/log-step (str "git worktree add " wt-path " " branch " (existing branch)"))
       (git! project-dir ["worktree" "add" wt-path branch]))
     (do
+      (fetch-base! project-dir base)
       (core/log-step (str "git worktree add " wt-path " -b " branch " " base))
       (git! project-dir ["worktree" "add" wt-path "-b" branch base]))))
 
@@ -143,7 +156,7 @@
         wt-path (or (some-> (:path opts) str fs/expand-home str)
                     (worktree-path project-name directory name))
         branch (or (:branch opts) name)
-        base   (or (:base opts) "main")
+        base   (or (:base opts) "origin/main")
         instance-id (engine/resolve-instance-id wt-path)]
     {:project-name project-name
      :project-dir  directory
