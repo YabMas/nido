@@ -1,0 +1,23 @@
+;; Manifest for `bb nido:harness:sync` — declarative source-of-truth for
+;; what nido borrows from another project's .claude/ via symlink.
+;;
+;; - :from        source .claude dir (absolute path; ~ allowed)
+;; - :include     per-category: :all (mirror everything in that subdir)
+;;                or a vector of names. :files takes an explicit name list.
+;; - :exclude     per-category: name set to drop from :all
+;; - Native nido files (real, non-symlink) are auto-detected and never
+;;   touched — drop a real file in place to override a borrowed entry.
+;; - Sync prunes symlinks that point into :from but are no longer in the
+;;   resolved set (covers source deletions and newly-excluded entries).
+
+{:from "~/Code/brian/.claude"
+
+ :include
+ {:agents :all
+  :skills :all
+  :files  ["dev-rules.md" "guide-rules.md"]}
+
+ :exclude
+ {:skills #{"dev"   ;; brian's worktree/session orchestration — nido owns this
+            "push"} ;; brian's session/workflow plumbing — out of scope here
+  :agents #{}}}

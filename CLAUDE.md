@@ -23,7 +23,7 @@ Nido does not redocument target-project routing. When working in a brian session
 - `~/Code/brian/docs/reference/agent-ownership.md` — handoff rules between lanes
 - `~/Code/brian/CLAUDE.md` — brian's full working-model rules (read for reference; auto-load is intentionally suppressed when cwd is nido)
 
-Selected brian agents are surfaced under nido's `.claude/agents/` via symlink (currently: `datastar-dev`, plus `dev-rules.md` import). When you need a brian lane that isn't symlinked yet, ask — that's the trigger to extend the harness.
+Brian's domain agents and most of its skills are mirrored under `nido/.claude/` via symlink, declared in `nido/.claude/harness.edn`. Run `bb nido:harness:sync` to reconcile after brian ships harness changes — it adds new entries, prunes deletions/exclusions, and leaves any user-overridden file (real, non-symlink) untouched. Currently excluded: `dev`, `push` (brian session/workflow plumbing nido owns).
 
 ## Session lifecycle
 

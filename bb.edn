@@ -10,6 +10,7 @@
              [tasks.nido-ui :as nido-ui]
              [tasks.nido-ci :as nido-ci]
              [tasks.nido-bench :as nido-bench]
+             [tasks.nido-harness :as nido-harness]
              [tasks.nido-help :as nido-help])
 
   :init (do
@@ -108,6 +109,10 @@
   nido:reclaim
   {:doc "List (or with :force? true, delete) per-instance state dirs not tracked in the registry"
    :task (apply nido-reclaim/run *command-line-args*)}
+
+  nido:harness:sync
+  {:doc "Reconcile nido/.claude/ symlinks against .claude/harness.edn (add new, prune deleted, respect overrides)"
+   :task (apply nido-harness/sync-cmd *command-line-args*)}
 
   nido:bench:memory
   {:doc "Run the memory-bench lever matrix for a project: :project <name> [:levers [kw...]] [:session <name>]"
