@@ -62,7 +62,7 @@
    :task (apply nido-project/remove-cmd *command-line-args*)}
 
   nido:session:up
-  {:doc "Bring a session up: :project <p> <session> — worktree if missing + start PG/JVM/app (idempotent)"
+  {:doc "Bring a session up + enter Claude: :project <p> <session> [:claude false to skip launch]"
    :task (apply nido-session/up *command-line-args*)}
 
   nido:session:down
@@ -76,6 +76,10 @@
   nido:session:destroy
   {:doc "Destroy a session: :project <p> <session> — down + remove worktree"
    :task (apply nido-session/destroy *command-line-args*)}
+
+  nido:session:claude
+  {:doc "Launch Claude Code against a running session: :project <p> <session>"
+   :task (apply nido-session/claude *command-line-args*)}
 
   nido:session:status
   {:doc "Session status: :project <p> <session>"

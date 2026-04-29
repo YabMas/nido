@@ -9,6 +9,7 @@
      down     stop the session, leave worktree + state on disk
      reset    nuclear: down → drop PGDATA → re-clone template → up
      destroy  down + remove worktree
+     claude   launch Claude Code against a running session
      status   per-session liveness + ports
      list     project-wide overview
 
@@ -67,14 +68,32 @@
     (throw (ex-info "Unexpected positional args; this command takes only kwargs"
                     {:positionals positionals}))))
 
+(defn- launch-claude? [opts]
+  (cond
+    (contains? opts :claude?) (boolean (:claude? opts))
+    (contains? opts :claude)  (boolean (:claude opts))
+    :else true))
+
 (defn up
-  "Bring the named session up: worktree if missing, then PG/JVM/app.
-   Idempotent — running on a live session is a no-op."
+  "Bring the named session up and launch Claude Code against it.
+
+   Default behaviour: brings up the worktree (if missing) + services, then
+   launches `claude` from the nido directory with --add-dir pointing at the
+   worktree, --mcp-config pointing at the per-session mcp.json, and the
+   per-session briefing appended to the system prompt. Pass :claude false
+   (or :claude? false) to skip the launch and just bring services up.
+
+   Idempotent — running on a live session is a no-op for services; the
+   launcher artifacts are refreshed and claude is launched (unless opted
+   out). Most other kwargs (e.g. :base, :branch, :jvm-heap-max) flow into
+   `up!`; `claude!` ignores anything it doesn't need."
   [& args]
   (let [[pos opts] (split-args args)
         _project (require-project opts)
         session (require-session-name pos)]
-    (lifecycle/up! session opts)))
+    (lifecycle/up! session opts)
+    (when (launch-claude? opts)
+      (lifecycle/claude! session opts))))
 
 (defn down
   "Stop the named session. Worktree and on-disk state are preserved."
@@ -103,6 +122,17 @@
         _project (require-project opts)
         session (require-session-name pos)]
     (lifecycle/destroy! session opts)))
+
+(defn claude
+  "Launch Claude Code against the named session: nido becomes the harness
+   (cwd unchanged), worktree is added via --add-dir, postgres MCP is wired
+   to the session's PG port, and a session briefing is appended to the
+   system prompt."
+  [& args]
+  (let [[pos opts] (split-args args)
+        _project (require-project opts)
+        session (require-session-name pos)]
+    (lifecycle/claude! session opts)))
 
 (defn status
   "Print status for the named session."

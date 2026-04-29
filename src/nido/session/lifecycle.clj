@@ -24,6 +24,7 @@
    [nido.config :as config]
    [nido.core :as core]
    [nido.session.engine :as engine]
+   [nido.session.launcher :as launcher]
    [nido.session.state :as state]))
 
 ;; ---------------------------------------------------------------------------
@@ -232,6 +233,38 @@
     (println "exists?:" (fs/exists? wt-path))
     (when (fs/exists? wt-path)
       (engine/session-status wt-path))))
+
+(defn claude!
+  "Launch Claude Code against a running session. Invokes the system `claude`
+   binary with the worktree added via --add-dir, the session's mcp.json
+   loaded via --mcp-config, and the per-session briefing appended to the
+   system prompt via --append-system-prompt. CWD stays at whatever the
+   caller's cwd is (typically nido itself) — the worktree is reachable but
+   nido's CLAUDE.md still owns the harness."
+  [name opts]
+  (let [{:keys [instance-id wt-path]} (with-context name opts)
+        mcp-path (launcher/mcp-config-path instance-id)
+        ctx-path (launcher/context-path instance-id)]
+    (when-not (fs/exists? wt-path)
+      (throw (ex-info (str "Worktree does not exist for session '" name "'")
+                      {:path wt-path :hint "Run `bb nido:session:up` first."})))
+    (when-not (fs/exists? mcp-path)
+      (throw (ex-info (str "No launcher artifacts for session '" name
+                           "' — is it running?")
+                      {:expected mcp-path
+                       :hint "Run `bb nido:session:up` to bring it up."})))
+    (let [ctx-content (when (fs/exists? ctx-path) (slurp ctx-path))
+          nido-dir    (core/nido-source-dir)
+          base-args   ["claude"
+                       "--add-dir" wt-path
+                       "--mcp-config" mcp-path]
+          args        (cond-> base-args
+                        ctx-content (into ["--append-system-prompt" ctx-content]))]
+      (core/log-step (str "Launching claude --add-dir " wt-path
+                          " --mcp-config " mcp-path
+                          (when ctx-content " --append-system-prompt …")
+                          " (cwd=" nido-dir ")"))
+      (apply shell {:dir nido-dir} args))))
 
 (defn list-all
   "List every session for a project, with quick liveness info."

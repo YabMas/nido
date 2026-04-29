@@ -10,6 +10,7 @@
    [nido.process :as proc]
    [nido.session.agent-guidance :as agent-guidance]
    [nido.session.context :as ctx]
+   [nido.session.launcher :as launcher]
    [nido.session.service :as service]
    ;; Load service implementations (must be loaded before state for the
    ;; defmethods to register; state itself has no transitive deps on them).
@@ -297,6 +298,10 @@
          (catch Exception e
            (core/log-step (str "warning: failed to write agent CLAUDE.md: "
                                (ex-message e)))))
+    (try (launcher/write-artifacts! final-ctx session-edn)
+         (catch Exception e
+           (core/log-step (str "warning: failed to write launcher artifacts: "
+                               (ex-message e)))))
     (print-session-summary session-data final-ctx)
     session-data))
 
@@ -317,7 +322,17 @@
     ;; Check for existing running session
     (if-let [existing (state/read-session instance-id)]
       (if (session-alive? existing)
-        (do (println "Session already running for" instance-id) nil)
+        (do (println "Session already running for" instance-id)
+            ;; Refresh launcher artifacts on the idempotent path. Covers two
+            ;; cases: (a) sessions that pre-date the launcher feature have
+            ;; no artifacts yet; (b) artifacts could have been deleted out
+            ;; of band. Same content as a fresh start writes, derived from
+            ;; the persisted session context.
+            (try (launcher/write-artifacts! (:context existing) session-edn)
+                 (catch Exception e
+                   (core/log-step (str "warning: refresh launcher artifacts: "
+                                       (ex-message e)))))
+            nil)
         (start-services! project-dir project-name instance-id session-edn opts))
       (start-services! project-dir project-name instance-id session-edn opts))))
 
@@ -366,6 +381,10 @@
         (try (agent-guidance/remove! project-dir)
              (catch Exception e
                (core/log-step (str "warning: failed to remove agent CLAUDE.md: "
+                                   (ex-message e)))))
+        (try (launcher/remove-artifacts! instance-id)
+             (catch Exception e
+               (core/log-step (str "warning: failed to remove launcher artifacts: "
                                    (ex-message e)))))
         (println "Stopped session" instance-id)))))
 

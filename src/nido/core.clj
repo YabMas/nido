@@ -1,11 +1,29 @@
 (ns nido.core
-  (:require [babashka.fs :as fs]))
+  (:require [babashka.fs :as fs]
+            [clojure.java.io :as io]))
 
 (defn nido-home
   "Returns the nido home directory. Defaults to ~/.nido, overridable via $NIDO_HOME."
   []
   (or (System/getenv "NIDO_HOME")
       (str (fs/path (System/getProperty "user.home") ".nido"))))
+
+(defn nido-source-dir
+  "The directory containing nido's bb.edn — i.e. the nido project root.
+   Derived at runtime from where this namespace was loaded so the value is
+   correct regardless of the caller's cwd. Resolves
+   <root>/src/nido/core.clj → <root>."
+  []
+  (let [url (io/resource "nido/core.clj")]
+    (when-not url
+      (throw (ex-info "Could not resolve nido source dir from classpath" {})))
+    (-> url
+        .toURI
+        java.io.File.
+        .getParentFile      ; nido/
+        .getParentFile      ; src/
+        .getParentFile      ; project root
+        .getAbsolutePath)))
 
 (def ^:private log-lock (Object.))
 
