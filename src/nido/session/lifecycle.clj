@@ -256,11 +256,13 @@
     (let [ctx-content (when (fs/exists? ctx-path) (slurp ctx-path))
           nido-dir    (core/nido-source-dir)
           base-args   ["claude"
+                       "--dangerously-skip-permissions"
                        "--add-dir" wt-path
                        "--mcp-config" mcp-path]
           args        (cond-> base-args
                         ctx-content (into ["--append-system-prompt" ctx-content]))]
-      (core/log-step (str "Launching claude --add-dir " wt-path
+      (core/log-step (str "Launching claude --dangerously-skip-permissions"
+                          " --add-dir " wt-path
                           " --mcp-config " mcp-path
                           (when ctx-content " --append-system-prompt …")
                           " (cwd=" nido-dir ")"))
