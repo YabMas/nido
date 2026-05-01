@@ -138,15 +138,14 @@
 
 (defn- remove-git-worktree!
   "Remove a git worktree. Forced (dev worktrees often have local edits).
-   Optionally also delete the branch."
-  [project-dir wt-path delete-branch?]
+   Optionally also delete the named branch."
+  [project-dir wt-path branch delete-branch?]
   (when (fs/exists? wt-path)
     (core/log-step (str "git worktree remove --force " wt-path))
     (git! project-dir ["worktree" "remove" "--force" wt-path] :continue? true))
   (when delete-branch?
-    (let [branch (str (fs/file-name wt-path))]
-      (core/log-step (str "git branch -D " branch))
-      (git! project-dir ["branch" "-D" branch] :continue? true))))
+    (core/log-step (str "git branch -D " branch))
+    (git! project-dir ["branch" "-D" branch] :continue? true)))
 
 ;; ---------------------------------------------------------------------------
 ;; Public lifecycle
@@ -215,14 +214,14 @@
    opts: {... :delete-branch? bool (default false)}
    Also accepts :delete-branch (no `?`) since `?` is a zsh glob char."
   [name opts]
-  (let [{:keys [project-dir wt-path]} (with-context name opts)
+  (let [{:keys [project-dir wt-path branch]} (with-context name opts)
         delete-branch? (boolean (or (:delete-branch? opts) (:delete-branch opts)))]
     (try
       (when (fs/exists? wt-path)
         (engine/stop-session! wt-path))
       (catch Exception e
         (core/log-step (str "warning: stop-session error: " (ex-message e)))))
-    (remove-git-worktree! project-dir wt-path delete-branch?)))
+    (remove-git-worktree! project-dir wt-path branch delete-branch?)))
 
 (defn status
   "Print status for a named session."
@@ -268,6 +267,26 @@
                           " (cwd=" nido-dir ")"))
       (apply shell {:dir nido-dir} args))))
 
+(defn- worktree-dir?
+  "A git worktree's root contains a `.git` entry (a file in linked
+   worktrees, a directory in the main checkout)."
+  [dir]
+  (fs/exists? (fs/path dir ".git")))
+
+(defn- find-session-names
+  "Recursively enumerate worktree roots under base. A directory that is
+   itself a worktree terminates the descent — its session name is its path
+   relative to base (so slash-namespaced names like `fix/foo` survive)."
+  [base]
+  (letfn [(walk [dir]
+            (cond
+              (worktree-dir? dir)  [dir]
+              (fs/directory? dir)  (mapcat walk (fs/list-dir dir))
+              :else                []))]
+    (->> (walk base)
+         (map #(str (fs/relativize base %)))
+         sort)))
+
 (defn list-all
   "List every session for a project, with quick liveness info."
   [opts]
@@ -278,10 +297,7 @@
     (println "worktrees-dir:" base)
     (if-not (fs/exists? base)
       (println "(no sessions)")
-      (let [names (->> (fs/list-dir base)
-                       (filter fs/directory?)
-                       (map (comp str fs/file-name))
-                       sort)]
+      (let [names (find-session-names base)]
         (if (empty? names)
           (println "(no sessions)")
           (doseq [n names]
