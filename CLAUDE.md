@@ -1,19 +1,25 @@
 # Nido
 
-Agent orchestrator and harness for managing development sessions across projects and providers. Nido owns the agent workflow shell — session lifecycle, per-session services, and the launch path into Claude Code. Per-project domain knowledge (lane routing, REPL discipline, Datastar/statechart contracts, …) is borrowed from the target project on demand rather than re-stated here.
+Agent orchestrator and harness for managing development sessions across projects and providers. Nido owns the workflow shell — session lifecycle, per-session services, and a session home you can `cd` into and launch whatever agent you like (claude, codex, …). Per-project domain knowledge (lane routing, REPL discipline, Datastar/statechart contracts, …) is borrowed from the target project on demand rather than re-stated here.
 
 Built as a standalone Babashka project. CLI entry points are defined in `bb.edn` as tasks.
 
 ## Working model
 
-Nido is the harness; the active project (e.g. brian) is the workspace. When you launch with `bb nido:session:claude <session>`, Claude Code starts with cwd at this directory but with the session's worktree available via `--add-dir`. A per-session briefing (under `~/.nido/state/<instance-id>/session-context.md`) is appended to the system prompt at launch — it tells you which worktree to operate on and which ports the live services are bound to.
+Nido is the harness; the active project (e.g. brian) is the workspace. Each running session has a **session home** at `~/.nido/sessions/<project>/<session>/` containing:
+
+- `CLAUDE.md` — short briefing with the worktree path and live service ports.
+- `.mcp.json` — postgres MCP wired to the per-session DB.
+- `worktree/` — symlink to the code (`~/Code/<project>-worktrees/<session>/`).
+
+`bb nido:session:up` brings the session up; `bb nido:session:enter` drops you into a subshell rooted at the session home. From there, run `claude`, `codex`, or any other agent — they pick up the briefing and MCP config from cwd, and `cd worktree` reaches the code.
 
 Rules of engagement:
 
-- **Edit code in the worktree, not in nido's source tree.** Use absolute paths under the worktree path provided in the session briefing.
+- **Edit code in the worktree, not in nido's source tree.** Use absolute paths or `cd worktree/` from the session home.
 - **Don't start your own services.** The REPL, app server, and database are managed by nido. Connect to them; don't spin up parallel ones via project-local scripts.
 - **Don't edit a target project's main checkout in place.** Work always lands in a session worktree.
-- **Trust nido's MCP wiring.** `--mcp-config` points the postgres MCP at the per-session DB on the session's PG port. Don't reach for the project's static `.mcp.json`.
+- **Trust nido's MCP wiring.** The session home's `.mcp.json` points the postgres MCP at the per-session DB on the session's PG port. Don't reach for the project's static `.mcp.json`.
 
 ## Routing domain work
 
@@ -27,13 +33,13 @@ Brian's domain agents and most of its skills are mirrored under `nido/.claude/` 
 
 ## Session lifecycle
 
-All session verbs take `:project <project>` plus a positional `<session>` (any order). Six verbs: four destructive, one launch-only, two read-only.
+All session verbs take `:project <project>` plus a positional `<session>` (any order).
 
-- `bb nido:session:up :project <p> <session>` — create the worktree if missing, start PG + JVM + app, **and launch Claude Code** against the session. Idempotent on the services side; the claude launch happens every time. Pass `:claude false` (or `:claude? false`) to skip the launch and just bring services up.
+- `bb nido:session:up :project <p> <session>` — create the worktree if missing, start PG + JVM + app, write the session home. Idempotent. Prints the session-home path on success.
+- `bb nido:session:enter :project <p> <session>` — drop into a subshell rooted at the session home. Run `claude`, `codex`, or any other agent from there.
 - `bb nido:session:down :project <p> <session>` — stop the session; worktree + on-disk state preserved.
 - `bb nido:session:reset :project <p> <session>` — nuclear recovery. Down → drop PGDATA → re-clone from the current template → up. The "I'm wedged, fix it" button.
 - `bb nido:session:destroy :project <p> <session>` — down + remove the worktree.
-- `bb nido:session:claude :project <p> <session>` — launch claude against an already-running session (no service work). Useful when claude exited and you want to re-enter without bouncing services. Same flags as `up`'s launch path: cwd is forced to nido, worktree added via `--add-dir`, postgres MCP wired to the session port, briefing appended to the system prompt.
 - `bb nido:session:status` / `nido:session:list` — read-only.
 
 There is no `restart` task — use `down` then `up` (or just `up`, since it's idempotent on a running session and a no-op there). The dashboard's restart button still exists; it's an internal UI-only path.
@@ -42,12 +48,7 @@ The UI watchdog fully stops idle sessions (default 30 min of zero ESTABLISHED co
 
 ## Launcher artifacts
 
-`session:up` writes two files into `~/.nido/state/<instance-id>/` for the launcher:
-
-- `mcp.json` — postgres MCP wired to the per-session DB on the session's PG port.
-- `session-context.md` — short briefing (project, worktree path, app/PG/REPL ports). Appended to the system prompt by `session:claude`.
-
-Both are removed on `session:down`. If you run `session:claude` against a downed session, it will refuse — bring it `up` first.
+`session:up` populates `~/.nido/sessions/<project>/<session>/` with the agent-discoverable files described in **Working model**. Everything is regenerated each `up` (idempotent) and removed on `session:destroy`. If you run `session:enter` against a downed session, it will refuse — bring it `up` first.
 
 ## PostgreSQL topology
 

@@ -4,12 +4,13 @@
    and takes a single positional <session-name> (= git branch = worktree leaf).
    Kwargs and the positional may appear in any order.
 
-   Surface (four destructive verbs + two read-only):
+   Surface:
      up       create worktree (if missing) + start PG/JVM/app — idempotent
      down     stop the session, leave worktree + state on disk
      reset    nuclear: down → drop PGDATA → re-clone template → up
      destroy  down + remove worktree
-     claude   launch Claude Code against a running session
+     enter    drop into a subshell rooted at the session home (start
+              claude/codex/whatever from there)
      status   per-session liveness + ports
      list     project-wide overview
 
@@ -19,13 +20,15 @@
      bb nido:session:up      :project brian fix-bug   :branch existing-branch
      bb nido:session:up      :project brian feat-auth :jvm-heap-max 1500m
      bb nido:session:down    :project brian feat-auth
+     bb nido:session:enter   :project brian feat-auth
      bb nido:session:reset   :project brian feat-auth
      bb nido:session:destroy :project brian feat-auth :delete-branch? true
      bb nido:session:status  :project brian feat-auth
      bb nido:session:list    :project brian"
   (:require
    [clojure.edn :as edn]
-   [nido.session.lifecycle :as lifecycle]))
+   [nido.session.lifecycle :as lifecycle]
+   [nido.session.state :as state]))
 
 (defn- parse-token [tok]
   (try (edn/read-string tok) (catch Exception _ tok)))
@@ -68,32 +71,23 @@
     (throw (ex-info "Unexpected positional args; this command takes only kwargs"
                     {:positionals positionals}))))
 
-(defn- launch-claude? [opts]
-  (cond
-    (contains? opts :claude?) (boolean (:claude? opts))
-    (contains? opts :claude)  (boolean (:claude opts))
-    :else true))
-
 (defn up
-  "Bring the named session up and launch Claude Code against it.
-
-   Default behaviour: brings up the worktree (if missing) + services, then
-   launches `claude` from the nido directory with --add-dir pointing at the
-   worktree, --mcp-config pointing at the per-session mcp.json, and the
-   per-session briefing appended to the system prompt. Pass :claude false
-   (or :claude? false) to skip the launch and just bring services up.
-
-   Idempotent — running on a live session is a no-op for services; the
-   launcher artifacts are refreshed and claude is launched (unless opted
-   out). Most other kwargs (e.g. :base, :branch, :jvm-heap-max) flow into
-   `up!`; `claude!` ignores anything it doesn't need."
+  "Bring the named session up. Creates the worktree (if missing) + starts
+   PG/JVM/app, then prints the session-home path the user can cd into to
+   start their preferred agent (claude, codex, …). Idempotent — running
+   on a live session refreshes the session-home artifacts but doesn't
+   restart services. Kwargs like :base, :branch, :jvm-heap-max flow into
+   `up!`."
   [& args]
   (let [[pos opts] (split-args args)
-        _project (require-project opts)
+        project (require-project opts)
         session (require-session-name pos)]
     (lifecycle/up! session opts)
-    (when (launch-claude? opts)
-      (lifecycle/claude! session opts))))
+    (let [home (state/session-home-dir project session)]
+      (println)
+      (println (str "Session ready: " project "/" session))
+      (println (str "  cd " home))
+      (println (str "  bb nido:session:enter :project " project " " session)))))
 
 (defn down
   "Stop the named session. Worktree and on-disk state are preserved."
@@ -123,16 +117,17 @@
         session (require-session-name pos)]
     (lifecycle/destroy! session opts)))
 
-(defn claude
-  "Launch Claude Code against the named session: nido becomes the harness
-   (cwd unchanged), worktree is added via --add-dir, postgres MCP is wired
-   to the session's PG port, and a session briefing is appended to the
-   system prompt."
+(defn enter
+  "Drop the user into a subshell rooted at the session-home
+   (~/.nido/sessions/<project>/<session>/). The shell inherits stdio so
+   the user can run claude / codex / whatever — those agents pick up
+   .mcp.json and CLAUDE.md from cwd, and `worktree/` is a symlink to
+   the code. Returns when the user exits the shell."
   [& args]
   (let [[pos opts] (split-args args)
         _project (require-project opts)
         session (require-session-name pos)]
-    (lifecycle/claude! session opts)))
+    (lifecycle/enter! session opts)))
 
 (defn status
   "Print status for the named session."

@@ -24,7 +24,6 @@
    [nido.config :as config]
    [nido.core :as core]
    [nido.session.engine :as engine]
-   [nido.session.launcher :as launcher]
    [nido.session.state :as state]))
 
 ;; ---------------------------------------------------------------------------
@@ -233,39 +232,22 @@
     (when (fs/exists? wt-path)
       (engine/session-status wt-path))))
 
-(defn claude!
-  "Launch Claude Code against a running session. Invokes the system `claude`
-   binary with the worktree added via --add-dir, the session's mcp.json
-   loaded via --mcp-config, and the per-session briefing appended to the
-   system prompt via --append-system-prompt. CWD stays at whatever the
-   caller's cwd is (typically nido itself) — the worktree is reachable but
-   nido's CLAUDE.md still owns the harness."
+(defn enter!
+  "Drop the user into a subshell rooted at the session-home. The shell
+   inherits stdio so the user can run claude / codex / whatever — those
+   agents discover .mcp.json and CLAUDE.md from cwd, and `worktree/` is a
+   symlink to the code inside the session-home. Returns when the user
+   exits the shell."
   [name opts]
-  (let [{:keys [instance-id wt-path]} (with-context name opts)
-        mcp-path (launcher/mcp-config-path instance-id)
-        ctx-path (launcher/context-path instance-id)]
-    (when-not (fs/exists? wt-path)
-      (throw (ex-info (str "Worktree does not exist for session '" name "'")
-                      {:path wt-path :hint "Run `bb nido:session:up` first."})))
-    (when-not (fs/exists? mcp-path)
-      (throw (ex-info (str "No launcher artifacts for session '" name
-                           "' — is it running?")
-                      {:expected mcp-path
+  (let [[project-name _] (resolve-project opts)
+        session-home (state/session-home-dir project-name name)]
+    (when-not (fs/exists? session-home)
+      (throw (ex-info (str "No session home for '" name "' — is it running?")
+                      {:expected session-home
                        :hint "Run `bb nido:session:up` to bring it up."})))
-    (let [ctx-content (when (fs/exists? ctx-path) (slurp ctx-path))
-          nido-dir    (core/nido-source-dir)
-          base-args   ["claude"
-                       "--dangerously-skip-permissions"
-                       "--add-dir" wt-path
-                       "--mcp-config" mcp-path]
-          args        (cond-> base-args
-                        ctx-content (into ["--append-system-prompt" ctx-content]))]
-      (core/log-step (str "Launching claude --dangerously-skip-permissions"
-                          " --add-dir " wt-path
-                          " --mcp-config " mcp-path
-                          (when ctx-content " --append-system-prompt …")
-                          " (cwd=" nido-dir ")"))
-      (apply shell {:dir nido-dir} args))))
+    (let [shell-bin (or (System/getenv "SHELL") "/bin/bash")]
+      (core/log-step (str "Entering " session-home " (" shell-bin ")"))
+      (shell {:dir session-home :continue true} shell-bin))))
 
 (defn- worktree-dir?
   "A git worktree's root contains a `.git` entry (a file in linked
