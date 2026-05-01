@@ -227,11 +227,13 @@
   (core/log-step (str "Starting session " instance-id " (" project-dir ")"))
   (let [pre-allocated (pre-allocate-ports (:services session-edn) project-dir)
         jvm-cfg (resolve-jvm-config (:defaults session-edn) opts)
+        session-name (:session-name opts)
         init-ctx (merge pre-allocated
-                        {:session {:project-dir project-dir
-                                   :project-name project-name
-                                   :instance-id instance-id
-                                   :jvm jvm-cfg}})
+                        {:session (cond-> {:project-dir project-dir
+                                           :project-name project-name
+                                           :instance-id instance-id
+                                           :jvm jvm-cfg}
+                                    session-name (assoc :name session-name))})
         ;; Run setup steps
         _ (doseq [step (:setup session-edn)]
             (run-setup-step! step project-dir))
@@ -272,13 +274,14 @@
                    (throw e)))
         final-ctx (:ctx result)
         service-states (:service-states result)
-        session-data {:project-dir project-dir
-                      :project-name project-name
-                      :instance-id instance-id
-                      :service-defs (:services session-edn)
-                      :service-states service-states
-                      :context final-ctx
-                      :created-at (core/now-iso)}]
+        session-data (cond-> {:project-dir project-dir
+                              :project-name project-name
+                              :instance-id instance-id
+                              :service-defs (:services session-edn)
+                              :service-states service-states
+                              :context final-ctx
+                              :created-at (core/now-iso)}
+                       session-name (assoc :name session-name))]
     ;; Write session state
     (state/write-session! instance-id session-data)
     ;; Upsert registry for backward compat
@@ -382,7 +385,9 @@
              (catch Exception e
                (core/log-step (str "warning: failed to remove agent CLAUDE.md: "
                                    (ex-message e)))))
-        (try (launcher/remove-artifacts! instance-id)
+        (try (launcher/remove-artifacts! instance-id
+                                         (:project-name session)
+                                         (:name session))
              (catch Exception e
                (core/log-step (str "warning: failed to remove launcher artifacts: "
                                    (ex-message e)))))

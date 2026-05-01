@@ -175,7 +175,7 @@
     (if (fs/exists? wt-path)
       (core/log-step (str "Worktree already exists at " wt-path " — starting session."))
       (create-git-worktree! project-dir wt-path branch base))
-    (engine/start-session! wt-path opts)))
+    (engine/start-session! wt-path (assoc opts :session-name name))))
 
 (defn down!
   "Stop the named session. Worktree and on-disk state are preserved."
@@ -192,7 +192,7 @@
   [name opts]
   (down! name opts)
   (let [{:keys [wt-path]} (with-context name opts)]
-    (engine/start-session! wt-path opts)))
+    (engine/start-session! wt-path (assoc opts :session-name name))))
 
 (defn reset!
   "Nuclear recovery for a session in a bad state: stop the session
@@ -207,7 +207,7 @@
     (try (engine/stop-session! wt-path)
          (catch Exception e
            (core/log-step (str "warning: stop during reset: " (ex-message e)))))
-    (engine/start-session! wt-path opts)))
+    (engine/start-session! wt-path (assoc opts :session-name name))))
 
 (defn destroy!
   "Bring the named session down and remove its worktree.

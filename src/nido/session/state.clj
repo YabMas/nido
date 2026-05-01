@@ -45,6 +45,24 @@
   (str (fs/path (instance-state-dir instance-id) "pg-data")))
 
 ;; ---------------------------------------------------------------------------
+;; Session-home — human-readable per-session dir users cd into.
+;; ~/.nido/sessions/<project>/<session>/ holds .mcp.json, CLAUDE.md, and a
+;; `worktree` symlink. Distinct from instance-state-dir (opaque hash, owned
+;; by nido). Same session is reachable via both paths until the migration
+;; off instance-state-dir is complete.
+;; ---------------------------------------------------------------------------
+
+(defn sessions-root
+  "~/.nido/sessions/"
+  []
+  (str (fs/path (core/nido-home) "sessions")))
+
+(defn session-home-dir
+  "~/.nido/sessions/<project>/<session>/"
+  [project-name session-name]
+  (str (fs/path (sessions-root) project-name session-name)))
+
+;; ---------------------------------------------------------------------------
 ;; Template paths — long-lived, per-project, source for APFS clones
 ;; ---------------------------------------------------------------------------
 
