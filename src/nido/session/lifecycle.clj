@@ -287,24 +287,42 @@
          (map #(str (fs/relativize base %)))
          sort)))
 
-(defn list-all
-  "List every session for a project, with quick liveness info."
+(defn list-all-data
+  "Programmatic counterpart to `list-all`. Returns
+   `{:project-name <name> :worktrees-dir <path> :sessions [{...}]}` where each
+   session map carries `:name :worktree :pg-port :app-port :nrepl-port :repl-pid`.
+   Registry-derived ports are nil for sessions that aren't tracked (i.e. down)."
   [opts]
   (let [[project-name {:keys [directory]}] (resolve-project opts)
         base (worktrees-dir project-name directory)
-        registry (state/read-registry)]
+        registry (state/read-registry)
+        sessions (when (fs/exists? base)
+                   (mapv (fn [n]
+                           (let [wt-path (str (fs/path base n))
+                                 entry (get registry wt-path)]
+                             {:name n
+                              :worktree wt-path
+                              :pg-port (:pg-port entry)
+                              :app-port (:app-port entry)
+                              :nrepl-port (:nrepl-port entry)
+                              :repl-pid (:repl-pid entry)}))
+                         (find-session-names base)))]
+    {:project-name project-name
+     :worktrees-dir base
+     :sessions (or sessions [])}))
+
+(defn list-all
+  "List every session for a project, with quick liveness info."
+  [opts]
+  (let [{:keys [project-name worktrees-dir sessions]} (list-all-data opts)]
     (println "project:" project-name)
-    (println "worktrees-dir:" base)
-    (if-not (fs/exists? base)
+    (println "worktrees-dir:" worktrees-dir)
+    (if (empty? sessions)
       (println "(no sessions)")
-      (let [names (find-session-names base)]
-        (if (empty? names)
-          (println "(no sessions)")
-          (doseq [n names]
-            (let [wt-path (str (fs/path base n))
-                  entry (get registry wt-path)]
-              (println (str "- " n
-                            (when entry
-                              (str "  [pg=" (or (:pg-port entry) "-")
-                                   " app=" (or (:app-port entry) "-")
-                                   " repl=" (or (:nrepl-port entry) "-") "]")))))))))))
+      (doseq [{:keys [name pg-port app-port nrepl-port]} sessions]
+        (let [tracked? (or pg-port app-port nrepl-port)]
+          (println (str "- " name
+                        (when tracked?
+                          (str "  [pg=" (or pg-port "-")
+                               " app=" (or app-port "-")
+                               " repl=" (or nrepl-port "-") "]")))))))))
