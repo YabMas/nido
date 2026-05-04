@@ -22,7 +22,7 @@ Nido is the harness; the active project (e.g. brian) is the workspace. Each runn
 nido() {
   local f=~/.nido/.last-cd
   rm -f "$f"
-  command bb nido:tui "$@"
+  (cd ~/Code/nido && command bb nido:tui "$@")
   [[ -s "$f" ]] && { cd "$(cat "$f")" && rm -f "$f"; }
 }
 ```
