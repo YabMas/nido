@@ -51,7 +51,7 @@ Brian's domain agents and most of its skills are mirrored under `nido/.claude/` 
 All session verbs take `:project <project>` plus a positional `<session>` (any order).
 
 - `bb nido:session:up :project <p> <session>` — create the worktree if missing, start PG + JVM + app, write the session home. Idempotent. Prints the session-home path on success.
-- `bb nido:session:enter :project <p> <session>` — write the session-home path to `~/.nido/.last-cd` and exit. Pair with the `nido` shell function (see "Shell wrapper" above) to actually `cd` your shell there. Refuses if the session is down.
+- `bb nido:session:enter :project <p> <session>` — write the session-home path to `~/.nido/.last-cd` and exit. Pair with the `nido` shell function (see "Shell wrapper" above) to actually `cd` your shell there. Refuses if the session is down. Pass `:cd worktree` to land in the worktree (the actual code) instead — useful when you want to edit / git-grep without the extra `cd worktree`. The TUI exposes the same opt-in: <kbd>e</kbd> / <kbd>↵</kbd> for session-home, <kbd>w</kbd> for worktree.
 - `bb nido:session:down :project <p> <session>` — stop the session; worktree + on-disk state preserved.
 - `bb nido:session:reset :project <p> <session>` — nuclear recovery. Down → drop PGDATA → re-clone from the current template → up. The "I'm wedged, fix it" button.
 - `bb nido:session:destroy :project <p> <session>` — down + remove the worktree.
