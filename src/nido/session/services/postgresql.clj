@@ -210,6 +210,19 @@
     (when (fs/exists? pid-file)
       (some-> (slurp pid-file) str/split-lines first str/trim parse-long))))
 
+(defn dropdb!
+  "Drop the named database if it exists. Wraps `dropdb --if-exists`, which
+   connects to the maintenance `postgres` DB. Caller must ensure no other
+   client is connected to db-name."
+  [bin-dir pg-port db-user db-name]
+  (core/log-step (str "Dropping database '" db-name "' (if exists)..."))
+  (let [result (shell {:continue true :out :string :err :string}
+                      (pg-cmd bin-dir "dropdb")
+                      "--if-exists"
+                      "-h" "127.0.0.1" "-p" (str pg-port) "-U" db-user db-name)]
+    (when-not (zero? (:exit result))
+      (throw (ex-info "dropdb failed" {:error (:err result) :output (:out result)})))))
+
 (defn setup-fresh-database!
   "After initdb + start, create the application database and apply baseline or
    raw schema/extensions. Skipped when starting from a cloned template."

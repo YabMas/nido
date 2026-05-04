@@ -128,7 +128,8 @@
   (let [session-edn (engine/load-session-edn project-name)
         template-cfg (load-template-config session-edn)
         project-commands (:project-commands session-edn)
-        {:keys [port refresh-steps]} template-cfg
+        {:keys [port refresh-steps db-name db-user schema extensions]
+         :or {db-user "user" db-name "postgres"}} template-cfg
         data-dir (state/template-pg-data-dir project-name)
         log-path (state/template-log-file project-name)
         bin-dir (pg/find-pg-bin-dir)
@@ -143,6 +144,15 @@
     (pg/pg-ctl-start! bin-dir data-dir port log-path)
     (pg/wait-for-tcp! port)
     (try
+      ;; pg_restore --clean cannot CASCADE; FKs from a previous refresh block
+      ;; per-object DROPs. Reset the DB to init-clean state so every refresh
+      ;; starts from a known empty target.
+      (pg/dropdb! bin-dir port db-user db-name)
+      (pg/setup-fresh-database! {:bin-dir bin-dir :pg-port port
+                                 :db-user db-user :db-name db-name
+                                 :schema schema :extensions extensions
+                                 :baseline nil
+                                 :project-dir project-dir})
       (let [ctx (template-context project-name project-dir template-cfg port data-dir bin-dir)]
         (doseq [step refresh-steps]
           (commands/run-command! project-commands step ctx)))
