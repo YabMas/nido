@@ -240,24 +240,54 @@
   []
   (str (fs/path (core/nido-home) ".last-cd")))
 
-(defn enter!
-  "Hand off the session-home path to the parent shell via `cd-target-file`.
-   bb cannot change its parent's cwd, so a tiny zsh function (see Nido's
-   CLAUDE.md) reads this file after the TUI exits and `cd`s the user there.
+(defn- parse-cd-target
+  "Normalize the user-supplied `:cd` value (symbol from edn/read-string,
+   keyword, or string) to one of `:home` / `:worktree`. Defaults to
+   `:home` when nil. Throws on anything else with the valid set in the
+   message."
+  [v]
+  (let [s (cond
+            (nil? v)                    "home"
+            (or (keyword? v) (symbol? v)) (name v)
+            :else                       (str v))]
+    (case s
+      "home"     :home
+      "worktree" :worktree
+      (throw (ex-info (str "Invalid :cd value " (pr-str v))
+                      {:value v
+                       :valid #{"home" "worktree"}
+                       :hint "Pass :cd home (default) or :cd worktree"})))))
 
-   Throws if the session isn't running — there's nothing to land in until
-   `session:up` has populated the session-home."
+(defn enter!
+  "Hand off a cwd to the parent shell via `cd-target-file`. bb cannot change
+   its parent's cwd, so a tiny zsh function (see Nido's CLAUDE.md) reads
+   this file after the bb task exits and `cd`s the user there.
+
+   `:cd` selects the target:
+     :home (default) — the session-home (CLAUDE.md, .mcp.json live here)
+     :worktree       — the worktree symlink inside session-home
+
+   Throws if the session isn't running, or if `:cd worktree` is requested
+   and the worktree symlink is missing or dangling."
   [name opts]
   (let [[project-name _] (resolve-project opts)
+        cd-target    (parse-cd-target (:cd opts))
         session-home (state/session-home-dir project-name name)]
     (when-not (fs/exists? session-home)
       (throw (ex-info (str "No session home for '" name "' — is it running?")
                       {:expected session-home
                        :hint "Run `bb nido:session:up` to bring it up."})))
-    (let [target (cd-target-file)]
-      (fs/create-dirs (fs/parent target))
-      (spit target session-home)
-      (core/log-step (str "Selected " session-home)))))
+    (let [resolved (case cd-target
+                     :home     session-home
+                     :worktree (str (fs/path session-home "worktree")))]
+      (when (and (= :worktree cd-target) (not (fs/exists? resolved)))
+        (throw (ex-info (str "No worktree symlink for '" name "'")
+                        {:expected resolved
+                         :hint "Run `bb nido:session:up` to refresh the session-home."})))
+      (let [target (cd-target-file)]
+        (fs/create-dirs (fs/parent target))
+        (spit target resolved)
+        (core/log-step (str "Selected " resolved))))))
 
 (defn- worktree-dir?
   "A git worktree's root contains a `.git` entry (a file in linked
