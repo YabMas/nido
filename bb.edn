@@ -82,7 +82,7 @@
    :task (apply nido-session/destroy *command-line-args*)}
 
   nido:session:enter
-  {:doc "Drop into a subshell rooted at the session-home: :project <p> <session>"
+  {:doc "Write session-home path to ~/.nido/.last-cd: :project <p> <session> (pair with the `nido` shell wrapper)"
    :task (apply nido-session/enter *command-line-args*)}
 
   nido:session:status

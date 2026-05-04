@@ -232,12 +232,21 @@
     (when (fs/exists? wt-path)
       (engine/session-status wt-path))))
 
+(defn cd-target-file
+  "File the parent shell wrapper polls after `bb nido:tui` exits to decide
+   where to `cd`. Located inside `~/.nido/` so it's per-user and survives
+   reboots. The wrapper is responsible for removing it before invoking bb;
+   we only ever write."
+  []
+  (str (fs/path (core/nido-home) ".last-cd")))
+
 (defn enter!
-  "Drop the user into a subshell rooted at the session-home. The shell
-   inherits stdio so the user can run claude / codex / whatever — those
-   agents discover .mcp.json and CLAUDE.md from cwd, and `worktree/` is a
-   symlink to the code inside the session-home. Returns when the user
-   exits the shell."
+  "Hand off the session-home path to the parent shell via `cd-target-file`.
+   bb cannot change its parent's cwd, so a tiny zsh function (see Nido's
+   CLAUDE.md) reads this file after the TUI exits and `cd`s the user there.
+
+   Throws if the session isn't running — there's nothing to land in until
+   `session:up` has populated the session-home."
   [name opts]
   (let [[project-name _] (resolve-project opts)
         session-home (state/session-home-dir project-name name)]
@@ -245,9 +254,10 @@
       (throw (ex-info (str "No session home for '" name "' — is it running?")
                       {:expected session-home
                        :hint "Run `bb nido:session:up` to bring it up."})))
-    (let [shell-bin (or (System/getenv "SHELL") "/bin/bash")]
-      (core/log-step (str "Entering " session-home " (" shell-bin ")"))
-      (shell {:dir session-home :continue true} shell-bin))))
+    (let [target (cd-target-file)]
+      (fs/create-dirs (fs/parent target))
+      (spit target session-home)
+      (core/log-step (str "Selected " session-home)))))
 
 (defn- worktree-dir?
   "A git worktree's root contains a `.git` entry (a file in linked

@@ -9,8 +9,9 @@
      down     stop the session, leave worktree + state on disk
      reset    nuclear: down → drop PGDATA → re-clone template → up
      destroy  down + remove worktree
-     enter    drop into a subshell rooted at the session home (start
-              claude/codex/whatever from there)
+     enter    select session for the parent shell — writes the session-home
+              path to ~/.nido/.last-cd; pair with the `nido` shell wrapper
+              to actually `cd` (see Nido's CLAUDE.md)
      status   per-session liveness + ports
      list     project-wide overview
 
@@ -118,11 +119,10 @@
     (lifecycle/destroy! session opts)))
 
 (defn enter
-  "Drop the user into a subshell rooted at the session-home
-   (~/.nido/sessions/<project>/<session>/). The shell inherits stdio so
-   the user can run claude / codex / whatever — those agents pick up
-   .mcp.json and CLAUDE.md from cwd, and `worktree/` is a symlink to
-   the code. Returns when the user exits the shell."
+  "Hand off the session-home path to the parent shell via
+   `~/.nido/.last-cd`. Paired with a tiny shell function (see Nido's
+   CLAUDE.md → Shell wrapper) the user lands in the session-home with
+   no nested shell. Refuses if the session is down."
   [& args]
   (let [[pos opts] (split-args args)
         _project (require-project opts)

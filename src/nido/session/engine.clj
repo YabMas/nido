@@ -385,9 +385,7 @@
              (catch Exception e
                (core/log-step (str "warning: failed to remove agent CLAUDE.md: "
                                    (ex-message e)))))
-        (try (launcher/remove-artifacts! instance-id
-                                         (:project-name session)
-                                         (:name session))
+        (try (launcher/remove-artifacts! (:project-name session) (:name session))
              (catch Exception e
                (core/log-step (str "warning: failed to remove launcher artifacts: "
                                    (ex-message e)))))

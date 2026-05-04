@@ -12,7 +12,22 @@ Nido is the harness; the active project (e.g. brian) is the workspace. Each runn
 - `.mcp.json` — postgres MCP wired to the per-session DB.
 - `worktree/` — symlink to the code (`~/Code/<project>-worktrees/<session>/`).
 
-`bb nido:session:up` brings the session up; `bb nido:session:enter` drops you into a subshell rooted at the session home. From there, run `claude`, `codex`, or any other agent — they pick up the briefing and MCP config from cwd, and `cd worktree` reaches the code.
+`bb nido:session:up` brings the session up. To pick a session interactively, use the TUI (`bb nido:tui`) and press enter — your shell `cd`s into the session-home (see "Shell wrapper" below). From there, run `claude`, `codex`, or any other agent — they pick up the briefing and MCP config from cwd, and `cd worktree` reaches the code.
+
+### Shell wrapper
+
+`bb` is a child process and can't change its parent shell's cwd, so the TUI hands off via `~/.nido/.last-cd` and a tiny shell function does the actual `cd`. Add to `~/.zshrc` (or your shell's equivalent):
+
+```zsh
+nido() {
+  local f=~/.nido/.last-cd
+  rm -f "$f"
+  command bb nido:tui "$@"
+  [[ -s "$f" ]] && { cd "$(cat "$f")" && rm -f "$f"; }
+}
+```
+
+Then launch the TUI as `nido` rather than `bb nido:tui`. Without the wrapper the TUI still works as a viewer — pressing enter writes the path but nothing reads it.
 
 Rules of engagement:
 
@@ -36,7 +51,7 @@ Brian's domain agents and most of its skills are mirrored under `nido/.claude/` 
 All session verbs take `:project <project>` plus a positional `<session>` (any order).
 
 - `bb nido:session:up :project <p> <session>` — create the worktree if missing, start PG + JVM + app, write the session home. Idempotent. Prints the session-home path on success.
-- `bb nido:session:enter :project <p> <session>` — drop into a subshell rooted at the session home. Run `claude`, `codex`, or any other agent from there.
+- `bb nido:session:enter :project <p> <session>` — write the session-home path to `~/.nido/.last-cd` and exit. Pair with the `nido` shell function (see "Shell wrapper" above) to actually `cd` your shell there. Refuses if the session is down.
 - `bb nido:session:down :project <p> <session>` — stop the session; worktree + on-disk state preserved.
 - `bb nido:session:reset :project <p> <session>` — nuclear recovery. Down → drop PGDATA → re-clone from the current template → up. The "I'm wedged, fix it" button.
 - `bb nido:session:destroy :project <p> <session>` — down + remove the worktree.
