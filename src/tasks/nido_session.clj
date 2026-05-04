@@ -11,7 +11,8 @@
      destroy  down + remove worktree
      enter    select session for the parent shell — writes the session-home
               path to ~/.nido/.last-cd; pair with the `nido` shell wrapper
-              to actually `cd` (see Nido's CLAUDE.md)
+              to actually `cd` (see Nido's CLAUDE.md). Pass :cd worktree to
+              land in the code instead of the session-home.
      status   per-session liveness + ports
      list     project-wide overview
 
@@ -22,6 +23,7 @@
      bb nido:session:up      :project brian feat-auth :jvm-heap-max 1500m
      bb nido:session:down    :project brian feat-auth
      bb nido:session:enter   :project brian feat-auth
+     bb nido:session:enter   :project brian feat-auth :cd worktree
      bb nido:session:reset   :project brian feat-auth
      bb nido:session:destroy :project brian feat-auth :delete-branch? true
      bb nido:session:status  :project brian feat-auth
@@ -119,10 +121,15 @@
     (lifecycle/destroy! session opts)))
 
 (defn enter
-  "Hand off the session-home path to the parent shell via
-   `~/.nido/.last-cd`. Paired with a tiny shell function (see Nido's
-   CLAUDE.md → Shell wrapper) the user lands in the session-home with
-   no nested shell. Refuses if the session is down."
+  "Hand off a cwd to the parent shell via `~/.nido/.last-cd`. Paired with
+   a tiny shell function (see Nido's CLAUDE.md → Shell wrapper) the user
+   lands in the chosen directory with no nested shell.
+
+   `:cd home` (default) → session-home (CLAUDE.md, .mcp.json live here).
+   `:cd worktree`       → the worktree symlink (the actual code).
+
+   Refuses if the session is down, or if `:cd worktree` is requested and
+   the worktree symlink is missing."
   [& args]
   (let [[pos opts] (split-args args)
         _project (require-project opts)
