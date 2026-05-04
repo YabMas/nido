@@ -77,6 +77,20 @@
       (fs/delete link))
     (fs/create-sym-link link worktree)))
 
+(defn- purge-legacy-artifacts!
+  "Delete pre-refactor launcher artifacts at ~/.nido/state/<instance-id>/
+   that the previous launcher wrote there. Sessions created before the
+   session-home migration leave these on disk with stale port info, so
+   anything (or anyone) grepping ~/.nido reads obsolete data. Idempotent."
+  [instance-id]
+  (when instance-id
+    (let [base (state/instance-state-dir instance-id)]
+      (doseq [legacy ["session-context.md" "mcp.json"]
+              :let [path (str (fs/path base legacy))]
+              :when (fs/exists? path)]
+        (fs/delete path)
+        (core/log-step (str "Removed legacy " path))))))
+
 (defn write-artifacts!
   "Write per-session launcher artifacts into the session home. Called from
    start-services! after services are up. session-edn is passed in so we
@@ -114,7 +128,11 @@
       (try
         (ensure-worktree-symlink! project-name session-name worktree)
         (catch Exception e
-          (core/log-step (str "warning: worktree symlink: " (ex-message e))))))))
+          (core/log-step (str "warning: worktree symlink: " (ex-message e)))))
+      (try
+        (purge-legacy-artifacts! (get-in ctx [:session :instance-id]))
+        (catch Exception e
+          (core/log-step (str "warning: purge legacy artifacts: " (ex-message e))))))))
 
 (defn remove-artifacts!
   "Remove the session home. Called from stop-session!. No-op if the session
