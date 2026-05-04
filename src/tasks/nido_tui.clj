@@ -29,6 +29,7 @@
    [nido.core :as core]
    [nido.session.lifecycle :as lifecycle]
    [nido.tui :as tui]
+   [tasks.nido-ci :as ci]
    [tasks.nido-session :as session])
   (:import
    [java.io PrintWriter StringWriter]))
@@ -48,6 +49,25 @@
               (str (java.time.Instant/now) " " context "\n" sw "\n")
               :append true)
         (catch Exception _ nil)))))
+
+(defn- session-running?
+  "Registry view of liveness — `pg-port` is set on `up`, cleared on `down`."
+  [p s]
+  (let [{:keys [sessions]} (lifecycle/list-all-data {:project p})]
+    (boolean (some #(and (= s (:name %)) (:pg-port %)) sessions))))
+
+(defn- run-ci! [kind p s]
+  (when-not (session-running? p s)
+    (println (str "[nido:tui] session " s " is down — bringing it up before ci"))
+    (session/up ":project" p s))
+  (let [result (ci/execute! {:project p :session-name s :kind kind})]
+    (ci/print-summary result)
+    (when (not= :passed (:outcome result))
+      (binding [*err* *err*]
+        (.println ^java.io.PrintWriter *err*
+                  (str "[nido:tui] ci " (name kind)
+                       " run-id=" (:run-id result)
+                       " outcome=" (some-> (:outcome result) name)))))))
 
 (defn- destroy-and-verify!
   "Run destroy, then re-query and fall back to rm -rf if the worktree
@@ -71,7 +91,8 @@
       :up      (let [[_ p s] action] (session/up      ":project" p s))
       :down    (let [[_ p s] action] (session/down    ":project" p s))
       :destroy (let [[_ p s] action] (destroy-and-verify! p s))
-      :add     (let [[_ p s] action] (session/up      ":project" p s)))
+      :add     (let [[_ p s] action] (session/up      ":project" p s))
+      :ci      (let [[_ kind p s] action] (run-ci! kind p s)))
     (catch Throwable t
       (log-throwable! t (str "action failed: " (pr-str action)))
       (binding [*err* *err*]

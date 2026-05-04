@@ -586,6 +586,24 @@
                  (contains? #{:failed :errored :interrupted} (:outcome sr))))
        (mapv first)))
 
+(defn last-run-summary
+  "Brief summary of the most recent Run for this session, or nil if no
+   manifest exists. The session map only needs `:instance-state-dir`;
+   this is read-only and works on a session that's currently down.
+
+   Returns `{:run-id :outcome :total-steps :failed-step-names}` so a
+   caller (e.g. the TUI) can decide whether to offer a rerun option
+   before kicking off CI."
+  [session]
+  (when-let [{:keys [run-id manifest-path]} (last-run-manifest session)]
+    (let [manifest (try (edn/read-string (slurp manifest-path))
+                        (catch Exception _ nil))]
+      (when manifest
+        {:run-id            run-id
+         :outcome           (:outcome manifest)
+         :total-steps       (count (:step-runs manifest))
+         :failed-step-names (failed-step-names manifest)}))))
+
 (defn resolve-rerun-selection!
   "Read the session's last Run manifest and return a selection the
    caller can hand to `execute-run!`. Throws if there's no prior Run or

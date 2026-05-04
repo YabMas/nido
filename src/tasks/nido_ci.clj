@@ -102,7 +102,7 @@
     {:session session
      :config  config}))
 
-(defn- exit-code-for [run]
+(defn exit-code-for [run]
   (case (:outcome run)
     :passed      0
     :failed      1
@@ -110,7 +110,7 @@
     :interrupted 130
     1))
 
-(defn- print-summary [run]
+(defn print-summary [run]
   (println (str "ci run " (:run-id run)
                 " outcome=" (name (:outcome run))
                 " manifest=" (get-in run [:paths :status-manifest-path])))
@@ -122,6 +122,26 @@
                        (if-let [ec (:command-exit-code sr)]
                          (str " (exit " ec ")") ""))))))
 
+(defn execute!
+  "Resolve a CI context and execute a Run. Returns the result map; does
+   not print or `System/exit`. CLI wrappers (`run`/`rerun`) and the TUI
+   bb-task wrapper share this entry point so behaviour stays in one
+   place.
+
+   Required: `:project`, `:kind` (`:run` or `:rerun`).
+   Optional: `:session-name`, `:only`, `:profile`, `:from`, `:path`."
+  [{:keys [kind session-name] :as opts}]
+  (require-project opts)
+  (let [{:keys [session config]} (resolve-ci-context session-name opts)
+        selection (case kind
+                    :run   (cond-> {}
+                             (:only opts)    (assoc :only (:only opts))
+                             (:profile opts) (assoc :profile (:profile opts)))
+                    :rerun (ci-lifecycle/resolve-rerun-selection!
+                            session {:from (:from opts)}))]
+    (ci-lifecycle/execute-run!
+     {:session session :config config :selection selection})))
+
 (defn run
   "Execute a Run. With no `:only` and no `:profile`, runs every step
    in ci.edn (subject to step-level :after deps) — unless ci.edn
@@ -131,14 +151,8 @@
    slice from ci.edn `:profiles`."
   [& args]
   (let [[pos opts] (split-args args)
-        _project (require-project opts)
         session-name (require-session-name pos)
-        {:keys [session config]} (resolve-ci-context session-name opts)
-        selection (cond-> {}
-                    (:only opts)    (assoc :only (:only opts))
-                    (:profile opts) (assoc :profile (:profile opts)))
-        result (ci-lifecycle/execute-run!
-                {:session session :config config :selection selection})]
+        result (execute! (assoc opts :kind :run :session-name session-name))]
     (print-summary result)
     (System/exit (exit-code-for result))))
 
@@ -151,12 +165,7 @@
    main-mode Run."
   [& args]
   (let [[pos opts] (split-args args)
-        _project (require-project opts)
         session-name (require-session-name pos)
-        {:keys [session config]} (resolve-ci-context session-name opts)
-        rerun-selection (ci-lifecycle/resolve-rerun-selection!
-                         session {:from (:from opts)})
-        result (ci-lifecycle/execute-run!
-                {:session session :config config :selection rerun-selection})]
+        result (execute! (assoc opts :kind :rerun :session-name session-name))]
     (print-summary result)
     (System/exit (exit-code-for result))))
