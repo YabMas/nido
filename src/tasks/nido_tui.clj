@@ -66,7 +66,8 @@
 (defn- run-action [action]
   (try
     (case (first action)
-      :enter   (let [[_ p s] action] (session/enter ":project" p s))
+      :enter   (let [[_ p s target] action]
+                 (session/enter ":project" p s ":cd" (name target)))
       :up      (let [[_ p s] action] (session/up      ":project" p s))
       :down    (let [[_ p s] action] (session/down    ":project" p s))
       :destroy (let [[_ p s] action] (destroy-and-verify! p s))
