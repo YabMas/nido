@@ -23,7 +23,8 @@
 ;; ---------------------------------------------------------------------------
 ;; Action channel: update-fn writes here before returning quit-cmd; the bb
 ;; task wrapper reads after `program/run` returns to decide what to run next.
-;; Shape: :quit | [:enter p s] | [:up p s] | [:down p s] | [:destroy p s] | [:add p s]
+;; Shape: :quit | [:enter p s target] | [:up p s] | [:down p s] | [:destroy p s] | [:add p s]
+;;        target = :home | :worktree
 ;; ---------------------------------------------------------------------------
 
 (def ^:private exit-action (atom :quit))
@@ -152,7 +153,11 @@
 
     (or (msg/key-match? msg "enter") (msg/key-match? msg "e"))
     (with-selected-session state
-      (fn [s p sn] [s (queue-action! [:enter p sn])]))
+      (fn [s p sn] [s (queue-action! [:enter p sn :home])]))
+
+    (msg/key-match? msg "w")
+    (with-selected-session state
+      (fn [s p sn] [s (queue-action! [:enter p sn :worktree])]))
 
     (msg/key-match? msg "u")
     (with-selected-session state
@@ -258,7 +263,7 @@
                   :create-session  "[↵] create  [esc] cancel"
                   (case (:screen state)
                     :projects "[↵] open  [q]uit"
-                    :sessions "[↵/e] enter  [a]dd  [u]p  [d]own  [x] destroy  [esc] back  [q]uit"))))
+                    :sessions "[↵/e] enter  [w]orktree  [a]dd  [u]p  [d]own  [x] destroy  [esc] back  [q]uit"))))
 
 (defn- modal-body [state]
   (case (:modal state)
