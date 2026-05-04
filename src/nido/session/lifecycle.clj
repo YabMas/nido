@@ -194,11 +194,12 @@
     (engine/start-session! wt-path (assoc opts :session-name name))))
 
 (defn reset!
-  "Nuclear recovery for a session in a bad state: stop the session
-   (which drops its PGDATA), then start it again so the :postgresql
-   service re-clones a fresh PGDATA from the current template. Same
-   shape as the previous `refresh!` — renamed because the operation
-   destroys local DB state."
+  "Nuclear recovery for a session in a bad state: stop the session,
+   drop its PGDATA, then start it again so the :postgresql service
+   re-clones a fresh PGDATA from the current template. Distinct from
+   `down!` + `up!` (which preserves PGDATA) — call this when the local
+   DB is wedged or after `bb nido:template:pg:refresh` to pick up the
+   new template content."
   [name opts]
   (let [{:keys [wt-path]} (with-context name opts)]
     (when-not (fs/exists? wt-path)
@@ -206,20 +207,30 @@
     (try (engine/stop-session! wt-path)
          (catch Exception e
            (core/log-step (str "warning: stop during reset: " (ex-message e)))))
+    (let [pg-data (state/pg-data-dir (engine/resolve-instance-id wt-path))]
+      (when (fs/exists? pg-data)
+        (core/log-step (str "Dropping PGDATA at " pg-data))
+        (fs/delete-tree pg-data)))
     (engine/start-session! wt-path (assoc opts :session-name name))))
 
 (defn destroy!
-  "Bring the named session down and remove its worktree.
+  "Bring the named session down, drop its instance state-dir (PGDATA,
+   logs, session.edn) and remove its worktree.
    opts: {... :delete-branch? bool (default false)}
    Also accepts :delete-branch (no `?`) since `?` is a zsh glob char."
   [name opts]
   (let [{:keys [project-dir wt-path branch]} (with-context name opts)
-        delete-branch? (boolean (or (:delete-branch? opts) (:delete-branch opts)))]
+        delete-branch? (boolean (or (:delete-branch? opts) (:delete-branch opts)))
+        instance-id (engine/resolve-instance-id wt-path)]
     (try
       (when (fs/exists? wt-path)
         (engine/stop-session! wt-path))
       (catch Exception e
         (core/log-step (str "warning: stop-session error: " (ex-message e)))))
+    (let [state-dir (state/instance-state-dir instance-id)]
+      (when (fs/exists? state-dir)
+        (core/log-step (str "Dropping instance state-dir at " state-dir))
+        (fs/delete-tree state-dir)))
     (remove-git-worktree! project-dir wt-path branch delete-branch?)))
 
 (defn status

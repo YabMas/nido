@@ -302,14 +302,18 @@
 
 (defmethod service/stop-service! :postgresql
   [_service-def saved-state]
+  ;; Stop the cluster but leave PGDATA on disk. Sessions can be cycled
+  ;; (down → up, watchdog idle-stop, JVM crash) without losing intra-session
+  ;; DB state — re-cloning is reset!'s job, not down!'s. Without this
+  ;; restraint, `bb nido:session:down` silently destroys ad-hoc data the
+  ;; user pulled into the session (e.g. a one-off staging restore that
+  ;; wasn't promoted to the template).
   (let [{:keys [pg-data-dir instance-id project-name]} saved-state
         id (or instance-id project-name)
         data-dir (or pg-data-dir
                      (when id (state/pg-data-dir id)))]
     (when (and data-dir (fs/exists? data-dir))
-      (pg-ctl-stop! data-dir)
-      (core/log-step "Removing PostgreSQL data directory")
-      (fs/delete-tree data-dir))))
+      (pg-ctl-stop! data-dir))))
 
 (defmethod service/service-status :postgresql
   [_service-def saved-state]
