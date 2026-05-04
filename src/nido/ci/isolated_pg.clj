@@ -73,15 +73,6 @@
             (let [merged (deep-merge base overrides)]
               (spit file (with-out-str (pprint/pprint merged))))))))))
 
-(def ^:private socket-base-dir
-  "Short, shared base for Unix-domain sockets. PGDATA paths under
-   `~/.nido/state/<…>/runs/<…>/steps/<…>/work/pg-data` blow past macOS's
-   `sun_path` 103-byte limit; pointing PG's `-k` at a short path keeps
-   the socket file (`.s.PGSQL.<port>`) under that limit. Different
-   ports → different socket file names, so multiple per-step clusters
-   coexist here without collision."
-  "/tmp/nido-pg-sock")
-
 (defn- pick-template-data-dir
   "Prefer the project's `<project>--ci` template when present, falling
    back to the regular `<project>` template. The CI variant is meant to
@@ -128,12 +119,12 @@
                            "` (and `:refresh`) before opting a CI step into "
                            ":isolated-pg?.")
                       {:project project-name})))
-    (fs/create-dirs socket-base-dir)
+    (fs/create-dirs pg-svc/socket-base-dir)
     (core/log-step
      (str "Starting isolated PG for step "
           "(port " pg-port ", template=" (name variant) ")"))
     (pg-svc/clone-pgdata! template-data-dir data-dir)
-    (pg-svc/pg-ctl-start! bin-dir data-dir pg-port log-path socket-base-dir)
+    (pg-svc/pg-ctl-start! bin-dir data-dir pg-port log-path pg-svc/socket-base-dir)
     (pg-svc/wait-for-tcp! pg-port)
     (rewrite-local-edn-port! work-dir from-port pg-port)
     {:pg-port pg-port

@@ -33,12 +33,6 @@
    [nido.session.services.postgresql :as pg]
    [nido.session.state :as state]))
 
-(def ^:private socket-base-dir
-  "Short Unix-domain socket dir — same as nido.ci.isolated-pg uses, kept
-   in lockstep so future macOS sun_path changes have one place to
-   update."
-  "/tmp/nido-pg-sock")
-
 (defn ci-data-dir
   "Path to the CI variant template's PGDATA. Lives at
    `~/.nido/templates/<project>--ci/pg-data/`."
@@ -233,8 +227,8 @@
     (core/log-step (str "Building CI template variant for " project-name))
     (pg/clone-pgdata! dev-data-dir ci-data-dir')
     (write-auto-conf-overrides! ci-data-dir' postgres-config)
-    (fs/create-dirs socket-base-dir)
-    (pg/pg-ctl-start! bin-dir ci-data-dir' port log-path socket-base-dir)
+    (fs/create-dirs pg/socket-base-dir)
+    (pg/pg-ctl-start! bin-dir ci-data-dir' port log-path pg/socket-base-dir)
     (pg/wait-for-tcp! port)
     (try
       (apply-pending-migrations!

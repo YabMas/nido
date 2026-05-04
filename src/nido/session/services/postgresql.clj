@@ -33,6 +33,15 @@
   (let [full (str (fs/path bin-dir cmd))]
     (if (fs/exists? full) full cmd)))
 
+(def socket-base-dir
+  "Short, shared base for Unix-domain sockets. macOS caps `sun_path` at
+   103 bytes, so PGDATA paths under `~/.nido/state/<long-instance-id>/
+   pg-data/` overflow as soon as you append `.s.PGSQL.<port>`. Pointing
+   PG's `-k` at a short directory keeps the socket file under the limit;
+   different ports → different socket file names, so concurrent sessions
+   and CI clusters coexist here without collision."
+  "/tmp/nido-pg-sock")
+
 (defn- flyway-checksum
   "Computes a Flyway-compatible CRC32 checksum over a SQL file.
    Reads line-by-line, converts each line to UTF-8 bytes, updates CRC32."
@@ -257,10 +266,11 @@
         already-initialized? (fs/exists? (str (fs/path data-dir "PG_VERSION")))
         cloned? (and clone-from-template (not already-initialized?))]
     (fs/create-dirs (state/log-dir instance-id))
+    (fs/create-dirs socket-base-dir)
     (if cloned?
       (clone-pgdata! (state/template-pg-data-dir project-name) data-dir)
       (initdb! bin-dir data-dir db-user))
-    (pg-ctl-start! bin-dir data-dir pg-port log-path)
+    (pg-ctl-start! bin-dir data-dir pg-port log-path socket-base-dir)
     (wait-for-tcp! pg-port)
     (when-not (or cloned? already-initialized?)
       (setup-fresh-database! {:bin-dir bin-dir :pg-port pg-port :db-user db-user
