@@ -11,6 +11,7 @@ Nido is the harness; the active project (e.g. brian) is the workspace. Each runn
 - `CLAUDE.md` — short briefing with the worktree path and live service ports.
 - `.mcp.json` — postgres MCP wired to the per-session DB.
 - `worktree/` — symlink to the code (`~/Code/<project>-worktrees/<session>/`).
+- `.claude/` — symlink to `worktree/.claude/` so project-local skills/agents/commands resolve from the session home.
 
 `bb nido:session:up` brings the session up. To pick a session interactively, use the TUI (`bb nido:tui`) and press enter — your shell `cd`s into the session-home (see "Shell wrapper" below). From there, run `claude`, `codex`, or any other agent — they pick up the briefing and MCP config from cwd, and `cd worktree` reaches the code.
 

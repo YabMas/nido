@@ -4,6 +4,7 @@
      ~/.nido/sessions/<project>/<session>/.mcp.json
      ~/.nido/sessions/<project>/<session>/CLAUDE.md
      ~/.nido/sessions/<project>/<session>/worktree -> <wt-path>
+     ~/.nido/sessions/<project>/<session>/.claude  -> worktree/.claude
 
    Populated on session:up, removed on session:destroy. Internal nido
    bookkeeping (registry, session.edn, pg-data, logs) still lives under
@@ -77,6 +78,19 @@
       (fs/delete link))
     (fs/create-sym-link link worktree)))
 
+(defn- ensure-claude-symlink!
+  "Create or refresh a `.claude` symlink inside the session-home pointing
+   through the `worktree` symlink to the project's checked-in `.claude/`.
+   Without this, Claude Code launched from the session-home cwd sees no
+   project-local skills, agents, or commands. Relative target so a moved
+   worktree is picked up automatically via the `worktree` symlink."
+  [project-name session-name]
+  (let [home (state/session-home-dir project-name session-name)
+        link (str (fs/path home ".claude"))]
+    (when (or (fs/exists? link) (fs/sym-link? link))
+      (fs/delete link))
+    (fs/create-sym-link link "worktree/.claude")))
+
 (defn- purge-legacy-artifacts!
   "Delete pre-refactor launcher artifacts at ~/.nido/state/<instance-id>/
    that the previous launcher wrote there. Sessions created before the
@@ -129,6 +143,10 @@
         (ensure-worktree-symlink! project-name session-name worktree)
         (catch Exception e
           (core/log-step (str "warning: worktree symlink: " (ex-message e)))))
+      (try
+        (ensure-claude-symlink! project-name session-name)
+        (catch Exception e
+          (core/log-step (str "warning: .claude symlink: " (ex-message e)))))
       (try
         (purge-legacy-artifacts! (get-in ctx [:session :instance-id]))
         (catch Exception e
