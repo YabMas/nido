@@ -162,6 +162,16 @@
           :modal-target {:project p :session s :summary summary})
    nil])
 
+(defn- open-session-info
+  "Snapshot the highlighted session's data into the modal so the panel
+   stays consistent if the registry shifts underneath."
+  [state p s]
+  (let [data (selected-data state)]
+    [(assoc state
+            :modal :session-info
+            :modal-target {:project p :session s :data data})
+     nil]))
+
 (defn- open-create-session [state p]
   [(assoc state
           :modal :create-session
@@ -204,6 +214,10 @@
           (open-ci-picker s p sn summary)
           [s (queue-action! [:ci :run p sn])])))
 
+    (msg/key-match? msg "i")
+    (with-selected-session state
+      (fn [s p sn] (open-session-info s p sn)))
+
     (msg/key-match? msg "a")
     (open-create-session state (:project state))
 
@@ -238,6 +252,14 @@
     ;; esc / anything else cancels
     :else
     [(close-modal state) nil]))
+
+(defn- update-session-info
+  "Only `esc` closes the info panel; other keys are swallowed so the
+   modal stays open until explicitly dismissed."
+  [state msg]
+  (if (msg/key-match? msg "escape")
+    [(close-modal state) nil]
+    [state nil]))
 
 (defn- update-create-session [state msg]
   (cond
@@ -279,6 +301,9 @@
     (= :ci-picker (:modal state))
     (update-ci-picker state msg)
 
+    (= :session-info (:modal state))
+    (update-session-info state msg)
+
     (= :create-session (:modal state))
     (update-create-session state msg)
 
@@ -295,6 +320,7 @@
 (def ^:private subtle-style   (style/style :fg 240))
 (def ^:private status-style   (style/style :fg style/yellow))
 (def ^:private warning-style  (style/style :fg style/red :bold true))
+(def ^:private label-style    (style/style :fg 244))
 
 (defn- header [state]
   (style/render title-style
@@ -304,6 +330,9 @@
                                         " · new session")
                   :ci-picker       (str "nido — " (-> state :modal-target :project)
                                         " · ci · " (-> state :modal-target :session))
+                  :session-info    (str "nido — " (-> state :modal-target :project)
+                                        " · " (-> state :modal-target :session)
+                                        " · info")
                   (case (:screen state)
                     :projects "nido — projects"
                     :sessions (str "nido — " (:project state) " · sessions")))))
@@ -314,9 +343,38 @@
                   :confirm-destroy "[y] destroy  [n/esc] cancel"
                   :create-session  "[↵] create  [esc] cancel"
                   :ci-picker       "[r] rerun failed  [n] run all  [esc] cancel"
+                  :session-info    "[esc] back"
                   (case (:screen state)
                     :projects "[↵] open  [q]uit"
-                    :sessions "[↵/e] enter  [w]orktree  [a]dd  [u]p  [d]own  [c]i  [x] destroy  [esc] back  [q]uit"))))
+                    :sessions "[↵/e] enter  [w]orktree  [i]nfo  [a]dd  [u]p  [d]own  [c]i  [x] destroy  [esc] back  [q]uit"))))
+
+(defn- info-row [label value]
+  (str (style/render label-style (format "%-13s" label)) " " value))
+
+(defn- session-info-body
+  "Render the read-only session-info panel. `data` is the session row
+   (`:name :worktree :pg-port :app-port :nrepl-port :repl-pid`) snapshotted
+   at modal open time. `app-port` nil means the session is down — every
+   live-port row falls back to `—` and the dev URL is omitted."
+  [project session data]
+  (let [{:keys [worktree app-port pg-port nrepl-port]} data
+        up?      (boolean (or pg-port app-port nrepl-port))
+        dash     "—"
+        glyph    (if up? "●" "○")
+        status   (if up? "up" "down")
+        dev-url  (if app-port (str "http://localhost:" app-port) dash)
+        home     (state/session-home-dir project session)]
+    (str/join "\n"
+              [(info-row "session"      (str project "/" session))
+               (info-row "status"       (str glyph "  " status))
+               ""
+               (info-row "dev URL"      dev-url)
+               (info-row "app port"     (or app-port dash))
+               (info-row "pg port"      (or pg-port dash))
+               (info-row "nrepl port"   (or nrepl-port dash))
+               ""
+               (info-row "session home" home)
+               (info-row "worktree"     (or worktree dash))])))
 
 (defn- modal-body [state]
   (case (:modal state)
@@ -333,6 +391,10 @@
            "    failed " (count failed-step-names) " of " total-steps
            "\n\n"
            "[r] rerun failed   [n] run all   [esc] cancel"))
+
+    :session-info
+    (let [{:keys [project session data]} (:modal-target state)]
+      (session-info-body project session data))
 
     :create-session
     (text-input/text-input-view (:modal-input state))))
