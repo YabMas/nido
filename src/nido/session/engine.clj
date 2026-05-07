@@ -28,7 +28,38 @@
   (let [result (shell {:continue true :out :string :err :string}
                       "git" "-C" project-dir "rev-parse" "--git-common-dir")]
     (when (zero? (:exit result))
-      (some-> (:out result) str/trim fs/parent str))))
+      ;; --git-common-dir returns a relative path when discovery walks up
+      ;; the tree (e.g. when a jj workspace lives below a colocated repo);
+      ;; canonicalize against project-dir so callers always get an absolute
+      ;; source root.
+      (some-> (:out result)
+              str/trim
+              (->> (fs/path project-dir))
+              fs/canonicalize
+              fs/parent
+              str))))
+
+(defn- jj-source-root
+  "When `project-dir` is a jj workspace (no `.git`, just `.jj/`), its
+   `.jj/repo` is a small text file containing a relative path to the
+   source's `.jj/repo/` directory. Resolve that pointer and return the
+   source dir (parent of the source's `.jj/`)."
+  [project-dir]
+  (let [pointer (fs/path project-dir ".jj" "repo")]
+    (when (fs/regular-file? pointer)
+      (let [rel (str/trim (slurp (str pointer)))
+            target (fs/canonicalize (fs/path (fs/parent pointer) rel))]
+        (some-> target fs/parent fs/parent str)))))
+
+(defn- source-project-root
+  "Resolve the source project root for a worktree at `project-dir`. jj
+   workspaces (no `.git`, just a `.jj/repo` pointer file) take precedence
+   so we don't accidentally walk up past the workspace via git's discovery
+   behavior. Falls back to `git rev-parse --git-common-dir` for plain git
+   worktrees."
+  [project-dir]
+  (or (jj-source-root project-dir)
+      (git-common-project-root project-dir)))
 
 (defn- local-root-paths [project-dir]
   (let [deps-path (str (fs/path project-dir "deps.edn"))]
@@ -60,15 +91,15 @@
                        :error (:err result)})))))
 
 (defn- ensure-local-root-deps! [project-dir]
-  (let [source-project-root (git-common-project-root project-dir)
+  (let [src-root (source-project-root project-dir)
         local-roots (local-root-paths project-dir)
         linked (atom [])
         missing (atom [])]
     (doseq [local-root local-roots
             :let [target-path (str (fs/normalize (fs/path project-dir local-root)))]
             :when (not (path-present? target-path))]
-      (if source-project-root
-        (let [source-path (str (fs/normalize (fs/path source-project-root local-root)))]
+      (if src-root
+        (let [source-path (str (fs/normalize (fs/path src-root local-root)))]
           (if (fs/exists? source-path)
             (do
               (link-path! source-path target-path)
@@ -102,7 +133,7 @@
 (defmethod run-setup-step! :worktree-links
   [step project-dir]
   (let [{:keys [shared-paths local-deps]} step
-        source-root (git-common-project-root project-dir)]
+        source-root (source-project-root project-dir)]
     (when (= local-deps :deps-edn)
       (core/log-step "Ensuring local/root dependencies...")
       (ensure-local-root-deps! project-dir))
@@ -148,10 +179,10 @@
                   name))
               projects)
         (some (fn [[name entry]]
-                (let [common-root (git-common-project-root project-dir)
+                (let [src-root (source-project-root project-dir)
                       reg-dir (str (fs/normalize (fs/path (:directory entry))))]
-                  (when (and common-root
-                             (= (str (fs/normalize (fs/path common-root)))
+                  (when (and src-root
+                             (= (str (fs/normalize (fs/path src-root)))
                                 reg-dir))
                     name)))
               projects)

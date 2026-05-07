@@ -1,10 +1,19 @@
 (ns nido.session.lifecycle
-  "Bundled per-session workflow: a single command creates a git worktree,
-   starts an isolated nido session against it, and the inverse tears it all
-   down. Sessions are named (the name is the git branch and the leaf path
-   under the project's worktrees directory by default). State isolation
-   relies on the engine's instance-id derivation (see
+  "Bundled per-session workflow: a single command creates a worktree,
+   starts an isolated nido session against it, and the inverse tears it
+   all down. Sessions are named (the name is the git branch / jj bookmark
+   and the leaf path under the project's worktrees directory by default).
+   State isolation relies on the engine's instance-id derivation (see
    `nido.session.engine/resolve-instance-id`).
+
+   Worktree backend depends on the source VCS:
+   - jj-colocated source (has `.jj/repo/`) → `jj workspace add` produces a
+     jj-only workspace (`.jj/` inside, no `.git/`). Agents in the worktree
+     use `jj st` / `jj log` / `jj git push`.
+   - plain git source → `git worktree add` (legacy path).
+   `destroy!` detects the layer per worktree, so legacy git worktrees keep
+   tearing down with `git worktree remove` even after the source becomes
+   jj-colocated.
 
    The worktree is an implementation detail — what the user manages here is
    the *session*. Lifecycle:
@@ -147,6 +156,84 @@
     (git! project-dir ["branch" "-D" branch] :continue? true)))
 
 ;; ---------------------------------------------------------------------------
+;; jj workspace primitives
+;; ---------------------------------------------------------------------------
+
+(defn- jj!
+  "Run a jj command in `dir`. Throws on non-zero exit unless :continue?."
+  [dir args & {:keys [continue?] :or {continue? false}}]
+  (let [opts (cond-> {:out :string :err :string :dir dir}
+               continue? (assoc :continue true))
+        result (apply shell opts "jj" args)]
+    (when (and (not continue?) (not (zero? (:exit result))))
+      (throw (ex-info (str "jj " (str/join " " args) " failed")
+                      {:exit (:exit result) :err (:err result)})))
+    result))
+
+(defn- jj-source-repo?
+  "True if `dir` is a jj-colocated source repo. The source's `.jj/repo` is a
+   directory (the actual jj data); a workspace's `.jj/repo` is a pointer file."
+  [dir]
+  (fs/directory? (str (fs/path dir ".jj" "repo"))))
+
+(defn- jj-workspace?
+  "True if `wt-path` is a jj workspace (has a `.jj/` dir of any shape)."
+  [wt-path]
+  (fs/exists? (str (fs/path wt-path ".jj"))))
+
+(defn- bookmark-exists?
+  "True if a jj bookmark named `branch` exists in `project-dir`."
+  [project-dir branch]
+  (let [r (jj! project-dir ["bookmark" "list" branch "-T" "name ++ \"\\n\""]
+               :continue? true)]
+    (and (zero? (:exit r))
+         (not (str/blank? (:out r))))))
+
+(defn- git-ref->jj-revset
+  "Translate a git-style ref (`origin/main`) into jj revset syntax
+   (`main@origin`). Other refs pass through unchanged — jj accepts
+   bookmark names, change/commit IDs, and arbitrary revsets directly."
+  [ref]
+  (if-let [[_ branch] (re-matches #"origin/(.+)" ref)]
+    (str branch "@origin")
+    ref))
+
+(defn- create-jj-workspace!
+  "Create a jj workspace at wt-path tracking bookmark `branch`. If the
+   bookmark doesn't exist yet, fetch `base` (when it's a remote ref) and
+   create the bookmark at it. The workspace lands at a new empty change on
+   top of the bookmark, mirroring `git worktree add`'s behavior of putting
+   you on a fresh branch tip ready to commit."
+  [project-dir wt-path branch base]
+  (fs/create-dirs (str (fs/parent wt-path)))
+  (when-not (bookmark-exists? project-dir branch)
+    (fetch-base! project-dir base)
+    (let [jj-base (git-ref->jj-revset base)]
+      (core/log-step (str "jj bookmark create " branch " -r " jj-base))
+      (jj! project-dir ["bookmark" "create" branch "-r" jj-base])))
+  (core/log-step (str "jj workspace add " wt-path
+                      " --name " branch " --revision " branch))
+  (jj! project-dir ["workspace" "add"
+                    "--name" branch
+                    "--revision" branch
+                    wt-path]))
+
+(defn- remove-jj-workspace!
+  "Forget the jj workspace named `workspace-name`, then delete the
+   workspace directory (which is what holds its `.jj/`). Optionally
+   delete the bookmark too. `jj workspace forget` only drops jj's
+   metadata pointer — the on-disk dir must be removed separately."
+  [project-dir wt-path workspace-name branch delete-branch?]
+  (when (fs/exists? wt-path)
+    (core/log-step (str "jj workspace forget " workspace-name))
+    (jj! project-dir ["workspace" "forget" workspace-name] :continue? true)
+    (core/log-step (str "rm -rf " wt-path))
+    (fs/delete-tree wt-path))
+  (when delete-branch?
+    (core/log-step (str "jj bookmark delete " branch))
+    (jj! project-dir ["bookmark" "delete" branch] :continue? true)))
+
+;; ---------------------------------------------------------------------------
 ;; Public lifecycle
 ;; ---------------------------------------------------------------------------
 
@@ -168,12 +255,17 @@
 (defn up!
   "Bring the named session up: create its worktree if missing, then start
    PG + JVM + app. Idempotent — running on an existing live session is a
-   no-op (engine/start-session! detects and short-circuits)."
+   no-op (engine/start-session! detects and short-circuits).
+
+   Worktree creation routes by source-repo VCS: jj-colocated → `jj
+   workspace add`; plain git → `git worktree add`."
   [name opts]
   (let [{:keys [project-dir wt-path branch base]} (with-context name opts)]
     (if (fs/exists? wt-path)
       (core/log-step (str "Worktree already exists at " wt-path " — starting session."))
-      (create-git-worktree! project-dir wt-path branch base))
+      (if (jj-source-repo? project-dir)
+        (create-jj-workspace! project-dir wt-path branch base)
+        (create-git-worktree! project-dir wt-path branch base)))
     (engine/start-session! wt-path (assoc opts :session-name name))))
 
 (defn down!
@@ -217,7 +309,13 @@
   "Bring the named session down, drop its instance state-dir (PGDATA,
    logs, session.edn) and remove its worktree.
    opts: {... :delete-branch? bool (default false)}
-   Also accepts :delete-branch (no `?`) since `?` is a zsh glob char."
+   Also accepts :delete-branch (no `?`) since `?` is a zsh glob char.
+
+   The worktree-removal layer is detected from the worktree itself: a
+   `.jj/` dir → `jj workspace forget`; a `.git` entry → `git worktree
+   remove`. Mixed-vintage trees (a project that became jj-colocated after
+   some sessions were already created with `git worktree`) tear down on
+   the same path they were created with."
   [name opts]
   (let [{:keys [project-dir wt-path branch]} (with-context name opts)
         delete-branch? (boolean (or (:delete-branch? opts) (:delete-branch opts)))
@@ -231,7 +329,12 @@
       (when (fs/exists? state-dir)
         (core/log-step (str "Dropping instance state-dir at " state-dir))
         (fs/delete-tree state-dir)))
-    (remove-git-worktree! project-dir wt-path branch delete-branch?)))
+    (cond
+      (and (fs/exists? wt-path) (jj-workspace? wt-path))
+      (remove-jj-workspace! project-dir wt-path branch branch delete-branch?)
+
+      :else
+      (remove-git-worktree! project-dir wt-path branch delete-branch?))))
 
 (defn status
   "Print status for a named session."
@@ -301,10 +404,12 @@
         (core/log-step (str "Selected " resolved))))))
 
 (defn- worktree-dir?
-  "A git worktree's root contains a `.git` entry (a file in linked
-   worktrees, a directory in the main checkout)."
+  "True if `dir` is a session worktree root. A git worktree's root has a
+   `.git` entry (a file in linked worktrees, a directory in the main
+   checkout); a jj workspace's root has a `.jj/` entry instead."
   [dir]
-  (fs/exists? (fs/path dir ".git")))
+  (or (fs/exists? (fs/path dir ".git"))
+      (fs/exists? (fs/path dir ".jj"))))
 
 (defn- find-session-names
   "Recursively enumerate worktree roots under base. A directory that is
