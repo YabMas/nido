@@ -33,8 +33,16 @@
    [nido.session.lifecycle :as lifecycle]
    [nido.session.state :as state]))
 
-(defn- parse-token [tok]
-  (try (edn/read-string tok) (catch Exception _ tok)))
+(defn- parse-token
+  "Parse a CLI token as EDN, with one carve-out: top-level symbols stay as
+   their original string. `bb nido:session:up :base origin/main` would
+   otherwise produce the symbol `origin/main`, which crashes anything that
+   runs a regex or string operation on it. Other shapes (keywords, numbers,
+   booleans, vectors, maps) parse as usual — including vectors of symbols
+   like `[dev cider/nrepl]`, where downstream code expects them."
+  [tok]
+  (let [parsed (try (edn/read-string tok) (catch Exception _ tok))]
+    (if (symbol? parsed) tok parsed)))
 
 (defn- keyword-token? [tok]
   (and (string? tok) (.startsWith ^String tok ":")))
