@@ -12,6 +12,7 @@
   (:require
    [babashka.fs :as fs]
    [clojure.string :as str]
+   [nido.config :as config]
    [nido.core :as core]
    [nido.io :as io]
    [nido.session.links :as links]
@@ -21,6 +22,51 @@
   (->> (:services session-edn)
        (filter #(= :postgresql (:type %)))
        first))
+
+(defn- jj-source-repo?
+  "True if `dir` is a jj-colocated source repo. The source's `.jj/repo`
+   is a directory (the actual jj data); a workspace's `.jj/repo` is a
+   pointer file. Mirrors nido.session.lifecycle/jj-source-repo? — kept
+   private here to avoid a require cycle (lifecycle already pulls in
+   launcher)."
+  [dir]
+  (fs/directory? (str (fs/path dir ".jj" "repo"))))
+
+(defn- jj-workspace?
+  "True if `wt-path` is a jj workspace (has any `.jj/` shape inside)."
+  [wt-path]
+  (fs/exists? (str (fs/path wt-path ".jj"))))
+
+(defn- project-source-dir
+  "Look up a project's source directory from the registry. Returns nil
+   when the project isn't registered (rare — usually means a hand-edited
+   projects.edn) so callers can fall through to a sensible default."
+  [project-name]
+  (some-> (config/read-projects)
+          (get project-name)
+          :directory))
+
+(defn- vcs-mode
+  "Where do edits land for this session? Resolved from filesystem state:
+
+     :jj-workspace          — worktree has its own .jj/ (jj workspace add).
+                              Edits in `worktree` are tracked by jj there.
+     :jj-source-git-worktree — source repo is jj-colocated but this session
+                              uses a legacy git worktree (no .jj/ inside).
+                              jj's working copy is the *source* dir; the
+                              worktree is invisible to jj.
+     :plain-git             — plain-git source + git worktree. Edits in
+                              `worktree` are tracked by git there.
+
+   `source-dir` may be nil when the project's directory cannot be resolved
+   from the registry; fall back to :plain-git in that case so the briefing
+   stays useful even if the project entry was hand-edited."
+  [worktree source-dir]
+  (cond
+    (jj-workspace? worktree)              :jj-workspace
+    (and source-dir
+         (jj-source-repo? source-dir))    :jj-source-git-worktree
+    :else                                 :plain-git))
 
 (defn mcp-path [project-name session-name]
   (str (fs/path (state/session-home-dir project-name session-name) ".mcp.json")))
@@ -80,16 +126,45 @@
        "`bb nido:session:link:list`. Existing entries are listed under\n"
        "\"Relevant links\" above (when any).\n"))
 
+(defn- render-edit-location
+  "The 'where do edits land' paragraph, conditioned on vcs-mode so the
+   briefing tells the truth for legacy git-worktree sessions inside a
+   jj-colocated source. `source-dir` is shown only when it differs from
+   the worktree (i.e. the legacy mixed case)."
+  [vcs-mode source-dir]
+  (case vcs-mode
+    :jj-workspace
+    (str "You are working through the nido orchestrator. Source-code edits land in\n"
+         "the worktree below — NOT in nido's source tree. Use absolute paths when\n"
+         "reading/writing files there, or `cd worktree` from this session home.\n"
+         "This worktree is a jj workspace; `jj st` / `jj log` / `jj git push` work\n"
+         "in place.\n")
+
+    :jj-source-git-worktree
+    (str "You are working through the nido orchestrator. This session was created\n"
+         "as a legacy git worktree, but the project's source repo is jj-colocated\n"
+         "and jj's working copy is the *source* directory below — NOT the worktree.\n"
+         "\n"
+         "- jj working copy (edit here for jj st/absorb/squash to see changes):\n"
+         "    " source-dir "\n"
+         "\n"
+         "Edits made directly in the worktree are invisible to jj. To resync this\n"
+         "session as a jj workspace, run `bb nido:session:destroy` followed by\n"
+         "`bb nido:session:up` once the source has been jj-colocated.\n")
+
+    :plain-git
+    (str "You are working through the nido orchestrator. Source-code edits land in\n"
+         "the worktree below — NOT in nido's source tree. Use absolute paths when\n"
+         "reading/writing files there, or `cd worktree` from this session home.\n")))
+
 (defn- render-context
-  [{:keys [project-name session-name worktree
+  [{:keys [project-name session-name worktree source-dir
            app-port app-url nrepl-port pg-port
            links]}]
   (str
    "# Active nido session\n"
    "\n"
-   "You are working through the nido orchestrator. Source-code edits land in\n"
-   "the worktree below — NOT in nido's source tree. Use absolute paths when\n"
-   "reading/writing files there, or `cd worktree` from this session home.\n"
+   (render-edit-location (vcs-mode worktree source-dir) source-dir)
    "\n"
    "- session: " session-name "\n"
    "- project: " project-name "\n"
@@ -186,6 +261,7 @@
           ctx-doc (render-context {:session-name session-name
                                    :project-name project-name
                                    :worktree     worktree
+                                   :source-dir   (project-source-dir project-name)
                                    :app-port     (get-in ctx [:app :port])
                                    :app-url      (get-in ctx [:app :url])
                                    :nrepl-port   (get-in ctx [:repl :port])
@@ -234,6 +310,7 @@
                  {:session-name session-name
                   :project-name project-name
                   :worktree     (get-in ctx [:session :project-dir])
+                  :source-dir   (project-source-dir project-name)
                   :app-port     (get-in ctx [:app :port])
                   :app-url      (get-in ctx [:app :url])
                   :nrepl-port   (get-in ctx [:repl :port])
