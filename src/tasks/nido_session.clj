@@ -29,40 +29,9 @@
      bb nido:session:status  :project brian feat-auth
      bb nido:session:list    :project brian"
   (:require
-   [clojure.edn :as edn]
    [nido.session.lifecycle :as lifecycle]
-   [nido.session.state :as state]))
-
-(defn- parse-token
-  "Parse a CLI token as EDN, with one carve-out: top-level symbols stay as
-   their original string. `bb nido:session:up :base origin/main` would
-   otherwise produce the symbol `origin/main`, which crashes anything that
-   runs a regex or string operation on it. Other shapes (keywords, numbers,
-   booleans, vectors, maps) parse as usual — including vectors of symbols
-   like `[dev cider/nrepl]`, where downstream code expects them."
-  [tok]
-  (let [parsed (try (edn/read-string tok) (catch Exception _ tok))]
-    (if (symbol? parsed) tok parsed)))
-
-(defn- keyword-token? [tok]
-  (and (string? tok) (.startsWith ^String tok ":")))
-
-(defn- split-args
-  "Split CLI args into [positionals opts-map]. A token starting with ':' is
-   a kwarg key and consumes the next token as its value; every other token
-   is a positional. Preserves positional order."
-  [args]
-  (loop [xs args, pos [], opts {}]
-    (if (empty? xs)
-      [pos opts]
-      (let [x (first xs)]
-        (if (keyword-token? x)
-          (let [k (parse-token x)
-                v (second xs)]
-            (when-not (some? v)
-              (throw (ex-info (str "Missing value for " x) {:args args})))
-            (recur (drop 2 xs) pos (assoc opts k (parse-token v))))
-          (recur (rest xs) (conj pos x) opts))))))
+   [nido.session.state :as state]
+   [nido.task-args :as task-args]))
 
 (defn- require-project [opts]
   (or (some-> (:project opts) name)
@@ -90,7 +59,7 @@
    restart services. Kwargs like :base, :branch, :jvm-heap-max flow into
    `up!`."
   [& args]
-  (let [[pos opts] (split-args args)
+  (let [[pos opts] (task-args/split-args args)
         project (require-project opts)
         session (require-session-name pos)]
     (lifecycle/up! session opts)
@@ -103,7 +72,7 @@
 (defn down
   "Stop the named session. Worktree and on-disk state are preserved."
   [& args]
-  (let [[pos opts] (split-args args)
+  (let [[pos opts] (task-args/split-args args)
         _project (require-project opts)
         session (require-session-name pos)]
     (lifecycle/down! session opts)))
@@ -114,7 +83,7 @@
    `bb nido:template:pg:refresh` or when a session has wedged into a
    bad state."
   [& args]
-  (let [[pos opts] (split-args args)
+  (let [[pos opts] (task-args/split-args args)
         _project (require-project opts)
         session (require-session-name pos)]
     (lifecycle/reset! session opts)))
@@ -123,7 +92,7 @@
   "Bring the named session down and remove its worktree.
    Pass :delete-branch? true to also drop the git branch."
   [& args]
-  (let [[pos opts] (split-args args)
+  (let [[pos opts] (task-args/split-args args)
         _project (require-project opts)
         session (require-session-name pos)]
     (lifecycle/destroy! session opts)))
@@ -139,7 +108,7 @@
    Refuses if the session is down, or if `:cd worktree` is requested and
    the worktree symlink is missing."
   [& args]
-  (let [[pos opts] (split-args args)
+  (let [[pos opts] (task-args/split-args args)
         _project (require-project opts)
         session (require-session-name pos)]
     (lifecycle/enter! session opts)))
@@ -147,7 +116,7 @@
 (defn status
   "Print status for the named session."
   [& args]
-  (let [[pos opts] (split-args args)
+  (let [[pos opts] (task-args/split-args args)
         _project (require-project opts)
         session (require-session-name pos)]
     (lifecycle/status session opts)))
@@ -155,7 +124,7 @@
 (defn list-sessions
   "List every session for a project."
   [& args]
-  (let [[pos opts] (split-args args)
+  (let [[pos opts] (task-args/split-args args)
         _project (require-project opts)]
     (require-no-positional pos)
     (lifecycle/list-all opts)))

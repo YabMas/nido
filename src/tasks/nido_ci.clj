@@ -21,44 +21,13 @@
    declares profiles). `:only` overrides the profile when present."
   (:require
    [babashka.fs :as fs]
-   [clojure.edn :as edn]
    [nido.ci.config :as ci-config]
    [nido.ci.lifecycle :as ci-lifecycle]
    [nido.ci.session :as ci-session]
    [nido.session.engine :as engine]
    [nido.session.lifecycle :as session-lifecycle]
-   [nido.session.state :as state]))
-
-(defn- parse-token
-  "Parse a CLI token as EDN, with one carve-out: top-level symbols stay as
-   their original string. `bb nido:session:up :base origin/main` would
-   otherwise produce the symbol `origin/main`, which crashes anything that
-   runs a regex or string operation on it. Other shapes (keywords, numbers,
-   booleans, vectors, maps) parse as usual — including vectors of symbols
-   like `[dev cider/nrepl]`, where downstream code expects them."
-  [tok]
-  (let [parsed (try (edn/read-string tok) (catch Exception _ tok))]
-    (if (symbol? parsed) tok parsed)))
-
-(defn- keyword-token? [tok]
-  (and (string? tok) (.startsWith ^String tok ":")))
-
-(defn- split-args
-  "Split CLI args into [positionals opts-map]. A token starting with ':'
-   is a kwarg key and consumes the next token as its value; every other
-   token is a positional. Mirrors tasks.nido-session/split-args."
-  [args]
-  (loop [xs args, pos [], opts {}]
-    (if (empty? xs)
-      [pos opts]
-      (let [x (first xs)]
-        (if (keyword-token? x)
-          (let [k (parse-token x)
-                v (second xs)]
-            (when-not (some? v)
-              (throw (ex-info (str "Missing value for " x) {:args args})))
-            (recur (drop 2 xs) pos (assoc opts k (parse-token v))))
-          (recur (rest xs) (conj pos x) opts))))))
+   [nido.session.state :as state]
+   [nido.task-args :as task-args]))
 
 (defn- require-project [opts]
   (or (some-> (:project opts) name)
@@ -158,7 +127,7 @@
    subset, overriding any profile. `:profile :full` selects a named
    slice from ci.edn `:profiles`."
   [& args]
-  (let [[pos opts] (split-args args)
+  (let [[pos opts] (task-args/split-args args)
         session-name (require-session-name pos)
         result (execute! (assoc opts :kind :run :session-name session-name))]
     (print-summary result)
@@ -172,7 +141,7 @@
    `run` uses — so `bb nido:ci:rerun :project p` re-runs the last
    main-mode Run."
   [& args]
-  (let [[pos opts] (split-args args)
+  (let [[pos opts] (task-args/split-args args)
         session-name (require-session-name pos)
         result (execute! (assoc opts :kind :rerun :session-name session-name))]
     (print-summary result)

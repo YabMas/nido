@@ -19,48 +19,14 @@
      bb nido:session:link:remove :url https://github.com/foo/bar/pull/1
      bb nido:session:link:list   :project brian feat-auth"
   (:require
-   [clojure.edn :as edn]
-   [nido.session.lifecycle :as lifecycle]))
-
-(defn- parse-token
-  "Parse a CLI token as EDN, with one carve-out: top-level symbols stay as
-   their original string. `bb nido:session:up :base origin/main` would
-   otherwise produce the symbol `origin/main`, which crashes anything that
-   runs a regex or string operation on it. Other shapes (keywords, numbers,
-   booleans, vectors, maps) parse as usual — including vectors of symbols
-   like `[dev cider/nrepl]`, where downstream code expects them."
-  [tok]
-  (let [parsed (try (edn/read-string tok) (catch Exception _ tok))]
-    (if (symbol? parsed) tok parsed)))
-
-(defn- keyword-token? [tok]
-  (and (string? tok) (.startsWith ^String tok ":")))
+   [nido.session.lifecycle :as lifecycle]
+   [nido.task-args :as task-args]))
 
 (def ^:private raw-string-keys
   "Kwarg keys whose values must be passed through verbatim — EDN-parsing
    loses information for URLs (with `/digits` int suffix) and multi-word
    titles (read-string consumes only the first form)."
   #{:url :title})
-
-(defn- split-args
-  "Split CLI args into [positionals opts-map]. A token starting with ':' is
-   a kwarg key and consumes the next token as its value; every other token
-   is a positional. Values for `:url` and `:title` are kept as raw strings."
-  [args]
-  (loop [xs args, pos [], opts {}]
-    (if (empty? xs)
-      [pos opts]
-      (let [x (first xs)]
-        (if (keyword-token? x)
-          (let [k (parse-token x)
-                v (second xs)]
-            (when-not (some? v)
-              (throw (ex-info (str "Missing value for " x) {:args args})))
-            (recur (drop 2 xs) pos
-                   (assoc opts k (if (contains? raw-string-keys k)
-                                   (str v)
-                                   (parse-token v)))))
-          (recur (rest xs) (conj pos x) opts))))))
 
 (defn- session-positional [positionals]
   (case (count positionals)
@@ -72,20 +38,20 @@
 (defn add
   "Append/replace a link by :url on the resolved session."
   [& args]
-  (let [[pos opts] (split-args args)
+  (let [[pos opts] (task-args/split-args args raw-string-keys)
         session    (session-positional pos)]
     (lifecycle/link-add! session opts)))
 
 (defn remove-cmd
   "Drop a link by :url from the resolved session."
   [& args]
-  (let [[pos opts] (split-args args)
+  (let [[pos opts] (task-args/split-args args raw-string-keys)
         session    (session-positional pos)]
     (lifecycle/link-remove! session opts)))
 
 (defn list-cmd
   "Print the resolved session's links."
   [& args]
-  (let [[pos opts] (split-args args)
+  (let [[pos opts] (task-args/split-args args raw-string-keys)
         session    (session-positional pos)]
     (lifecycle/link-list session opts)))
