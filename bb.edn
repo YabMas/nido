@@ -5,6 +5,7 @@
 
  :tasks
  {:requires ([tasks.nido-session :as nido-session]
+             [tasks.nido-session-link :as nido-session-link]
              [tasks.nido-project :as nido-project]
              [tasks.nido-template :as nido-template]
              [tasks.nido-reclaim :as nido-reclaim]
@@ -92,6 +93,18 @@
   nido:session:list
   {:doc "List sessions: :project <p>"
    :task (apply nido-session/list-sessions *command-line-args*)}
+
+  nido:session:link:add
+  {:doc "Add a session link: :type <kw> :url <url> [:title \"...\"]  (project+session auto-resolved from session-home cwd)"
+   :task (apply nido-session-link/add *command-line-args*)}
+
+  nido:session:link:remove
+  {:doc "Remove a session link by url: :url <url>  (project+session auto-resolved from session-home cwd)"
+   :task (apply nido-session-link/remove-cmd *command-line-args*)}
+
+  nido:session:link:list
+  {:doc "List session links grouped by type  (project+session auto-resolved from session-home cwd)"
+   :task (apply nido-session-link/list-cmd *command-line-args*)}
 
   nido:template:pg:init
   {:doc "Initialize a per-project Postgres template cluster (empty schema)"

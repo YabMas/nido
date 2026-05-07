@@ -20,6 +20,7 @@
    [nido.project :as project]
    [nido.session.engine :as engine]
    [nido.session.lifecycle :as lifecycle]
+   [nido.session.links :as links]
    [nido.session.state :as state]))
 
 ;; ---------------------------------------------------------------------------
@@ -351,6 +352,32 @@
 (defn- info-row [label value]
   (str (style/render label-style (format "%-13s" label)) " " value))
 
+(defn- session-link-entries
+  "Read the highlighted session's links by deriving instance-id from
+   worktree. Returns [] when worktree is nil or any error escapes —
+   the panel must never throw."
+  [worktree]
+  (when worktree
+    (try
+      (links/read-links (engine/resolve-instance-id worktree))
+      (catch Exception _ []))))
+
+(def ^:private link-indent "              ")
+
+(defn- render-link-rows
+  "Sequence of strings — one type-header row plus one row per link.
+   Empty when entries is empty; only types with entries are emitted."
+  [entries]
+  (when (seq entries)
+    (apply concat
+           (for [[t ls] (links/group-by-type entries)]
+             (cons (str link-indent
+                        (style/render label-style
+                                      (links/display-labels t (name t))))
+                   (for [{:keys [url title]} ls]
+                     (str link-indent "  " url
+                          (when (seq title) (str " — " title)))))))))
+
 (defn- session-info-body
   "Render the read-only session-info panel. `data` is the session row
    (`:name :worktree :pg-port :app-port :nrepl-port :repl-pid`) snapshotted
@@ -363,18 +390,24 @@
         glyph    (if up? "●" "○")
         status   (if up? "up" "down")
         dev-url  (if app-port (str "http://localhost:" app-port) dash)
-        home     (state/session-home-dir project session)]
+        home     (state/session-home-dir project session)
+        entries  (session-link-entries worktree)
+        link-rows (render-link-rows entries)]
     (str/join "\n"
-              [(info-row "session"      (str project "/" session))
-               (info-row "status"       (str glyph "  " status))
-               ""
-               (info-row "dev URL"      dev-url)
-               (info-row "app port"     (or app-port dash))
-               (info-row "pg port"      (or pg-port dash))
-               (info-row "nrepl port"   (or nrepl-port dash))
-               ""
-               (info-row "session home" home)
-               (info-row "worktree"     (or worktree dash))])))
+              (concat
+               [(info-row "session"      (str project "/" session))
+                (info-row "status"       (str glyph "  " status))
+                ""
+                (info-row "dev URL"      dev-url)
+                (info-row "app port"     (or app-port dash))
+                (info-row "pg port"      (or pg-port dash))
+                (info-row "nrepl port"   (or nrepl-port dash))
+                ""
+                (info-row "session home" home)
+                (info-row "worktree"     (or worktree dash))]
+               (when link-rows
+                 (cons "" (cons (info-row "links" "")
+                                link-rows)))))))
 
 (defn- modal-body [state]
   (case (:modal state)

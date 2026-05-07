@@ -33,6 +33,8 @@
    [nido.config :as config]
    [nido.core :as core]
    [nido.session.engine :as engine]
+   [nido.session.launcher :as launcher]
+   [nido.session.links :as links]
    [nido.session.state :as state]))
 
 ;; ---------------------------------------------------------------------------
@@ -464,3 +466,92 @@
                           (str "  [pg=" (or pg-port "-")
                                " app=" (or app-port "-")
                                " repl=" (or nrepl-port "-") "]")))))))))
+
+;; ---------------------------------------------------------------------------
+;; Link tracking (notion tickets, GH PRs, slack threads, etc.)
+;;
+;; Persistent at ~/.nido/state/<instance-id>/links.edn — survives down/up,
+;; removed by destroy. Mutations re-render the session-home CLAUDE.md so
+;; the next session start sees the change. Project + session can be
+;; auto-resolved when invoked from a session-home cwd.
+;; ---------------------------------------------------------------------------
+
+(defn- session-home-coords-from-cwd
+  "If cwd is a session-home (~/.nido/sessions/<project>/<session>/),
+   return [project session]. Otherwise nil."
+  []
+  (let [cwd  (abs-path (System/getProperty "user.dir"))
+        root (abs-path (state/sessions-root))]
+    (when (and (str/starts-with? cwd (str root "/"))
+               (not= cwd root))
+      (let [rel   (subs cwd (inc (count root)))
+            parts (str/split rel #"/")]
+        (when (>= (count parts) 2)
+          [(first parts) (second parts)])))))
+
+(defn- resolve-link-coords
+  "Resolve [project-name session-name instance-id worktree] for a link
+   command. Order:
+     1. explicit :project + positional <session>
+     2. cwd is a session-home → derive both
+   Throws with a useful hint if neither works."
+  [opts session-arg]
+  (let [explicit-project (some-> (:project opts) name)
+        cwd-coords       (session-home-coords-from-cwd)
+        project-name     (or explicit-project (first cwd-coords))
+        session-name     (or session-arg (second cwd-coords))]
+    (when-not (and project-name session-name)
+      (throw (ex-info "Could not resolve project + session for link command"
+                      {:hint (str "Pass :project <p> <session> explicitly, "
+                                  "or cd into the session home "
+                                  "(~/.nido/sessions/<project>/<session>/) first.")
+                       :project project-name :session session-name})))
+    (let [projects (config/read-projects)]
+      (when-not (contains? projects project-name)
+        (throw (ex-info (str "Unknown project: " project-name)
+                        {:registered (vec (keys projects))}))))
+    (let [{:keys [directory]} (get (config/read-projects) project-name)
+          worktree    (worktree-path project-name directory session-name)
+          instance-id (engine/resolve-instance-id worktree)]
+      [project-name session-name instance-id worktree])))
+
+(defn link-add!
+  "Append/replace a link for the resolved session. opts must include
+   :type and :url; :title is optional. project + session may be passed
+   explicitly or auto-resolved from cwd."
+  [session-arg opts]
+  (let [[project session instance-id _] (resolve-link-coords opts session-arg)]
+    (links/add! instance-id (select-keys opts [:type :url :title]))
+    (try (launcher/rerender-briefing! project session instance-id)
+         (catch Exception e
+           (core/log-step (str "warning: briefing rerender: " (ex-message e)))))
+    (println (str "Added link to " project "/" session
+                  " (" (name (:type opts)) "  " (:url opts) ")"))))
+
+(defn link-remove!
+  "Drop the link with matching :url from the resolved session."
+  [session-arg opts]
+  (let [[project session instance-id _] (resolve-link-coords opts session-arg)
+        url (:url opts)]
+    (when-not url
+      (throw (ex-info "Missing :url" {:hint "Pass :url <url-to-remove>"})))
+    (links/remove-by-url! instance-id url)
+    (try (launcher/rerender-briefing! project session instance-id)
+         (catch Exception e
+           (core/log-step (str "warning: briefing rerender: " (ex-message e)))))
+    (println (str "Removed link from " project "/" session " (" url ")"))))
+
+(defn link-list
+  "Print the resolved session's links grouped by type. No-op message
+   when empty."
+  [session-arg opts]
+  (let [[project session instance-id _] (resolve-link-coords opts session-arg)
+        entries (links/read-links instance-id)]
+    (println (str "links for " project "/" session ":"))
+    (if (empty? entries)
+      (println "  (none)")
+      (doseq [[t ls] (links/group-by-type entries)]
+        (println (str "  " (links/display-labels t (name t))))
+        (doseq [{:keys [url title]} ls]
+          (println (str "    " url
+                        (when (seq title) (str " — " title)))))))))
