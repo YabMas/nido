@@ -1,0 +1,50 @@
+(ns nido.coordinator.triggers
+  "Per-project trigger config: schema, load, validate, find.
+
+   See spec §Triggers."
+  (:require
+   [babashka.fs :as fs]
+   [malli.core :as m]
+   [nido.coordinator.state :as cstate]
+   [nido.io :as io]))
+
+(def Trigger
+  [:map {:closed true}
+   [:name           keyword?]
+   [:source         [:map [:type keyword?]]]
+   [:skill          keyword?]
+   [:payload        string?]
+   [:filter      {:optional true} [:map-of keyword? any?]]
+   [:payload-key {:optional true} keyword?]
+   [:agent       {:optional true} keyword?]
+   [:limits      {:optional true} [:map-of keyword? any?]]
+   [:dry-run?    {:optional true} boolean?]
+   [:enabled?    {:optional true} boolean?]])
+
+(def TriggersFile
+  [:map {:closed true}
+   [:triggers [:vector Trigger]]])
+
+(defn load-for-project
+  "Read triggers.edn for a project. Returns a vector of trigger maps
+   (possibly empty). Invalid entries are skipped with a stderr warning."
+  [project]
+  (let [path (cstate/triggers-path project)]
+    (if (fs/exists? path)
+      (let [raw (io/read-edn path)]
+        (if (m/validate TriggersFile raw)
+          (:triggers raw)
+          (do
+            (binding [*err* *err*]
+              (.println ^java.io.PrintWriter *err*
+                        (str "WARN: invalid triggers.edn for project " project
+                             " — " (pr-str (m/explain TriggersFile raw)))))
+            (->> (:triggers raw)
+                 (filter #(m/validate Trigger %))
+                 vec))))
+      [])))
+
+(defn find-by-name
+  "Find a trigger in a loaded vector by :name. Returns nil if absent."
+  [triggers name]
+  (some #(when (= name (:name %)) %) triggers))

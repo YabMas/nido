@@ -677,13 +677,14 @@ Create `src/nido/coordinator/triggers.clj`:
   [project]
   (let [path (cstate/triggers-path project)]
     (if (fs/exists? path)
-      (let [raw (io/read-edn (str path))]
+      (let [raw (io/read-edn path)]
         (if (m/validate TriggersFile raw)
           (:triggers raw)
           (do
             (binding [*err* *err*]
-              (println "WARN: invalid triggers.edn for project" project
-                       "—" (pr-str (m/explain TriggersFile raw))))
+              (.println ^java.io.PrintWriter *err*
+                        (str "WARN: invalid triggers.edn for project " project
+                             " — " (pr-str (m/explain TriggersFile raw)))))
             (->> (:triggers raw)
                  (filter #(m/validate Trigger %))
                  vec))))
@@ -1017,7 +1018,8 @@ Create `src/nido/coordinator/queue.clj`:
             (do
               (fs/move f (str f ".malformed"))
               (binding [*err* *err*]
-                (println "WARN: malformed queue file" (str f) "—" (ex-message err)))
+                (.println ^java.io.PrintWriter *err*
+                          (str "WARN: malformed queue file " f " — " (ex-message err))))
               acc)
             (do
               (fs/delete f)
@@ -1833,7 +1835,8 @@ No unit tests for this namespace — it's wiring. End-to-end coverage lives in T
   (let [routed (events/route envelope triggers-by-project)]
     (if (:error routed)
       (binding [*err* *err*]
-        (println "WARN: dropping envelope —" (pr-str routed)))
+        (.println ^java.io.PrintWriter *err*
+                  (str "WARN: dropping envelope — " (pr-str routed))))
       (let [run (runs/create-run! routed
                                   {:fired-at (str (java.time.Instant/now))
                                    :fired-by (System/getenv "USER")})]
