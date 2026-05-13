@@ -95,6 +95,16 @@
                :data s}))
           sessions)))
 
+(defn- run-rows []
+  ;; Stage 1b minimal: one row per Run, sorted newest first by id.
+  ;; Task 3 replaces this with grouped sections (Needs attention / In flight / Recent).
+  (->> (runs-view/read-all-runs)
+       (sort-by :id #(compare %2 %1))
+       (mapv (fn [r]
+               {:title       (runs-view/format-row r)
+                :description (or (some-> r :state-history last :at) "")
+                :data        r}))))
+
 ;; ---------------------------------------------------------------------------
 ;; charm list component
 ;; ---------------------------------------------------------------------------
@@ -128,6 +138,20 @@
   (-> state
       (assoc :screen :sessions :project project-name :status nil)
       (rebuild-list (session-rows project-name))))
+
+(defn- set-screen
+  "Switch to `screen` and rebuild the embedded list with that screen's rows.
+   Also clears any open modal so tab-style nav can't trap us behind a panel.
+   Used by the `r`/`s` keybindings in `update-fn`."
+  [state screen]
+  (let [rows (case screen
+               :runs     (run-rows)
+               :sessions (session-rows (:project state))
+               :projects (project-rows))]
+    (-> state
+        (assoc :screen screen :status nil)
+        (rebuild-list rows)
+        (dissoc :modal :modal-target :modal-input))))
 
 (defn- selected-data [state]
   (some-> (item-list/selected-item (:list state)) :data))
@@ -244,6 +268,13 @@
     (let [[lst cmd] (item-list/list-update (:list state) msg)]
       [(assoc state :list lst) cmd])))
 
+(defn- update-runs
+  "Runs screen update handler. Task 3 fills in row navigation and actions;
+   for now we only delegate to the embedded list component for arrow keys."
+  [state msg]
+  (let [[lst cmd] (item-list/list-update (:list state) msg)]
+    [(assoc state :list lst) cmd]))
+
 ;; ---------------------------------------------------------------------------
 ;; Modals — handled before the regular screen update so input is captured.
 ;; ---------------------------------------------------------------------------
@@ -326,10 +357,21 @@
     (= :create-session (:modal state))
     (update-create-session state msg)
 
+    ;; Tab-style navigation between screens. Always available (outside modals),
+    ;; so users can flip from any screen to runs and back to sessions when a
+    ;; project context exists. Without a project the sessions screen has
+    ;; nothing to show, so the `s` switch is gated on `(:project state)`.
+    (and (nil? (:modal state)) (msg/key-match? msg "r") (not= :runs (:screen state)))
+    [(set-screen state :runs) nil]
+
+    (and (nil? (:modal state)) (msg/key-match? msg "s") (not= :sessions (:screen state)) (:project state))
+    [(set-screen state :sessions) nil]
+
     :else
     (case (:screen state)
       :projects (update-projects state msg)
-      :sessions (update-sessions state msg))))
+      :sessions (update-sessions state msg)
+      :runs     (update-runs state msg))))
 
 ;; ---------------------------------------------------------------------------
 ;; View
@@ -354,7 +396,8 @@
                                         " · info")
                   (case (:screen state)
                     :projects "nido — projects"
-                    :sessions (str "nido — " (:project state) " · sessions")))))
+                    :sessions (str "nido — " (:project state) " · sessions")
+                    :runs     "nido — runs"))))
 
 (defn- footer [state]
   (style/render subtle-style
@@ -364,8 +407,9 @@
                   :ci-picker       "[r] rerun failed  [n] run all  [esc] cancel"
                   :session-info    "[esc] back"
                   (case (:screen state)
-                    :projects "[↵] open  [q]uit"
-                    :sessions "[↵/e] enter  [w]orktree  [i]nfo  [a]dd  [u]p  [d]own  [c]i  [x] destroy  [esc] back  [q]uit"))))
+                    :projects "[↵] open  [r]uns  [q]uit"
+                    :sessions "[↵/e] enter  [w]orktree  [i]nfo  [a]dd  [u]p  [d]own  [c]i  [x] destroy  [r]uns  [esc] back  [q]uit"
+                    :runs     "[↵] enter session  [w]orktree  [d]etails  [f]ire trigger  [s]essions  [q]uit"))))
 
 (defn- info-row [label value]
   (str (style/render label-style (format "%-13s" label)) " " value))
