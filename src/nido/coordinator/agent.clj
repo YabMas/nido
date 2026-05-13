@@ -17,8 +17,24 @@
              (= "init"   (:subtype event)))
     (:session_id event)))
 
+(defn- parse-budget-ms
+  "Parse a budget string like '30m', '45m', '2h' into milliseconds.
+   nil → no budget (treat as infinite)."
+  [s]
+  (when s
+    (let [[_ n unit] (re-matches #"(\d+)([smhd])" s)]
+      (when n
+        (let [n  (Long/parseLong n)
+              ms (case unit
+                   "s" 1000
+                   "m" 60000
+                   "h" 3600000
+                   "d" 86400000)]
+          (* n ms))))))
+
 (defn launch!
-  "Spawn claude headlessly for a Run. Blocks until the agent exits.
+  "Spawn claude headlessly for a Run. Blocks until the agent exits or the
+   wall-clock budget is exceeded.
 
    opts:
      :run-id        — run id (used to locate run-dir for agent.log path)
@@ -27,37 +43,54 @@
      :system-prompt — optional --append-system-prompt content
      :claude-bin    — path/name of the claude binary (override for tests)
      :env           — extra env vars to merge into the child's environment
+     :budget        — string like \"30m\" / \"2h\". nil → no budget.
 
    Returns:
-     {:exit-code <int> :claude-session-id <str-or-nil>}"
-  [{:keys [run-id cwd first-message system-prompt claude-bin env]
+     {:exit-code <int> :claude-session-id <str-or-nil> :timed-out? <bool>}"
+  [{:keys [run-id cwd first-message system-prompt claude-bin env budget]
     :or   {claude-bin "claude"}}]
-  (let [log-path (cstate/run-agent-log run-id)
-        cmd      (cond-> [claude-bin
-                          "--print"
-                          ;; Stream-json output requires --verbose per claude-code's
-                          ;; --print mode validation; without it claude refuses to run.
-                          "--verbose"
-                          "--output-format=stream-json"
-                          "--dangerously-skip-permissions"]
-                   system-prompt (into ["--append-system-prompt" system-prompt])
-                   :always       (conj first-message))
-        proc     (p/process cmd {:dir cwd
-                                 :env (merge (into {} (System/getenv)) (or env {}))
-                                 ;; Close stdin so claude doesn't wait for input
-                                 ;; (it emits a "no stdin in 3s" warning otherwise).
-                                 :in  ""
-                                 :out :stream
-                                 :err :inherit
-                                 :shutdown nil})
-        session  (atom nil)]
-    (with-open [w (jio/writer log-path :append true)]
-      (with-open [r (jio/reader (:out proc))]
-        (doseq [line (line-seq r)]
-          (.write w line) (.write w "\n") (.flush w)
-          (when-let [event (parse-event line)]
-            (when-let [sid (session-id-from event)]
-              (reset! session sid))))))
+  (let [log-path  (cstate/run-agent-log run-id)
+        cmd       (cond-> [claude-bin
+                           "--print"
+                           ;; Stream-json output requires --verbose per claude-code's
+                           ;; --print mode validation; without it claude refuses to run.
+                           "--verbose"
+                           "--output-format=stream-json"
+                           "--dangerously-skip-permissions"]
+                    system-prompt (into ["--append-system-prompt" system-prompt])
+                    :always       (conj first-message))
+        proc      (p/process cmd {:dir cwd
+                                  :env (merge (into {} (System/getenv)) (or env {}))
+                                  ;; Close stdin so claude doesn't wait for input
+                                  ;; (it emits a "no stdin in 3s" warning otherwise).
+                                  :in  ""
+                                  :out :stream
+                                  :err :inherit
+                                  :shutdown nil})
+        session   (atom nil)
+        budget-ms (parse-budget-ms budget)
+        timed-out (atom false)
+        timer     (when budget-ms
+                    (future
+                      (Thread/sleep budget-ms)
+                      (when (.isAlive ^Process (:proc proc))
+                        (reset! timed-out true)
+                        (p/destroy proc)
+                        ;; Give claude 10s to exit on SIGTERM, then SIGKILL.
+                        (Thread/sleep 10000)
+                        (when (.isAlive ^Process (:proc proc))
+                          (p/destroy-tree proc)))))]
+    (try
+      (with-open [w (jio/writer log-path :append true)]
+        (with-open [r (jio/reader (:out proc))]
+          (doseq [line (line-seq r)]
+            (.write w line) (.write w "\n") (.flush w)
+            (when-let [event (parse-event line)]
+              (when-let [sid (session-id-from event)]
+                (reset! session sid))))))
+      (finally
+        (when timer (future-cancel timer))))
     (let [exit (:exit @proc)]
       {:exit-code         exit
-       :claude-session-id @session})))
+       :claude-session-id @session
+       :timed-out?        @timed-out})))

@@ -5,18 +5,26 @@
 #   FAKE_CLAUDE_EXIT_CODE   — exit code to return (default 0)
 #   FAKE_CLAUDE_STATUS_FILE — if set, path to write a _run-status.edn
 #   FAKE_CLAUDE_DELAY_MS    — sleep before exiting (default 50)
+#   FAKE_CLAUDE_HANG_MS     — if set, sleep this long instead of DELAY_MS
+#                             (used by budget-timeout tests)
 
 set -euo pipefail
 SESSION_ID="${FAKE_CLAUDE_SESSION_ID:-fake-session-001}"
 EXIT_CODE="${FAKE_CLAUDE_EXIT_CODE:-0}"
 DELAY_MS="${FAKE_CLAUDE_DELAY_MS:-50}"
+HANG_MS="${FAKE_CLAUDE_HANG_MS:-}"
 
 # init event
 printf '{"type":"system","subtype":"init","session_id":"%s"}\n' "$SESSION_ID"
 # a fake tool call
 printf '{"type":"assistant","tool_use":{"name":"Read"}}\n'
-# sleep to let the parent observe at least one event
-python3 -c "import time; time.sleep(${DELAY_MS}/1000.0)" 2>/dev/null || sleep 0.05
+# sleep to let the parent observe at least one event; if HANG_MS is set we
+# sleep for that long instead so the parent's budget timer can race us.
+if [ -n "$HANG_MS" ]; then
+  python3 -c "import time; time.sleep(${HANG_MS}/1000.0)" 2>/dev/null || sleep $(echo "scale=3; $HANG_MS/1000" | bc 2>/dev/null || echo "$((HANG_MS / 1000))")
+else
+  python3 -c "import time; time.sleep(${DELAY_MS}/1000.0)" 2>/dev/null || sleep 0.05
+fi
 
 # optionally write a status file
 if [ -n "${FAKE_CLAUDE_STATUS_FILE:-}" ]; then

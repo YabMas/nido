@@ -45,18 +45,24 @@
         result     (agent/launch! {:run-id        run-id
                                    :cwd           worktree
                                    :first-message (:first-message run)
-                                   :system-prompt (:system-prompt defaults)})
-        next-state (if (zero? (:exit-code result))
+                                   :system-prompt (:system-prompt defaults)
+                                   :budget        (-> run :limits :budget)})
+        next-state (cond
+                     (:timed-out? result) :failed
+                     (zero? (:exit-code result))
                      (status-file/derive-state-after-exit
                        (status-file/read-status run-id))
-                     :failed)]
+                     :else :failed)]
     ;; persist captured claude session-id
     (let [r (runs/read-run run-id)]
       (runs/write-run! (assoc r :claude-session-id (:claude-session-id result))))
     (runs/transition! run-id next-state)
     (when (= :failed next-state)
       (let [r (runs/read-run run-id)]
-        (runs/write-run! (assoc r :error {:exit-code (:exit-code result)}))))))
+        (runs/write-run! (assoc r :error (cond-> {:exit-code (:exit-code result)}
+                                           (:timed-out? result)
+                                           (assoc :reason :timeout
+                                                  :budget (-> r :limits :budget)))))))))
 
 (defn- mark-run-failed! [run-id ex]
   (try
