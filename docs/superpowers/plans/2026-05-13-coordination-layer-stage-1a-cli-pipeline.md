@@ -121,8 +121,9 @@ Create `src/tasks/nido_test.clj`:
        sort))
 
 (defn run [& args]
-  (let [{:keys [only]} (task-args/parse args)
-        nses (discover-test-namespaces only)]
+  (let [[_ opts] (task-args/split-args args)
+        only     (some-> (:only opts) str)
+        nses     (discover-test-namespaces only)]
     (when (empty? nses)
       (println "No test namespaces found." (when only (str "filter: " only)))
       (System/exit 0))
@@ -1902,8 +1903,8 @@ Create `src/tasks/nido_coordinator.clj`:
    [nido.task-args :as task-args]))
 
 (defn run [& args]
-  (let [{:keys [poll-ms]} (task-args/parse args)
-        ms (some-> poll-ms parse-long)]
+  (let [[_ opts] (task-args/split-args args)
+        ms       (some-> (:poll-ms opts) str parse-long)]
     (if ms
       (core/run! :poll-ms ms)
       (core/run!))))
@@ -1974,38 +1975,23 @@ Create `src/tasks/nido_trigger.clj`:
   "Bb task entry points for firing manual triggers and listing trigger
    configs."
   (:require
-   [clojure.string :as str]
    [nido.coordinator.queue :as queue]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.triggers :as triggers]
    [nido.task-args :as task-args]))
 
-(defn- positional-trigger-name [args]
-  (->> args
-       (remove keyword?)
-       (remove #(str/starts-with? (str %) "--"))
-       first))
-
-(defn- payload-flags->map
-  "Convert --key value --key2 value2 into {:key 'value' :key2 'value2'}."
-  [args]
-  (loop [m {} xs args]
-    (let [[a b & rest] xs]
-      (cond
-        (nil? a) m
-        (and (string? a) (str/starts-with? a "--"))
-        (recur (assoc m (keyword (subs a 2)) (str b)) rest)
-        :else (recur m (rest xs))))))
+;; nido's task-args/split-args returns [positionals opts-map].
+;; Convention: kwargs use `:keyword value` (matches every other nido task).
+;; For trigger:fire, the trigger name is a positional; payload fields are
+;; kwargs minus the reserved :project key.
 
 (defn fire
-  "bb nido:trigger:fire :project <p> <trigger-name> --key val --key2 val2"
+  "bb nido:trigger:fire :project <p> <trigger-name> :url <v> :ticket-id <v> ..."
   [& args]
-  (let [{:keys [project]} (task-args/parse args)
-        project-kw   (when project (keyword (str project)))
-        t-name       (some-> (positional-trigger-name args) str keyword)
-        payload      (payload-flags->map (map str args))
-        ;; remove non-payload positional args from payload
-        payload      (dissoc payload :project)]
+  (let [[positionals opts] (task-args/split-args args)
+        project-kw         (some-> (:project opts) str keyword)
+        t-name             (some-> (first positionals) str keyword)
+        payload            (dissoc opts :project)]
     (when-not project-kw (println "Missing :project") (System/exit 2))
     (when-not t-name     (println "Missing trigger name") (System/exit 2))
     (let [ts (triggers/load-for-project project-kw)]
@@ -2020,8 +2006,8 @@ Create `src/tasks/nido_trigger.clj`:
 (defn list-triggers
   "bb nido:trigger:list :project <p>"
   [& args]
-  (let [{:keys [project]} (task-args/parse args)
-        project-kw (when project (keyword (str project)))]
+  (let [[_ opts]   (task-args/split-args args)
+        project-kw (some-> (:project opts) str keyword)]
     (when-not project-kw (println "Missing :project") (System/exit 2))
     (let [ts (triggers/load-for-project project-kw)]
       (if (empty? ts)
@@ -2042,7 +2028,7 @@ Add tasks:
 
 ```clojure
 nido:trigger:fire
-{:doc "Fire a manual trigger: :project <p> <trigger> --<key> <value> ..."
+{:doc "Fire a manual trigger: :project <p> <trigger> :<payload-key> <value> ..."
  :task (apply nido-trigger/fire *command-line-args*)}
 
 nido:trigger:list
@@ -2058,7 +2044,7 @@ cat > ~/.nido/projects/brian/triggers.edn <<'EOF'
 {:triggers [{:name :smoke :source {:type :manual} :skill :echo :payload "msg={{event/msg}}"}]}
 EOF
 bb nido:trigger:list :project brian
-bb nido:trigger:fire :project brian smoke --msg hello
+bb nido:trigger:fire :project brian smoke :msg hello
 ls ~/.nido/coordinator/queue/
 ```
 
@@ -2103,7 +2089,7 @@ Create `src/tasks/nido_runs.clj`:
 (defn list-runs
   "bb nido:runs:list [:state <kw>] [:trigger <kw>] [:project <kw>]"
   [& args]
-  (let [{:keys [state trigger project]} (task-args/parse args)
+  (let [[_ {:keys [state trigger project]}] (task-args/split-args args)
         filter-fn (every-pred
                     (if state   #(= (keyword (str state))   (:state %))   (constantly true))
                     (if trigger #(= (keyword (str trigger)) (:trigger %)) (constantly true))
@@ -2118,7 +2104,8 @@ Create `src/tasks/nido_runs.clj`:
 (defn show
   "bb nido:runs:show <run-id>"
   [& args]
-  (let [run-id (->> args (remove keyword?) first str)]
+  (let [[positionals _] (task-args/split-args args)
+        run-id          (some-> (first positionals) str)]
     (if-let [r (runs/read-run run-id)]
       (do
         (pp/pprint r)
@@ -2267,7 +2254,7 @@ bb nido:coordinator:run :poll-ms 500 &
 COORD_PID=$!
 
 # Fire
-bb nido:trigger:fire :project brian echo-smoke --who world
+bb nido:trigger:fire :project brian echo-smoke :who world
 
 # Wait for it to finish, then inspect
 sleep 5
@@ -2348,7 +2335,7 @@ Find the existing "Delegation" section near the bottom of `CLAUDE.md` and add a 
 
 A foreground nido coordinator (`bb nido:coordinator:run`) watches `~/.nido/coordinator/queue/` for manual-trigger envelopes and spawns Run-owned sessions that auto-launch claude with a configured skill. Triggers live at `~/.nido/projects/<project>/triggers.edn`.
 
-Fire a Run: `bb nido:trigger:fire :project brian <trigger-name> --<key> <value>`
+Fire a Run: `bb nido:trigger:fire :project brian <trigger-name> :<payload-key> <value>`
 Inspect Runs: `bb nido:runs:list` and `bb nido:runs:show <run-id>`.
 
 Full design: `docs/superpowers/specs/2026-05-13-nido-coordination-layer-design.md`. Skill conventions for trigger targets: `docs/skill-conventions-for-triggers.md`.
