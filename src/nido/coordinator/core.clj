@@ -22,8 +22,10 @@
    :system-prompt       "You are running inside a nido auto-triggered session. The user is not present yet. Write artifacts under <session-home>/artifacts/ with stable filenames. Update <session-home>/_run-status.edn at phase transitions with {:phase :awaiting-input | :working | :complete | :error :note <str>}."})
 
 (defn- registered-projects []
-  ;; nido.project/list-projects returns a map of {project-name {:directory ...}}.
-  (vec (keys (project/list-projects))))
+  ;; nido.project/list-projects returns {<string-name> {:directory ...}}.
+  ;; Envelopes (and load-all-triggers' returned map) use keyword project names,
+  ;; so coerce here to a vector of keywords.
+  (mapv keyword (keys (project/list-projects))))
 
 (defn- load-all-triggers
   "Returns {:brian [triggers] :foo [triggers]}."
