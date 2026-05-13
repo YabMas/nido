@@ -10,14 +10,17 @@
    exits charm's alt-screen, runs the matching `nido:session:*` verb in the
    normal terminal, and re-enters the TUI."
   (:require
+   [babashka.fs :as fs]
    [charm.components.list :as item-list]
    [charm.components.text-input :as text-input]
    [charm.message :as msg]
    [charm.program :as program]
    [charm.style.core :as style]
+   [clojure.pprint]
    [clojure.string :as str]
    [nido.ci.lifecycle :as ci-lifecycle]
    [nido.coordinator.runs-view :as runs-view]
+   [nido.coordinator.state :as cstate]
    [nido.project :as project]
    [nido.session.engine :as engine]
    [nido.session.lifecycle :as lifecycle]
@@ -319,6 +322,14 @@
       [state (queue-action! [:enter-run (name (:project run)) (:session-name run) :worktree])]
       [state nil])
 
+    (msg/key-match? msg "d")
+    (if-let [run (selected-run state)]
+      [(-> state
+           (assoc :modal :run-details)
+           (assoc :modal-target {:run run}))
+       nil]
+      [state nil])
+
     :else
     (let [[lst cmd] (item-list/list-update (:list state) msg)]
       [(assoc state :list lst) cmd])))
@@ -354,6 +365,14 @@
 (defn- update-session-info
   "Only `esc` closes the info panel; other keys are swallowed so the
    modal stays open until explicitly dismissed."
+  [state msg]
+  (if (msg/key-match? msg "escape")
+    [(close-modal state) nil]
+    [state nil]))
+
+(defn- update-run-details
+  "Only `esc` closes the read-only run-details modal; other keys are
+   swallowed so the panel stays put until explicitly dismissed."
   [state msg]
   (if (msg/key-match? msg "escape")
     [(close-modal state) nil]
@@ -401,6 +420,9 @@
 
     (= :session-info (:modal state))
     (update-session-info state msg)
+
+    (= :run-details (:modal state))
+    (update-run-details state msg)
 
     (= :create-session (:modal state))
     (update-create-session state msg)
@@ -456,6 +478,7 @@
                   :session-info    (str "nido — " (-> state :modal-target :project)
                                         " · " (-> state :modal-target :session)
                                         " · info")
+                  :run-details     (str "nido — run · " (-> state :modal-target :run :id))
                   (case (:screen state)
                     :projects "nido — projects"
                     :sessions (str "nido — " (:project state) " · sessions")
@@ -468,6 +491,7 @@
                   :create-session  "[↵] create  [esc] cancel"
                   :ci-picker       "[r] rerun failed  [n] run all  [esc] cancel"
                   :session-info    "[esc] back"
+                  :run-details     "[esc] back"
                   (case (:screen state)
                     :projects "[↵] open  [r]uns  [q]uit"
                     :sessions "[↵/e] enter  [w]orktree  [i]nfo  [a]dd  [u]p  [d]own  [c]i  [x] destroy  [r]uns  [esc] back  [q]uit"
@@ -552,6 +576,19 @@
     :session-info
     (let [{:keys [project session data]} (:modal-target state)]
       (session-info-body project session data))
+
+    :run-details
+    (let [{:keys [run]} (:modal-target state)
+          log-path     (cstate/run-agent-log (:id run))
+          log-tail     (when (fs/exists? log-path)
+                         (->> (str/split-lines (slurp log-path))
+                              (take-last 50)
+                              (str/join "\n")))]
+      (str
+       (with-out-str (clojure.pprint/pprint run))
+       "\n\n"
+       (style/render label-style "─── last 50 lines of agent.log ───") "\n"
+       (or log-tail "(no agent.log yet)")))
 
     :create-session
     (text-input/text-input-view (:modal-input state))))
