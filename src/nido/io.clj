@@ -10,11 +10,17 @@
     (edn/read-string (slurp path))))
 
 (defn write-edn!
-  "Write data as EDN to path, creating parent dirs."
+  "Atomically write EDN to path: writes to <path>.tmp then renames.
+  Creates parent dirs as needed. Protects readers from observing torn
+  writes — the file is always either the previous good content or the
+  new good content, never partial."
   [path data]
   (when-let [parent (fs/parent path)]
     (fs/create-dirs parent))
-  (spit path (str (pr-str data) "\n")))
+  (let [path-s (str path)
+        tmp    (str path-s ".tmp")]
+    (spit tmp (str (pr-str data) "\n"))
+    (fs/move tmp path-s {:replace-existing true})))
 
 (defn write-json!
   "Write data as JSON to path, creating parent dirs."
