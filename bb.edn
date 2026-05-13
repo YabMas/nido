@@ -187,6 +187,18 @@
   {:doc "Show coordinator heartbeat + state from status.edn"
    :task (apply nido-coordinator/status *command-line-args*)}
 
+  nido:coordinator:halt
+  {:doc "Pause the coordinator: write halted.edn so no new Runs spawn. Optional :note <str>."
+   :task (apply nido-coordinator/halt *command-line-args*)}
+
+  nido:coordinator:resume
+  {:doc "Resume after halt: remove halted.edn so the daemon ticks again."
+   :task (apply nido-coordinator/resume *command-line-args*)}
+
+  nido:halt
+  {:doc "Alias for nido:coordinator:halt — the panic button."
+   :task (apply nido-coordinator/halt *command-line-args*)}
+
   nido:trigger:fire
   {:doc "Fire a manual trigger: :project <p> <trigger> :<payload-key> <value> ..."
    :task (apply nido-trigger/fire *command-line-args*)}

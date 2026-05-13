@@ -7,6 +7,7 @@
   (:require
    [babashka.fs :as fs]
    [nido.coordinator.core :as core]
+   [nido.coordinator.halt :as halt]
    [nido.coordinator.state :as cstate]
    [nido.io :as io]
    [nido.task-args :as task-args]))
@@ -28,3 +29,16 @@
         (when (:halted-reason s)
           (println "Halted:     " (:halted-reason s))))
       (println "Coordinator: not running (no status.edn)"))))
+
+(defn halt
+  "bb nido:halt [:note \"...\"] — pauses coordinator; existing Runs get SIGTERM."
+  [& args]
+  (let [[_ opts] (task-args/split-args args)]
+    (halt/halt! {:source :user :note (some-> (:note opts) str)})
+    (println "Coordinator: halted (user). Resume with: bb nido:coordinator:resume")))
+
+(defn resume
+  "bb nido:coordinator:resume — clears halted.edn so the daemon picks back up."
+  [& _args]
+  (halt/resume!)
+  (println "Coordinator: resumed (halted.edn removed)."))
