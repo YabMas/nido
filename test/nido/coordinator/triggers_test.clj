@@ -53,3 +53,20 @@
             (assoc minimal-trigger :name :other)]]
     (is (= :investigate-bug (:name (triggers/find-by-name ts :investigate-bug))))
     (is (nil? (triggers/find-by-name ts :missing)))))
+
+(deftest render-payload-substitutes-top-level
+  (is (= "/investigate-bug url=https://example.com"
+         (triggers/render-payload "/investigate-bug url={{event/url}}"
+                                  {:url "https://example.com"}))))
+
+(deftest render-payload-substitutes-nested
+  (is (= "ticket=ABC priority=P0"
+         (triggers/render-payload "ticket={{event/ticket/id}} priority={{event/ticket/priority}}"
+                                  {:ticket {:id "ABC" :priority "P0"}}))))
+
+(deftest render-payload-leaves-literal-text-alone
+  (is (= "no placeholders here"
+         (triggers/render-payload "no placeholders here" {:url "x"}))))
+
+(deftest render-payload-missing-key-renders-empty
+  (is (= "url=" (triggers/render-payload "url={{event/missing}}" {:url "x"}))))

@@ -4,6 +4,7 @@
    See spec §Triggers."
   (:require
    [babashka.fs :as fs]
+   [clojure.string :as str]
    [malli.core :as m]
    [nido.coordinator.state :as cstate]
    [nido.io :as io]))
@@ -48,3 +49,19 @@
   "Find a trigger in a loaded vector by :name. Returns nil if absent."
   [triggers name]
   (some #(when (= name (:name %)) %) triggers))
+
+(def ^:private placeholder-re
+  #"\{\{event/([^}]+)\}\}")
+
+(defn- lookup-path
+  "Resolve a slash-delimited path like 'ticket/id' against an event map."
+  [event path]
+  (let [ks (mapv keyword (str/split path #"/"))]
+    (get-in event ks)))
+
+(defn render-payload
+  "Replace {{event/path}} placeholders in template with values from event.
+   Missing values render as empty string."
+  [template event]
+  (str/replace template placeholder-re
+               (fn [[_ path]] (str (lookup-path event path)))))
