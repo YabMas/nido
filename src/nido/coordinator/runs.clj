@@ -5,6 +5,7 @@
   (:require
    [babashka.fs :as fs]
    [malli.core :as m]
+   [nido.coordinator.clock :as clock]
    [nido.coordinator.state :as cstate]
    [nido.io :as io]))
 
@@ -56,3 +57,33 @@
   (validate run)
   (io/write-edn! (cstate/run-edn-path (:id run)) run)
   run)
+
+(def allowed-transitions
+  "Map of from-state → set of to-states.
+   See spec §Runs / Lifecycle. Terminal states have no entries."
+  {:queued          #{:running :failed :halted}
+   :running         #{:awaiting-review :done :failed :halted}
+   :awaiting-review #{:running :done :failed :halted}})
+
+(defn valid-transition?
+  "True iff `from` → `to` is in `allowed-transitions`. Terminal states
+   have no entry and so reject every transition."
+  [from to]
+  (contains? (get allowed-transitions from #{}) to))
+
+(defn transition!
+  "Atomically update a Run's state with history. Throws ex-info if the
+   run is absent or the transition is invalid. Returns the updated Run."
+  [run-id new-state]
+  (let [run  (or (read-run run-id)
+                 (throw (ex-info "Run not found" {:run-id run-id})))
+        from (:state run)]
+    (when-not (valid-transition? from new-state)
+      (throw (ex-info "Invalid transition"
+                      {:run-id run-id :from from :to new-state})))
+    (let [updated (-> run
+                      (assoc :state new-state)
+                      (update :state-history conj
+                              {:at (clock/now-iso) :state new-state}))]
+      (write-run! updated)
+      updated)))
