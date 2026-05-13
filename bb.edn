@@ -207,6 +207,14 @@
   {:doc "List configured triggers: :project <p>"
    :task (apply nido-trigger/list-triggers *command-line-args*)}
 
+  nido:trigger:enable
+  {:doc "Clear circuit-breaker / re-enable a trigger: :project <p> <trigger>"
+   :task (apply nido-trigger/enable *command-line-args*)}
+
+  nido:trigger:disable
+  {:doc "Manually disable a trigger: :project <p> <trigger> [:note <str>]"
+   :task (apply nido-trigger/disable *command-line-args*)}
+
   nido:runs:list
   {:doc "List runs. Filters: :state <kw> :trigger <kw> :project <kw>"
    :task (apply nido-runs/list-runs *command-line-args*)}
