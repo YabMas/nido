@@ -17,6 +17,7 @@
    [charm.style.core :as style]
    [clojure.string :as str]
    [nido.ci.lifecycle :as ci-lifecycle]
+   [nido.coordinator.runs-view :as runs-view]
    [nido.project :as project]
    [nido.session.engine :as engine]
    [nido.session.lifecycle :as lifecycle]
@@ -63,16 +64,33 @@
                     :description (str directory "    " running " running")
                     :data {:name name :directory directory}}))))))
 
+(defn- run-owned-session-names
+  "Set of session-names owned by a Run for the given project. Derived from
+   ~/.nido/runs/*/run.edn — the durable indicator that a session is
+   Run-owned (the launcher's :owned-by-run flag is only threaded in-memory
+   into session-home artifacts, not persisted to the session registry).
+   Returns #{} on any read failure so the sessions screen degrades quietly."
+  [project-name]
+  (try
+    (let [proj-kw (keyword project-name)]
+      (into #{}
+            (comp (filter #(= proj-kw (:project %)))
+                  (map :session-name))
+            (runs-view/read-all-runs)))
+    (catch Exception _ #{})))
+
 (defn- session-rows [project-name]
-  (let [{:keys [sessions]} (lifecycle/list-all-data {:project project-name})]
+  (let [{:keys [sessions]} (lifecycle/list-all-data {:project project-name})
+        run-owned? (run-owned-session-names project-name)]
     (mapv (fn [{:keys [name pg-port app-port nrepl-port] :as s}]
             (let [up? (boolean (or pg-port app-port nrepl-port))
                   glyph (if up? "●" "○")
+                  marker (when (run-owned? name) "⚙ ")
                   parts (cond-> []
                           app-port   (conj (format "app  %s"  app-port))
                           pg-port    (conj (format "pg   %s"  pg-port))
                           nrepl-port (conj (format "repl %s"  nrepl-port)))]
-              {:title (str glyph "  " name)
+              {:title (str glyph "  " marker name)
                :description (if up? (str/join "    " parts) "—")
                :data s}))
           sessions)))
