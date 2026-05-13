@@ -35,12 +35,18 @@
   (let [log-path (cstate/run-agent-log run-id)
         cmd      (cond-> [claude-bin
                           "--print"
+                          ;; Stream-json output requires --verbose per claude-code's
+                          ;; --print mode validation; without it claude refuses to run.
+                          "--verbose"
                           "--output-format=stream-json"
                           "--dangerously-skip-permissions"]
                    system-prompt (into ["--append-system-prompt" system-prompt])
                    :always       (conj first-message))
         proc     (p/process cmd {:dir cwd
                                  :env (merge (into {} (System/getenv)) (or env {}))
+                                 ;; Close stdin so claude doesn't wait for input
+                                 ;; (it emits a "no stdin in 3s" warning otherwise).
+                                 :in  ""
                                  :out :stream
                                  :err :inherit
                                  :shutdown nil})
