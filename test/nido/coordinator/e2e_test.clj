@@ -1,0 +1,63 @@
+(ns nido.coordinator.e2e-test
+  (:require
+   [babashka.fs :as fs]
+   [clojure.test :refer [deftest is]]
+   [nido.coordinator.agent :as agent]
+   [nido.coordinator.core :as core]
+   [nido.coordinator.queue :as queue]
+   [nido.coordinator.runs :as runs]
+   [nido.coordinator.state :as cstate]
+   [nido.io :as io]
+   [nido.project :as project]))
+
+(deftest manual-trigger-end-to-end
+  (let [tmp     (fs/create-temp-dir)
+        tmp-str (str tmp)]
+    (try
+      (with-redefs [cstate/nido-root         (constantly tmp-str)
+                    ;; stub project listing — real shape is {project-name {...}}
+                    project/list-projects    (constantly {"brian" {:directory "/tmp"}})
+                    ;; stub session spawn — write a minimal session-home tree so
+                    ;; the agent has a worktree path to cd into and a session-home
+                    ;; link from run-dir to find.
+                    runs/spawn-session-for-run!
+                    (fn [run]
+                      (let [home (fs/path tmp-str "sessions" "brian" (:session-name run))
+                            wt   (fs/path home "worktree")
+                            link (cstate/run-session-home-link (:id run))]
+                        (fs/create-dirs wt)
+                        (fs/create-sym-link link home)
+                        {}))
+                    ;; stub the agent launcher — write a status file and a fake log line,
+                    ;; return a successful result with a known claude-session-id.
+                    agent/launch!
+                    (fn [opts]
+                      (io/write-edn! (cstate/run-status-path (:run-id opts))
+                                     {:phase :awaiting-input :note "from fake"})
+                      (spit (cstate/run-agent-log (:run-id opts))
+                            "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"abc-xyz\"}\n")
+                      {:exit-code 0 :claude-session-id "abc-xyz"})]
+        ;; 1. configure a trigger
+        (fs/create-dirs (fs/parent (cstate/triggers-path :brian)))
+        (io/write-edn! (cstate/triggers-path :brian)
+                       {:triggers [{:name    :investigate-bug
+                                    :source  {:type :manual}
+                                    :skill   :investigate-bug
+                                    :payload "url={{event/url}}"}]})
+        ;; 2. enqueue an envelope
+        (cstate/ensure-dirs!)
+        (queue/enqueue! {:target  {:project :brian :trigger :investigate-bug}
+                         :payload {:url "https://x"}})
+        ;; 3. one tick
+        (core/tick!)
+        ;; 4. assert
+        (let [run-dirs (->> (fs/list-dir (cstate/runs-dir))
+                            (filter fs/directory?))]
+          (is (= 1 (count run-dirs)) "exactly one Run was created")
+          (let [run-id (str (fs/file-name (first run-dirs)))
+                run    (runs/read-run run-id)]
+            (is (= :awaiting-review (:state run)))
+            (is (= "abc-xyz"        (:claude-session-id run)))
+            (is (= "/investigate-bug url=https://x" (:first-message run)))
+            (is (fs/exists? (cstate/run-agent-log run-id))))))
+      (finally (fs/delete-tree tmp)))))
