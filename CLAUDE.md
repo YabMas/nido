@@ -135,6 +135,17 @@ These produce `-J-Xmx...` and `-M:a:b:c` on the `clojure` command line without a
 - `brian.server/server` reads `(:datastar/port (mount/args))` to bind the HTTP server
 - The nido start form tries `(development/start {:datastar-port PORT})` first, with an ArityException fallback for older brian codebases
 
+## Coordination layer (stage 1a)
+
+A foreground nido coordinator (`bb nido:coordinator:run`) watches `~/.nido/coordinator/queue/` for manual-trigger envelopes and spawns Run-owned sessions that auto-launch claude with a configured skill. Triggers live at `~/.nido/projects/<project>/triggers.edn`.
+
+Fire a Run: `bb nido:trigger:fire :project brian <trigger-name> :<payload-key> <value>`
+Inspect Runs: `bb nido:runs:list` and `bb nido:runs:show <run-id>`.
+
+Full design: `docs/superpowers/specs/2026-05-13-nido-coordination-layer-design.md`. Skill conventions for trigger targets: `docs/skill-conventions-for-triggers.md`.
+
+The coordinator is foreground-only at stage 1a — bring it up explicitly when you want autonomous behavior, kill it with `Ctrl-C` when you don't. Subsequent stages (background daemon, launchd auto-start, Notion / cron / GitHub sources) ship in later plans.
+
 ## Delegation
 
 Specialist agents live in `.claude/agents/`. Most domain agents are borrowed from brian via symlink — `datastar-dev` points at brian's, and `dev-rules.md` is symlinked too so its `@.claude/dev-rules.md` import resolves correctly. Native nido agents (currently just `architect`) live alongside the symlinks.
