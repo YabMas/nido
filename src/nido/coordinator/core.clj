@@ -6,6 +6,7 @@
   (:require
    [babashka.fs :as fs]
    [nido.coordinator.agent :as agent]
+   [nido.coordinator.anomaly :as anomaly]
    [nido.coordinator.breakers :as breakers]
    [nido.coordinator.clock :as clock]
    [nido.coordinator.events :as events]
@@ -22,6 +23,12 @@
   {:poll-ms             1000
    :global-parallel-cap 2
    :system-prompt       "You are running inside a nido auto-triggered session. The user is not present yet. Write artifacts under <session-home>/artifacts/ with stable filenames. Update <session-home>/_run-status.edn at phase transitions with {:phase :awaiting-input | :working | :complete | :error :note <str>}."})
+
+(def ^:private anomaly-thresholds
+  {:spawn-window-ms 60000  :spawn-threshold 5
+   :fail-window-ms  300000 :fail-threshold 3})
+
+(defonce ^:private !detector (atom (anomaly/empty-detector)))
 
 (defn- registered-projects []
   ;; nido.project/list-projects returns {<string-name> {:directory ...}}.
@@ -106,12 +113,18 @@
       (let [run (runs/create-run! routed
                                   {:fired-at (clock/now-iso)
                                    :fired-by (System/getenv "USER")})]
+        (swap! !detector anomaly/record-spawn (clock/now-iso))
         (try
           (run-now! (:id run))
+          ;; If the Run finished :failed, record the failure for anomaly tracking.
+          (let [final (runs/read-run (:id run))]
+            (when (= :failed (:state final))
+              (swap! !detector anomaly/record-failure (clock/now-iso))))
           (catch Exception e
             ;; Don't let one bad Run kill the daemon: mark it :failed and
             ;; continue. Stage 2 will add structured budget/retry, but for
             ;; Stage 1a we just need the loop to survive.
+            (swap! !detector anomaly/record-failure (clock/now-iso))
             (binding [*err* *err*]
               (.println ^java.io.PrintWriter *err*
                         (str "ERROR: run-now! threw for "
@@ -131,7 +144,14 @@
       (do
         (heartbeat/write! {:status :running :slots-in-use 0})
         (doseq [env (queue/drain!)]
-          (process-envelope! env triggers-by-project))))))
+          (process-envelope! env triggers-by-project))
+        ;; After draining, check anomaly thresholds.
+        (when-let [trip (anomaly/check @!detector anomaly-thresholds)]
+          (halt/halt! {:source  :auto
+                       :reason  (:trip trip)
+                       :details trip
+                       :note    (str "auto-halt: " (name (:trip trip))
+                                     " count=" (:count trip))}))))))
 
 (defn run!
   "Start the foreground loop. Blocks until interrupted."
