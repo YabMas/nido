@@ -27,9 +27,13 @@
 ;; ---------------------------------------------------------------------------
 ;; Action channel: update-fn writes here before returning quit-cmd; the bb
 ;; task wrapper reads after `program/run` returns to decide what to run next.
-;; Shape: :quit | [:enter p s target] | [:up p s] | [:down p s] | [:destroy p s]
+;; Shape: :quit | [:enter p s target] | [:enter-run p s target]
+;;        | [:up p s] | [:down p s] | [:destroy p s]
 ;;        | [:add p s] | [:ci kind p s]   ; kind ∈ #{:run :rerun}
 ;;        target = :home | :worktree
+;; :enter-run is the runs-screen variant of :enter — same handoff, but
+;; the highlighted row is a Run so the project comes from (:project run)
+;; (a keyword) rather than (:project state) (a string).
 ;; ---------------------------------------------------------------------------
 
 (def ^:private exit-action (atom :quit))
@@ -297,11 +301,27 @@
       [(assoc state :list lst) cmd])))
 
 (defn- update-runs
-  "Runs screen update handler. Task 3 fills in row navigation and actions;
-   for now we only delegate to the embedded list component for arrow keys."
+  "Runs screen update handler. ↵ enters the highlighted Run's session-home;
+   w enters its worktree. Both are terminal — they queue an `:enter-run`
+   action whose bb-wrapper arm writes ~/.nido/.last-cd and the parent
+   shell wrapper picks it up. Group-header / empty-state rows are guarded
+   by `selected-run` returning nil. Other keys fall through to the list
+   component for arrow-key navigation."
   [state msg]
-  (let [[lst cmd] (item-list/list-update (:list state) msg)]
-    [(assoc state :list lst) cmd]))
+  (cond
+    (msg/key-match? msg "enter")
+    (if-let [run (selected-run state)]
+      [state (queue-action! [:enter-run (name (:project run)) (:session-name run) :home])]
+      [state nil])
+
+    (msg/key-match? msg "w")
+    (if-let [run (selected-run state)]
+      [state (queue-action! [:enter-run (name (:project run)) (:session-name run) :worktree])]
+      [state nil])
+
+    :else
+    (let [[lst cmd] (item-list/list-update (:list state) msg)]
+      [(assoc state :list lst) cmd])))
 
 ;; ---------------------------------------------------------------------------
 ;; Modals — handled before the regular screen update so input is captured.

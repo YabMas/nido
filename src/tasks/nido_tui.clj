@@ -86,8 +86,14 @@
 (defn- run-action [action]
   (try
     (case (first action)
-      :enter   (let [[_ p s target] action]
-                 (session/enter ":project" p s ":cd" (name target)))
+      :enter     (let [[_ p s target] action]
+                   (session/enter ":project" p s ":cd" (name target)))
+      :enter-run (let [[_ p s target] action]
+                   ;; Runs-screen variant — same wire-protocol as :enter
+                   ;; (writes ~/.nido/.last-cd; the nido shell wrapper
+                   ;; picks it up after we exit). Run-owned sessions are
+                   ;; still sessions, so we reuse `session/enter`.
+                   (session/enter ":project" p s ":cd" (name target)))
       :up      (let [[_ p s] action] (session/up      ":project" p s))
       :down    (let [[_ p s] action] (session/down    ":project" p s))
       :destroy (let [[_ p s] action] (destroy-and-verify! p s))
@@ -108,10 +114,11 @@
           (= :quit action)
           nil
 
-          ;; :enter is terminal — the parent shell wrapper picks up
+          ;; :enter (and its runs-screen sibling :enter-run) is
+          ;; terminal — the parent shell wrapper picks up
           ;; ~/.nido/.last-cd after we exit. Looping back into charm
           ;; here would erase the handoff signal.
-          (and (vector? action) (= :enter (first action)))
+          (and (vector? action) (#{:enter :enter-run} (first action)))
           (run-action action)
 
           (vector? action)
