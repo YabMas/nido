@@ -19,8 +19,10 @@
    [clojure.pprint]
    [clojure.string :as str]
    [nido.ci.lifecycle :as ci-lifecycle]
+   [nido.coordinator.queue :as queue]
    [nido.coordinator.runs-view :as runs-view]
    [nido.coordinator.state :as cstate]
+   [nido.coordinator.triggers :as triggers]
    [nido.project :as project]
    [nido.session.engine :as engine]
    [nido.session.lifecycle :as lifecycle]
@@ -303,6 +305,167 @@
     (let [[lst cmd] (item-list/list-update (:list state) msg)]
       [(assoc state :list lst) cmd])))
 
+;; ---------------------------------------------------------------------------
+;; Fire-trigger modal (runs screen, `f` key)
+;;
+;; Three sub-states cooperate to walk the user through:
+;;   :fire-pick-project  — choose project (skipped when only one is registered)
+;;   :fire-pick-trigger  — choose a :manual trigger from that project
+;;   :fire-input-payload — fill placeholder kwargs one field at a time
+;; The final state enqueues an envelope via `queue/enqueue!` and surfaces a
+;; status-bar message so the user can confirm by pressing `r` to refresh.
+;; Defined here (rather than alongside the other modal handlers below) so
+;; `update-runs` can call `open-fire-trigger` without a forward declaration.
+;; ---------------------------------------------------------------------------
+
+(defn- placeholder-keys
+  "Return ordered vector of placeholder names from a trigger's :payload
+   template. `{{event/url}}` → `:url`. Top-level keys only — slash-paths
+   are not addressable from the form."
+  [payload-template]
+  (->> (re-seq #"\{\{event/([^}/]+)\}\}" payload-template)
+       (map second)
+       distinct
+       (mapv keyword)))
+
+(defn- queued-status
+  "One-line status message confirming an envelope was enqueued."
+  [project trigger-name]
+  (str "queued: " (name project) "/" (name trigger-name)
+       " — refresh with 'r' to see it"))
+
+(defn- start-payload-input
+  "Either enqueue immediately (no placeholders) or open the payload-input
+   sub-modal seeded with the first field's text-input."
+  [state project trigger]
+  (let [ks (placeholder-keys (:payload trigger))]
+    (if (empty? ks)
+      (do
+        (queue/enqueue! {:target  {:project project :trigger (:name trigger)}
+                         :payload {}})
+        [(-> state
+             close-modal
+             (assoc :status (queued-status project (:name trigger))))
+         nil])
+      [(-> state
+           (assoc :modal :fire-input-payload)
+           (assoc :modal-target {:project project
+                                 :trigger trigger
+                                 :keys    ks
+                                 :idx     0
+                                 :values  {}})
+           (assoc :modal-input
+                  (text-input/text-input :prompt (str (name (first ks)) ": "))))
+       nil])))
+
+(defn- open-fire-pick-trigger
+  "Load the project's manual triggers and open the trigger-picker.
+   When none exist, open the picker in an error state so esc still closes."
+  [state project-str]
+  (let [project-kw (keyword project-str)
+        trigs      (->> (triggers/load-for-project project-kw)
+                        (filter #(= :manual (-> % :source :type)))
+                        vec)]
+    (if (empty? trigs)
+      [(-> state
+           (assoc :modal :fire-pick-trigger)
+           (assoc :modal-target {:project project-kw
+                                 :triggers []
+                                 :error "(no manual triggers for this project)"}))
+       nil]
+      [(-> state
+           (assoc :modal :fire-pick-trigger)
+           (assoc :modal-target {:project project-kw
+                                 :triggers trigs
+                                 :cursor 0}))
+       nil])))
+
+(defn- open-fire-trigger
+  "Entry point bound to `f` on the runs screen. Routes to the project
+   picker when more than one project is registered; otherwise skips
+   straight to the trigger picker."
+  [state]
+  (let [projects (vec (sort (keys (project/list-projects))))]
+    (cond
+      (empty? projects)
+      [state nil]
+
+      (= 1 (count projects))
+      (open-fire-pick-trigger state (first projects))
+
+      :else
+      [(-> state
+           (assoc :modal :fire-pick-project)
+           (assoc :modal-target {:projects projects :cursor 0}))
+       nil])))
+
+(defn- update-fire-pick-project [state msg]
+  (let [{:keys [projects cursor]} (:modal-target state)]
+    (cond
+      (msg/key-match? msg "escape") [(close-modal state) nil]
+
+      (msg/key-match? msg "up")
+      [(assoc-in state [:modal-target :cursor] (max 0 (dec cursor))) nil]
+
+      (msg/key-match? msg "down")
+      [(assoc-in state [:modal-target :cursor]
+                 (min (dec (count projects)) (inc cursor))) nil]
+
+      (msg/key-match? msg "enter")
+      (open-fire-pick-trigger state (nth projects cursor))
+
+      :else [state nil])))
+
+(defn- update-fire-pick-trigger [state msg]
+  (let [{:keys [project triggers cursor]} (:modal-target state)]
+    (cond
+      (msg/key-match? msg "escape") [(close-modal state) nil]
+
+      (or (empty? triggers) (nil? cursor)) [state nil]
+
+      (msg/key-match? msg "up")
+      [(assoc-in state [:modal-target :cursor] (max 0 (dec cursor))) nil]
+
+      (msg/key-match? msg "down")
+      [(assoc-in state [:modal-target :cursor]
+                 (min (dec (count triggers)) (inc cursor))) nil]
+
+      (msg/key-match? msg "enter")
+      (start-payload-input state project (nth triggers cursor))
+
+      :else [state nil])))
+
+(defn- update-fire-input-payload [state msg]
+  (let [{:keys [project trigger keys idx values]} (:modal-target state)]
+    (cond
+      (msg/key-match? msg "escape")
+      [(close-modal state) nil]
+
+      (msg/key-match? msg "enter")
+      (let [v        (str/trim (text-input/value (:modal-input state)))
+            k        (nth keys idx)
+            values'  (assoc values k v)
+            next-idx (inc idx)]
+        (if (< next-idx (count keys))
+          [(-> state
+               (assoc-in [:modal-target :values] values')
+               (assoc-in [:modal-target :idx] next-idx)
+               (assoc :modal-input
+                      (text-input/text-input
+                       :prompt (str (name (nth keys next-idx)) ": "))))
+           nil]
+          (do
+            (queue/enqueue! {:target  {:project project :trigger (:name trigger)}
+                             :payload values'})
+            [(-> state
+                 close-modal
+                 (assoc :status (queued-status project (:name trigger))))
+             nil])))
+
+      :else
+      (let [[ti cmd] (text-input/text-input-update (:modal-input state) msg)]
+        [(assoc state :modal-input ti) cmd]))))
+
 (defn- update-runs
   "Runs screen update handler. ↵ enters the highlighted Run's session-home;
    w enters its worktree. Both are terminal — they queue an `:enter-run`
@@ -329,6 +492,9 @@
            (assoc :modal-target {:run run}))
        nil]
       [state nil])
+
+    (msg/key-match? msg "f")
+    (open-fire-trigger state)
 
     :else
     (let [[lst cmd] (item-list/list-update (:list state) msg)]
@@ -394,6 +560,7 @@
     (let [[ti cmd] (text-input/text-input-update (:modal-input state) msg)]
       [(assoc state :modal-input ti) cmd])))
 
+
 (defn- update-fn [state msg]
   (cond
     ;; Charm always fires a window-size on startup. Our view is
@@ -426,6 +593,15 @@
 
     (= :create-session (:modal state))
     (update-create-session state msg)
+
+    (= :fire-pick-project (:modal state))
+    (update-fire-pick-project state msg)
+
+    (= :fire-pick-trigger (:modal state))
+    (update-fire-pick-trigger state msg)
+
+    (= :fire-input-payload (:modal state))
+    (update-fire-input-payload state msg)
 
     ;; Tab-style navigation between screens. Always available (outside modals),
     ;; so users can flip from any screen to runs and back to sessions when a
@@ -479,6 +655,15 @@
                                         " · " (-> state :modal-target :session)
                                         " · info")
                   :run-details     (str "nido — run · " (-> state :modal-target :run :id))
+                  :fire-pick-project
+                  "nido — fire trigger · pick project"
+                  :fire-pick-trigger
+                  (str "nido — fire trigger · "
+                       (name (-> state :modal-target :project)))
+                  :fire-input-payload
+                  (str "nido — fire trigger · "
+                       (name (-> state :modal-target :project)) " · "
+                       (name (-> state :modal-target :trigger :name)))
                   (case (:screen state)
                     :projects "nido — projects"
                     :sessions (str "nido — " (:project state) " · sessions")
@@ -487,11 +672,14 @@
 (defn- footer [state]
   (style/render subtle-style
                 (case (:modal state)
-                  :confirm-destroy "[y] destroy  [n/esc] cancel"
-                  :create-session  "[↵] create  [esc] cancel"
-                  :ci-picker       "[r] rerun failed  [n] run all  [esc] cancel"
-                  :session-info    "[esc] back"
-                  :run-details     "[esc] back"
+                  :confirm-destroy    "[y] destroy  [n/esc] cancel"
+                  :create-session     "[↵] create  [esc] cancel"
+                  :ci-picker          "[r] rerun failed  [n] run all  [esc] cancel"
+                  :session-info       "[esc] back"
+                  :run-details        "[esc] back"
+                  :fire-pick-project  "[↑↓] move  [↵] pick  [esc] cancel"
+                  :fire-pick-trigger  "[↑↓] move  [↵] pick  [esc] cancel"
+                  :fire-input-payload "[↵] next field  [esc] cancel"
                   (case (:screen state)
                     :projects "[↵] open  [r]uns  [q]uit"
                     :sessions "[↵/e] enter  [w]orktree  [i]nfo  [a]dd  [u]p  [d]own  [c]i  [x] destroy  [r]uns  [esc] back  [q]uit"
@@ -591,7 +779,37 @@
        (or log-tail "(no agent.log yet)")))
 
     :create-session
-    (text-input/text-input-view (:modal-input state))))
+    (text-input/text-input-view (:modal-input state))
+
+    :fire-pick-project
+    (let [{:keys [projects cursor]} (:modal-target state)]
+      (str/join "\n"
+                (map-indexed (fn [i p]
+                               (str (if (= i cursor) "▸ " "  ") p))
+                             projects)))
+
+    :fire-pick-trigger
+    (let [{:keys [triggers cursor error]} (:modal-target state)]
+      (if error
+        error
+        (str/join "\n"
+                  (map-indexed (fn [i t]
+                                 (str (if (= i cursor) "▸ " "  ")
+                                      (name (:name t))))
+                               triggers))))
+
+    :fire-input-payload
+    (let [{:keys [trigger keys idx values]} (:modal-target state)
+          k (nth keys idx)]
+      (str "Trigger: " (name (:name trigger)) "\n"
+           "Payload field " (inc idx) " of " (count keys)
+           ": " (name k) "\n\n"
+           (text-input/text-input-view (:modal-input state))
+           (when (seq values)
+             (str "\n\nFilled so far:\n"
+                  (str/join "\n"
+                            (for [[fk v] values]
+                              (str "  " (name fk) " = " v)))))))))
 
 (defn- view [state]
   (if (:modal state)
