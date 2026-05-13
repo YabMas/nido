@@ -3,6 +3,7 @@
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
    [nido.coordinator.agent :as agent]
+   [nido.coordinator.breakers :as breakers]
    [nido.coordinator.core :as core]
    [nido.coordinator.queue :as queue]
    [nido.coordinator.runs :as runs]
@@ -60,4 +61,34 @@
             (is (= "abc-xyz"        (:claude-session-id run)))
             (is (= "/investigate-bug url=https://x" (:first-message run)))
             (is (fs/exists? (cstate/run-agent-log run-id))))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest breaker-trips-after-3-failures-on-same-trigger
+  (let [tmp         (fs/create-temp-dir)
+        fail-launch (fn [_opts] {:exit-code 1 :claude-session-id nil :timed-out? false})
+        no-session  (fn [_run] {})]
+    (try
+      (with-redefs [cstate/nido-root            (constantly (str tmp))
+                    project/list-projects       (constantly {"brian" {:directory "/tmp"}})
+                    runs/spawn-session-for-run! no-session
+                    agent/launch!               fail-launch]
+        (fs/create-dirs (fs/parent (cstate/triggers-path :brian)))
+        (io/write-edn! (cstate/triggers-path :brian)
+                       {:triggers [{:name    :failing
+                                    :source  {:type :manual}
+                                    :skill   :foo
+                                    :payload ""}]})
+        (cstate/ensure-dirs!)
+        (dotimes [_ 3]
+          (queue/enqueue! {:target  {:project :brian :trigger :failing}
+                           :payload {}})
+          (core/tick!))
+        (is (breakers/tripped? :brian :failing)
+            "3 failures should trip the breaker")
+        ;; A 4th fire should NOT create a new Run (breaker open).
+        (let [runs-before (count (filter fs/directory? (fs/list-dir (cstate/runs-dir))))]
+          (queue/enqueue! {:target {:project :brian :trigger :failing} :payload {}})
+          (core/tick!)
+          (is (= runs-before (count (filter fs/directory? (fs/list-dir (cstate/runs-dir)))))
+              "skipped envelope should not create a Run")))
       (finally (fs/delete-tree tmp)))))

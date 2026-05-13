@@ -6,6 +6,7 @@
   (:require
    [babashka.fs :as fs]
    [nido.coordinator.agent :as agent]
+   [nido.coordinator.breakers :as breakers]
    [nido.coordinator.clock :as clock]
    [nido.coordinator.events :as events]
    [nido.coordinator.halt :as halt]
@@ -62,7 +63,18 @@
         (runs/write-run! (assoc r :error (cond-> {:exit-code (:exit-code result)}
                                            (:timed-out? result)
                                            (assoc :reason :timeout
-                                                  :budget (-> r :limits :budget)))))))))
+                                                  :budget (-> r :limits :budget)))))))
+    ;; Breaker update on terminal state. Default max-failures is 3; the
+    ;; trigger's :limits.max-failures (snapshotted onto the Run at create
+    ;; time) overrides this.
+    (let [project      (:project run)
+          trigger-name (:trigger run)
+          max-failures (or (-> run :limits :max-failures) 3)]
+      (case next-state
+        :failed          (breakers/record-failure! project trigger-name max-failures)
+        :done            (breakers/record-success! project trigger-name)
+        :awaiting-review (breakers/record-success! project trigger-name)
+        nil))))
 
 (defn- mark-run-failed! [run-id ex]
   (try
@@ -77,10 +89,20 @@
 
 (defn- process-envelope! [envelope triggers-by-project]
   (let [routed (events/route envelope triggers-by-project)]
-    (if (:error routed)
+    (cond
+      (:error routed)
       (binding [*err* *err*]
         (.println ^java.io.PrintWriter *err*
                   (str "WARN: dropping envelope — " (pr-str routed))))
+
+      (breakers/tripped? (:project routed) (-> routed :trigger :name))
+      (binding [*err* *err*]
+        (.println ^java.io.PrintWriter *err*
+                  (str "WARN: trigger breaker open — skipping "
+                       (name (:project routed)) "/"
+                       (name (-> routed :trigger :name)))))
+
+      :else
       (let [run (runs/create-run! routed
                                   {:fired-at (clock/now-iso)
                                    :fired-by (System/getenv "USER")})]

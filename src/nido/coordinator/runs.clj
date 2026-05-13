@@ -123,7 +123,7 @@
                  :agent           (or (:agent trigger) :claude)
                  :session-name    session-name
                  :claude-session-id nil
-                 :limits          (or (:limits trigger) {:budget "30m"})
+                 :limits          (or (:limits trigger) {:budget "30m" :max-failures 3})
                  :state           :queued
                  :state-history   [{:at (clock/now-iso) :state :queued}]
                  :artifacts       []
