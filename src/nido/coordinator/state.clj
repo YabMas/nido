@@ -28,6 +28,9 @@
 (defn status-path []
   (str (fs/path (coordinator-root) "status.edn")))
 
+(defn halted-path []
+  (str (fs/path (coordinator-root) "halted.edn")))
+
 (defn config-path []
   (str (fs/path (coordinator-root) "config.edn")))
 
