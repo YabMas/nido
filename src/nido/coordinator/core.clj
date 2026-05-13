@@ -8,6 +8,7 @@
    [nido.coordinator.agent :as agent]
    [nido.coordinator.clock :as clock]
    [nido.coordinator.events :as events]
+   [nido.coordinator.halt :as halt]
    [nido.coordinator.heartbeat :as heartbeat]
    [nido.coordinator.queue :as queue]
    [nido.coordinator.runs :as runs]
@@ -93,10 +94,16 @@
   "One iteration of the main loop. Public for testability."
   []
   (let [triggers-by-project (load-all-triggers)
-        envelopes           (queue/drain!)]
-    (heartbeat/write! {:status :running :slots-in-use 0})
-    (doseq [env envelopes]
-      (process-envelope! env triggers-by-project))))
+        halt-info           (halt/read-halt-info)]
+    (if halt-info
+      (heartbeat/write! {:status       :halted
+                         :halted-by    (:source halt-info)
+                         :halt-note    (:note halt-info)
+                         :slots-in-use 0})
+      (do
+        (heartbeat/write! {:status :running :slots-in-use 0})
+        (doseq [env (queue/drain!)]
+          (process-envelope! env triggers-by-project))))))
 
 (defn run!
   "Start the foreground loop. Blocks until interrupted."

@@ -20,15 +20,17 @@
       (core/run!))))
 
 (defn status [& _args]
-  (let [p (cstate/status-path)]
+  (let [p (cstate/status-path)
+        h (halt/read-halt-info)]
     (if (fs/exists? p)
       (let [s (io/read-edn p)]
         (println "Coordinator:" (some-> (:status s) name))
         (println "Heartbeat:  " (:heartbeat-at s))
-        (println "Slots:      " (:slots-in-use s))
-        (when (:halted-reason s)
-          (println "Halted:     " (:halted-reason s))))
-      (println "Coordinator: not running (no status.edn)"))))
+        (println "Slots:      " (:slots-in-use s)))
+      (println "Coordinator: not running (no status.edn)"))
+    (when h
+      (println "Halted:     " (name (:source h)) "—" (or (:note h) "(no note)"))
+      (println "Halted at:  " (:halted-at h)))))
 
 (defn halt
   "bb nido:halt [:note \"...\"] — pauses coordinator; existing Runs get SIGTERM."
