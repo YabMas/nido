@@ -34,6 +34,9 @@
 (defn config-path []
   (str (fs/path (coordinator-root) "config.edn")))
 
+(defn breakers-path []
+  (str (fs/path (coordinator-root) "breakers.edn")))
+
 (defn runs-dir []
   (str (fs/path (nido-root) "runs")))
 
