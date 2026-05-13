@@ -332,7 +332,13 @@
          (catch Exception e
            (core/log-step (str "warning: failed to write agent CLAUDE.md: "
                                (ex-message e)))))
-    (try (launcher/write-artifacts! final-ctx session-edn)
+    ;; Thread :owned-by-run from opts into the in-memory session-edn the
+    ;; launcher sees so it can decorate Run-owned sessions (resume shim +
+    ;; run-link). Project session.edn on disk is shared and stays untouched.
+    (try (launcher/write-artifacts! final-ctx
+                                    (cond-> session-edn
+                                      (:owned-by-run opts)
+                                      (assoc :owned-by-run (:owned-by-run opts))))
          (catch Exception e
            (core/log-step (str "warning: failed to write launcher artifacts: "
                                (ex-message e)))))
@@ -362,7 +368,10 @@
             ;; no artifacts yet; (b) artifacts could have been deleted out
             ;; of band. Same content as a fresh start writes, derived from
             ;; the persisted session context.
-            (try (launcher/write-artifacts! (:context existing) session-edn)
+            (try (launcher/write-artifacts! (:context existing)
+                                            (cond-> session-edn
+                                              (:owned-by-run opts)
+                                              (assoc :owned-by-run (:owned-by-run opts))))
                  (catch Exception e
                    (core/log-step (str "warning: refresh launcher artifacts: "
                                        (ex-message e)))))

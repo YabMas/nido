@@ -8,7 +8,8 @@
    [nido.coordinator.clock :as clock]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.triggers :as triggers]
-   [nido.io :as io]))
+   [nido.io :as io]
+   [nido.session.lifecycle :as session-lifecycle]))
 
 (def states
   "Permitted Run states. See spec §Runs / Lifecycle."
@@ -129,3 +130,14 @@
     (fs/create-dirs (cstate/run-dir run-id))
     (fs/create-dirs (cstate/run-artifacts-dir run-id))
     (write-run! run)))
+
+(defn spawn-session-for-run!
+  "Bring up a session for the given Run, marked :owned-by-run. The launcher
+   picks up :owned-by-run in the session-edn and writes the resume shim +
+   run-link via nido.coordinator.shim. Returns whatever session-lifecycle/up!
+   returns."
+  [run]
+  (let [{:keys [project session-name id]} run]
+    (session-lifecycle/up! session-name
+                           {:project      project
+                            :owned-by-run id})))

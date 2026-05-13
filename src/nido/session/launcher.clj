@@ -13,6 +13,8 @@
    [babashka.fs :as fs]
    [clojure.string :as str]
    [nido.config :as config]
+   [nido.coordinator.shim :as coord-shim]
+   [nido.coordinator.state :as cstate]
    [nido.core :as core]
    [nido.io :as io]
    [nido.session.links :as links]
@@ -291,7 +293,13 @@
       (try
         (purge-legacy-artifacts! (get-in ctx [:session :instance-id]))
         (catch Exception e
-          (core/log-step (str "warning: purge legacy artifacts: " (ex-message e))))))))
+          (core/log-step (str "warning: purge legacy artifacts: " (ex-message e)))))
+      (when-let [run-id (:owned-by-run session-edn)]
+        (try
+          (coord-shim/write! home (cstate/run-dir run-id))
+          (core/log-step (str "Wrote " home "/bin/claude (resume shim) + run-link"))
+          (catch Exception e
+            (core/log-step (str "warning: run-shim: " (ex-message e)))))))))
 
 (defn rerender-briefing!
   "Re-render only the session-home CLAUDE.md briefing — used after a
