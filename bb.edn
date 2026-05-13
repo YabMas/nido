@@ -19,7 +19,8 @@
              [tasks.nido-tui :as nido-tui]
              [tasks.nido-test :as nido-test]
              [tasks.nido-coordinator :as nido-coordinator]
-             [tasks.nido-trigger :as nido-trigger])
+             [tasks.nido-trigger :as nido-trigger]
+             [tasks.nido-runs :as nido-runs])
 
   :init (do
           ;; Disable babashka.process/shell's default destroy-tree JVM
@@ -193,5 +194,13 @@
   nido:trigger:list
   {:doc "List configured triggers: :project <p>"
    :task (apply nido-trigger/list-triggers *command-line-args*)}
+
+  nido:runs:list
+  {:doc "List runs. Filters: :state <kw> :trigger <kw> :project <kw>"
+   :task (apply nido-runs/list-runs *command-line-args*)}
+
+  nido:runs:show
+  {:doc "Show full run.edn + last 50 lines of agent.log: <run-id>"
+   :task (apply nido-runs/show *command-line-args*)}
 
   }}
