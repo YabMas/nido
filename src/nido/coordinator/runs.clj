@@ -7,6 +7,7 @@
    [malli.core :as m]
    [nido.coordinator.clock :as clock]
    [nido.coordinator.state :as cstate]
+   [nido.coordinator.triggers :as triggers]
    [nido.io :as io]))
 
 (def states
@@ -87,3 +88,44 @@
                               {:at (clock/now-iso) :state new-state}))]
       (write-run! updated)
       updated)))
+
+(defn- new-run-parts
+  "Returns {:run-id ... :session-name ... :suffix ...} so callers don't have
+   to re-derive the session-name from the run-id by string surgery."
+  [project trigger-name]
+  ;; clock/now-iso is ISO-8601 (YYYY-MM-DDTHH:...Z); first 10 chars = date.
+  (let [date (subs (clock/now-iso) 0 10)
+        suf  (subs (str (java.util.UUID/randomUUID)) 0 8)]
+    {:run-id       (str date "-" (name project) "-" (name trigger-name) "-" suf)
+     :session-name (str "run-" (name project) "-" (name trigger-name) "-" suf)
+     :suffix       suf}))
+
+(defn create-run!
+  "Build a :queued Run record from a fire request and persist run.edn.
+   `meta` carries source-call metadata: {:fired-at <iso> :fired-by <str>}."
+  [{:keys [project trigger payload]} meta]
+  (let [{:keys [run-id session-name]} (new-run-parts project (:name trigger))
+        ;; First message format per spec §Agent launch: "/<skill> <interpolated-payload>".
+        ;; The trigger's :payload holds just the skill args; the framework prepends "/<skill> ".
+        message (str "/" (name (:skill trigger)) " "
+                     (triggers/render-payload (:payload trigger) payload))
+        run     {:id              run-id
+                 :project         project
+                 :trigger         (:name trigger)
+                 ;; Preserve all source config keys (e.g. :database, :view for :notion-view)
+                 ;; so the Run record stays useful for debugging non-:manual sources later.
+                 :source          (merge (:source trigger) meta)
+                 :event-payload   payload
+                 :skill           (:skill trigger)
+                 :first-message   message
+                 :agent           (or (:agent trigger) :claude)
+                 :session-name    session-name
+                 :claude-session-id nil
+                 :limits          (or (:limits trigger) {:budget "30m"})
+                 :state           :queued
+                 :state-history   [{:at (clock/now-iso) :state :queued}]
+                 :artifacts       []
+                 :error           nil}]
+    (fs/create-dirs (cstate/run-dir run-id))
+    (fs/create-dirs (cstate/run-artifacts-dir run-id))
+    (write-run! run)))

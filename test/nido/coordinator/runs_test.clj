@@ -96,3 +96,28 @@
                               #"Run not found"
                               (runs/transition! "no-such-run" :running))))
       (finally (fs/delete-tree tmp)))))
+
+(deftest create-run!-builds-a-queued-run
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (let [fire-req {:project :brian
+                        :trigger {:name    :investigate-bug
+                                  :source  {:type :manual}
+                                  :skill   :investigate-bug
+                                  :payload "url={{event/url}}"
+                                  :agent   :claude}
+                        :payload {:url "https://x"}}
+              run      (runs/create-run! fire-req {:fired-at "T" :fired-by "u"})]
+          (is (= :queued (:state run)))
+          (is (= :brian (:project run)))
+          (is (= :investigate-bug (:trigger run)))
+          (is (= :investigate-bug (:skill run)))
+          (is (= "/investigate-bug url=https://x" (:first-message run)))
+          (is (re-matches #"\d{4}-\d{2}-\d{2}-brian-investigate-bug-[a-f0-9]{8}" (:id run)))
+          (is (re-matches #"run-brian-investigate-bug-[a-f0-9]{8}" (:session-name run))
+              "session-name shape stays stable if run-id format changes")
+          (is (= 1 (count (:state-history run))))
+          (is (fs/exists? (cstate/run-edn-path (:id run))))
+          (is (= run (runs/read-run (:id run))) "run.edn round-trips cleanly")))
+      (finally (fs/delete-tree tmp)))))
