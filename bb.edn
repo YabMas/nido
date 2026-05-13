@@ -1,7 +1,8 @@
 {:min-bb-version "1.12.215"
- :paths ["src" "resources"]
+ :paths ["src" "resources" "test"]
 
- :deps {de.timokramer/charm.clj {:mvn/version "0.2.71"}}
+ :deps {de.timokramer/charm.clj {:mvn/version "0.2.71"}
+        metosin/malli           {:mvn/version "0.16.4"}}
 
  :tasks
  {:requires ([tasks.nido-session :as nido-session]
@@ -15,7 +16,8 @@
              [tasks.nido-bench :as nido-bench]
              [tasks.nido-harness :as nido-harness]
              [tasks.nido-help :as nido-help]
-             [tasks.nido-tui :as nido-tui])
+             [tasks.nido-tui :as nido-tui]
+             [tasks.nido-test :as nido-test])
 
   :init (do
           ;; Disable babashka.process/shell's default destroy-tree JVM
@@ -169,5 +171,9 @@
   nido:ci:rerun
   {:doc "Re-run failed steps from last Run: :project <p> <session> [:from <run-id>]"
    :task (apply nido-ci/rerun *command-line-args*)}
+
+  nido:test
+  {:doc "Run unit tests. Optional :only <ns-prefix> to filter."
+   :task (apply nido-test/run *command-line-args*)}
 
   }}
