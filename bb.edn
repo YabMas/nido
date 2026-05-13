@@ -17,7 +17,8 @@
              [tasks.nido-harness :as nido-harness]
              [tasks.nido-help :as nido-help]
              [tasks.nido-tui :as nido-tui]
-             [tasks.nido-test :as nido-test])
+             [tasks.nido-test :as nido-test]
+             [tasks.nido-coordinator :as nido-coordinator])
 
   :init (do
           ;; Disable babashka.process/shell's default destroy-tree JVM
@@ -175,5 +176,13 @@
   nido:test
   {:doc "Run unit tests. Optional :only <ns-prefix> to filter."
    :task (apply nido-test/run *command-line-args*)}
+
+  nido:coordinator:run
+  {:doc "Run coordinator in foreground (stage 1a). Optional :poll-ms <int>."
+   :task (apply nido-coordinator/run *command-line-args*)}
+
+  nido:coordinator:status
+  {:doc "Show coordinator heartbeat + state from status.edn"
+   :task (apply nido-coordinator/status *command-line-args*)}
 
   }}
