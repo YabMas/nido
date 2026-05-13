@@ -18,7 +18,8 @@
              [tasks.nido-help :as nido-help]
              [tasks.nido-tui :as nido-tui]
              [tasks.nido-test :as nido-test]
-             [tasks.nido-coordinator :as nido-coordinator])
+             [tasks.nido-coordinator :as nido-coordinator]
+             [tasks.nido-trigger :as nido-trigger])
 
   :init (do
           ;; Disable babashka.process/shell's default destroy-tree JVM
@@ -184,5 +185,13 @@
   nido:coordinator:status
   {:doc "Show coordinator heartbeat + state from status.edn"
    :task (apply nido-coordinator/status *command-line-args*)}
+
+  nido:trigger:fire
+  {:doc "Fire a manual trigger: :project <p> <trigger> :<payload-key> <value> ..."
+   :task (apply nido-trigger/fire *command-line-args*)}
+
+  nido:trigger:list
+  {:doc "List configured triggers: :project <p>"
+   :task (apply nido-trigger/list-triggers *command-line-args*)}
 
   }}
