@@ -95,15 +95,34 @@
                :data s}))
           sessions)))
 
+;; Group-header and empty-state sentinels. Both are namespace-qualified
+;; keywords so `selected-run` can filter them out — the list component
+;; renders them as ordinary rows but they shouldn't fire row actions.
+(defn- run-group-rows
+  "Header row + one row per Run for a single group. Returns nil when the
+   group is empty so the caller can `concat` without conditionals."
+  [label runs]
+  (when (seq runs)
+    (cons {:title       (str "── " label " (" (count runs) ") ──")
+           :description ""
+           :data        ::group-header}
+          (mapv (fn [r]
+                  {:title       (runs-view/format-row r)
+                   :description (or (some-> r :state-history last :at) "")
+                   :data        r})
+                runs))))
+
 (defn- run-rows []
-  ;; Stage 1b minimal: one row per Run, sorted newest first by id.
-  ;; Task 3 replaces this with grouped sections (Needs attention / In flight / Recent).
-  (->> (runs-view/read-all-runs)
-       (sort-by :id #(compare %2 %1))
-       (mapv (fn [r]
-               {:title       (runs-view/format-row r)
-                :description (or (some-> r :state-history last :at) "")
-                :data        r}))))
+  (let [groups (runs-view/grouped-runs (runs-view/read-all-runs))
+        rows   (concat
+                (run-group-rows "Needs attention" (:needs-attention groups))
+                (run-group-rows "In flight"       (:in-flight groups))
+                (run-group-rows "Recent"          (:recent groups)))]
+    (if (empty? rows)
+      [{:title       "No runs yet. Press 'f' to fire a manual trigger."
+        :description ""
+        :data        ::empty}]
+      (vec rows))))
 
 ;; ---------------------------------------------------------------------------
 ;; charm list component
@@ -155,6 +174,15 @@
 
 (defn- selected-data [state]
   (some-> (item-list/selected-item (:list state)) :data))
+
+(defn- selected-run
+  "Returns the highlighted row's Run map, or nil when the highlighted row
+   is a group-header / empty-state sentinel. Tasks 4-6 use this to decide
+   whether ↵/w/d should fire."
+  [state]
+  (let [data (selected-data state)]
+    (when (and data (not (#{::group-header ::empty} data)))
+      data)))
 
 ;; ---------------------------------------------------------------------------
 ;; Elm: init / update / view
@@ -383,6 +411,20 @@
 (def ^:private warning-style  (style/style :fg style/red :bold true))
 (def ^:private label-style    (style/style :fg 244))
 
+(defn- status-bar
+  "Top-of-runs-screen line showing the coordinator daemon's reachability
+   and current slots-in-use count. `:unreachable` renders in warning-style
+   (red) so it's visually obvious when the daemon is down."
+  []
+  (let [{:keys [status reachable? slots-in-use]} (runs-view/read-coordinator-status)]
+    (str (style/render label-style "Coordinator: ")
+         (style/render
+          (if reachable? status-style warning-style)
+          (name status))
+         "  •  "
+         (style/render label-style "Slots: ")
+         (or slots-in-use 0))))
+
 (defn- header [state]
   (style/render title-style
                 (case (:modal state)
@@ -499,7 +541,10 @@
     (str (header state) "\n\n"
          (modal-body state) "\n\n"
          (footer state))
-    (str (header state) "\n\n"
+    (str (header state) "\n"
+         (when (= :runs (:screen state))
+           (str (status-bar) "\n"))
+         "\n"
          (item-list/list-view (:list state)) "\n\n"
          (when-let [s (:status state)]
            (str (style/render status-style s) "\n"))
