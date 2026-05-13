@@ -57,6 +57,17 @@
       (let [r (runs/read-run run-id)]
         (runs/write-run! (assoc r :error {:exit-code (:exit-code result)}))))))
 
+(defn- mark-run-failed! [run-id ex]
+  (try
+    (let [r (runs/read-run run-id)]
+      (when r
+        (runs/write-run! (assoc r
+                                :state :failed
+                                :error {:reason  :coordinator-exception
+                                        :message (ex-message ex)
+                                        :data    (ex-data ex)}))))
+    (catch Exception _ nil)))
+
 (defn- process-envelope! [envelope triggers-by-project]
   (let [routed (events/route envelope triggers-by-project)]
     (if (:error routed)
@@ -66,7 +77,17 @@
       (let [run (runs/create-run! routed
                                   {:fired-at (clock/now-iso)
                                    :fired-by (System/getenv "USER")})]
-        (run-now! (:id run))))))
+        (try
+          (run-now! (:id run))
+          (catch Exception e
+            ;; Don't let one bad Run kill the daemon: mark it :failed and
+            ;; continue. Stage 2 will add structured budget/retry, but for
+            ;; Stage 1a we just need the loop to survive.
+            (binding [*err* *err*]
+              (.println ^java.io.PrintWriter *err*
+                        (str "ERROR: run-now! threw for "
+                             (:id run) " — " (ex-message e))))
+            (mark-run-failed! (:id run) e)))))))
 
 (defn tick!
   "One iteration of the main loop. Public for testability."

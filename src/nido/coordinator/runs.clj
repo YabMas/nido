@@ -9,7 +9,8 @@
    [nido.coordinator.state :as cstate]
    [nido.coordinator.triggers :as triggers]
    [nido.io :as io]
-   [nido.session.lifecycle :as session-lifecycle]))
+   [nido.session.lifecycle :as session-lifecycle]
+   [nido.session.state :as session-state]))
 
 (def states
   "Permitted Run states. See spec §Runs / Lifecycle."
@@ -134,10 +135,17 @@
 (defn spawn-session-for-run!
   "Bring up a session for the given Run, marked :owned-by-run. The launcher
    picks up :owned-by-run in the session-edn and writes the resume shim +
-   run-link via nido.coordinator.shim. Returns whatever session-lifecycle/up!
-   returns."
+   run-link via nido.coordinator.shim. After session-up, also writes the
+   reverse `<run-dir>/session-home` symlink the coordinator uses to locate
+   the worktree (per spec §Runs / Identity & storage). Returns whatever
+   session-lifecycle/up! returns."
   [run]
-  (let [{:keys [project session-name id]} run]
-    (session-lifecycle/up! session-name
-                           {:project      project
-                            :owned-by-run id})))
+  (let [{:keys [project session-name id]} run
+        result       (session-lifecycle/up! session-name
+                                            {:project      project
+                                             :owned-by-run id})
+        session-home (session-state/session-home-dir (name project) session-name)
+        link-path    (cstate/run-session-home-link id)]
+    (when (fs/exists? link-path) (fs/delete link-path))
+    (fs/create-sym-link link-path session-home)
+    result))
