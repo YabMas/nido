@@ -19,6 +19,8 @@
    [clojure.pprint]
    [clojure.string :as str]
    [nido.ci.lifecycle :as ci-lifecycle]
+   [nido.coordinator.breakers :as breakers]
+   [nido.coordinator.halt :as halt]
    [nido.coordinator.queue :as queue]
    [nido.coordinator.runs-view :as runs-view]
    [nido.coordinator.state :as cstate]
@@ -466,6 +468,67 @@
       (let [[ti cmd] (text-input/text-input-update (:modal-input state) msg)]
         [(assoc state :modal-input ti) cmd]))))
 
+;; ---------------------------------------------------------------------------
+;; Coordinator brakes modals (runs screen, `h` / `c` keys)
+;;
+;; `h` toggles the global halt: open :halt-confirm when running, or
+;; :halt-resume-confirm when already halted. `c` opens :clear-breaker — a
+;; picker over tripped triggers; ↵ clears the highlighted one. Empty
+;; tripped list is a no-op (no modal opened) so users don't see an empty
+;; picker. Modal arms are wired into `update-fn` next to the other modal
+;; cases.
+;; ---------------------------------------------------------------------------
+
+(defn- open-halt-confirm [state]
+  (if (halt/halted?)
+    [(-> state (assoc :modal :halt-resume-confirm)) nil]
+    [(-> state (assoc :modal :halt-confirm)) nil]))
+
+(defn- update-halt-confirm [state msg]
+  (cond
+    (or (msg/key-match? msg "y") (msg/key-match? msg "Y"))
+    (do (halt/halt! {:source :user :note "from TUI"})
+        [(-> state (close-modal) (assoc :status "Coordinator halted.")) nil])
+    :else [(close-modal state) nil]))
+
+(defn- update-halt-resume-confirm [state msg]
+  (cond
+    (or (msg/key-match? msg "y") (msg/key-match? msg "Y"))
+    (do (halt/resume!)
+        [(-> state (close-modal) (assoc :status "Coordinator resumed.")) nil])
+    :else [(close-modal state) nil]))
+
+(defn- open-clear-breaker-picker [state]
+  (let [tripped (breakers/tripped-triggers)]
+    (if (empty? tripped)
+      [state nil]
+      [(-> state
+           (assoc :modal :clear-breaker)
+           (assoc :modal-target {:tripped tripped :cursor 0}))
+       nil])))
+
+(defn- update-clear-breaker [state msg]
+  (let [{:keys [tripped cursor]} (:modal-target state)]
+    (cond
+      (msg/key-match? msg "escape") [(close-modal state) nil]
+
+      (msg/key-match? msg "up")
+      [(assoc-in state [:modal-target :cursor] (max 0 (dec cursor))) nil]
+
+      (msg/key-match? msg "down")
+      [(assoc-in state [:modal-target :cursor]
+                 (min (dec (count tripped)) (inc cursor))) nil]
+
+      (msg/key-match? msg "enter")
+      (let [{:keys [project trigger]} (nth tripped cursor)]
+        (breakers/enable! project trigger)
+        [(-> state (close-modal)
+             (assoc :status (str "Breaker cleared: "
+                                 (name project) "/" (name trigger))))
+         nil])
+
+      :else [state nil])))
+
 (defn- update-runs
   "Runs screen update handler. ↵ enters the highlighted Run's session-home;
    w enters its worktree. Both are terminal — they queue an `:enter-run`
@@ -495,6 +558,12 @@
 
     (msg/key-match? msg "f")
     (open-fire-trigger state)
+
+    (msg/key-match? msg "h")
+    (open-halt-confirm state)
+
+    (msg/key-match? msg "c")
+    (open-clear-breaker-picker state)
 
     :else
     (let [[lst cmd] (item-list/list-update (:list state) msg)]
@@ -603,6 +672,15 @@
     (= :fire-input-payload (:modal state))
     (update-fire-input-payload state msg)
 
+    (= :halt-confirm (:modal state))
+    (update-halt-confirm state msg)
+
+    (= :halt-resume-confirm (:modal state))
+    (update-halt-resume-confirm state msg)
+
+    (= :clear-breaker (:modal state))
+    (update-clear-breaker state msg)
+
     ;; Tab-style navigation between screens. Always available (outside modals),
     ;; so users can flip from any screen to runs and back to sessions when a
     ;; project context exists. Without a project the sessions screen has
@@ -630,18 +708,30 @@
 (def ^:private label-style    (style/style :fg 244))
 
 (defn- status-bar
-  "Top-of-runs-screen line showing the coordinator daemon's reachability
-   and current slots-in-use count. `:unreachable` renders in warning-style
-   (red) so it's visually obvious when the daemon is down."
+  "Top-of-runs-screen line showing the coordinator daemon's reachability,
+   slots-in-use, halt state, and breaker count. `:unreachable` and halted
+   states render in warning-style (red). The breaker pill appears only when
+   at least one trigger is tripped."
   []
-  (let [{:keys [status reachable? slots-in-use]} (runs-view/read-coordinator-status)]
+  (let [{:keys [status reachable? slots-in-use alerts]} (runs-view/read-coordinator-status)
+        {:keys [halted? halt-source halt-note breakers]} alerts]
     (str (style/render label-style "Coordinator: ")
-         (style/render
-          (if reachable? status-style warning-style)
-          (name status))
+         (style/render (if halted? warning-style
+                         (if reachable? status-style warning-style))
+                       (if halted?
+                         (str "halted"
+                              (when halt-source (str " (" (name halt-source) ")")))
+                         (name status)))
+         (when (and halted? halt-note) (str " — " halt-note))
          "  •  "
          (style/render label-style "Slots: ")
-         (or slots-in-use 0))))
+         (or slots-in-use 0)
+         (when (pos? breakers)
+           (str "  •  "
+                (style/render warning-style
+                              (str "⚠ " breakers " trigger"
+                                   (when (> breakers 1) "s")
+                                   " in breaker")))))))
 
 (defn- header [state]
   (style/render title-style
@@ -664,6 +754,9 @@
                   (str "nido — fire trigger · "
                        (name (-> state :modal-target :project)) " · "
                        (name (-> state :modal-target :trigger :name)))
+                  :halt-confirm         "nido — halt coordinator?"
+                  :halt-resume-confirm  "nido — resume coordinator?"
+                  :clear-breaker        "nido — clear breaker"
                   (case (:screen state)
                     :projects "nido — projects"
                     :sessions (str "nido — " (:project state) " · sessions")
@@ -680,10 +773,13 @@
                   :fire-pick-project  "[↑↓] move  [↵] pick  [esc] cancel"
                   :fire-pick-trigger  "[↑↓] move  [↵] pick  [esc] cancel"
                   :fire-input-payload "[↵] next field  [esc] cancel"
+                  :halt-confirm         "[y] halt  [n/esc] cancel"
+                  :halt-resume-confirm  "[y] resume  [n/esc] cancel"
+                  :clear-breaker        "[↑↓] move  [↵] clear  [esc] cancel"
                   (case (:screen state)
                     :projects "[↵] open  [r]uns  [q]uit"
                     :sessions "[↵/e] enter  [w]orktree  [i]nfo  [a]dd  [u]p  [d]own  [c]i  [x] destroy  [r]uns  [esc] back  [q]uit"
-                    :runs     "[↵] enter session  [w]orktree  [d]etails  [f]ire trigger  [s]essions  [q]uit"))))
+                    :runs     "[↵] enter  [w]orktree  [d]etails  [f]ire  [h]alt  [c]lear breaker  [s]essions  [q]uit"))))
 
 (defn- info-row [label value]
   (str (style/render label-style (format "%-13s" label)) " " value))
@@ -809,7 +905,25 @@
              (str "\n\nFilled so far:\n"
                   (str/join "\n"
                             (for [[fk v] values]
-                              (str "  " (name fk) " = " v)))))))))
+                              (str "  " (name fk) " = " v)))))))
+
+    :halt-confirm
+    "Halt the coordinator? New envelopes will queue; existing in-flight\nRuns continue to terminal state."
+
+    :halt-resume-confirm
+    (str "Resume coordinator?\n\n"
+         (when-let [h (halt/read-halt-info)]
+           (str "Currently halted by " (name (:source h))
+                (when (:note h) (str " (" (:note h) ")"))
+                ".")))
+
+    :clear-breaker
+    (let [{:keys [tripped cursor]} (:modal-target state)]
+      (str/join "\n"
+                (map-indexed (fn [i {:keys [project trigger]}]
+                               (str (if (= i cursor) "▸ " "  ")
+                                    (name project) "/" (name trigger)))
+                             tripped)))))
 
 (defn- view [state]
   (if (:modal state)

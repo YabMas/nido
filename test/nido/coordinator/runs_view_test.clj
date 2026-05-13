@@ -117,3 +117,11 @@
         (let [s (rv/read-coordinator-status)]
           (is (false? (:reachable? s))
               "30s-old heartbeat should be considered unreachable (>5s threshold)"))))))
+
+(deftest read-coordinator-status-includes-alerts
+  (with-tmp-runs-dir
+    (fn []
+      (let [s (rv/read-coordinator-status)]
+        (is (contains? s :alerts))
+        (is (false? (-> s :alerts :halted?)))
+        (is (= 0 (-> s :alerts :breakers)))))))

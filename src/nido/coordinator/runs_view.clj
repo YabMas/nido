@@ -6,7 +6,9 @@
   (:require
    [babashka.fs :as fs]
    [clojure.string :as str]
+   [nido.coordinator.breakers :as breakers]
    [nido.coordinator.clock :as clock]
+   [nido.coordinator.halt :as halt]
    [nido.coordinator.runs :as runs]
    [nido.coordinator.state :as cstate]
    [nido.io :as io]))
@@ -95,10 +97,19 @@
 
 (def heartbeat-stale-after-seconds 5)
 
-(defn read-coordinator-status
-  "Read ~/.nido/coordinator/status.edn and decide reachability.
-   Returns {:status <kw or :unreachable> :slots-in-use <int> :heartbeat-at <iso or nil> :reachable? <bool>}.
-   `:reachable?` is true iff heartbeat is within `heartbeat-stale-after-seconds` of now."
+(defn read-alerts
+  "Aggregate alert summary for the TUI status bar.
+   Returns {:halted? <bool> :halt-source <kw or nil> :halt-note <str or nil> :breakers <int>}."
+  []
+  (let [halt-info (halt/read-halt-info)]
+    {:halted?     (boolean halt-info)
+     :halt-source (:source halt-info)
+     :halt-note   (:note halt-info)
+     :breakers    (count (breakers/tripped-triggers))}))
+
+(defn- read-coordinator-status*
+  "Reachability core: reads ~/.nido/coordinator/status.edn and stamps
+   `:reachable?` based on heartbeat freshness. Caller layers alerts on top."
   []
   (let [p (cstate/status-path)
         absent {:status :unreachable :reachable? false :heartbeat-at nil :slots-in-use 0}]
@@ -118,3 +129,13 @@
               (assoc :reachable? (boolean fresh?))
               (cond-> (not fresh?) (assoc :status :unreachable))))
         (catch Exception _ absent)))))
+
+(defn read-coordinator-status
+  "Read ~/.nido/coordinator/status.edn and decide reachability.
+   Returns:
+     {:status <kw or :unreachable> :slots-in-use <int>
+      :heartbeat-at <iso or nil> :reachable? <bool>
+      :alerts {:halted? <bool> :halt-source <kw or nil> :halt-note <str> :breakers <int>}}"
+  []
+  (-> (read-coordinator-status*)
+      (assoc :alerts (read-alerts))))
