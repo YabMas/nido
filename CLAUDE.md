@@ -135,16 +135,18 @@ These produce `-J-Xmx...` and `-M:a:b:c` on the `clojure` command line without a
 - `brian.server/server` reads `(:datastar/port (mount/args))` to bind the HTTP server
 - The nido start form tries `(development/start {:datastar-port PORT})` first, with an ArityException fallback for older brian codebases
 
-## Coordination layer (stage 1a)
+## Coordination layer (stages 1–2)
 
 A foreground nido coordinator (`bb nido:coordinator:run`) watches `~/.nido/coordinator/queue/` for manual-trigger envelopes and spawns Run-owned sessions that auto-launch claude with a configured skill. Triggers live at `~/.nido/projects/<project>/triggers.edn`.
 
 Fire a Run: `bb nido:trigger:fire :project brian <trigger-name> :<payload-key> <value>`
-Inspect Runs: `bb nido:runs:list` and `bb nido:runs:show <run-id>`.
+Inspect Runs: `bb nido:runs:list` and `bb nido:runs:show <run-id>`, or in the TUI press `r`.
+
+**Safety brakes (Stage 2):** per-Run wall-clock budget (`:limits.budget`, default 30m, hard SIGTERM→SIGKILL), per-trigger circuit breaker (`:limits.max-failures`, default 3), daemon-wide anomaly auto-halt (>5 spawns/min or ≥3 failures/5m), and a kill switch (`bb nido:halt`). Resume with `bb nido:coordinator:resume`. The TUI runs screen surfaces breaker/halt alerts and exposes `h` (halt/resume) and `c` (clear breaker) keys.
 
 Full design: `docs/superpowers/specs/2026-05-13-nido-coordination-layer-design.md`. Skill conventions for trigger targets: `docs/skill-conventions-for-triggers.md`.
 
-The coordinator is foreground-only at stage 1a — bring it up explicitly when you want autonomous behavior, kill it with `Ctrl-C` when you don't. Subsequent stages (background daemon, launchd auto-start, Notion / cron / GitHub sources) ship in later plans.
+The coordinator is foreground-only at stages 1–2 — bring it up explicitly when you want autonomous behavior, kill it with `Ctrl-C` when you don't. Stage 3 adds a background harness; Stage 4 launchd auto-start; stages 5+ add Notion / cron / GitHub event sources.
 
 ## Delegation
 

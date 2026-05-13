@@ -37,3 +37,9 @@ The daemon reads this file when the agent exits to decide the Run's terminal sta
 ## 3. Idempotency
 
 If the skill is re-invoked in a session-home that already has artifacts (e.g., the user re-fired the trigger, or the daemon restarted), read existing artifacts and resume — don't blindly overwrite.
+
+## What the brakes mean for a skill author
+
+- Your skill should respect its wall-clock budget. If the daemon's budget (default 30m) is shorter than what your skill needs, fail fast or split into phases.
+- A skill that emits `:phase :error` to `_run-status.edn` counts as a failure toward the per-trigger circuit breaker. After 3 consecutive failures (config-overridable via `:limits.max-failures` on the trigger), the trigger is auto-disabled until the user runs `bb nido:trigger:enable :project <p> <trigger>`.
+- The daemon may halt itself if it spawns too many Runs too fast (>5 in 60s) or sees a fail-loop (≥3 failures in 5min). From a skill's perspective this looks identical to the daemon stopping for any reason — your Run is left in its current state.
