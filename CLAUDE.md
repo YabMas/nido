@@ -135,18 +135,43 @@ These produce `-J-Xmx...` and `-M:a:b:c` on the `clojure` command line without a
 - `brian.server/server` reads `(:datastar/port (mount/args))` to bind the HTTP server
 - The nido start form tries `(development/start {:datastar-port PORT})` first, with an ArityException fallback for older brian codebases
 
-## Coordination layer (stages 1–2)
+## Coordination layer (stages 1–3)
 
-A foreground nido coordinator (`bb nido:coordinator:run`) watches `~/.nido/coordinator/queue/` for manual-trigger envelopes and spawns Run-owned sessions that auto-launch claude with a configured skill. Triggers live at `~/.nido/projects/<project>/triggers.edn`.
+The coordinator daemon spawns Run-owned sessions that auto-launch claude with a configured skill. Triggers live at `~/.nido/projects/<project>/triggers.edn`; envelopes hit `~/.nido/coordinator/queue/`.
 
-Fire a Run: `bb nido:trigger:fire :project brian <trigger-name> :<payload-key> <value>`
-Inspect Runs: `bb nido:runs:list` and `bb nido:runs:show <run-id>`, or in the TUI press `r`.
+**Running the daemon (Stage 3):**
 
-**Safety brakes (Stage 2):** per-Run wall-clock budget (`:limits.budget`, default 30m, hard SIGTERM→SIGKILL), per-trigger circuit breaker (`:limits.max-failures`, default 3), daemon-wide anomaly auto-halt (>5 spawns/min or ≥3 failures/5m), and a kill switch (`bb nido:halt`). Resume with `bb nido:coordinator:resume`. The TUI runs screen surfaces breaker/halt alerts and exposes `h` (halt/resume) and `c` (clear breaker) keys.
+```
+bb nido:coordinator:up          # background daemon; logs to coordinator.log
+bb nido:coordinator:status      # process alive? + heartbeat + halt/breaker info
+bb nido:coordinator:logs        # last 50 lines (or :follow? true to tail -f)
+bb nido:coordinator:down        # graceful stop (SIGTERM); :force? true → SIGKILL
+```
 
-Full design: `docs/superpowers/specs/2026-05-13-nido-coordination-layer-design.md`. Skill conventions for trigger targets: `docs/skill-conventions-for-triggers.md`.
+`up` refuses if a live daemon already holds the PID file. `down` cleans the PID file even when the daemon was already gone (stale PID).
 
-The coordinator is foreground-only at stages 1–2 — bring it up explicitly when you want autonomous behavior, kill it with `Ctrl-C` when you don't. Stage 3 adds a background harness; Stage 4 launchd auto-start; stages 5+ add Notion / cron / GitHub event sources.
+**Foreground (still supported for development):**
+
+```
+bb nido:coordinator:run :poll-ms 500
+```
+
+**Working with triggers/runs:**
+
+```
+bb nido:trigger:fire :project brian <name> :<key> <value>
+bb nido:runs:list / bb nido:runs:show <id>
+```
+
+Or in the TUI press `r` for the runs surface.
+
+**Safety brakes (Stage 2):** per-Run wall-clock budget (`:limits.budget`, default 30m, SIGTERM→SIGKILL), per-trigger circuit breaker (`:limits.max-failures`, default 3), daemon-wide anomaly auto-halt, kill switch (`bb nido:halt` + `bb nido:coordinator:resume`). TUI `h` halts, `c` clears a breaker.
+
+**Startup reconciliation (Stage 3):** when the daemon starts, any non-terminal Run on disk is forced to a terminal state from observable evidence (artifacts, `_run-status.edn`, agent.log). Crashed/orphaned Runs get marked `:failed :reason :orphaned-from-restart` so the dashboard stays honest.
+
+Full design: `docs/superpowers/specs/2026-05-13-nido-coordination-layer-design.md`. Skill conventions: `docs/skill-conventions-for-triggers.md`.
+
+Stage 4 will add launchd auto-start at login; stages 5+ add Notion / cron / GitHub event sources.
 
 ## Delegation
 
