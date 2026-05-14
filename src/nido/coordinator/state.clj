@@ -31,6 +31,9 @@
 (defn halted-path []
   (str (fs/path (coordinator-root) "halted.edn")))
 
+(defn pid-path []
+  (str (fs/path (coordinator-root) "coordinator.pid")))
+
 (defn config-path []
   (str (fs/path (coordinator-root) "config.edn")))
 
