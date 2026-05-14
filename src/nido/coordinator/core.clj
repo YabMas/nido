@@ -12,7 +12,9 @@
    [nido.coordinator.events :as events]
    [nido.coordinator.halt :as halt]
    [nido.coordinator.heartbeat :as heartbeat]
+   [nido.coordinator.pid :as pid]
    [nido.coordinator.queue :as queue]
+   [nido.coordinator.reconcile :as reconcile]
    [nido.coordinator.runs :as runs]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.status-file :as status-file]
@@ -153,11 +155,27 @@
                        :note    (str "auto-halt: " (name (:trip trip))
                                      " count=" (:count trip))}))))))
 
+(defn- install-shutdown-hook! []
+  (.addShutdownHook
+    (Runtime/getRuntime)
+    (Thread.
+      (fn []
+        ;; Best-effort: write a final :stopped heartbeat, then drop the PID file.
+        (try (heartbeat/write! {:status :stopped :slots-in-use 0})
+             (catch Exception _ nil))
+        (try (pid/delete!)
+             (catch Exception _ nil))))))
+
 (defn run!
-  "Start the foreground loop. Blocks until interrupted."
+  "Start the foreground loop. Blocks until interrupted.
+   Also installs the daemon lifecycle: writes coordinator.pid, runs the
+   crash-recovery reconcile pass, and registers a JVM shutdown hook."
   [& {:keys [poll-ms] :or {poll-ms (:poll-ms defaults)}}]
   (cstate/ensure-dirs!)
-  (println "nido coordinator: starting (foreground, poll" poll-ms "ms)")
+  (println "nido coordinator: starting (poll" poll-ms "ms)")
+  (reconcile/reconcile!)
+  (pid/write! (long (.pid (java.lang.ProcessHandle/current))))
+  (install-shutdown-hook!)
   (heartbeat/write! {:status :running :slots-in-use 0})
   (loop []
     (tick!)
