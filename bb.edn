@@ -195,6 +195,10 @@
   {:doc "Resume after halt: remove halted.edn so the daemon ticks again."
    :task (apply nido-coordinator/resume *command-line-args*)}
 
+  nido:coordinator:up
+  {:doc "Spawn coordinator daemon in background. Optional :poll-ms <int>. Logs to coordinator.log."
+   :task (apply nido-coordinator/up *command-line-args*)}
+
   nido:halt
   {:doc "Alias for nido:coordinator:halt — the panic button."
    :task (apply nido-coordinator/halt *command-line-args*)}

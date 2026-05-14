@@ -6,8 +6,10 @@
      bb nido:coordinator:status"
   (:require
    [babashka.fs :as fs]
+   [babashka.process :as p]
    [nido.coordinator.core :as core]
    [nido.coordinator.halt :as halt]
+   [nido.coordinator.pid :as pid]
    [nido.coordinator.state :as cstate]
    [nido.io :as io]
    [nido.task-args :as task-args]))
@@ -44,3 +46,35 @@
   [& _args]
   (halt/resume!)
   (println "Coordinator: resumed (halted.edn removed)."))
+
+(defn up
+  "bb nido:coordinator:up [:poll-ms <int>] — spawn the daemon in background.
+   Refuses if coordinator.pid points at a live process.
+
+   Output goes to ~/.nido/coordinator/coordinator.log (append).
+   The daemon writes its own PID; this task exits as soon as the spawn is set up."
+  [& args]
+  (let [[_ opts] (task-args/split-args args)]
+    (if (pid/alive?)
+      (do (println "Coordinator: already running (pid" (pid/read) "). Use `bb nido:coordinator:down` to stop.")
+          (System/exit 1))
+      (do
+        (cstate/ensure-dirs!)
+        (let [log-file  (java.io.File. ^String (cstate/log-path))
+              cmd       (cond-> ["bb" "nido:coordinator:run"]
+                          (:poll-ms opts) (into [":poll-ms" (str (:poll-ms opts))]))
+              ;; Use :append + :out-file so the child's stdout/stderr are
+              ;; redirected at the OS level (ProcessBuilder.Redirect.appendTo).
+              ;; A plain OutputStream would be pumped by a thread inside this
+              ;; bb — which dies the moment we exit, taking the log with it.
+              proc      (p/process cmd {:in        ""         ; close stdin
+                                        :out       :append
+                                        :out-file  log-file
+                                        :err       :append
+                                        :err-file  log-file
+                                        :shutdown  nil})      ; survive bb exit
+              child-pid (.pid (:proc proc))]
+          ;; Don't wait for the child — leave it detached.
+          (println "Coordinator: starting in background (pid" child-pid ")")
+          (println "Logs: " (cstate/log-path))
+          (println "Stop: bb nido:coordinator:down"))))))
