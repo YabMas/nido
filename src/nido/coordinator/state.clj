@@ -34,6 +34,9 @@
 (defn pid-path []
   (str (fs/path (coordinator-root) "coordinator.pid")))
 
+(defn log-path []
+  (str (fs/path (coordinator-root) "coordinator.log")))
+
 (defn config-path []
   (str (fs/path (coordinator-root) "config.edn")))
 
