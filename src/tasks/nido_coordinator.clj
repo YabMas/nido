@@ -117,3 +117,20 @@
 
               :else
               (do (Thread/sleep 200) (recur)))))))))
+
+(defn logs
+  "bb nido:coordinator:logs [:follow? true] [:lines <n>]
+   Default: print last 50 lines of coordinator.log and exit.
+   :follow? true → tail -f (blocks until Ctrl-C)."
+  [& args]
+  (let [[_ opts] (task-args/split-args args)
+        follow?  (= true (:follow? opts))
+        lines    (or (some-> (:lines opts) str parse-long) 50)
+        log      (cstate/log-path)]
+    (if-not (fs/exists? log)
+      (println "Coordinator log not found:" log)
+      (if follow?
+        ;; tail -f, blocks until Ctrl-C
+        (apply p/exec ["tail" "-f" "-n" (str lines) log])
+        ;; one-shot tail -n N
+        (apply p/exec ["tail" "-n" (str lines) log])))))
