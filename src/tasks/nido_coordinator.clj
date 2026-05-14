@@ -22,14 +22,21 @@
       (core/run!))))
 
 (defn status [& _args]
-  (let [p (cstate/status-path)
-        h (halt/read-halt-info)]
+  (let [p          (cstate/status-path)
+        h          (halt/read-halt-info)
+        pid        (pid/read)
+        proc-alive (pid/alive?)]
+    (println "Process:     "
+             (cond
+               (and pid proc-alive) (str "alive (pid " pid ")")
+               pid                  (str "stale PID file (pid " pid " is not alive)")
+               :else                "not running (no PID file)"))
     (if (fs/exists? p)
       (let [s (io/read-edn p)]
         (println "Coordinator:" (some-> (:status s) name))
         (println "Heartbeat:  " (:heartbeat-at s))
         (println "Slots:      " (:slots-in-use s)))
-      (println "Coordinator: not running (no status.edn)"))
+      (println "Coordinator: no status.edn (never started or already cleaned up)"))
     (when h
       (println "Halted:     " (name (:source h)) "—" (or (:note h) "(no note)"))
       (println "Halted at:  " (:halted-at h)))))
