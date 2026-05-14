@@ -78,3 +78,42 @@
           (println "Coordinator: starting in background (pid" child-pid ")")
           (println "Logs: " (cstate/log-path))
           (println "Stop: bb nido:coordinator:down"))))))
+
+(defn down
+  "bb nido:coordinator:down [:force? true] — stop the background daemon.
+   Default SIGTERM, waits up to 30s for graceful shutdown.
+   With :force? true, sends SIGKILL immediately (orphans any in-flight agent)."
+  [& args]
+  (let [[_ opts]  (task-args/split-args args)
+        force?    (= true (:force? opts))
+        pid       (pid/read)]
+    (cond
+      (nil? pid)
+      (do (println "Coordinator: not running (no PID file).") (System/exit 0))
+
+      (not (pid/alive?))
+      (do (println "Coordinator: stale PID file (pid" pid "is not alive). Cleaning up.")
+          (pid/delete!)
+          (System/exit 0))
+
+      :else
+      (let [proc-handle (.get ^java.util.Optional (java.lang.ProcessHandle/of (long pid)))
+            signal-name (if force? "SIGKILL" "SIGTERM")]
+        (println "Coordinator: sending" signal-name "to pid" pid)
+        (if force?
+          (.destroyForcibly ^java.lang.ProcessHandle proc-handle)
+          (.destroy ^java.lang.ProcessHandle proc-handle))
+        ;; Wait up to 30s for the process to exit. Poll every 200ms.
+        (let [deadline (+ (System/currentTimeMillis) 30000)]
+          (loop []
+            (cond
+              (not (.isAlive ^java.lang.ProcessHandle proc-handle))
+              (do (pid/delete!)   ; defensive — shutdown hook usually does this
+                  (println "Coordinator: stopped."))
+
+              (> (System/currentTimeMillis) deadline)
+              (do (println "Coordinator: did not exit within 30s. Use :force? true to SIGKILL.")
+                  (System/exit 2))
+
+              :else
+              (do (Thread/sleep 200) (recur)))))))))

@@ -199,6 +199,10 @@
   {:doc "Spawn coordinator daemon in background. Optional :poll-ms <int>. Logs to coordinator.log."
    :task (apply nido-coordinator/up *command-line-args*)}
 
+  nido:coordinator:down
+  {:doc "Stop the background daemon. SIGTERM by default. :force? true → SIGKILL."
+   :task (apply nido-coordinator/down *command-line-args*)}
+
   nido:halt
   {:doc "Alias for nido:coordinator:halt — the panic button."
    :task (apply nido-coordinator/halt *command-line-args*)}
