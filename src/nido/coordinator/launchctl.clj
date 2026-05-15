@@ -2,7 +2,9 @@
   "macOS LaunchAgent plist for the nido coordinator. Pure rendering plus
    thin shell wrappers around launchctl. No nio2 watchers, no state."
   (:require
-   [babashka.fs :as fs]))
+   [babashka.fs :as fs]
+   [babashka.process :as p]
+   [clojure.string :as str]))
 
 (defn launch-agents-dir
   "~/Library/LaunchAgents. Wrapped so tests can redirect to a tempdir."
@@ -37,6 +39,46 @@
   []
   (when (installed?)
     (fs/delete (plist-path))))
+
+(defn current-uid
+  "Resolve the current numeric user id via `id -u`. Read at call time."
+  []
+  (-> (p/sh ["id" "-u"]) :out str/trim))
+
+(defn target
+  "Service target for launchctl subcommands: gui/<uid>/<label>."
+  []
+  (str "gui/" (current-uid) "/" (label)))
+
+(defn sh!
+  "Thin wrapper over babashka.process/sh that returns {:exit :out :err}.
+   Wrapped so tests can stub launchctl invocations."
+  [args]
+  (p/sh args))
+
+(defn loaded?
+  "True iff `launchctl print <target>` reports the service as loaded
+   (exit 0). Any non-zero exit is treated as 'not loaded'."
+  []
+  (zero? (:exit (sh! ["launchctl" "print" (target)]))))
+
+(defn bootstrap!
+  "Load the plist into the user's launchd domain. RunAtLoad=true in the plist
+   means the daemon also starts now. Returns the sh! result."
+  []
+  (sh! ["launchctl" "bootstrap" (str "gui/" (current-uid)) (plist-path)]))
+
+(defn bootout!
+  "Unload the service (kills the running daemon and stops respawn).
+   Returns the sh! result."
+  []
+  (sh! ["launchctl" "bootout" (target)]))
+
+(defn kickstart!
+  "Send SIGTERM to the running daemon and immediately start a fresh instance.
+   Used by `bb nido:coordinator:restart`. Returns the sh! result."
+  []
+  (sh! ["launchctl" "kickstart" "-k" (target)]))
 
 (defn render-plist
   "Render the LaunchAgent plist XML for the coordinator.

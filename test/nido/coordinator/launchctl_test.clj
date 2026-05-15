@@ -102,3 +102,48 @@
       (lc/write-plist! "stub")
       (lc/remove-plist!)
       (is (false? (lc/installed?))))))
+
+(defn- stub-sh
+  "Return a fake sh! that records its calls and returns the given result."
+  [calls result]
+  (fn [args]
+    (swap! calls conj args)
+    result))
+
+(deftest target-uses-current-uid
+  (is (re-matches #"gui/\d+/dev\.nido\.coordinator" (lc/target))))
+
+(deftest loaded?-true-when-launchctl-print-exits-0
+  (with-redefs [lc/sh! (stub-sh (atom []) {:exit 0 :out "" :err ""})]
+    (is (true? (lc/loaded?)))))
+
+(deftest loaded?-false-when-launchctl-print-exits-nonzero
+  (with-redefs [lc/sh! (stub-sh (atom []) {:exit 113 :out "" :err "Could not find service"})]
+    (is (false? (lc/loaded?)))))
+
+(deftest bootstrap!-shells-launchctl-bootstrap
+  (let [calls (atom [])]
+    (with-redefs [lc/sh! (stub-sh calls {:exit 0 :out "" :err ""})]
+      (lc/bootstrap!)
+      (is (= 1 (count @calls)))
+      (let [[args] @calls]
+        (is (= "launchctl" (first args)))
+        (is (= "bootstrap" (second args)))
+        (is (re-matches #"gui/\d+" (nth args 2)))
+        (is (= (lc/plist-path) (nth args 3)))))))
+
+(deftest bootout!-shells-launchctl-bootout
+  (let [calls (atom [])]
+    (with-redefs [lc/sh! (stub-sh calls {:exit 0 :out "" :err ""})]
+      (lc/bootout!)
+      (let [[args] @calls]
+        (is (= ["launchctl" "bootout"] (take 2 args)))
+        (is (= (lc/target) (nth args 2)))))))
+
+(deftest kickstart!-shells-launchctl-kickstart-with--k
+  (let [calls (atom [])]
+    (with-redefs [lc/sh! (stub-sh calls {:exit 0 :out "" :err ""})]
+      (lc/kickstart!)
+      (let [[args] @calls]
+        (is (= ["launchctl" "kickstart" "-k"] (take 3 args)))
+        (is (= (lc/target) (nth args 3)))))))
