@@ -82,3 +82,64 @@
         ((:poll! handle))                ; p1 returned — emit
         (is (= 1 (count @emitted)))
         (is (= "p1" (-> @emitted first :page-id)))))))
+
+(deftest breaker-opens-after-3-consecutive-failures
+  (with-tmp
+    (fn [_]
+      (let [emitted (atom [])
+            handle  (nsource/start-instance!
+                      {:database "db1" :poll "5m"}
+                      (fn [p] (swap! emitted conj p))
+                      {:token "t"
+                       :query (fn [_ _] {:status 503 :error :server})})]
+        (dotimes [_ 3] ((:poll! handle)))
+        (let [s (sst/read-state (sources/config-hash {:database "db1" :poll "5m"}))]
+          (is (= 3 (:consecutive-failures s)))
+          (is (= :open (:breaker s))))))))
+
+(deftest breaker-opens-immediately-on-401
+  (with-tmp
+    (fn [_]
+      (let [handle (nsource/start-instance!
+                     {:database "db1" :poll "5m"}
+                     (fn [_])
+                     {:token "t"
+                      :query (fn [_ _] {:status 401 :error :auth})})]
+        ((:poll! handle))
+        (let [s (sst/read-state (sources/config-hash {:database "db1" :poll "5m"}))]
+          (is (= :open (:breaker s)))
+          (is (= :auth (-> s :last-poll-result :error))))))))
+
+(deftest open-breaker-suppresses-polling
+  (with-tmp
+    (fn [_]
+      (let [calls   (atom 0)
+            qfn     (fn [_ _] (swap! calls inc) {:status 503 :error :server})
+            handle  (nsource/start-instance!
+                      {:database "db1" :poll "5m"}
+                      (fn [_])
+                      {:token "t" :query qfn})]
+        ;; trip the breaker
+        (dotimes [_ 3] ((:poll! handle)))
+        (let [trip-count @calls]
+          ;; subsequent polls do nothing
+          ((:poll! handle))
+          ((:poll! handle))
+          (is (= trip-count @calls)))))))
+
+(deftest success-after-failures-clears-counter
+  (with-tmp
+    (fn [_]
+      (let [outcome  (atom {:status 503 :error :server})
+            qfn      (fn [_ _] @outcome)
+            handle   (nsource/start-instance!
+                       {:database "db1" :poll "5m"}
+                       (fn [_])
+                       {:token "t" :query qfn})]
+        ((:poll! handle))                ; fail
+        ((:poll! handle))                ; fail
+        (reset! outcome {:status 200 :results [] :has_more false})
+        ((:poll! handle))                ; ok
+        (let [s (sst/read-state (sources/config-hash {:database "db1" :poll "5m"}))]
+          (is (zero? (:consecutive-failures s)))
+          (is (nil? (:breaker s))))))))
