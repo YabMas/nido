@@ -207,6 +207,10 @@
   {:doc "Tail the coordinator log. Default last 50 lines. :follow true to follow."
    :task (apply nido-coordinator/logs *command-line-args*)}
 
+  nido:coordinator:install
+  {:doc "Write the LaunchAgent plist and start the daemon. Auto-starts at login."
+   :task (apply nido-coordinator/install *command-line-args*)}
+
   nido:halt
   {:doc "Alias for nido:coordinator:halt — the panic button."
    :task (apply nido-coordinator/halt *command-line-args*)}

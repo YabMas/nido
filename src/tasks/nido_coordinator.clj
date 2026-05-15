@@ -12,7 +12,9 @@
    [nido.coordinator.heartbeat :as heartbeat]
    [nido.coordinator.pid :as pid]
    [nido.coordinator.state :as cstate]
+   [nido.coordinator.launchctl :as lc]
    [nido.io :as io]
+   [clojure.string :as str]
    [nido.task-args :as task-args]))
 
 (defn run [& args]
@@ -131,6 +133,72 @@
 
               :else
               (do (Thread/sleep 200) (recur)))))))))
+
+(defn- which-bb []
+  (let [{:keys [exit out]} (p/sh ["which" "bb"])]
+    (when (zero? exit) (str/trim out))))
+
+(defn- git-toplevel []
+  (let [{:keys [exit out]} (p/sh ["git" "rev-parse" "--show-toplevel"])]
+    (when (zero? exit) (str/trim out))))
+
+(defn- java-bin-dir
+  "Resolve the directory containing `java` for the plist PATH.
+   Prefers $JAVA_HOME/bin (if set + non-empty); otherwise the parent of `which java`.
+   Returns nil if neither is available."
+  []
+  (let [jh (System/getenv "JAVA_HOME")]
+    (cond
+      (and jh (seq jh))
+      (str jh "/bin")
+
+      :else
+      (let [{:keys [exit out]} (p/sh ["which" "java"])]
+        (when (zero? exit)
+          (str (fs/parent (str/trim out))))))))
+
+(defn install
+  "bb nido:coordinator:install — write the LaunchAgent plist and start
+   the daemon. Auto-starts at every subsequent login."
+  [& _args]
+  (cond
+    (and (pid/alive?) (not (lc/installed?)))
+    (do (println "Coordinator: bare daemon already running (pid" (pid/read) "). Run `bb nido:coordinator:down`, then re-install.")
+        (System/exit 1))
+
+    (nil? (git-toplevel))
+    (do (println "Coordinator: install must be run from inside the nido git checkout.")
+        (System/exit 1))
+
+    (nil? (which-bb))
+    (do (println "Coordinator: `which bb` failed. Install babashka first.")
+        (System/exit 1))
+
+    (nil? (java-bin-dir))
+    (do (println "Coordinator: cannot find java. Set $JAVA_HOME or install java on your PATH.")
+        (System/exit 1))
+
+    :else
+    (let [bb-path  (which-bb)
+          nido-dir (git-toplevel)
+          log-path (cstate/log-path)
+          plist    (lc/render-plist
+                    {:bb-path  bb-path
+                     :nido-dir nido-dir
+                     :log-path log-path
+                     :path-env (str (java-bin-dir) ":/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin")})]
+      ;; If already loaded (e.g., re-install), bootout first so bootstrap
+      ;; picks up the new plist contents.
+      (when (lc/loaded?)
+        (lc/bootout!))
+      (lc/write-plist! plist)
+      (let [{:keys [exit err]} (lc/bootstrap!)]
+        (if (zero? exit)
+          (println "Coordinator: installed. Plist at" (lc/plist-path)
+                   "— daemon will auto-start at login.")
+          (do (println "Coordinator: launchctl bootstrap failed (exit" exit "). stderr:")
+              (println err)
+              (System/exit exit)))))))
 
 (defn logs
   "bb nido:coordinator:logs [:follow true] [:lines <n>]
