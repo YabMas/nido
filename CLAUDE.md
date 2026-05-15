@@ -144,8 +144,8 @@ The coordinator daemon spawns Run-owned sessions that auto-launch claude with a 
 ```
 bb nido:coordinator:up          # background daemon; logs to coordinator.log
 bb nido:coordinator:status      # process alive? + heartbeat + halt/breaker info
-bb nido:coordinator:logs        # last 50 lines (or :follow? true to tail -f)
-bb nido:coordinator:down        # graceful stop (SIGTERM); :force? true → SIGKILL
+bb nido:coordinator:logs        # last 50 lines (or :follow true to tail -f)
+bb nido:coordinator:down        # graceful stop (SIGTERM); :force true → SIGKILL
 ```
 
 `up` refuses if a live daemon already holds the PID file. `down` cleans the PID file even when the daemon was already gone (stale PID).

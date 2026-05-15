@@ -200,11 +200,11 @@
    :task (apply nido-coordinator/up *command-line-args*)}
 
   nido:coordinator:down
-  {:doc "Stop the background daemon. SIGTERM by default. :force? true → SIGKILL."
+  {:doc "Stop the background daemon. SIGTERM by default. :force true → SIGKILL."
    :task (apply nido-coordinator/down *command-line-args*)}
 
   nido:coordinator:logs
-  {:doc "Tail the coordinator log. Default last 50 lines. :follow? true to follow."
+  {:doc "Tail the coordinator log. Default last 50 lines. :follow true to follow."
    :task (apply nido-coordinator/logs *command-line-args*)}
 
   nido:halt

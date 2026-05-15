@@ -87,12 +87,13 @@
           (println "Stop: bb nido:coordinator:down"))))))
 
 (defn down
-  "bb nido:coordinator:down [:force? true] — stop the background daemon.
+  "bb nido:coordinator:down [:force true] — stop the background daemon.
    Default SIGTERM, waits up to 30s for graceful shutdown.
-   With :force? true, sends SIGKILL immediately (orphans any in-flight agent)."
+   With :force true, sends SIGKILL immediately (orphans any in-flight agent).
+   Also accepts :force? (zsh users: quote it as ':force?')."
   [& args]
   (let [[_ opts]  (task-args/split-args args)
-        force?    (= true (:force? opts))
+        force?    (or (= true (:force opts)) (= true (:force? opts)))
         pid       (pid/read)]
     (cond
       (nil? pid)
@@ -119,19 +120,20 @@
                   (println "Coordinator: stopped."))
 
               (> (System/currentTimeMillis) deadline)
-              (do (println "Coordinator: did not exit within 30s. Use :force? true to SIGKILL.")
+              (do (println "Coordinator: did not exit within 30s. Use :force true to SIGKILL.")
                   (System/exit 2))
 
               :else
               (do (Thread/sleep 200) (recur)))))))))
 
 (defn logs
-  "bb nido:coordinator:logs [:follow? true] [:lines <n>]
+  "bb nido:coordinator:logs [:follow true] [:lines <n>]
    Default: print last 50 lines of coordinator.log and exit.
-   :follow? true → tail -f (blocks until Ctrl-C)."
+   :follow true → tail -f (blocks until Ctrl-C).
+   Also accepts :follow? (zsh users: quote it as ':follow?')."
   [& args]
   (let [[_ opts] (task-args/split-args args)
-        follow?  (= true (:follow? opts))
+        follow?  (or (= true (:follow opts)) (= true (:follow? opts)))
         lines    (or (some-> (:lines opts) str parse-long) 50)
         log      (cstate/log-path)]
     (if-not (fs/exists? log)
