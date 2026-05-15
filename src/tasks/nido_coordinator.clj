@@ -28,7 +28,15 @@
   (let [p          (cstate/status-path)
         h          (halt/read-halt-info)
         pid        (pid/read)
-        proc-alive (pid/alive?)]
+        proc-alive (pid/alive?)
+        installed  (lc/installed?)
+        loaded     (when installed (lc/loaded?))]
+    (println "Launchd:     "
+             (cond
+               (and installed loaded)        "installed (loaded)"
+               installed                     "installed (not loaded)"
+               :else                         "not installed"))
+    (println "Managed by:  " (if installed "launchd" "none"))
     (println "Process:     "
              (cond
                (and pid proc-alive) (str "alive (pid " pid ")")
