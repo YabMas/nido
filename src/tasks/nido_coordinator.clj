@@ -9,6 +9,7 @@
    [babashka.process :as p]
    [nido.coordinator.core :as core]
    [nido.coordinator.halt :as halt]
+   [nido.coordinator.heartbeat :as heartbeat]
    [nido.coordinator.pid :as pid]
    [nido.coordinator.state :as cstate]
    [nido.io :as io]
@@ -102,6 +103,7 @@
       (not (pid/alive?))
       (do (println "Coordinator: stale PID file (pid" pid "is not alive). Cleaning up.")
           (pid/delete!)
+          (heartbeat/write! {:status :stopped :slots-in-use 0})
           (System/exit 0))
 
       :else
@@ -117,6 +119,10 @@
             (cond
               (not (.isAlive ^java.lang.ProcessHandle proc-handle))
               (do (pid/delete!)   ; defensive — shutdown hook usually does this
+                  ;; Idempotent for SIGTERM (the daemon's shutdown hook already
+                  ;; wrote :stopped). Load-bearing for SIGKILL, where the hook
+                  ;; never ran and status.edn would otherwise still say :running.
+                  (heartbeat/write! {:status :stopped :slots-in-use 0})
                   (println "Coordinator: stopped."))
 
               (> (System/currentTimeMillis) deadline)
