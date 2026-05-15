@@ -101,14 +101,23 @@
 
 (defn down
   "bb nido:coordinator:down [:force true] — stop the background daemon.
-   Default SIGTERM, waits up to 30s for graceful shutdown.
-   With :force true, sends SIGKILL immediately (orphans any in-flight agent).
+   If the LaunchAgent plist is installed, runs `launchctl bootout` so
+   the daemon stops AND does not respawn until reinstalled or `up`'d.
+   Otherwise sends SIGTERM (or SIGKILL with :force true) to the bare daemon.
    Also accepts :force? (zsh users: quote it as ':force?')."
   [& args]
   (let [[_ opts]  (task-args/split-args args)
         force?    (or (= true (:force opts)) (= true (:force? opts)))
         pid       (pid/read)]
     (cond
+      (lc/installed?)
+      (let [{:keys [exit err]} (lc/bootout!)]
+        (if (zero? exit)
+          (println "Coordinator: stopped via launchctl bootout.")
+          (do (println "Coordinator: launchctl bootout failed (exit" exit "). stderr:")
+              (println err)
+              (System/exit exit))))
+
       (nil? pid)
       (do (println "Coordinator: not running (no PID file).") (System/exit 0))
 
@@ -119,21 +128,18 @@
           (System/exit 0))
 
       :else
+      ;; Stage 3 SIGTERM/SIGKILL path (unchanged).
       (let [proc-handle (.get ^java.util.Optional (java.lang.ProcessHandle/of (long pid)))
             signal-name (if force? "SIGKILL" "SIGTERM")]
         (println "Coordinator: sending" signal-name "to pid" pid)
         (if force?
           (.destroyForcibly ^java.lang.ProcessHandle proc-handle)
           (.destroy ^java.lang.ProcessHandle proc-handle))
-        ;; Wait up to 30s for the process to exit. Poll every 200ms.
         (let [deadline (+ (System/currentTimeMillis) 30000)]
           (loop []
             (cond
               (not (.isAlive ^java.lang.ProcessHandle proc-handle))
-              (do (pid/delete!)   ; defensive — shutdown hook usually does this
-                  ;; Idempotent for SIGTERM (the daemon's shutdown hook already
-                  ;; wrote :stopped). Load-bearing for SIGKILL, where the hook
-                  ;; never ran and status.edn would otherwise still say :running.
+              (do (pid/delete!)
                   (heartbeat/write! {:status :stopped :slots-in-use 0})
                   (println "Coordinator: stopped."))
 
