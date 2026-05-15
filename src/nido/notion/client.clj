@@ -68,3 +68,53 @@
       (>= status 500) {:status status :error :server}
       (= status 0)    {:status 0     :error :network}
       :else           {:status status :error :http})))
+
+(defn- normalise-property-name
+  "\"Ticket ID\" → :ticket-id"
+  [s]
+  (-> (str s)
+      str/lower-case
+      (str/replace #"[^a-z0-9]+" "-")
+      (str/replace #"^-|-$" "")
+      keyword))
+
+(defn- extract-value
+  "Pull a value out of a Notion property based on its :type. Unknown types
+   render as the raw map so we don't crash."
+  [{:keys [type] :as prop}]
+  (case type
+    "title"        (->> (:title prop) (map :plain_text) (apply str))
+    "rich_text"    (->> (:rich_text prop) (map :plain_text) (apply str))
+    "select"       (some-> (:select prop) :name)
+    "multi_select" (->> (:multi_select prop) (mapv :name))
+    "status"       (some-> (:status prop) :name)
+    "url"          (:url prop)
+    "number"       (:number prop)
+    "checkbox"     (:checkbox prop)
+    "date"         (some-> (:date prop) :start)
+    ;; Fallback: hand back the whole property so debugging is possible
+    prop))
+
+(defn- title-of
+  "Return the value of the first property whose :type is \"title\"."
+  [properties]
+  (some (fn [[_ p]] (when (= "title" (:type p)) (extract-value p)))
+        properties))
+
+(defn normalise-page
+  "Turn a Notion API page object into the spec's event-payload shape.
+   See spec §Source: :notion-view / Event-payload schema."
+  [{:keys [id url created_time last_edited_time properties]}]
+  (let [props-kw (into {}
+                       (map (fn [[k v]] [(normalise-property-name k) (extract-value v)]))
+                       properties)]
+    (merge {:source       :notion-view
+            :page-id      id
+            :url          url
+            :title        (title-of properties)
+            :created-time created_time
+            :edited-time  last_edited_time
+            :properties   props-kw}
+           ;; Promote each property to top-level too (filter.clj's lookup
+           ;; checks top-level first, then :properties).
+           props-kw)))

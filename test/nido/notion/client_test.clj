@@ -1,5 +1,6 @@
 (ns nido.notion.client-test
   (:require
+   [cheshire.core]
    [clojure.test :refer [deftest is]]
    [nido.notion.client :as notion]))
 
@@ -67,3 +68,42 @@
   (with-redefs [notion/http-request
                 (stub-http {:status 503 :body "service unavailable"})]
     (is (= :server (:error (notion/database-query "x" "t"))))))
+
+(def ^:private fixture
+  (cheshire.core/parse-string (slurp "test/fixtures/notion/query-response.json") true))
+
+(deftest normalise-page-extracts-required-top-level-fields
+  (let [[page] (:results fixture)
+        ev    (notion/normalise-page page)]
+    (is (= :notion-view (:source ev)))
+    (is (= "page-abc-123" (:page-id ev)))
+    (is (= "https://notion.so/Login-loops-page-abc-123" (:url ev)))
+    (is (= "Login redirect loops on Safari" (:title ev)))
+    (is (= "2026-05-15T13:00:00.000Z" (:created-time ev)))
+    (is (= "2026-05-15T13:30:00.000Z" (:edited-time ev)))))
+
+(deftest normalise-page-promotes-properties-to-top-level
+  (let [[page] (:results fixture)
+        ev    (notion/normalise-page page)]
+    (is (= "Untriaged" (:status ev)))
+    (is (= "P0"        (:priority ev)))
+    (is (= "alice"     (:owner ev)))
+    (is (= "ABC-123"   (:ticket-id ev)))
+    (is (= ["auth" "browser"] (:tags ev)))))
+
+(deftest normalise-page-keeps-properties-map
+  (let [[page] (:results fixture)
+        ev    (notion/normalise-page page)]
+    (is (= "Untriaged" (get-in ev [:properties :status])))
+    (is (= "ABC-123"   (get-in ev [:properties :ticket-id])))))
+
+(deftest normalise-page-handles-empty-title
+  (let [page {:id "p" :url "u" :created_time "t" :last_edited_time "t"
+              :properties {:Name {:type "title" :title []}}}]
+    (is (= "" (:title (notion/normalise-page page))))))
+
+(deftest normalise-page-handles-unknown-property-type
+  (let [page {:id "p" :url "u" :created_time "t" :last_edited_time "t"
+              :properties {:Weird {:type "files" :files [{:name "x"}]}}}]
+    ;; Unknown types render as the raw property map so debugging is possible.
+    (is (some? (get-in (notion/normalise-page page) [:properties :weird])))))
