@@ -3,9 +3,12 @@
    Used by the :notion-view source.
 
    Keychain entries are scoped per-user with service name 'nido-notion'.
-   `sh!` is a redef seam so tests can stub `security` invocations."
+   `sh!` is a redef seam so tests can stub `security` invocations.
+   `http-request` is a redef seam so tests can stub HTTP calls."
   (:require
+   [babashka.http-client :as http]
    [babashka.process :as p]
+   [cheshire.core :as json]
    [clojure.string :as str]))
 
 (defn sh!
@@ -33,3 +36,35 @@
   [token]
   (sh! ["security" "add-generic-password"
         "-s" "nido-notion" "-a" (whoami) "-U" "-w" token]))
+
+(defn http-request
+  "Wrapped HTTP call (POST) so tests can stub. Returns {:status :body}."
+  [_method url opts]
+  (http/post url (assoc opts :throw false)))
+
+(defn database-query
+  "POST https://api.notion.com/v1/databases/<id>/query. Returns
+   {:status :results :has_more} on 2xx, or {:status :error <kw>} on
+   4xx/5xx / network failures. Hard 10s timeout."
+  [database-id token]
+  (let [resp (try
+               (http-request
+                :post
+                (str "https://api.notion.com/v1/databases/" database-id "/query")
+                {:headers {"Authorization"  (str "Bearer " token)
+                           "Notion-Version" "2022-06-28"
+                           "Content-Type"   "application/json"}
+                 :body    "{\"page_size\":100}"
+                 :timeout 10000})
+               (catch Exception e
+                 {:status 0 :exception e}))
+        {:keys [status body]} resp]
+    (cond
+      (= status 200)  (let [parsed (json/parse-string body true)]
+                        {:status   200
+                         :results  (:results parsed)
+                         :has_more (:has_more parsed)})
+      (= status 401)  {:status status :error :auth}
+      (>= status 500) {:status status :error :server}
+      (= status 0)    {:status 0     :error :network}
+      :else           {:status status :error :http})))
