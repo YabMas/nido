@@ -4,7 +4,6 @@
    See spec §The coordinator daemon."
   (:refer-clojure :exclude [run!])
   (:require
-   [babashka.fs :as fs]
    [clojure.set :as set]
    [nido.coordinator.agent :as agent]
    [nido.coordinator.anomaly :as anomaly]
@@ -101,14 +100,20 @@
    Synchronous in Stage 1a — concurrency is added in Stage 2."
   [run-id]
   (runs/transition! run-id :running)
-  (let [run        (runs/read-run run-id)
-        _          (runs/spawn-session-for-run! run)
-        worktree   (str (fs/path (cstate/run-session-home-link run-id) "worktree"))
-        result     (agent/launch! {:run-id        run-id
-                                   :cwd           worktree
-                                   :first-message (:first-message run)
-                                   :system-prompt (:system-prompt defaults)
-                                   :budget        (-> run :limits :budget)})
+  (let [run          (runs/read-run run-id)
+        _            (runs/spawn-session-for-run! run)
+        ;; Launch claude with the SESSION-HOME as cwd (not the worktree).
+        ;; Claude registers its transcript by cwd under ~/.claude/projects/,
+        ;; so this is what makes `claude --resume` work from session-home —
+        ;; the same reflex that already works for manually-launched sessions.
+        ;; CLAUDE.md + the system prompt instruct claude to use absolute paths
+        ;; (or `cd worktree`) when reading/writing source code.
+        session-home (cstate/run-session-home-link run-id)
+        result       (agent/launch! {:run-id        run-id
+                                     :cwd           session-home
+                                     :first-message (:first-message run)
+                                     :system-prompt (:system-prompt defaults)
+                                     :budget        (-> run :limits :budget)})
         next-state (cond
                      (:timed-out? result) :failed
                      (zero? (:exit-code result))
