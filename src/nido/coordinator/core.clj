@@ -163,6 +163,17 @@
                        (name (:project routed)) "/"
                        (name (-> routed :trigger :name)))))
 
+      ;; Dry-run short-circuit (spec §Dry-run mode): record the would-fire
+      ;; as a terminal Run, but never spawn a session. Anomaly detector
+      ;; still sees the spawn so a chatty mis-configured trigger trips it.
+      ;; Breakers stay untouched — neither success nor failure of the skill.
+      (-> routed :trigger :dry-run?)
+      (let [run (runs/create-run! routed
+                                  {:fired-at (clock/now-iso)
+                                   :fired-by (System/getenv "USER")})]
+        (swap! !detector anomaly/record-spawn (clock/now-iso))
+        (runs/transition! (:id run) :dry-run-would-fire))
+
       :else
       (let [run (runs/create-run! routed
                                   {:fired-at (clock/now-iso)

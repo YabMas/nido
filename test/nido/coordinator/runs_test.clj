@@ -52,12 +52,15 @@
 
 (deftest valid-transitions
   (is (runs/valid-transition? :queued :running))
+  (is (runs/valid-transition? :queued :dry-run-would-fire))
   (is (runs/valid-transition? :running :awaiting-review))
   (is (runs/valid-transition? :running :done))
   (is (runs/valid-transition? :running :failed))
   (is (runs/valid-transition? :awaiting-review :running))
   (is (runs/valid-transition? :awaiting-review :done))
   (is (not (runs/valid-transition? :queued :awaiting-review)))
+  (is (not (runs/valid-transition? :running :dry-run-would-fire)))
+  (is (not (runs/valid-transition? :dry-run-would-fire :running)))
   (is (not (runs/valid-transition? :done :running)))
   (is (not (runs/valid-transition? :failed :running))))
 

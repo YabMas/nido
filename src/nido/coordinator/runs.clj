@@ -64,7 +64,7 @@
 (def allowed-transitions
   "Map of from-state → set of to-states.
    See spec §Runs / Lifecycle. Terminal states have no entries."
-  {:queued          #{:running :failed :halted}
+  {:queued          #{:running :failed :halted :dry-run-would-fire}
    :running         #{:awaiting-review :done :failed :halted}
    :awaiting-review #{:running :done :failed :halted}})
 
