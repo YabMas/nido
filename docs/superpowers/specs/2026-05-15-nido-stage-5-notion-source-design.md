@@ -1,6 +1,6 @@
 # nido Stage 5 — event-source plugin infrastructure + `:notion-view`
 
-**Status:** designed, not implemented
+**Status:** implemented
 **Date:** 2026-05-15
 **Parent spec:** [`2026-05-13-nido-coordination-layer-design.md`](./2026-05-13-nido-coordination-layer-design.md)
 
@@ -41,7 +41,7 @@ These came out of brainstorming on 2026-05-15:
 1. **One spec for both infrastructure and first source.** Notion can't ship without the plugin model, and the model isn't worth designing in the abstract — the first source pins down the contract.
 2. **Polling lives in the main `tick!`**, not on side threads. Each tick visits every distinct source-config, polls those whose `:poll` interval has elapsed since their last poll. Single-threaded daemon stays single-threaded; halt / anomaly / breaker semantics keep working. Hard 10s timeout per HTTP call so one slow Notion endpoint can't stall the loop.
 3. **Set-diff dedup with seeded cold start.** Each `[database, view]` keeps `last-rows: #{page-id …}` on disk. Each poll computes `(set/difference current-rows last-rows)` and emits one event per addition. The very first poll for a fresh source-config writes the snapshot and emits *nothing* — only entries that enter the view after install fire.
-4. **Auth in macOS Keychain.** Token stored once via `security add-generic-password -s nido-notion -a <user> -w <token>`. Coordinator reads at source-start time via `security find-generic-password -s nido-notion -a <user> -w`. Token held in source closure; never written to disk, never logged, never injected via env.
+4. **Auth in macOS Keychain.** A Notion **Personal Access Token (PAT)** is the recommended credential — created at https://www.notion.so/profile/integrations → Personal Access Tokens, and inherits the creator's read access without needing per-database Connection approval. Stored once via `security add-generic-password -s nido-notion -a <user> -w <token>`; coordinator reads at source-start time via `security find-generic-password -s nido-notion -a <user> -w`. Token held in source closure; never written to disk, never logged, never injected via env. The code accepts any token presented as `Authorization: Bearer <token>`, so an internal-integration secret also works if you prefer that path — but the PAT route is strictly simpler.
 5. **Events emitted as broadcast envelopes through the queue dir.** Crash-safe ordering: write envelope file first (filename = content hash → idempotent on retry), then update the snapshot. This also finally implements the parent spec's `:broadcast` routing.
 
 ## Plugin contract
