@@ -160,6 +160,18 @@ bb nido:coordinator:restart     # launchctl kickstart -k (requires install)
 
 Once installed, `bb nido:coordinator:up` / `down` wrap `launchctl bootstrap` / `bootout` automatically; status surfaces a `Launchd:` line so you can see which lifecycle is in charge. `install` refuses if a bare daemon is already running — `down` it first.
 
+**Autonomous sources (Stage 5):**
+
+```
+bb nido:notion:auth:set                # store Notion integration token in macOS Keychain
+bb nido:notion:auth:check              # confirm token presence
+bb nido:coordinator:source:list        # one row per source-instance on disk
+bb nido:coordinator:source:reset :type notion-view :database <id> :view <name> :poll <dur>
+                                       # clear an open breaker
+```
+
+A trigger with `:source {:type :notion-view :database "..." :view "..." :poll "5m"}` polls the database every 5 minutes and emits one event per row that newly enters the view. The first poll seeds the snapshot and emits nothing. Status shows per-source health under a `Sources:` section; breakers open after 3 consecutive failures (or immediately on 401).
+
 **Foreground (still supported for development):**
 
 ```
@@ -181,7 +193,7 @@ Or in the TUI press `r` for the runs surface.
 
 Full design: `docs/superpowers/specs/2026-05-13-nido-coordination-layer-design.md`. Skill conventions: `docs/skill-conventions-for-triggers.md`.
 
-Stage 4 added launchd auto-start at login; stages 5+ add Notion / cron / GitHub event sources.
+Stage 4 added launchd auto-start at login; Stage 5 added the Notion source; cron / GitHub remain future work.
 
 ## Delegation
 
