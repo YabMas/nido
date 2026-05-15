@@ -215,6 +215,31 @@
       (lc/remove-plist!)
       (println "Coordinator: uninstalled. Run `bb nido:coordinator:up` to start manually."))))
 
+(defn restart
+  "bb nido:coordinator:restart — restart the daemon via launchctl.
+   Errors when the plist is not installed (use down + up instead)."
+  [& _args]
+  (cond
+    (not (lc/installed?))
+    (do (println "Coordinator: not installed. Use `bb nido:coordinator:down` then `bb nido:coordinator:up`.")
+        (System/exit 1))
+
+    (not (lc/loaded?))
+    (let [{:keys [exit err]} (lc/bootstrap!)]
+      (if (zero? exit)
+        (println "Coordinator: was not loaded; bootstrapped via launchctl.")
+        (do (println "Coordinator: launchctl bootstrap failed (exit" exit "). stderr:")
+            (println err)
+            (System/exit exit))))
+
+    :else
+    (let [{:keys [exit err]} (lc/kickstart!)]
+      (if (zero? exit)
+        (println "Coordinator: restarted via launchctl kickstart -k.")
+        (do (println "Coordinator: launchctl kickstart failed (exit" exit "). stderr:")
+            (println err)
+            (System/exit exit))))))
+
 (defn logs
   "bb nido:coordinator:logs [:follow true] [:lines <n>]
    Default: print last 50 lines of coordinator.log and exit.

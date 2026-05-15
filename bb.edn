@@ -215,6 +215,10 @@
   {:doc "Bootout and remove the LaunchAgent plist. Idempotent."
    :task (apply nido-coordinator/uninstall *command-line-args*)}
 
+  nido:coordinator:restart
+  {:doc "Restart the daemon via launchctl kickstart -k (requires install)."
+   :task (apply nido-coordinator/restart *command-line-args*)}
+
   nido:halt
   {:doc "Alias for nido:coordinator:halt — the panic button."
    :task (apply nido-coordinator/halt *command-line-args*)}
