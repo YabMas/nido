@@ -24,6 +24,20 @@
   []
   (fs/exists? (plist-path)))
 
+(defn write-plist!
+  "Write the plist contents to ~/Library/LaunchAgents/dev.nido.coordinator.plist.
+   Creates the parent directory if missing. Overwrites any existing file."
+  [contents]
+  (let [p (plist-path)]
+    (fs/create-dirs (fs/parent p))
+    (spit p contents)))
+
+(defn remove-plist!
+  "Delete the plist file if it exists. No-op when absent."
+  []
+  (when (installed?)
+    (fs/delete (plist-path))))
+
 (defn render-plist
   "Render the LaunchAgent plist XML for the coordinator.
 

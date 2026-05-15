@@ -68,3 +68,37 @@
                            :nido-dir "/Users/yabmas/Code/nido"
                            :log-path "/Users/yabmas/.nido/coordinator/coordinator.log"
                            :path-env "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin"}))))
+
+(deftest write-plist!-creates-the-file
+  (with-tmp-home
+    (fn [_]
+      (lc/write-plist! "stub-contents")
+      (is (lc/installed?))
+      (is (= "stub-contents" (slurp (lc/plist-path)))))))
+
+(deftest write-plist!-creates-parent-dir-if-missing
+  (with-tmp-home
+    (fn [tmp]
+      (fs/delete-tree tmp)
+      (lc/write-plist! "stub")
+      (is (fs/exists? (lc/plist-path))))))
+
+(deftest write-plist!-overwrites-existing
+  (with-tmp-home
+    (fn [_]
+      (lc/write-plist! "first")
+      (lc/write-plist! "second")
+      (is (= "second" (slurp (lc/plist-path)))))))
+
+(deftest remove-plist!-noop-when-absent
+  (with-tmp-home
+    (fn [_]
+      (lc/remove-plist!) ; must not throw
+      (is (false? (lc/installed?))))))
+
+(deftest remove-plist!-deletes-existing
+  (with-tmp-home
+    (fn [_]
+      (lc/write-plist! "stub")
+      (lc/remove-plist!)
+      (is (false? (lc/installed?))))))
