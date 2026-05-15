@@ -48,7 +48,7 @@
                               {:id "p2" :url "u2" :created_time "t" :last_edited_time "t" :properties {}}])
         ((:poll! handle))
         (is (= 1 (count @emitted)))
-        (is (= "p2" (-> @emitted first :page-id)))))))
+        (is (= "p2" (-> @emitted first :payload :page-id)))))))
 
 (deftest emits-once-not-twice-on-repeated-poll
   (with-tmp
@@ -81,7 +81,7 @@
         (reset! qr [{:id "p1" :url "u" :created_time "t" :last_edited_time "t" :properties {}}])
         ((:poll! handle))                ; p1 returned — emit
         (is (= 1 (count @emitted)))
-        (is (= "p1" (-> @emitted first :page-id)))))))
+        (is (= "p1" (-> @emitted first :payload :page-id)))))))
 
 (deftest breaker-opens-after-3-consecutive-failures
   (with-tmp

@@ -72,14 +72,18 @@
   [source-config emit-fn {:keys [token query] :as _opts}]
   (let [hash    (sources/config-hash source-config)
         token   (or token (notion/keychain-token))
-        query   (or query notion/database-query)]
+        query   (or query notion/database-query)
+        emit    (fn [payload]
+                  (emit-fn {:type          :notion-view
+                            :source-config source-config
+                            :payload       payload}))]
     {:poll! (fn []
               (let [prior (sst/read-state hash)]
                 (when-not (= :open (:breaker prior))
                   (let [next (poll-once! {:source-config source-config
                                           :token         token
                                           :query         query
-                                          :emit          emit-fn}
+                                          :emit          emit}
                                          prior)]
                     (sst/write-state! hash next)))))
      :stop! (fn []
