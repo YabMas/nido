@@ -163,15 +163,31 @@
    (pg-ctl-start! bin-dir data-dir pg-port log-path data-dir))
   ([bin-dir data-dir pg-port log-path socket-dir]
    (core/log-step (str "Starting PostgreSQL on port " pg-port " (data-dir=" data-dir ")"))
-   (let [result (shell {:continue true :out :string :err :string :shutdown nil}
+   ;; LC_ALL / LANG must be set BEFORE pg_ctl forks the postmaster — on macOS
+   ;; PG's startup invokes locale-sensitive code that becomes multithreaded
+   ;; when the locale is empty, which fails the single-threaded-fork invariant
+   ;; ("postmaster became multithreaded during startup"). Coordinator-driven
+   ;; spawns from launchd have a minimal env (Stage 4 plist) and trigger this;
+   ;; setting locale explicitly here protects every caller regardless of
+   ;; ambient env. en_US.UTF-8 is a safe, ubiquitous macOS default.
+   (let [result (shell {:continue true :out :string :err :string :shutdown nil
+                        :extra-env {"LC_ALL" "en_US.UTF-8"
+                                    "LANG"   "en_US.UTF-8"}}
                        (pg-cmd bin-dir "pg_ctl")
                        "start" "-D" data-dir
                        "-l" log-path
                        "-o" (str "-p " pg-port " -k " socket-dir " -h 127.0.0.1")
                        "-w")]
      (when-not (zero? (:exit result))
-       (throw (ex-info "pg_ctl start failed"
-                       {:error (:err result) :output (:out result)}))))))
+       ;; pg_ctl writes "could not start server" to stderr but the actual
+       ;; FATAL line is in log-path — slurp it so callers see the real reason.
+       (let [pg-log (when (fs/exists? log-path)
+                      (try (slurp log-path) (catch Exception _ nil)))]
+         (throw (ex-info "pg_ctl start failed"
+                         {:error    (:err result)
+                          :output   (:out result)
+                          :log-path log-path
+                          :pg-log   pg-log})))))))
 
 (defn wait-for-tcp!
   "Block until the given port accepts TCP connections, or throw on timeout."
