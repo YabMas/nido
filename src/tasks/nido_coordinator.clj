@@ -58,33 +58,43 @@
   (println "Coordinator: resumed (halted.edn removed)."))
 
 (defn up
-  "bb nido:coordinator:up [:poll-ms <int>] — spawn the daemon in background.
-   Refuses if coordinator.pid points at a live process.
-
-   Output goes to ~/.nido/coordinator/coordinator.log (append).
-   The daemon writes its own PID; this task exits as soon as the spawn is set up."
+  "bb nido:coordinator:up [:poll-ms <int>] — start the daemon.
+   If the LaunchAgent plist is installed (bb nido:coordinator:install),
+   delegates to launchctl. Otherwise spawns a bare background daemon
+   that writes a PID file at ~/.nido/coordinator/coordinator.pid."
   [& args]
   (let [[_ opts] (task-args/split-args args)]
-    (if (pid/alive?)
+    (cond
+      (and (lc/installed?) (lc/loaded?) (pid/alive?))
+      (println "Coordinator: already managed by launchd (pid" (pid/read) ").")
+
+      (lc/installed?)
+      (let [{:keys [exit err]} (lc/bootstrap!)]
+        (if (zero? exit)
+          (do (Thread/sleep 500) ; give the daemon a moment to write its PID
+              (println "Coordinator: started via launchd (pid" (or (pid/read) "pending") ")."))
+          (do (println "Coordinator: launchctl bootstrap failed (exit" exit "). stderr:")
+              (println err)
+              (System/exit exit))))
+
+      (pid/alive?)
       (do (println "Coordinator: already running (pid" (pid/read) "). Use `bb nido:coordinator:down` to stop.")
           (System/exit 1))
+
+      :else
+      ;; Stage 3 bare-spawn path (unchanged).
       (do
         (cstate/ensure-dirs!)
         (let [log-file  (java.io.File. ^String (cstate/log-path))
               cmd       (cond-> ["bb" "nido:coordinator:run"]
                           (:poll-ms opts) (into [":poll-ms" (str (:poll-ms opts))]))
-              ;; Use :append + :out-file so the child's stdout/stderr are
-              ;; redirected at the OS level (ProcessBuilder.Redirect.appendTo).
-              ;; A plain OutputStream would be pumped by a thread inside this
-              ;; bb — which dies the moment we exit, taking the log with it.
-              proc      (p/process cmd {:in        ""         ; close stdin
+              proc      (p/process cmd {:in        ""
                                         :out       :append
                                         :out-file  log-file
                                         :err       :append
                                         :err-file  log-file
-                                        :shutdown  nil})      ; survive bb exit
+                                        :shutdown  nil})
               child-pid (.pid (:proc proc))]
-          ;; Don't wait for the child — leave it detached.
           (println "Coordinator: starting in background (pid" child-pid ")")
           (println "Logs: " (cstate/log-path))
           (println "Stop: bb nido:coordinator:down"))))))
