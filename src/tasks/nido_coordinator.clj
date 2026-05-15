@@ -224,7 +224,9 @@
                     {:bb-path  bb-path
                      :nido-dir nido-dir
                      :log-path log-path
-                     :path-env (str (java-bin-dir) ":/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin")})]
+                     :path-env (str (java-bin-dir)
+                                    ":" (System/getProperty "user.home") "/.local/bin"
+                                    ":/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin")})]
       ;; If already loaded (e.g., re-install), bootout first so bootstrap
       ;; picks up the new plist contents.
       (when (lc/loaded?)
