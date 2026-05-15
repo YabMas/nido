@@ -150,6 +150,16 @@ bb nido:coordinator:down        # graceful stop (SIGTERM); :force true → SIGKI
 
 `up` refuses if a live daemon already holds the PID file. `down` cleans the PID file even when the daemon was already gone (stale PID).
 
+**Auto-start at login (Stage 4):**
+
+```
+bb nido:coordinator:install     # write LaunchAgent plist + bootstrap; daemon runs now + at every login
+bb nido:coordinator:uninstall   # bootout + remove plist
+bb nido:coordinator:restart     # launchctl kickstart -k (requires install)
+```
+
+Once installed, `bb nido:coordinator:up` / `down` wrap `launchctl bootstrap` / `bootout` automatically; status surfaces a `Launchd:` line so you can see which lifecycle is in charge. `install` refuses if a bare daemon is already running — `down` it first.
+
 **Foreground (still supported for development):**
 
 ```
@@ -171,7 +181,7 @@ Or in the TUI press `r` for the runs surface.
 
 Full design: `docs/superpowers/specs/2026-05-13-nido-coordination-layer-design.md`. Skill conventions: `docs/skill-conventions-for-triggers.md`.
 
-Stage 4 will add launchd auto-start at login; stages 5+ add Notion / cron / GitHub event sources.
+Stage 4 added launchd auto-start at login; stages 5+ add Notion / cron / GitHub event sources.
 
 ## Delegation
 
