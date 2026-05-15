@@ -1,0 +1,23 @@
+(ns nido.coordinator.filter
+  "Trigger filter evaluation: map-equality + set-membership against
+   event payloads. See spec §Source: :notion-view / Event-payload schema.")
+
+(defn- lookup
+  "Top-level first, then :properties. Missing-everywhere returns ::missing."
+  [event k]
+  (cond
+    (contains? event k)               (get event k)
+    (contains? (:properties event) k) (get-in event [:properties k])
+    :else                             ::missing))
+
+(defn- key-matches? [event [k v]]
+  (let [ev (lookup event k)]
+    (cond
+      (= ::missing ev)          false
+      (or (set? v) (vector? v)) (contains? (set v) ev)
+      :else                     (= v ev))))
+
+(defn accept?
+  "True iff every key in filter-map matches the event payload."
+  [filter-map event]
+  (every? (partial key-matches? event) filter-map))
