@@ -13,14 +13,17 @@
    [babashka.fs :as fs]))
 
 (def ^:private shim-script
+  ;; `bb -e EXPR` prints the result with pr-str semantics, so a string
+  ;; value gets surrounded by literal " characters. Use (print …) so the
+  ;; bare session-id ends up in SESSION_ID; bb suppresses the nil return.
   "#!/usr/bin/env bash
 set -euo pipefail
 RUN_EDN=\"$(dirname \"$0\")/../run-link/run.edn\"
 SESSION_ID=\"\"
 if [ -f \"$RUN_EDN\" ]; then
-  SESSION_ID=$(bb -e \"(-> (slurp \\\"$RUN_EDN\\\") clojure.edn/read-string :claude-session-id)\" 2>/dev/null || true)
+  SESSION_ID=$(bb -e \"(print (or (-> (slurp \\\"$RUN_EDN\\\") clojure.edn/read-string :claude-session-id) \\\"\\\"))\" 2>/dev/null || true)
 fi
-if [ -n \"$SESSION_ID\" ] && [ \"$SESSION_ID\" != \"nil\" ]; then
+if [ -n \"$SESSION_ID\" ]; then
   exec command claude --resume \"$SESSION_ID\" \"$@\"
 fi
 exec command claude \"$@\"
