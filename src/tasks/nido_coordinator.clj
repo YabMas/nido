@@ -13,6 +13,7 @@
    [nido.coordinator.pid :as pid]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.launchctl :as lc]
+   [nido.coordinator.sources.state :as sst]
    [nido.io :as io]
    [clojure.string :as str]
    [nido.task-args :as task-args]))
@@ -50,7 +51,20 @@
       (println "Coordinator: no status.edn (never started or already cleaned up)"))
     (when h
       (println "Halted:     " (name (:source h)) "—" (or (:note h) "(no note)"))
-      (println "Halted at:  " (:halted-at h)))))
+      (println "Halted at:  " (:halted-at h)))
+    (let [hashes (sst/list-state-hashes)]
+      (when (seq hashes)
+        (println "Sources:")
+        (doseq [h hashes
+                :let [s (sst/read-state h)]]
+          (println (format "  %s %s  (%s, %s)"
+                           (name (or (:type s) :unknown))
+                           h
+                           (case (:breaker s)
+                             :open  (str "breaker OPEN: "
+                                         (name (or (-> s :last-poll-result :error) :unknown)))
+                             "OK")
+                           (or (:last-polled-at s) "never polled"))))))))
 
 (defn halt
   "bb nido:halt [:note \"...\"] — pauses coordinator; existing Runs get SIGTERM."
