@@ -97,7 +97,7 @@
     (catch Exception _ nil)))
 
 (defn- process-envelope! [envelope triggers-by-project]
-  (let [routed (events/route envelope triggers-by-project)]
+  (doseq [routed (events/route envelope triggers-by-project)]
     (cond
       (:error routed)
       (binding [*err* *err*]
@@ -118,14 +118,10 @@
         (swap! !detector anomaly/record-spawn (clock/now-iso))
         (try
           (run-now! (:id run))
-          ;; If the Run finished :failed, record the failure for anomaly tracking.
           (let [final (runs/read-run (:id run))]
             (when (= :failed (:state final))
               (swap! !detector anomaly/record-failure (clock/now-iso))))
           (catch Exception e
-            ;; Don't let one bad Run kill the daemon: mark it :failed and
-            ;; continue. Stage 2 will add structured budget/retry, but for
-            ;; Stage 1a we just need the loop to survive.
             (swap! !detector anomaly/record-failure (clock/now-iso))
             (binding [*err* *err*]
               (.println ^java.io.PrintWriter *err*

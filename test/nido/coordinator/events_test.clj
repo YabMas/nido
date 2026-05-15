@@ -3,38 +3,53 @@
    [clojure.test :refer [deftest is]]
    [nido.coordinator.events :as events]))
 
-(def triggers-fixture
-  [{:name    :investigate-bug
-    :source  {:type :manual}
-    :skill   :investigate-bug
-    :payload "{{event/url}}"}
-   {:name    :other
-    :source  {:type :manual}
-    :skill   :other
-    :payload "x"}])
+(deftest route-direct-returns-singleton-vector
+  (let [tbp {:brian [{:name :inv :source {:type :manual} :skill :investigate-bug
+                      :payload "{{event/url}}"}]}]
+    (is (= [{:project :brian
+             :trigger (first (:brian tbp))
+             :payload {:url "u"}}]
+           (events/route
+             {:target  {:project :brian :trigger :inv}
+              :payload {:url "u"}}
+             tbp)))))
 
-(deftest direct-target-resolves-trigger
-  (let [envelope {:target  {:project :brian :trigger :investigate-bug}
-                  :payload {:url "https://x"}}
-        request  (events/route envelope {:brian triggers-fixture})]
-    (is (= :investigate-bug (-> request :trigger :name)))
-    (is (= :brian (:project request)))
-    (is (= {:url "https://x"} (:payload request)))))
+(deftest route-direct-unknown-trigger-returns-error-vector
+  (is (= [{:error :unknown-trigger :project :brian :trigger :nope}]
+         (events/route
+           {:target {:project :brian :trigger :nope} :payload {}}
+           {:brian []}))))
 
-(deftest direct-target-unknown-trigger-returns-error
-  (let [envelope {:target {:project :brian :trigger :missing} :payload {}}
-        result   (events/route envelope {:brian triggers-fixture})]
-    (is (= :unknown-trigger (:error result)))))
+(deftest route-direct-unknown-project-returns-error-vector
+  (is (= [{:error :unknown-project :project :nope}]
+         (events/route
+           {:target {:project :nope :trigger :inv} :payload {}}
+           {}))))
 
-(deftest direct-target-unknown-project-returns-error
-  (let [envelope {:target {:project :nope :trigger :x} :payload {}}
-        result   (events/route envelope {:brian triggers-fixture})]
-    (is (= :unknown-project (:error result)))))
+(deftest route-broadcast-fans-out-to-matching-triggers
+  (let [t1 {:name :a :source {:type :notion-view :database "x"} :skill :s
+            :payload "" :filter {:status "Open"}}
+        t2 {:name :b :source {:type :notion-view :database "x"} :skill :s
+            :payload "" :filter {:status "Open"}}
+        t3 {:name :c :source {:type :notion-view :database "x"} :skill :s
+            :payload "" :filter {:status "Done"}}     ; filter rejects
+        t4 {:name :d :source {:type :notion-view :database "y"} :skill :s
+            :payload "" :filter {:status "Open"}}     ; different db
+        tbp {:p [t1 t2 t3 t4]}
+        env {:broadcast {:type :notion-view
+                         :source-config {:database "x"}
+                         :payload {:status "Open"}}}]
+    (is (= [{:project :p :trigger t1 :payload {:status "Open"}}
+            {:project :p :trigger t2 :payload {:status "Open"}}]
+           (events/route env tbp)))))
 
-(deftest broadcast-envelope-stubbed
-  (is (= :broadcast-not-implemented
-         (:error (events/route {:broadcast {:event :x}} {})))))
+(deftest route-broadcast-empty-when-no-matches
+  (is (= []
+         (events/route
+           {:broadcast {:type :cron :source-config {} :payload {}}}
+           {:p [{:name :a :source {:type :notion-view :database "x"}
+                 :skill :s :payload ""}]}))))
 
-(deftest unknown-envelope-shape
-  (is (= :unknown-envelope
-         (:error (events/route {:noise true} {})))))
+(deftest route-unknown-envelope-returns-error-vector
+  (is (= [{:error :unknown-envelope}]
+         (events/route {:nonsense true} {}))))
