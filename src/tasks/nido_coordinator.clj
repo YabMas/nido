@@ -200,6 +200,21 @@
               (println err)
               (System/exit exit)))))))
 
+(defn uninstall
+  "bb nido:coordinator:uninstall — bootout and remove the plist. Idempotent."
+  [& _args]
+  (cond
+    (not (lc/installed?))
+    (do (println "Coordinator: not installed. Nothing to do.")
+        (System/exit 0))
+
+    :else
+    (do
+      (when (lc/loaded?)
+        (lc/bootout!))
+      (lc/remove-plist!)
+      (println "Coordinator: uninstalled. Run `bb nido:coordinator:up` to start manually."))))
+
 (defn logs
   "bb nido:coordinator:logs [:follow true] [:lines <n>]
    Default: print last 50 lines of coordinator.log and exit.

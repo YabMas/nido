@@ -211,6 +211,10 @@
   {:doc "Write the LaunchAgent plist and start the daemon. Auto-starts at login."
    :task (apply nido-coordinator/install *command-line-args*)}
 
+  nido:coordinator:uninstall
+  {:doc "Bootout and remove the LaunchAgent plist. Idempotent."
+   :task (apply nido-coordinator/uninstall *command-line-args*)}
+
   nido:halt
   {:doc "Alias for nido:coordinator:halt — the panic button."
    :task (apply nido-coordinator/halt *command-line-args*)}
