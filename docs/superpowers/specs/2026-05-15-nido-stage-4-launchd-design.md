@@ -1,6 +1,6 @@
 # nido Stage 4 — launchd auto-start
 
-**Status:** designed, not implemented
+**Status:** implemented
 **Date:** 2026-05-15
 **Parent spec:** [`2026-05-13-nido-coordination-layer-design.md`](./2026-05-13-nido-coordination-layer-design.md)
 
