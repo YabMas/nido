@@ -163,7 +163,7 @@ Once installed, `bb nido:coordinator:up` / `down` wrap `launchctl bootstrap` / `
 **Autonomous sources (Stage 5):**
 
 ```
-bb nido:notion:auth:set                # store Notion integration token in macOS Keychain
+bb nido:notion:auth:set                # store Notion Personal Access Token (PAT) in macOS Keychain
 bb nido:notion:auth:check              # confirm token presence
 bb nido:coordinator:source:list        # one row per source-instance on disk
 bb nido:coordinator:source:reset :type notion-view :database <id> :view <name> :poll <dur>

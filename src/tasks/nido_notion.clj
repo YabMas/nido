@@ -1,5 +1,7 @@
 (ns tasks.nido-notion
-  "Bb task entry points for Notion integration auth (Stage 5)."
+  "Bb task entry points for Notion auth (Stage 5). Recommended token type is
+   a Notion Personal Access Token (PAT) — created in the Developer Portal,
+   inherits the creator's read access without per-database Connection approval."
   (:require
    [clojure.string :as str]
    [nido.notion.client :as notion]))
@@ -9,7 +11,7 @@
    Stdin is echoed (Babashka can't trivially disable terminal echo); the user
    should clear their terminal scrollback after running this."
   [& _args]
-  (println "Paste your Notion integration token (input is echoed; clear terminal afterwards):")
+  (println "Paste your Notion Personal Access Token (input is echoed; clear terminal afterwards):")
   (let [token (read-line)]
     (cond
       (or (nil? token) (str/blank? token))
