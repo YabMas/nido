@@ -21,7 +21,8 @@
              [tasks.nido-coordinator :as nido-coordinator]
              [tasks.nido-trigger :as nido-trigger]
              [tasks.nido-runs :as nido-runs]
-             [tasks.nido-notion :as nido-notion])
+             [tasks.nido-notion :as nido-notion]
+             [tasks.nido-coordinator-source :as nido-coordinator-source])
 
   :init (do
           ;; Disable babashka.process/shell's default destroy-tree JVM
@@ -227,6 +228,14 @@
   nido:notion:auth:check
   {:doc "Print whether a Notion token is present in the macOS Keychain."
    :task (apply nido-notion/auth-check *command-line-args*)}
+
+  nido:coordinator:source:list
+  {:doc "List source-instance state files."
+   :task (apply nido-coordinator-source/list-cmd *command-line-args*)}
+
+  nido:coordinator:source:reset
+  {:doc "Clear breaker + failure counter for a source-instance."
+   :task (apply nido-coordinator-source/reset-cmd *command-line-args*)}
 
   nido:halt
   {:doc "Alias for nido:coordinator:halt — the panic button."
