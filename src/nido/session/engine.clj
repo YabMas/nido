@@ -254,9 +254,21 @@
               acc))
           {} services))
 
+(defn filter-services
+  "Filter a session.edn :services list by an allowlist. Allowlist is
+   either :all (return everything) or a vector of allowed :type values."
+  [services allowlist]
+  (cond
+    (= :all allowlist) (vec services)
+    (vector? allowlist) (filterv #(contains? (set allowlist) (:type %)) services)
+    :else (throw (ex-info "Invalid services allowlist" {:allowlist allowlist}))))
+
 (defn- start-services! [project-dir project-name instance-id session-edn opts]
   (core/log-step (str "Starting session " instance-id " (" project-dir ")"))
-  (let [pre-allocated (pre-allocate-ports (:services session-edn) project-dir)
+  (let [profile  (:profile opts)
+        allow    (or (:services profile) :all)
+        services (filter-services (:services session-edn) allow)
+        pre-allocated (pre-allocate-ports services project-dir)
         jvm-cfg (resolve-jvm-config (:defaults session-edn) opts)
         session-name (:session-name opts)
         init-ctx (merge pre-allocated
@@ -273,7 +285,6 @@
         ;; back (stop in reverse) if any later service throws. Without
         ;; this, a mid-init failure would leave PG/JVM/etc. orphaned
         ;; because session state isn't persisted until after the reduce.
-        services (:services session-edn)
         started (atom [])
         result (try
                  (reduce
@@ -354,9 +365,14 @@
 
 (defn start-session!
   "Start a session for a project directory using its session.edn definition.
-   opts: {:jvm-heap-max string, :jvm-aliases [kw], :jvm-extra-opts [str], ...}"
-  [project-dir opts]
-  (let [project-name (resolve-project-name project-dir)
+   opts: {:jvm-heap-max string, :jvm-aliases [kw], :jvm-extra-opts [str],
+          :profile <resolved-profile-map>, ...}
+   :profile defaults to {:services :all :worktree {:strategy :git-worktree}}
+   so callers that don't pass it preserve prior behavior unchanged."
+  [project-dir {:keys [profile] :as opts}]
+  (let [opts        (assoc opts :profile (or profile {:services :all
+                                                      :worktree {:strategy :git-worktree}}))
+        project-name (resolve-project-name project-dir)
         instance-id  (resolve-instance-id project-dir)
         session-edn  (load-session-edn project-name)]
     ;; Check for existing running session
