@@ -1,0 +1,39 @@
+(ns nido.notion.views
+  "Per-project Notion view registry. The Notion REST API does not expose
+   view filter definitions; this registry encodes them so triggers can
+   refer to a view by keyword and the source applies the right filter.
+
+   Registry path: ~/.nido/projects/<project>/notion-views.edn
+
+   Shape:
+     {:database \"<notion-db-id>\"
+      :views {:<view-kw> {:filter <notion-filter-map>}
+              ...}}
+
+   Filters are the literal body Notion expects under the \"filter\" key in
+   a data-source query. No translation layer."
+  (:require
+   [babashka.fs :as fs]
+   [nido.coordinator.state :as cstate]
+   [nido.io :as io]))
+
+(defn- registry-path [project]
+  (str (fs/path (cstate/nido-root) "projects" (name project) "notion-views.edn")))
+
+(defn load-registry [project]
+  (let [path (registry-path project)]
+    (when-not (fs/exists? path)
+      (throw (ex-info (str "Notion views registry missing for project " project
+                           ". Create " path " or remove the Notion source from triggers.")
+                      {:project project :path path})))
+    (io/read-edn path)))
+
+(defn resolve-view
+  "Returns {:database <id> :filter <map>} for the given (project, view-kw).
+   Throws on missing registry or unknown view."
+  [project view-kw]
+  (let [{:keys [database views]} (load-registry project)]
+    (or (when-let [v (get views view-kw)]
+          {:database database :filter (:filter v)})
+        (throw (ex-info (str "Unknown Notion view " view-kw " for project " project)
+                        {:project project :view view-kw :known (keys views)})))))
