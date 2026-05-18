@@ -22,6 +22,7 @@
    [nido.coordinator.breakers :as breakers]
    [nido.coordinator.halt :as halt]
    [nido.coordinator.queue :as queue]
+   [nido.coordinator.runs-clean :as runs-clean]
    [nido.coordinator.runs-view :as runs-view]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.triggers :as triggers]
@@ -556,6 +557,15 @@
        nil]
       [state nil])
 
+    ;; Capital D — deliberate deletion of the highlighted Run.
+    (msg/key-match? msg "D")
+    (if-let [run (selected-run state)]
+      [(-> state
+           (assoc :modal :delete-run-confirm)
+           (assoc :modal-target {:run run}))
+       nil]
+      [state nil])
+
     (msg/key-match? msg "f")
     (open-fire-trigger state)
 
@@ -630,6 +640,34 @@
       [(assoc state :modal-input ti) cmd])))
 
 
+(defn- update-delete-run-confirm
+  "Modal handler for :delete-run-confirm. Opened by capital D on the runs screen.
+   - y: delete the Run's dir + session-home + state dir, refresh the list.
+   - n / esc / anything else: close modal.
+   Refuses silently (shows a refusal message) when the Run is in a live state."
+  [state msg]
+  (let [run (-> state :modal-target :run)]
+    (cond
+      (or (msg/key-match? msg "y") (msg/key-match? msg "Y"))
+      (if (contains? runs-clean/live-states (:state run))
+        ;; Refuse — leave modal open with a status message.
+        [(assoc state :status (str "Refusing: Run is in state " (name (:state run)))) nil]
+        (do
+          (try
+            (let [plan (runs-clean/plan-clean {:state #{(:state run)}})]
+              ;; Filter to only the highlighted run so we don't batch-delete more than intended.
+              (runs-clean/execute! (filter #(= (:id run) (-> % :run :id)) plan)))
+            (catch Exception _e
+              nil))
+          [(-> state
+               close-modal
+               (assoc :status (str "Deleted: " (:id run)))
+               (rebuild-list (run-rows)))
+           nil]))
+
+      :else
+      [(close-modal state) nil])))
+
 (defn- update-fn [state msg]
   (cond
     ;; Charm always fires a window-size on startup. Our view is
@@ -680,6 +718,9 @@
 
     (= :clear-breaker (:modal state))
     (update-clear-breaker state msg)
+
+    (= :delete-run-confirm (:modal state))
+    (update-delete-run-confirm state msg)
 
     ;; Tab-style navigation between screens. Always available (outside modals),
     ;; so users can flip from any screen to runs and back to sessions when a
@@ -749,7 +790,8 @@
                   :session-info    (str "nido — " (-> state :modal-target :project)
                                         " · " (-> state :modal-target :session)
                                         " · info")
-                  :run-details     (str "nido — run · " (-> state :modal-target :run :id))
+                  :run-details         (str "nido — run · " (-> state :modal-target :run :id))
+                  :delete-run-confirm  (str "nido — delete run · " (-> state :modal-target :run :id))
                   :fire-pick-project
                   "nido — fire trigger · pick project"
                   :fire-pick-trigger
@@ -774,7 +816,8 @@
                   :create-session     "[↵] create  [esc] cancel"
                   :ci-picker          "[r] rerun failed  [n] run all  [esc] cancel"
                   :session-info       "[esc] back"
-                  :run-details        "[esc] back"
+                  :run-details            "[esc] back"
+                  :delete-run-confirm     "[y] delete  [n/esc] cancel"
                   :fire-pick-project  "[↑↓] move  [↵] pick  [esc] cancel"
                   :fire-pick-trigger  "[↑↓] move  [↵] pick  [esc] cancel"
                   :fire-input-payload "[↵] next field  [esc] cancel"
@@ -784,7 +827,7 @@
                   (case (:screen state)
                     :projects "[↵] open  [r]uns  [q]uit"
                     :sessions "[↵/e] enter  [w]orktree  [i]nfo  [a]dd  [u]p  [d]own  [c]i  [x] destroy  [r]uns  [esc] back  [q]uit"
-                    :runs     "[↵] enter  [w]orktree  [d]etails  [f]ire  [h]alt  [c]lear breaker  [s]essions  [q]uit"))))
+                    :runs     "[↵] enter  [w]orktree  [d]etails  [D]elete  [f]ire  [h]alt  [c]lear breaker  [s]essions  [q]uit"))))
 
 (defn- info-row [label value]
   (str (style/render label-style (format "%-13s" label)) " " value))
@@ -878,6 +921,18 @@
        "\n\n"
        (style/render label-style "─── last 50 lines of agent.log ───") "\n"
        (or log-tail "(no agent.log yet)")))
+
+    :delete-run-confirm
+    (let [{:keys [run]} (:modal-target state)]
+      (if (contains? runs-clean/live-states (:state run))
+        (str (style/render warning-style "Cannot delete — Run is in state: ") (name (:state run))
+             "\n\nOnly terminal Runs can be deleted. Press [n] or [esc] to cancel.")
+        (str (style/render warning-style "Delete ") (:id run) " [" (name (:state run)) "]"
+             (style/render warning-style " ?")
+             "\n\nThis removes:\n"
+             "  • The run dir\n"
+             "  • The session-home\n"
+             "  • The state dir")))
 
     :create-session
     (text-input/text-input-view (:modal-input state))

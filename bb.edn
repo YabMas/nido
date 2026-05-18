@@ -21,6 +21,7 @@
              [tasks.nido-coordinator :as nido-coordinator]
              [tasks.nido-trigger :as nido-trigger]
              [tasks.nido-runs :as nido-runs]
+             [tasks.nido-runs-clean :as nido-runs-clean]
              [tasks.nido-notion :as nido-notion]
              [tasks.nido-notion-views :as nido-notion-views]
              [tasks.nido-coordinator-source :as nido-coordinator-source])
@@ -261,6 +262,10 @@
   nido:trigger:disable
   {:doc "Manually disable a trigger: :project <p> <trigger> [:note <str>]"
    :task (apply nido-trigger/disable *command-line-args*)}
+
+  nido:runs:clean
+  {:doc "Clean terminal-state Runs (run dir + session-home + state dir). Dry-run by default. :state, :older-than, :project, :dry-run? options."
+   :task (apply nido-runs-clean/clean-cmd *command-line-args*)}
 
   nido:runs:list
   {:doc "List runs. Filters: :state <kw> :trigger <kw> :project <kw>"
