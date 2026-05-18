@@ -78,3 +78,11 @@
 (deftest schema-rejects-non-int-priority
   (is (not (m/validate triggers/Trigger
                        (assoc minimal-trigger :priority "high")))))
+
+(deftest schema-accepts-session-profile
+  (is (m/validate triggers/Trigger
+                  (assoc minimal-trigger :session-profile :lite))))
+
+(deftest schema-rejects-non-keyword-session-profile
+  (is (not (m/validate triggers/Trigger
+                       (assoc minimal-trigger :session-profile "lite")))))

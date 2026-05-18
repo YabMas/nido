@@ -19,9 +19,10 @@
    [:payload-key {:optional true} keyword?]
    [:agent       {:optional true} keyword?]
    [:limits      {:optional true} [:map-of keyword? any?]]
-   [:priority    {:optional true} int?]
-   [:dry-run?    {:optional true} boolean?]
-   [:enabled?    {:optional true} boolean?]])
+   [:priority       {:optional true} int?]
+   [:session-profile {:optional true} keyword?]
+   [:dry-run?       {:optional true} boolean?]
+   [:enabled?       {:optional true} boolean?]])
 
 (def TriggersFile
   [:map {:closed true}
