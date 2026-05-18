@@ -20,6 +20,7 @@
    :claude-session-id nil
    :limits          {:budget "30m"}
    :priority        0
+   :session-profile :full
    :state           :queued
    :state-history   [{:at "2026-05-13T09:14:22Z" :state :queued}]
    :artifacts       []
@@ -139,6 +140,63 @@
                         :priority 7}
               run      (runs/create-run! fire-req {:fired-at "T" :fired-by "u"})]
           (is (= 7 (:priority run)))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest create-run-carries-session-profile
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (cstate/ensure-dirs!)
+        (let [run (runs/create-run!
+                    {:project :p
+                     :trigger {:name :t :skill :triage-bug
+                               :payload "x" :source {:type :test}
+                               :session-profile :lite}
+                     :payload {}
+                     :priority 0
+                     :session-profile :lite}
+                    {})]
+          (is (= :lite (:session-profile run)))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest create-run-defaults-session-profile-to-full
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (cstate/ensure-dirs!)
+        (let [run (runs/create-run!
+                    {:project :p
+                     :trigger {:name :t :skill :noop
+                               :payload "x" :source {:type :test}}
+                     :payload {}
+                     :priority 0}
+                    {})]
+          (is (= :full (:session-profile run))
+              "Runs without an explicit :session-profile should default to :full")))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest read-run-backfills-missing-session-profile
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (cstate/ensure-dirs!)
+        ;; Mimic a legacy Run on disk that has :priority (from Plan A) but
+        ;; no :session-profile yet.
+        (let [path   (cstate/run-edn-path "legacy-pre-plan-b")
+              legacy {:id "legacy-pre-plan-b"
+                      :project :brian :trigger :legacy :source {:type :legacy}
+                      :event-payload {} :skill :noop :first-message "x"
+                      :agent :claude :session-name "s" :claude-session-id nil
+                      :limits {:budget "10m" :max-failures 3}
+                      :priority 0
+                      :state :awaiting-review
+                      :state-history [{:at "2026-05-15T00:00:00Z" :state :queued}]
+                      :artifacts [] :error nil}]
+          (fs/create-dirs (cstate/run-dir "legacy-pre-plan-b"))
+          (spit path (pr-str legacy))
+          (let [loaded (runs/read-run "legacy-pre-plan-b")]
+            (is (= :full (:session-profile loaded))
+                "read-run should backfill :session-profile :full on legacy Runs"))))
       (finally (fs/delete-tree tmp)))))
 
 (deftest read-run-backfills-missing-priority

@@ -9,7 +9,8 @@
     (is (= [{:project :brian
              :trigger (first (:brian tbp))
              :payload {:url "u"}
-             :priority 0}]
+             :priority 0
+             :session-profile nil}]
            (events/route
              {:target  {:project :brian :trigger :inv}
               :payload {:url "u"}}
@@ -40,8 +41,8 @@
         env {:broadcast {:type :notion-view
                          :source-config {:database "x"}
                          :payload {:status "Open"}}}]
-    (is (= [{:project :p :trigger t1 :payload {:status "Open"} :priority 0}
-            {:project :p :trigger t2 :payload {:status "Open"} :priority 0}]
+    (is (= [{:project :p :trigger t1 :payload {:status "Open"} :priority 0 :session-profile nil}
+            {:project :p :trigger t2 :payload {:status "Open"} :priority 0 :session-profile nil}]
            (events/route env tbp)))))
 
 (deftest route-broadcast-empty-when-no-matches
@@ -82,3 +83,23 @@
                     :payload {:url "u"}}
                    tbp)
                  first :priority)))))
+
+(deftest route-uses-trigger-session-profile-when-set
+  (let [t   {:name :t :source {:type :notion-view :database "x"} :skill :s
+             :payload "" :session-profile :lite}
+        tbp {:p [t]}
+        env {:broadcast {:type :notion-view
+                         :source-config {:database "x"}
+                         :payload {}}}
+        requests (events/route env tbp)]
+    (is (= :lite (-> requests first :session-profile)))))
+
+(deftest route-direct-carries-trigger-session-profile
+  (let [t   {:name :inv :source {:type :manual} :skill :investigate-bug
+             :payload "{{event/url}}" :session-profile :lite}
+        tbp {:brian [t]}]
+    (is (= :lite (-> (events/route
+                       {:target  {:project :brian :trigger :inv}
+                        :payload {:url "u"}}
+                       tbp)
+                     first :session-profile)))))

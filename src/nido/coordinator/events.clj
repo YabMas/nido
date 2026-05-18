@@ -19,7 +19,8 @@
 
       :else
       (if-let [t (triggers/find-by-name ts trigger)]
-        [{:project project :trigger t :payload payload :priority (or (:priority t) 0)}]
+        [{:project project :trigger t :payload payload :priority (or (:priority t) 0)
+          :session-profile (:session-profile t)}]
         [{:error :unknown-trigger :project project :trigger trigger}]))))
 
 (defn- source-config-match?
@@ -36,7 +37,8 @@
             :when (= type (-> t :source :type))
             :when (source-config-match? source-config (:source t))
             :when (f/accept? (:filter t) payload)]
-        {:project project :trigger t :payload payload :priority (or (:priority t) 0)}))))
+        {:project project :trigger t :payload payload :priority (or (:priority t) 0)
+         :session-profile (:session-profile t)}))))
 
 (defn route
   "Resolve an envelope to a vector of fire-requests:

@@ -30,6 +30,7 @@
    [:claude-session-id [:maybe string?]]
    [:limits            [:map-of keyword? any?]]
    [:priority          int?]
+   [:session-profile   keyword?]
    [:state             (into [:enum] states)]
    [:state-history     [:vector [:map
                                  [:at    string?]
@@ -56,7 +57,8 @@
   (let [path (cstate/run-edn-path run-id)]
     (when (fs/exists? path)
       (-> (io/read-edn path)
-          (update :priority #(if (int? %) % 0))))))
+          (update :priority        #(if (int? %) % 0))
+          (update :session-profile #(if (keyword? %) % :full))))))
 
 (defn write-run!
   "Validate then write a Run record. Parent dir must already exist."
@@ -109,7 +111,7 @@
 (defn create-run!
   "Build a :queued Run record from a fire request and persist run.edn.
    `meta` carries source-call metadata: {:fired-at <iso> :fired-by <str>}."
-  [{:keys [project trigger payload priority]} meta]
+  [{:keys [project trigger payload priority session-profile]} meta]
   (let [{:keys [run-id session-name]} (new-run-parts project (:name trigger))
         ;; First message format per spec §Agent launch: "/<skill> <interpolated-payload>".
         ;; The trigger's :payload holds just the skill args; the framework prepends "/<skill> ".
@@ -129,6 +131,7 @@
                  :claude-session-id nil
                  :limits          (or (:limits trigger) {:budget "30m" :max-failures 3})
                  :priority        (or priority 0)
+                 :session-profile (or session-profile :full)
                  :state           :queued
                  :state-history   [{:at (clock/now-iso) :state :queued}]
                  :artifacts       []
@@ -145,10 +148,11 @@
    the worktree (per spec §Runs / Identity & storage). Returns whatever
    session-lifecycle/up! returns."
   [run]
-  (let [{:keys [project session-name id]} run
+  (let [{:keys [project session-name id session-profile]} run
         result       (session-lifecycle/up! session-name
-                                            {:project      project
-                                             :owned-by-run id})
+                                            {:project         project
+                                             :owned-by-run    id
+                                             :session-profile session-profile})
         session-home (session-state/session-home-dir (name project) session-name)
         link-path    (cstate/run-session-home-link id)]
     (when (fs/exists? link-path) (fs/delete link-path))
