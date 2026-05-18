@@ -43,9 +43,17 @@
       files)))
 
 (defn enqueue!
-  "Write an envelope to the queue with a fresh UUID filename."
+  "Write an envelope to the queue with a fresh UUID filename.
+   Stamps :created-at (when the caller produced it), :received-at (when
+   we observed it), and defaults :priority to 0 if absent."
   [envelope]
   (let [uuid (str (java.util.UUID/randomUUID))
-        path (str (fs/path (cstate/queue-dir) (str uuid ".edn")))]
-    (io/write-edn! path (assoc envelope :created-at (clock/now-iso)))
+        path (str (fs/path (cstate/queue-dir) (str uuid ".edn")))
+        now  (clock/now-iso)
+        env  (-> envelope
+                 (assoc :received-at now)
+                 (cond->
+                   (not (contains? envelope :created-at)) (assoc :created-at now)
+                   (not (contains? envelope :priority))   (assoc :priority 0)))]
+    (io/write-edn! path env)
     path))
