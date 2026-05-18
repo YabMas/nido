@@ -23,6 +23,7 @@
    :limits {:budget "30m"}
    :priority 0
    :session-profile :full
+   :uncapped? false
    :state :queued
    :state-history [{:at "2026-05-13T09:14:22Z" :state :queued}]
    :artifacts []

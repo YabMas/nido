@@ -23,7 +23,8 @@
    [:priority-from  {:optional true} [:map [:property string?]]]
    [:session-profile {:optional true} keyword?]
    [:dry-run?       {:optional true} boolean?]
-   [:enabled?       {:optional true} boolean?]])
+   [:enabled?       {:optional true} boolean?]
+   [:uncapped?      {:optional true} boolean?]])
 
 (def TriggersFile
   [:map {:closed true}

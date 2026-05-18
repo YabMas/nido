@@ -21,6 +21,7 @@
    :limits          {:budget "30m"}
    :priority        0
    :session-profile :full
+   :uncapped?       false
    :state           :queued
    :state-history   [{:at "2026-05-13T09:14:22Z" :state :queued}]
    :artifacts       []
@@ -225,4 +226,51 @@
           (let [loaded (runs/read-run "legacy-run-1")]
             (is (= 0 (:priority loaded))
                 "read-run should backfill :priority 0 on legacy Runs missing the key"))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest create-run-defaults-uncapped-to-false
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (cstate/ensure-dirs!)
+        (let [run (runs/create-run!
+                    {:project :p :trigger {:name :t :skill :noop
+                                           :payload "x" :source {:type :test}}
+                     :payload {} :priority 0} {})]
+          (is (= false (:uncapped? run)))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest create-run-carries-uncapped
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (cstate/ensure-dirs!)
+        (let [run (runs/create-run!
+                    {:project :p :trigger {:name :t :skill :noop
+                                           :payload "x" :source {:type :test}
+                                           :uncapped? true}
+                     :payload {} :priority 0 :uncapped? true} {})]
+          (is (= true (:uncapped? run)))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest read-run-backfills-missing-uncapped
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (cstate/ensure-dirs!)
+        (let [path  (str (cstate/run-dir "legacy-no-uncapped") "/run.edn")
+              legacy {:id "legacy-no-uncapped"
+                      :project :brian :trigger :legacy :source {:type :legacy}
+                      :event-payload {} :skill :noop :first-message "x"
+                      :agent :claude :session-name "s" :claude-session-id nil
+                      :limits {:budget "10m" :max-failures 3}
+                      :priority 0 :session-profile :full
+                      :state :done
+                      :state-history [{:at "2026-05-15T00:00:00Z" :state :queued}]
+                      :artifacts [] :error nil}]
+          (fs/create-dirs (cstate/run-dir "legacy-no-uncapped"))
+          (spit path (pr-str legacy))
+          (let [loaded (runs/read-run "legacy-no-uncapped")]
+            (is (= false (:uncapped? loaded))
+                "read-run should backfill :uncapped? false on legacy Runs"))))
       (finally (fs/delete-tree tmp)))))

@@ -83,3 +83,50 @@
     (is (= 1 @thrown))
     (is (= 0 (:in-flight (ex/snapshot))))
     (is (= 0 (:queued    (ex/snapshot))))))
+
+(deftest submit-defaults-uncapped-to-false-for-backcompat
+  (let [snap (do (ex/configure! {:global-cap 5})
+                 (ex/submit! "rid-1" 0)        ;; 2-arity (old signature)
+                 (ex/snapshot))]
+    (is (= 1 (:queued snap)))))
+
+(deftest uncapped-runs-bypass-the-cap
+  (let [spawned (atom [])
+        slow    (fn [rid] (swap! spawned conj rid) (Thread/sleep 200))]
+    (ex/configure! {:global-cap 1})
+    ;; Fill the cap with a capped Run
+    (ex/submit! "capped-1" 0 false)
+    (ex/tick! slow)
+    (Thread/sleep 30)
+    (is (= ["capped-1"] @spawned))
+    ;; Now submit two more capped (should NOT promote — cap full)
+    (ex/submit! "capped-2" 0 false)
+    (ex/submit! "capped-3" 0 false)
+    (ex/tick! slow)
+    (Thread/sleep 30)
+    (is (= ["capped-1"] @spawned) "capped Runs still queued; cap is full")
+    ;; Submit an uncapped Run; it should jump straight through
+    (ex/submit! "uncapped-1" 0 true)
+    (ex/tick! slow)
+    (Thread/sleep 30)
+    (is (contains? (set @spawned) "uncapped-1")
+        "uncapped Run promoted even though cap is full")
+    ;; Wait for all spawns to drain
+    (Thread/sleep 500)))
+
+(deftest uncapped-runs-do-not-consume-cap-slots
+  (let [spawned (atom [])
+        slow    (fn [rid] (swap! spawned conj rid) (Thread/sleep 300))]
+    (ex/configure! {:global-cap 1})
+    ;; Submit an uncapped Run first — it spawns
+    (ex/submit! "uncapped-1" 0 true)
+    (ex/tick! slow)
+    (Thread/sleep 30)
+    (is (= ["uncapped-1"] @spawned))
+    ;; Now submit a capped Run — should ALSO spawn, since uncapped doesn't fill the cap
+    (ex/submit! "capped-1" 0 false)
+    (ex/tick! slow)
+    (Thread/sleep 30)
+    (is (= ["uncapped-1" "capped-1"] @spawned)
+        "capped Run spawns alongside uncapped — uncapped didn't fill the slot")
+    (Thread/sleep 500)))

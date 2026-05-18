@@ -90,3 +90,7 @@
 (deftest schema-accepts-priority-from-map
   (is (m/validate triggers/Trigger
                   (assoc minimal-trigger :priority-from {:property "severity-calc"}))))
+
+(deftest schema-accepts-uncapped
+  (is (m/validate triggers/Trigger
+                  (assoc minimal-trigger :uncapped? true))))

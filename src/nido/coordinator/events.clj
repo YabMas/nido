@@ -20,7 +20,8 @@
       :else
       (if-let [t (triggers/find-by-name ts trigger)]
         [{:project project :trigger t :payload payload :priority (or (:priority t) 0)
-          :session-profile (:session-profile t)}]
+          :session-profile (:session-profile t)
+          :uncapped? (boolean (:uncapped? t))}]
         [{:error :unknown-trigger :project project :trigger trigger}]))))
 
 (defn- source-config-match?
@@ -39,7 +40,8 @@
             :when (f/accept? (:filter t) payload)]
         {:project project :trigger t :payload payload
          :priority (or (:priority payload) (:priority t) 0)
-         :session-profile (:session-profile t)}))))
+         :session-profile (:session-profile t)
+         :uncapped? (boolean (:uncapped? t))}))))
 
 (defn route
   "Resolve an envelope to a vector of fire-requests:

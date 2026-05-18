@@ -44,6 +44,7 @@
                :limits          {:budget "10m" :max-failures 3}
                :priority        0
                :session-profile :full
+               :uncapped?       false
                :state           state
                :state-history   [{:at at :state :queued}
                                  {:at at :state state}]

@@ -10,7 +10,8 @@
              :trigger (first (:brian tbp))
              :payload {:url "u"}
              :priority 0
-             :session-profile nil}]
+             :session-profile nil
+             :uncapped? false}]
            (events/route
              {:target  {:project :brian :trigger :inv}
               :payload {:url "u"}}
@@ -41,8 +42,8 @@
         env {:broadcast {:type :notion-view
                          :source-config {:database "x"}
                          :payload {:status "Open"}}}]
-    (is (= [{:project :p :trigger t1 :payload {:status "Open"} :priority 0 :session-profile nil}
-            {:project :p :trigger t2 :payload {:status "Open"} :priority 0 :session-profile nil}]
+    (is (= [{:project :p :trigger t1 :payload {:status "Open"} :priority 0 :session-profile nil :uncapped? false}
+            {:project :p :trigger t2 :payload {:status "Open"} :priority 0 :session-profile nil :uncapped? false}]
            (events/route env tbp)))))
 
 (deftest route-broadcast-empty-when-no-matches
@@ -114,3 +115,14 @@
         requests (events/route env tbp)]
     (is (= 100 (-> requests first :priority))
         "event-level :priority should win over trigger-level :priority")))
+
+(deftest route-propagates-uncapped
+  (let [trigger  {:name :investigate-bug :source {:type :manual}
+                  :skill :investigate-bug :payload "{{event/url}}"
+                  :uncapped? true}
+        tbp      {:brian [trigger]}
+        req      (events/route
+                   {:target {:project :brian :trigger :investigate-bug}
+                    :payload {:url "u"}}
+                   tbp)]
+    (is (= true (-> req first :uncapped?)))))

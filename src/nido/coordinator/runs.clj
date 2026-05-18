@@ -31,6 +31,7 @@
    [:limits            [:map-of keyword? any?]]
    [:priority          int?]
    [:session-profile   keyword?]
+   [:uncapped?         boolean?]
    [:state             (into [:enum] states)]
    [:state-history     [:vector [:map
                                  [:at    string?]
@@ -58,7 +59,8 @@
     (when (fs/exists? path)
       (-> (io/read-edn path)
           (update :priority        #(if (int? %) % 0))
-          (update :session-profile #(if (keyword? %) % :full))))))
+          (update :session-profile #(if (keyword? %) % :full))
+          (update :uncapped?       #(if (boolean? %) % false))))))
 
 (defn write-run!
   "Validate then write a Run record. Parent dir must already exist."
@@ -111,7 +113,7 @@
 (defn create-run!
   "Build a :queued Run record from a fire request and persist run.edn.
    `meta` carries source-call metadata: {:fired-at <iso> :fired-by <str>}."
-  [{:keys [project trigger payload priority session-profile]} meta]
+  [{:keys [project trigger payload priority session-profile uncapped?]} meta]
   (let [{:keys [run-id session-name]} (new-run-parts project (:name trigger))
         ;; First message format per spec §Agent launch: "/<skill> <interpolated-payload>".
         ;; The trigger's :payload holds just the skill args; the framework prepends "/<skill> ".
@@ -132,6 +134,7 @@
                  :limits          (or (:limits trigger) {:budget "30m" :max-failures 3})
                  :priority        (or priority 0)
                  :session-profile (or session-profile :full)
+                 :uncapped?       (boolean uncapped?)
                  :state           :queued
                  :state-history   [{:at (clock/now-iso) :state :queued}]
                  :artifacts       []

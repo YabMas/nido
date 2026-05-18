@@ -182,7 +182,7 @@
                                   {:fired-at (clock/now-iso)
                                    :fired-by (System/getenv "USER")})]
         (swap! !detector anomaly/record-spawn (clock/now-iso))
-        (executor/submit! (:id run) (:priority run))))))
+        (executor/submit! (:id run) (:priority run) (:uncapped? run))))))
 
 (defn tick!
   "One iteration of the main loop. Public for testability."
