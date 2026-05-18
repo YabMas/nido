@@ -59,10 +59,13 @@
 
 (defn- discover-source-configs
   "Walk loaded triggers and return distinct source-configs whose type is
-   registered. Filters out :manual (the queue dir handles that)."
+   registered. Filters out :manual (the queue dir handles that).
+   Merges :project from the trigger's owning project into each source-config
+   so plugins that resolve per-project registry files (e.g. notion-views.edn)
+   know which project they are serving."
   [triggers-by-project]
-  (->> (for [[_ triggers] triggers-by-project, t triggers
-             :let [src (:source t)]
+  (->> (for [[project triggers] triggers-by-project, t triggers
+             :let [src (assoc (:source t) :project project)]
              :when (and (not= :manual (:type src))
                         (sources/lookup (:type src)))]
          src)

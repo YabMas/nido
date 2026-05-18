@@ -123,33 +123,6 @@
       (= status 0)    {:status 0 :error :network}
       :else           {:status status :error :http})))
 
-(defn database-query
-  "DEPRECATED — kept as a compilation shim while sources/notion.clj migrates
-   to data-source-query (Task 3 removes this). Calls the old V1 databases
-   endpoint so callers keep working until the migration is complete."
-  [database-id token]
-  (let [resp (try
-               (http-request
-                 :post
-                 (str "https://api.notion.com/v1/databases/" database-id "/query")
-                 {:headers {"Authorization"  (str "Bearer " token)
-                            "Notion-Version" "2022-06-28"
-                            "Content-Type"   "application/json"}
-                  :body    "{\"page_size\":100}"
-                  :timeout 10000})
-               (catch Exception e
-                 {:status 0 :exception e}))
-        {:keys [status body]} resp]
-    (cond
-      (= status 200)  (let [parsed (json/parse-string body true)]
-                        {:status   200
-                         :results  (:results parsed)
-                         :has_more (:has_more parsed)})
-      (= status 401)  {:status status :error :auth}
-      (>= status 500) {:status status :error :server}
-      (= status 0)    {:status 0 :error :network}
-      :else           {:status status :error :http})))
-
 (defn- normalise-property-name
   "\"Ticket ID\" → :ticket-id"
   [s]
