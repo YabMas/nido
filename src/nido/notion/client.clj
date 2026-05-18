@@ -38,24 +38,105 @@
         "-s" "nido-notion" "-a" (whoami) "-U" "-w" token]))
 
 (defn http-request
-  "Wrapped HTTP call (POST) so tests can stub. Returns {:status :body}."
-  [_method url opts]
-  (http/post url (assoc opts :throw false)))
+  "Wrapped HTTP call so tests can stub. Dispatches on method (:get/:post).
+   Returns {:status :body}."
+  [method url opts]
+  (case method
+    :get  (http/get  url (assoc opts :throw false))
+    :post (http/post url (assoc opts :throw false))))
 
-(defn database-query
-  "POST https://api.notion.com/v1/databases/<id>/query. Returns
-   {:status :results :has_more} on 2xx, or {:status :error <kw>} on
-   4xx/5xx / network failures. Hard 10s timeout."
+(def ^:private notion-api-version "2025-09-03")
+
+(defonce ^:private !data-source-cache (atom {}))
+
+(defn clear-data-source-cache!
+  "Test-only / config-reload helper. Clears the cached database-id→data-source-id map."
+  []
+  (reset! !data-source-cache {}))
+
+(defn- retrieve-database
+  "GET /v1/databases/<id>. Returns parsed JSON or {:error :kw}."
   [database-id token]
   (let [resp (try
                (http-request
-                :post
-                (str "https://api.notion.com/v1/databases/" database-id "/query")
-                {:headers {"Authorization"  (str "Bearer " token)
-                           "Notion-Version" "2022-06-28"
-                           "Content-Type"   "application/json"}
-                 :body    "{\"page_size\":100}"
-                 :timeout 10000})
+                 :get
+                 (str "https://api.notion.com/v1/databases/" database-id)
+                 {:headers {"Authorization"  (str "Bearer " token)
+                            "Notion-Version" notion-api-version}
+                  :timeout 10000})
+               (catch Exception e
+                 {:status 0 :exception e}))
+        {:keys [status body]} resp]
+    (cond
+      (= status 200) (json/parse-string body true)
+      (= status 401) {:error :auth}
+      (>= status 500) {:error :server}
+      (= status 0)   {:error :network}
+      :else          {:error :http :status status})))
+
+(defn resolve-data-source-id
+  "Look up the first data-source id for a database (the only one for most
+   databases). Cached per-process — call clear-data-source-cache! after
+   schema changes. Returns the id or throws if the database has no data
+   sources / the API call failed."
+  [database-id token]
+  (if-let [cached (get @!data-source-cache database-id)]
+    cached
+    (let [db (retrieve-database database-id token)]
+      (if (:error db)
+        (throw (ex-info "Failed to resolve data-source id"
+                        {:database database-id :error db}))
+        (let [ds-id (-> db :data_sources first :id)]
+          (when-not ds-id
+            (throw (ex-info "Database has no data sources"
+                            {:database database-id})))
+          (swap! !data-source-cache assoc database-id ds-id)
+          ds-id)))))
+
+(defn data-source-query
+  "POST /v1/data_sources/<ds-id>/query with a body containing optional
+   :filter (Notion filter map), :sorts, and :page-size. Returns
+   {:status 200 :results :has_more} on success or {:status :error :kw}.
+   Hard 10s timeout."
+  [data-source-id token {:keys [filter sorts page-size]
+                         :or   {page-size 100}}]
+  (let [body (cond-> {:page_size page-size}
+               filter (assoc :filter filter)
+               sorts  (assoc :sorts sorts))
+        resp (try
+               (http-request
+                 :post
+                 (str "https://api.notion.com/v1/data_sources/" data-source-id "/query")
+                 {:headers {"Authorization"  (str "Bearer " token)
+                            "Notion-Version" notion-api-version
+                            "Content-Type"   "application/json"}
+                  :body    (json/generate-string body)
+                  :timeout 10000})
+               (catch Exception e
+                 {:status 0 :exception e}))
+        {:keys [status body]} resp]
+    (cond
+      (= status 200)  (let [parsed (json/parse-string body true)]
+                        {:status 200 :results (:results parsed) :has_more (:has_more parsed)})
+      (= status 401)  {:status status :error :auth}
+      (>= status 500) {:status status :error :server}
+      (= status 0)    {:status 0 :error :network}
+      :else           {:status status :error :http})))
+
+(defn database-query
+  "DEPRECATED — kept as a compilation shim while sources/notion.clj migrates
+   to data-source-query (Task 3 removes this). Calls the old V1 databases
+   endpoint so callers keep working until the migration is complete."
+  [database-id token]
+  (let [resp (try
+               (http-request
+                 :post
+                 (str "https://api.notion.com/v1/databases/" database-id "/query")
+                 {:headers {"Authorization"  (str "Bearer " token)
+                            "Notion-Version" "2022-06-28"
+                            "Content-Type"   "application/json"}
+                  :body    "{\"page_size\":100}"
+                  :timeout 10000})
                (catch Exception e
                  {:status 0 :exception e}))
         {:keys [status body]} resp]
@@ -66,7 +147,7 @@
                          :has_more (:has_more parsed)})
       (= status 401)  {:status status :error :auth}
       (>= status 500) {:status status :error :server}
-      (= status 0)    {:status 0     :error :network}
+      (= status 0)    {:status 0 :error :network}
       :else           {:status status :error :http})))
 
 (defn- normalise-property-name

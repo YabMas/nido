@@ -29,45 +29,59 @@
         (is (some (fn [[a b]] (and (= a "-s") (= b "nido-notion")))
                   (partition 2 1 args)))))))
 
-(defn- stub-http [result]
-  (fn [_method _url _opts] result))
-
-(deftest database-query-builds-the-right-request
-  (let [calls (atom [])]
+(deftest data-source-query-posts-filter-body
+  (let [captured (atom nil)]
     (with-redefs [notion/http-request
-                  (fn [method url opts]
-                    (swap! calls conj {:method method :url url :opts opts})
+                  (fn [_method url opts]
+                    (reset! captured {:url url :body (:body opts)})
                     {:status 200 :body "{\"results\":[],\"has_more\":false}"})]
-      (notion/database-query "abc-123" "the-token")
-      (let [[{:keys [method url opts]}] @calls]
-        (is (= :post method))
-        (is (= "https://api.notion.com/v1/databases/abc-123/query" url))
-        (is (= "Bearer the-token" (get-in opts [:headers "Authorization"])))
-        (is (= "2022-06-28"       (get-in opts [:headers "Notion-Version"])))
-        (is (= "application/json" (get-in opts [:headers "Content-Type"])))
-        (is (= "{\"page_size\":100}" (:body opts)))
-        (is (= 10000 (:timeout opts)))))))
+      (notion/data-source-query "ds-1" "token-x"
+                                {:filter {:property "Status"
+                                          :status {:equals "Needs verification"}}})
+      (let [{:keys [url body]} @captured
+            decoded (cheshire.core/parse-string body true)]
+        (is (re-find #"/v1/data_sources/ds-1/query" url))
+        (is (= {:property "Status" :status {:equals "Needs verification"}}
+               (:filter decoded)))))))
 
-(deftest database-query-returns-parsed-result-on-200
-  (with-redefs [notion/http-request
-                (stub-http {:status 200
-                            :body "{\"results\":[{\"id\":\"p1\"}],\"has_more\":false}"})]
-    (let [r (notion/database-query "x" "t")]
-      (is (= 200 (:status r)))
-      (is (= [{:id "p1"}] (:results r)))
-      (is (false? (:has_more r))))))
+(deftest data-source-query-no-filter-still-works
+  (let [captured (atom nil)]
+    (with-redefs [notion/http-request
+                  (fn [_method url opts]
+                    (reset! captured {:url url :body (:body opts)})
+                    {:status 200 :body "{\"results\":[],\"has_more\":false}"})]
+      (notion/data-source-query "ds-1" "token-x" {})
+      (let [decoded (cheshire.core/parse-string (:body @captured) true)]
+        (is (nil? (:filter decoded))
+            "no :filter in opts means no filter key in the request body")
+        (is (= 100 (:page_size decoded))
+            "default page-size is 100")))))
 
-(deftest database-query-marks-401-as-auth-error
+(deftest resolve-data-source-id-extracts-from-database-fetch
+  (notion/clear-data-source-cache!)
   (with-redefs [notion/http-request
-                (stub-http {:status 401 :body "{\"message\":\"Invalid token\"}"})]
-    (let [r (notion/database-query "x" "bad")]
-      (is (= 401 (:status r)))
-      (is (= :auth (:error r))))))
+                (fn [_method url _opts]
+                  (cond
+                    (re-find #"/v1/databases/db-1" url)
+                    {:status 200
+                     :body (cheshire.core/generate-string
+                             {:id "db-1"
+                              :data_sources [{:id "ds-from-db-1" :name "main"}]})}
+                    :else {:status 404 :body ""}))]
+    (is (= "ds-from-db-1" (notion/resolve-data-source-id "db-1" "token-x")))))
 
-(deftest database-query-marks-5xx-as-server-error
-  (with-redefs [notion/http-request
-                (stub-http {:status 503 :body "service unavailable"})]
-    (is (= :server (:error (notion/database-query "x" "t"))))))
+(deftest resolve-data-source-id-caches
+  (let [calls (atom 0)]
+    (notion/clear-data-source-cache!)
+    (with-redefs [notion/http-request
+                  (fn [_method _url _opts]
+                    (swap! calls inc)
+                    {:status 200
+                     :body (cheshire.core/generate-string
+                             {:id "db-cached" :data_sources [{:id "ds-cached"}]})})]
+      (notion/resolve-data-source-id "db-cached" "token-x")
+      (notion/resolve-data-source-id "db-cached" "token-x")
+      (is (= 1 @calls) "second call should hit the cache, not the API"))))
 
 (def ^:private fixture
   (cheshire.core/parse-string (slurp "test/fixtures/notion/query-response.json") true))
