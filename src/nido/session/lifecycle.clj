@@ -35,6 +35,7 @@
    [nido.session.engine :as engine]
    [nido.session.launcher :as launcher]
    [nido.session.links :as links]
+   [nido.session.profiles :as profiles]
    [nido.session.state :as state]))
 
 ;; ---------------------------------------------------------------------------
@@ -145,6 +146,20 @@
       (fetch-base! project-dir base)
       (core/log-step (str "git worktree add " wt-path " -b " branch " " base))
       (git! project-dir ["worktree" "add" wt-path "-b" branch base]))))
+
+(defn create-symlink-worktree!
+  "Symlink wt-path to an existing checkout at target. Refuses if target
+   is missing — we never silently point at non-existent code. Replaces a
+   stale symlink at wt-path if one exists."
+  [wt-path target]
+  (when-not (fs/exists? target)
+    (throw (ex-info (str "Symlink worktree target does not exist: " target)
+                    {:wt-path wt-path :target target})))
+  (fs/create-dirs (str (fs/parent wt-path)))
+  (when (fs/exists? wt-path)
+    (fs/delete wt-path))
+  (fs/create-sym-link wt-path target)
+  wt-path)
 
 (defn- remove-git-worktree!
   "Remove a git worktree. Forced (dev worktrees often have local edits).
@@ -262,13 +277,21 @@
    Worktree creation routes by source-repo VCS: jj-colocated → `jj
    workspace add`; plain git → `git worktree add`."
   [name opts]
-  (let [{:keys [project-dir wt-path branch base]} (with-context name opts)]
+  (let [{:keys [project-name project-dir wt-path branch base]} (with-context name opts)
+        profile-kw (or (:session-profile opts) :full)
+        profile    (profiles/resolve-profile project-name profile-kw)]
     (if (fs/exists? wt-path)
       (core/log-step (str "Worktree already exists at " wt-path " — starting session."))
-      (if (jj-source-repo? project-dir)
+      (cond
+        (= :symlink (-> profile :worktree :strategy))
+        (create-symlink-worktree! wt-path (-> profile :worktree :target))
+
+        (jj-source-repo? project-dir)
         (create-jj-workspace! project-dir wt-path branch base)
+
+        :else
         (create-git-worktree! project-dir wt-path branch base)))
-    (engine/start-session! wt-path (assoc opts :session-name name))))
+    (engine/start-session! wt-path (assoc opts :session-name name :profile profile))))
 
 (defn down!
   "Stop the named session. Worktree and on-disk state are preserved."
