@@ -56,8 +56,8 @@
    PG/JVM/app, then prints the session-home path the user can cd into to
    start their preferred agent (claude, codex, …). Idempotent — running
    on a live session refreshes the session-home artifacts but doesn't
-   restart services. Kwargs like :base, :branch, :jvm-heap-max flow into
-   `up!`."
+   restart services. Kwargs like :base, :branch, :session-profile, :jvm-heap-max
+   flow into `up!`."
   [& args]
   (let [[pos opts] (task-args/split-args args)
         project (require-project opts)
