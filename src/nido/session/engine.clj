@@ -263,6 +263,31 @@
     (vector? allowlist) (filterv #(contains? (set allowlist) (:type %)) services)
     :else (throw (ex-info "Invalid services allowlist" {:allowlist allowlist}))))
 
+;; ---------------------------------------------------------------------------
+;; Profile persistence — written at session-up so cleanup can read the
+;; resolved profile without re-resolving from config (robust against
+;; registry edits between up and destroy).
+;; ---------------------------------------------------------------------------
+
+(defn- profile-path [wt-path]
+  (str (fs/path (state/instance-state-dir (resolve-instance-id wt-path)) "profile.edn")))
+
+(defn write-profile-for-session!
+  "Persist the resolved profile to the session's state dir. Called at the
+   end of start-session! so cleanup paths can read the profile back
+   without re-resolving (robust against registry edits between up and
+   destroy)."
+  [wt-path profile]
+  (io/write-edn! (profile-path wt-path) profile))
+
+(defn read-profile-for-session
+  "Return the resolved profile persisted at session-up time. nil if absent
+   (e.g. legacy sessions predating this feature)."
+  [wt-path]
+  (let [path (profile-path wt-path)]
+    (when (fs/exists? path)
+      (io/read-edn path))))
+
 (defn- start-services! [project-dir project-name instance-id session-edn opts]
   (core/log-step (str "Starting session " instance-id " (" project-dir ")"))
   (let [profile  (:profile opts)
@@ -352,6 +377,12 @@
                                       (assoc :owned-by-run (:owned-by-run opts))))
          (catch Exception e
            (core/log-step (str "warning: failed to write launcher artifacts: "
+                               (ex-message e)))))
+    ;; Persist the resolved profile so destroy! / reset! can read it back
+    ;; without re-resolving (robust against registry edits between up and destroy).
+    (try (write-profile-for-session! project-dir (:profile opts))
+         (catch Exception e
+           (core/log-step (str "warning: failed to write profile snapshot: "
                                (ex-message e)))))
     (print-session-summary session-data final-ctx)
     session-data))

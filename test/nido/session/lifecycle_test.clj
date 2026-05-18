@@ -36,3 +36,24 @@
              (str (fs/real-path wt)))
           "second call should replace the stale link, pointing at the new target")
       (finally (fs/delete-tree tmp)))))
+
+(deftest remove-symlink-worktree-removes-link-not-target
+  (let [tmp    (fs/create-temp-dir)
+        target (str (fs/create-dirs (str (fs/path tmp "shared-checkout"))))
+        wt     (str (fs/path tmp "wt-link"))]
+    (try
+      (lifecycle/create-symlink-worktree! wt target)
+      (lifecycle/remove-symlink-worktree! wt)
+      (is (not (fs/exists? wt)) "symlink should be removed")
+      (is (fs/exists? target) "target should NOT be removed")
+      (finally (fs/delete-tree tmp)))))
+
+(deftest remove-symlink-worktree-refuses-non-symlink-paths
+  (let [tmp      (fs/create-temp-dir)
+        real-dir (str (fs/create-dirs (str (fs/path tmp "real-dir"))))]
+    (try
+      ;; calling on a real dir should be a no-op (safety: never recurse-delete a dir)
+      (lifecycle/remove-symlink-worktree! real-dir)
+      (is (fs/exists? real-dir)
+          "real directory must NOT be deleted by remove-symlink-worktree!")
+      (finally (fs/delete-tree tmp)))))

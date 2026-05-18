@@ -161,6 +161,14 @@
   (fs/create-sym-link wt-path target)
   wt-path)
 
+(defn remove-symlink-worktree!
+  "Delete the symlink at wt-path. Refuses to recurse — the symlink
+   target is shared state we never own. Safe no-op if wt-path doesn't
+   exist or isn't a symlink (prevents accidental deletion of real dirs)."
+  [wt-path]
+  (when (and (fs/exists? wt-path) (fs/sym-link? wt-path))
+    (fs/delete wt-path)))
+
 (defn- remove-git-worktree!
   "Remove a git worktree. Forced (dev worktrees often have local edits).
    Optionally also delete the named branch."
@@ -336,15 +344,19 @@
    opts: {... :delete-branch? bool (default false)}
    Also accepts :delete-branch (no `?`) since `?` is a zsh glob char.
 
-   The worktree-removal layer is detected from the worktree itself: a
-   `.jj/` dir → `jj workspace forget`; a `.git` entry → `git worktree
-   remove`. Mixed-vintage trees (a project that became jj-colocated after
-   some sessions were already created with `git worktree`) tear down on
-   the same path they were created with."
+   The worktree-removal layer is detected from the persisted profile
+   (written at session-up). :symlink sessions remove the symlink only —
+   the shared checkout is never touched. For VCS-backed worktrees the
+   legacy detection applies: `.jj/` dir → `jj workspace forget`; a
+   `.git` entry → `git worktree remove`. Mixed-vintage trees (a project
+   that became jj-colocated after some sessions were already created with
+   `git worktree`) tear down on the same path they were created with."
   [name opts]
   (let [{:keys [project-dir wt-path branch]} (with-context name opts)
         delete-branch? (boolean (or (:delete-branch? opts) (:delete-branch opts)))
-        instance-id (engine/resolve-instance-id wt-path)]
+        instance-id (engine/resolve-instance-id wt-path)
+        ;; Read persisted profile BEFORE dropping state-dir (profile lives inside it).
+        profile (engine/read-profile-for-session wt-path)]
     (try
       (when (fs/exists? wt-path)
         (engine/stop-session! wt-path))
@@ -355,6 +367,9 @@
         (core/log-step (str "Dropping instance state-dir at " state-dir))
         (fs/delete-tree state-dir)))
     (cond
+      (= :symlink (-> profile :worktree :strategy))
+      (remove-symlink-worktree! wt-path)
+
       (and (fs/exists? wt-path) (jj-workspace? wt-path))
       (remove-jj-workspace! project-dir wt-path branch branch delete-branch?)
 
