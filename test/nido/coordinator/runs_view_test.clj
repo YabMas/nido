@@ -20,6 +20,7 @@
    :session-name "run-brian-investigate-bug-a1b2c3"
    :claude-session-id nil
    :limits {:budget "30m"}
+   :priority 0
    :state :queued
    :state-history [{:at "2026-05-13T09:14:22Z" :state :queued}]
    :artifacts []

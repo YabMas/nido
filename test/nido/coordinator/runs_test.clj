@@ -19,6 +19,7 @@
    :session-name    "run-2026-05-13-investigate-bug-a1b2c3"
    :claude-session-id nil
    :limits          {:budget "30m"}
+   :priority        0
    :state           :queued
    :state-history   [{:at "2026-05-13T09:14:22Z" :state :queued}]
    :artifacts       []
@@ -123,4 +124,19 @@
           (is (= 1 (count (:state-history run))))
           (is (fs/exists? (cstate/run-edn-path (:id run))))
           (is (= run (runs/read-run (:id run))) "run.edn round-trips cleanly")))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest create-run-carries-priority
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (let [fire-req {:project :brian
+                        :trigger {:name    :investigate-bug
+                                  :source  {:type :manual}
+                                  :skill   :investigate-bug
+                                  :payload "url={{event/url}}"}
+                        :payload {:url "https://x"}
+                        :priority 7}
+              run      (runs/create-run! fire-req {:fired-at "T" :fired-by "u"})]
+          (is (= 7 (:priority run)))))
       (finally (fs/delete-tree tmp)))))

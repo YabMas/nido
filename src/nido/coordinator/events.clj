@@ -19,7 +19,7 @@
 
       :else
       (if-let [t (triggers/find-by-name ts trigger)]
-        [{:project project :trigger t :payload payload}]
+        [{:project project :trigger t :payload payload :priority (or (:priority t) 0)}]
         [{:error :unknown-trigger :project project :trigger trigger}]))))
 
 (defn- source-config-match?
@@ -36,11 +36,11 @@
             :when (= type (-> t :source :type))
             :when (source-config-match? source-config (:source t))
             :when (f/accept? (:filter t) payload)]
-        {:project project :trigger t :payload payload}))))
+        {:project project :trigger t :payload payload :priority (or (:priority t) 0)}))))
 
 (defn route
   "Resolve an envelope to a vector of fire-requests:
-     [{:project <kw> :trigger <trigger-map> :payload <m>} ...]
+     [{:project <kw> :trigger <trigger-map> :payload <m> :priority <int>} ...]
    Or, on routing errors for :target envelopes, a vector of error maps:
      [{:error <kw> :project ... :trigger ...}]
    Broadcast envelopes with no matches return an empty vector."

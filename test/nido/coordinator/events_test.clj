@@ -8,7 +8,8 @@
                       :payload "{{event/url}}"}]}]
     (is (= [{:project :brian
              :trigger (first (:brian tbp))
-             :payload {:url "u"}}]
+             :payload {:url "u"}
+             :priority 0}]
            (events/route
              {:target  {:project :brian :trigger :inv}
               :payload {:url "u"}}
@@ -39,8 +40,8 @@
         env {:broadcast {:type :notion-view
                          :source-config {:database "x"}
                          :payload {:status "Open"}}}]
-    (is (= [{:project :p :trigger t1 :payload {:status "Open"}}
-            {:project :p :trigger t2 :payload {:status "Open"}}]
+    (is (= [{:project :p :trigger t1 :payload {:status "Open"} :priority 0}
+            {:project :p :trigger t2 :payload {:status "Open"} :priority 0}]
            (events/route env tbp)))))
 
 (deftest route-broadcast-empty-when-no-matches
@@ -53,3 +54,31 @@
 (deftest route-unknown-envelope-returns-error-vector
   (is (= [{:error :unknown-envelope}]
          (events/route {:nonsense true} {}))))
+
+(deftest route-uses-trigger-priority-when-set
+  (let [t   {:name :t1 :source {:type :notion-view :database "x"} :skill :s
+              :payload "" :priority 10}
+        tbp {:p [t]}
+        env {:broadcast {:type :notion-view
+                         :source-config {:database "x"}
+                         :payload {:status "Open"}}}]
+    (is (= 10 (-> (events/route env tbp) first :priority)))))
+
+(deftest route-defaults-priority-to-zero
+  (let [t   {:name :t2 :source {:type :notion-view :database "x"} :skill :s
+              :payload ""}
+        tbp {:p [t]}
+        env {:broadcast {:type :notion-view
+                         :source-config {:database "x"}
+                         :payload {:status "Open"}}}]
+    (is (= 0 (-> (events/route env tbp) first :priority)))))
+
+(deftest route-direct-carries-trigger-priority
+  (let [t   {:name :inv :source {:type :manual} :skill :investigate-bug
+             :payload "{{event/url}}" :priority 5}
+        tbp {:brian [t]}]
+    (is (= 5 (-> (events/route
+                   {:target  {:project :brian :trigger :inv}
+                    :payload {:url "u"}}
+                   tbp)
+                 first :priority)))))

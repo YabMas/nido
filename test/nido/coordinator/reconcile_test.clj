@@ -13,7 +13,7 @@
    :source {:type :manual :fired-at "T" :fired-by "u"}
    :event-payload {} :skill :foo :first-message "/foo"
    :agent :claude :session-name "run-test-foo-zzzzzzzz"
-   :claude-session-id nil :limits {} :state :running
+   :claude-session-id nil :limits {} :priority 0 :state :running
    :state-history [{:at "T1" :state :queued} {:at "T2" :state :running}]
    :artifacts [] :error nil})
 
