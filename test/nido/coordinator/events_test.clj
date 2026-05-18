@@ -103,3 +103,14 @@
                         :payload {:url "u"}}
                        tbp)
                      first :session-profile)))))
+
+(deftest route-event-priority-overrides-trigger-priority
+  (let [t   {:name :t1 :source {:type :notion-view :database "x"} :skill :s
+             :payload "" :priority 5}
+        tbp {:p [t]}
+        env {:broadcast {:type :notion-view
+                         :source-config {:database "x"}
+                         :payload {:page-id "p" :priority 100}}}
+        requests (events/route env tbp)]
+    (is (= 100 (-> requests first :priority))
+        "event-level :priority should win over trigger-level :priority")))

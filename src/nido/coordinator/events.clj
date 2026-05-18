@@ -37,7 +37,8 @@
             :when (= type (-> t :source :type))
             :when (source-config-match? source-config (:source t))
             :when (f/accept? (:filter t) payload)]
-        {:project project :trigger t :payload payload :priority (or (:priority t) 0)
+        {:project project :trigger t :payload payload
+         :priority (or (:priority payload) (:priority t) 0)
          :session-profile (:session-profile t)}))))
 
 (defn route

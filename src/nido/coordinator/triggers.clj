@@ -20,6 +20,7 @@
    [:agent       {:optional true} keyword?]
    [:limits      {:optional true} [:map-of keyword? any?]]
    [:priority       {:optional true} int?]
+   [:priority-from  {:optional true} [:map [:property string?]]]
    [:session-profile {:optional true} keyword?]
    [:dry-run?       {:optional true} boolean?]
    [:enabled?       {:optional true} boolean?]])

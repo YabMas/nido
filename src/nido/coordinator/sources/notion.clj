@@ -11,6 +11,7 @@
    See spec §Source: :notion-view."
   (:require
    [clojure.set :as set]
+   [clojure.string :as str]
    [nido.coordinator.clock :as clock]
    [nido.coordinator.sources :as sources]
    [nido.coordinator.sources.state :as sst]
@@ -18,6 +19,28 @@
    [nido.notion.views :as views]))
 
 (def ^:private failure-threshold 3)
+
+(defn- priority-from-page
+  "Given a normalised Notion page and a :priority-from config map, extract the
+   numeric value or return nil. Defensive — accepts both the flattened
+   top-level value (when normalise-page promoted it) and the raw formula
+   map (in case the property hasn't been promoted)."
+  [page priority-from]
+  (when-let [prop-name (:property priority-from)]
+    (let [;; Build the kebab-keyword the way client/normalise-page does.
+          k (-> prop-name
+                str/lower-case
+                (str/replace #"[^a-z0-9]+" "-")
+                (str/replace #"^-|-$" "")
+                keyword)
+          v (or (get page k)                              ;; promoted top-level
+                (get-in page [:properties k]))]           ;; fallback
+      (cond
+        (number? v)                                (long v)
+        (and (map? v) (number? (:number v)))       (long (:number v))
+        (and (map? v) (-> v :formula :number number?))
+        (long (-> v :formula :number))
+        :else nil))))
 
 (defn- merge-filters
   "Combine the view's filter with an optional :additional-filter into a
@@ -47,7 +70,7 @@
         prior-state (sst/read-state hash)]
     (if (= :open (:breaker prior-state))
       prior-state
-      (let [{:keys [project view additional-filter]} source-config
+      (let [{:keys [project view additional-filter priority-from]} source-config
             {:keys [database filter]}  (views/resolve-view project view)
             combined-filter            (merge-filters filter additional-filter)
             ds-id                      (notion/resolve-data-source-id database token)
@@ -69,7 +92,10 @@
               (let [additions (set/difference current-rows prev)]
                 (doseq [page pages
                         :when (contains? additions (:page-id page))]
-                  (emit-fn page))))
+                  (let [ev-priority (priority-from-page page priority-from)
+                        payload     (cond-> page
+                                      ev-priority (assoc :priority ev-priority))]
+                    (emit-fn payload)))))
             new-state)
 
           ;; Auth errors open immediately — a bad token won't get better.
@@ -119,7 +145,8 @@
              [:project keyword?]
              [:view    keyword?]
              [:poll    {:optional true} string?]
-             [:additional-filter {:optional true} [:map-of keyword? any?]]]
+             [:additional-filter {:optional true} [:map-of keyword? any?]]
+             [:priority-from     {:optional true} [:map [:property string?]]]]
     :events [:map [:source [:= :notion-view]] [:page-id string?]]
     :start! (fn [source-config emit-fn]
               (start-instance! source-config emit-fn {}))}))

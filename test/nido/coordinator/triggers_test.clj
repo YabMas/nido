@@ -86,3 +86,7 @@
 (deftest schema-rejects-non-keyword-session-profile
   (is (not (m/validate triggers/Trigger
                        (assoc minimal-trigger :session-profile "lite")))))
+
+(deftest schema-accepts-priority-from-map
+  (is (m/validate triggers/Trigger
+                  (assoc minimal-trigger :priority-from {:property "severity-calc"}))))

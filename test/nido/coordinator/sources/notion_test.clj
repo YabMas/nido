@@ -259,3 +259,60 @@
                           {:property "Effort" :select {:is_empty true}}]}
                    @captured-filter)))))
       (finally (fs/delete-tree tmp)))))
+
+;; ---------------------------------------------------------------------------
+;; Tests — per-event :priority-from (Task 4)
+;; ---------------------------------------------------------------------------
+
+(deftest poll-once-stamps-priority-from-property
+  ;; Two-phase: seed with empty result, then a page appears → emit with :priority from formula prop.
+  (with-tmp
+    (fn [_tmp]
+      (write-views! _tmp {:database "db-1" :views {:v {:filter {}}}})
+      (let [emitted (atom [])
+            pages   (atom [])
+            sc      {:type :notion-view :project :brian :view :v
+                     :priority-from {:property "severity-calc"}}]
+        (with-redefs [client/resolve-data-source-id (fn [_ _] "ds-1")
+                      client/data-source-query
+                      (fn [_ds _token _opts]
+                        {:status 200 :has_more false :results @pages})]
+          (let [handle (notion-src/start-instance!
+                         sc
+                         (fn [event] (swap! emitted conj event))
+                         {:token "token"})]
+            ((:poll! handle))   ; seed with empty — no emission
+            (reset! pages [{:id "page-1" :url "u"
+                            :created_time "t" :last_edited_time "t"
+                            :properties {"severity-calc"
+                                         {:type "formula"
+                                          :formula {:type "number" :number 5}}}}])
+            ((:poll! handle))   ; page-1 newly appears → emit
+            (is (= 1 (count @emitted)))
+            (is (= 5 (-> @emitted first :payload :priority))
+                "envelope :priority should come from the Notion formula property")))))))
+
+(deftest poll-once-omits-priority-when-priority-from-missing
+  ;; Two-phase: seed empty, page appears → emits without :priority when no :priority-from.
+  (with-tmp
+    (fn [_tmp]
+      (write-views! _tmp {:database "db-1" :views {:v {:filter {}}}})
+      (let [emitted (atom [])
+            pages   (atom [])
+            sc      {:type :notion-view :project :brian :view :v}]
+        (with-redefs [client/resolve-data-source-id (fn [_ _] "ds-1")
+                      client/data-source-query
+                      (fn [_ds _token _opts]
+                        {:status 200 :has_more false :results @pages})]
+          (let [handle (notion-src/start-instance!
+                         sc
+                         (fn [event] (swap! emitted conj event))
+                         {:token "token"})]
+            ((:poll! handle))   ; seed with empty
+            (reset! pages [{:id "page-1" :url "u"
+                            :created_time "t" :last_edited_time "t"
+                            :properties {}}])
+            ((:poll! handle))   ; page-1 appears → emit
+            (is (= 1 (count @emitted)))
+            (is (nil? (-> @emitted first :payload :priority))
+                "no :priority-from => no :priority stamped on event")))))))
