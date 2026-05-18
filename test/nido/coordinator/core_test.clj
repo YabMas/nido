@@ -44,3 +44,6 @@
           (is (contains? #{:done :failed :awaiting-review}
                          (:state (runs/read-run (:id run)))))))
       (finally (fs/delete-tree tmp)))))
+
+(deftest defaults-include-executor-shutdown-grace
+  (is (= 5000 (core/shutdown-grace-ms))))

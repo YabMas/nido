@@ -27,6 +27,7 @@
 (def ^:private defaults
   {:poll-ms             1000
    :global-parallel-cap 2
+   :executor            {:shutdown-grace-ms 5000}
    :system-prompt       "You are running inside a nido auto-triggered session. The user is not present yet. Write artifacts under <session-home>/artifacts/ with stable filenames. Update <session-home>/_run-status.edn at phase transitions with {:phase :awaiting-input | :working | :complete | :error :note <str>}."})
 
 (def ^:private anomaly-thresholds
@@ -231,6 +232,11 @@
              (catch Exception _ nil))
         (try (pid/delete!)
              (catch Exception _ nil))))))
+
+(defn shutdown-grace-ms
+  "Return the grace period (in ms) for daemon shutdown (SIGTERM to SIGKILL)."
+  []
+  (-> defaults :executor :shutdown-grace-ms))
 
 (defn run!
   "Start the foreground loop. Blocks until interrupted.

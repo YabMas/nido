@@ -152,12 +152,13 @@
       :else
       ;; Stage 3 SIGTERM/SIGKILL path (unchanged).
       (let [proc-handle (.get ^java.util.Optional (java.lang.ProcessHandle/of (long pid)))
-            signal-name (if force? "SIGKILL" "SIGTERM")]
+            signal-name (if force? "SIGKILL" "SIGTERM")
+            grace-ms    (core/shutdown-grace-ms)]
         (println "Coordinator: sending" signal-name "to pid" pid)
         (if force?
           (.destroyForcibly ^java.lang.ProcessHandle proc-handle)
           (.destroy ^java.lang.ProcessHandle proc-handle))
-        (let [deadline (+ (System/currentTimeMillis) 30000)]
+        (let [deadline (+ (System/currentTimeMillis) grace-ms)]
           (loop []
             (cond
               (not (.isAlive ^java.lang.ProcessHandle proc-handle))
@@ -166,7 +167,7 @@
                   (println "Coordinator: stopped."))
 
               (> (System/currentTimeMillis) deadline)
-              (do (println "Coordinator: did not exit within 30s. Use :force true to SIGKILL.")
+              (do (println "Coordinator: did not exit within" grace-ms "ms. Use :force true to SIGKILL.")
                   (System/exit 2))
 
               :else
