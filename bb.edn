@@ -22,6 +22,7 @@
              [tasks.nido-trigger :as nido-trigger]
              [tasks.nido-runs :as nido-runs]
              [tasks.nido-notion :as nido-notion]
+             [tasks.nido-notion-views :as nido-notion-views]
              [tasks.nido-coordinator-source :as nido-coordinator-source])
 
   :init (do
@@ -228,6 +229,10 @@
   nido:notion:auth:check
   {:doc "Print whether a Notion token is present in the macOS Keychain."
    :task (apply nido-notion/auth-check *command-line-args*)}
+
+  nido:notion:views:check
+  {:doc "Validate ~/.nido/projects/<p>/notion-views.edn against the live database. :project <p>."
+   :task (apply nido-notion-views/check-cmd *command-line-args*)}
 
   nido:coordinator:source:list
   {:doc "List source-instance state files."

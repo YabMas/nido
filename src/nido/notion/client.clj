@@ -54,13 +54,37 @@
   []
   (reset! !data-source-cache {}))
 
-(defn- retrieve-database
-  "GET /v1/databases/<id>. Returns parsed JSON or {:error :kw}."
+(defn retrieve-database
+  "GET /v1/databases/<id>. Returns parsed JSON or {:error :kw}.
+   Public so the registry validator (nido.notion.views-check) can call it directly."
   [database-id token]
   (let [resp (try
                (http-request
                  :get
                  (str "https://api.notion.com/v1/databases/" database-id)
+                 {:headers {"Authorization"  (str "Bearer " token)
+                            "Notion-Version" notion-api-version}
+                  :timeout 10000})
+               (catch Exception e
+                 {:status 0 :exception e}))
+        {:keys [status body]} resp]
+    (cond
+      (= status 200) (json/parse-string body true)
+      (= status 401) {:error :auth}
+      (>= status 500) {:error :server}
+      (= status 0)   {:error :network}
+      :else          {:error :http :status status})))
+
+(defn retrieve-data-source
+  "GET /v1/data_sources/<ds-id>. Returns parsed JSON (including :properties)
+   or {:error :kw}. In Notion API 2025-09-03 the schema (property defs +
+   options) lives on the data source, NOT on the database — call this when
+   you need to inspect the property shape."
+  [data-source-id token]
+  (let [resp (try
+               (http-request
+                 :get
+                 (str "https://api.notion.com/v1/data_sources/" data-source-id)
                  {:headers {"Authorization"  (str "Bearer " token)
                             "Notion-Version" notion-api-version}
                   :timeout 10000})
