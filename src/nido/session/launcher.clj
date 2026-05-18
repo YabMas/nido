@@ -25,6 +25,20 @@
        (filter #(= :postgresql (:type %)))
        first))
 
+(defn- profile-path
+  "Path to the persisted profile for a session. Mirrors the logic in
+   engine.clj but kept local to avoid a circular require."
+  [instance-id]
+  (str (fs/path (state/instance-state-dir instance-id) "profile.edn")))
+
+(defn- read-profile-for-session
+  "Return the resolved profile persisted at session-up time. nil if absent
+   (e.g. legacy sessions predating this feature)."
+  [instance-id]
+  (let [path (profile-path instance-id)]
+    (when (fs/exists? path)
+      (io/read-edn path))))
+
 (defn- jj-source-repo?
   "True if `dir` is a jj-colocated source repo. The source's `.jj/repo`
    is a directory (the actual jj data); a workspace's `.jj/repo` is a
@@ -162,29 +176,29 @@
 (defn- render-context
   [{:keys [project-name session-name worktree source-dir
            app-port app-url nrepl-port pg-port
-           links]}]
-  (str
-   "# Active nido session\n"
-   "\n"
-   (render-edit-location (vcs-mode worktree source-dir) source-dir)
-   "\n"
-   "- session: " session-name "\n"
-   "- project: " project-name "\n"
-   "- worktree: " worktree "\n"
-   (when app-url    (str "- app: " app-url "\n"))
-   (when app-port   (str "- app port: " app-port "\n"))
-   (when nrepl-port (str "- nrepl port: " nrepl-port "\n"))
-   (when pg-port    (str "- postgres port: " pg-port "\n"))
-   "\n"
-   "## Services are already running\n"
-   "\n"
-   "The REPL, app server, and database for this worktree are managed by\n"
-   "nido. Don't run project-local scripts that spin up a REPL/app/DB —\n"
-   "connect to what's already live. The postgres MCP is preconfigured to\n"
-   "this session's DB.\n"
-   "\n"
-   (render-links-section links)
-   add-link-instructions))
+           profile links]}]
+  (let [;; Lite sessions have no services; :services can be :all (full) or [] (lite)
+        services-active? (and (some? profile)
+                              (let [svcs (:services profile)]
+                                (or (= :all svcs) (and (seq? svcs) (seq svcs)))))]
+    (str
+     "# Active nido session\n"
+     "\n"
+     (render-edit-location (vcs-mode worktree source-dir) source-dir)
+     "\n"
+     "- session: " session-name "\n"
+     "- project: " project-name "\n"
+     "- worktree: " worktree "\n"
+     (when app-url    (str "- app: " app-url "\n"))
+     (when app-port   (str "- app port: " app-port "\n"))
+     (when nrepl-port (str "- nrepl port: " nrepl-port "\n"))
+     (when pg-port    (str "- postgres port: " pg-port "\n"))
+     "\n"
+     (if services-active?
+       "## Services are already running\n\nThe REPL, app server, and database for this worktree are managed by\nnido. Don't run project-local scripts that spin up a REPL/app/DB —\nconnect to what's already live. The postgres MCP is preconfigured to\nthis session's DB.\n\n"
+       "## Lite session\n\nThis is a lite session with no background services. The worktree is a\nread-only symlink to the project source directory. To inspect the code,\nuse absolute paths or `cd worktree` from this session home.\n\n")
+     (render-links-section links)
+     add-link-instructions)))
 
 (defn- ensure-worktree-symlink!
   "Create or refresh the `worktree` symlink inside the session-home so
@@ -258,18 +272,20 @@
                :hint (str "This session was started before the session-home "
                           "migration. Run `bb nido:session:down` then `:up` "
                           "to rebuild it.")})))
-    (let [home    (state/session-home-dir project-name session-name)
+    (let [profile      (read-profile-for-session instance-id)
+          home         (state/session-home-dir project-name session-name)
           link-entries (when instance-id (links/read-links instance-id))
-          ctx-doc (render-context {:session-name session-name
-                                   :project-name project-name
-                                   :worktree     worktree
-                                   :source-dir   (project-source-dir project-name)
-                                   :app-port     (get-in ctx [:app :port])
-                                   :app-url      (get-in ctx [:app :url])
-                                   :nrepl-port   (get-in ctx [:repl :port])
-                                   :pg-port      pg-port
-                                   :links        link-entries})
-          mcp-doc (when (and pg-svc pg-port) (mcp-config pg-svc pg-port))]
+          ctx-doc      (render-context {:session-name session-name
+                                        :project-name project-name
+                                        :worktree     worktree
+                                        :source-dir   (project-source-dir project-name)
+                                        :app-port     (get-in ctx [:app :port])
+                                        :app-url      (get-in ctx [:app :url])
+                                        :nrepl-port   (get-in ctx [:repl :port])
+                                        :pg-port      pg-port
+                                        :profile      profile
+                                        :links        link-entries})
+          mcp-doc      (when (and pg-svc pg-port) (mcp-config pg-svc pg-port))]
       (fs/create-dirs home)
       (when mcp-doc
         (let [path (mcp-path project-name session-name)]
@@ -309,21 +325,24 @@
    session-home dir is missing — links land on disk regardless and the
    next `up` will rebuild the briefing fresh."
   [project-name session-name instance-id]
-  (let [home    (state/session-home-dir project-name session-name)
-        session (some-> instance-id state/read-session)
-        ctx     (:context session)]
+  (let [home     (state/session-home-dir project-name session-name)
+        session  (some-> instance-id state/read-session)
+        ctx      (:context session)
+        worktree (get-in ctx [:session :project-dir])]
     (when (and ctx (fs/exists? home))
-      (let [link-entries (links/read-links instance-id)
-            doc (render-context
-                 {:session-name session-name
-                  :project-name project-name
-                  :worktree     (get-in ctx [:session :project-dir])
-                  :source-dir   (project-source-dir project-name)
-                  :app-port     (get-in ctx [:app :port])
-                  :app-url      (get-in ctx [:app :url])
-                  :nrepl-port   (get-in ctx [:repl :port])
-                  :pg-port      (get-in ctx [:pg :port])
-                  :links        link-entries})]
+      (let [profile      (read-profile-for-session instance-id)
+            link-entries (links/read-links instance-id)
+            doc          (render-context
+                          {:session-name session-name
+                           :project-name project-name
+                           :worktree     worktree
+                           :source-dir   (project-source-dir project-name)
+                           :app-port     (get-in ctx [:app :port])
+                           :app-url      (get-in ctx [:app :url])
+                           :nrepl-port   (get-in ctx [:repl :port])
+                           :pg-port      (get-in ctx [:pg :port])
+                           :profile      profile
+                           :links        link-entries})]
         (io/write-text! (claude-md-path project-name session-name) doc)))))
 
 (defn remove-artifacts!
