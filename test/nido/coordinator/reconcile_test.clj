@@ -95,3 +95,36 @@
         ;; got a session or agent.
         (is (= :failed (:state r)))
         (is (= :orphaned-from-restart (-> r :error :reason)))))))
+
+(deftest reconcile-one-handles-legacy-run-without-priority
+  ;; Pre-Plan-A on-disk Runs lack :priority. The reconciler reads the Run,
+  ;; updates state/error, and calls write-run! which validates the closed
+  ;; schema. Without backfill-on-read this crashed daemon startup.
+  (with-tmp
+    (fn []
+      (let [old-run {:id "legacy-2"
+                     :project :brian
+                     :trigger :legacy
+                     :source {:type :legacy}
+                     :event-payload {}
+                     :skill :noop
+                     :first-message "x"
+                     :agent :claude
+                     :session-name "s"
+                     :claude-session-id nil
+                     :limits {:budget "10m" :max-failures 3}
+                     :state :awaiting-review
+                     :state-history [{:at "2026-05-15T00:00:00Z" :state :queued}]
+                     :artifacts []
+                     :error nil}]
+        (fs/create-dirs (cstate/run-dir "legacy-2"))
+        ;; Write the raw edn directly — bypassing write-run! validation so we
+        ;; can persist a record missing :priority as it would appear on disk.
+        (spit (cstate/run-edn-path "legacy-2") (pr-str old-run))
+        ;; reconcile! should not throw on a legacy run lacking :priority
+        (reconcile/reconcile!)
+        (let [after (runs/read-run "legacy-2")]
+          (is (= 0 (:priority after))
+              "post-reconcile run should have :priority backfilled to 0")
+          (is (contains? #{:done :failed :awaiting-review} (:state after))
+              "reconcile should have transitioned run to a terminal or review state"))))))

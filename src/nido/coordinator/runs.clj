@@ -49,11 +49,14 @@
                      :run    run}))))
 
 (defn read-run
-  "Read a run.edn by id. Returns nil if absent."
+  "Read a run.edn by id. Returns nil if absent.
+   Normalizes legacy records: backfills :priority 0 when the key is absent
+   so that pre-Plan-A on-disk Runs pass the closed schema on write-back."
   [run-id]
   (let [path (cstate/run-edn-path run-id)]
     (when (fs/exists? path)
-      (io/read-edn path))))
+      (-> (io/read-edn path)
+          (update :priority #(if (int? %) % 0))))))
 
 (defn write-run!
   "Validate then write a Run record. Parent dir must already exist."

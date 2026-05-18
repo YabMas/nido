@@ -140,3 +140,31 @@
               run      (runs/create-run! fire-req {:fired-at "T" :fired-by "u"})]
           (is (= 7 (:priority run)))))
       (finally (fs/delete-tree tmp)))))
+
+(deftest read-run-backfills-missing-priority
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (cstate/ensure-dirs!)
+        (let [old-run {:id              "legacy-run-1"
+                       :project         :brian
+                       :trigger         :legacy
+                       :source          {:type :legacy}
+                       :event-payload   {}
+                       :skill           :noop
+                       :first-message   "x"
+                       :agent           :claude
+                       :session-name    "s"
+                       :claude-session-id nil
+                       :limits          {:budget "10m" :max-failures 3}
+                       :state           :awaiting-review
+                       :state-history   [{:at "2026-05-15T00:00:00Z" :state :queued}]
+                       :artifacts       []
+                       :error           nil}
+              path    (cstate/run-edn-path "legacy-run-1")]
+          (fs/create-dirs (cstate/run-dir "legacy-run-1"))
+          (spit path (pr-str old-run))
+          (let [loaded (runs/read-run "legacy-run-1")]
+            (is (= 0 (:priority loaded))
+                "read-run should backfill :priority 0 on legacy Runs missing the key"))))
+      (finally (fs/delete-tree tmp)))))
