@@ -70,3 +70,11 @@
 
 (deftest render-payload-missing-key-renders-empty
   (is (= "url=" (triggers/render-payload "url={{event/missing}}" {:url "x"}))))
+
+(deftest schema-accepts-priority
+  (is (m/validate triggers/Trigger
+                  (assoc minimal-trigger :priority 10))))
+
+(deftest schema-rejects-non-int-priority
+  (is (not (m/validate triggers/Trigger
+                       (assoc minimal-trigger :priority "high")))))

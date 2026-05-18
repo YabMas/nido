@@ -19,6 +19,7 @@
    [:payload-key {:optional true} keyword?]
    [:agent       {:optional true} keyword?]
    [:limits      {:optional true} [:map-of keyword? any?]]
+   [:priority    {:optional true} int?]
    [:dry-run?    {:optional true} boolean?]
    [:enabled?    {:optional true} boolean?]])
 
