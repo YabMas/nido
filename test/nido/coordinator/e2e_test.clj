@@ -1,15 +1,39 @@
 (ns nido.coordinator.e2e-test
   (:require
    [babashka.fs :as fs]
-   [clojure.test :refer [deftest is]]
+   [clojure.test :refer [deftest is use-fixtures]]
    [nido.coordinator.agent :as agent]
    [nido.coordinator.breakers :as breakers]
    [nido.coordinator.core :as core]
+   [nido.coordinator.executor :as executor]
    [nido.coordinator.queue :as queue]
    [nido.coordinator.runs :as runs]
    [nido.coordinator.state :as cstate]
    [nido.io :as io]
    [nido.project :as project]))
+
+(defn- reset-executor! [f]
+  (executor/configure! {:global-cap 4})
+  (executor/clear!)
+  (f))
+
+(use-fixtures :each reset-executor!)
+
+(defn- tick-until-terminal!
+  "Poll for a terminal state (max 20 iterations × 50ms = 1s cap).
+   Needed because process-envelope! now submits to the executor instead
+   of blocking synchronously. Robust under load."
+  []
+  (loop [i 0]
+    (when (< i 20)
+      (core/tick!)
+      (let [run-dirs (->> (fs/list-dir (cstate/runs-dir))
+                          (filter fs/directory?))
+            state (when (seq run-dirs)
+                    (:state (runs/read-run (str (fs/file-name (first run-dirs))))))]
+        (if (contains? #{:done :failed :awaiting-review :halted :dry-run-would-fire} state)
+          (do (Thread/sleep 50) (core/tick!))
+          (do (Thread/sleep 50) (recur (inc i))))))))
 
 (deftest manual-trigger-end-to-end
   (let [tmp     (fs/create-temp-dir)
@@ -49,8 +73,8 @@
         (cstate/ensure-dirs!)
         (queue/enqueue! {:target  {:project :brian :trigger :investigate-bug}
                          :payload {:url "https://x"}})
-        ;; 3. one tick
-        (core/tick!)
+        ;; 3. tick + wait for executor future + reap
+        (tick-until-terminal!)
         ;; 4. assert
         (let [run-dirs (->> (fs/list-dir (cstate/runs-dir))
                             (filter fs/directory?))]
@@ -82,13 +106,13 @@
         (dotimes [_ 3]
           (queue/enqueue! {:target  {:project :brian :trigger :failing}
                            :payload {}})
-          (core/tick!))
+          (tick-until-terminal!))
         (is (breakers/tripped? :brian :failing)
             "3 failures should trip the breaker")
         ;; A 4th fire should NOT create a new Run (breaker open).
         (let [runs-before (count (filter fs/directory? (fs/list-dir (cstate/runs-dir))))]
           (queue/enqueue! {:target {:project :brian :trigger :failing} :payload {}})
-          (core/tick!)
+          (tick-until-terminal!)
           (is (= runs-before (count (filter fs/directory? (fs/list-dir (cstate/runs-dir)))))
               "skipped envelope should not create a Run")))
       (finally (fs/delete-tree tmp)))))

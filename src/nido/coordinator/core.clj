@@ -20,6 +20,7 @@
    [nido.coordinator.sources.notion :as nsource]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.status-file :as status-file]
+   [nido.coordinator.executor :as executor]
    [nido.coordinator.triggers :as triggers]
    [nido.project :as project]))
 
@@ -95,9 +96,12 @@
             :when (not (contains? current (sources/config-hash sc)))]
       (start-source! sc))))
 
-(defn- run-now!
+(defn- run-blocking!
   "Drive a single :queued Run to terminal/awaiting-review state.
-   Synchronous in Stage 1a — concurrency is added in Stage 2."
+   Called inside an executor-spawned future (one per slot). The name
+   reflects that this fn blocks its thread for the duration of the run;
+   it is no longer called directly from process-envelope! (which now
+   submits to the executor instead)."
   [run-id]
   (runs/transition! run-id :running)
   (let [run          (runs/read-run run-id)
@@ -137,21 +141,11 @@
           trigger-name (:trigger run)
           max-failures (or (-> run :limits :max-failures) 3)]
       (case next-state
-        :failed          (breakers/record-failure! project trigger-name max-failures)
+        :failed          (do (swap! !detector anomaly/record-failure (clock/now-iso))
+                             (breakers/record-failure! project trigger-name max-failures))
         :done            (breakers/record-success! project trigger-name)
         :awaiting-review (breakers/record-success! project trigger-name)
         nil))))
-
-(defn- mark-run-failed! [run-id ex]
-  (try
-    (let [r (runs/read-run run-id)]
-      (when r
-        (runs/write-run! (assoc r
-                                :state :failed
-                                :error {:reason  :coordinator-exception
-                                        :message (ex-message ex)
-                                        :data    (ex-data ex)}))))
-    (catch Exception _ nil)))
 
 (defn- process-envelope! [envelope triggers-by-project]
   (doseq [routed (events/route envelope triggers-by-project)]
@@ -184,18 +178,7 @@
                                   {:fired-at (clock/now-iso)
                                    :fired-by (System/getenv "USER")})]
         (swap! !detector anomaly/record-spawn (clock/now-iso))
-        (try
-          (run-now! (:id run))
-          (let [final (runs/read-run (:id run))]
-            (when (= :failed (:state final))
-              (swap! !detector anomaly/record-failure (clock/now-iso))))
-          (catch Exception e
-            (swap! !detector anomaly/record-failure (clock/now-iso))
-            (binding [*err* *err*]
-              (.println ^java.io.PrintWriter *err*
-                        (str "ERROR: run-now! threw for "
-                             (:id run) " — " (ex-message e))))
-            (mark-run-failed! (:id run) e)))))))
+        (executor/submit! (:id run) (:priority run))))))
 
 (defn tick!
   "One iteration of the main loop. Public for testability."
@@ -214,6 +197,9 @@
         ;; tick by source polls. Keeps each tick's unit of work small.
         (doseq [env (queue/drain!)]
           (process-envelope! env triggers-by-project))
+        ;; Reap finished executor futures and promote waiting Runs into
+        ;; free slots. run-blocking! is the body executed per slot.
+        (executor/tick! run-blocking!)
         ;; Then poll due sources. Their emissions land in the queue and
         ;; will be picked up next tick.
         (let [now-ms (System/currentTimeMillis)]
@@ -257,6 +243,7 @@
   (pid/write! (long (.pid (java.lang.ProcessHandle/current))))
   (install-shutdown-hook!)
   (heartbeat/write! {:status :running :slots-in-use 0})
+  (executor/configure! {:global-cap (:global-parallel-cap defaults)})
   (nsource/register!)                                 ; register Notion source plugin
   (loop []
     (tick!)
