@@ -11,6 +11,7 @@
    ~/.nido/state/<instance-id>/ — see nido.session.state."
   (:require
    [babashka.fs :as fs]
+   [clojure.java.io :as jio]
    [clojure.string :as str]
    [nido.config :as config]
    [nido.coordinator.shim :as coord-shim]
@@ -176,10 +177,23 @@
          "the worktree below — NOT in nido's source tree. Use absolute paths when\n"
          "reading/writing files there, or `cd worktree` from this session home.\n")))
 
+(defn read-project-briefing
+  "Return the project-specific briefing markdown for <project-name>, or
+   nil when no briefing resource exists. Looked up on the classpath at
+   project-briefings/<project>.md so projects without dedicated briefings
+   (most of them today) get a clean default. The content is embedded
+   verbatim into the session-home CLAUDE.md by render-context — keep the
+   resource focused on domain rules (routing, REPL discipline, …) that
+   nido's generic briefing can't say."
+  [project-name]
+  (when project-name
+    (when-let [resource (jio/resource (str "project-briefings/" project-name ".md"))]
+      (slurp resource))))
+
 (defn- render-context
   [{:keys [project-name session-name worktree source-dir
            app-port app-url nrepl-port pg-port
-           profile links]}]
+           profile links project-briefing]}]
   (let [;; Lite sessions have no services; :services can be :all (full) or [] (lite)
         services-active? (and (some? profile)
                               (let [svcs (:services profile)]
@@ -200,6 +214,7 @@
      (if services-active?
        "## Services are already running\n\nThe REPL, app server, and database for this worktree are managed by\nnido. Don't run project-local scripts that spin up a REPL/app/DB —\nconnect to what's already live. The postgres MCP is preconfigured to\nthis session's DB.\n\n"
        "## Lite session\n\nThis is a lite session with no background services. The worktree is a\nread-only symlink to the project source directory. To inspect the code,\nuse absolute paths or `cd worktree` from this session home.\n\n")
+     (when-not (str/blank? project-briefing) (str project-briefing "\n"))
      (render-links-section links)
      add-link-instructions)))
 
@@ -278,16 +293,17 @@
     (let [profile      (read-profile-for-session instance-id)
           home         (state/session-home-dir project-name session-name)
           link-entries (when instance-id (links/read-links instance-id))
-          ctx-doc      (render-context {:session-name session-name
-                                        :project-name project-name
-                                        :worktree     worktree
-                                        :source-dir   (project-source-dir project-name)
-                                        :app-port     (get-in ctx [:app :port])
-                                        :app-url      (get-in ctx [:app :url])
-                                        :nrepl-port   (get-in ctx [:repl :port])
-                                        :pg-port      pg-port
-                                        :profile      profile
-                                        :links        link-entries})
+          ctx-doc      (render-context {:session-name     session-name
+                                        :project-name     project-name
+                                        :worktree         worktree
+                                        :source-dir       (project-source-dir project-name)
+                                        :app-port         (get-in ctx [:app :port])
+                                        :app-url          (get-in ctx [:app :url])
+                                        :nrepl-port       (get-in ctx [:repl :port])
+                                        :pg-port          pg-port
+                                        :profile          profile
+                                        :links            link-entries
+                                        :project-briefing (read-project-briefing project-name)})
           mcp-doc      (when (and pg-svc pg-port) (mcp-config pg-svc pg-port))]
       (fs/create-dirs home)
       (when mcp-doc
@@ -336,16 +352,17 @@
       (let [profile      (read-profile-for-session instance-id)
             link-entries (links/read-links instance-id)
             doc          (render-context
-                          {:session-name session-name
-                           :project-name project-name
-                           :worktree     worktree
-                           :source-dir   (project-source-dir project-name)
-                           :app-port     (get-in ctx [:app :port])
-                           :app-url      (get-in ctx [:app :url])
-                           :nrepl-port   (get-in ctx [:repl :port])
-                           :pg-port      (get-in ctx [:pg :port])
-                           :profile      profile
-                           :links        link-entries})]
+                          {:session-name     session-name
+                           :project-name     project-name
+                           :worktree         worktree
+                           :source-dir       (project-source-dir project-name)
+                           :app-port         (get-in ctx [:app :port])
+                           :app-url          (get-in ctx [:app :url])
+                           :nrepl-port       (get-in ctx [:repl :port])
+                           :pg-port          (get-in ctx [:pg :port])
+                           :profile          profile
+                           :links            link-entries
+                           :project-briefing (read-project-briefing project-name)})]
         (io/write-text! (claude-md-path project-name session-name) doc)))))
 
 (defn remove-artifacts!
