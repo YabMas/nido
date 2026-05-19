@@ -94,3 +94,26 @@
 (deftest schema-accepts-uncapped
   (is (m/validate triggers/Trigger
                   (assoc minimal-trigger :uncapped? true))))
+
+(deftest trigger-schema-accepts-preprocess-vector
+  (let [t {:name :triage-new
+           :source {:type :notion-view}
+           :skill :triage-bug
+           :payload ""
+           :preprocess [:notion-ticket]}]
+    (is (m/validate triggers/Trigger t))))
+
+(deftest trigger-schema-rejects-non-keyword-preprocess
+  (let [t {:name :triage-new
+           :source {:type :notion-view}
+           :skill :triage-bug
+           :payload ""
+           :preprocess ["notion-ticket"]}]
+    (is (not (m/validate triggers/Trigger t)))))
+
+(deftest trigger-schema-allows-no-preprocess
+  (let [t {:name :smoke
+           :source {:type :smoke}
+           :skill :smoke
+           :payload ""}]
+    (is (m/validate triggers/Trigger t))))
