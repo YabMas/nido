@@ -14,7 +14,7 @@
 
 (def states
   "Permitted Run states. See spec §Runs / Lifecycle."
-  #{:queued :running :awaiting-review :done :failed :halted :dry-run-would-fire})
+  #{:queued :preprocessing :running :awaiting-review :done :failed :halted :dry-run-would-fire})
 
 (def Run
   [:map {:closed true}
@@ -71,8 +71,12 @@
 
 (def allowed-transitions
   "Map of from-state → set of to-states.
-   See spec §Runs / Lifecycle. Terminal states have no entries."
-  {:queued          #{:running :failed :halted :dry-run-would-fire}
+   See spec §Runs / Lifecycle. Terminal states have no entries.
+   :preprocessing is an optional phase between :queued and :running, used
+   by triggers with a :preprocess config. Triggers without :preprocess skip
+   directly :queued → :running (both remain valid)."
+  {:queued          #{:preprocessing :running :failed :halted :dry-run-would-fire}
+   :preprocessing   #{:running :failed :halted}
    :running         #{:awaiting-review :done :failed :halted}
    :awaiting-review #{:running :done :failed :halted}})
 

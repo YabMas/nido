@@ -274,3 +274,22 @@
             (is (= false (:uncapped? loaded))
                 "read-run should backfill :uncapped? false on legacy Runs"))))
       (finally (fs/delete-tree tmp)))))
+
+(deftest preprocessing-is-a-state
+  (is (contains? runs/states :preprocessing)))
+
+(deftest queued-can-transition-to-preprocessing
+  (is (runs/valid-transition? :queued :preprocessing)))
+
+(deftest preprocessing-can-transition-to-running
+  (is (runs/valid-transition? :preprocessing :running)))
+
+(deftest preprocessing-can-transition-to-failed
+  (is (runs/valid-transition? :preprocessing :failed)))
+
+(deftest preprocessing-can-transition-to-halted
+  (is (runs/valid-transition? :preprocessing :halted)))
+
+(deftest queued-still-allows-direct-running
+  ;; Triggers without :preprocess skip the preprocessing phase entirely.
+  (is (runs/valid-transition? :queued :running)))
