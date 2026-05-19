@@ -1,10 +1,12 @@
-(ns nido.ui.watchdog
+(ns nido.coordinator.watchdog
   "Background thread that fully stops idle sessions to free memory.
    'Idle' is determined by TCP sampling: the watchdog counts
    ESTABLISHED connections on each running app's port; if zero for
    longer than idle-timeout-ms, the entire session (app + JVM + any
    isolated PG) is torn down via lifecycle/down!. Wake is user-driven:
-   idle-stopped sessions stay down until the next `session:up`."
+   idle-stopped sessions stay down until the next `session:up`.
+
+   Owned by the coordinator daemon (see nido.coordinator.core/run!)."
   (:require
    [babashka.fs :as fs]
    [babashka.process :refer [shell]]

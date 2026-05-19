@@ -22,8 +22,8 @@
    [nido.coordinator.status-file :as status-file]
    [nido.coordinator.executor :as executor]
    [nido.coordinator.triggers :as triggers]
-   [nido.project :as project]
-   [nido.ui.watchdog :as watchdog]))
+   [nido.coordinator.watchdog :as watchdog]
+   [nido.project :as project]))
 
 (def ^:private defaults
   {:poll-ms             1000
