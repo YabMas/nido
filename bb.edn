@@ -24,7 +24,8 @@
              [tasks.nido-runs-clean :as nido-runs-clean]
              [tasks.nido-notion :as nido-notion]
              [tasks.nido-notion-views :as nido-notion-views]
-             [tasks.nido-coordinator-source :as nido-coordinator-source])
+             [tasks.nido-coordinator-source :as nido-coordinator-source]
+             [tasks.nido-transcribe :as nido-transcribe])
 
   :init (do
           ;; Disable babashka.process/shell's default destroy-tree JVM
@@ -242,6 +243,10 @@
   nido:coordinator:source:reset
   {:doc "Clear breaker + failure counter for a source-instance."
    :task (apply nido-coordinator-source/reset-cmd *command-line-args*)}
+
+  nido:transcribe-video
+  {:doc "Transcribe a video URL → VTT: <url> :out <path> [:model :small] [:timeout 5m]"
+   :task (apply nido-transcribe/run *command-line-args*)}
 
   nido:halt
   {:doc "Alias for nido:coordinator:halt — the panic button."
