@@ -25,7 +25,8 @@
              [tasks.nido-notion :as nido-notion]
              [tasks.nido-notion-views :as nido-notion-views]
              [tasks.nido-coordinator-source :as nido-coordinator-source]
-             [tasks.nido-transcribe :as nido-transcribe])
+             [tasks.nido-transcribe :as nido-transcribe]
+             [tasks.nido-notion-preprocess :as nido-notion-preprocess])
 
   :init (do
           ;; Disable babashka.process/shell's default destroy-tree JVM
@@ -235,6 +236,10 @@
   nido:notion:views:check
   {:doc "Validate ~/.nido/projects/<p>/notion-views.edn against the live database. :project <p>."
    :task (apply nido-notion-views/check-cmd *command-line-args*)}
+
+  nido:notion:preprocess-ticket
+  {:doc "Preprocess a Notion ticket (transcribe videos): :page <id> :out <dir> [:budget 10m]"
+   :task (apply nido-notion-preprocess/run *command-line-args*)}
 
   nido:coordinator:source:list
   {:doc "List source-instance state files."
