@@ -22,7 +22,8 @@
    [nido.coordinator.status-file :as status-file]
    [nido.coordinator.executor :as executor]
    [nido.coordinator.triggers :as triggers]
-   [nido.project :as project]))
+   [nido.project :as project]
+   [nido.ui.watchdog :as watchdog]))
 
 (def ^:private defaults
   {:poll-ms             1000
@@ -231,6 +232,8 @@
       (fn []
         (doseq [hash (keys @!source-instances)]
           (stop-source! hash))
+        (try (watchdog/stop!)
+             (catch Exception _ nil))
         (try (heartbeat/write! {:status :stopped :slots-in-use 0})
              (catch Exception _ nil))
         (try (pid/delete!)
@@ -254,6 +257,7 @@
   (heartbeat/write! {:status :running :slots-in-use 0})
   (executor/configure! {:global-cap (:global-parallel-cap defaults)})
   (nsource/register!)                                 ; register Notion source plugin
+  (watchdog/start! {})                                ; idle-session reaper (was dashboard-only)
   (loop []
     (tick!)
     (Thread/sleep poll-ms)
