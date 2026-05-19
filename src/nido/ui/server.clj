@@ -8,7 +8,6 @@
             [nido.session.state :as state]
             [nido.ui.discovery :as discovery]
             [nido.ui.views :as views]
-            [nido.ui.watchdog :as watchdog]
             [org.httpkit.server :as http]))
 
 ;; ---------------------------------------------------------------------------
@@ -353,20 +352,19 @@
 (defonce ^:private server-atom (atom nil))
 
 (defn start!
-  "Start the dashboard server and the idle-app watchdog. Returns the stop fn."
-  [{:keys [port watchdog?] :or {port 8800 watchdog? true}}]
+  "Start the dashboard server. The idle-session watchdog is owned by the
+   coordinator daemon (see nido.coordinator.core/run!), so the dashboard
+   no longer starts one."
+  [{:keys [port] :or {port 8800}}]
   (when-let [old @server-atom]
     (old))
   (let [stop-fn (http/run-server handle-request {:port port})]
     (reset! server-atom stop-fn)
     (println (str "[nido] Dashboard running at http://localhost:" port))
-    (when watchdog?
-      (watchdog/start! {}))
     stop-fn))
 
 (defn stop! []
   (when-let [stop-fn @server-atom]
     (stop-fn)
     (reset! server-atom nil)
-    (watchdog/stop!)
     (println "[nido] Dashboard stopped")))
