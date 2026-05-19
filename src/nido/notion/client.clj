@@ -196,3 +196,68 @@
            ;; Promote each property to top-level too (filter.clj's lookup
            ;; checks top-level first, then :properties).
            props-kw)))
+
+(defn retrieve-block-children
+  "GET /v1/blocks/<block-id>/children. Single page; pass `:start-cursor`
+   to get the next page. Returns:
+     {:status 200 :results [...] :has_more bool :next_cursor str}
+     {:status N   :error :auth|:server|:network|:http}"
+  [block-id token {:keys [start-cursor]}]
+  (let [base-url (str "https://api.notion.com/v1/blocks/" block-id "/children?page_size=100")
+        url      (if start-cursor (str base-url "&start_cursor=" start-cursor) base-url)
+        resp     (try
+                   (http-request
+                     :get url
+                     {:headers {"Authorization"  (str "Bearer " token)
+                                "Notion-Version" notion-api-version}
+                      :timeout 10000})
+                   (catch Exception e {:status 0 :exception e}))
+        {:keys [status body]} resp]
+    (cond
+      (= status 200) (let [parsed (json/parse-string body true)]
+                       {:status 200
+                        :results     (:results parsed)
+                        :has_more    (:has_more parsed)
+                        :next_cursor (:next_cursor parsed)})
+      (= status 401) {:status status :error :auth}
+      (>= status 500) {:status status :error :server}
+      (= status 0)    {:status 0     :error :network}
+      :else           {:status status :error :http})))
+
+(defn walk-blocks
+  "Recursively walk a page's block tree. Returns a vector of
+   {:block <notion-block-map> :depth n}. Bounded by :max-depth (default 10)
+   and :max-total (default 1000). Pagination is followed automatically.
+
+   Throws ex-info on auth/network/server failure — the caller is expected
+   to surface this as a page-level failure (no partial manifest written)."
+  [root-id token {:keys [max-depth max-total]
+                  :or   {max-depth 10 max-total 1000}}]
+  (let [seen (volatile! 0)]
+    (letfn [(visit [block-id depth]
+              (if (or (> depth max-depth) (>= @seen max-total))
+                []
+                (loop [cursor nil
+                       acc    []]
+                  (let [{:keys [status results has_more next_cursor]
+                         :as page} (retrieve-block-children
+                                     block-id token
+                                     (when cursor {:start-cursor cursor}))]
+                    (when-not (= 200 status)
+                      (throw (ex-info "Notion block fetch failed"
+                                      {:block block-id :error page})))
+                    (let [acc' (reduce
+                                 (fn [a b]
+                                   (if (>= @seen max-total)
+                                     (reduced a)
+                                     (do (vswap! seen inc)
+                                         (let [entry {:block b :depth depth}
+                                               kids  (when (:has_children b)
+                                                       (visit (:id b) (inc depth)))]
+                                           (cond-> (conj a entry)
+                                             (seq kids) (into kids))))))
+                                 acc results)]
+                      (if (and has_more next_cursor (< @seen max-total))
+                        (recur next_cursor acc')
+                        acc'))))))]
+      (visit root-id 0))))

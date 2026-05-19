@@ -121,3 +121,159 @@
               :properties {:Weird {:type "files" :files [{:name "x"}]}}}]
     ;; Unknown types render as the raw property map so debugging is possible.
     (is (some? (get-in (notion/normalise-page page) [:properties :weird])))))
+
+(deftest retrieve-block-children-returns-results-and-cursor
+  (let [captured (atom nil)]
+    (with-redefs [notion/http-request
+                  (fn [method url opts]
+                    (reset! captured {:method method :url url :opts opts})
+                    {:status 200
+                     :body (cheshire.core/generate-string
+                             {:results [{:id "b1" :type "paragraph"}]
+                              :has_more true
+                              :next_cursor "cur-2"})})]
+      (let [r (notion/retrieve-block-children "page-1" "tok" {})]
+        (is (= 200 (:status r)))
+        (is (= [{:id "b1" :type "paragraph"}] (:results r)))
+        (is (true? (:has_more r)))
+        (is (= "cur-2" (:next_cursor r)))
+        (is (re-find #"/v1/blocks/page-1/children" (:url @captured)))))))
+
+(deftest retrieve-block-children-passes-cursor
+  (let [captured (atom nil)]
+    (with-redefs [notion/http-request
+                  (fn [_method url _opts]
+                    (reset! captured url)
+                    {:status 200
+                     :body (cheshire.core/generate-string
+                             {:results [] :has_more false})})]
+      (notion/retrieve-block-children "page-1" "tok" {:start-cursor "cur-X"})
+      (is (re-find #"start_cursor=cur-X" @captured)))))
+
+(deftest retrieve-block-children-handles-auth
+  (with-redefs [notion/http-request (fn [_ _ _] {:status 401 :body ""})]
+    (is (= :auth (-> (notion/retrieve-block-children "p" "t" {}) :error)))))
+
+(deftest walk-blocks-paginates-and-recurses-children
+  ;; page-1 has [b1 (no children), b2 (has children=true)]; b2 has [b3].
+  ;; Two pages of /blocks/page-1/children, then b2's children.
+  (let [responses (atom {"page-1?"        [{:status 200
+                                            :body (cheshire.core/generate-string
+                                                    {:results [{:id "b1" :type "paragraph" :has_children false}]
+                                                     :has_more true
+                                                     :next_cursor "p1-cur"})}
+                                           {:status 200
+                                            :body (cheshire.core/generate-string
+                                                    {:results [{:id "b2" :type "toggle" :has_children true}]
+                                                     :has_more false})}]
+                         "b2?"             [{:status 200
+                                            :body (cheshire.core/generate-string
+                                                    {:results [{:id "b3" :type "paragraph" :has_children false}]
+                                                     :has_more false})}]})
+        next!     (fn [k]
+                    (let [[h & t] (get @responses k)]
+                      (swap! responses assoc k (vec t))
+                      h))]
+    (with-redefs [notion/http-request
+                  (fn [_method url _opts]
+                    (cond
+                      (re-find #"/v1/blocks/page-1/children" url) (next! "page-1?")
+                      (re-find #"/v1/blocks/b2/children"     url) (next! "b2?")))]
+      (let [ids (->> (notion/walk-blocks "page-1" "tok" {})
+                     (map (comp :id :block)))]
+        (is (= ["b1" "b2" "b3"] ids))))))
+
+(deftest walk-blocks-respects-max-total
+  ;; Two paginated responses of 50 + 100 blocks; max-total=30 caps result at 30.
+  (let [responses (atom
+                    [{:status 200
+                      :body (cheshire.core/generate-string
+                              {:results (vec (for [i (range 50)]
+                                               {:id (str "b" i)
+                                                :type "paragraph"
+                                                :has_children false}))
+                               :has_more true
+                               :next_cursor "more"})}
+                     {:status 200
+                      :body (cheshire.core/generate-string
+                              {:results (vec (for [i (range 100 200)]
+                                               {:id (str "b" i)
+                                                :type "paragraph"
+                                                :has_children false}))
+                               :has_more false})}])
+        ix        (atom 0)]
+    (with-redefs [notion/http-request
+                  (fn [_ _ _]
+                    (let [r (nth @responses @ix)]
+                      (swap! ix inc)
+                      r))]
+      (let [walked (notion/walk-blocks "p" "t" {:max-total 30})]
+        (is (= 30 (count walked)))))))
+
+(deftest walk-blocks-assigns-depths-with-children-incremented
+  ;; Same shape as walk-blocks-paginates-and-recurses-children, but verifying :depth.
+  (let [responses (atom {"page-1?" [{:status 200
+                                     :body (cheshire.core/generate-string
+                                             {:results [{:id "b1" :type "paragraph" :has_children false}
+                                                        {:id "b2" :type "toggle"    :has_children true}]
+                                              :has_more false})}]
+                         "b2?"     [{:status 200
+                                     :body (cheshire.core/generate-string
+                                             {:results [{:id "b3" :type "paragraph" :has_children false}]
+                                              :has_more false})}]})
+        next!     (fn [k]
+                    (let [[h & t] (get @responses k)]
+                      (swap! responses assoc k (vec t))
+                      h))]
+    (with-redefs [notion/http-request
+                  (fn [_method url _opts]
+                    (cond
+                      (re-find #"/v1/blocks/page-1/children" url) (next! "page-1?")
+                      (re-find #"/v1/blocks/b2/children"     url) (next! "b2?")))]
+      (let [walked (notion/walk-blocks "page-1" "tok" {})]
+        (is (= [0 0 1] (mapv :depth walked))
+            "root-level blocks are depth 0; b3 (child of b2) is depth 1")))))
+
+(deftest walk-blocks-respects-max-depth
+  ;; A 3-deep tree (page → b1 → b1c → b1cc). With :max-depth 1, only depth 0 and 1
+  ;; should appear — depth 2 is excluded.
+  (let [responses (atom {"page-1?" [{:status 200
+                                     :body (cheshire.core/generate-string
+                                             {:results [{:id "b1" :type "toggle" :has_children true}]
+                                              :has_more false})}]
+                         "b1?"     [{:status 200
+                                     :body (cheshire.core/generate-string
+                                             {:results [{:id "b1c" :type "toggle" :has_children true}]
+                                              :has_more false})}]
+                         "b1c?"    [{:status 200
+                                     :body (cheshire.core/generate-string
+                                             {:results [{:id "b1cc" :type "paragraph" :has_children false}]
+                                              :has_more false})}]})
+        next!     (fn [k]
+                    (let [[h & t] (get @responses k)]
+                      (swap! responses assoc k (vec t))
+                      h))]
+    (with-redefs [notion/http-request
+                  (fn [_method url _opts]
+                    (cond
+                      (re-find #"/v1/blocks/page-1/children" url) (next! "page-1?")
+                      (re-find #"/v1/blocks/b1/children"     url) (next! "b1?")
+                      (re-find #"/v1/blocks/b1c/children"    url) (next! "b1c?")))]
+      (let [walked (notion/walk-blocks "page-1" "tok" {:max-depth 1})
+            ids    (mapv (comp :id :block) walked)]
+        (is (= ["b1" "b1c"] ids)
+            "with :max-depth 1, depth-0 (b1) and depth-1 (b1c) included; depth-2 (b1cc) excluded")))))
+
+(deftest walk-blocks-throws-on-fetch-failure
+  ;; A page-level error (e.g. auth) during the walk must throw — not return partial results.
+  (with-redefs [notion/http-request (fn [_ _ _] {:status 401 :body ""})]
+    (let [ex (try
+               (notion/walk-blocks "page-1" "tok" {})
+               nil
+               (catch clojure.lang.ExceptionInfo e e))]
+      (is (some? ex)
+          "walk-blocks must throw, not return")
+      (is (= :auth (-> (ex-data ex) :error :error))
+          "ex-data carries the underlying retrieve-block-children error")
+      (is (= "page-1" (-> (ex-data ex) :block))
+          "ex-data identifies which block failed"))))
