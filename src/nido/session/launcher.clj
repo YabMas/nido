@@ -194,10 +194,13 @@
   [{:keys [project-name session-name worktree source-dir
            app-port app-url nrepl-port pg-port
            profile links project-briefing]}]
-  (let [;; Lite sessions have no services; :services can be :all (full) or [] (lite)
-        services-active? (and (some? profile)
-                              (let [svcs (:services profile)]
-                                (or (= :all svcs) (and (seq? svcs) (seq svcs)))))]
+  (let [;; Lite sessions have no services; :services is :all (full) or a
+        ;; vector allowlist ([] = lite). Default to "active" when profile
+        ;; is absent — legacy sessions predating profile.edn were all full.
+        svcs             (:services profile)
+        services-active? (or (nil? profile)
+                             (= :all svcs)
+                             (and (sequential? svcs) (seq svcs)))]
     (str
      "# Active nido session\n"
      "\n"

@@ -57,3 +57,22 @@
   (let [doc (@#'launcher/render-context (assoc base-ctx :project-briefing "   "))]
     (is (not (str/includes? doc "## Project:"))
         "whitespace-only briefing should be treated like nil")))
+
+(deftest render-context-services-active-for-various-profile-shapes
+  (testing ":all profile renders full-services briefing"
+    (let [doc (@#'launcher/render-context (assoc base-ctx :profile {:services :all}))]
+      (is (str/includes? doc "## Services are already running"))
+      (is (not (str/includes? doc "## Lite session")))))
+  (testing "vector allowlist with entries renders full-services briefing"
+    (let [doc (@#'launcher/render-context
+                (assoc base-ctx :profile {:services [:postgresql :process]}))]
+      (is (str/includes? doc "## Services are already running"))
+      (is (not (str/includes? doc "## Lite session")))))
+  (testing "nil profile (legacy session pre-profile.edn) is treated as active"
+    (let [doc (@#'launcher/render-context (assoc base-ctx :profile nil))]
+      (is (str/includes? doc "## Services are already running"))
+      (is (not (str/includes? doc "## Lite session")))))
+  (testing "empty vector is a lite session"
+    (let [doc (@#'launcher/render-context (assoc base-ctx :profile {:services []}))]
+      (is (str/includes? doc "## Lite session"))
+      (is (not (str/includes? doc "## Services are already running"))))))

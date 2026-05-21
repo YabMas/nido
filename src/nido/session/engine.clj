@@ -368,6 +368,15 @@
          (catch Exception e
            (core/log-step (str "warning: failed to write agent CLAUDE.md: "
                                (ex-message e)))))
+    ;; Persist the resolved profile so destroy! / reset! can read it back
+    ;; without re-resolving (robust against registry edits between up and
+    ;; destroy). Must precede launcher/write-artifacts!, which reads
+    ;; profile.edn from disk to decide between the full/lite briefing —
+    ;; reversed order misclassifies every fresh session as lite.
+    (try (write-profile-for-session! project-dir (:profile opts))
+         (catch Exception e
+           (core/log-step (str "warning: failed to write profile snapshot: "
+                               (ex-message e)))))
     ;; Thread :owned-by-run from opts into the in-memory session-edn the
     ;; launcher sees so it can decorate Run-owned sessions (resume shim +
     ;; run-link). Project session.edn on disk is shared and stays untouched.
@@ -377,12 +386,6 @@
                                       (assoc :owned-by-run (:owned-by-run opts))))
          (catch Exception e
            (core/log-step (str "warning: failed to write launcher artifacts: "
-                               (ex-message e)))))
-    ;; Persist the resolved profile so destroy! / reset! can read it back
-    ;; without re-resolving (robust against registry edits between up and destroy).
-    (try (write-profile-for-session! project-dir (:profile opts))
-         (catch Exception e
-           (core/log-step (str "warning: failed to write profile snapshot: "
                                (ex-message e)))))
     (print-session-summary session-data final-ctx)
     session-data))
