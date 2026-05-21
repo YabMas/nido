@@ -419,35 +419,52 @@
 
    `:cd` selects the target:
      :home (default) — the session-home (CLAUDE.md, .mcp.json live here)
-     :worktree       — the worktree symlink inside session-home
+     :worktree       — the worktree symlink inside session-home, with a
+                       fallback to the on-disk worktree path when the
+                       session-home is gone (idle-stopped sessions retain
+                       their worktree).
 
    `:auto-up?` (default false) — call `up!` first. Idempotent on a running
    session. Used by the TUI runs screen so `↵` on an idle-stopped run
    transparently resumes the session.
 
-   Throws if the session isn't running and `:auto-up?` is false, or if
-   `:cd worktree` is requested and the worktree symlink is missing or
-   dangling."
+   Throws if `:cd home` is requested without `:auto-up?` and the
+   session-home is missing, or if `:cd worktree` is requested and neither
+   the session-home symlink nor the on-disk worktree exists."
   [name opts]
   (when (:auto-up? opts) (up! name opts))
-  (let [[project-name _] (resolve-project opts)
+  (let [[project-name project] (resolve-project opts)
         cd-target    (parse-cd-target (:cd opts))
-        session-home (state/session-home-dir project-name name)]
-    (when-not (fs/exists? session-home)
-      (throw (ex-info (str "No session home for '" name "' — is it running?")
-                      {:expected session-home
-                       :hint "Run `bb nido:session:up` to bring it up."})))
-    (let [resolved (case cd-target
-                     :home     session-home
-                     :worktree (str (fs/path session-home "worktree")))]
-      (when (and (= :worktree cd-target) (not (fs/exists? resolved)))
-        (throw (ex-info (str "No worktree symlink for '" name "'")
-                        {:expected resolved
-                         :hint "Run `bb nido:session:up` to refresh the session-home."})))
-      (let [target (cd-target-file)]
-        (fs/create-dirs (fs/parent target))
-        (spit target resolved)
-        (core/log-step (str "Selected " resolved))))))
+        session-home (state/session-home-dir project-name name)
+        home-exists? (fs/exists? session-home)]
+    (case cd-target
+      :home
+      (do
+        (when-not home-exists?
+          (throw (ex-info (str "No session home for '" name "' — is it running?")
+                          {:expected session-home
+                           :hint "Run `bb nido:session:up` to bring it up."})))
+        (let [target (cd-target-file)]
+          (fs/create-dirs (fs/parent target))
+          (spit target session-home)
+          (core/log-step (str "Selected " session-home))))
+
+      :worktree
+      (let [via-home   (str (fs/path session-home "worktree"))
+            on-disk    (worktree-path project-name (:directory project) name)
+            resolved   (cond
+                         (and home-exists? (fs/exists? via-home)) via-home
+                         (fs/exists? on-disk)                     on-disk
+                         :else                                    nil)]
+        (when-not resolved
+          (throw (ex-info (str "Worktree no longer exists for '" name "'")
+                          {:session-home via-home
+                           :on-disk      on-disk
+                           :hint "Run `bb nido:session:up` to recreate the worktree."})))
+        (let [target (cd-target-file)]
+          (fs/create-dirs (fs/parent target))
+          (spit target resolved)
+          (core/log-step (str "Selected " resolved)))))))
 
 (defn- worktree-dir?
   "True if `dir` is a session worktree root. A git worktree's root has a

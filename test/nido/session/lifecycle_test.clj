@@ -3,6 +3,7 @@
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
    [nido.core]
+   [nido.session.engine]
    [nido.session.lifecycle :as lifecycle]
    [nido.session.state]))
 
@@ -81,4 +82,50 @@
         (is (= session-home
                (slurp (str (fs/path tmp ".last-cd"))))
             "after auto-up, .last-cd points at the session-home"))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest enter!-worktree-falls-back-to-on-disk-path-when-session-home-missing
+  (let [tmp (fs/create-temp-dir)
+        project-name "fakeproj"
+        project-dir  (str (fs/path tmp "src" project-name))
+        session-name "feat-x"
+        wt-root      (str (fs/path tmp "src" (str project-name "-worktrees")))
+        wt-path      (str (fs/path wt-root session-name))
+        session-home (str (fs/path tmp "sessions" project-name session-name))]
+    (try
+      (fs/create-dirs wt-path)               ; on-disk worktree exists
+      (fs/create-dirs project-dir)
+      ;; session-home is deliberately NOT created
+      (with-redefs [nido.core/nido-home              (constantly (str tmp))
+                    nido.session.state/session-home-dir (fn [_ _] session-home)
+                    nido.session.lifecycle/resolve-project
+                    (fn [_] [project-name {:directory project-dir}])
+                    nido.session.engine/load-session-edn
+                    (fn [_] {})]              ; default worktrees-dir
+        (lifecycle/enter! session-name {:project project-name :cd :worktree})
+        (is (= wt-path
+               (slurp (str (fs/path tmp ".last-cd"))))
+            ".last-cd points at the on-disk worktree, not the session-home symlink"))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest enter!-worktree-throws-focused-error-when-worktree-also-gone
+  (let [tmp (fs/create-temp-dir)
+        project-name "fakeproj"
+        project-dir  (str (fs/path tmp "src" project-name))
+        session-name "feat-x"
+        session-home (str (fs/path tmp "sessions" project-name session-name))]
+    (try
+      (fs/create-dirs project-dir)
+      (with-redefs [nido.core/nido-home              (constantly (str tmp))
+                    nido.session.state/session-home-dir (fn [_ _] session-home)
+                    nido.session.lifecycle/resolve-project
+                    (fn [_] [project-name {:directory project-dir}])
+                    nido.session.engine/load-session-edn
+                    (fn [_] {})]
+        (let [ex (try (lifecycle/enter! session-name
+                                        {:project project-name :cd :worktree})
+                      nil
+                      (catch clojure.lang.ExceptionInfo e e))]
+          (is ex "enter! must throw when neither session-home nor worktree exists")
+          (is (re-find #"Worktree no longer exists for 'feat-x'" (ex-message ex)))))
       (finally (fs/delete-tree tmp)))))
