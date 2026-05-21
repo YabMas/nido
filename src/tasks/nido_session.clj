@@ -103,15 +103,24 @@
    lands in the chosen directory with no nested shell.
 
    `:cd home` (default) → session-home (CLAUDE.md, .mcp.json live here).
-   `:cd worktree`       → the worktree symlink (the actual code).
+   `:cd worktree`       → the worktree symlink, falling back to the
+                          on-disk worktree path when the session-home
+                          is gone.
+   `:auto-up true`      → bring the session up first (idempotent). The
+                          TUI runs screen uses this so `↵` on an
+                          idle-stopped run transparently resumes.
 
-   Refuses if the session is down, or if `:cd worktree` is requested and
-   the worktree symlink is missing."
+   Refuses if the session is down and `:auto-up` was not passed, or if
+   `:cd worktree` is requested and neither the session-home symlink nor
+   the on-disk worktree exists."
   [& args]
   (let [[pos opts] (task-args/split-args args)
-        _project (require-project opts)
-        session (require-session-name pos)]
-    (lifecycle/enter! session opts)))
+        _project   (require-project opts)
+        session    (require-session-name pos)
+        opts'      (cond-> opts
+                     (contains? opts :auto-up) (-> (assoc :auto-up? (:auto-up opts))
+                                                   (dissoc :auto-up)))]
+    (lifecycle/enter! session opts')))
 
 (defn status
   "Print status for the named session."

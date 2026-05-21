@@ -89,11 +89,18 @@
       :enter     (let [[_ p s target] action]
                    (session/enter ":project" p s ":cd" (name target)))
       :enter-run (let [[_ p s target] action]
-                   ;; Runs-screen variant — same wire-protocol as :enter
-                   ;; (writes ~/.nido/.last-cd; the nido shell wrapper
-                   ;; picks it up after we exit). Run-owned sessions are
-                   ;; still sessions, so we reuse `session/enter`.
-                   (session/enter ":project" p s ":cd" (name target)))
+                   ;; Runs-screen variant. Sessions for runs are usually
+                   ;; idle-stopped by the watchdog by the time the user
+                   ;; looks. `:home` auto-ups so `↵` becomes "resume";
+                   ;; `:worktree` resolves the on-disk path without
+                   ;; touching services so `w` is a cheap inspect that
+                   ;; leans on lifecycle/enter!'s worktree fallback.
+                   (case target
+                     :home
+                     (session/enter ":project" p s
+                                    ":cd" "home" ":auto-up" "true")
+                     :worktree
+                     (session/enter ":project" p s ":cd" "worktree")))
       :up      (let [[_ p s] action] (session/up      ":project" p s))
       :down    (let [[_ p s] action] (session/down    ":project" p s))
       :destroy (let [[_ p s] action] (destroy-and-verify! p s))
