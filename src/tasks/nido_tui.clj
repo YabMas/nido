@@ -26,6 +26,7 @@
   (:require
    [babashka.fs :as fs]
    [babashka.process :refer [shell]]
+   [nido.coordinator.state :as cstate]
    [nido.core :as core]
    [nido.session.lifecycle :as lifecycle]
    [nido.tui :as tui]
@@ -88,17 +89,29 @@
     (case (first action)
       :enter     (let [[_ p s target] action]
                    (session/enter ":project" p s ":cd" (name target)))
-      :enter-run (let [[_ p s target] action]
+      :enter-run (let [[_ p s target run-id] action]
                    ;; Runs-screen variant. Sessions for runs are usually
                    ;; idle-stopped by the watchdog by the time the user
-                   ;; looks. `:home` auto-ups so `↵` becomes "resume";
+                   ;; looks. `:home` auto-ups so `↵` becomes "resume",
+                   ;; and cd's into the run-link (~/.nido/runs/<id>/
+                   ;; session-home) — that's the cwd claude was launched
+                   ;; from originally, so `claude --resume` finds the
+                   ;; transcript registered under ~/.claude/projects/.
                    ;; `:worktree` resolves the on-disk path without
                    ;; touching services so `w` is a cheap inspect that
                    ;; leans on lifecycle/enter!'s worktree fallback.
                    (case target
                      :home
-                     (session/enter ":project" p s
-                                    ":cd" "home" ":auto-up" "true")
+                     (let [link (cstate/run-session-home-link run-id)]
+                       (session/up ":project" p s)
+                       (when-not (fs/exists? link)
+                         (throw (ex-info (str "Run-link missing for run " run-id)
+                                         {:expected link
+                                          :hint "The run's session-home symlink was never created or has been removed."})))
+                       (let [target-file (lifecycle/cd-target-file)]
+                         (fs/create-dirs (fs/parent target-file))
+                         (spit target-file link))
+                       (println (str "[nido:tui] Selected " link)))
                      :worktree
                      (session/enter ":project" p s ":cd" "worktree")))
       :up      (let [[_ p s] action] (session/up      ":project" p s))

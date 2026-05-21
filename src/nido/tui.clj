@@ -541,12 +541,12 @@
   (cond
     (msg/key-match? msg "enter")
     (if-let [run (selected-run state)]
-      [state (queue-action! [:enter-run (name (:project run)) (:session-name run) :home])]
+      [state (queue-action! [:enter-run (name (:project run)) (:session-name run) :home (:id run)])]
       [state nil])
 
     (msg/key-match? msg "w")
     (if-let [run (selected-run state)]
-      [state (queue-action! [:enter-run (name (:project run)) (:session-name run) :worktree])]
+      [state (queue-action! [:enter-run (name (:project run)) (:session-name run) :worktree (:id run)])]
       [state nil])
 
     (msg/key-match? msg "d")
