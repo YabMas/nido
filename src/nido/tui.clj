@@ -827,7 +827,7 @@
                   (case (:screen state)
                     :projects "[↵] open  [r]uns  [q]uit"
                     :sessions "[↵/e] enter  [w]orktree  [i]nfo  [a]dd  [u]p  [d]own  [c]i  [x] destroy  [r]uns  [esc] back  [q]uit"
-                    :runs     "[↵] enter  [w]orktree  [d]etails  [D]elete  [f]ire  [h]alt  [c]lear breaker  [s]essions  [q]uit"))))
+                    :runs     "[↵] resume  [w] inspect worktree  [d]etails  [D]elete  [f]ire  [h]alt  [c]lear breaker  [s]essions  [q]uit"))))
 
 (defn- info-row [label value]
   (str (style/render label-style (format "%-13s" label)) " " value))
