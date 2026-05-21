@@ -2,7 +2,9 @@
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
-   [nido.session.lifecycle :as lifecycle]))
+   [nido.core]
+   [nido.session.lifecycle :as lifecycle]
+   [nido.session.state]))
 
 (deftest symlink-worktree-creates-symlink-to-target
   (let [tmp    (fs/create-temp-dir)
@@ -56,4 +58,27 @@
       (lifecycle/remove-symlink-worktree! real-dir)
       (is (fs/exists? real-dir)
           "real directory must NOT be deleted by remove-symlink-worktree!")
+      (finally (fs/delete-tree tmp)))))
+
+(deftest enter!-auto-up?-calls-up!-when-session-home-missing
+  (let [tmp (fs/create-temp-dir)
+        project-name "fakeproj"
+        session-name "feat-x"
+        session-home (str (fs/path tmp "sessions" project-name session-name))
+        up-called?   (atom false)]
+    (try
+      (with-redefs [nido.core/nido-home              (constantly (str tmp))
+                    nido.session.state/session-home-dir (fn [_ _] session-home)
+                    nido.session.lifecycle/resolve-project
+                    (fn [_] [project-name {:directory (str tmp)}])
+                    nido.session.lifecycle/up!
+                    (fn [_n _]
+                      (reset! up-called? true)
+                      ;; simulate up! creating the session-home
+                      (fs/create-dirs session-home))]
+        (lifecycle/enter! session-name {:project project-name :auto-up? true})
+        (is @up-called? "up! must be called when :auto-up? true")
+        (is (= session-home
+               (slurp (str (fs/path tmp ".last-cd"))))
+            "after auto-up, .last-cd points at the session-home"))
       (finally (fs/delete-tree tmp)))))

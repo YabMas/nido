@@ -421,9 +421,15 @@
      :home (default) — the session-home (CLAUDE.md, .mcp.json live here)
      :worktree       — the worktree symlink inside session-home
 
-   Throws if the session isn't running, or if `:cd worktree` is requested
-   and the worktree symlink is missing or dangling."
+   `:auto-up?` (default false) — call `up!` first. Idempotent on a running
+   session. Used by the TUI runs screen so `↵` on an idle-stopped run
+   transparently resumes the session.
+
+   Throws if the session isn't running and `:auto-up?` is false, or if
+   `:cd worktree` is requested and the worktree symlink is missing or
+   dangling."
   [name opts]
+  (when (:auto-up? opts) (up! name opts))
   (let [[project-name _] (resolve-project opts)
         cd-target    (parse-cd-target (:cd opts))
         session-home (state/session-home-dir project-name name)]
