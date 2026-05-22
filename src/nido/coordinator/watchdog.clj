@@ -7,7 +7,10 @@
        (an editor or REPL client attached),
      - the worktree has filesystem edits inside the lookback window
        (raw editing / scripting, including agents that don't keep a
-       socket open).
+       socket open),
+     - some process anywhere on the host has its cwd inside the
+       worktree or session-home (an attached agent / shell / test
+       runner — catches read/think phases that produce no writes).
    If none of these signals fire for longer than idle-timeout-ms, the
    entire session (app + JVM + any isolated PG) is torn down via
    lifecycle/down!. Wake is user-driven: idle-stopped sessions stay
@@ -74,12 +77,70 @@
         (boolean (and (zero? exit) (some-> out str/trim seq))))
       (catch Exception _ false))))
 
+(defn cwd-snapshot
+  "Run lsof once and return the cwd paths of every process on the host.
+   Single-shot per tick (callers thread the snapshot through), so all
+   sessions in this tick share the same probe — cheaper than one lsof
+   per session. Fail-open: nil on error so a flaky lsof never causes
+   false stops."
+  []
+  (try
+    (let [{:keys [exit out]}
+          (shell {:continue true :out :string :err :string}
+                 "lsof" "-F" "n" "-d" "cwd")]
+      (when (zero? exit)
+        (->> (str/split-lines out)
+             (filter #(str/starts-with? % "n"))
+             (map #(subs % 1))
+             (filterv seq))))
+    (catch Exception _ nil)))
+
+(defn- with-trailing-slash [^String s]
+  (if (or (str/blank? s) (str/ends-with? s "/")) s (str s "/")))
+
+(defn- canonical-prefix
+  "Canonicalize a directory path (resolving symlinks) and append a trailing
+   slash so prefix checks treat it as a directory boundary. Returns nil on
+   anything unparseable so callers can skip it without crashing."
+  [path]
+  (when path
+    (try
+      (-> (fs/canonicalize path {:nofollow-links false}) str with-trailing-slash)
+      (catch Exception _ nil))))
+
+(defn process-cwd-inside?
+  "True if any cwd in `snapshot` lies inside one of `dirs`. Compares on the
+   canonicalized form so symlinks (e.g. session-home/worktree → real
+   worktree) don't cause false negatives."
+  [snapshot dirs]
+  (when (seq snapshot)
+    (let [prefixes (->> dirs (keep canonical-prefix) distinct)]
+      (boolean
+       (when (seq prefixes)
+         (some (fn [cwd]
+                 (when (seq cwd)
+                   (let [cwd+ (with-trailing-slash cwd)]
+                     (some #(str/starts-with? cwd+ %) prefixes))))
+               snapshot))))))
+
+(defn signals
+  "Compute the four activity signals for one session. Returns a map so
+   callers can both decide active? and emit a structured kill report."
+  [{:keys [app-port nrepl-port worktree session-home
+           fs-denylist fs-lookback-min cwd-snap]}]
+  {:app-port-conn?  (established-connections? app-port)
+   :nrepl-conn?     (established-connections? nrepl-port)
+   :recent-fs?      (recent-fs-change? worktree fs-denylist fs-lookback-min)
+   :proc-cwd?       (process-cwd-inside? cwd-snap [worktree session-home])})
+
+(defn any-signal? [sigs]
+  (boolean (some sigs [:app-port-conn? :nrepl-conn? :recent-fs? :proc-cwd?])))
+
 (defn session-active?
-  "True if any activity signal fires for this session."
-  [{:keys [app-port nrepl-port worktree fs-denylist fs-lookback-min]}]
-  (or (established-connections? app-port)
-      (established-connections? nrepl-port)
-      (recent-fs-change? worktree fs-denylist fs-lookback-min)))
+  "Back-compat wrapper for callers without a cwd snapshot (tests, REPL).
+   Production tick! computes signals directly via `signals`."
+  [m]
+  (any-signal? (signals (assoc m :cwd-snap (cwd-snapshot)))))
 
 (defn- watchdog-config
   "Per-project watchdog tunables from session.edn :watchdog, with defaults."
@@ -105,39 +166,48 @@
           :when (fs/directory? wt-dir)
           :let [wt-path (str wt-dir)
                 entry (get registry wt-path)
-                port (:app-port entry)]
+                port (:app-port entry)
+                session-name (str (fs/file-name wt-dir))]
           :when (and entry port (proc/tcp-open? port))]
       {:project-name project-name
        :instance-id (:instance-id entry)
-       :session-name (str (fs/file-name wt-dir))
+       :session-name session-name
        :worktree wt-path
+       :session-home (state/session-home-dir project-name session-name)
        :app-port port
        :nrepl-port (:nrepl-port entry)})))
 
 (defn- tick!
   "One watchdog pass. Updates last-seen-ms for sessions showing any
    activity signal; stops sessions whose last-seen is older than the
-   project's idle-timeout-ms."
+   project's idle-timeout-ms. Takes a single cwd snapshot per tick so
+   all sessions share one lsof invocation."
   [last-seen-atom]
-  (let [now (System/currentTimeMillis)]
+  (let [now      (System/currentTimeMillis)
+        cwd-snap (cwd-snapshot)]
     (doseq [{:keys [project-name instance-id session-name
-                    worktree app-port nrepl-port]} (running-apps)]
+                    worktree session-home
+                    app-port nrepl-port]} (running-apps)]
       (let [{:keys [idle-timeout-ms fs-denylist fs-lookback-min]}
-            (watchdog-config project-name)]
-        (if (session-active? {:app-port        app-port
-                              :nrepl-port      nrepl-port
-                              :worktree        worktree
-                              :fs-denylist     fs-denylist
-                              :fs-lookback-min fs-lookback-min})
+            (watchdog-config project-name)
+            sigs (signals {:app-port        app-port
+                           :nrepl-port      nrepl-port
+                           :worktree        worktree
+                           :session-home    session-home
+                           :fs-denylist     fs-denylist
+                           :fs-lookback-min fs-lookback-min
+                           :cwd-snap        cwd-snap})]
+        (if (any-signal? sigs)
           (swap! last-seen-atom assoc instance-id now)
           (let [last (or (get @last-seen-atom instance-id) now)
                 idle-ms (- now last)]
             (swap! last-seen-atom (fn [m] (update m instance-id #(or % now))))
             (when (>= idle-ms idle-timeout-ms)
-              (core/log-step (str "[watchdog] session idle for "
-                                  (quot idle-ms 1000) "s (> "
-                                  (quot idle-timeout-ms 1000) "s) — stopping "
-                                  instance-id))
+              (core/log-step
+               (str "[watchdog] session idle for "
+                    (quot idle-ms 1000) "s (> "
+                    (quot idle-timeout-ms 1000) "s) — signals "
+                    (pr-str sigs) " — stopping " instance-id))
               (try
                 (lifecycle/down! session-name {:project project-name})
                 (swap! last-seen-atom dissoc instance-id)
@@ -170,7 +240,7 @@
     (.setDaemon t true)
     (.start t)
     (reset! thread-atom t)
-    (println (str "[nido] Watchdog started (tick=" tick-ms "ms, signals: app-port + nrepl-port + worktree-fs;"
+    (println (str "[nido] Watchdog started (tick=" tick-ms "ms, signals: app-port + nrepl-port + worktree-fs + process-cwd;"
                   " idle-timeout per project via session.edn :watchdog)"))
     t))
 
