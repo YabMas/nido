@@ -185,6 +185,23 @@
       (when-let [t (:initialized-at meta)] (println "  initialized-at:" t))
       (when-let [t (:last-refresh-at meta)] (println "  last-refresh-at:" t)))))
 
+(defn stop!
+  "Stop the template cluster if running. No-op when not initialized or already
+   stopped. Handles a stale postmaster.pid (e.g. left over from an aborted
+   refresh) via pg-ctl-stop!'s kill fallback."
+  [project-name]
+  (let [data-dir (state/template-pg-data-dir project-name)]
+    (cond
+      (not (fs/exists? (str (fs/path data-dir "PG_VERSION"))))
+      (core/log-step (str "Template not initialized for " project-name " — nothing to stop."))
+
+      (pg/template-stopped? data-dir)
+      (core/log-step (str "Template already stopped at " data-dir))
+
+      :else
+      (do (pg/pg-ctl-stop! data-dir)
+          (core/log-step (str "Template stopped at " data-dir))))))
+
 (defn destroy!
   "Stop (if running) and delete the template cluster entirely."
   [project-name]

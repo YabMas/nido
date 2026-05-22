@@ -70,7 +70,7 @@ The UI watchdog fully stops idle sessions (default 30 min of zero ESTABLISHED co
 
 Two clusters per project. Every session gets its own database — there is no shared runtime cluster.
 
-- **Template cluster** — long-lived APFS clone source at `~/.nido/templates/<project>/pg-data/`. Initialized with `bb nido:template:pg:init :project <name>`; refreshed from a dump with `bb nido:template:pg:refresh`. Must always be stopped when not actively being refreshed (clones need a clean `postmaster.pid` absence).
+- **Template cluster** — long-lived APFS clone source at `~/.nido/templates/<project>/pg-data/`. Initialized with `bb nido:template:pg:init :project <name>`; refreshed from a dump with `bb nido:template:pg:refresh`. Must always be stopped when not actively being refreshed (clones need a clean `postmaster.pid` absence). If a refresh aborts and leaves a stale `postmaster.pid`, `bb nido:template:pg:stop :project <name>` clears it (kill fallback included).
 - **Per-session cluster** — own cluster under `~/.nido/state/<instance-id>/pg-data/`, APFS-cloned from the template at `session:up` and torn down on `session:down`. Each session runs Flyway against its own DB on app boot, so destructive migrations can't leak between sessions.
 
 After a `template:pg:refresh`, running sessions still hold their original clone — use `bb nido:session:reset :project <p> <session>` to drop their PGDATA and re-clone from the new template. APFS clones are essentially free, so this is fast.

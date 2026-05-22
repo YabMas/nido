@@ -51,6 +51,16 @@
         project-name (require-project opts)]
     (template/status project-name)))
 
+(defn stop
+  "Stop the template cluster (no-op when already stopped).
+
+   Usage:
+     bb nido:template:pg:stop :project \"brian\""
+  [& args]
+  (let [opts (parse-opts args)
+        project-name (require-project opts)]
+    (template/stop! project-name)))
+
 (defn destroy
   "Delete the template cluster entirely.
 

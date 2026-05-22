@@ -129,6 +129,10 @@
   {:doc "Show template cluster status for a project"
    :task (apply nido-template/status *command-line-args*)}
 
+  nido:template:pg:stop
+  {:doc "Stop the template cluster (no-op if already stopped)"
+   :task (apply nido-template/stop *command-line-args*)}
+
   nido:template:pg:destroy
   {:doc "Delete the template cluster for a project"
    :task (apply nido-template/destroy *command-line-args*)}
