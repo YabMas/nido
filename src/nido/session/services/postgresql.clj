@@ -226,6 +226,32 @@
     (when (fs/exists? pid-file)
       (some-> (slurp pid-file) str/split-lines first str/trim parse-long))))
 
+(defn- read-postmaster-pid-file
+  "Parse PGDATA/postmaster.pid into {:pid :port}. PG writes a fixed
+   line layout: line 1 = pid, line 4 = port. Returns nil if absent
+   or unparseable."
+  [data-dir]
+  (let [pid-file (str (fs/path data-dir "postmaster.pid"))]
+    (when (fs/exists? pid-file)
+      (try
+        (let [lines (str/split-lines (slurp pid-file))
+              pid   (some-> (nth lines 0 nil) str/trim parse-long)
+              port  (some-> (nth lines 3 nil) str/trim parse-long)]
+          (when (and (pos-int? pid) (pos-int? port))
+            {:pid pid :port port}))
+        (catch Exception _ nil)))))
+
+(defn detect-running-postmaster
+  "Inspect PGDATA for a live postmaster. Returns:
+     {:status :running :pid :port}    — live postmaster, adopt it
+     {:status :stale   :pid-file …}   — pid file present but process dead
+     nil                              — no pid file, free to start fresh"
+  [data-dir]
+  (when-let [{:keys [pid port]} (read-postmaster-pid-file data-dir)]
+    (if (proc/process-alive? pid)
+      {:status :running :pid pid :port port}
+      {:status :stale :pid pid :pid-file (str (fs/path data-dir "postmaster.pid"))})))
+
 (defn dropdb!
   "Drop the named database if it exists. Wraps `dropdb --if-exists`, which
    connects to the maintenance `postgres` DB. Caller must ensure no other
@@ -287,21 +313,39 @@
         project-dir (get-in ctx [:session :project-dir])
         instance-id (or (get-in ctx [:session :instance-id]) project-name)
         [low high] port-range
-        preferred-port (proc/deterministic-port project-dir low high)
-        pg-port (proc/find-available-port preferred-port (- high low))
         bin-dir (find-pg-bin-dir)
         data-dir (state/pg-data-dir instance-id)
         log-path (state/log-file instance-id :pg)
         already-initialized? (fs/exists? (str (fs/path data-dir "PG_VERSION")))
+        ;; A live postmaster from a previous (partially-failed) lifecycle
+        ;; still owns the data-dir; pg_ctl will refuse a second start on the
+        ;; postmaster.pid lock regardless of port. Adopt it instead of
+        ;; bailing out. A stale pid-file (process gone) is removed so the
+        ;; fresh start can proceed.
+        existing (when already-initialized?
+                   (detect-running-postmaster data-dir))
+        adopted? (= :running (:status existing))
+        pg-port (cond
+                  adopted? (:port existing)
+                  :else (let [preferred (proc/deterministic-port project-dir low high)]
+                          (proc/find-available-port preferred (- high low))))
         cloned? (and clone-from-template (not already-initialized?))]
     (fs/create-dirs (state/log-dir instance-id))
     (fs/create-dirs socket-base-dir)
-    (if cloned?
-      (clone-pgdata! (state/template-pg-data-dir project-name) data-dir)
-      (initdb! bin-dir data-dir db-user))
-    (pg-ctl-start! bin-dir data-dir pg-port log-path socket-base-dir)
+    (when (= :stale (:status existing))
+      (core/log-step (str "Removing stale postmaster.pid (pid "
+                          (:pid existing) " not alive)"))
+      (fs/delete-if-exists (:pid-file existing)))
+    (cond
+      adopted?
+      (core/log-step (str "Adopting running PostgreSQL (pid " (:pid existing)
+                          ", port " pg-port ", data-dir=" data-dir ")"))
+      cloned? (clone-pgdata! (state/template-pg-data-dir project-name) data-dir)
+      :else (initdb! bin-dir data-dir db-user))
+    (when-not adopted?
+      (pg-ctl-start! bin-dir data-dir pg-port log-path socket-base-dir))
     (wait-for-tcp! pg-port)
-    (when-not (or cloned? already-initialized?)
+    (when-not (or adopted? cloned? already-initialized?)
       (setup-fresh-database! {:bin-dir bin-dir :pg-port pg-port :db-user db-user
                               :db-name db-name :schema schema :extensions extensions
                               :baseline baseline
@@ -309,9 +353,13 @@
     (let [pg-pid (read-pg-pid data-dir)]
       (core/log-step (str "PostgreSQL running (pid " pg-pid
                           ", port " pg-port
-                          (when cloned? ", cloned from template") ")"))
+                          (cond adopted? ", adopted"
+                                cloned?  ", cloned from template"
+                                :else    "")
+                          ")"))
       {:state {:pg-port pg-port :pg-pid pg-pid
-               :pg-data-dir data-dir :instance-id instance-id :cloned? cloned?}
+               :pg-data-dir data-dir :instance-id instance-id :cloned? cloned?
+               :adopted? adopted?}
        :context {:port pg-port :db-name db-name :db-user db-user
                  :db-password db-password
                  :flyway-migrate? flyway-migrate?}})))
