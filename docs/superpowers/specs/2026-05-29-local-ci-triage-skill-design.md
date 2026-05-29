@@ -1,137 +1,148 @@
-# /local-ci — run brian's CI, triage failures, fix on approval
+# /local-ci — run brian's CI in-session, triage failures, fix on approval
 
-**Date:** 2026-05-29
+**Date:** 2026-05-29 (revised same day after the location decision)
 **Status:** Design approved; ready for implementation
 **Builds on:** `2026-05-29-nido-run-adopted-commands-design.md` (the `bb nido:run` passthrough)
 
 ## Problem
 
 `bb nido:run :project brian <session> ci` already runs brian's own CI against a
-session worktree and streams its output (including brian's agent-oriented
-`ACTION REQUIRED:` tail) with a 0/1 exit code. What's missing is the agent-facing
-layer the user originally asked for: "run /local-ci, look at the output, and fix
-all findings." This spec covers that layer as a Claude skill.
+session worktree (using the `--no-cache --all-failures` `:ci` command) and
+streams its output, including brian's agent-oriented `ACTION REQUIRED:` tail.
+What's missing is the agent-facing layer: "run /local-ci, look at the output,
+and fix all findings." This spec covers that as a Claude skill the user invokes
+**from inside a session, with no arguments**.
 
 ## Goals
 
-- A `/local-ci` skill that runs brian's CI for a session, then **triages**
-  failures into a structured, lane-grouped report.
-- **Human-in-the-loop:** the skill makes **no edits** until the user approves;
-  on approval it delegates fixes to brian's specialist agents.
-- Keep nido a thin orchestrator — the skill is prose that drives the existing
-  `bb nido:run` task and the brian agents already mirrored into nido. No new
-  nido source code, no output-parsing logic in Clojure.
+- A `/local-ci` skill invokable **from the session home** with **no arguments** —
+  the session is implicit from the working directory.
+- It runs brian's CI for that session, **triages** failures into a structured,
+  lane-grouped report, and makes **no edits until the user approves**; on
+  approval it delegates fixes to brian's specialist agents.
+- nido owns the skill (built in nido, per `feedback_nido_owns_integrations`) and
+  delivers it into sessions via the launcher.
 
-## Non-goals
+## Key facts that shape the design
 
-- No auto-loop until green (each CI run is a slow Docker cycle).
-- No auto-commit — fixes are left in the worktree for the user to review.
-- No changes to the brian repo. The skill lives in nido; the only brian-side
-  touch is the runtime `:ci` adopted-command config under `~/.nido/`.
-- No nido Clojure code changes (the `bb nido:run` engine already exists).
+The in-session agent runs with cwd = the **session home**
+(`~/.nido/sessions/<project>/<session>/`), which the launcher provisions with:
 
-## Decisions (from brainstorming)
+- `bb.edn` → a symlink to **nido's** `bb.edn` (`ensure-bb-edn-symlink!`). So
+  `bb nido:run …` **works from the session home** — that is how the skill runs
+  CI. (From the worktree, `bb` resolves brian's `bb.edn` and `nido:run` is
+  absent — so the skill is a session-home tool, not a worktree tool.)
+- `.claude` → currently a single symlink to the worktree's `.claude` (brian's).
+  So brian's lane/dev agents are available in-session, but **a nido-owned skill
+  is not visible** — this is what the launcher change fixes.
 
-- **Location / invocation context.** Native nido skill at
-  `nido/.claude/skills/local-ci/SKILL.md`. Invoked by a claude running in the
-  **nido repo** (cwd `~/Code/nido`), not by the in-session agent. Rationale: the
-  session-home `.claude` resolves to brian's worktree `.claude`, so a
-  nido-native skill is not visible in-session; but a nido-repo claude sees
-  nido's `.claude` **and** has all of brian's lane/dev agents mirrored in (via
-  `harness.edn :agents :all`), so delegation works from here. This honors
-  "build in nido, not brian" (see memory `feedback_nido_owns_integrations`).
-- **Autonomy.** Triage-only, fix-on-approval. No edits before the user says go.
-- **`--no-cache`.** The `:ci` adopted command becomes
-  `bb ci --no-cache --all-failures`. Brian's CI derives its Docker image cache
-  key from git HEAD/diff; under jj the colocated git view can be stale, so a
-  cache hit could run images built against the wrong tree. `--no-cache` forces
-  clean rebuilds. Tradeoff: slower runs — acceptable for a manual, infrequent,
-  triage-only command. This flag lives in the adopted-command config, not the
-  skill, keeping the skill generic.
+The session home path encodes the project and session, so the skill derives
+both from cwd — no arguments needed.
 
 ## Design
 
-### Invocation
+### Part 1 — Launcher: compose the session-home `.claude`
 
-```
-/local-ci <session>            ; project defaults to brian
-/local-ci <project> <session>  ; explicit project (only brian declares :ci today)
-```
+Replace `ensure-claude-symlink!` (which makes `.claude` a single symlink to the
+worktree's `.claude`) with a composition that makes `.claude` a **real
+directory**:
 
-The skill resolves `<project>` (default `brian`) and `<session>` from its
-arguments. If `<session>` is omitted, the skill lists candidate sessions
-(`bb nido:session:list :project <project>` or `~/Code/<project>-worktrees` /
-brian's in-repo `.worktrees/`) and asks which one.
+- For each top-level entry of the worktree's `.claude` **except `skills/`**
+  (`agents/`, `commands/`, `settings.json`, `dev-rules.md`, `projects/`, …):
+  create a relative symlink `<.claude>/<entry> → ../worktree/.claude/<entry>`.
+  (Relative, through the session home's `worktree` symlink, so a moved worktree
+  is still followed — preserving today's behaviour.)
+- `skills/` becomes a **real directory** that symlinks:
+  - each of the worktree's skills:
+    `<.claude>/skills/<name> → ../../worktree/.claude/skills/<name>`, plus
+  - each of nido's **native** harness skills (real, non-symlink dirs under
+    `nido/.claude/skills/`, e.g. `local-ci`):
+    `<.claude>/skills/<name> → <nido-source>/.claude/skills/<name>` (absolute).
+    Mirrored brian skills (symlinks in nido's tree) are skipped — the session
+    already gets brian's skills directly.
 
-### Flow
+Result: in-session the agent sees brian's full `.claude` *and* nido's injected
+skills; brian's worktree is untouched; it refreshes each `session:up`.
 
-1. **Announce + run.** Tell the user this is a slow, full Docker rebuild
-   (`--no-cache`). Run `bb nido:run :project <project> <session> ci` via Bash,
-   capturing combined stdout/stderr. No session-up required (brian's CI is
-   self-contained Docker, path-isolated by its own `CI_SUFFIX`).
-2. **Green path.** Exit 0 → report "CI green, nothing to fix." Stop.
-3. **Triage.** On non-zero exit, read the output: identify failed jobs
-   (`checks`, `unit`, `integ-{a,b,c}`, `e2e-{1,2,3}`) and the `ACTION REQUIRED:`
-   tail. Build a **lane-grouped findings report** — for each failure: the job,
-   the salient error lines, a proposed fix, and the **owning agent**, routed via
-   brian's `docs/reference/agent-delegation.md` (mirrored/readable from nido).
-   Starter routing (consult agent-delegation.md for anything ambiguous):
-   - format / lint (clj-kondo) / lint-deps / shellcheck / css build / js build
-     → mechanical; fix directly in the fix phase
-   - i18n / translation → `translate-i18n` skill
-   - migrations → `database-dev` (deploy/safety angle: `lane-db-deploy`)
-   - Allium specs → `allium:weed`
-   - unit / integration test failures → `test-dev`, or the domain `lane-*` keyed
-     to the failing namespace
-   - e2e → `e2e-dev`
-   - version gates / partition-rebalance / anything unclear → surface to the
-     user with the exact `ACTION REQUIRED` instruction; do not guess an owner
-4. **Stop for approval.** Present the report and ask which findings to fix:
-   all / a named subset / none. Make no edits.
-5. **Fix phase (a later turn, on approval).** For each approved finding,
-   dispatch its owning agent with a focused prompt: the worktree path
-   (for brian, `~/Code/brian/.worktrees/<session>` — its `:worktrees-dir` is
-   `.worktrees` relative to the project dir), the specific failing job, and the
-   relevant error/test.
-   Agents edit the worktree. **No auto-commit** — leave changes for review
-   (subagents working in the worktree must follow its VCS hygiene; see memory
-   `feedback_jj_subagent_commit_hygiene` if it is a jj worktree). After the
-   fixes, suggest re-running `/local-ci <session>` to verify.
+**Safety (critical):** when rebuilding, if the existing `.claude` is a **symlink**
+(today's form), remove only the link (`fs/delete`) — never `delete-tree`, which
+would follow into and destroy brian's real `.claude`. Only a previously-composed
+real `.claude` (containing our own symlinks) is `delete-tree`d, and that deletes
+the link entries, not their targets. A regression test must prove a rebuild
+leaves the worktree's source `.claude` and its skills intact.
 
-### Why these boundaries
+**Testable seam:** a `compose-claude-dir! [home nido-native-skill-dirs]` helper
+does the filesystem work against explicit paths; `nido-native-skill-dirs []`
+returns the absolute paths of nido's native (non-symlink) skill dirs. The
+launcher wires them together and calls it from `write-artifacts!` where
+`ensure-claude-symlink!` is called today.
 
-- **Skill = prose orchestration only.** It calls `bb nido:run` and the mirrored
-  agents; it does not parse CI output in Clojure or re-encode routing. The
-  failure→owner mapping defers to brian's `agent-delegation.md` so it stays
-  correct as brian's lanes evolve.
-- **HITL by construction.** Steps 1–4 never edit; step 5 only runs after
-  explicit approval. Matches the user's safety-first / chat-is-review-ui stance
-  (memories `feedback_autonomous_safety_first`, `feedback_chat_is_review_ui`).
-- **jj-specific concern isolated.** `--no-cache` lives in the `:ci` command def,
-  not the skill — the skill works unchanged for any future project.
+### Part 2 — The skill (`nido/.claude/skills/local-ci/SKILL.md`)
+
+Invoked in-session as `/local-ci` (no args). Flow:
+
+1. **Resolve session from cwd.** Expect cwd to be a session home
+   (`~/.nido/sessions/<project>/<session>/`); parse `<project>` and `<session>`
+   from the path. If cwd is not a session home (e.g. the user is in the
+   worktree or the nido repo), say so and tell them to run it from the session
+   home (`bb nido:session:enter …` lands there).
+2. **Run.** Warn it's a slow full Docker rebuild (`:ci` uses `--no-cache` for jj
+   correctness), then run, capturing output:
+   `bb nido:run :project <project> <session> ci`. No `session:up` needed —
+   brian's CI is self-contained Docker.
+3. **Green path.** Exit 0 → "CI green, nothing to fix." Stop.
+4. **Triage.** Enumerate failed jobs (`:check`, `:unit`, `:integ-{a,b,c}`,
+   `:e2e-{1,2,3}`) + the `ACTION REQUIRED:` tail; separate real failures from
+   flake/infra; produce a lane-grouped report (job, error lines, proposed fix,
+   owning agent routed via brian's `docs/reference/agent-delegation.md`).
+5. **STOP for approval.** Present the report; ask which to fix (all/subset/none).
+   Make no edits — the approval gate holds even for "obvious"/"trivial" fixes.
+6. **Fix (on approval).** Delegate each approved finding to its owning brian
+   agent (present in-session) with the worktree path + failing job + error.
+   Mechanical fixes done directly. No auto-commit. Then suggest re-running
+   `/local-ci`.
+
+Routing table and the approval-gate rationalization table are as in the prior
+revision (format/lint → direct; i18n → translate-i18n; migrations →
+database-dev/lane-db-deploy; Allium → allium:weed; unit/integration → test-dev
+or domain lane; e2e → e2e-dev; version gates/partition/unclear → surface).
+
+## Non-goals
+
+- No auto-loop to green (each run is a slow Docker cycle); one run, re-run on
+  request.
+- No auto-commit — fixes left in the worktree for review.
+- No brian-repo changes. brian's `:ci` adopted command lives in nido runtime
+  config (`~/.nido/projects/brian/session.edn`, already set to
+  `bb ci --no-cache --all-failures`).
+- The skill is session-home-only by construction (it is injected into the
+  session-home `.claude`, and relies on the session-home `bb.edn` for
+  `bb nido:run`). Not a worktree tool.
 
 ## Affected artifacts
 
-- Create `nido/.claude/skills/local-ci/SKILL.md` — the skill (prose).
-- Edit `~/.nido/projects/brian/session.edn` — `:ci` cmd →
-  `bb ci --no-cache --all-failures` (runtime config, NOT committed).
-- No nido Clojure changes. No brian-repo changes.
+- `src/nido/session/launcher.clj` — replace `ensure-claude-symlink!` with the
+  composition (`compose-claude-dir!` + `nido-native-skill-dirs` + wiring).
+- `test/nido/session/launcher_test.clj` — composition structure, skill merge,
+  native-only detection, and the rebuild-safety regression test.
+- `nido/.claude/skills/local-ci/SKILL.md` — rewrite for in-session/no-args.
+- (Already done) `~/.nido/projects/brian/session.edn` — `:ci` with `--no-cache`.
 
 ## Testing / verification
 
-A prose skill has no unit tests. Verification is manual and structural:
-- Frontmatter is valid (name, description with trigger guidance) and the skill
-  is discoverable from a nido-repo claude (`/local-ci`).
-- The command the skill forms is exactly
-  `bb nido:run :project <project> <session> ci`.
-- Dry structural check: against a real brian session, the run step invokes the
-  command and the triage step has concrete grouping/routing instructions (no
-  placeholders). A full green/red end-to-end is a real Docker run, validated
-  manually when convenient — not part of routine checks.
+- Launcher: unit tests for structure, skill merge, native-only skip, and the
+  **rebuild-never-deletes-source** safety test (compose twice; assert the
+  worktree's source `.claude`/skills survive).
+- Skill: re-verify with a subagent that (a) it resolves project/session from a
+  session-home cwd, (b) runs `bb nido:run … ci`, and (c) the approval gate holds
+  under pressure ("just fix the trivial stuff directly"). A full Docker run is
+  validated manually.
+- Manual end-to-end: `session:up` a brian session, inspect the composed
+  `.claude` (brian entries symlinked, `skills/` merged incl. `local-ci`),
+  confirm `/local-ci` is discoverable from the session home.
 
 ## Implementation note
 
-This is a single prose skill file plus a one-line runtime-config edit. It will
-be authored directly following the `superpowers:writing-skills` conventions
-rather than via a multi-task subagent plan (which would be overkill here).
-```
+Part 1 (launcher) is real Clojure with a deletion-safety edge — implemented with
+TDD and reviewed. Part 2 (skill) is prose, authored per `writing-skills`
+conventions and re-verified with a subagent.
