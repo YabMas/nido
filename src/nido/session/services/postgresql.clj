@@ -367,7 +367,7 @@
 (defmethod service/stop-service! :postgresql
   [_service-def saved-state]
   ;; Stop the cluster but leave PGDATA on disk. Sessions can be cycled
-  ;; (down → up, watchdog idle-stop, JVM crash) without losing intra-session
+  ;; (down → up, JVM crash) without losing intra-session
   ;; DB state — re-cloning is reset!'s job, not down!'s. Without this
   ;; restraint, `bb nido:session:down` silently destroys ad-hoc data the
   ;; user pulled into the session (e.g. a one-off staging restore that

@@ -352,9 +352,7 @@
 (defonce ^:private server-atom (atom nil))
 
 (defn start!
-  "Start the dashboard server. The idle-session watchdog is owned by the
-   coordinator daemon (see nido.coordinator.core/run!), so the dashboard
-   no longer starts one."
+  "Start the dashboard server."
   [{:keys [port] :or {port 8800}}]
   (when-let [old @server-atom]
     (old))

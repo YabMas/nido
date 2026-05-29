@@ -107,8 +107,8 @@
                           on-disk worktree path when the session-home
                           is gone.
    `:auto-up true`      → bring the session up first (idempotent). The
-                          TUI runs screen uses this so `↵` on an
-                          idle-stopped run transparently resumes.
+                          TUI runs screen uses this so `↵` on a
+                          downed run transparently resumes.
 
    Refuses if the session is down and `:auto-up` was not passed, or if
    `:cd worktree` is requested and neither the session-home symlink nor

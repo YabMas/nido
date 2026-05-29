@@ -60,7 +60,7 @@ All session verbs take `:project <project>` plus a positional `<session>` (any o
 
 There is no `restart` task — use `down` then `up` (or just `up`, since it's idempotent on a running session and a no-op there). The dashboard's restart button still exists; it's an internal UI-only path.
 
-The UI watchdog fully stops idle sessions (default 30 min of zero ESTABLISHED connections on the app port); wake is user-driven — an idle-stopped session stays down until the next `session:up`.
+Sessions stay up until explicitly stopped. There is no automatic idle-suspension — bring a session `down` yourself when you're done with it.
 
 ## Launcher artifacts
 

@@ -70,9 +70,10 @@
       :enter     (let [[_ p s target] action]
                    (session/enter ":project" p s ":cd" (name target)))
       :enter-run (let [[_ p s target run-id] action]
-                   ;; Runs-screen variant. Sessions for runs are usually
-                   ;; idle-stopped by the watchdog by the time the user
-                   ;; looks. `:home` auto-ups so `↵` becomes "resume",
+                   ;; Runs-screen variant. Sessions for runs are often
+                   ;; already down by the time the user looks (the run
+                   ;; finished, or it was stopped manually). `:home`
+                   ;; auto-ups so `↵` becomes "resume",
                    ;; and cd's into the run-link (~/.nido/runs/<id>/
                    ;; session-home) — that's the cwd claude was launched
                    ;; from originally, so `claude --resume` finds the

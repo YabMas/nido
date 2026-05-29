@@ -421,11 +421,11 @@
      :home (default) — the session-home (CLAUDE.md, .mcp.json live here)
      :worktree       — the worktree symlink inside session-home, with a
                        fallback to the on-disk worktree path when the
-                       session-home is gone (idle-stopped sessions retain
+                       session-home is gone (downed sessions retain
                        their worktree).
 
    `:auto-up?` (default false) — call `up!` first. Idempotent on a running
-   session. Used by the TUI runs screen so `↵` on an idle-stopped run
+   session. Used by the TUI runs screen so `↵` on a downed run
    transparently resumes the session.
 
    Throws if `:cd home` is requested without `:auto-up?` and the
