@@ -34,6 +34,9 @@
             ["nido:vsdd:analyze"  ":project-dir <path> :run-id <id> [:model opus]"]
             ["nido:vsdd:sweep"    ":project-dir <path> — run across all changed modules"]]}
 
+   {:title "Project commands"
+    :tasks [["nido:run" ":project <p> <session> <command-ref> — run an adopted command in the worktree"]]}
+
    {:title "UI"
     :tasks [["nido:ui" "[:port 8800] — start the nido dashboard"]]}
 
