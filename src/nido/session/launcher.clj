@@ -234,18 +234,74 @@
       (fs/delete link))
     (fs/create-sym-link link worktree)))
 
-(defn- ensure-claude-symlink!
-  "Create or refresh a `.claude` symlink inside the session-home pointing
-   through the `worktree` symlink to the project's checked-in `.claude/`.
-   Without this, Claude Code launched from the session-home cwd sees no
-   project-local skills, agents, or commands. Relative target so a moved
-   worktree is picked up automatically via the `worktree` symlink."
+(defn- nido-native-skill-dirs
+  "Absolute paths of nido's *native* (real, non-symlink) skill dirs under
+   `nido/.claude/skills` — the harness skills to inject into every session-home
+   `.claude`. Mirrored brian skills (symlinks in nido's tree) are skipped: the
+   session already gets brian's skills directly through the composed `.claude`."
+  []
+  (let [skills-dir (fs/path (core/nido-source-dir) ".claude" "skills")]
+    (if (fs/exists? skills-dir)
+      (->> (fs/list-dir skills-dir)
+           (filter #(and (fs/directory? %) (not (fs/sym-link? %))))
+           (mapv str))
+      [])))
+
+(defn- compose-claude-dir!
+  "Compose `<home>/.claude` as a *real* directory so the in-session agent sees
+   both brian's project tooling and nido's injected harness skills:
+
+   - every top-level entry of the worktree's `.claude` *except* `skills/` is
+     re-exposed as a relative symlink through the session-home `worktree` link
+     (so a moved worktree is still followed — as the old single symlink did);
+   - `skills/` is a real dir symlinking each of the worktree's skills plus each
+     `nido-native-skills` path (absolute).
+
+   Idempotent. SAFETY: if `<home>/.claude` is currently a *symlink* (the old
+   single-link form) it is only unlinked — never `delete-tree`d — so we never
+   follow it into the worktree and destroy brian's real `.claude`. A previously
+   composed real dir contains only our own symlinks, so deleting it removes link
+   entries, not their targets."
+  [home nido-native-skills]
+  (let [claude    (fs/path home ".claude")
+        wt-claude (fs/path home "worktree" ".claude")]
+    (cond
+      (fs/sym-link? claude) (fs/delete claude)        ; old single-symlink: unlink only
+      (fs/exists? claude)   (fs/delete-tree claude))  ; prior composed dir (our symlinks)
+    (fs/create-dirs claude)
+    (when (fs/exists? wt-claude)
+      (doseq [entry (fs/list-dir wt-claude)
+              :let  [nm (str (fs/file-name entry))]
+              :when (not= nm "skills")]
+        (fs/create-sym-link (fs/path claude nm)
+                            (fs/path ".." "worktree" ".claude" nm))))
+    (let [skills    (fs/path claude "skills")
+          wt-skills (fs/path wt-claude "skills")]
+      (fs/create-dirs skills)
+      (when (fs/exists? wt-skills)
+        (doseq [s (fs/list-dir wt-skills)
+                :let [nm (str (fs/file-name s))]]
+          (fs/create-sym-link (fs/path skills nm)
+                              (fs/path ".." ".." "worktree" ".claude" "skills" nm))))
+      (doseq [nido-skill nido-native-skills
+              :let [nm   (str (fs/file-name nido-skill))
+                    link (fs/path skills nm)]]
+        ;; A nido native skill wins over a same-named brian skill linked above.
+        ;; Removing any existing entry first means a name clash can't throw —
+        ;; which would otherwise be swallowed by write-artifacts! and silently
+        ;; leave the session with no composed .claude at all.
+        (when (or (fs/exists? link) (fs/sym-link? link))
+          (fs/delete link))
+        (fs/create-sym-link link nido-skill)))))
+
+(defn- ensure-claude-dir!
+  "Compose the session-home `.claude` (brian's entries + nido's native harness
+   skills). Replaces the old single `.claude` → worktree/.claude symlink so the
+   in-session agent sees nido's injected skills (e.g. local-ci) alongside
+   brian's project-local skills, agents, and commands."
   [project-name session-name]
-  (let [home (state/session-home-dir project-name session-name)
-        link (str (fs/path home ".claude"))]
-    (when (or (fs/exists? link) (fs/sym-link? link))
-      (fs/delete link))
-    (fs/create-sym-link link "worktree/.claude")))
+  (compose-claude-dir! (state/session-home-dir project-name session-name)
+                       (nido-native-skill-dirs)))
 
 (defn- ensure-bb-edn-symlink!
   "Create or refresh a `bb.edn` symlink inside the session-home pointing
@@ -321,7 +377,7 @@
         (catch Exception e
           (core/log-step (str "warning: worktree symlink: " (ex-message e)))))
       (try
-        (ensure-claude-symlink! project-name session-name)
+        (ensure-claude-dir! project-name session-name)
         (catch Exception e
           (core/log-step (str "warning: .claude symlink: " (ex-message e)))))
       (try
