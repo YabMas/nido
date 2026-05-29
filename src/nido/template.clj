@@ -17,7 +17,6 @@
    postmaster.pid and refuse to start."
   (:require
    [babashka.fs :as fs]
-   [nido.ci.template :as ci-template]
    [nido.commands :as commands]
    [nido.config :as config]
    [nido.core :as core]
@@ -159,9 +158,6 @@
       (finally
         (pg/pg-ctl-stop! data-dir)))
     (update-meta! project-name {:last-refresh-at (core/now-iso)})
-    ;; The CI variant is derived from the dev template; invalidate it so
-    ;; the next CI run rebuilds against the freshly refreshed source.
-    (ci-template/invalidate! project-name)
     (core/log-step (str "Template refreshed for " project-name))))
 
 ;; ---------------------------------------------------------------------------

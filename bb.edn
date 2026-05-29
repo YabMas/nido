@@ -12,7 +12,6 @@
              [tasks.nido-reclaim :as nido-reclaim]
              [tasks.nido-vsdd :as nido-vsdd]
              [tasks.nido-ui :as nido-ui]
-             [tasks.nido-ci :as nido-ci]
              [tasks.nido-bench :as nido-bench]
              [tasks.nido-harness :as nido-harness]
              [tasks.nido-help :as nido-help]
@@ -176,14 +175,6 @@
   nido:vsdd:sweep
   {:doc "Run VSDD across all changed modules: :project-dir <path>"
    :task (apply nido-vsdd/sweep *command-line-args*)}
-
-  nido:ci:run
-  {:doc "Run ci.edn: :project <p> <session> [:only <step-or-vec>] (all steps by default, parallel)"
-   :task (apply nido-ci/run *command-line-args*)}
-
-  nido:ci:rerun
-  {:doc "Re-run failed steps from last Run: :project <p> <session> [:from <run-id>]"
-   :task (apply nido-ci/rerun *command-line-args*)}
 
   nido:test
   {:doc "Run unit tests. Optional :only <ns-prefix> to filter."

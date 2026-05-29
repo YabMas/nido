@@ -18,7 +18,6 @@
    [charm.style.core :as style]
    [clojure.pprint]
    [clojure.string :as str]
-   [nido.ci.lifecycle :as ci-lifecycle]
    [nido.coordinator.breakers :as breakers]
    [nido.coordinator.halt :as halt]
    [nido.coordinator.queue :as queue]
@@ -37,7 +36,7 @@
 ;; task wrapper reads after `program/run` returns to decide what to run next.
 ;; Shape: :quit | [:enter p s target] | [:enter-run p s target]
 ;;        | [:up p s] | [:down p s] | [:destroy p s]
-;;        | [:add p s] | [:ci kind p s]   ; kind ∈ #{:run :rerun}
+;;        | [:add p s]
 ;;        target = :home | :worktree
 ;; :enter-run is the runs-screen variant of :enter — same handoff, but
 ;; the highlighted row is a Run so the project comes from (:project run)
@@ -222,29 +221,6 @@
 (defn- open-confirm-destroy [state p s]
   [(assoc state :modal :confirm-destroy :modal-target {:project p :session s}) nil])
 
-(defn- prior-failed-run-summary
-  "Read the highlighted session's last-run manifest. Returns the
-   `nido.ci.lifecycle/last-run-summary` map only when there's at least
-   one failed/errored/interrupted step (i.e. rerun would be meaningful).
-   Manifests live under the instance state-dir which persists across
-   `down`, so this works regardless of whether the session is currently
-   up. Any error swallows to nil — the probe must never block CI."
-  [{:keys [worktree]}]
-  (when worktree
-    (try
-      (let [instance-id (engine/resolve-instance-id worktree)
-            state-dir   (state/instance-state-dir instance-id)
-            summary     (ci-lifecycle/last-run-summary
-                         {:instance-state-dir state-dir})]
-        (when (seq (:failed-step-names summary)) summary))
-      (catch Exception _ nil))))
-
-(defn- open-ci-picker [state p s summary]
-  [(assoc state
-          :modal :ci-picker
-          :modal-target {:project p :session s :summary summary})
-   nil])
-
 (defn- open-session-info
   "Snapshot the highlighted session's data into the modal so the panel
    stays consistent if the registry shifts underneath."
@@ -289,13 +265,6 @@
     (msg/key-match? msg "x")
     (with-selected-session state
       (fn [s p sn] (open-confirm-destroy s p sn)))
-
-    (msg/key-match? msg "c")
-    (with-selected-session state
-      (fn [s p sn]
-        (if-let [summary (prior-failed-run-summary (selected-data state))]
-          (open-ci-picker s p sn summary)
-          [s (queue-action! [:ci :run p sn])])))
 
     (msg/key-match? msg "i")
     (with-selected-session state
@@ -593,20 +562,6 @@
     :else
     [(close-modal state) nil]))
 
-(defn- update-ci-picker [state msg]
-  (cond
-    (msg/key-match? msg "r")
-    (let [{:keys [project session]} (:modal-target state)]
-      [(close-modal state) (queue-action! [:ci :rerun project session])])
-
-    (msg/key-match? msg "n")
-    (let [{:keys [project session]} (:modal-target state)]
-      [(close-modal state) (queue-action! [:ci :run project session])])
-
-    ;; esc / anything else cancels
-    :else
-    [(close-modal state) nil]))
-
 (defn- update-session-info
   "Only `esc` closes the info panel; other keys are swallowed so the
    modal stays open until explicitly dismissed."
@@ -688,9 +643,6 @@
     ;; Modal takes priority over screen handlers.
     (= :confirm-destroy (:modal state))
     (update-confirm-destroy state msg)
-
-    (= :ci-picker (:modal state))
-    (update-ci-picker state msg)
 
     (= :session-info (:modal state))
     (update-session-info state msg)
@@ -785,8 +737,6 @@
                   :confirm-destroy "nido — confirm destroy"
                   :create-session  (str "nido — " (-> state :modal-target :project)
                                         " · new session")
-                  :ci-picker       (str "nido — " (-> state :modal-target :project)
-                                        " · ci · " (-> state :modal-target :session))
                   :session-info    (str "nido — " (-> state :modal-target :project)
                                         " · " (-> state :modal-target :session)
                                         " · info")
@@ -814,7 +764,6 @@
                 (case (:modal state)
                   :confirm-destroy    "[y] destroy  [n/esc] cancel"
                   :create-session     "[↵] create  [esc] cancel"
-                  :ci-picker          "[r] rerun failed  [n] run all  [esc] cancel"
                   :session-info       "[esc] back"
                   :run-details            "[esc] back"
                   :delete-run-confirm     "[y] delete  [n/esc] cancel"
@@ -826,7 +775,7 @@
                   :clear-breaker        "[↑↓] move  [↵] clear  [esc] cancel"
                   (case (:screen state)
                     :projects "[↵] open  [r]uns  [q]uit"
-                    :sessions "[↵/e] enter  [w]orktree  [i]nfo  [a]dd  [u]p  [d]own  [c]i  [x] destroy  [r]uns  [esc] back  [q]uit"
+                    :sessions "[↵/e] enter  [w]orktree  [i]nfo  [a]dd  [u]p  [d]own  [x] destroy  [r]uns  [esc] back  [q]uit"
                     :runs     "[↵] resume  [w] inspect worktree  [d]etails  [D]elete  [f]ire  [h]alt  [c]lear breaker  [s]essions  [q]uit"))))
 
 (defn- info-row [label value]
@@ -896,14 +845,6 @@
       (str (style/render warning-style "destroy ")
            project "/" session
            (style/render warning-style " ?")))
-
-    :ci-picker
-    (let [{:keys [summary]} (:modal-target state)
-          {:keys [run-id failed-step-names total-steps]} summary]
-      (str "prior run: " run-id
-           "    failed " (count failed-step-names) " of " total-steps
-           "\n\n"
-           "[r] rerun failed   [n] run all   [esc] cancel"))
 
     :session-info
     (let [{:keys [project session data]} (:modal-target state)]

@@ -34,10 +34,6 @@
             ["nido:vsdd:analyze"  ":project-dir <path> :run-id <id> [:model opus]"]
             ["nido:vsdd:sweep"    ":project-dir <path> — run across all changed modules"]]}
 
-   {:title "CI  (all take :project <p> <session>)"
-    :tasks [["nido:ci:run"   "[:only <step-or-vec>] — run ci.edn (parallel)"]
-            ["nido:ci:rerun" "[:from <run-id>] — re-run failed steps"]]}
-
    {:title "UI"
     :tasks [["nido:ui" "[:port 8800] — start the nido dashboard"]]}
 
