@@ -34,9 +34,12 @@ found), stop and tell the user to run it from the session home —
 
 ### 2. Run CI
 
-Warn the user this is a slow, full Docker rebuild (the `:ci` command uses
-`--no-cache` for jj correctness — its cache key derives from git HEAD/diff,
-unreliable under jj). Then run, capturing output:
+Warn the user this is a slow, full Docker rebuild. The `:ci` command forces it
+two ways, both for jj correctness: it passes `--no-cache` (brian's image cache
+key derives from `git HEAD`/`git diff`, which lags jj's working copy in a
+colocated repo, so a stale image can silently run old code), and it `docker
+image rm -f`s the floating `brian-ci:local` / `brian-playwright:local` tags
+first so no stale tag can be reused. Then run, capturing output:
 
 ```
 bb nido:run :project <project> <session> ci
