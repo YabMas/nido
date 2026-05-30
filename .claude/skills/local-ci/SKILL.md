@@ -45,6 +45,13 @@ bb nido:run :project <project> <session> ci
 No `nido:session:up` needed — brian's CI is self-contained Docker, path-isolated
 by its own `CI_SUFFIX`.
 
+**Clean-worktree gate:** the `:ci` command refuses to run if the worktree is
+dirty (output starts `nido: working copy is dirty …`, followed by `jj st`).
+This is **not** a CI failure — the Docker build COPYs the worktree, so a dirty
+tree would test code the remote can't see. Don't triage it as a failed job:
+tell the user to commit their changes, then re-run `/local-ci`. Do **not**
+commit on their behalf.
+
 ### 3. Green path
 
 Exit 0 → report "CI green, nothing to fix." Stop.
