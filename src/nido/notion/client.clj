@@ -170,6 +170,8 @@
     "number"       (:number prop)
     "checkbox"     (:checkbox prop)
     "date"         (some-> (:date prop) :start)
+    "unique_id"    (let [{:keys [prefix number]} (:unique_id prop)]
+                     (if prefix (str prefix "-" number) (str number)))
     ;; Fallback: hand back the whole property so debugging is possible
     prop))
 

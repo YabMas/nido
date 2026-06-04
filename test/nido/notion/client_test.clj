@@ -264,6 +264,16 @@
         (is (= ["b1" "b1c"] ids)
             "with :max-depth 1, depth-0 (b1) and depth-1 (b1c) included; depth-2 (b1cc) excluded")))))
 
+(deftest extract-value-formats-unique-id
+  (is (= "BR-5236"
+         (#'notion/extract-value {:type "unique_id"
+                                  :unique_id {:prefix "BR" :number 5236}}))
+      "unique_id renders as <prefix>-<number>")
+  (is (= "42"
+         (#'notion/extract-value {:type "unique_id"
+                                  :unique_id {:prefix nil :number 42}}))
+      "missing prefix renders the number alone"))
+
 (deftest walk-blocks-throws-on-fetch-failure
   ;; A page-level error (e.g. auth) during the walk must throw — not return partial results.
   (with-redefs [notion/http-request (fn [_ _ _] {:status 401 :body ""})]
