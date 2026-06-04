@@ -7,8 +7,10 @@
    The shim reads run-link/run.edn at invocation time to discover the
    claude session-id, so typing `claude` from the session-home resumes
    the autonomous conversation. Falls through to a normal `claude` if
-   the id is absent. See spec §Agent launch / Resume from the
-   session-home."
+   the id is absent. Resumes with --dangerously-skip-permissions to match
+   how the coordinator launched the autonomous run (so a human picking up the
+   parked session to apply/skip isn't prompted on every tool call). See spec
+   §Agent launch / Resume from the session-home."
   (:require
    [babashka.fs :as fs]))
 
@@ -24,9 +26,9 @@ if [ -f \"$RUN_EDN\" ]; then
   SESSION_ID=$(bb -e \"(print (or (-> (slurp \\\"$RUN_EDN\\\") clojure.edn/read-string :claude-session-id) \\\"\\\"))\" 2>/dev/null || true)
 fi
 if [ -n \"$SESSION_ID\" ]; then
-  exec command claude --resume \"$SESSION_ID\" \"$@\"
+  exec command claude --resume \"$SESSION_ID\" --dangerously-skip-permissions \"$@\"
 fi
-exec command claude \"$@\"
+exec command claude --dangerously-skip-permissions \"$@\"
 ")
 
 (defn write!

@@ -18,7 +18,9 @@
         (is (fs/executable? shim-path))
         (let [content (slurp shim-path)]
           (is (str/includes? content "claude --resume"))
-          (is (str/includes? content "run-link/run.edn")))
+          (is (str/includes? content "run-link/run.edn"))
+          (is (str/includes? content "--dangerously-skip-permissions")
+              "resumes Run-owned sessions with full permissions, matching the autonomous launch"))
         (let [link (str (fs/path session-home "run-link"))]
           (is (fs/sym-link? link))
           (is (= (str (fs/canonicalize run-dir))
