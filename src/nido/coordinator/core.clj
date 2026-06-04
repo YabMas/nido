@@ -17,6 +17,7 @@
    [nido.coordinator.reconcile :as reconcile]
    [nido.coordinator.runs :as runs]
    [nido.coordinator.sources :as sources]
+   [nido.coordinator.tickets :as tickets]
    [nido.coordinator.sources.notion :as nsource]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.status-file :as status-file]
@@ -176,6 +177,20 @@
                                    :fired-by (System/getenv "USER")})]
         (swap! !detector anomaly/record-spawn (clock/now-iso))
         (runs/transition! (:id run) :dry-run-would-fire))
+
+      ;; Triage pre-spawn gate (spec §Coordinator pre-spawn gate): a triage
+      ;; event whose ticket is already completed, or already owned by a live
+      ;; session, is dropped without creating a Run. BR-#### rides in the
+      ;; event-payload (:id) — no network. Non-triage triggers are unaffected.
+      (and (= :triage-bug (-> routed :trigger :skill))
+           (when-let [br (-> routed :payload :id)]
+             (not= :spawn (tickets/gate-decision (:project routed) br))))
+      (let [br       (-> routed :payload :id)
+            decision (tickets/gate-decision (:project routed) br)]
+        (binding [*err* *err*]
+          (.println ^java.io.PrintWriter *err*
+                    (str "INFO: triage gate skip — " (name (:project routed)) "/"
+                         br " (" (name decision) ")"))))
 
       :else
       (let [run (runs/create-run! routed
