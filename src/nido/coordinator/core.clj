@@ -111,20 +111,27 @@
   [run-id]
   (runs/transition! run-id :running)
   (let [run          (runs/read-run run-id)
-        _            (runs/spawn-session-for-run! run)
-        ;; Launch claude with the SESSION-HOME as cwd (not the worktree).
-        ;; Claude registers its transcript by cwd under ~/.claude/projects/,
-        ;; so this is what makes `claude --resume` work from session-home —
-        ;; the same reflex that already works for manually-launched sessions.
-        ;; CLAUDE.md + the system prompt instruct claude to use absolute paths
-        ;; (or `cd worktree`) when reading/writing source code.
-        session-home (cstate/run-session-home-link run-id)
-        result       (agent/launch! {:run-id        run-id
-                                     :cwd           session-home
-                                     :first-message (:first-message run)
-                                     :system-prompt (:system-prompt defaults)
-                                     :budget        (-> run :limits :budget)})
+        ;; Spawn the session + launch claude. If EITHER throws (e.g. session
+        ;; build / worktree creation fails), don't let it escape — that would
+        ;; leave the Run stuck :running forever (a zombie that permanently
+        ;; consumes its trigger's in-flight slot, since nothing transitions it
+        ;; terminal and the resolution sweep only handles :awaiting-review).
+        ;; Catch and fall through to the :failed terminal path below.
+        ;;
+        ;; Claude is launched with the SESSION-HOME as cwd (not the worktree):
+        ;; it registers its transcript by cwd under ~/.claude/projects/, which is
+        ;; what makes `claude --resume` work from the session home.
+        result       (try
+                       (runs/spawn-session-for-run! run)
+                       (agent/launch! {:run-id        run-id
+                                       :cwd           (cstate/run-session-home-link run-id)
+                                       :first-message (:first-message run)
+                                       :system-prompt (:system-prompt defaults)
+                                       :budget        (-> run :limits :budget)})
+                       (catch Throwable t
+                         {:spawn-error true :detail (.getMessage t)}))
         next-state (cond
+                     (:spawn-error result) :failed
                      (:timed-out? result) :failed
                      (zero? (:exit-code result))
                      (if (= :triage-bug (:skill run))
@@ -140,6 +147,9 @@
     (when (= :failed next-state)
       (let [r (runs/read-run run-id)]
         (runs/write-run! (assoc r :error (cond-> {:exit-code (:exit-code result)}
+                                           (:spawn-error result)
+                                           (assoc :reason :spawn-failed
+                                                  :detail (:detail result))
                                            (:timed-out? result)
                                            (assoc :reason :timeout
                                                   :budget (-> r :limits :budget)))))))

@@ -195,6 +195,33 @@
           (is (nil? (tickets/status :brian "BR-7"))
               "abnormal triage exit clears the stale :investigating status"))))))
 
+(deftest run-blocking-fails-cleanly-when-session-spawn-throws
+  ;; If spawn-session-for-run! (or launch) throws, run-blocking! must mark the
+  ;; run :failed — NOT leave it stuck :running (a zombie that leaks an in-flight
+  ;; slot). The ticket is then cleared → re-triable.
+  (gate-with-tmp
+    (fn [_]
+      (tickets/open! :brian "BR-Z" {:notion-page-id "p" :url "u" :title "T"
+                                    :opened-by :triage-teacher-bugs :notion-last-edited-at "t"})
+      (runs/write-run! {:id "rz" :project :brian :trigger :triage-teacher-bugs
+                        :source {:type :notion-view} :event-payload {:id "BR-Z"}
+                        :skill :triage-bug :first-message "x" :agent :claude
+                        :session-name "run-rz" :claude-session-id nil :limits {}
+                        :priority 0 :session-profile :lite :uncapped? false
+                        :state :queued :state-history [{:at "t" :state :queued}]
+                        :artifacts [] :error nil})
+      (with-redefs [runs/spawn-session-for-run! (fn [_] (throw (ex-info "boom: worktree create failed" {})))
+                    nido.coordinator.agent/launch! (fn [_] {:exit-code 0 :timed-out? false}) ; unreached
+                    cstate/run-session-home-link (constantly "/tmp/nope")
+                    anomaly/record-failure      (fn [det _] det)
+                    breakers/record-failure!    (fn [& _] nil)]
+        (#'core/run-blocking! "rz")
+        (is (= :failed (:state (runs/read-run "rz")))
+            "spawn failure ⇒ run :failed, not stuck :running (no zombie)")
+        (is (= :spawn-failed (-> (runs/read-run "rz") :error :reason)))
+        (is (nil? (tickets/status :brian "BR-Z"))
+            "ticket cleared on spawn-failure terminal ⇒ re-triable")))))
+
 (deftest run-blocking-parks-triage-run-from-ticket-status
   (gate-with-tmp
     (fn [_]
