@@ -25,6 +25,7 @@
              [tasks.nido-notion :as nido-notion]
              [tasks.nido-notion-views :as nido-notion-views]
              [tasks.nido-coordinator-source :as nido-coordinator-source]
+             [tasks.nido-ticket :as nido-ticket]
              [tasks.nido-transcribe :as nido-transcribe]
              [tasks.nido-notion-preprocess :as nido-notion-preprocess])
 
@@ -248,6 +249,26 @@
   nido:coordinator:source:reset
   {:doc "Clear breaker + failure counter for a source-instance."
    :task (apply nido-coordinator-source/reset-cmd *command-line-args*)}
+
+  nido:ticket:open
+  {:doc "Open/refresh a ticket record (status :investigating)."
+   :task (apply nido-ticket/open-cmd *command-line-args*)}
+
+  nido:ticket:status
+  {:doc "Set a ticket record's :status."
+   :task (apply nido-ticket/status-cmd *command-line-args*)}
+
+  nido:ticket:complete
+  {:doc "Terminal completion of a ticket (:triaged|:skipped + disposition)."
+   :task (apply nido-ticket/complete-cmd *command-line-args*)}
+
+  nido:ticket:append
+  {:doc "Append an entry file (body read from :file) to a ticket record."
+   :task (apply nido-ticket/append-cmd *command-line-args*)}
+
+  nido:ticket:show
+  {:doc "Pretty-print a ticket's meta.edn."
+   :task (apply nido-ticket/show-cmd *command-line-args*)}
 
   nido:transcribe-video
   {:doc "Transcribe a video URL → VTT: <url> :out <path> [:model :small] [:timeout 5m]"
