@@ -13,6 +13,16 @@
         (f tmp))
       (finally (fs/delete-tree tmp)))))
 
+(deftest read-meta-is-nil-safe-for-nil-or-blank-br-id
+  ;; A nil/blank br-id (e.g. a triage run whose event-payload predates :id)
+  ;; must not NPE in fs/path — it has no ticket record, so reads return nil.
+  (with-tmp
+    (fn [_]
+      (is (nil? (tickets/read-meta :brian nil)))
+      (is (nil? (tickets/read-meta :brian "")))
+      (is (nil? (tickets/status :brian nil)))
+      (is (= :spawn (tickets/gate-decision :brian nil))))))
+
 (deftest open-creates-record-with-investigating-status
   (with-tmp
     (fn [_]

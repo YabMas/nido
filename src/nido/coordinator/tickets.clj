@@ -17,8 +17,13 @@
 (defn- meta-path [project br-id]
   (str (fs/path (ticket-dir project br-id) "meta.edn")))
 
-(defn read-meta [project br-id]
-  (io/read-edn (meta-path project br-id)))
+(defn read-meta
+  "Read a ticket's meta.edn, or nil if absent. Nil-safe for a nil/blank br-id
+   (e.g. a triage run whose event-payload predates the :id field): such a run
+   has no ticket record, so this returns nil rather than NPEing in fs/path."
+  [project br-id]
+  (when (and br-id (not (str/blank? br-id)))
+    (io/read-edn (meta-path project br-id))))
 
 (defn write-meta! [project br-id m]
   (io/write-edn! (meta-path project br-id) m)

@@ -57,3 +57,14 @@
         (is (= :done           (:state (runs/read-run "r3"))) "cancelled → done")
         (is (= :awaiting-review (:state (runs/read-run "r4"))) "non-triage ignored")
         (is (= 2 n) "two triage runs resolved")))))
+
+(deftest sweep-tolerates-parked-run-without-br-id
+  ;; A legacy/anomalous parked triage run whose event-payload predates the :id
+  ;; field. (some-> run :event-payload :id) is nil — the sweep must NOT NPE on
+  ;; the nil br-id; such a run can't map to a ticket, so it's not-in-review and
+  ;; gets resolved to :done.
+  (with-tmp
+    (fn [_]
+      (mk-run "old" :awaiting-review {:page-id "pg" :title "smoke target"} :triage-bug)
+      (is (= 1 (review/sweep-resolved!)) "nil-id parked run swept without NPE")
+      (is (= :done (:state (runs/read-run "old")))))))

@@ -23,9 +23,12 @@
     :done))
 
 (defn- in-review?
-  "True while a triage ticket still occupies the human's review queue."
+  "True while a triage ticket still occupies the human's review queue. A run
+   with no resolvable BR-#### (nil br-id) can't map to a ticket, so it is
+   treated as not-in-review — the sweep then resolves it to :done."
   [project br-id]
-  (contains? #{:investigating :awaiting-input} (tickets/status project br-id)))
+  (and (some? br-id)
+       (contains? #{:investigating :awaiting-input} (tickets/status project br-id))))
 
 (defn sweep-resolved!
   "Transition every :awaiting-review triage run whose ticket is no longer in
