@@ -117,3 +117,10 @@
            :skill :smoke
            :payload ""}]
     (is (m/validate triggers/Trigger t))))
+
+(deftest max-in-flight-is-an-optional-pos-int
+  (let [base {:name :t :source {:type :notion-view} :skill :triage-bug :payload "p"}]
+    (is (m/validate triggers/Trigger (assoc base :max-in-flight 5)))
+    (is (m/validate triggers/Trigger base) "absent is fine")
+    (is (not (m/validate triggers/Trigger (assoc base :max-in-flight 0))) "must be positive")
+    (is (not (m/validate triggers/Trigger (assoc base :max-in-flight "5"))) "must be an int")))

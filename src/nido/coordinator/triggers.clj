@@ -25,7 +25,8 @@
    [:preprocess     {:optional true} [:vector keyword?]]
    [:dry-run?       {:optional true} boolean?]
    [:enabled?       {:optional true} boolean?]
-   [:uncapped?      {:optional true} boolean?]])
+   [:uncapped?      {:optional true} boolean?]
+   [:max-in-flight  {:optional true} pos-int?]])
 
 (def TriggersFile
   [:map {:closed true}
