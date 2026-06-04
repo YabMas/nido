@@ -13,7 +13,7 @@
 (deftest submit-then-tick-spawns-future
   (let [spawned (atom [])]
     (ex/submit! "run-1" 0)
-    (ex/tick! (fn [rid] (swap! spawned conj rid)))
+    (ex/tick! (fn [rid] (swap! spawned conj rid)) {})
     (Thread/sleep 50)
     (is (= ["run-1"] @spawned))))
 
@@ -23,11 +23,11 @@
     (ex/configure! {:global-cap 1})
     (ex/submit! "low"  1)
     (ex/submit! "high" 10)
-    (ex/tick! slow)
+    (ex/tick! slow {})
     (Thread/sleep 30)
-    (ex/tick! slow)                      ; slot full
+    (ex/tick! slow {})                     ; slot full
     (Thread/sleep 200)                    ; high finishes
-    (ex/tick! slow)                      ; reap, promote low
+    (ex/tick! slow {})                     ; reap, promote low
     (Thread/sleep 200)
     (is (= ["high" "low"] @spawned))))
 
@@ -38,9 +38,9 @@
     (ex/submit! "first"  5)
     (Thread/sleep 5)                      ; distinct received-at
     (ex/submit! "second" 5)
-    (ex/tick! slow) (Thread/sleep 30)
-    (ex/tick! slow) (Thread/sleep 200)
-    (ex/tick! slow) (Thread/sleep 200)
+    (ex/tick! slow {}) (Thread/sleep 30)
+    (ex/tick! slow {}) (Thread/sleep 200)
+    (ex/tick! slow {}) (Thread/sleep 200)
     (is (= ["first" "second"] @spawned))))
 
 (deftest cap-limits-concurrent-futures
@@ -52,7 +52,7 @@
                          (swap! running dec))]
     (ex/configure! {:global-cap 2})
     (dotimes [i 5] (ex/submit! (str "r" i) 0))
-    (dotimes [_ 10] (ex/tick! slow) (Thread/sleep 50))
+    (dotimes [_ 10] (ex/tick! slow {}) (Thread/sleep 50))
     (is (<= @max-r 2))))
 
 (deftest snapshot-reports-counts
@@ -68,18 +68,18 @@
   (let [spawned (atom #{})]
     (ex/configure! {:global-cap 1})
     (ex/submit! "r1" 0)
-    (ex/tick! (fn [rid] (swap! spawned conj rid)))
+    (ex/tick! (fn [rid] (swap! spawned conj rid)) {})
     (Thread/sleep 100)
-    (ex/tick! (fn [_] nil))
+    (ex/tick! (fn [_] nil) {})
     (is (= 0 (:in-flight (ex/snapshot))))))
 
 (deftest tick-swallows-future-exceptions-and-frees-slot
   (let [thrown (atom 0)]
     (ex/configure! {:global-cap 1})
     (ex/submit! "boom" 0)
-    (ex/tick! (fn [_] (swap! thrown inc) (throw (ex-info "boom" {}))))
+    (ex/tick! (fn [_] (swap! thrown inc) (throw (ex-info "boom" {}))) {})
     (Thread/sleep 100)
-    (ex/tick! (fn [_] nil))
+    (ex/tick! (fn [_] nil) {})
     (is (= 1 @thrown))
     (is (= 0 (:in-flight (ex/snapshot))))
     (is (= 0 (:queued    (ex/snapshot))))))
@@ -96,18 +96,18 @@
     (ex/configure! {:global-cap 1})
     ;; Fill the cap with a capped Run
     (ex/submit! "capped-1" 0 false)
-    (ex/tick! slow)
+    (ex/tick! slow {})
     (Thread/sleep 30)
     (is (= ["capped-1"] @spawned))
     ;; Now submit two more capped (should NOT promote — cap full)
     (ex/submit! "capped-2" 0 false)
     (ex/submit! "capped-3" 0 false)
-    (ex/tick! slow)
+    (ex/tick! slow {})
     (Thread/sleep 30)
     (is (= ["capped-1"] @spawned) "capped Runs still queued; cap is full")
     ;; Submit an uncapped Run; it should jump straight through
     (ex/submit! "uncapped-1" 0 true)
-    (ex/tick! slow)
+    (ex/tick! slow {})
     (Thread/sleep 30)
     (is (contains? (set @spawned) "uncapped-1")
         "uncapped Run promoted even though cap is full")
@@ -120,13 +120,36 @@
     (ex/configure! {:global-cap 1})
     ;; Submit an uncapped Run first — it spawns
     (ex/submit! "uncapped-1" 0 true)
-    (ex/tick! slow)
+    (ex/tick! slow {})
     (Thread/sleep 30)
     (is (= ["uncapped-1"] @spawned))
     ;; Now submit a capped Run — should ALSO spawn, since uncapped doesn't fill the cap
     (ex/submit! "capped-1" 0 false)
-    (ex/tick! slow)
+    (ex/tick! slow {})
     (Thread/sleep 30)
     (is (= ["uncapped-1" "capped-1"] @spawned)
         "capped Run spawns alongside uncapped — uncapped didn't fill the slot")
     (Thread/sleep 500)))
+
+(deftest max-in-flight-gates-promotion
+  (ex/clear!)
+  (ex/configure! {:global-cap 10})           ; global cap not the limiter here
+  (ex/submit! "r1" 0 false :tt 2)
+  (ex/submit! "r2" 0 false :tt 2)
+  (ex/submit! "r3" 0 false :tt 2)
+  (let [spawned (atom [])]
+    ;; trigger :tt already has 1 in-progress run on disk; cap 2 ⇒ only 1 more promotes
+    (ex/tick! (fn [rid] (swap! spawned conj rid)) {:tt 1})
+    (Thread/sleep 50)
+    (is (= 1 (count @spawned)) "cap 2 minus 1 in-flight ⇒ promote exactly 1")))
+
+(deftest no-max-in-flight-promotes-under-global-cap-only
+  (ex/clear!)
+  (ex/configure! {:global-cap 2})
+  (ex/submit! "a" 0 false :tt nil)           ; nil cap = uncapped per-trigger
+  (ex/submit! "b" 0 false :tt nil)
+  (ex/submit! "c" 0 false :tt nil)
+  (let [spawned (atom [])]
+    (ex/tick! (fn [rid] (swap! spawned conj rid)) {})
+    (Thread/sleep 50)
+    (is (= 2 (count @spawned)) "global cap 2 limits; per-trigger uncapped")))

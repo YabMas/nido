@@ -50,9 +50,13 @@
    is an int (higher pops first). uncapped? (default false) marks the Run
    as exempt from the global cap — it always promotes regardless of how many
    capped Runs are in flight, and does not consume a cap slot.
+   trigger is the trigger keyword that spawned this Run (used for per-trigger
+   in-flight gating). max-in-flight is the per-trigger cap (nil = uncapped
+   per-trigger; gated only by the global cap).
    Idempotent: re-submitting the same run-id is a no-op."
-  ([run-id priority] (submit! run-id priority false))
-  ([run-id priority uncapped?]
+  ([run-id priority] (submit! run-id priority false nil nil))
+  ([run-id priority uncapped?] (submit! run-id priority uncapped? nil nil))
+  ([run-id priority uncapped? trigger max-in-flight]
    (locking lock
      (swap! !state update :queue
             (fn [q]
@@ -61,10 +65,12 @@
                         (contains? in-flight-capped run-id)
                         (contains? in-flight-uncapped run-id))
                   q
-                  (conj q {:run-id      run-id
-                           :priority    priority
-                           :uncapped?   (boolean uncapped?)
-                           :received-at (clock/now-iso)}))))))))
+                  (conj q {:run-id        run-id
+                           :priority      priority
+                           :uncapped?     (boolean uncapped?)
+                           :trigger       trigger
+                           :max-in-flight max-in-flight
+                           :received-at   (clock/now-iso)}))))))))
 
 (defn- reap-done-map
   "Remove futures that have completed from a {run-id → future} map.
@@ -85,33 +91,47 @@
 (defn tick!
   "Called by the daemon every poll. Reaps finished futures, then:
    - Promotes ALL queued uncapped Runs immediately (bypass the cap).
-   - Promotes capped Runs up to (cap - count-in-flight-capped) slots.
-   on-spawn is `(fn [run-id])` — typically a wrapper around run-blocking!."
-  [on-spawn]
-  (locking lock
-    (swap! !state #(-> %
-                       (update :in-flight-capped   reap-done-map)
-                       (update :in-flight-uncapped reap-done-map)))
-    (let [{:keys [queue in-flight-capped in-flight-uncapped cap]} @!state
-          uncapped (filterv :uncapped? queue)
-          capped   (filterv (complement :uncapped?) queue)
-          free     (max 0 (- cap (count in-flight-capped)))
-          picks    (concat uncapped (take free capped))]
-      (when (seq picks)
-        (let [new-q         (reduce disj queue picks)
-              spawn-future  (fn [rid]
-                              (future (try (on-spawn rid)
-                                           (catch Throwable t t))))
-              new-uncapped  (into in-flight-uncapped
+   - Promotes capped Runs up to (cap - count-in-flight-capped) slots,
+     further constrained by per-trigger :max-in-flight when set.
+   on-spawn is `(fn [run-id])` — typically a wrapper around run-blocking!.
+   in-flight-by-trigger is {trigger -> n}, the current in-progress run count
+   per trigger (from persisted run state). A capped run is promoted only
+   while its trigger's in-flight (the map value plus picks already chosen
+   this tick) is below its :max-in-flight. Runs with nil :max-in-flight obey
+   only the global cap. Uncapped runs bypass both caps entirely."
+  ([on-spawn] (tick! on-spawn {}))
+  ([on-spawn in-flight-by-trigger]
+   (locking lock
+     (swap! !state #(-> %
+                        (update :in-flight-capped   reap-done-map)
+                        (update :in-flight-uncapped reap-done-map)))
+     (let [{:keys [queue in-flight-capped in-flight-uncapped cap]} @!state
+           uncapped (filterv :uncapped? queue)
+           capped   (filterv (complement :uncapped?) queue)
+           free     (max 0 (- cap (count in-flight-capped)))
+           picks-capped (loop [cs capped, slots free, used {}, acc []]
+                          (if (or (zero? slots) (empty? cs))
+                            acc
+                            (let [c   (first cs)
+                                  t   (:trigger c)
+                                  mif (:max-in-flight c)
+                                  cur (get used t (get in-flight-by-trigger t 0))]
+                              (if (or (nil? mif) (< cur mif))
+                                (recur (rest cs) (dec slots)
+                                       (assoc used t (inc cur)) (conj acc c))
+                                (recur (rest cs) slots used acc)))))
+           picks (concat uncapped picks-capped)]
+       (when (seq picks)
+         (let [new-q        (reduce disj queue picks)
+               spawn-future (fn [rid] (future (try (on-spawn rid) (catch Throwable t t))))
+               new-uncapped (into in-flight-uncapped
                                   (for [{:keys [run-id]} (filter :uncapped? picks)]
                                     [run-id (spawn-future run-id)]))
-              new-capped    (into in-flight-capped
+               new-capped   (into in-flight-capped
                                   (for [{:keys [run-id]} (remove :uncapped? picks)]
                                     [run-id (spawn-future run-id)]))]
-          (swap! !state assoc
-                 :queue              new-q
-                 :in-flight-capped   new-capped
-                 :in-flight-uncapped new-uncapped))))))
+           (swap! !state assoc
+                  :queue new-q :in-flight-capped new-capped :in-flight-uncapped new-uncapped)))))))
 
 (defn snapshot
   "Read-only view for the TUI. No locking — reads a consistent atom value.
