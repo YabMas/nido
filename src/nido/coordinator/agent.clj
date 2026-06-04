@@ -32,9 +32,30 @@
                    "d" 86400000)]
           (* n ms))))))
 
+(defn- build-cmd
+  "Assemble the claude command vector. When :claude-session-id is supplied,
+   pass `--session-id <uuid>` so claude records the transcript under a known
+   id (the resume shim then always resolves it). first-message is the trailing
+   positional argument."
+  [{:keys [claude-bin first-message system-prompt claude-session-id]}]
+  (cond-> [claude-bin
+           "--print"
+           ;; Stream-json output requires --verbose per claude-code's
+           ;; --print mode validation; without it claude refuses to run.
+           "--verbose"
+           "--output-format=stream-json"
+           "--dangerously-skip-permissions"]
+    claude-session-id (into ["--session-id" claude-session-id])
+    system-prompt     (into ["--append-system-prompt" system-prompt])
+    :always           (conj first-message)))
+
 (defn launch!
   "Spawn claude headlessly for a Run. Blocks until the agent exits or the
    wall-clock budget is exceeded.
+
+   :claude-session-id (opt) — pre-generated session id; passed as --session-id
+   and returned verbatim so the caller can persist it BEFORE launch (surviving
+   interruption). When omitted, the id is parsed from the stream-json init event.
 
    opts:
      :run-id        — run id (used to locate run-dir for agent.log path)
@@ -47,18 +68,11 @@
 
    Returns:
      {:exit-code <int> :claude-session-id <str-or-nil> :timed-out? <bool>}"
-  [{:keys [run-id cwd first-message system-prompt claude-bin env budget]
+  [{:keys [run-id cwd first-message system-prompt claude-bin env budget claude-session-id]
     :or   {claude-bin "claude"}}]
   (let [log-path  (cstate/run-agent-log run-id)
-        cmd       (cond-> [claude-bin
-                           "--print"
-                           ;; Stream-json output requires --verbose per claude-code's
-                           ;; --print mode validation; without it claude refuses to run.
-                           "--verbose"
-                           "--output-format=stream-json"
-                           "--dangerously-skip-permissions"]
-                    system-prompt (into ["--append-system-prompt" system-prompt])
-                    :always       (conj first-message))
+        cmd       (build-cmd {:claude-bin claude-bin :first-message first-message
+                              :system-prompt system-prompt :claude-session-id claude-session-id})
         proc      (p/process cmd {:dir cwd
                                   :env (merge (into {} (System/getenv)) (or env {}))
                                   ;; Close stdin so claude doesn't wait for input
@@ -92,5 +106,7 @@
         (when timer (future-cancel timer))))
     (let [exit (:exit @proc)]
       {:exit-code         exit
-       :claude-session-id @session
+       ;; Prefer the caller-supplied id (deterministic, already persisted);
+       ;; fall back to the id parsed from the init event.
+       :claude-session-id (or claude-session-id @session)
        :timed-out?        @timed-out})))

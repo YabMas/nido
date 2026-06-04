@@ -37,7 +37,8 @@
 
 (deftest manual-trigger-end-to-end
   (let [tmp     (fs/create-temp-dir)
-        tmp-str (str tmp)]
+        tmp-str (str tmp)
+        sid     (atom nil)]   ; capture the session-id run-blocking! generates + passes to launch!
     (try
       (with-redefs [cstate/nido-root         (constantly tmp-str)
                     ;; stub project listing — real shape is {project-name {...}}
@@ -57,11 +58,13 @@
                     ;; return a successful result with a known claude-session-id.
                     agent/launch!
                     (fn [opts]
+                      (reset! sid (:claude-session-id opts))   ; echo the caller-supplied id, like the real launch!
                       (io/write-edn! (cstate/run-status-path (:run-id opts))
                                      {:phase :awaiting-input :note "from fake"})
                       (spit (cstate/run-agent-log (:run-id opts))
-                            "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"abc-xyz\"}\n")
-                      {:exit-code 0 :claude-session-id "abc-xyz"})]
+                            (str "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\""
+                                 (:claude-session-id opts) "\"}\n"))
+                      {:exit-code 0 :claude-session-id (:claude-session-id opts)})]
         ;; 1. configure a trigger
         (fs/create-dirs (fs/parent (cstate/triggers-path :brian)))
         (io/write-edn! (cstate/triggers-path :brian)
@@ -82,7 +85,9 @@
           (let [run-id (str (fs/file-name (first run-dirs)))
                 run    (runs/read-run run-id)]
             (is (= :awaiting-review (:state run)))
-            (is (= "abc-xyz"        (:claude-session-id run)))
+            (is (string? @sid) "run-blocking! generated + passed a session-id to launch!")
+            (is (= @sid (:claude-session-id run))
+                "the generated session-id is persisted on the Run (resume-shim resolvable)")
             (is (= "/investigate-bug url=https://x" (:first-message run)))
             (is (fs/exists? (cstate/run-agent-log run-id))))))
       (finally (fs/delete-tree tmp)))))

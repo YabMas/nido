@@ -195,6 +195,41 @@
           (is (nil? (tickets/status :brian "BR-7"))
               "abnormal triage exit clears the stale :investigating status"))))))
 
+(deftest run-blocking-generates-and-persists-session-id-before-launch
+  ;; The session-id is generated up front and written to run.edn BEFORE claude
+  ;; launches, so it survives interruption (a daemon restart mid-session) — the
+  ;; resume shim can always find it. launch! is handed that id.
+  (gate-with-tmp
+    (fn [_]
+      (tickets/open! :brian "BR-S" {:notion-page-id "p" :url "u" :title "T"
+                                    :opened-by :triage-teacher-bugs :notion-last-edited-at "t"})
+      (tickets/set-status! :brian "BR-S" :awaiting-input)
+      (runs/write-run! {:id "rs" :project :brian :trigger :triage-teacher-bugs
+                        :source {:type :notion-view} :event-payload {:id "BR-S"}
+                        :skill :triage-bug :first-message "x" :agent :claude
+                        :session-name "run-rs" :claude-session-id nil :limits {}
+                        :priority 0 :session-profile :lite :uncapped? false
+                        :state :queued :state-history [{:at "t" :state :queued}]
+                        :artifacts [] :error nil})
+      (let [sid-passed    (atom :unset)
+            sid-at-launch (atom :unset)]
+        (with-redefs [runs/spawn-session-for-run! (fn [_] nil)
+                      nido.coordinator.agent/launch!
+                      (fn [opts]
+                        (reset! sid-passed (:claude-session-id opts))
+                        (reset! sid-at-launch (:claude-session-id (runs/read-run "rs")))
+                        {:exit-code 0 :timed-out? false :claude-session-id (:claude-session-id opts)})
+                      cstate/run-session-home-link (constantly "/tmp/nope")
+                      status-file/read-status      (fn [_] nil)
+                      anomaly/record-failure       (fn [det _] det)
+                      breakers/record-failure!     (fn [& _] nil)]
+          (#'core/run-blocking! "rs")
+          (is (string? @sid-passed) "launch! is handed a session-id")
+          (is (= @sid-passed @sid-at-launch)
+              "session-id is persisted to run.edn BEFORE launch (survives interruption)")
+          (is (= @sid-passed (:claude-session-id (runs/read-run "rs")))
+              "and remains in run.edn after"))))))
+
 (deftest run-blocking-fails-cleanly-when-session-spawn-throws
   ;; If spawn-session-for-run! (or launch) throws, run-blocking! must mark the
   ;; run :failed — NOT leave it stuck :running (a zombie that leaks an in-flight

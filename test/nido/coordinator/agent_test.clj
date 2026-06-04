@@ -8,6 +8,32 @@
 (def fake-claude
   (str (fs/canonicalize "resources/test/fake-claude/claude")))
 
+(deftest build-cmd-includes-session-id-when-given
+  (let [cmd (#'agent/build-cmd {:claude-bin "claude" :first-message "/x hi"
+                                :system-prompt nil :claude-session-id "abc-123"})]
+    (is (some #{"--session-id"} cmd) "passes --session-id flag")
+    (is (some #{"abc-123"} cmd) "passes the id")
+    (is (= "/x hi" (last cmd)) "first-message stays the trailing positional arg"))
+  (let [cmd (#'agent/build-cmd {:claude-bin "claude" :first-message "/x"
+                                :system-prompt nil :claude-session-id nil})]
+    (is (not (some #{"--session-id"} cmd)) "omits --session-id when none given")))
+
+(deftest launch!-returns-the-given-session-id
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (fs/create-dirs (cstate/run-dir "r1"))
+        (let [result (agent/launch!
+                       {:run-id        "r1"
+                        :cwd           (str tmp)
+                        :first-message "/x"
+                        :claude-bin    fake-claude
+                        :claude-session-id "preset-id"
+                        :env           {"FAKE_CLAUDE_SESSION_ID" "ignored-emitted-id"}})]
+          (is (= "preset-id" (:claude-session-id result))
+              "a pre-generated session-id is returned (not the emitted one)")))
+      (finally (fs/delete-tree tmp)))))
+
 (deftest launch!-captures-session-id-and-exits-clean
   (let [tmp (fs/create-temp-dir)]
     (try

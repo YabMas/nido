@@ -110,7 +110,13 @@
    submits to the executor instead)."
   [run-id]
   (runs/transition! run-id :running)
-  (let [run          (runs/read-run run-id)
+  (let [;; Generate the claude session id up front and persist it to run.edn
+        ;; BEFORE launch, so a restart mid-session (or any interruption) never
+        ;; strands the Run without a resumable id — the resume shim reads this.
+        ;; Passed to claude as --session-id so the transcript uses it.
+        session-id   (str (java.util.UUID/randomUUID))
+        run          (let [r (assoc (runs/read-run run-id) :claude-session-id session-id)]
+                       (runs/write-run! r) r)
         ;; Spawn the session + launch claude. If EITHER throws (e.g. session
         ;; build / worktree creation fails), don't let it escape — that would
         ;; leave the Run stuck :running forever (a zombie that permanently
@@ -123,11 +129,12 @@
         ;; what makes `claude --resume` work from the session home.
         result       (try
                        (runs/spawn-session-for-run! run)
-                       (agent/launch! {:run-id        run-id
-                                       :cwd           (cstate/run-session-home-link run-id)
-                                       :first-message (:first-message run)
-                                       :system-prompt (:system-prompt defaults)
-                                       :budget        (-> run :limits :budget)})
+                       (agent/launch! {:run-id            run-id
+                                       :cwd               (cstate/run-session-home-link run-id)
+                                       :first-message     (:first-message run)
+                                       :system-prompt     (:system-prompt defaults)
+                                       :budget            (-> run :limits :budget)
+                                       :claude-session-id session-id})
                        (catch Throwable t
                          {:spawn-error true :detail (.getMessage t)}))
         next-state (cond
@@ -140,9 +147,7 @@
                        (status-file/derive-state-after-exit
                          (status-file/read-status run-id)))
                      :else :failed)]
-    ;; persist captured claude session-id
-    (let [r (runs/read-run run-id)]
-      (runs/write-run! (assoc r :claude-session-id (:claude-session-id result))))
+    ;; (session-id was already persisted up front, above)
     (runs/transition! run-id next-state)
     (when (= :failed next-state)
       (let [r (runs/read-run run-id)]
