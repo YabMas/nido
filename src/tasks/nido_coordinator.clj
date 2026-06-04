@@ -52,11 +52,15 @@
     (when h
       (println "Halted:     " (name (:source h)) "—" (or (:note h) "(no note)"))
       (println "Halted at:  " (:halted-at h)))
-    (let [hashes (sst/list-state-hashes)]
+    (let [hashes (sst/list-state-hashes)
+          states (map (fn [h] [h (sst/read-state h)]) hashes)
+          open   (filter (fn [[_ s]] (= :open (:breaker s))) states)]
       (when (seq hashes)
+        (when (seq open)
+          (println (format "⚠ %d source breaker(s) OPEN — auto-recovers on cooldown; force now: bb nido:coordinator:source:reset"
+                           (count open))))
         (println "Sources:")
-        (doseq [h hashes
-                :let [s (sst/read-state h)]]
+        (doseq [[h s] states]
           (println (format "  %s %s  (%s, %s)"
                            (name (or (:type s) :unknown))
                            h
