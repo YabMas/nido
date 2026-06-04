@@ -8,6 +8,7 @@
    [nido.coordinator.core :as core]
    [nido.coordinator.executor :as executor]
    [nido.coordinator.anomaly :as anomaly]
+   [nido.coordinator.breakers :as breakers]
    [nido.coordinator.runs :as runs]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.tickets :as tickets]))
@@ -154,3 +155,41 @@
             triage-envelope
             {:brian [non-triage-trigger]})
           (is (= 1 @created) "non-triage trigger must not be blocked by the gate"))))))
+
+;; ---------------------------------------------------------------------------
+;; Run-termination hook tests (Task 5)
+;; ---------------------------------------------------------------------------
+
+(deftest run-blocking-clears-ticket-on-abnormal-exit
+  (gate-with-tmp
+    (fn [_]
+      (tickets/open! :brian "BR-7" {:notion-page-id "pg" :url "u" :title "T"
+                                    :opened-by :triage-new :notion-last-edited-at "t0"})
+      ;; Stand up a minimal :queued triage Run on disk.
+      ;; run-blocking! first transitions :queued → :running, so the run
+      ;; must start in :queued state (not :running).
+      (let [run {:id "r7" :project :brian :trigger :triage-new
+                 :source {:type :notion-view} :event-payload {:id "BR-7"}
+                 :skill :triage-bug :first-message "/triage-bug x" :agent :claude
+                 :session-name "run-x" :claude-session-id nil
+                 :limits {:budget "15m" :max-failures 3} :priority 10
+                 :session-profile :lite :uncapped? true :state :queued
+                 :state-history [{:at "t" :state :queued}] :artifacts [] :error nil}]
+        (runs/write-run! run)
+        (with-redefs [;; force an abnormal (:failed) outcome without launching claude:
+                      ;; exit-code 1 (non-zero) → :else :failed branch in run-blocking!
+                      ;; status-file/read-status is NOT called on the :else path
+                      runs/spawn-session-for-run! (fn [_] nil)
+                      agent/launch!               (fn [_] {:exit-code 1 :timed-out? false
+                                                           :claude-session-id nil})
+                      cstate/run-session-home-link (constantly "/tmp/nonexistent")
+                      ;; no-op anomaly/breaker side-effects: the !detector atom and
+                      ;; breakers file are global across the test suite; recording a
+                      ;; failure here would inflate counts and cause the e2e breaker
+                      ;; test to trip the anomaly auto-halt during tick! — same
+                      ;; isolation pattern used in gate-allows-untriaged-ticket.
+                      anomaly/record-failure      (fn [det _] det)
+                      breakers/record-failure!    (fn [& _] nil)]
+          (#'core/run-blocking! "r7")
+          (is (nil? (tickets/status :brian "BR-7"))
+              "abnormal triage exit clears the stale :investigating status"))))))

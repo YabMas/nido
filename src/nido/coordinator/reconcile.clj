@@ -9,7 +9,8 @@
    [nido.coordinator.clock :as clock]
    [nido.coordinator.runs :as runs]
    [nido.coordinator.state :as cstate]
-   [nido.coordinator.status-file :as status-file]))
+   [nido.coordinator.status-file :as status-file]
+   [nido.coordinator.tickets :as tickets]))
 
 (def ^:private non-terminal-states
   (set (keys runs/allowed-transitions)))
@@ -51,7 +52,10 @@
                                       (assoc :state state
                                              :error error)
                                       (update :state-history conj history-entry))]
-        (runs/write-run! updated)))))
+        (runs/write-run! updated)
+        ;; Keep the ticket record honest: an orphaned triage Run clears
+        ;; a stale :investigating so the ticket is re-triable next poll.
+        (tickets/on-run-terminal! (runs/read-run run-id) state)))))
 
 (defn reconcile!
   "Scan every Run directory under ~/.nido/runs/ and force any non-terminal

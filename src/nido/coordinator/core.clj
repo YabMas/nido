@@ -139,6 +139,10 @@
                                            (:timed-out? result)
                                            (assoc :reason :timeout
                                                   :budget (-> r :limits :budget)))))))
+    ;; Keep the ticket record honest on terminal exit (spec §Lifecycle):
+    ;; clears a stale :investigating after an abnormal exit, leaves completed
+    ;; dispositions and parked :awaiting-input drafts alone.
+    (tickets/on-run-terminal! (runs/read-run run-id) next-state)
     ;; Breaker update on terminal state. Default max-failures is 3; the
     ;; trigger's :limits.max-failures (snapshotted onto the Run at create
     ;; time) overrides this.
