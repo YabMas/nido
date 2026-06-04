@@ -69,6 +69,31 @@
   (io/write-edn! (cstate/run-edn-path (:id run)) run)
   run)
 
+(def in-progress-states
+  "Run states that occupy a trigger's in-flight budget: promoted and not yet
+   terminal. :queued is the pending pool and deliberately does NOT count."
+  #{:preprocessing :running :awaiting-review})
+
+(defn list-run-ids
+  "Vector of run-ids (directory names) under the runs dir; [] if none."
+  []
+  (let [d (cstate/runs-dir)]
+    (if (fs/exists? d)
+      (->> (fs/list-dir d)
+           (filter fs/directory?)
+           (mapv #(str (fs/file-name %))))
+      [])))
+
+(defn in-progress-count-by-trigger
+  "Map {trigger-kw → count} of runs in an in-progress state, grouped by
+   :trigger. Scans the runs dir. The scheduler reads this to enforce per-trigger
+   :max-in-flight caps; recomputed each tick so it is restart-safe."
+  []
+  (->> (list-run-ids)
+       (keep read-run)
+       (filter #(contains? in-progress-states (:state %)))
+       (reduce (fn [m r] (update m (:trigger r) (fnil inc 0))) {})))
+
 (def allowed-transitions
   "Map of from-state → set of to-states.
    See spec §Runs / Lifecycle. Terminal states have no entries.

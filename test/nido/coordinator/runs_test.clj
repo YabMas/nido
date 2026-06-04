@@ -293,3 +293,36 @@
 (deftest queued-still-allows-direct-running
   ;; Triggers without :preprocess skip the preprocessing phase entirely.
   (is (runs/valid-transition? :queued :running)))
+
+;; ---------------------------------------------------------------------------
+;; in-progress-count-by-trigger
+;; ---------------------------------------------------------------------------
+
+(defn- with-tmp [f]
+  (let [tmp (fs/create-temp-dir)]
+    (try (with-redefs [cstate/nido-root (constantly (str tmp))]
+           (cstate/ensure-dirs!) (f tmp))
+         (finally (fs/delete-tree tmp)))))
+
+(defn- mk-run [id trigger state]
+  (let [run {:id id :project :brian :trigger trigger
+             :source {:type :notion-view} :event-payload {}
+             :skill :triage-bug :first-message "x" :agent :claude
+             :session-name (str "run-" id) :claude-session-id nil
+             :limits {} :priority 0 :session-profile :lite :uncapped? false
+             :state state :state-history [{:at "t" :state state}]
+             :artifacts [] :error nil}]
+    (fs/create-dirs (cstate/run-dir id))
+    (runs/write-run! run)))
+
+(deftest in-progress-count-by-trigger-counts-only-in-progress
+  (with-tmp
+    (fn [_]
+      (mk-run "a" :triage-teacher-bugs :running)
+      (mk-run "b" :triage-teacher-bugs :awaiting-review)
+      (mk-run "c" :triage-teacher-bugs :queued)     ; pending pool — must NOT count
+      (mk-run "d" :triage-teacher-bugs :done)        ; terminal — must NOT count
+      (mk-run "e" :other-trigger :running)           ; different trigger
+      (let [counts (runs/in-progress-count-by-trigger)]
+        (is (= 2 (get counts :triage-teacher-bugs)))
+        (is (= 1 (get counts :other-trigger)))))))
