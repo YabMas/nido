@@ -15,6 +15,7 @@
    [nido.coordinator.pid :as pid]
    [nido.coordinator.queue :as queue]
    [nido.coordinator.reconcile :as reconcile]
+   [nido.coordinator.review :as review]
    [nido.coordinator.runs :as runs]
    [nido.coordinator.sources :as sources]
    [nido.coordinator.tickets :as tickets]
@@ -126,8 +127,11 @@
         next-state (cond
                      (:timed-out? result) :failed
                      (zero? (:exit-code result))
-                     (status-file/derive-state-after-exit
-                       (status-file/read-status run-id))
+                     (if (= :triage-bug (:skill run))
+                       (review/run-state-from-ticket
+                         (tickets/status (:project run) (some-> run :event-payload :id)))
+                       (status-file/derive-state-after-exit
+                         (status-file/read-status run-id)))
                      :else :failed)]
     ;; persist captured claude session-id
     (let [r (runs/read-run run-id)]
@@ -201,7 +205,8 @@
                                   {:fired-at (clock/now-iso)
                                    :fired-by (System/getenv "USER")})]
         (swap! !detector anomaly/record-spawn (clock/now-iso))
-        (executor/submit! (:id run) (:priority run) (:uncapped? run))))))
+        (executor/submit! (:id run) (:priority run) (:uncapped? run)
+                          (:trigger run) (-> routed :trigger :max-in-flight))))))
 
 (defn tick!
   "One iteration of the main loop. Public for testability."
@@ -222,7 +227,8 @@
           (process-envelope! env triggers-by-project))
         ;; Reap finished executor futures and promote waiting Runs into
         ;; free slots. run-blocking! is the body executed per slot.
-        (executor/tick! run-blocking!)
+        (review/sweep-resolved!)
+        (executor/tick! run-blocking! (runs/in-progress-count-by-trigger))
         ;; Then poll due sources. Their emissions land in the queue and
         ;; will be picked up next tick.
         (let [now-ms (System/currentTimeMillis)]
@@ -260,6 +266,19 @@
   []
   (-> defaults :executor :shutdown-grace-ms))
 
+(defn- resubmit-queued!
+  "After reconcile, re-add surviving :queued runs to the executor queue so the
+   in-memory queue rehydrates across a restart."
+  [triggers-by-project]
+  (let [cap-of (into {}
+                     (for [[_ ts] triggers-by-project, t ts]
+                       [(:name t) (:max-in-flight t)]))]
+    (doseq [rid (runs/list-run-ids)
+            :let [r (runs/read-run rid)]
+            :when (and r (= :queued (:state r)))]
+      (executor/submit! (:id r) (:priority r) (:uncapped? r)
+                        (:trigger r) (get cap-of (:trigger r))))))
+
 (defn run!
   "Start the foreground loop. Blocks until interrupted.
    Also installs the daemon lifecycle: writes coordinator.pid, runs the
@@ -268,6 +287,7 @@
   (cstate/ensure-dirs!)
   (println "nido coordinator: starting (poll" poll-ms "ms)")
   (reconcile/reconcile!)
+  (resubmit-queued! (load-all-triggers))
   (pid/write! (long (.pid (java.lang.ProcessHandle/current))))
   (install-shutdown-hook!)
   (heartbeat/write! {:status :running :slots-in-use 0})

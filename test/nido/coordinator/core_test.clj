@@ -11,7 +11,8 @@
    [nido.coordinator.breakers :as breakers]
    [nido.coordinator.runs :as runs]
    [nido.coordinator.state :as cstate]
-   [nido.coordinator.tickets :as tickets]))
+   [nido.coordinator.tickets :as tickets]
+   [nido.coordinator.status-file :as status-file]))
 
 (defn- reset-executor! [f]
   (executor/configure! {:global-cap 1})
@@ -40,11 +41,11 @@
           ;; submit directly to the executor (bypassing process-envelope!)
           (executor/submit! (:id run) 0)
           ;; first tick: promotes the Run into a future that calls run-blocking!
-          (executor/tick! #'nido.coordinator.core/run-blocking!)
+          (executor/tick! #'nido.coordinator.core/run-blocking! {})
           ;; wait for the future to finish (agent stub is instant)
           (Thread/sleep 200)
           ;; second tick: reaps the finished future
-          (executor/tick! #'nido.coordinator.core/run-blocking!)
+          (executor/tick! #'nido.coordinator.core/run-blocking! {})
           (is (contains? #{:done :failed :awaiting-review}
                          (:state (runs/read-run (:id run)))))))
       (finally (fs/delete-tree tmp)))))
@@ -193,3 +194,26 @@
           (#'core/run-blocking! "r7")
           (is (nil? (tickets/status :brian "BR-7"))
               "abnormal triage exit clears the stale :investigating status"))))))
+
+(deftest run-blocking-parks-triage-run-from-ticket-status
+  (gate-with-tmp
+    (fn [_]
+      (tickets/open! :brian "BR-11" {:notion-page-id "p" :url "u" :title "T"
+                                     :opened-by :triage-teacher-bugs :notion-last-edited-at "t"})
+      (tickets/set-status! :brian "BR-11" :awaiting-input)   ; skill parked
+      (runs/write-run! {:id "rp" :project :brian :trigger :triage-teacher-bugs
+                        :source {:type :notion-view} :event-payload {:id "BR-11"}
+                        :skill :triage-bug :first-message "x" :agent :claude
+                        :session-name "run-rp" :claude-session-id nil :limits {}
+                        :priority 0 :session-profile :lite :uncapped? false
+                        :state :queued :state-history [{:at "t" :state :queued}]
+                        :artifacts [] :error nil})
+      (with-redefs [runs/spawn-session-for-run! (fn [_] nil)
+                    nido.coordinator.agent/launch! (fn [_] {:exit-code 0 :timed-out? false})
+                    cstate/run-session-home-link (constantly "/tmp/nope")
+                    status-file/read-status (fn [_] nil)
+                    anomaly/record-failure      (fn [det _] det)
+                    breakers/record-failure!    (fn [& _] nil)]
+        (#'core/run-blocking! "rp")
+        (is (= :awaiting-review (:state (runs/read-run "rp")))
+            "clean exit + ticket :awaiting-input ⇒ run parks at :awaiting-review, not :done")))))

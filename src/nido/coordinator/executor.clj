@@ -99,7 +99,6 @@
    while its trigger's in-flight (the map value plus picks already chosen
    this tick) is below its :max-in-flight. Runs with nil :max-in-flight obey
    only the global cap. Uncapped runs bypass both caps entirely."
-  ([on-spawn] (tick! on-spawn {}))
   ([on-spawn in-flight-by-trigger]
    (locking lock
      (swap! !state #(-> %
