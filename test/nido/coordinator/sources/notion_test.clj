@@ -2,6 +2,7 @@
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
+   [nido.coordinator.clock :as clock]
    [nido.coordinator.sources :as sources]
    [nido.coordinator.sources.notion :as notion-src]
    [nido.coordinator.sources.state :as sst]
@@ -205,6 +206,90 @@
             (let [s (sst/read-state (sources/config-hash sc))]
               (is (zero? (:consecutive-failures s)))
               (is (nil? (:breaker s))))))))))
+
+(deftest network-errors-do-not-trip-breaker
+  ;; Connectivity failures (status 0 / :network) are transient — a sleeping
+  ;; laptop or a dropped WiFi must NOT permanently disable the source. The
+  ;; breaker stays closed and polling continues; failures are tracked for
+  ;; visibility under :network-failures.
+  (with-tmp
+    (fn [tmp]
+      (write-views! tmp default-views)
+      (let [calls (atom 0)
+            sc    {:type :notion-view :project :brian :view :open-bugs :poll "5m"}]
+        (with-redefs [client/resolve-data-source-id (stub-resolve-ds)
+                      client/data-source-query
+                      (fn [_ds _token _opts]
+                        (swap! calls inc)
+                        {:status 0 :error :network})]
+          (let [handle (notion-src/start-instance! sc (fn [_]) {:token "t"})]
+            (dotimes [_ 5] ((:poll! handle)))
+            (let [s (sst/read-state (sources/config-hash sc))]
+              (is (nil? (:breaker s)) "network errors must not open the breaker")
+              (is (= 5 @calls) "polling must continue through connectivity failures")
+              (is (= 5 (:network-failures s)) "network failures tracked separately")
+              (is (= :network (-> s :last-poll-result :error))))))))))
+
+(deftest open-breaker-probes-and-closes-after-cooldown
+  ;; Half-open recovery: a tripped breaker probes once after the cooldown.
+  ;; A successful probe closes it — no manual reset needed.
+  (with-tmp
+    (fn [tmp]
+      (write-views! tmp default-views)
+      (let [now     (atom (java.time.Instant/parse "2026-01-01T00:00:00Z"))
+            outcome (atom {:status 503 :error :server})
+            calls   (atom 0)
+            sc      {:type :notion-view :project :brian :view :open-bugs :poll "5m"}]
+        (with-redefs [clock/now-iso                 (fn [] (str @now))
+                      client/resolve-data-source-id (stub-resolve-ds)
+                      client/data-source-query
+                      (fn [_ds _token _opts] (swap! calls inc) @outcome)]
+          (let [handle (notion-src/start-instance! sc (fn [_]) {:token "t"})]
+            (dotimes [_ 3] ((:poll! handle)))      ; trip the breaker
+            (is (= :open (:breaker (sst/read-state (sources/config-hash sc)))))
+            (let [tripped @calls]
+              ;; within cooldown — poll is suppressed
+              ((:poll! handle))
+              (is (= tripped @calls) "poll suppressed during cooldown")
+              ;; advance past cooldown; connectivity recovers
+              (swap! now #(.plusSeconds % 600))
+              (reset! outcome {:status 200 :results [] :has_more false})
+              ((:poll! handle))                    ; probe → success
+              (is (= (inc tripped) @calls) "probe polled once after cooldown")
+              (let [s (sst/read-state (sources/config-hash sc))]
+                (is (nil? (:breaker s)) "successful probe closes the breaker")
+                (is (zero? (:consecutive-failures s)))))))))))
+
+(deftest failed-probe-rearms-cooldown
+  ;; If the half-open probe fails again, the breaker stays open and the
+  ;; cooldown is re-armed — we don't fall back to probing every poll.
+  (with-tmp
+    (fn [tmp]
+      (write-views! tmp default-views)
+      (let [now   (atom (java.time.Instant/parse "2026-01-01T00:00:00Z"))
+            calls (atom 0)
+            sc    {:type :notion-view :project :brian :view :open-bugs :poll "5m"}]
+        (with-redefs [clock/now-iso                 (fn [] (str @now))
+                      client/resolve-data-source-id (stub-resolve-ds)
+                      client/data-source-query
+                      (fn [_ds _token _opts]
+                        (swap! calls inc)
+                        {:status 503 :error :server})]
+          (let [handle (notion-src/start-instance! sc (fn [_]) {:token "t"})]
+            (dotimes [_ 3] ((:poll! handle)))      ; trip
+            (let [tripped @calls]
+              (swap! now #(.plusSeconds % 600))
+              ((:poll! handle))                    ; probe → fails again
+              (is (= (inc tripped) @calls) "probe ran once after cooldown")
+              (is (= :open (:breaker (sst/read-state (sources/config-hash sc))))
+                  "still open after a failed probe")
+              ;; immediately after, cooldown re-armed → suppressed again
+              ((:poll! handle))
+              (is (= (inc tripped) @calls) "failed probe re-armed the cooldown")
+              ;; advance again → probes once more
+              (swap! now #(.plusSeconds % 600))
+              ((:poll! handle))
+              (is (= (+ 2 tripped) @calls) "probes again after a second cooldown"))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Tests — view registry + filter merging (Task 3)
