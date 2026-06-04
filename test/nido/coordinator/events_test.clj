@@ -46,6 +46,19 @@
             {:project :p :trigger t2 :payload {:status "Open"} :priority 0 :session-profile nil :uncapped? false}]
            (events/route env tbp)))))
 
+(deftest route-broadcast-matches-despite-injected-project
+  ;; discover-source-configs tags the running source-config with :project, which
+  ;; rides in the broadcast; the trigger's declared :source has no :project.
+  ;; Routing must still match — and only to the same project's triggers.
+  (let [t   {:name :a :source {:type :notion-view :database "x"} :skill :s :payload ""}
+        env {:broadcast {:type :notion-view
+                         :source-config {:type :notion-view :database "x" :project :brian}
+                         :payload {:status "Open"}}}]
+    (is (= [:a] (mapv #(-> % :trigger :name) (events/route env {:brian [t]})))
+        "matches despite the injected :project")
+    (is (= [] (events/route env {:other [t]}))
+        "broadcast tagged :brian does not match a different project's trigger")))
+
 (deftest route-broadcast-empty-when-no-matches
   (is (= []
          (events/route

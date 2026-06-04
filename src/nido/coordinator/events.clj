@@ -25,9 +25,12 @@
         [{:error :unknown-trigger :project project :trigger trigger}]))))
 
 (defn- source-config-match?
-  "Compare source-configs by value, ignoring :type."
+  "Compare source-configs by value, ignoring :type and the injected :project.
+   `discover-source-configs` tags the running source-config with :project so the
+   source plugin can resolve per-project registries; the trigger's declared
+   :source does not carry it, so it must be excluded from the comparison."
   [a b]
-  (= (dissoc a :type) (dissoc b :type)))
+  (= (dissoc a :type :project) (dissoc b :type :project)))
 
 (defn- route-broadcast
   [{:keys [broadcast]} triggers-by-project]
@@ -36,6 +39,9 @@
       (for [[project ts] triggers-by-project
             t ts
             :when (= type (-> t :source :type))
+            ;; a project-tagged broadcast only matches that project's triggers
+            :when (or (nil? (:project source-config))
+                      (= project (:project source-config)))
             :when (source-config-match? source-config (:source t))
             :when (f/accept? (:filter t) payload)]
         {:project project :trigger t :payload payload
