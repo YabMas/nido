@@ -41,21 +41,43 @@
       :else                               {:state :failed
                                            :error {:reason :orphaned-from-restart}})))
 
+(defn- triage-reconciled-state
+  "Reconciled state for a non-:queued triage run, derived from its ticket record.
+   Ticket status drives the decision; for runs still mid-investigation at restart
+   (no resolved ticket) the run state determines whether to park or fail."
+  [run]
+  (let [br (some-> run :event-payload :id)
+        ts (when (and br (not (str/blank? br)))
+             (tickets/status (:project run) br))]
+    (case ts
+      (:triaged :skipped) {:state :done          :error nil}
+      :awaiting-input     {:state :awaiting-review :error nil}
+      ;; :investigating / cleared / absent — orphan mid-investigation runs;
+      ;; a run already parked at :awaiting-review stays parked.
+      (if (= :awaiting-review (:state run))
+        {:state :awaiting-review :error nil}
+        {:state :failed :error {:reason :orphaned-from-restart}}))))
+
 (defn- reconcile-one!
-  "Read run.edn, decide a terminal state if non-terminal, write it back."
+  "Read run.edn, decide a terminal/parked state if non-terminal, write it back.
+   :queued runs are pending work — they are left intact for re-submission."
   [run-id]
   (when-let [run (runs/read-run run-id)]
-    (when (contains? non-terminal-states (:state run))
-      (let [{:keys [state error]} (derive-terminal-state run-id)
-            history-entry         {:at (clock/now-iso) :state state}
-            updated               (-> run
-                                      (assoc :state state
-                                             :error error)
-                                      (update :state-history conj history-entry))]
-        (runs/write-run! updated)
-        ;; Keep the ticket record honest: an orphaned triage Run clears
-        ;; a stale :investigating so the ticket is re-triable next poll.
-        (tickets/on-run-terminal! (runs/read-run run-id) state)))))
+    (when (and (contains? non-terminal-states (:state run))
+               (not= :queued (:state run)))
+      (let [{:keys [state error]} (if (= :triage-bug (:skill run))
+                                    (triage-reconciled-state run)
+                                    (derive-terminal-state run-id))]
+        (when (not= state (:state run))                  ; no-op if state unchanged (e.g. parked → parked)
+          (let [history-entry {:at (clock/now-iso) :state state}
+                updated       (-> run
+                                  (assoc :state state
+                                         :error error)
+                                  (update :state-history conj history-entry))]
+            (runs/write-run! updated)
+            ;; Keep the ticket record honest: an orphaned triage Run clears
+            ;; a stale :investigating so the ticket is re-triable next poll.
+            (tickets/on-run-terminal! updated state)))))))
 
 (defn reconcile!
   "Scan every Run directory under ~/.nido/runs/ and force any non-terminal

@@ -5,6 +5,7 @@
    [nido.coordinator.reconcile :as reconcile]
    [nido.coordinator.runs :as runs]
    [nido.coordinator.state :as cstate]
+   [nido.coordinator.tickets :as tickets]
    [nido.io :as io]))
 
 (def base-run
@@ -22,8 +23,18 @@
     (try
       (with-redefs [cstate/nido-root (constantly (str tmp))]
         (cstate/ensure-dirs!)
-        (f))
+        (f tmp))
       (finally (fs/delete-tree tmp)))))
+
+(defn- mk-run [id state payload skill]
+  (fs/create-dirs (cstate/run-dir id))
+  (runs/write-run! {:id id :project :brian :trigger :triage-teacher-bugs
+                    :source {:type :notion-view} :event-payload payload
+                    :skill skill :first-message "x" :agent :claude
+                    :session-name (str "run-" id) :claude-session-id nil
+                    :limits {} :priority 0 :session-profile :lite :uncapped? false
+                    :state state :state-history [{:at "t" :state state}]
+                    :artifacts [] :error nil}))
 
 (defn- seed-run! [run]
   (fs/create-dirs (cstate/run-dir (:id run)))
@@ -31,7 +42,7 @@
 
 (deftest reconcile!-leaves-terminal-runs-alone
   (with-tmp
-    (fn []
+    (fn [_]
       (seed-run! (assoc base-run :state :done :state-history
                         [{:at "T" :state :queued} {:at "T" :state :done}]))
       (reconcile/reconcile!)
@@ -39,7 +50,7 @@
 
 (deftest reconcile!-promotes-to-done-when-status-says-complete
   (with-tmp
-    (fn []
+    (fn [_]
       (seed-run! base-run)
       (io/write-edn! (cstate/run-status-path (:id base-run))
                      {:phase :complete :note "done"})
@@ -48,7 +59,7 @@
 
 (deftest reconcile!-promotes-to-awaiting-review-when-status-says-awaiting
   (with-tmp
-    (fn []
+    (fn [_]
       (seed-run! base-run)
       (io/write-edn! (cstate/run-status-path (:id base-run))
                      {:phase :awaiting-input :note "?"})
@@ -57,7 +68,7 @@
 
 (deftest reconcile!-marks-failed-when-status-says-error
   (with-tmp
-    (fn []
+    (fn [_]
       (seed-run! base-run)
       (io/write-edn! (cstate/run-status-path (:id base-run))
                      {:phase :error :note "boom"})
@@ -68,7 +79,7 @@
 
 (deftest reconcile!-promotes-to-done-when-agent-log-has-result-event
   (with-tmp
-    (fn []
+    (fn [_]
       (seed-run! base-run)
       (spit (cstate/run-agent-log (:id base-run))
             "{\"type\":\"system\",\"subtype\":\"init\"}\n{\"type\":\"result\",\"subtype\":\"success\"}\n")
@@ -77,31 +88,30 @@
 
 (deftest reconcile!-marks-orphan-when-no-evidence
   (with-tmp
-    (fn []
+    (fn [_]
       (seed-run! base-run)
       (reconcile/reconcile!)
       (let [r (runs/read-run (:id base-run))]
         (is (= :failed (:state r)))
         (is (= :orphaned-from-restart (-> r :error :reason)))))))
 
-(deftest reconcile!-handles-queued-runs-too
+(deftest reconcile!-leaves-queued-runs-alone
   (with-tmp
-    (fn []
+    (fn [_]
       (seed-run! (assoc base-run :state :queued
                         :state-history [{:at "T" :state :queued}]))
       (reconcile/reconcile!)
       (let [r (runs/read-run (:id base-run))]
-        ;; Queued Runs that didn't start yet are also orphaned — they never
-        ;; got a session or agent.
-        (is (= :failed (:state r)))
-        (is (= :orphaned-from-restart (-> r :error :reason)))))))
+        ;; :queued runs are pending work, not orphans — leave them intact for
+        ;; re-submission after restart.
+        (is (= :queued (:state r)))))))
 
 (deftest reconcile-one-handles-legacy-run-without-priority
   ;; Pre-Plan-A on-disk Runs lack :priority. The reconciler reads the Run,
   ;; updates state/error, and calls write-run! which validates the closed
   ;; schema. Without backfill-on-read this crashed daemon startup.
   (with-tmp
-    (fn []
+    (fn [_]
       (let [old-run {:id "legacy-2"
                      :project :brian
                      :trigger :legacy
@@ -128,3 +138,20 @@
               "post-reconcile run should have :priority backfilled to 0")
           (is (contains? #{:done :failed :awaiting-review} (:state after))
               "reconcile should have transitioned run to a terminal or review state"))))))
+
+(deftest reconcile-preserves-queued-and-parked-triage
+  (with-tmp
+    (fn [_]
+      ;; queued backlog run — must survive untouched
+      (mk-run "q1" :queued {} :triage-bug)
+      ;; parked run whose ticket is still awaiting review — must stay parked
+      (tickets/open! :brian "BR-9" {:notion-page-id "p" :url "u" :title "T"
+                                    :opened-by :triage-teacher-bugs :notion-last-edited-at "t"})
+      (tickets/set-status! :brian "BR-9" :awaiting-input)
+      (mk-run "aw1" :awaiting-review {:id "BR-9"} :triage-bug)
+      ;; orphaned running run — must be forced terminal
+      (mk-run "r1" :running {} :triage-bug)
+      (reconcile/reconcile!)
+      (is (= :queued          (:state (runs/read-run "q1"))) "queued backlog preserved")
+      (is (= :awaiting-review (:state (runs/read-run "aw1"))) "parked-for-review preserved")
+      (is (= :failed          (:state (runs/read-run "r1"))) "orphaned running forced terminal"))))
