@@ -5,6 +5,7 @@
    [clojure.test :refer [deftest is]]
    [malli.core :as m]
    [nido.coordinator.clock :as clock]
+   [nido.coordinator.session :as sess]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.workstream :as ws]))
 
@@ -150,4 +151,17 @@
                               :external-refs [{:adapter :notion :id "BR-99"}]})
           (is (= (:id w) (:id (ws/find-by-ref :brian :notion "BR-42"))))
           (is (nil? (ws/find-by-ref :brian :notion "BR-nope")))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest engagement-reads-sessions-off-disk
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))
+                    clock/now-iso (constantly "2026-06-05T09:00:00Z")]
+        (let [w (ws/create! :brian {:stage :investigation})]
+          (is (= :idle (ws/engagement :brian (:id w))))
+          (sess/create! :brian (:id w) {:name "s1" :weight :light :autonomy nil})
+          (is (= :active (ws/engagement :brian (:id w))))
+          (ws/close! :brian (:id w) :dropped)
+          (is (= :settled (ws/engagement :brian (:id w))))))
       (finally (fs/delete-tree tmp)))))

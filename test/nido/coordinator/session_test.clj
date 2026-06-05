@@ -141,3 +141,15 @@
           ;; live + archived only — second archive adds no duplicate entry.
           (is (= 2 (count (:substrate-history again))))))
       (finally (fs/delete-tree tmp)))))
+
+(deftest engagement-projection
+  ;; settled wins regardless of sessions
+  (is (= :settled (sess/engagement-state {:at "t" :outcome :done} [autonomous-session])))
+  ;; parked beats active (a parked session is also live)
+  (let [parked (assoc-in autonomous-session [:autonomy :phase] :parked)]
+    (is (= :parked-at-gate (sess/engagement-state nil [human-session parked]))))
+  ;; any live session ⇒ active
+  (is (= :active (sess/engagement-state nil [human-session])))
+  ;; no live sessions ⇒ idle
+  (is (= :idle (sess/engagement-state nil [(assoc human-session :substrate :archived)])))
+  (is (= :idle (sess/engagement-state nil []))))

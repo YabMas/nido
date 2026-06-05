@@ -114,3 +114,15 @@
                 (assoc-in [:autonomy :phase] new-phase)
                 (update-in [:autonomy :phase-history] conj
                            {:at (clock/now-iso) :phase new-phase})))))
+
+(defn engagement-state
+  "Pure projection of a workstream's engagement. `closed` is the workstream's
+   :closed value (nil or a map); `sessions` is the seq of its session records.
+   Order matters: parked is checked before active because a parked session is
+   also live."
+  [closed sessions]
+  (cond
+    (some? closed)            :settled
+    (some parked? sessions)   :parked-at-gate
+    (some live? sessions)     :active
+    :else                     :idle))

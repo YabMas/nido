@@ -8,6 +8,7 @@
    [clojure.string :as str]
    [malli.core :as m]
    [nido.coordinator.clock :as clock]
+   [nido.coordinator.session :as session]
    [nido.coordinator.state :as cstate]
    [nido.io :as io]))
 
@@ -138,3 +139,11 @@
                (when (some #(and (= adapter (:adapter %)) (= external-id (:id %)))
                            (:external-refs w))
                  w)))))
+
+(defn engagement
+  "Engagement state of a workstream: loads its sessions and projects. Returns
+   :idle / :active / :parked-at-gate / :settled. Returns :idle if the workstream
+   is absent (read-ws nil → no :closed, no sessions)."
+  [project ws-id]
+  (let [w (read-ws project ws-id)]
+    (session/engagement-state (:closed w) (session/list-sessions project ws-id))))
