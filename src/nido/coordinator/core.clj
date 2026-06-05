@@ -171,8 +171,17 @@
         ;; BEFORE launch, so a restart mid-session (or any interruption) never
         ;; strands the Run without a resumable id — the resume shim reads this.
         ;; Passed to claude as --session-id so the transcript uses it.
-        session-id   (str (java.util.UUID/randomUUID))
-        run          (let [r (assoc (runs/read-run run-id) :claude-session-id session-id)]
+        ;; :plan-bug is "provision only": promote brings up the :full session and
+        ;; flips Notion → "In progress", then parks ready-for-human. No headless
+        ;; burst and no skill runs — the human enters the session and invokes
+        ;; /continue-ticket to pick up the triage findings from the ledger. So a
+        ;; plan-bug Run needs no resume session-id and bypasses both the
+        ;; skill-resolvable? gate and agent/launch!. (`:plan-bug` is kept as the
+        ;; internal trigger identifier; the user-facing command is /continue-ticket.)
+        provision-only? (= :plan-bug (:skill (runs/read-run run-id)))
+        session-id   (when-not provision-only? (str (java.util.UUID/randomUUID)))
+        run          (let [r (cond-> (runs/read-run run-id)
+                               session-id (assoc :claude-session-id session-id))]
                        (runs/write-run! r) r)
         ;; Spawn the session + launch claude. If EITHER throws (e.g. session
         ;; build / worktree creation fails), don't let it escape — that would
@@ -188,12 +197,26 @@
         ;; (a :lite session symlinked to a branch that no longer carries it),
         ;; fail fast WITHOUT building a session — no doomed spawn, and the
         ;; breaker still trips. See skill-resolvable?.
-        result       (if-not (skill-resolvable? run)
-                       {:skill-unavailable true :skill (:skill run)}
+        result       (cond
+                       ;; Provision-only: bring the :full session up + flip Notion,
+                       ;; then synthesize a clean exit so next-state derives the
+                       ;; parked state from the ticket (:planning → :awaiting-review).
+                       ;; The session stays up for the human; /implement-bug later
+                       ;; sets :implementing, letting the sweep resolve this → :done.
+                       provision-only?
                        (try
                          (runs/spawn-session-for-run! run)
-                         (when (= :plan-bug (:skill run))
-                           (notify/on-plan-spawn! run))
+                         (notify/on-plan-spawn! run)
+                         {:exit-code 0 :provisioned true}
+                         (catch Throwable t
+                           {:spawn-error true :detail (.getMessage t)}))
+
+                       (not (skill-resolvable? run))
+                       {:skill-unavailable true :skill (:skill run)}
+
+                       :else
+                       (try
+                         (runs/spawn-session-for-run! run)
                          (agent/launch! {:run-id            run-id
                                          :cwd               (cstate/run-session-home-link run-id)
                                          :first-message     (:first-message run)
