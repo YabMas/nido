@@ -118,15 +118,38 @@
 
 (def heartbeat-stale-after-seconds 5)
 
+(defn breaker-reason
+  "Human-readable 'why' for an open breaker, from its breakers.edn entry.
+   User-disabled → a deliberate pause (with the note); failure-tripped → the
+   consecutive-failure count and when the last failure happened."
+  [{:keys [disabled-by-user? note consecutive-failures last-failure-at]}]
+  (if disabled-by-user?
+    (str "paused by you" (when (seq note) (str " — " note)))
+    (let [n (or consecutive-failures 0)]
+      (str n " consecutive failure" (when (not= 1 n) "s")
+           (when last-failure-at (str ", last " (format-age last-failure-at)))))))
+
 (defn read-alerts
-  "Aggregate alert summary for the TUI status bar.
-   Returns {:halted? <bool> :halt-source <kw or nil> :halt-note <str or nil> :breakers <int>}."
+  "Aggregate alert summary for the TUI status bar. Returns
+   {:halted? :halt-source :halt-note
+    :breakers <int total open>
+    :breakers-paused <int user-disabled> :breakers-failing <int failure-tripped>
+    :breaker-triggers [{:project :trigger :disabled? :reason} …]}."
   []
-  (let [halt-info (halt/read-halt-info)]
-    {:halted?     (boolean halt-info)
-     :halt-source (:source halt-info)
-     :halt-note   (:note halt-info)
-     :breakers    (count (breakers/tripped-triggers))}))
+  (let [halt-info (halt/read-halt-info)
+        detail    (mapv (fn [{:keys [project trigger info]}]
+                          {:project   project
+                           :trigger   trigger
+                           :disabled? (boolean (:disabled-by-user? info))
+                           :reason    (breaker-reason info)})
+                        (breakers/tripped-triggers))]
+    {:halted?          (boolean halt-info)
+     :halt-source      (:source halt-info)
+     :halt-note        (:note halt-info)
+     :breakers         (count detail)
+     :breakers-paused  (count (filter :disabled? detail))
+     :breakers-failing (count (remove :disabled? detail))
+     :breaker-triggers detail}))
 
 (defn- read-coordinator-status*
   "Reachability core: reads ~/.nido/coordinator/status.edn and stamps

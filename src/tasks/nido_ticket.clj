@@ -4,6 +4,7 @@
    [clojure.pprint :as pprint]
    [nido.coordinator.promote :as promote]
    [nido.coordinator.tickets :as tickets]
+   [nido.coordinator.tickets-view :as tickets-view]
    [nido.task-args :as task-args]))
 
 (defn- project-kw [opts] (keyword (or (:project opts) "brian")))
@@ -58,6 +59,24 @@
   [& args]
   (let [[_ o] (task-args/split-args args)]
     (pprint/pprint (tickets/read-meta (project-kw o) (str (:br o))))))
+
+(defn list-cmd
+  "bb nido:tickets:list [:status <kw>]
+   List ticket records grouped by lifecycle stage. The 'Ready to implement'
+   group (:triaged) is what you promote next. Optional :status narrows to one."
+  [& args]
+  (let [[_ o] (task-args/split-args args)
+        all   (cond->> (tickets-view/read-all-tickets)
+                (:status o) (filter #(= (keyword (str (:status o))) (:status %))))
+        g     (tickets-view/grouped-tickets all)]
+    (doseq [[label k] [["Ready to implement" :ready]
+                       ["In progress"        :in-progress]
+                       ["Skipped"            :skipped]]
+            :let  [ts (get g k)]
+            :when (seq ts)]
+      (println (str "── " label " (" (count ts) ") ──"))
+      (doseq [t ts] (println "  " (tickets-view/format-row t)))
+      (println))))
 
 (defn promote-cmd
   "bb nido:ticket:promote :project <p> :br BR-#### (or positional BR-####)

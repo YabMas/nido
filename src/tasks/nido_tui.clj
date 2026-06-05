@@ -26,6 +26,7 @@
   (:require
    [babashka.fs :as fs]
    [babashka.process :refer [shell]]
+   [nido.coordinator.promote :as promote]
    [nido.coordinator.state :as cstate]
    [nido.core :as core]
    [nido.session.lifecycle :as lifecycle]
@@ -98,7 +99,15 @@
       :up      (let [[_ p s] action] (session/up      ":project" p s))
       :down    (let [[_ p s] action] (session/down    ":project" p s))
       :destroy (let [[_ p s] action] (destroy-and-verify! p s))
-      :add     (let [[_ p s] action] (session/up      ":project" p s)))
+      :add     (let [[_ p s] action] (session/up      ":project" p s))
+      ;; Promote a triaged ticket → enqueue a provisioning Run. Call promote!
+      ;; directly (NOT promote-cmd, which System/exits on refusal and would kill
+      ;; the TUI loop). Best-effort: print the outcome and re-enter the TUI.
+      :promote (let [[_ p br] action
+                     res (promote/promote! (keyword p) br)]
+                 (if (= :promote (:decision res))
+                   (println (str "[nido:tui] promoted " br " → impl session provisioning"))
+                   (println (str "[nido:tui] promote " br " refused: " (name (:decision res)))))))
     (catch Throwable t
       (log-throwable! t (str "action failed: " (pr-str action)))
       (binding [*err* *err*]

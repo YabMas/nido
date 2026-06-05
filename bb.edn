@@ -274,6 +274,10 @@
   {:doc "Promote a :triaged ticket → enqueue a :plan-bug planning Run."
    :task (apply nido-ticket/promote-cmd *command-line-args*)}
 
+  nido:tickets:list
+  {:doc "List ticket records grouped by stage (Ready to implement / In progress / Skipped)."
+   :task (apply nido-ticket/list-cmd *command-line-args*)}
+
   nido:transcribe-video
   {:doc "Transcribe a video URL → VTT: <url> :out <path> [:model :small] [:timeout 5m]"
    :task (apply nido-transcribe/run *command-line-args*)}

@@ -2,8 +2,10 @@
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
+   [nido.coordinator.breakers :as breakers]
    [nido.coordinator.clock :as clock]
    [nido.coordinator.executor :as executor]
+   [nido.coordinator.halt :as halt]
    [nido.coordinator.runs :as runs]
    [nido.coordinator.runs-view :as rv]
    [nido.coordinator.state :as cstate]
@@ -155,3 +157,31 @@
           (is (= 5 (-> s :executor :cap)))
           (is (= 2 (-> s :executor :in-flight)))
           (is (= 3 (-> s :executor :queued))))))))
+
+(deftest breaker-reason-text
+  (is (= "paused by you — new-reports paused"
+         (rv/breaker-reason {:disabled-by-user? true :note "new-reports paused"})))
+  (is (= "paused by you"
+         (rv/breaker-reason {:disabled-by-user? true :note nil})))
+  (with-redefs [clock/now-iso (constantly "2026-06-05T10:00:00Z")]
+    (is (= "3 consecutive failures, last 5m ago"
+           (rv/breaker-reason {:disabled-by-user? false :consecutive-failures 3
+                               :last-failure-at "2026-06-05T09:55:00Z"})))
+    (is (= "1 consecutive failure, last 5m ago"
+           (rv/breaker-reason {:consecutive-failures 1 :last-failure-at "2026-06-05T09:55:00Z"})))))
+
+(deftest read-alerts-includes-breaker-reasons
+  (with-redefs [halt/read-halt-info (constantly nil)
+                breakers/tripped-triggers
+                (constantly [{:project :brian :trigger :triage-new
+                              :info {:disabled-by-user? true :note "paused"}}
+                             {:project :brian :trigger :triage-teacher-bugs
+                              :info {:disabled-by-user? false :consecutive-failures 3
+                                     :last-failure-at nil}}])]
+    (let [a (rv/read-alerts)]
+      (is (= 2 (:breakers a)))
+      (is (= 1 (:breakers-paused a)) "user-disabled count")
+      (is (= 1 (:breakers-failing a)) "failure-tripped count")
+      (is (= {:project :brian :trigger :triage-new :disabled? true
+              :reason "paused by you — paused"}
+             (first (:breaker-triggers a)))))))

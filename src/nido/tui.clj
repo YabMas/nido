@@ -23,6 +23,7 @@
    [nido.coordinator.queue :as queue]
    [nido.coordinator.runs-clean :as runs-clean]
    [nido.coordinator.runs-view :as runs-view]
+   [nido.coordinator.tickets-view :as tickets-view]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.triggers :as triggers]
    [nido.project :as project]
@@ -135,6 +136,32 @@
         :data        ::empty}]
       (vec rows))))
 
+(defn- ticket-group-rows
+  "Header row + one row per ticket for a single group. Returns nil when the
+   group is empty so the caller can `concat` without conditionals."
+  [label tickets]
+  (when (seq tickets)
+    (cons {:title       (str "── " label " (" (count tickets) ") ──")
+           :description ""
+           :data        ::group-header}
+          (mapv (fn [t]
+                  {:title       (tickets-view/format-row t)
+                   :description (or (tickets-view/last-activity t) "")
+                   :data        t})
+                tickets))))
+
+(defn- ticket-rows []
+  (let [groups (tickets-view/grouped-tickets (tickets-view/read-all-tickets))
+        rows   (concat
+                (ticket-group-rows "Ready to implement" (:ready groups))
+                (ticket-group-rows "In progress"        (:in-progress groups))
+                (ticket-group-rows "Skipped"            (:skipped groups)))]
+    (if (empty? rows)
+      [{:title       "No tickets yet — triage has to run and be acked first."
+        :description ""
+        :data        ::empty}]
+      (vec rows))))
+
 ;; ---------------------------------------------------------------------------
 ;; charm list component
 ;; ---------------------------------------------------------------------------
@@ -176,6 +203,7 @@
   [state screen]
   (let [rows (case screen
                :runs     (run-rows)
+               :tickets  (ticket-rows)
                :sessions (session-rows (:project state))
                :projects (project-rows))]
     (-> state
@@ -193,6 +221,15 @@
   [state]
   (let [data (selected-data state)]
     (when (and data (not (#{::group-header ::empty} data)))
+      data)))
+
+(defn- selected-promotable-ticket
+  "The highlighted ticket map when it's a `:triaged` ticket (the only
+   promotable state); nil for group-headers, the empty sentinel, or any
+   in-progress/skipped ticket."
+  [state]
+  (let [data (selected-data state)]
+    (when (and (map? data) (:br-id data) (= :triaged (:status data)))
       data)))
 
 ;; ---------------------------------------------------------------------------
@@ -623,6 +660,23 @@
       :else
       [(close-modal state) nil])))
 
+(defn- update-tickets
+  "Tickets screen: `↵`/`p` promotes the highlighted `:triaged` ticket — queues
+   `[:promote project br-id]`, which the wrapper runs as `bb nido:ticket:promote`
+   and then re-enters the TUI so the ticket moves into `In progress`. Other keys
+   fall through to list navigation."
+  [state msg]
+  (cond
+    (or (msg/key-match? msg "enter") (msg/key-match? msg "p"))
+    (if-let [{:keys [project br-id]} (selected-promotable-ticket state)]
+      [(assoc state :status (str "Promoting " br-id " …"))
+       (queue-action! [:promote (name project) br-id])]
+      [(assoc state :status "Select a ticket in “Ready to implement” to promote.") nil])
+
+    :else
+    (let [[lst cmd] (item-list/list-update (:list state) msg)]
+      [(assoc state :list lst) cmd])))
+
 (defn- update-fn [state msg]
   (cond
     ;; Charm always fires a window-size on startup. Our view is
@@ -684,11 +738,15 @@
     (and (nil? (:modal state)) (msg/key-match? msg "s") (not= :sessions (:screen state)) (:project state))
     [(set-screen state :sessions) nil]
 
+    (and (nil? (:modal state)) (msg/key-match? msg "t") (not= :tickets (:screen state)))
+    [(set-screen state :tickets) nil]
+
     :else
     (case (:screen state)
       :projects (update-projects state msg)
       :sessions (update-sessions state msg)
-      :runs     (update-runs state msg))))
+      :runs     (update-runs state msg)
+      :tickets  (update-tickets state msg))))
 
 ;; ---------------------------------------------------------------------------
 ;; View
@@ -707,7 +765,7 @@
    pill appears only when at least one trigger is tripped."
   []
   (let [{:keys [status reachable? slots-in-use alerts executor]} (runs-view/read-coordinator-status)
-        {:keys [halted? halt-source halt-note breakers]} alerts
+        {:keys [halted? halt-source halt-note breakers breakers-paused breakers-failing]} alerts
         {:keys [in-flight cap queued]} executor]
     (str (style/render label-style "Coordinator: ")
          (style/render (if halted? warning-style
@@ -724,12 +782,15 @@
          (style/render label-style "in-flight: ")
          (or in-flight 0) "/" (or cap 0)
          " · queued: " (or queued 0)
+         ;; Split the breaker pill: failures need attention (red ⚠), paused
+         ;; triggers are deliberate (dim). Press `c` to see the per-trigger why.
          (when (pos? breakers)
            (str "  •  "
-                (style/render warning-style
-                              (str "⚠ " breakers " trigger"
-                                   (when (> breakers 1) "s")
-                                   " in breaker")))))))
+                (when (pos? breakers-failing)
+                  (style/render warning-style (str "⚠ " breakers-failing " failing")))
+                (when (and (pos? breakers-failing) (pos? breakers-paused)) " · ")
+                (when (pos? breakers-paused)
+                  (style/render label-style (str breakers-paused " paused"))))))))
 
 (defn- header [state]
   (style/render title-style
@@ -757,7 +818,8 @@
                   (case (:screen state)
                     :projects "nido — projects"
                     :sessions (str "nido — " (:project state) " · sessions")
-                    :runs     "nido — runs"))))
+                    :runs     "nido — runs"
+                    :tickets  "nido — tickets"))))
 
 (defn- footer [state]
   (style/render subtle-style
@@ -774,9 +836,10 @@
                   :halt-resume-confirm  "[y] resume  [n/esc] cancel"
                   :clear-breaker        "[↑↓] move  [↵] clear  [esc] cancel"
                   (case (:screen state)
-                    :projects "[↵] open  [r]uns  [q]uit"
-                    :sessions "[↵/e] enter  [w]orktree  [i]nfo  [a]dd  [u]p  [d]own  [x] destroy  [r]uns  [esc] back  [q]uit"
-                    :runs     "[↵] resume  [w] inspect worktree  [d]etails  [D]elete  [f]ire  [h]alt  [c]lear breaker  [s]essions  [q]uit"))))
+                    :projects "[↵] open  [r]uns  [t]ickets  [q]uit"
+                    :sessions "[↵/e] enter  [w]orktree  [i]nfo  [a]dd  [u]p  [d]own  [x] destroy  [r]uns  [t]ickets  [esc] back  [q]uit"
+                    :runs     "[↵] resume  [w] inspect worktree  [d]etails  [D]elete  [f]ire  [h]alt  [c]lear breaker  [s]essions  [t]ickets  [q]uit"
+                    :tickets  "[↵/p] promote (start impl)  [r]uns  [s]essions  [q]uit"))))
 
 (defn- info-row [label value]
   (str (style/render label-style (format "%-13s" label)) " " value))
@@ -921,9 +984,10 @@
     :clear-breaker
     (let [{:keys [tripped cursor]} (:modal-target state)]
       (str/join "\n"
-                (map-indexed (fn [i {:keys [project trigger]}]
+                (map-indexed (fn [i {:keys [project trigger info]}]
                                (str (if (= i cursor) "▸ " "  ")
-                                    (name project) "/" (name trigger)))
+                                    (name project) "/" (name trigger)
+                                    "  —  " (runs-view/breaker-reason info)))
                              tripped)))))
 
 (defn- view [state]
