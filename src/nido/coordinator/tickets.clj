@@ -17,17 +17,29 @@
 (defn- meta-path [project br-id]
   (str (fs/path (ticket-dir project br-id) "meta.edn")))
 
+(defn- blank-br?
+  "A nil or blank br-id means the run has no resolvable ticket (e.g. an
+   event-payload that predates the :id field). Ticket ops no-op for such a run
+   rather than NPEing in fs/path on a nil path segment."
+  [br-id]
+  (or (nil? br-id) (str/blank? br-id)))
+
 (defn read-meta
   "Read a ticket's meta.edn, or nil if absent. Nil-safe for a nil/blank br-id
    (e.g. a triage run whose event-payload predates the :id field): such a run
    has no ticket record, so this returns nil rather than NPEing in fs/path."
   [project br-id]
-  (when (and br-id (not (str/blank? br-id)))
+  (when-not (blank-br? br-id)
     (io/read-edn (meta-path project br-id))))
 
-(defn write-meta! [project br-id m]
-  (io/write-edn! (meta-path project br-id) m)
-  m)
+(defn write-meta!
+  "Persist a ticket's meta.edn. No-op (returns nil) for a nil/blank br-id — a
+   run with no ticket has nothing to write. This is the write chokepoint, so
+   open!/set-status!/complete! inherit the nil-safety."
+  [project br-id m]
+  (when-not (blank-br? br-id)
+    (io/write-edn! (meta-path project br-id) m)
+    m))
 
 (defn status [project br-id]
   (:status (read-meta project br-id)))
@@ -67,16 +79,17 @@
   "Write a new immutable entry file under entries/ and record it in meta :entries.
    `entry` = {:kind <kw> :session <str> :run-id <str>}. Returns the file path."
   [project br-id entry content]
-  (let [m       (read-meta project br-id)
-        seq-n   (inc (count (:entries m)))
-        fname   (format "%04d-%s.md" seq-n (name (:kind entry)))
-        rel     (str "entries/" fname)
-        abs     (str (fs/path (ticket-dir project br-id) rel))]
-    (io/write-text! abs content)
-    (write-meta! project br-id
-                 (update m :entries (fnil conj [])
-                         (assoc entry :seq seq-n :at (clock/now-iso) :file rel)))
-    abs))
+  (when-not (blank-br? br-id)
+    (let [m       (read-meta project br-id)
+          seq-n   (inc (count (:entries m)))
+          fname   (format "%04d-%s.md" seq-n (name (:kind entry)))
+          rel     (str "entries/" fname)
+          abs     (str (fs/path (ticket-dir project br-id) rel))]
+      (io/write-text! abs content)
+      (write-meta! project br-id
+                   (update m :entries (fnil conj [])
+                           (assoc entry :seq seq-n :at (clock/now-iso) :file rel)))
+      abs)))
 
 (defn gate-decision
   "Decide the coordinator pre-spawn action by reading the ticket's meta status

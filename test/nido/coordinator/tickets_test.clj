@@ -23,6 +23,24 @@
       (is (nil? (tickets/status :brian nil)))
       (is (= :spawn (tickets/gate-decision :brian nil))))))
 
+(deftest write-paths-are-nil-safe-for-nil-or-blank-br-id
+  ;; A run with no resolvable br-id has no ticket — every write path must no-op
+  ;; rather than NPE in fs/path (the daemon crash-loop behind the '36 sessions'
+  ;; incident traced to a ticket op on a nil br-id).
+  (with-tmp
+    (fn [_]
+      (doseq [br [nil ""]]
+        (is (nil? (tickets/write-meta! :brian br {:status :investigating})))
+        (is (nil? (tickets/open! :brian br {:notion-page-id "p" :url "u" :title "T"
+                                            :opened-by :triage-new :notion-last-edited-at "t"})))
+        (is (nil? (tickets/set-status! :brian br :awaiting-input)))
+        (is (nil? (tickets/complete! :brian br :triaged :applied)))
+        (is (nil? (tickets/clear-status! :brian br)))
+        (is (nil? (tickets/append-entry! :brian br {:kind :note} "body"))))
+      ;; on-run-terminal! over a record-less run is also a no-op
+      (is (nil? (tickets/on-run-terminal!
+                  {:skill :triage-bug :project :brian :event-payload {}} :failed))))))
+
 (deftest open-creates-record-with-investigating-status
   (with-tmp
     (fn [_]
