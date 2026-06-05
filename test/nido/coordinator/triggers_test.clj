@@ -124,3 +124,16 @@
     (is (m/validate triggers/Trigger base) "absent is fine")
     (is (not (m/validate triggers/Trigger (assoc base :max-in-flight 0))) "must be positive")
     (is (not (m/validate triggers/Trigger (assoc base :max-in-flight "5"))) "must be an int")))
+
+(deftest trigger-accepts-on-promote-and-session-name-prefix
+  (is (m/validate triggers/Trigger
+                  {:name :plan-bug :source {:type :manual} :skill :plan-bug
+                   :payload "Plan {{event/title}}"
+                   :session-profile :full
+                   :session-name-prefix "impl-"
+                   :on-promote {:notion-status "In progress"}})))
+
+(deftest trigger-rejects-bad-session-name-prefix
+  (is (not (m/validate triggers/Trigger
+                       {:name :plan-bug :source {:type :manual} :skill :plan-bug
+                        :payload "x" :session-name-prefix 42}))))

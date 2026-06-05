@@ -26,7 +26,9 @@
    [:dry-run?       {:optional true} boolean?]
    [:enabled?       {:optional true} boolean?]
    [:uncapped?      {:optional true} boolean?]
-   [:max-in-flight  {:optional true} pos-int?]])
+   [:max-in-flight  {:optional true} pos-int?]
+   [:session-name-prefix {:optional true} string?]
+   [:on-promote          {:optional true} [:map-of keyword? any?]]])
 
 (def TriggersFile
   [:map {:closed true}
