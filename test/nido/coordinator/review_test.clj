@@ -68,3 +68,27 @@
       (mk-run "old" :awaiting-review {:page-id "pg" :title "smoke target"} :triage-bug)
       (is (= 1 (review/sweep-resolved!)) "nil-id parked run swept without NPE")
       (is (= :done (:state (runs/read-run "old")))))))
+
+(deftest run-state-from-ticket-maps-planning-parked
+  (is (= :awaiting-review (review/run-state-from-ticket :planning))
+      "a clean plan exit while :planning ⇒ parked, not dropped"))
+
+(deftest sweep-resolves-parked-plan-runs-too
+  (with-tmp
+    (fn [_]
+      (tickets/open! :brian "BR-9" {:notion-page-id "p" :url "u" :title "T"
+                                    :opened-by :triage-new :notion-last-edited-at "t"})
+      (tickets/complete! :brian "BR-9" :triaged :applied)   ; triage done; plan resolved
+      (mk-run "plan-9" :awaiting-review {:id "BR-9"} :plan-bug)
+      (is (= 1 (review/sweep-resolved!)))
+      (is (= :done (:state (runs/read-run "plan-9")))))))
+
+(deftest sweep-leaves-parked-plan-run-still-in-review
+  (with-tmp
+    (fn [_]
+      (tickets/open! :brian "BR-10" {:notion-page-id "p" :url "u" :title "T"
+                                     :opened-by :triage-new :notion-last-edited-at "t"})
+      (tickets/set-status! :brian "BR-10" :planning)        ; still being planned
+      (mk-run "plan-10" :awaiting-review {:id "BR-10"} :plan-bug)
+      (is (= 0 (review/sweep-resolved!)))
+      (is (= :awaiting-review (:state (runs/read-run "plan-10")))))))

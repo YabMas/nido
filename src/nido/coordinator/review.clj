@@ -9,8 +9,9 @@
    [nido.coordinator.tickets :as tickets]))
 
 (defn run-state-from-ticket
-  "Map a triage ticket's status to the Run state a clean agent exit implies:
-     :awaiting-input  → :awaiting-review   (parked for human review)
+  "Map a ticket's status to the Run state a clean agent exit implies:
+     :awaiting-input  → :awaiting-review   (triage parked for human review)
+     :planning        → :awaiting-review   (plan Run owns the ticket; parked)
      :triaged/:skipped → :done             (resolved in-session)
      nil / anything else → :done           (cancelled/cleared → terminal)
    :investigating maps to :awaiting-review defensively (a clean exit that left
@@ -19,25 +20,26 @@
    elsewhere)."
   [ticket-status]
   (case ticket-status
-    (:awaiting-input :investigating) :awaiting-review
+    (:awaiting-input :investigating :planning) :awaiting-review
     :done))
 
 (defn- in-review?
-  "True while a triage ticket still occupies the human's review queue. A run
-   with no resolvable BR-#### (nil br-id) can't map to a ticket, so it is
+  "True while a ticket still occupies the human's review queue (triage or plan).
+   A run with no resolvable BR-#### (nil br-id) can't map to a ticket, so it is
    treated as not-in-review — the sweep then resolves it to :done."
   [project br-id]
   (and (some? br-id)
-       (contains? #{:investigating :awaiting-input} (tickets/status project br-id))))
+       (contains? #{:investigating :awaiting-input :planning}
+                  (tickets/status project br-id))))
 
 (defn sweep-resolved!
-  "Transition every :awaiting-review triage run whose ticket is no longer in
-   review (resolved via apply/skip, or cleared via cancel) → :done, freeing the
-   trigger's in-flight budget. Returns the number transitioned."
+  "Transition every :awaiting-review triage or plan run whose ticket is no
+   longer in review (resolved via apply/skip, or cleared via cancel) → :done,
+   freeing the trigger's in-flight budget. Returns the number transitioned."
   []
   (->> (runs/list-run-ids)
        (keep runs/read-run)
        (filter #(and (= :awaiting-review (:state %))
-                     (= :triage-bug (:skill %))))
+                     (#{:triage-bug :plan-bug} (:skill %))))
        (remove #(in-review? (:project %) (some-> % :event-payload :id)))
        (reduce (fn [n r] (runs/transition! (:id r) :done) (inc n)) 0)))
