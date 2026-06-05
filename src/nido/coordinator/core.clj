@@ -26,6 +26,7 @@
    [nido.coordinator.status-file :as status-file]
    [nido.coordinator.executor :as executor]
    [nido.coordinator.triggers :as triggers]
+   [nido.core :as nido-core]
    [nido.project :as project]
    [nido.session.profiles :as profiles]))
 
@@ -130,26 +131,32 @@
       (fs/exists? (str (fs/path claude-dir "commands" (str skill-name ".md"))))))
 
 (defn- skill-resolvable?
-  "True if the Run's skill is something claude can actually run. Checks the
-   session's target checkout (.claude) and the user's ~/.claude.
+  "True if the Run's skill is something claude can run in the spawned session,
+   mirroring the launcher's composed `.claude` resolution order:
+     - nido's native harness skills (nido/.claude/skills/<skill>) — injected into
+       EVERY session's composed .claude/skills (compose-claude-dir!), so they
+       resolve regardless of the target project's checked-out branch;
+     - the user's ~/.claude;
+     - for :symlink (:lite) profiles, the target checkout's .claude.
 
-   Only ENFORCED for :symlink-strategy profiles (e.g. :lite), whose skill source
-   is a live checkout that drifts with the branch — exactly the failure behind
-   the '36 sessions' incident: a triage run launched `/triage-bug` against a
-   checkout whose branch no longer carried that skill, claude answered 'Unknown
-   command', and the run silently completed. For non-symlink profiles the target
-   isn't built yet, so we can't cheaply check — fail OPEN (return true) rather
-   than risk blocking a legitimate run. Any resolution error also fails open."
+   The gate only bites a :symlink profile whose skill is nowhere above — exactly
+   the '36 sessions' failure: a :lite triage run launched `/triage-bug` against a
+   checkout whose branch no longer carried it, claude answered 'Unknown command',
+   and the run silently completed. For non-symlink profiles whose skill isn't
+   nido-native/user-global the worktree isn't built yet, so we can't cheaply
+   check — fail OPEN. Any resolution error also fails open."
   [run]
   (try
-    (let [profile (profiles/resolve-profile (:project run) (:session-profile run))
-          target  (-> profile :worktree :target)]
-      (if (and (= :symlink (-> profile :worktree :strategy)) target)
-        (let [skill-name  (name (:skill run))
-              user-claude (str (fs/path (System/getProperty "user.home") ".claude"))]
-          (or (skill-in-claude-dir? (str (fs/path target ".claude")) skill-name)
-              (skill-in-claude-dir? user-claude skill-name)))
-        true))
+    (let [skill-name  (name (:skill run))
+          nido-claude (str (fs/path (nido-core/nido-source-dir) ".claude"))
+          user-claude (str (fs/path (System/getProperty "user.home") ".claude"))]
+      (or (skill-in-claude-dir? nido-claude skill-name)
+          (skill-in-claude-dir? user-claude skill-name)
+          (let [profile (profiles/resolve-profile (:project run) (:session-profile run))
+                target  (-> profile :worktree :target)]
+            (if (and (= :symlink (-> profile :worktree :strategy)) target)
+              (skill-in-claude-dir? (str (fs/path target ".claude")) skill-name)
+              true))))
     (catch Throwable _ true)))
 
 (defn- run-blocking!

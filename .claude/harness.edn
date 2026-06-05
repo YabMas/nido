@@ -18,6 +18,7 @@
   :files  ["dev-rules.md" "guide-rules.md"]}
 
  :exclude
- {:skills #{"dev"   ;; brian's worktree/session orchestration — nido owns this
-            "push"} ;; brian's session/workflow plumbing — out of scope here
+ {:skills #{"dev"        ;; brian's worktree/session orchestration — nido owns this
+            "push"       ;; brian's session/workflow plumbing — out of scope here
+            "triage-bug"} ;; nido-native auto-triage skill — nido owns this (real dir)
   :agents #{}}}

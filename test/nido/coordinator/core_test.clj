@@ -302,24 +302,28 @@
             "failure reason records the no-op so the dashboard is honest")))))
 
 (deftest skill-resolvable?-gates-symlink-profiles-only
-  ;; A :lite (symlink) session's skill must resolve in the target checkout's
-  ;; .claude; a non-symlink profile fails open (can't be cheaply checked).
+  ;; A :lite (symlink) session's skill resolves from nido-native harness skills,
+  ;; ~/.claude, or the target checkout's .claude; a non-symlink profile fails
+  ;; open (can't be cheaply checked).
   (gate-with-tmp
     (fn [tmp]
       (let [target (str (fs/path tmp "co"))]
-        (fs/create-dirs (str (fs/path target ".claude" "skills" "triage-bug")))
+        (fs/create-dirs (str (fs/path target ".claude" "skills" "some-project-skill")))
         (with-redefs [profiles/resolve-profile
                       (fn [_ _] {:worktree {:strategy :symlink :target target}})]
           (is (true? (boolean (#'core/skill-resolvable?
+                                {:project :brian :session-profile :lite :skill :some-project-skill})))
+              "skill present in the target checkout resolves")
+          (is (true? (boolean (#'core/skill-resolvable?
                                 {:project :brian :session-profile :lite :skill :triage-bug})))
-              "present skill (skills/ dir) resolves")
+              "nido-native skill (triage-bug) resolves regardless of the target checkout")
           (is (false? (boolean (#'core/skill-resolvable?
-                                 {:project :brian :session-profile :lite :skill :missing})))
-              "absent skill does not resolve ⇒ will be gated"))
+                                 {:project :brian :session-profile :lite :skill :ghost-skill-xyz})))
+              "skill nowhere (not nido-native, not in target) does not resolve ⇒ gated"))
         (with-redefs [profiles/resolve-profile
                       (fn [_ _] {:worktree {:strategy :git-worktree}})]
           (is (true? (#'core/skill-resolvable?
-                       {:project :brian :session-profile :full :skill :anything}))
+                       {:project :brian :session-profile :full :skill :ghost-skill-xyz}))
               ":full / git-worktree fails open (not gated)"))))))
 
 (deftest run-blocking-fails-fast-when-skill-unavailable
@@ -331,11 +335,13 @@
       (let [spawned (atom false)
             target  (str (fs/path tmp "co"))]
         (fs/create-dirs (str (fs/path target ".claude" "skills")))   ; .claude exists, skill absent
+        ;; Use a skill that is NOT a nido-native harness skill, so the only place
+        ;; it could resolve is the (empty) target checkout — i.e. it can't.
         (tickets/open! :brian "BR-U" {:notion-page-id "p" :url "u" :title "T"
                                       :opened-by :triage-teacher-bugs :notion-last-edited-at "t"})
         (runs/write-run! {:id "ru" :project :brian :trigger :triage-teacher-bugs
                           :source {:type :notion-view} :event-payload {:id "BR-U"}
-                          :skill :triage-bug :first-message "/triage-bug x" :agent :claude
+                          :skill :ghost-skill-xyz :first-message "/ghost-skill-xyz x" :agent :claude
                           :session-name "run-ru" :claude-session-id nil :limits {}
                           :priority 0 :session-profile :lite :uncapped? false
                           :state :queued :state-history [{:at "t" :state :queued}]
