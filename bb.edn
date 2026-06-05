@@ -270,6 +270,10 @@
   {:doc "Pretty-print a ticket's meta.edn."
    :task (apply nido-ticket/show-cmd *command-line-args*)}
 
+  nido:ticket:promote
+  {:doc "Promote a :triaged ticket → enqueue a :plan-bug planning Run."
+   :task (apply nido-ticket/promote-cmd *command-line-args*)}
+
   nido:transcribe-video
   {:doc "Transcribe a video URL → VTT: <url> :out <path> [:model :small] [:timeout 5m]"
    :task (apply nido-transcribe/run *command-line-args*)}

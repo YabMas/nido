@@ -2,6 +2,7 @@
   "bb task entry points for the per-ticket triage record (the skill's interface)."
   (:require
    [clojure.pprint :as pprint]
+   [nido.coordinator.promote :as promote]
    [nido.coordinator.tickets :as tickets]
    [nido.task-args :as task-args]))
 
@@ -57,3 +58,16 @@
   [& args]
   (let [[_ o] (task-args/split-args args)]
     (pprint/pprint (tickets/read-meta (project-kw o) (str (:br o))))))
+
+(defn promote-cmd
+  "bb nido:ticket:promote :project <p> :br BR-#### (or positional BR-####)
+   Gate a triaged ticket → enqueue a :plan-bug planning Run. Exits non-zero
+   (and enqueues nothing) when the ticket isn't promotable."
+  [& args]
+  (let [[pos o] (task-args/split-args args)
+        br      (str (or (:br o) (first pos)))
+        res     (promote/promote! (project-kw o) br)]
+    (case (:decision res)
+      :promote (println "promoted" br "→ queued" (:queued res))
+      (do (println "refused" br "—" (name (:decision res)))
+          (System/exit 3)))))
