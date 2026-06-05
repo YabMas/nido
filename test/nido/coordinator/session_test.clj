@@ -82,3 +82,62 @@
         (sess/create! :brian "ws-1" {:name "b" :weight :heavy :autonomy nil})
         (is (= #{"a" "b"} (set (map :name (sess/list-sessions :brian "ws-1"))))))
       (finally (fs/delete-tree tmp)))))
+
+(deftest archive-flips-substrate-and-appends-history
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))
+                    clock/now-iso (constantly "2026-06-05T13:00:00Z")]
+        (sess/write! human-session)
+        (let [a (sess/archive! :brian "ws-1" "explore-firefox")]
+          (is (= :archived (:substrate a)))
+          (is (= {:at "2026-06-05T13:00:00Z" :substrate :archived}
+                 (last (:substrate-history a))))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest set-phase-updates-autonomy-and-history
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))
+                    clock/now-iso (constantly "2026-06-05T13:30:00Z")]
+        (sess/write! autonomous-session)
+        (let [p (sess/set-phase! :brian "ws-1" "run-triage-x" :parked)]
+          (is (= :parked (get-in p [:autonomy :phase])))
+          (is (= {:at "2026-06-05T13:30:00Z" :phase :parked}
+                 (last (get-in p [:autonomy :phase-history]))))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest set-phase-throws-on-human-session
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (sess/write! human-session)
+        (is (thrown? clojure.lang.ExceptionInfo
+                     (sess/set-phase! :brian "ws-1" "explore-firefox" :parked))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest predicates
+  (is (sess/live? human-session))
+  (is (not (sess/live? (assoc human-session :substrate :archived))))
+  (is (not (sess/parked? autonomous-session)))
+  (is (sess/parked? (assoc-in autonomous-session [:autonomy :phase] :parked)))
+  ;; parked requires BOTH live and phase :parked — an archived session with a
+  ;; :parked phase is NOT parked.
+  (is (not (sess/parked? (-> autonomous-session
+                             (assoc :substrate :archived)
+                             (assoc-in [:autonomy :phase] :parked)))))
+  (is (sess/autonomous? autonomous-session))
+  (is (not (sess/autonomous? human-session))))
+
+(deftest archive-is-idempotent
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))
+                    clock/now-iso (constantly "2026-06-05T13:00:00Z")]
+        (sess/write! human-session)
+        (sess/archive! :brian "ws-1" "explore-firefox")
+        (let [again (sess/archive! :brian "ws-1" "explore-firefox")]
+          (is (= :archived (:substrate again)))
+          ;; live + archived only — second archive adds no duplicate entry.
+          (is (= 2 (count (:substrate-history again))))))
+      (finally (fs/delete-tree tmp)))))

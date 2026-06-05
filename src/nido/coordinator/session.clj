@@ -79,3 +79,38 @@
            (filter fs/directory?)
            (keep #(read-session project ws-id (str (fs/file-name %)))))
       [])))
+
+(defn live?       [s] (= :live (:substrate s)))
+(defn autonomous? [s] (some? (:autonomy s)))
+(defn parked?     [s] (and (live? s) (= :parked (get-in s [:autonomy :phase]))))
+
+(defn- load! [project ws-id session-name]
+  (or (read-session project ws-id session-name)
+      (throw (ex-info "Session not found"
+                      {:project project :ws-id ws-id :session session-name}))))
+
+(defn archive!
+  "Flip a session to :archived, appending substrate-history. Idempotent (no
+   duplicate history entry when already archived). Returns updated record."
+  [project ws-id session-name]
+  (let [s (load! project ws-id session-name)]
+    (if (= :archived (:substrate s))
+      s
+      (write! (-> s
+                  (assoc :substrate :archived)
+                  (update :substrate-history conj
+                          {:at (clock/now-iso) :substrate :archived}))))))
+
+(defn set-phase!
+  "Move an autonomous session's burst phase, appending phase-history. Throws if
+   the session has no autonomy facet (a human session has no phase). Returns
+   updated record."
+  [project ws-id session-name new-phase]
+  (let [s (load! project ws-id session-name)]
+    (when-not (autonomous? s)
+      (throw (ex-info "Cannot set phase on a human session"
+                      {:project project :ws-id ws-id :session session-name})))
+    (write! (-> s
+                (assoc-in [:autonomy :phase] new-phase)
+                (update-in [:autonomy :phase-history] conj
+                           {:at (clock/now-iso) :phase new-phase})))))
