@@ -12,6 +12,7 @@
    [nido.coordinator.events :as events]
    [nido.coordinator.halt :as halt]
    [nido.coordinator.heartbeat :as heartbeat]
+   [nido.coordinator.notify :as notify]
    [nido.coordinator.pid :as pid]
    [nido.coordinator.queue :as queue]
    [nido.coordinator.reconcile :as reconcile]
@@ -129,6 +130,8 @@
         ;; what makes `claude --resume` work from the session home.
         result       (try
                        (runs/spawn-session-for-run! run)
+                       (when (= :plan-bug (:skill run))
+                         (notify/on-plan-spawn! run))
                        (agent/launch! {:run-id            run-id
                                        :cwd               (cstate/run-session-home-link run-id)
                                        :first-message     (:first-message run)
@@ -141,7 +144,7 @@
                      (:spawn-error result) :failed
                      (:timed-out? result) :failed
                      (zero? (:exit-code result))
-                     (if (= :triage-bug (:skill run))
+                     (if (#{:triage-bug :plan-bug} (:skill run))
                        (review/run-state-from-ticket
                          (tickets/status (:project run) (some-> run :event-payload :id)))
                        (status-file/derive-state-after-exit

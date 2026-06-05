@@ -9,6 +9,7 @@
    [nido.coordinator.executor :as executor]
    [nido.coordinator.anomaly :as anomaly]
    [nido.coordinator.breakers :as breakers]
+   [nido.coordinator.notify :as notify]
    [nido.coordinator.runs :as runs]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.tickets :as tickets]
@@ -279,3 +280,29 @@
         (#'core/run-blocking! "rp")
         (is (= :awaiting-review (:state (runs/read-run "rp")))
             "clean exit + ticket :awaiting-input ⇒ run parks at :awaiting-review, not :done")))))
+
+(deftest run-blocking-plan-bug-notifies-then-parks-from-ticket
+  (gate-with-tmp
+    (fn [_]
+      (let [notified (atom nil)]
+        (tickets/open! :brian "BR-12" {:notion-page-id "PG12" :url "u" :title "T"
+                                       :opened-by :triage-new :notion-last-edited-at "t"})
+        (tickets/complete! :brian "BR-12" :triaged :applied)
+        (tickets/set-status! :brian "BR-12" :awaiting-input)   ; plan skill parked
+        (runs/write-run! {:id "rplan" :project :brian :trigger :plan-bug
+                          :source {:type :manual} :event-payload {:id "BR-12" :notion-page-id "PG12"}
+                          :skill :plan-bug :first-message "/plan-bug x" :agent :claude
+                          :session-name "impl-br-12" :claude-session-id nil :limits {}
+                          :priority 0 :session-profile :full :uncapped? false
+                          :on-promote {:notion-status "In progress"}
+                          :state :queued :state-history [{:at "t" :state :queued}]
+                          :artifacts [] :error nil})
+        (with-redefs [runs/spawn-session-for-run! (fn [_] nil)
+                      nido.coordinator.agent/launch! (fn [_] {:exit-code 0 :timed-out? false})
+                      cstate/run-session-home-link (constantly "/tmp/nope")
+                      notify/on-plan-spawn! (fn [run] (reset! notified (:id run)))
+                      breakers/record-success! (fn [& _] nil)]
+          (#'core/run-blocking! "rplan")
+          (is (= "rplan" @notified) "notify/on-plan-spawn! fires for plan-bug runs")
+          (is (= :awaiting-review (:state (runs/read-run "rplan")))
+              "clean exit + ticket :awaiting-input ⇒ plan run parks, not :done"))))))
