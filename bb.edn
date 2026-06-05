@@ -26,6 +26,7 @@
              [tasks.nido-notion-views :as nido-notion-views]
              [tasks.nido-coordinator-source :as nido-coordinator-source]
              [tasks.nido-ticket :as nido-ticket]
+             [tasks.nido-migrate :as nido-migrate]
              [tasks.nido-transcribe :as nido-transcribe]
              [tasks.nido-notion-preprocess :as nido-notion-preprocess])
 
@@ -313,5 +314,9 @@
   nido:runs:show
   {:doc "Show full run.edn + last 50 lines of agent.log: <run-id>"
    :task (apply nido-runs/show *command-line-args*)}
+
+  nido:migrate
+  {:doc "Migrate legacy run/ticket records into the workstream/session model: :project <p>"
+   :task (apply nido-migrate/migrate-cmd *command-line-args*)}
 
   }}
