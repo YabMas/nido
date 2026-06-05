@@ -38,12 +38,13 @@
         "-s" "nido-notion" "-a" (whoami) "-U" "-w" token]))
 
 (defn http-request
-  "Wrapped HTTP call so tests can stub. Dispatches on method (:get/:post).
+  "Wrapped HTTP call so tests can stub. Dispatches on method (:get/:post/:patch).
    Returns {:status :body}."
   [method url opts]
   (case method
-    :get  (http/get  url (assoc opts :throw false))
-    :post (http/post url (assoc opts :throw false))))
+    :get   (http/get   url (assoc opts :throw false))
+    :post  (http/post  url (assoc opts :throw false))
+    :patch (http/patch url (assoc opts :throw false))))
 
 (def ^:private notion-api-version "2025-09-03")
 
@@ -146,6 +147,32 @@
       (>= status 500) {:status status :error :server}
       (= status 0)    {:status 0 :error :network}
       :else           {:status status :error :http})))
+
+(defn update-page-status!
+  "PATCH /v1/pages/<page-id>, setting a Status-type property to a named option.
+   Returns {:ok true} on 200, else {:error :kw} (with :status for generic HTTP).
+   Notion 'Status' properties take {:status {:name <option>}} — NOT :select.
+   property-name is a string matching the Notion property name exactly (e.g.
+   \"Status\"), used verbatim as the JSON key."
+  [page-id property-name status-name token]
+  (let [resp (try
+               (http-request
+                 :patch
+                 (str "https://api.notion.com/v1/pages/" page-id)
+                 {:headers {"Authorization"  (str "Bearer " token)
+                            "Notion-Version" notion-api-version
+                            "Content-Type"   "application/json"}
+                  :body    (json/generate-string
+                             {:properties {property-name {:status {:name status-name}}}})
+                  :timeout 10000})
+               (catch Exception e {:status 0 :exception e}))
+        {:keys [status]} resp]
+    (cond
+      (= status 200)  {:ok true}
+      (= status 401)  {:error :auth}
+      (>= status 500) {:error :server}
+      (= status 0)    {:error :network}
+      :else           {:error :http :status status})))
 
 (defn- normalise-property-name
   "\"Ticket ID\" → :ticket-id"
