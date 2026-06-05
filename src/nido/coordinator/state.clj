@@ -8,7 +8,9 @@
        halted.edn   (only when auto-halted — stage 2)
        queue/<uuid>.edn
      ~/.nido/projects/<project>/triggers.edn
-     ~/.nido/runs/<run-id>/{run.edn, _run-status.edn, artifacts/, agent.log, session-home}"
+     ~/.nido/runs/<run-id>/{run.edn, _run-status.edn, artifacts/, agent.log, session-home}
+     ~/.nido/projects/<project>/workstreams/<ws-id>/{workstream.edn, entries/, sessions/<name>/session.edn}
+     ~/.nido/projects/<project>/_pre-unification/   (legacy run/ticket records archived by migration)"
   (:require [babashka.fs :as fs]
             [nido.core :as core]))
 
@@ -66,6 +68,30 @@
 
 (defn triggers-path [project]
   (str (fs/path (nido-root) "projects" (name project) "triggers.edn")))
+
+(defn workstreams-dir [project]
+  (str (fs/path (nido-root) "projects" (name project) "workstreams")))
+
+(defn workstream-dir [project ws-id]
+  (str (fs/path (workstreams-dir project) ws-id)))
+
+(defn workstream-edn-path [project ws-id]
+  (str (fs/path (workstream-dir project ws-id) "workstream.edn")))
+
+(defn ws-entries-dir [project ws-id]
+  (str (fs/path (workstream-dir project ws-id) "entries")))
+
+(defn ws-sessions-dir [project ws-id]
+  (str (fs/path (workstream-dir project ws-id) "sessions")))
+
+(defn session-dir [project ws-id session-name]
+  (str (fs/path (ws-sessions-dir project ws-id) session-name)))
+
+(defn session-edn-path [project ws-id session-name]
+  (str (fs/path (session-dir project ws-id session-name) "session.edn")))
+
+(defn pre-unification-dir [project]
+  (str (fs/path (nido-root) "projects" (name project) "_pre-unification")))
 
 (defn ensure-dirs!
   "Create the coordinator + runs directories if absent. Idempotent."

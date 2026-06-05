@@ -1,6 +1,7 @@
 (ns nido.coordinator.state-test
   (:require
    [babashka.fs :as fs]
+   [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
    [nido.coordinator.state :as cstate]))
 
@@ -26,6 +27,20 @@
   (testing "triggers.edn path is per-project"
     (is (= (str (fs/path (fs/home) ".nido" "projects" "brian" "triggers.edn"))
            (cstate/triggers-path :brian)))))
+
+(deftest workstream-paths-compose-under-project
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (is (str/ends-with? (cstate/workstreams-dir :brian) "projects/brian/workstreams"))
+        (is (str/ends-with? (cstate/workstream-dir :brian "ws-1") "workstreams/ws-1"))
+        (is (str/ends-with? (cstate/workstream-edn-path :brian "ws-1") "ws-1/workstream.edn"))
+        (is (str/ends-with? (cstate/ws-entries-dir :brian "ws-1") "ws-1/entries"))
+        (is (str/ends-with? (cstate/ws-sessions-dir :brian "ws-1") "ws-1/sessions"))
+        (is (str/ends-with? (cstate/session-dir :brian "ws-1" "sx") "sessions/sx"))
+        (is (str/ends-with? (cstate/session-edn-path :brian "ws-1" "sx") "sx/session.edn"))
+        (is (str/ends-with? (cstate/pre-unification-dir :brian) "projects/brian/_pre-unification")))
+      (finally (fs/delete-tree tmp)))))
 
 (deftest ensure-dirs!-creates-coordinator-tree
   (let [tmp (fs/create-temp-dir)]
