@@ -71,3 +71,24 @@
              :created-at    now
              :entries       []}]
     (write! w)))
+
+(defn advance-stage!
+  "Move a workstream to `new-stage`, appending to :stage-history. No-op (no
+   history entry) when already at `new-stage`. Throws if the workstream is
+   absent. Returns the updated record."
+  [project ws-id new-stage]
+  (let [w (or (read-ws project ws-id)
+              (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))]
+    (if (= new-stage (:stage w))
+      w
+      (write! (-> w
+                  (assoc :stage new-stage)
+                  (update :stage-history conj {:at (clock/now-iso) :stage new-stage}))))))
+
+(defn close!
+  "Settle a workstream terminally. `outcome` is :done or :dropped. Idempotent
+   write of :closed. Returns the updated record."
+  [project ws-id outcome]
+  (let [w (or (read-ws project ws-id)
+              (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))]
+    (write! (assoc w :closed {:at (clock/now-iso) :outcome outcome}))))

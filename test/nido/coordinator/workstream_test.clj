@@ -63,3 +63,36 @@
           (is (= [] (:entries w)))
           (is (= w (ws/read-ws :brian (:id w))))))
       (finally (fs/delete-tree tmp)))))
+
+(deftest advance-stage-appends-history-and-updates-stage
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))
+                    clock/now-iso (constantly "2026-06-05T10:00:00Z")]
+        (ws/write! example-ws)
+        (let [updated (ws/advance-stage! :brian (:id example-ws) :triaged)]
+          (is (= :triaged (:stage updated)))
+          (is (= 2 (count (:stage-history updated))))
+          (is (= {:at "2026-06-05T10:00:00Z" :stage :triaged}
+                 (last (:stage-history updated))))
+          (is (= updated (ws/read-ws :brian (:id example-ws))))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest advance-stage-is-noop-when-stage-unchanged
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (ws/write! example-ws)
+        (let [updated (ws/advance-stage! :brian (:id example-ws) :investigation)]
+          (is (= 1 (count (:stage-history updated))))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest close-sets-closed-with-outcome
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))
+                    clock/now-iso (constantly "2026-06-05T11:00:00Z")]
+        (ws/write! example-ws)
+        (let [closed (ws/close! :brian (:id example-ws) :dropped)]
+          (is (= {:at "2026-06-05T11:00:00Z" :outcome :dropped} (:closed closed)))))
+      (finally (fs/delete-tree tmp)))))
