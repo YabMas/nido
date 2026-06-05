@@ -205,3 +205,38 @@
     (when (fs/exists? link-path) (fs/delete link-path))
     (fs/create-sym-link link-path session-home)
     result))
+
+(defn teardown-session-for-run!
+  "Reclaim the session a Run spawned, once the Run reaches a resolved-terminal
+   state (:done / :failed / :halted). Stops PG + JVM + app, removes the registry
+   entry (so the session leaves the CLI/TUI list), removes the worktree (a
+   symlink-only removal for :lite sessions — the shared checkout is never
+   touched) and drops the per-session state-dir. Also removes the cosmetic
+   session-home dir + the run's session-home link.
+
+   Deliberately NOT called for :awaiting-review — that session is the human's
+   review surface and must stay up. The run dir (artifacts, agent.log, run.edn)
+   under ~/.nido/runs is never touched, so a failed/done run stays inspectable.
+
+   Best-effort: a missing/already-gone session logs and returns nil rather than
+   throwing — teardown must never re-fail a run that already reached terminal."
+  [run]
+  (let [{:keys [project session-name id]} run]
+    (try
+      (session-lifecycle/destroy! session-name {:project project})
+      (catch Exception e
+        (binding [*err* *err*]
+          (.println ^java.io.PrintWriter *err*
+                    (str "nido coordinator: teardown destroy! failed for "
+                         session-name " — " (ex-message e))))))
+    (try
+      (let [home (session-state/session-home-dir (name project) session-name)]
+        (when (fs/exists? home) (fs/delete-tree home)))
+      (when-let [link (cstate/run-session-home-link id)]
+        (when (fs/exists? link) (fs/delete link)))
+      (catch Exception e
+        (binding [*err* *err*]
+          (.println ^java.io.PrintWriter *err*
+                    (str "nido coordinator: teardown home-cleanup failed for "
+                         session-name " — " (ex-message e))))))
+    nil))

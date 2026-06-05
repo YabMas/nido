@@ -51,12 +51,16 @@
       (mk-run "r3" :awaiting-review {:id "BR-3"} :triage-bug)
       ;; non-triage parked run → ignored
       (mk-run "r4" :awaiting-review {:id "BR-1"} :investigate-bug)
-      (let [n (review/sweep-resolved!)]
+      (let [torn (atom [])
+            n    (with-redefs [runs/teardown-session-for-run! (fn [r] (swap! torn conj (:id r)))]
+                   (review/sweep-resolved!))]
         (is (= :done           (:state (runs/read-run "r1"))))
         (is (= :awaiting-review (:state (runs/read-run "r2"))) "still in review, untouched")
         (is (= :done           (:state (runs/read-run "r3"))) "cancelled → done")
         (is (= :awaiting-review (:state (runs/read-run "r4"))) "non-triage ignored")
-        (is (= 2 n) "two triage runs resolved")))))
+        (is (= 2 n) "two triage runs resolved")
+        (is (= #{"r1" "r3"} (set @torn))
+            "swept runs tear down their session; parked/ignored runs do not")))))
 
 (deftest sweep-tolerates-parked-run-without-br-id
   ;; A legacy/anomalous parked triage run whose event-payload predates the :id
@@ -66,7 +70,8 @@
   (with-tmp
     (fn [_]
       (mk-run "old" :awaiting-review {:page-id "pg" :title "smoke target"} :triage-bug)
-      (is (= 1 (review/sweep-resolved!)) "nil-id parked run swept without NPE")
+      (with-redefs [runs/teardown-session-for-run! (fn [_] nil)]
+        (is (= 1 (review/sweep-resolved!)) "nil-id parked run swept without NPE"))
       (is (= :done (:state (runs/read-run "old")))))))
 
 (deftest run-state-from-ticket-maps-planning-parked
@@ -80,7 +85,8 @@
                                     :opened-by :triage-new :notion-last-edited-at "t"})
       (tickets/complete! :brian "BR-9" :triaged :applied)   ; triage done; plan resolved
       (mk-run "plan-9" :awaiting-review {:id "BR-9"} :plan-bug)
-      (is (= 1 (review/sweep-resolved!)))
+      (with-redefs [runs/teardown-session-for-run! (fn [_] nil)]
+        (is (= 1 (review/sweep-resolved!))))
       (is (= :done (:state (runs/read-run "plan-9")))))))
 
 (deftest sweep-leaves-parked-plan-run-still-in-review

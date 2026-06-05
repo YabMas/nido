@@ -35,11 +35,17 @@
 (defn sweep-resolved!
   "Transition every :awaiting-review triage or plan run whose ticket is no
    longer in review (resolved via apply/skip, or cleared via cancel) → :done,
-   freeing the trigger's in-flight budget. Returns the number transitioned."
+   freeing the trigger's in-flight budget AND tearing down the now-finished
+   session — once the human has resolved the ticket the review surface is no
+   longer needed. Returns the number transitioned."
   []
   (->> (runs/list-run-ids)
        (keep runs/read-run)
        (filter #(and (= :awaiting-review (:state %))
                      (#{:triage-bug :plan-bug} (:skill %))))
        (remove #(in-review? (:project %) (some-> % :event-payload :id)))
-       (reduce (fn [n r] (runs/transition! (:id r) :done) (inc n)) 0)))
+       (reduce (fn [n r]
+                 (runs/transition! (:id r) :done)
+                 (runs/teardown-session-for-run! r)
+                 (inc n))
+               0)))

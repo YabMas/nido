@@ -13,7 +13,8 @@
    [nido.coordinator.runs :as runs]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.tickets :as tickets]
-   [nido.coordinator.status-file :as status-file]))
+   [nido.coordinator.status-file :as status-file]
+   [nido.session.profiles :as profiles]))
 
 (defn- reset-executor! [f]
   (executor/configure! {:global-cap 1})
@@ -30,7 +31,8 @@
                                        {:exit-code         0
                                         :claude-session-id "sess-x"
                                         :timed-out?        false})
-                    runs/spawn-session-for-run! (fn [_] nil)]
+                    runs/spawn-session-for-run! (fn [_] nil)
+                    runs/teardown-session-for-run! (fn [_] nil)]
         (cstate/ensure-dirs!)
         (let [trigger  {:name    :t
                         :source  {:type :test}
@@ -73,7 +75,16 @@
 (defn- gate-with-tmp [f]
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      ;; Stub session teardown by default: run-blocking! reclaims the session on
+      ;; resolved-terminal, but session lifecycle uses real ~/.nido paths (it
+      ;; doesn't honor the coordinator-root redef). Tests that assert teardown
+      ;; behavior override this with their own spy.
+      ;; Default the profile to a non-symlink (fail-open) shape so the pre-spawn
+      ;; skill-resolution gate doesn't probe the real ~/Code/<project>/.claude.
+      ;; The gate tests override resolve-profile with their own symlink target.
+      (with-redefs [cstate/nido-root (constantly (str tmp))
+                    runs/teardown-session-for-run! (fn [_] nil)
+                    profiles/resolve-profile (fn [_ _] {:worktree {:strategy :git-worktree}})]
         (cstate/ensure-dirs!)
         (f tmp))
       (finally (fs/delete-tree tmp)))))
@@ -289,6 +300,103 @@
             "exit-0 but zero turns ⇒ :failed, not :done (cap not silently freed)")
         (is (= :agent-no-op (-> (runs/read-run "rno") :error :reason))
             "failure reason records the no-op so the dashboard is honest")))))
+
+(deftest skill-resolvable?-gates-symlink-profiles-only
+  ;; A :lite (symlink) session's skill must resolve in the target checkout's
+  ;; .claude; a non-symlink profile fails open (can't be cheaply checked).
+  (gate-with-tmp
+    (fn [tmp]
+      (let [target (str (fs/path tmp "co"))]
+        (fs/create-dirs (str (fs/path target ".claude" "skills" "triage-bug")))
+        (with-redefs [profiles/resolve-profile
+                      (fn [_ _] {:worktree {:strategy :symlink :target target}})]
+          (is (true? (boolean (#'core/skill-resolvable?
+                                {:project :brian :session-profile :lite :skill :triage-bug})))
+              "present skill (skills/ dir) resolves")
+          (is (false? (boolean (#'core/skill-resolvable?
+                                 {:project :brian :session-profile :lite :skill :missing})))
+              "absent skill does not resolve ⇒ will be gated"))
+        (with-redefs [profiles/resolve-profile
+                      (fn [_ _] {:worktree {:strategy :git-worktree}})]
+          (is (true? (#'core/skill-resolvable?
+                       {:project :brian :session-profile :full :skill :anything}))
+              ":full / git-worktree fails open (not gated)"))))))
+
+(deftest run-blocking-fails-fast-when-skill-unavailable
+  ;; The :lite checkout-coupling fix: a triage run whose /skill no longer exists
+  ;; in the symlinked checkout is failed BEFORE a session is built — no doomed
+  ;; spawn, breaker still fed.
+  (gate-with-tmp
+    (fn [tmp]
+      (let [spawned (atom false)
+            target  (str (fs/path tmp "co"))]
+        (fs/create-dirs (str (fs/path target ".claude" "skills")))   ; .claude exists, skill absent
+        (tickets/open! :brian "BR-U" {:notion-page-id "p" :url "u" :title "T"
+                                      :opened-by :triage-teacher-bugs :notion-last-edited-at "t"})
+        (runs/write-run! {:id "ru" :project :brian :trigger :triage-teacher-bugs
+                          :source {:type :notion-view} :event-payload {:id "BR-U"}
+                          :skill :triage-bug :first-message "/triage-bug x" :agent :claude
+                          :session-name "run-ru" :claude-session-id nil :limits {}
+                          :priority 0 :session-profile :lite :uncapped? false
+                          :state :queued :state-history [{:at "t" :state :queued}]
+                          :artifacts [] :error nil})
+        (with-redefs [profiles/resolve-profile
+                      (fn [_ _] {:worktree {:strategy :symlink :target target}})
+                      runs/spawn-session-for-run! (fn [_] (reset! spawned true) nil)
+                      cstate/run-session-home-link (constantly "/tmp/nope")
+                      anomaly/record-failure       (fn [det _] det)
+                      breakers/record-failure!     (fn [& _] nil)]
+          (#'core/run-blocking! "ru")
+          (is (= :failed (:state (runs/read-run "ru"))))
+          (is (= :skill-unavailable (-> (runs/read-run "ru") :error :reason)))
+          (is (false? @spawned) "no session is spawned for an unresolvable skill"))))))
+
+(deftest run-blocking-tears-down-session-on-terminal-not-on-park
+  ;; Resolved-terminal runs (:done/:failed) must reclaim their session so it
+  ;; leaves the CLI list and frees PG/JVM/ports; a parked :awaiting-review run
+  ;; must KEEP its session up (the human's review surface).
+  (gate-with-tmp
+    (fn [_]
+      (let [torn (atom [])]
+        (with-redefs [runs/spawn-session-for-run!     (fn [_] nil)
+                      runs/teardown-session-for-run!   (fn [r] (swap! torn conj (:id r)))
+                      cstate/run-session-home-link     (constantly "/tmp/nope")
+                      status-file/read-status          (fn [_] nil)
+                      anomaly/record-failure           (fn [det _] det)
+                      breakers/record-failure!         (fn [& _] nil)]
+          ;; (1) clean exit, no ticket ⇒ :done ⇒ torn down
+          (tickets/open! :brian "BR-D" {:notion-page-id "p" :url "u" :title "T"
+                                        :opened-by :triage-teacher-bugs :notion-last-edited-at "t"})
+          (tickets/complete! :brian "BR-D" :triaged :applied)  ; ⇒ :done
+          (runs/write-run! {:id "rdone" :project :brian :trigger :triage-teacher-bugs
+                            :source {:type :notion-view} :event-payload {:id "BR-D"}
+                            :skill :triage-bug :first-message "x" :agent :claude
+                            :session-name "run-rdone" :claude-session-id nil :limits {}
+                            :priority 0 :session-profile :lite :uncapped? false
+                            :state :queued :state-history [{:at "t" :state :queued}]
+                            :artifacts [] :error nil})
+          (with-redefs [nido.coordinator.agent/launch!
+                        (fn [_] {:exit-code 0 :timed-out? false :num-turns 5})]
+            (#'core/run-blocking! "rdone"))
+          (is (= :done (:state (runs/read-run "rdone"))))
+          (is (some #{"rdone"} @torn) "a :done run is torn down")
+          ;; (2) parked at :awaiting-review ⇒ NOT torn down
+          (reset! torn [])
+          (tickets/open! :brian "BR-P" {:notion-page-id "p" :url "u" :title "T"
+                                        :opened-by :triage-teacher-bugs :notion-last-edited-at "t"})
+          (tickets/set-status! :brian "BR-P" :awaiting-input)
+          (runs/write-run! {:id "rpark" :project :brian :trigger :triage-teacher-bugs
+                            :source {:type :notion-view} :event-payload {:id "BR-P"}
+                            :skill :triage-bug :first-message "x" :agent :claude
+                            :session-name "run-rpark" :claude-session-id nil :limits {}
+                            :priority 0 :session-profile :lite :uncapped? false
+                            :state :queued :state-history [{:at "t" :state :queued}]
+                            :artifacts [] :error nil})
+          (with-redefs [nido.coordinator.agent/launch!
+                        (fn [_] {:exit-code 0 :timed-out? false :num-turns 5})]
+            (#'core/run-blocking! "rpark"))
+          (is (= :awaiting-review (:state (runs/read-run "rpark"))))
+          (is (empty? @torn) "a parked :awaiting-review run keeps its session up"))))))
 
 (deftest run-blocking-parks-triage-run-from-ticket-status
   (gate-with-tmp

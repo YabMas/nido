@@ -4,6 +4,7 @@
    See spec §The coordinator daemon."
   (:refer-clojure :exclude [run!])
   (:require
+   [babashka.fs :as fs]
    [clojure.set :as set]
    [nido.coordinator.agent :as agent]
    [nido.coordinator.anomaly :as anomaly]
@@ -25,7 +26,8 @@
    [nido.coordinator.status-file :as status-file]
    [nido.coordinator.executor :as executor]
    [nido.coordinator.triggers :as triggers]
-   [nido.project :as project]))
+   [nido.project :as project]
+   [nido.session.profiles :as profiles]))
 
 (def ^:private defaults
   {:poll-ms             1000
@@ -120,6 +122,36 @@
        (some? (:num-turns result))
        (zero? (:num-turns result))))
 
+(defn- skill-in-claude-dir?
+  "True if `skill-name` resolves under a `.claude` dir as either a skill
+   (skills/<name>/) or a slash command (commands/<name>.md)."
+  [claude-dir skill-name]
+  (or (fs/exists? (str (fs/path claude-dir "skills" skill-name)))
+      (fs/exists? (str (fs/path claude-dir "commands" (str skill-name ".md"))))))
+
+(defn- skill-resolvable?
+  "True if the Run's skill is something claude can actually run. Checks the
+   session's target checkout (.claude) and the user's ~/.claude.
+
+   Only ENFORCED for :symlink-strategy profiles (e.g. :lite), whose skill source
+   is a live checkout that drifts with the branch — exactly the failure behind
+   the '36 sessions' incident: a triage run launched `/triage-bug` against a
+   checkout whose branch no longer carried that skill, claude answered 'Unknown
+   command', and the run silently completed. For non-symlink profiles the target
+   isn't built yet, so we can't cheaply check — fail OPEN (return true) rather
+   than risk blocking a legitimate run. Any resolution error also fails open."
+  [run]
+  (try
+    (let [profile (profiles/resolve-profile (:project run) (:session-profile run))
+          target  (-> profile :worktree :target)]
+      (if (and (= :symlink (-> profile :worktree :strategy)) target)
+        (let [skill-name  (name (:skill run))
+              user-claude (str (fs/path (System/getProperty "user.home") ".claude"))]
+          (or (skill-in-claude-dir? (str (fs/path target ".claude")) skill-name)
+              (skill-in-claude-dir? user-claude skill-name)))
+        true))
+    (catch Throwable _ true)))
+
 (defn- run-blocking!
   "Drive a single :queued Run to terminal/awaiting-review state.
    Called inside an executor-spawned future (one per slot). The name
@@ -145,19 +177,26 @@
         ;; Claude is launched with the SESSION-HOME as cwd (not the worktree):
         ;; it registers its transcript by cwd under ~/.claude/projects/, which is
         ;; what makes `claude --resume` work from the session home.
-        result       (try
-                       (runs/spawn-session-for-run! run)
-                       (when (= :plan-bug (:skill run))
-                         (notify/on-plan-spawn! run))
-                       (agent/launch! {:run-id            run-id
-                                       :cwd               (cstate/run-session-home-link run-id)
-                                       :first-message     (:first-message run)
-                                       :system-prompt     (:system-prompt defaults)
-                                       :budget            (-> run :limits :budget)
-                                       :claude-session-id session-id})
-                       (catch Throwable t
-                         {:spawn-error true :detail (.getMessage t)}))
+        ;; Pre-spawn gate: if the skill can't resolve in the target checkout
+        ;; (a :lite session symlinked to a branch that no longer carries it),
+        ;; fail fast WITHOUT building a session — no doomed spawn, and the
+        ;; breaker still trips. See skill-resolvable?.
+        result       (if-not (skill-resolvable? run)
+                       {:skill-unavailable true :skill (:skill run)}
+                       (try
+                         (runs/spawn-session-for-run! run)
+                         (when (= :plan-bug (:skill run))
+                           (notify/on-plan-spawn! run))
+                         (agent/launch! {:run-id            run-id
+                                         :cwd               (cstate/run-session-home-link run-id)
+                                         :first-message     (:first-message run)
+                                         :system-prompt     (:system-prompt defaults)
+                                         :budget            (-> run :limits :budget)
+                                         :claude-session-id session-id})
+                         (catch Throwable t
+                           {:spawn-error true :detail (.getMessage t)})))
         next-state (cond
+                     (:skill-unavailable result) :failed
                      (:spawn-error result) :failed
                      (:timed-out? result) :failed
                      ;; Exit 0 but the agent did nothing (e.g. "Unknown command:
@@ -184,7 +223,11 @@
                                                   :budget (-> r :limits :budget))
                                            (agent-no-op? result)
                                            (assoc :reason :agent-no-op
-                                                  :detail (:result-text result)))))))
+                                                  :detail (:result-text result))
+                                           (:skill-unavailable result)
+                                           (assoc :reason :skill-unavailable
+                                                  :detail (str "skill /" (name (:skill result))
+                                                               " did not resolve in the session checkout")))))))
     ;; Keep the ticket record honest on terminal exit (spec §Lifecycle):
     ;; clears a stale :investigating after an abnormal exit, leaves completed
     ;; dispositions and parked :awaiting-input drafts alone.
@@ -200,7 +243,14 @@
                              (breakers/record-failure! project trigger-name max-failures))
         :done            (breakers/record-success! project trigger-name)
         :awaiting-review (breakers/record-success! project trigger-name)
-        nil))))
+        nil))
+    ;; Reclaim the session once the Run is resolved-terminal. :awaiting-review
+    ;; keeps its session up (the human's review surface); only terminal states
+    ;; tear down. Without this every completed/failed Run leaks its session
+    ;; (PG + JVM + ports + CLI list entry) — the cap is honored but sessions
+    ;; pile up unboundedly.
+    (when (contains? #{:done :failed :halted} next-state)
+      (runs/teardown-session-for-run! run))))
 
 (defn- process-envelope! [envelope triggers-by-project]
   (doseq [routed (events/route envelope triggers-by-project)]
