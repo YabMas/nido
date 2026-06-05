@@ -69,16 +69,36 @@
   [state]
   (first (str/split (name state) #"-")))
 
+(def ^:private subject-title-max 40)
+
+(defn- truncate
+  "Trim s to n chars, appending an ellipsis when it was longer."
+  [s n]
+  (if (> (count s) n)
+    (str (subs s 0 n) "…")
+    s))
+
+(defn run-subject
+  "A recognizable label for a run: `BR-#### · <title>` when the event-payload
+   carries both, the title alone when there's no BR id, else the run-id (for
+   legacy payloads that predate the :id/:title fields). Long titles truncate."
+  [{:keys [id event-payload]}]
+  (let [br    (:id event-payload)
+        title (some-> (:title event-payload) str (truncate subject-title-max))]
+    (cond
+      (and br title) (str br " · " title)
+      title          title
+      :else          id)))
+
 (defn format-row
   "Display string for a single Run: `[state-padded] project · trigger · subject`.
-   Subject is the run-id. A future iteration can substitute the trigger's
-   :payload-key value if needed."
-  [{:keys [state project trigger id]}]
+   Subject is a recognizable `BR-#### · title` label (see run-subject)."
+  [{:keys [state project trigger] :as run}]
   (format "[%-15s] %s · %s · %s"
           (state-label state)
           (name project)
           (name trigger)
-          id))
+          (run-subject run)))
 
 (defn format-age
   "Human-readable age string for an ISO-8601 timestamp relative to now.

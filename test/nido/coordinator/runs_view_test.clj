@@ -84,6 +84,22 @@
   (is (= "[done           ] brian · investigate-bug · 2026-05-13-brian-investigate-bug-a1b2c3"
          (rv/format-row (assoc base-run :state :done)))))
 
+(deftest format-row-prefers-br-and-title-from-event-payload
+  ;; long titles truncate at 40 chars + ellipsis so rows stay tidy
+  (is (= "[done           ] brian · triage-teacher-bugs · BR-4674 · pop up of modal after clicking on review…"
+         (rv/format-row (assoc base-run
+                               :state :done
+                               :trigger :triage-teacher-bugs
+                               :event-payload {:id "BR-4674"
+                                               :title "pop up of modal after clicking on review (vocab)"}))))
+  ;; title only (no BR id) → title alone
+  (is (= "[done           ] brian · investigate-bug · smoke target"
+         (rv/format-row (assoc base-run :state :done
+                               :event-payload {:title "smoke target"}))))
+  ;; neither → fall back to run-id
+  (is (= "[done           ] brian · investigate-bug · 2026-05-13-brian-investigate-bug-a1b2c3"
+         (rv/format-row (assoc base-run :state :done :event-payload {})))))
+
 (deftest format-age
   (with-redefs [clock/now-iso (constantly "2026-05-13T10:00:00Z")]
     (is (= "just now" (rv/format-age "2026-05-13T09:59:55Z")))
