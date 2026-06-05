@@ -5,7 +5,8 @@
    [malli.core :as m]
    [nido.coordinator.clock :as clock]
    [nido.coordinator.session :as sess]
-   [nido.coordinator.state :as cstate]))
+   [nido.coordinator.state :as cstate]
+   [nido.coordinator.workstream :as ws]))
 
 (def human-session
   {:name "explore-firefox"
@@ -153,3 +154,24 @@
   ;; no live sessions ⇒ idle
   (is (= :idle (sess/engagement-state nil [(assoc human-session :substrate :archived)])))
   (is (= :idle (sess/engagement-state nil []))))
+
+(deftest in-flight-by-trigger-counts-live-in-progress-autonomous-sessions
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))
+                    clock/now-iso (constantly "2026-06-05T09:00:00Z")]
+        (let [w (ws/create! :brian {:stage :investigation})
+              auto (fn [nm phase]
+                     {:name nm :weight :light
+                      :autonomy (assoc (:autonomy autonomous-session)
+                                       :phase phase
+                                       :trigger :triage-bug)})]
+          (sess/create! :brian (:id w) (auto "r1" :running))
+          (sess/create! :brian (:id w) (auto "r2" :running))
+          (sess/create! :brian (:id w) (auto "p1" :parked))
+          (sess/create! :brian (:id w) (auto "q1" :queued))
+          (sess/create! :brian (:id w) {:name "human" :weight :light :autonomy nil})
+          (sess/archive! :brian (:id w)
+                         (:name (sess/create! :brian (:id w) (auto "gone" :running))))
+          (is (= {:triage-bug 2} (sess/in-flight-by-trigger :brian)))))
+      (finally (fs/delete-tree tmp)))))

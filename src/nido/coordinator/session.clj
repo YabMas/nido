@@ -126,3 +126,28 @@
     (some parked? sessions)   :parked-at-gate
     (some live? sessions)     :active
     :else                     :idle))
+
+(def in-progress-phases
+  "Autonomy phases that occupy a trigger's in-flight budget: spawned and not yet
+   terminal or parked. :queued is the pending pool and does NOT count; :parked is
+   a human gate, not in-flight."
+  #{:preprocessing :running})
+
+(defn- list-ws-ids [project]
+  (let [d (cstate/workstreams-dir project)]
+    (if (fs/exists? d)
+      (->> (fs/list-dir d) (filter fs/directory?) (mapv #(str (fs/file-name %))))
+      [])))
+
+(defn in-flight-by-trigger
+  "Map {trigger-kw → count} of LIVE autonomous sessions whose phase is in-progress,
+   grouped by the autonomy :trigger, across all workstreams of `project`. Scans
+   disk; recomputed each tick so it is restart-safe (the new analogue of
+   runs/in-progress-count-by-trigger)."
+  [project]
+  (->> (list-ws-ids project)
+       (mapcat #(list-sessions project %))
+       (filter live?)
+       (filter autonomous?)
+       (filter #(contains? in-progress-phases (get-in % [:autonomy :phase])))
+       (reduce (fn [m s] (update m (get-in s [:autonomy :trigger]) (fnil inc 0))) {})))
