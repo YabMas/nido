@@ -103,6 +103,23 @@
             :when (not (contains? current (sources/config-hash sc)))]
       (start-source! sc))))
 
+(defn- agent-no-op?
+  "True when claude exited cleanly (exit 0) but its final `result` event reports
+   zero turns — the agent did literally no work. The canonical case is claude
+   rejecting the launch with \"Unknown command: /<skill>\" (exit 0, is_error
+   false, num_turns 0). Such a run must be :failed, not :done: a :done run
+   silently frees its trigger's in-flight slot, so a whole backlog drains and
+   the :max-in-flight cap becomes a no-op. Marking it :failed instead feeds the
+   breaker, which trips after :max-failures and halts the cascade.
+
+   Guards on (some? num-turns) so a launch! result that never observed a
+   `result` event (num-turns nil — e.g. killed mid-stream) is NOT mistaken for
+   a no-op; those fall through to the existing exit-code/timeout handling."
+  [result]
+  (and (= 0 (:exit-code result))            ; nil-safe: spawn-error result has no :exit-code
+       (some? (:num-turns result))
+       (zero? (:num-turns result))))
+
 (defn- run-blocking!
   "Drive a single :queued Run to terminal/awaiting-review state.
    Called inside an executor-spawned future (one per slot). The name
@@ -143,6 +160,10 @@
         next-state (cond
                      (:spawn-error result) :failed
                      (:timed-out? result) :failed
+                     ;; Exit 0 but the agent did nothing (e.g. "Unknown command:
+                     ;; /<skill>") — treat as failure so the breaker engages and
+                     ;; the in-flight slot isn't silently freed (see agent-no-op?).
+                     (agent-no-op? result) :failed
                      (zero? (:exit-code result))
                      (if (#{:triage-bug :plan-bug} (:skill run))
                        (review/run-state-from-ticket
@@ -160,7 +181,10 @@
                                                   :detail (:detail result))
                                            (:timed-out? result)
                                            (assoc :reason :timeout
-                                                  :budget (-> r :limits :budget)))))))
+                                                  :budget (-> r :limits :budget))
+                                           (agent-no-op? result)
+                                           (assoc :reason :agent-no-op
+                                                  :detail (:result-text result)))))))
     ;; Keep the ticket record honest on terminal exit (spec §Lifecycle):
     ;; clears a stale :investigating after an abnormal exit, leaves completed
     ;; dispositions and parked :awaiting-input drafts alone.

@@ -258,6 +258,38 @@
         (is (nil? (tickets/status :brian "BR-Z"))
             "ticket cleared on spawn-failure terminal ⇒ re-triable")))))
 
+(deftest run-blocking-fails-no-op-agent-exit
+  ;; Regression (the "36 sessions" incident): claude rejected the launch with
+  ;; "Unknown command: /triage-bug" — exit 0, is_error false, num_turns 0. The
+  ;; agent did literally nothing. This MUST be :failed (so the breaker sees it
+  ;; and trips after max-failures), NOT :done. A :done run silently frees its
+  ;; trigger's in-flight slot, letting the next queued run spawn → the whole
+  ;; backlog drains and max-in-flight becomes a no-op.
+  (gate-with-tmp
+    (fn [_]
+      (tickets/open! :brian "BR-NOOP" {:notion-page-id "p" :url "u" :title "T"
+                                       :opened-by :triage-teacher-bugs :notion-last-edited-at "t"})
+      (runs/write-run! {:id "rno" :project :brian :trigger :triage-teacher-bugs
+                        :source {:type :notion-view} :event-payload {:id "BR-NOOP"}
+                        :skill :triage-bug :first-message "/triage-bug x" :agent :claude
+                        :session-name "run-rno" :claude-session-id nil :limits {}
+                        :priority 0 :session-profile :lite :uncapped? false
+                        :state :queued :state-history [{:at "t" :state :queued}]
+                        :artifacts [] :error nil})
+      (with-redefs [runs/spawn-session-for-run! (fn [_] nil)
+                    nido.coordinator.agent/launch!
+                    (fn [_] {:exit-code 0 :timed-out? false :num-turns 0
+                             :result-text "Unknown command: /triage-bug"})
+                    cstate/run-session-home-link (constantly "/tmp/nope")
+                    status-file/read-status (fn [_] nil)
+                    anomaly/record-failure      (fn [det _] det)
+                    breakers/record-failure!    (fn [& _] nil)]
+        (#'core/run-blocking! "rno")
+        (is (= :failed (:state (runs/read-run "rno")))
+            "exit-0 but zero turns ⇒ :failed, not :done (cap not silently freed)")
+        (is (= :agent-no-op (-> (runs/read-run "rno") :error :reason))
+            "failure reason records the no-op so the dashboard is honest")))))
+
 (deftest run-blocking-parks-triage-run-from-ticket-status
   (gate-with-tmp
     (fn [_]

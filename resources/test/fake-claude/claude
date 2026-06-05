@@ -7,12 +7,16 @@
 #   FAKE_CLAUDE_DELAY_MS    — sleep before exiting (default 50)
 #   FAKE_CLAUDE_HANG_MS     — if set, sleep this long instead of DELAY_MS
 #                             (used by budget-timeout tests)
+#   FAKE_CLAUDE_NUM_TURNS   — num_turns to emit in the result event (default 3)
+#   FAKE_CLAUDE_RESULT_TEXT — result text to emit in the result event (optional)
 
 set -euo pipefail
 SESSION_ID="${FAKE_CLAUDE_SESSION_ID:-fake-session-001}"
 EXIT_CODE="${FAKE_CLAUDE_EXIT_CODE:-0}"
 DELAY_MS="${FAKE_CLAUDE_DELAY_MS:-50}"
 HANG_MS="${FAKE_CLAUDE_HANG_MS:-}"
+NUM_TURNS="${FAKE_CLAUDE_NUM_TURNS:-3}"
+RESULT_TEXT="${FAKE_CLAUDE_RESULT_TEXT:-}"
 
 # init event
 printf '{"type":"system","subtype":"init","session_id":"%s"}\n' "$SESSION_ID"
@@ -33,5 +37,5 @@ if [ -n "${FAKE_CLAUDE_STATUS_FILE:-}" ]; then
 fi
 
 # result event
-printf '{"type":"result","subtype":"success"}\n'
+printf '{"type":"result","subtype":"success","num_turns":%s,"is_error":false,"result":"%s"}\n' "$NUM_TURNS" "$RESULT_TEXT"
 exit $EXIT_CODE

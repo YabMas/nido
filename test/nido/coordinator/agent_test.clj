@@ -51,6 +51,28 @@
               "agent.log captured stream-json output")))
       (finally (fs/delete-tree tmp)))))
 
+(deftest launch!-surfaces-result-event-fields
+  ;; launch! pulls num_turns / is_error / result from claude's final `result`
+  ;; stream-json event so the caller can detect a no-op exit (zero turns).
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (fs/create-dirs (cstate/run-dir "r1"))
+        (let [worked (agent/launch!
+                       {:run-id "r1" :cwd (str tmp) :first-message "/x"
+                        :claude-bin fake-claude
+                        :env {"FAKE_CLAUDE_SESSION_ID" "s" "FAKE_CLAUDE_NUM_TURNS" "4"}})]
+          (is (= 4 (:num-turns worked)) "captures num_turns from the result event")
+          (is (false? (:result-error? worked))))
+        (let [no-op (agent/launch!
+                      {:run-id "r1" :cwd (str tmp) :first-message "/triage-bug x"
+                       :claude-bin fake-claude
+                       :env {"FAKE_CLAUDE_SESSION_ID" "s" "FAKE_CLAUDE_NUM_TURNS" "0"
+                             "FAKE_CLAUDE_RESULT_TEXT" "Unknown command: /triage-bug"}})]
+          (is (= 0 (:num-turns no-op)) "zero turns surfaced for a no-op exit")
+          (is (= "Unknown command: /triage-bug" (:result-text no-op)))))
+      (finally (fs/delete-tree tmp)))))
+
 (deftest launch!-records-non-zero-exit
   (let [tmp (fs/create-temp-dir)]
     (try

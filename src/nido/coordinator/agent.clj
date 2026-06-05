@@ -17,6 +17,9 @@
              (= "init"   (:subtype event)))
     (:session_id event)))
 
+(defn- result-event? [event]
+  (= "result" (:type event)))
+
 (defn- parse-budget-ms
   "Parse a budget string like '30m', '45m', '2h' into milliseconds.
    nil → no budget (treat as infinite)."
@@ -67,7 +70,14 @@
      :budget        — string like \"30m\" / \"2h\". nil → no budget.
 
    Returns:
-     {:exit-code <int> :claude-session-id <str-or-nil> :timed-out? <bool>}"
+     {:exit-code <int> :claude-session-id <str-or-nil> :timed-out? <bool>
+      :num-turns <int-or-nil> :result-error? <bool> :result-text <str-or-nil>}
+
+   :num-turns / :result-error? / :result-text are pulled from claude's final
+   stream-json `result` event. A clean exit (exit 0) with :num-turns 0 means
+   the agent did NO work — e.g. claude rejected the launch with
+   \"Unknown command: /<skill>\". Callers use this to distinguish a real
+   completion from a no-op exit (which must not be treated as success)."
   [{:keys [run-id cwd first-message system-prompt claude-bin env budget claude-session-id]
     :or   {claude-bin "claude"}}]
   (let [log-path  (cstate/run-agent-log run-id)
@@ -82,6 +92,7 @@
                                   :err :inherit
                                   :shutdown nil})
         session   (atom nil)
+        result-ev (atom nil)
         budget-ms (parse-budget-ms budget)
         timed-out (atom false)
         timer     (when budget-ms
@@ -101,12 +112,18 @@
             (.write w line) (.write w "\n") (.flush w)
             (when-let [event (parse-event line)]
               (when-let [sid (session-id-from event)]
-                (reset! session sid))))))
+                (reset! session sid))
+              (when (result-event? event)
+                (reset! result-ev event))))))
       (finally
         (when timer (future-cancel timer))))
-    (let [exit (:exit @proc)]
+    (let [exit (:exit @proc)
+          rev  @result-ev]
       {:exit-code         exit
        ;; Prefer the caller-supplied id (deterministic, already persisted);
        ;; fall back to the id parsed from the init event.
        :claude-session-id (or claude-session-id @session)
-       :timed-out?        @timed-out})))
+       :timed-out?        @timed-out
+       :num-turns         (:num_turns rev)
+       :result-error?     (boolean (:is_error rev))
+       :result-text       (:result rev)})))
