@@ -19,6 +19,7 @@
    [nido.coordinator.reconcile :as reconcile]
    [nido.coordinator.review :as review]
    [nido.coordinator.runs :as runs]
+   [nido.coordinator.shim :as shim]
    [nido.coordinator.sources :as sources]
    [nido.coordinator.tickets :as tickets]
    [nido.coordinator.sources.notion :as nsource]
@@ -173,15 +174,16 @@
         ;; Passed to claude as --session-id so the transcript uses it.
         ;; :plan-bug is "provision only": promote brings up the :full session and
         ;; flips Notion → "In progress", then parks ready-for-human. No headless
-        ;; burst and no skill runs — the human enters the session and invokes
-        ;; /continue-ticket to pick up the triage findings from the ledger. So a
-        ;; plan-bug Run needs no resume session-id and bypasses both the
-        ;; skill-resolvable? gate and agent/launch!. (`:plan-bug` is kept as the
-        ;; internal trigger identifier; the user-facing command is /continue-ticket.)
+        ;; burst and no skill runs — the human enters the session and the shim
+        ;; auto-runs /continue-ticket on first entry (see the marker written in
+        ;; the provision branch below), picking up the triage findings. The
+        ;; session-id is still generated + persisted so that first launch can use
+        ;; `--session-id` and later entries `--resume` the same conversation.
+        ;; plan-bug bypasses the skill-resolvable? gate and agent/launch!.
+        ;; (`:plan-bug` is the internal trigger id; the command is /continue-ticket.)
         provision-only? (= :plan-bug (:skill (runs/read-run run-id)))
-        session-id   (when-not provision-only? (str (java.util.UUID/randomUUID)))
-        run          (let [r (cond-> (runs/read-run run-id)
-                               session-id (assoc :claude-session-id session-id))]
+        session-id   (str (java.util.UUID/randomUUID))
+        run          (let [r (assoc (runs/read-run run-id) :claude-session-id session-id)]
                        (runs/write-run! r) r)
         ;; Spawn the session + launch claude. If EITHER throws (e.g. session
         ;; build / worktree creation fails), don't let it escape — that would
@@ -199,14 +201,18 @@
         ;; breaker still trips. See skill-resolvable?.
         result       (cond
                        ;; Provision-only: bring the :full session up + flip Notion,
-                       ;; then synthesize a clean exit so next-state derives the
-                       ;; parked state from the ticket (:planning → :awaiting-review).
-                       ;; The session stays up for the human; /implement-bug later
-                       ;; sets :implementing, letting the sweep resolve this → :done.
+                       ;; drop the first-enter marker so the shim auto-runs
+                       ;; /continue-ticket, then synthesize a clean exit so
+                       ;; next-state derives the parked state from the ticket
+                       ;; (:planning → :awaiting-review). The session stays up for
+                       ;; the human; /continue-ticket later sets :implementing,
+                       ;; letting the sweep resolve this → :done.
                        provision-only?
                        (try
                          (runs/spawn-session-for-run! run)
                          (notify/on-plan-spawn! run)
+                         (shim/mark-continue-on-first-enter!
+                           (cstate/run-session-home-link run-id))
                          {:exit-code 0 :provisioned true}
                          (catch Throwable t
                            {:spawn-error true :detail (.getMessage t)}))

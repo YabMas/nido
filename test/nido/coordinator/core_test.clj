@@ -11,6 +11,7 @@
    [nido.coordinator.breakers :as breakers]
    [nido.coordinator.notify :as notify]
    [nido.coordinator.runs :as runs]
+   [nido.coordinator.shim]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.tickets :as tickets]
    [nido.coordinator.status-file :as status-file]
@@ -428,14 +429,15 @@
             "clean exit + ticket :awaiting-input ⇒ run parks at :awaiting-review, not :done")))))
 
 (deftest run-blocking-plan-bug-provisions-without-launch-and-parks
-  ;; Provision-only: promote brings the :full session up + flips Notion, then
-  ;; parks ready-for-human. NO headless agent launch, and it bypasses the
-  ;; skill-resolvable? gate (there is no plan-bug skill — the human runs
-  ;; /implement-bug). The ticket is :planning (just promoted; nothing parked it).
+  ;; Provision-only: promote brings the :full session up + flips Notion, drops
+  ;; the first-enter marker (so the shim auto-runs /continue-ticket), and parks
+  ;; ready-for-human. NO headless agent launch; it bypasses the skill-resolvable?
+  ;; gate. The ticket is :planning (just promoted; nothing parked it).
   (gate-with-tmp
     (fn [_]
       (let [notified (atom nil)
-            launched (atom false)]
+            launched (atom false)
+            marked   (atom nil)]
         (tickets/open! :brian "BR-12" {:notion-page-id "PG12" :url "u" :title "T"
                                        :opened-by :triage-new :notion-last-edited-at "t"})
         (tickets/complete! :brian "BR-12" :triaged :applied)
@@ -451,12 +453,15 @@
         (with-redefs [runs/spawn-session-for-run! (fn [_] nil)
                       nido.coordinator.agent/launch! (fn [_] (reset! launched true) {:exit-code 0})
                       cstate/run-session-home-link (constantly "/tmp/nope")
+                      nido.coordinator.shim/mark-continue-on-first-enter!
+                      (fn [home] (reset! marked home))
                       notify/on-plan-spawn! (fn [run] (reset! notified (:id run)))
                       breakers/record-success! (fn [& _] nil)]
           (#'core/run-blocking! "rplan")
           (is (= "rplan" @notified) "Notion flip still happens at provision")
           (is (false? @launched) "no headless agent launch for plan-bug (provision-only)")
-          (is (nil? (:claude-session-id (runs/read-run "rplan")))
-              "no resume session-id persisted — the human starts claude fresh")
+          (is (= "/tmp/nope" @marked) "first-enter marker dropped in the session home")
+          (is (some? (:claude-session-id (runs/read-run "rplan")))
+              "session-id persisted so the shim can --session-id then --resume")
           (is (= :awaiting-review (:state (runs/read-run "rplan")))
               "provisioned + parked ready-for-human from ticket :planning"))))))
