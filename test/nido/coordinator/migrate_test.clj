@@ -1,10 +1,13 @@
 (ns nido.coordinator.migrate-test
   (:require
+   [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
    [malli.core :as m]
    [nido.coordinator.migrate :as migrate]
    [nido.coordinator.session :as sess]
-   [nido.coordinator.workstream :as ws]))
+   [nido.coordinator.state :as cstate]
+   [nido.coordinator.workstream :as ws]
+   [nido.io :as io]))
 
 (def old-ticket
   {:br-id "BR-4659"
@@ -103,3 +106,77 @@
                             (assoc old-run :state-history []))]
     (is (m/validate sess/Session session))
     (is (= [] (get-in session [:autonomy :phase-history])))))
+
+(defn- seed-legacy! [tmp]
+  (io/write-edn! (str (fs/path tmp "projects" "brian" "tickets" "BR-4659" "meta.edn"))
+                 old-ticket)
+  (io/write-edn! (str (fs/path tmp "runs" (:id old-run) "run.edn"))
+                 old-run))
+
+(deftest run-once-migrates-ticket-and-run-then-archives
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (seed-legacy! tmp)
+        (let [report (migrate/run-once! :brian)]
+          (is (= 1 (:workstreams report)))
+          (is (= 1 (:sessions report)))
+          (let [w (ws/find-by-ref :brian :notion "BR-4659")]
+            (is (some? w))
+            (is (= :triaged (:stage w)))
+            (let [ss (sess/list-sessions :brian (:id w))]
+              (is (= 1 (count ss)))
+              (is (= (:id w) (:workstream-id (first ss))))
+              (is (= :done (get-in (first ss) [:autonomy :phase])))))
+          (is (fs/exists? (str (fs/path (cstate/pre-unification-dir :brian) "tickets"))))
+          ;; the converted run dir is moved out of the global runs/ and archived
+          ;; under _pre-unification/runs/<run-id> (the global runs/ dir itself stays).
+          (is (not (fs/exists? (cstate/run-dir (:id old-run)))))
+          (is (fs/exists? (str (fs/path (cstate/pre-unification-dir :brian)
+                                        "runs" (:id old-run)))))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest run-once-archives-only-the-given-projects-runs
+  ;; ~/.nido/runs/ is global; migrating :brian must NOT sweep away another
+  ;; project's runs (regression guard for the per-run-dir archive).
+  (let [tmp      (fs/create-temp-dir)
+        acme-run (assoc old-run :id "acme-run-1" :project :acme :event-payload {:url "u"})]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (seed-legacy! tmp)
+        (io/write-edn! (str (fs/path tmp "runs" (:id acme-run) "run.edn")) acme-run)
+        (migrate/run-once! :brian)
+        ;; acme's run is untouched — still in the global runs dir, not in brian's archive
+        (is (fs/exists? (cstate/run-dir (:id acme-run))))
+        (is (not (fs/exists? (str (fs/path (cstate/pre-unification-dir :brian)
+                                           "runs" (:id acme-run))))))
+        ;; brian's run WAS archived
+        (is (not (fs/exists? (cstate/run-dir (:id old-run))))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest run-once-does-not-duplicate-an-existing-workstream-for-a-ticket
+  ;; A pre-existing workstream carrying the ticket's BR ref (e.g. from a prior
+  ;; partial run) is reused via find-by-ref, not re-minted — no duplicate.
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (seed-legacy! tmp)
+        (ws/write! (migrate/ticket->workstream :brian old-ticket "ws-pre-existing"))
+        (migrate/run-once! :brian)
+        (let [matches (->> (ws/list-ids :brian)
+                           (keep #(ws/read-ws :brian %))
+                           (filter (fn [w] (some #(= "BR-4659" (:id %)) (:external-refs w)))))]
+          (is (= 1 (count matches)))
+          (is (= "ws-pre-existing" (:id (first matches))))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest run-once-is-idempotent
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (seed-legacy! tmp)
+        (migrate/run-once! :brian)
+        (let [again (migrate/run-once! :brian)]
+          (is (= 0 (:workstreams again)))
+          (is (= 0 (:sessions again)))))
+      (finally (fs/delete-tree tmp)))))
