@@ -344,9 +344,31 @@
                                                :notion-page-id "PG1"}
                                      :priority 0 :session-profile :full :uncapped? false}
                                     {:fired-at "t" :fired-by "u"})]
-          (is (= "impl-br-4659" (:session-name run)) "prefix + slugged BR id, lower-cased")
+          (is (= "impl-br-4659-firefox-loading" (:session-name run))
+              "prefix + slugged BR id + slugged title, lower-cased")
           (is (= {:notion-status "In progress"} (:on-promote run)))
           (is (= "/plan-bug Plan firefox loading" (:first-message run)))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest create-run-session-name-truncates-long-title-and-handles-no-title
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (cstate/ensure-dirs!)
+        (let [mk (fn [payload]
+                   (:session-name
+                    (runs/create-run!
+                     {:project :brian
+                      :trigger {:name :plan-bug :source {:type :manual} :skill :plan-bug
+                                :payload "x" :session-name-prefix "impl-"}
+                      :payload payload :priority 0 :session-profile :full :uncapped? false}
+                     {:fired-at "t" :fired-by "u"})))]
+          ;; id but no title → just the BR slug
+          (is (= "impl-br-4659" (mk {:id "BR-4659"})))
+          ;; punctuation collapses to dashes; the title slug caps near 40 chars
+          ;; on a word boundary (no mid-word cut, no trailing dash)
+          (is (= "impl-br-77-new-ai-dialogue-doesn-t-take-course"
+                 (mk {:id "BR-77" :title "New AI dialogue doesn’t take course settings into account."})))))
       (finally (fs/delete-tree tmp)))))
 
 (deftest create-run-without-prefix-keeps-random-session-name

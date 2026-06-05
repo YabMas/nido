@@ -141,14 +141,34 @@
      :session-name (str "run-" (name project) "-" (name trigger-name) "-" suf)
      :suffix       suf}))
 
+(def ^:private session-title-slug-max 40)
+
+(defn- slugify
+  "Lower-case `s` into a `-`-delimited alphanumeric slug. When longer than `n`,
+   cap it near `n` on a word boundary (no mid-word cut; falls back to a hard cut
+   for a single over-long token). No leading/trailing dashes."
+  [s n]
+  (let [base (-> (str s)
+                 str/lower-case
+                 (str/replace #"[^a-z0-9]+" "-")
+                 (str/replace #"^-+|-+$" ""))]
+    (if (<= (count base) n)
+      base
+      (let [cut         (subs base 0 n)
+            at-boundary (str/replace cut #"-[^-]*$" "")]
+        (if (seq at-boundary) at-boundary cut)))))
+
 (defn- ticket-session-name
   "When the trigger sets :session-name-prefix and the payload carries an :id
-   (e.g. a BR-#### from promote), build a stable, slugged session-name like
-   \"impl-br-4659\". Otherwise fall back to the random per-run name."
+   (e.g. a BR-#### from promote), build a stable, recognizable session-name:
+   `<prefix><br-slug>[-<title-slug>]` — e.g. \"impl-br-4659-firefox-loading\".
+   Falls back to the random per-run name when there's no prefix or no :id."
   [trigger payload random-name]
   (if-let [prefix (:session-name-prefix trigger)]
     (if-let [id (:id payload)]
-      (str prefix (-> (str id) str/lower-case (str/replace #"[^a-z0-9]+" "-")))
+      (let [title (some-> (:title payload) (slugify session-title-slug-max))]
+        (str prefix (slugify id session-title-slug-max)
+             (when (seq title) (str "-" title))))
       random-name)
     random-name))
 
