@@ -90,19 +90,39 @@
     (:investigating :awaiting-input) :skip-active
     :spawn))
 
+(defn promote-decision
+  "Decide whether a ticket may be promoted to a planning Run, by reading its
+   meta status:
+     :promote        — status :triaged (the only promotable state)
+     :skip-active    — a plan Run already owns it (:planning)
+     :skip-completed — triage said don't bother (:skipped)
+     :skip-no-record — never triaged (no record)
+     :skip-untriaged — mid-triage (:investigating / :awaiting-input) or any
+                       other non-:triaged status"
+  [project br-id]
+  (case (status project br-id)
+    :triaged  :promote
+    :planning :skip-active
+    :skipped  :skip-completed
+    nil       :skip-no-record
+    :skip-untriaged))
+
 (defn on-run-terminal!
-  "Reconcile a ticket's meta when its triage Run reaches a terminal/parked
-   coordinator state. No-op for non-triage runs and for tickets with no record.
-   - run ended :awaiting-review  → leave (session parked at :awaiting-input)
-   - meta already :triaged/:skipped → leave (skill wrote the disposition)
-   - otherwise (e.g. :failed with stale :investigating) → clear → re-triable."
+  "Reconcile a ticket's meta when its triage/plan Run reaches a terminal or
+   parked coordinator state. No-op for other skills and record-less tickets.
+   - run ended :awaiting-review        → leave (session parked)
+   - meta already :triaged/:skipped    → leave (skill wrote the disposition)
+   - otherwise (abnormal/stale status):
+       :triage-bug → clear   (drop status → re-triable)
+       :plan-bug   → :triaged (revert → re-promotable, preserving triage)"
   [run run-state]
-  (when (= :triage-bug (:skill run))
-    (let [project (:project run)
-          br-id   (some-> run :event-payload :id)]
-      (when (and br-id (not (str/blank? br-id)))
-        (when-let [m (read-meta project br-id)]
-          (cond
-            (= :awaiting-review run-state)     nil
-            (#{:triaged :skipped} (:status m)) nil
-            :else (clear-status! project br-id)))))))
+  (let [skill   (:skill run)
+        project (:project run)
+        br-id   (some-> run :event-payload :id)]
+    (when (and (#{:triage-bug :plan-bug} skill) br-id (not (str/blank? br-id)))
+      (when-let [m (read-meta project br-id)]
+        (cond
+          (= :awaiting-review run-state)     nil
+          (#{:triaged :skipped} (:status m)) nil
+          (= :plan-bug skill)                (set-status! project br-id :triaged)
+          :else                              (clear-status! project br-id))))))

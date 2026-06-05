@@ -140,4 +140,45 @@
       (is (nil? (tickets/on-run-terminal!
                   {:skill :triage-bug :project :brian :event-payload nil} :failed)))
       (is (nil? (tickets/on-run-terminal!
-                  {:skill :triage-bug :project :brian :event-payload {:id ""}} :failed))))))
+                  {:skill :triage-bug :project :brian :event-payload {:id ""}} :failed)))
+      ;; the shared nil/blank-id guard must hold for :plan-bug too
+      (is (nil? (tickets/on-run-terminal!
+                  {:skill :plan-bug :project :brian :event-payload nil} :failed)))
+      (is (nil? (tickets/on-run-terminal!
+                  {:skill :plan-bug :project :brian :event-payload {:id ""}} :failed))))))
+
+(deftest promote-decision-allows-only-triaged
+  (with-tmp
+    (fn [_]
+      (is (= :skip-no-record (tickets/promote-decision :brian "BR-X")))   ; no record
+      (tickets/open! :brian "BR-1" {:notion-page-id "p" :url "u" :title "T"
+                                    :opened-by :triage-new :notion-last-edited-at "t0"})
+      (is (= :skip-untriaged (tickets/promote-decision :brian "BR-1")))   ; :investigating
+      (tickets/complete! :brian "BR-1" :triaged :applied)
+      (is (= :promote (tickets/promote-decision :brian "BR-1")))          ; the one yes
+      (tickets/set-status! :brian "BR-1" :planning)
+      (is (= :skip-active (tickets/promote-decision :brian "BR-1")))      ; already planning
+      (tickets/complete! :brian "BR-1" :skipped :leave-as-is)
+      (is (= :skip-completed (tickets/promote-decision :brian "BR-1"))))))
+
+(deftest on-run-terminal-plan-bug-abnormal-exit-reverts-to-triaged
+  (with-tmp
+    (fn [_]
+      (tickets/open! :brian "BR-2" {:notion-page-id "p" :url "u" :title "T"
+                                    :opened-by :triage-new :notion-last-edited-at "t0"})
+      (tickets/complete! :brian "BR-2" :triaged :applied)
+      (tickets/set-status! :brian "BR-2" :planning)
+      ;; a :failed plan run with a stale :planning ⇒ re-promotable (:triaged)
+      (tickets/on-run-terminal! {:skill :plan-bug :project :brian
+                                 :event-payload {:id "BR-2"}} :failed)
+      (is (= :triaged (tickets/status :brian "BR-2"))))))
+
+(deftest on-run-terminal-plan-bug-parked-is-left-alone
+  (with-tmp
+    (fn [_]
+      (tickets/open! :brian "BR-3" {:notion-page-id "p" :url "u" :title "T"
+                                    :opened-by :triage-new :notion-last-edited-at "t0"})
+      (tickets/set-status! :brian "BR-3" :awaiting-input)   ; plan parked
+      (tickets/on-run-terminal! {:skill :plan-bug :project :brian
+                                 :event-payload {:id "BR-3"}} :awaiting-review)
+      (is (= :awaiting-input (tickets/status :brian "BR-3"))))))
