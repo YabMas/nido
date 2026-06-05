@@ -21,6 +21,7 @@
    :limits          {:budget "30m"}
    :priority        0
    :session-profile :full
+   :on-promote      nil
    :uncapped?       false
    :state           :queued
    :state-history   [{:at "2026-05-13T09:14:22Z" :state :queued}]
@@ -326,3 +327,55 @@
       (let [counts (runs/in-progress-count-by-trigger)]
         (is (= 2 (get counts :triage-teacher-bugs)))
         (is (= 1 (get counts :other-trigger)))))))
+
+(deftest create-run-derives-ticket-stable-session-name-and-snapshots-on-promote
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (cstate/ensure-dirs!)
+        (let [trigger {:name :plan-bug :source {:type :manual} :skill :plan-bug
+                       :payload "Plan {{event/title}}"
+                       :session-profile :full
+                       :session-name-prefix "impl-"
+                       :on-promote {:notion-status "In progress"}
+                       :limits {:budget "45m" :max-failures 3}}
+              run (runs/create-run! {:project :brian :trigger trigger
+                                     :payload {:id "BR-4659" :title "firefox loading"
+                                               :notion-page-id "PG1"}
+                                     :priority 0 :session-profile :full :uncapped? false}
+                                    {:fired-at "t" :fired-by "u"})]
+          (is (= "impl-br-4659" (:session-name run)) "prefix + slugged BR id, lower-cased")
+          (is (= {:notion-status "In progress"} (:on-promote run)))
+          (is (= "/plan-bug Plan firefox loading" (:first-message run)))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest create-run-without-prefix-keeps-random-session-name
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (cstate/ensure-dirs!)
+        (let [trigger {:name :triage-bug :source {:type :notion-view} :skill :triage-bug
+                       :payload "Triage {{event/title}}"}
+              run (runs/create-run! {:project :brian :trigger trigger
+                                     :payload {:id "BR-1" :title "x"}
+                                     :priority 0 :session-profile :lite :uncapped? false}
+                                    {:fired-at "t" :fired-by "u"})]
+          (is (re-matches #"run-brian-triage-bug-[0-9a-f]{8}" (:session-name run)))
+          (is (nil? (:on-promote run)))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest create-run-with-prefix-but-no-id-falls-back-to-random-name
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (cstate/ensure-dirs!)
+        ;; :session-name-prefix set, but the payload carries no :id ⇒ random name
+        (let [trigger {:name :plan-bug :source {:type :manual} :skill :plan-bug
+                       :payload "Plan {{event/title}}"
+                       :session-name-prefix "impl-"}
+              run (runs/create-run! {:project :brian :trigger trigger
+                                     :payload {:title "no id here"}
+                                     :priority 0 :session-profile :full :uncapped? false}
+                                    {:fired-at "t" :fired-by "u"})]
+          (is (re-matches #"run-brian-plan-bug-[0-9a-f]{8}" (:session-name run)))))
+      (finally (fs/delete-tree tmp)))))

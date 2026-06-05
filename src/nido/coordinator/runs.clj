@@ -4,6 +4,7 @@
    See spec §Runs."
   (:require
    [babashka.fs :as fs]
+   [clojure.string :as str]
    [malli.core :as m]
    [nido.coordinator.clock :as clock]
    [nido.coordinator.state :as cstate]
@@ -31,6 +32,7 @@
    [:limits            [:map-of keyword? any?]]
    [:priority          int?]
    [:session-profile   keyword?]
+   [:on-promote        {:optional true} [:maybe [:map-of keyword? any?]]]
    [:uncapped?         boolean?]
    [:state             (into [:enum] states)]
    [:state-history     [:vector [:map
@@ -139,11 +141,23 @@
      :session-name (str "run-" (name project) "-" (name trigger-name) "-" suf)
      :suffix       suf}))
 
+(defn- ticket-session-name
+  "When the trigger sets :session-name-prefix and the payload carries an :id
+   (e.g. a BR-#### from promote), build a stable, slugged session-name like
+   \"impl-br-4659\". Otherwise fall back to the random per-run name."
+  [trigger payload random-name]
+  (if-let [prefix (:session-name-prefix trigger)]
+    (if-let [id (:id payload)]
+      (str prefix (-> (str id) str/lower-case (str/replace #"[^a-z0-9]+" "-")))
+      random-name)
+    random-name))
+
 (defn create-run!
   "Build a :queued Run record from a fire request and persist run.edn.
    `meta` carries source-call metadata: {:fired-at <iso> :fired-by <str>}."
   [{:keys [project trigger payload priority session-profile uncapped?]} meta]
   (let [{:keys [run-id session-name]} (new-run-parts project (:name trigger))
+        session-name (ticket-session-name trigger payload session-name)
         ;; First message format per spec §Agent launch: "/<skill> <interpolated-payload>".
         ;; The trigger's :payload holds just the skill args; the framework prepends "/<skill> ".
         message (str "/" (name (:skill trigger)) " "
@@ -163,6 +177,7 @@
                  :limits          (or (:limits trigger) {:budget "30m" :max-failures 3})
                  :priority        (or priority 0)
                  :session-profile (or session-profile :full)
+                 :on-promote      (:on-promote trigger)
                  :uncapped?       (boolean uncapped?)
                  :state           :queued
                  :state-history   [{:at (clock/now-iso) :state :queued}]
