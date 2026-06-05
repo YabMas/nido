@@ -96,3 +96,35 @@
         (let [closed (ws/close! :brian (:id example-ws) :dropped)]
           (is (= {:at "2026-06-05T11:00:00Z" :outcome :dropped} (:closed closed)))))
       (finally (fs/delete-tree tmp)))))
+
+(deftest append-entry-writes-file-and-indexes-it
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))
+                    clock/now-iso (constantly "2026-06-05T12:00:00Z")]
+        (ws/write! example-ws)
+        (let [path (ws/append-entry! :brian (:id example-ws)
+                                     {:kind :triage :session "sx"}
+                                     "# Triage report\nbody")
+              w    (ws/read-ws :brian (:id example-ws))
+              e    (last (:entries w))]
+          (is (str/ends-with? path "entries/0001-triage.md"))
+          (is (= "# Triage report\nbody" (slurp path)))
+          (is (= 1 (:seq e)))
+          (is (= :triage (:kind e)))
+          (is (= "sx" (:session e)))
+          (is (= "entries/0001-triage.md" (:file e)))
+          (is (= "2026-06-05T12:00:00Z" (:at e)))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest append-entry-increments-seq
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))
+                    clock/now-iso (constantly "2026-06-05T12:00:00Z")]
+        (ws/write! example-ws)
+        (ws/append-entry! :brian (:id example-ws) {:kind :triage} "a")
+        (let [p2 (ws/append-entry! :brian (:id example-ws) {:kind :plan} "b")]
+          (is (str/ends-with? p2 "entries/0002-plan.md"))
+          (is (= 2 (count (:entries (ws/read-ws :brian (:id example-ws))))))))
+      (finally (fs/delete-tree tmp)))))

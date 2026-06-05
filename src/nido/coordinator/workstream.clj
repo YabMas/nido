@@ -4,6 +4,7 @@
    projection over this workstream's session records (see nido.coordinator.session).
    See spec docs/superpowers/specs/2026-06-05-workstream-session-model-design.md."
   (:require
+   [babashka.fs :as fs]
    [clojure.string :as str]
    [malli.core :as m]
    [nido.coordinator.clock :as clock]
@@ -92,3 +93,18 @@
   (let [w (or (read-ws project ws-id)
               (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))]
     (write! (assoc w :closed {:at (clock/now-iso) :outcome outcome}))))
+
+(defn append-entry!
+  "Write an immutable entry file under entries/ and record it in :entries.
+   `entry` = {:kind <kw> :session <str>?}. Returns the absolute file path."
+  [project ws-id entry content]
+  (let [w     (or (read-ws project ws-id)
+                  (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))
+        seq-n (inc (count (:entries w)))
+        fname (format "%04d-%s.md" seq-n (name (:kind entry)))
+        rel   (str "entries/" fname)
+        abs   (str (fs/path (cstate/workstream-dir project ws-id) rel))]
+    (io/write-text! abs content)
+    (write! (update w :entries (fnil conj [])
+                    (assoc entry :seq seq-n :at (clock/now-iso) :file rel)))
+    abs))
