@@ -401,3 +401,17 @@
                                     {:fired-at "t" :fired-by "u"})]
           (is (re-matches #"run-brian-plan-bug-[0-9a-f]{8}" (:session-name run)))))
       (finally (fs/delete-tree tmp)))))
+
+(deftest teardown-skips-plan-bug-sessions-but-runs-for-triage
+  ;; A provision-only impl (:plan-bug) session is the human's workspace and must
+  ;; NOT be reclaimed when its run goes terminal; a triage (:triage-bug) lite
+  ;; session is an ephemeral review surface and SHOULD be torn down.
+  (let [destroyed (atom [])]
+    (with-redefs [nido.session.lifecycle/destroy!
+                  (fn [session-name _] (swap! destroyed conj session-name))]
+      (runs/teardown-session-for-run!
+        {:skill :plan-bug :project :brian :session-name "impl-br-1" :id "r1"})
+      (is (= [] @destroyed) "plan-bug session is never reclaimed")
+      (runs/teardown-session-for-run!
+        {:skill :triage-bug :project :brian :session-name "run-triage-1" :id "r2"})
+      (is (= ["run-triage-1"] @destroyed) "triage lite session is reclaimed"))))

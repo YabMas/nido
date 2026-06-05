@@ -238,10 +238,18 @@
    review surface and must stay up. The run dir (artifacts, agent.log, run.edn)
    under ~/.nido/runs is never touched, so a failed/done run stays inspectable.
 
+   NO-OP for :plan-bug runs: a provision-only impl session is HANDED to the
+   human at provision — it's their workspace, not a coordinator-owned ephemeral
+   surface. The run goes :done (to free the trigger's slot) the moment
+   /continue-ticket sets the ticket :implementing, but the session must OUTLIVE
+   the run; reclaiming it would delete the worktree out from under the person
+   working in it. The human brings it down explicitly (bb nido:session:down).
+
    Best-effort: a missing/already-gone session logs and returns nil rather than
    throwing — teardown must never re-fail a run that already reached terminal."
   [run]
-  (let [{:keys [project session-name id]} run]
+  (when-not (= :plan-bug (:skill run))
+   (let [{:keys [project session-name id]} run]
     (try
       (session-lifecycle/destroy! session-name {:project project})
       (catch Exception e
@@ -259,4 +267,4 @@
           (.println ^java.io.PrintWriter *err*
                     (str "nido coordinator: teardown home-cleanup failed for "
                          session-name " — " (ex-message e))))))
-    nil))
+    nil)))
