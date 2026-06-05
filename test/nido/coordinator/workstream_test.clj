@@ -128,3 +128,26 @@
           (is (str/ends-with? p2 "entries/0002-plan.md"))
           (is (= 2 (count (:entries (ws/read-ws :brian (:id example-ws))))))))
       (finally (fs/delete-tree tmp)))))
+
+(deftest add-ref-appends-and-dedupes
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (let [w0 (ws/create! :brian {:stage :investigation :external-refs []})
+              w1 (ws/add-ref! :brian (:id w0) {:adapter :notion :id "BR-9"})
+              w2 (ws/add-ref! :brian (:id w0) {:adapter :notion :id "BR-9"})]
+          (is (= 1 (count (:external-refs w1))))
+          (is (= 1 (count (:external-refs w2))))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest find-by-ref-locates-the-workstream
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (let [w (ws/create! :brian {:stage :investigation
+                                    :external-refs [{:adapter :notion :id "BR-42"}]})]
+          (ws/create! :brian {:stage :investigation
+                              :external-refs [{:adapter :notion :id "BR-99"}]})
+          (is (= (:id w) (:id (ws/find-by-ref :brian :notion "BR-42"))))
+          (is (nil? (ws/find-by-ref :brian :notion "BR-nope")))))
+      (finally (fs/delete-tree tmp)))))

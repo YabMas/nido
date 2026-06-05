@@ -108,3 +108,33 @@
     (write! (update w :entries (fnil conj [])
                     (assoc entry :seq seq-n :at (clock/now-iso) :file rel)))
     abs))
+
+(defn list-ids
+  "Vector of ws-ids under a project's workstreams dir; [] if none."
+  [project]
+  (let [d (cstate/workstreams-dir project)]
+    (if (fs/exists? d)
+      (->> (fs/list-dir d) (filter fs/directory?) (mapv #(str (fs/file-name %))))
+      [])))
+
+(defn add-ref!
+  "Append an external ref, deduped on (adapter, id). Returns updated record."
+  [project ws-id ref]
+  (let [w (or (read-ws project ws-id)
+              (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))
+        dup? (some #(and (= (:adapter %) (:adapter ref)) (= (:id %) (:id ref)))
+                   (:external-refs w))]
+    (if dup?
+      w
+      (write! (update w :external-refs (fnil conj []) ref)))))
+
+(defn find-by-ref
+  "Scan a project's workstreams for one carrying an external ref matching
+   (adapter, external-id). Returns the workstream record or nil."
+  [project adapter external-id]
+  (->> (list-ids project)
+       (keep #(read-ws project %))
+       (some (fn [w]
+               (when (some #(and (= adapter (:adapter %)) (= external-id (:id %)))
+                           (:external-refs w))
+                 w)))))
