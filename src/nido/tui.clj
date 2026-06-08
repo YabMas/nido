@@ -636,26 +636,25 @@
   "Modal handler for :delete-run-confirm. Opened by capital D on the runs screen.
    - y: delete the Run's dir + session-home + state dir, refresh the list.
    - n / esc / anything else: close modal.
-   Refuses silently (shows a refusal message) when the Run is in a live state."
+   Deletes any Run regardless of state — the confirmation dialog is the safety
+   layer. Live runs are deleted with `:allow-live? true`."
   [state msg]
   (let [run (-> state :modal-target :run)]
     (cond
       (or (msg/key-match? msg "y") (msg/key-match? msg "Y"))
-      (if (contains? runs-clean/live-states (:state run))
-        ;; Refuse — leave modal open with a status message.
-        [(assoc state :status (str "Refusing: Run is in state " (name (:state run)))) nil]
-        (do
-          (try
-            (let [plan (runs-clean/plan-clean {:state #{(:state run)}})]
-              ;; Filter to only the highlighted run so we don't batch-delete more than intended.
-              (runs-clean/execute! (filter #(= (:id run) (-> % :run :id)) plan)))
-            (catch Exception _e
-              nil))
-          [(-> state
-               close-modal
-               (assoc :status (str "Deleted: " (:id run)))
-               (rebuild-list (run-rows)))
-           nil]))
+      (do
+        (try
+          (let [plan (runs-clean/plan-clean {:state       #{(:state run)}
+                                             :allow-live? true})]
+            ;; Filter to only the highlighted run so we don't batch-delete more than intended.
+            (runs-clean/execute! (filter #(= (:id run) (-> % :run :id)) plan)))
+          (catch Exception _e
+            nil))
+        [(-> state
+             close-modal
+             (assoc :status (str "Deleted: " (:id run)))
+             (rebuild-list (run-rows)))
+         nil])
 
       :else
       [(close-modal state) nil])))
@@ -927,16 +926,19 @@
        (or log-tail "(no agent.log yet)")))
 
     :delete-run-confirm
-    (let [{:keys [run]} (:modal-target state)]
-      (if (contains? runs-clean/live-states (:state run))
-        (str (style/render warning-style "Cannot delete — Run is in state: ") (name (:state run))
-             "\n\nOnly terminal Runs can be deleted. Press [n] or [esc] to cancel.")
-        (str (style/render warning-style "Delete ") (:id run) " [" (name (:state run)) "]"
-             (style/render warning-style " ?")
-             "\n\nThis removes:\n"
-             "  • The run dir\n"
-             "  • The session-home\n"
-             "  • The state dir")))
+    (let [{:keys [run]} (:modal-target state)
+          live?         (contains? runs-clean/live-states (:state run))]
+      (str (style/render warning-style "Delete ") (:id run) " [" (name (:state run)) "]"
+           (style/render warning-style " ?")
+           (when live?
+             (str "\n\n"
+                  (style/render warning-style
+                                (str "⚠ Run is still live (" (name (:state run))
+                                     ") — deleting may orphan a running agent/session."))))
+           "\n\nThis removes:\n"
+           "  • The run dir\n"
+           "  • The session-home\n"
+           "  • The state dir"))
 
     :create-session
     (text-input/text-input-view (:modal-input state))

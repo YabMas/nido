@@ -207,12 +207,18 @@
   (fs/exists? (str (fs/path wt-path ".jj"))))
 
 (defn- bookmark-exists?
-  "True if a jj bookmark named `branch` exists in `project-dir`."
+  "True if a jj bookmark named `branch` exists in `project-dir`.
+
+   `jj bookmark list <name>` exits 0 whether or not the name matches — a
+   miss yields empty stdout, a hit yields the name. So existence is read
+   from stdout, and any non-zero exit means jj couldn't answer (stale or
+   locked working copy, corrupt repo, …). We deliberately don't pass
+   `:continue?` here: `jj!` throws on that, surfacing the real failure
+   rather than silently reporting the bookmark as missing — which would
+   trigger a spurious `bookmark create` that fails the same way."
   [project-dir branch]
-  (let [r (jj! project-dir ["bookmark" "list" branch "-T" "name ++ \"\\n\""]
-               :continue? true)]
-    (and (zero? (:exit r))
-         (not (str/blank? (:out r))))))
+  (let [r (jj! project-dir ["bookmark" "list" branch "-T" "name ++ \"\\n\""])]
+    (not (str/blank? (:out r)))))
 
 (defn- git-ref->jj-revset
   "Translate a git-style ref (`origin/main`) into jj revset syntax

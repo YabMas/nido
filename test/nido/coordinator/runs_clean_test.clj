@@ -96,6 +96,19 @@
         (is (thrown? clojure.lang.ExceptionInfo
                      (clean/plan-clean {:state #{:awaiting-review :done}})))))))
 
+(deftest plan-clean-allow-live-overrides-refusal
+  (with-tmp
+    (fn [_]
+      (write-test-run! {:id "r1" :state :awaiting-review})
+      (write-test-run! {:id "r2" :state :running})
+      (testing "live state planned (not thrown) when :allow-live? true"
+        (let [plan (clean/plan-clean {:state #{:awaiting-review} :allow-live? true})]
+          (is (= 1 (count plan)))
+          (is (= "r1" (-> plan first :run :id)))))
+      (testing "still refuses without the override"
+        (is (thrown? clojure.lang.ExceptionInfo
+                     (clean/plan-clean {:state #{:running}})))))))
+
 ;; ---------------------------------------------------------------------------
 ;; Project filter
 ;; ---------------------------------------------------------------------------

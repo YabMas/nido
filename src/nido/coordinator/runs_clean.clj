@@ -104,12 +104,17 @@
      :state        — set of state keywords (default: safe-default-states)
      :project      — keyword; nil = all projects
      :older-than   — string like \"7d\", \"12h\", \"30m\"; nil = no age filter
+     :allow-live?  — when true, skip the live-state refusal (interactive override)
      :dry-run?     — ignored here; callers use it to decide whether to call execute!
 
-   Throws ex-info when `state` overlaps with `live-states`."
-  [{:keys [state project older-than]
+   Throws ex-info when `state` overlaps with `live-states`, unless `:allow-live?`
+   is true. The live-state guard protects the automated/bulk paths (reclaim,
+   `plan-clean {}`); the interactive TUI passes `:allow-live? true` because its
+   per-run confirmation dialog is the safety layer."
+  [{:keys [state project older-than allow-live?]
     :or   {state safe-default-states}}]
-  (when (seq (set/intersection state live-states))
+  (when (and (not allow-live?)
+             (seq (set/intersection state live-states)))
     (throw (ex-info "Cannot clean Runs in live states"
                     {:requested state
                      :live      live-states

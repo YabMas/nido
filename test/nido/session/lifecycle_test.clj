@@ -129,3 +129,27 @@
           (is ex "enter! must throw when neither session-home nor worktree exists")
           (is (re-find #"Worktree no longer exists for 'feat-x'" (ex-message ex)))))
       (finally (fs/delete-tree tmp)))))
+
+;; bookmark-exists? — `jj bookmark list <name>` exits 0 for both hit and miss,
+;; so existence is read from stdout; a non-zero exit (stale/locked working
+;; copy) must propagate as an error, never be read as "missing".
+
+(deftest bookmark-exists?-true-when-jj-reports-the-name
+  (with-redefs [nido.session.lifecycle/jj!
+                (fn [_dir _args & _] {:exit 0 :out "run-foo\n" :err ""})]
+    (is (true? (#'lifecycle/bookmark-exists? "/proj" "run-foo")))))
+
+(deftest bookmark-exists?-false-when-jj-stdout-blank
+  (with-redefs [nido.session.lifecycle/jj!
+                (fn [_dir _args & _] {:exit 0 :out "" :err "Warning: No matching bookmarks"})]
+    (is (false? (#'lifecycle/bookmark-exists? "/proj" "run-foo")))))
+
+(deftest bookmark-exists?-propagates-jj-errors-instead-of-reporting-missing
+  ;; jj! throws on non-zero exit (stale working copy) — bookmark-exists? must
+  ;; not swallow it into a false, which would trigger a spurious create.
+  (with-redefs [nido.session.lifecycle/jj!
+                (fn [_dir _args & _]
+                  (throw (ex-info "jj bookmark list failed"
+                                  {:exit 1 :err "The working copy is stale"})))]
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (#'lifecycle/bookmark-exists? "/proj" "run-foo")))))
