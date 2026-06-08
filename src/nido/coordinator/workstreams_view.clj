@@ -71,3 +71,52 @@
   (->> (workstream/list-ids project)
        (keep #(workstream/read-ws project %))
        (mapv #(workstream-row project %))))
+
+(defn grouped-workstreams
+  "Partition rows by engagement, newest-activity first within each group.
+   :settled is capped at the 10 most recent (mirrors runs-view/tickets-view)."
+  [rows]
+  (let [by     (group-by :engagement rows)
+        newest (fn [rs] (vec (sort-by :last-activity #(compare %2 %1) rs)))]
+    {:parked  (newest (:parked-at-gate by []))
+     :active  (newest (:active by []))
+     :idle    (newest (:idle by []))
+     :settled (vec (take 10 (newest (:settled by []))))}))
+
+(defn session-rows
+  "Display rows for one workstream's coordinator-sessions. :phase is nil for
+   human (non-autonomous) sessions."
+  [project ws-id]
+  (->> (session/list-sessions project ws-id)
+       (mapv (fn [s]
+               {:name          (:name s)
+                :project       project
+                :phase         (get-in s [:autonomy :phase])
+                :weight        (:weight s)
+                :substrate     (:substrate s)
+                :last-activity (or (some-> s :autonomy :phase-history last :at)
+                                   (some-> s :substrate-history last :at)
+                                   (:created-at s))}))))
+
+(def ^:private title-max 52)
+
+(defn- truncate [s n]
+  (if (> (count s) n) (str (subs s 0 n) "…") s))
+
+(defn format-row
+  "Display string for a workstream row: `<label>  ·  <stage>  ·  N session(s)`."
+  [{:keys [label stage session-count]}]
+  (format "%s  ·  %s  ·  %d session%s"
+          (truncate (str label) title-max)
+          (name (or stage :?))
+          (int session-count)
+          (if (= 1 session-count) "" "s")))
+
+(defn format-session-row
+  "Display string for a session row: `<name>  ·  <phase|human>  ·  <weight>  ·  <substrate>`."
+  [{:keys [name phase weight substrate]}]
+  (format "%s  ·  %s  ·  %s  ·  %s"
+          name
+          (if phase (clojure.core/name phase) "human")
+          (clojure.core/name (or weight :?))
+          (clojure.core/name (or substrate :?))))

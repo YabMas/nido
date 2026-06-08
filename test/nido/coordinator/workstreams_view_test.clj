@@ -125,3 +125,57 @@
                        {:autonomy (assoc autonomy-running :phase :parked)}))
       (is (= [:parked-at-gate] (map :engagement (wsv/workstream-rows :brian)))))))
 
+
+;; ---------------------------------------------------------------------------
+;; grouped-workstreams
+;; ---------------------------------------------------------------------------
+
+(defn- row [eng id at]
+  {:ws-id id :engagement eng :label id :stage :s :session-count 0 :last-activity at})
+
+(deftest grouped-orders-and-caps
+  (let [settled (for [n (range 12)]
+                  (row :settled (str "s" n) (format "2026-06-%02dT00:00:00Z" (inc n))))
+        rows (concat [(row :parked-at-gate "p1" "2026-06-01T00:00:00Z")
+                      (row :active "a1" "2026-06-01T00:00:00Z")
+                      (row :idle "i1" "2026-06-01T00:00:00Z")]
+                     settled)
+        g (wsv/grouped-workstreams rows)]
+    (is (= ["p1"] (map :ws-id (:parked g))))
+    (is (= ["a1"] (map :ws-id (:active g))))
+    (is (= ["i1"] (map :ws-id (:idle g))))
+    (testing "settled capped at 10, newest-activity first"
+      (is (= 10 (count (:settled g))))
+      (is (= "s11" (:ws-id (first (:settled g))))))))
+
+;; ---------------------------------------------------------------------------
+;; session-rows (workstream detail) + formatting
+;; ---------------------------------------------------------------------------
+
+(deftest session-rows-reports-phase-weight-substrate
+  (with-tmp
+    (fn [_]
+      (let [w (make-ws! :brian {:stage :implementing})]
+        (make-session! :brian (:id w) "run-auto"
+                       {:weight :heavy :autonomy autonomy-running})
+        (make-session! :brian (:id w) "human-sess" {:autonomy nil})
+        (let [rows  (wsv/session-rows :brian (:id w))
+              by    (into {} (map (juxt :name identity)) rows)]
+          (is (= 2 (count rows)))
+          (is (= :running (:phase (by "run-auto"))))
+          (is (= :heavy   (:weight (by "run-auto"))))
+          (is (= :live    (:substrate (by "run-auto"))))
+          (is (nil?       (:phase (by "human-sess")))))))))
+
+(deftest format-row-renders-singular-plural
+  (is (= "BR-1 · Fix  ·  implementing  ·  1 session"
+         (wsv/format-row {:label "BR-1 · Fix" :stage :implementing :session-count 1})))
+  (is (= "BR-1 · Fix  ·  implementing  ·  2 sessions"
+         (wsv/format-row {:label "BR-1 · Fix" :stage :implementing :session-count 2}))))
+
+(deftest format-session-row-human-vs-autonomous
+  (is (= "run-auto  ·  running  ·  heavy  ·  live"
+         (wsv/format-session-row {:name "run-auto" :phase :running :weight :heavy :substrate :live})))
+  (is (= "human-sess  ·  human  ·  light  ·  live"
+         (wsv/format-session-row {:name "human-sess" :phase nil :weight :light :substrate :live}))))
+
