@@ -4,7 +4,7 @@
    The TUI handles all interactive input (lists, modals, text input) while
    charm owns the terminal. Every session/ticket-mutating verb (`:up` `:down`
    `:destroy` `:add` `:promote`) now runs IN-APP (async, spinner) and stays in
-   the TUI. The only actions that reach this wrapper are `:enter` / `:enter-run`,
+   the TUI. The only action that reaches this wrapper is `:enter`,
    which MUST exit the process for the cwd handoff (see below). So this wrapper
    has shrunk to: run-once → if the action is an enter, hand off and exit;
    otherwise (just `:quit`) stop.
@@ -27,9 +27,7 @@
      bb nido:tui"
   (:require
    [babashka.fs :as fs]
-   [nido.coordinator.state :as cstate]
    [nido.core :as core]
-   [nido.session.lifecycle :as lifecycle]
    [nido.tui :as tui]
    [tasks.nido-session :as session])
   (:import
@@ -55,38 +53,11 @@
   (try
     (case (first action)
       :enter     (let [[_ p s target] action]
-                   (session/enter ":project" p s ":cd" (name target)))
-      :enter-run (let [[_ p s target run-id] action]
-                   ;; Runs-screen variant. Sessions for runs are often
-                   ;; already down by the time the user looks (the run
-                   ;; finished, or it was stopped manually). `:home`
-                   ;; auto-ups so `↵` becomes "resume",
-                   ;; and cd's into the run-link (~/.nido/runs/<id>/
-                   ;; session-home) — that's the cwd claude was launched
-                   ;; from originally, so `claude --resume` finds the
-                   ;; transcript registered under ~/.claude/projects/.
-                   ;; `:worktree` resolves the on-disk path without
-                   ;; touching services so `w` is a cheap inspect that
-                   ;; leans on lifecycle/enter!'s worktree fallback.
-                   (case target
-                     :home
-                     (let [link (cstate/run-session-home-link run-id)]
-                       (session/up ":project" p s)
-                       (when-not (fs/exists? link)
-                         (throw (ex-info (str "Run-link missing for run " run-id)
-                                         {:expected link
-                                          :hint "The run's session-home symlink was never created or has been removed."})))
-                       (let [target-file (lifecycle/cd-target-file)]
-                         (fs/create-dirs (fs/parent target-file))
-                         (spit target-file link))
-                       (println (str "[nido:tui] Selected " link)))
-                     :worktree
-                     (session/enter ":project" p s ":cd" "worktree"))))
-      ;; All session/ticket-mutating verbs (:up :down :destroy :add :promote)
-      ;; now run in-app (async, with a spinner) and never reach this wrapper.
-      ;; Only :enter / :enter-run remain — they MUST exit the process so the
-      ;; parent shell wrapper can pick up the cwd handoff. `:enter-run :home`
-      ;; still ups a session inline; that path stays.
+                   (session/enter ":project" p s ":cd" (name target))))
+    ;; All session/ticket-mutating verbs (:up :down :destroy :add :promote)
+    ;; now run in-app (async, with a spinner) and never reach this wrapper.
+    ;; Only :enter remains — it MUST exit the process so the parent shell
+    ;; wrapper can pick up the cwd handoff.
     (catch Throwable t
       (log-throwable! t (str "action failed: " (pr-str action)))
       (binding [*err* *err*]
@@ -97,14 +68,14 @@
 (defn run [& _args]
   (try
     ;; No loop: every mutating verb runs in-app now, so run-once returns exactly
-    ;; once — either :quit (stop) or an :enter/:enter-run action that is terminal
+    ;; once — either :quit (stop) or an :enter action that is terminal
     ;; (writes ~/.nido/.last-cd; we exit so the parent shell picks up the cwd).
     (let [action (tui/run-once)]
       (cond
         (= :quit action)
         nil
 
-        (and (vector? action) (#{:enter :enter-run} (first action)))
+        (and (vector? action) (#{:enter} (first action)))
         (run-action action)
 
         :else
