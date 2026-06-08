@@ -183,6 +183,26 @@
          :items items
          :list (list-component items)))
 
+(defn- refresh-list
+  "Update the list's items IN PLACE via `item-list/set-items`, preserving the
+   cursor (clamped when the list shrinks). Used by the live-refresh tick —
+   unlike `rebuild-list`, which builds a fresh component and resets the cursor
+   to the top (correct for screen switches, wrong for a timer repaint)."
+  [state items]
+  (-> state
+      (assoc :items items)
+      (update :list item-list/set-items items)))
+
+(defn- current-rows
+  "Rows for the active screen — the source the live-refresh tick re-reads.
+   Mirrors `set-screen`'s screen→rows mapping."
+  [state]
+  (case (:screen state)
+    :runs     (run-rows)
+    :tickets  (ticket-rows)
+    :sessions (session-rows (:project state))
+    :projects (project-rows)))
+
 ;; ---------------------------------------------------------------------------
 ;; Screen transitions
 ;; ---------------------------------------------------------------------------
@@ -237,8 +257,18 @@
 ;; Elm: init / update / view
 ;; ---------------------------------------------------------------------------
 
+;; Live-refresh: a self-perpetuating tick re-reads the active screen's rows on
+;; an interval so the dashboard (run states, coordinator status, session ports)
+;; stays current without a keypress. The fn blocks in a core.async go block
+;; (charm's execute-cmd!), parking one go-pool thread — fine because exactly one
+;; tick is ever in flight: we only re-arm on receipt.
+(def ^:private refresh-ms 1500)
+
+(defn- tick-cmd []
+  (program/cmd (fn [] (Thread/sleep refresh-ms) {:type ::tick})))
+
 (defn- init-fn []
-  [(enter-projects {}) nil])
+  [(enter-projects {}) (tick-cmd)])
 
 (defn- update-projects [state msg]
   (cond
@@ -688,6 +718,15 @@
     (msg/window-size? msg)
     (do (charm-patch/clear-on-resize!)
         [state nil])
+
+    ;; Live-refresh tick. Re-read the active screen's rows and splice them in
+    ;; with set-items (cursor preserved). Skip the refresh while a modal is open
+    ;; — the list is hidden behind the modal and some modals own a text-input —
+    ;; but always re-arm so the dashboard is fresh the moment the modal closes.
+    (= ::tick (msg/msg-type msg))
+    (if (:modal state)
+      [state (tick-cmd)]
+      [(refresh-list state (current-rows state)) (tick-cmd)])
 
     ;; ctrl+c always quits. `q` only quits when no modal is active so the
     ;; create-session text-input can accept it as a literal character.
