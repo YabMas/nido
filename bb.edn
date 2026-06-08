@@ -28,7 +28,8 @@
              [tasks.nido-ticket :as nido-ticket]
              [tasks.nido-migrate :as nido-migrate]
              [tasks.nido-transcribe :as nido-transcribe]
-             [tasks.nido-notion-preprocess :as nido-notion-preprocess])
+             [tasks.nido-notion-preprocess :as nido-notion-preprocess]
+             [tasks.nido-workstream :as nido-workstream])
 
   :init (do
           ;; Disable babashka.process/shell's default destroy-tree JVM
@@ -318,5 +319,17 @@
   nido:migrate
   {:doc "Migrate legacy run/ticket records into the workstream/session model: :project <p>"
    :task (apply nido-migrate/migrate-cmd *command-line-args*)}
+
+  nido:workstream:entry:add
+  {:doc "Append an entry to a workstream ledger. :project <p> (:ws-id <id> | :ref <BR-####>) :kind <kw> :content <str>"
+   :task (apply nido-workstream/entry-add *command-line-args*)}
+
+  nido:workstream:stage:advance
+  {:doc "Advance a workstream's stage. :project <p> (:ws-id <id> | :ref <BR-####>) :stage <kw>"
+   :task (apply nido-workstream/stage-advance *command-line-args*)}
+
+  nido:workstream:close
+  {:doc "Close a workstream. :project <p> (:ws-id <id> | :ref <BR-####>) :outcome <done|dropped>"
+   :task (apply nido-workstream/close-cmd *command-line-args*)}
 
   }}
