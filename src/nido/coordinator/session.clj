@@ -139,15 +139,34 @@
       (->> (fs/list-dir d) (filter fs/directory?) (mapv #(str (fs/file-name %))))
       [])))
 
-(defn in-flight-by-trigger
-  "Map {trigger-kw → count} of LIVE autonomous sessions whose phase is in-progress,
-   grouped by the autonomy :trigger, across all workstreams of `project`. Scans
-   disk; recomputed each tick so it is restart-safe (the new analogue of
-   runs/in-progress-count-by-trigger)."
-  [project]
+(def gating-phases
+  "Autonomy phases that occupy a trigger's in-flight budget FOR SCHEDULING.
+   Includes :parked to preserve the legacy run-based backpressure (a session
+   awaiting human review still holds the trigger's slot). Distinct from
+   in-progress-phases, which is 'actively executing' work."
+  #{:preprocessing :running :parked})
+
+(defn count-by-trigger
+  "Map {trigger-kw → count} of LIVE autonomous sessions whose phase is in
+   `phase-set`, grouped by autonomy :trigger, across all of `project`'s
+   workstreams. Scans disk; restart-safe."
+  [project phase-set]
   (->> (list-ws-ids project)
        (mapcat #(list-sessions project %))
        (filter live?)
        (filter autonomous?)
-       (filter #(contains? in-progress-phases (get-in % [:autonomy :phase])))
+       (filter #(contains? phase-set (get-in % [:autonomy :phase])))
        (reduce (fn [m s] (update m (get-in s [:autonomy :trigger]) (fnil inc 0))) {})))
+
+(defn in-flight-by-trigger
+  "Active-work count per trigger (preprocessing+running). Distinct from
+   scheduling backpressure (see gating-count-by-trigger)."
+  [project]
+  (count-by-trigger project in-progress-phases))
+
+(defn gating-count-by-trigger
+  "Scheduling backpressure count per trigger (preprocessing+running+parked).
+   The scheduler reads this to enforce per-trigger :max-in-flight — the session
+   analogue of runs/in-progress-count-by-trigger."
+  [project]
+  (count-by-trigger project gating-phases))

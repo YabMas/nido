@@ -175,3 +175,24 @@
                          (:name (sess/create! :brian (:id w) (auto "gone" :running))))
           (is (= {:triage-bug 2} (sess/in-flight-by-trigger :brian)))))
       (finally (fs/delete-tree tmp)))))
+
+(deftest gating-count-includes-parked
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))
+                    clock/now-iso (constantly "2026-06-05T09:00:00Z")]
+        (let [w  (ws/create! :brian {:stage :investigation})
+              mk (fn [nm phase]
+                   (sess/create! :brian (:id w)
+                                 {:name nm :weight :light
+                                  :autonomy (assoc (:autonomy autonomous-session)
+                                                   :phase phase
+                                                   :trigger :triage-bug)}))]
+          (mk "r-run" :running)
+          (mk "r-park" :parked)
+          (mk "r-queued" :queued)
+          ;; gating counts running + parked (backpressure), NOT queued
+          (is (= {:triage-bug 2} (sess/gating-count-by-trigger :brian)))
+          ;; in-flight-by-trigger (active work) still excludes parked
+          (is (= {:triage-bug 1} (sess/in-flight-by-trigger :brian)))))
+      (finally (fs/delete-tree tmp)))))

@@ -19,6 +19,7 @@
    [nido.coordinator.reconcile :as reconcile]
    [nido.coordinator.review :as review]
    [nido.coordinator.runs :as runs]
+   [nido.coordinator.session :as session]
    [nido.coordinator.spawn :as spawn]
    [nido.coordinator.shim :as shim]
    [nido.coordinator.sources :as sources]
@@ -357,7 +358,9 @@
         ;; Reap finished executor futures and promote waiting Runs into
         ;; free slots. run-blocking! is the body executed per slot.
         (review/sweep-resolved!)
-        (executor/tick! run-blocking! (runs/in-progress-count-by-trigger))
+        (executor/tick! run-blocking!
+                        (reduce (fn [m p] (merge-with + m (session/gating-count-by-trigger p)))
+                                {} (registered-projects)))
         ;; Then poll due sources. Their emissions land in the queue and
         ;; will be picked up next tick.
         (let [now-ms (System/currentTimeMillis)]
