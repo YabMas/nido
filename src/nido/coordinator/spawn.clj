@@ -24,7 +24,12 @@
 
 (defn ensure-workstream!
   "Find-or-create the workstream for this fire. With a derivable Notion ref,
-   dedups via find-by-ref; otherwise mints a fresh ref-less workstream."
+   dedups via find-by-ref; otherwise mints a fresh ref-less workstream.
+
+   The find-then-create is not atomic, but the coordinator processes envelopes
+   single-threaded within a tick (tick! drains the queue via a sequential
+   doseq, and process-envelope! routes sequentially), so two fires for the same
+   ref can't race here."
   [project payload stage]
   (if-let [ref (external-ref payload)]
     (or (ws/find-by-ref project :notion (:id ref))

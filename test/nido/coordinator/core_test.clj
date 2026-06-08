@@ -11,10 +11,13 @@
    [nido.coordinator.breakers :as breakers]
    [nido.coordinator.notify :as notify]
    [nido.coordinator.runs :as runs]
+   [nido.coordinator.session :as session]
+   [nido.coordinator.spawn :as spawn]
    [nido.coordinator.shim]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.tickets :as tickets]
    [nido.coordinator.status-file :as status-file]
+   [nido.coordinator.workstream :as ws]
    [nido.session.profiles :as profiles]))
 
 (defn- reset-executor! [f]
@@ -143,6 +146,10 @@
         (with-redefs [runs/create-run!        (fn [& _]
                                                 (swap! created inc)
                                                 {:id "run-x" :priority 0 :uncapped? false})
+                      ;; Live arm now routes through spawn/spawn-records!; this
+                      ;; gate test only asserts a Run was created, so no-op the
+                      ;; session write (the stub run lacks Session fields).
+                      spawn/create-session-for-run! (fn [& _] nil)
                       executor/submit!        (fn [& _] nil)
                       anomaly/record-spawn    (fn [det _] det)]
           (#'core/process-envelope!
@@ -163,12 +170,47 @@
         (with-redefs [runs/create-run!      (fn [& _]
                                               (swap! created inc)
                                               {:id "run-y" :priority 0 :uncapped? false})
+                      ;; Live arm now routes through spawn/spawn-records!; this
+                      ;; gate test only asserts a Run was created, so no-op the
+                      ;; session write (the stub run lacks Session fields).
+                      spawn/create-session-for-run! (fn [& _] nil)
                       executor/submit!      (fn [& _] nil)
                       anomaly/record-spawn  (fn [det _] det)]
           (#'core/process-envelope!
             triage-envelope
             {:brian [non-triage-trigger]})
           (is (= 1 @created) "non-triage trigger must not be blocked by the gate"))))))
+
+(deftest live-arm-spawns-workstream-session-and-linked-run
+  ;; The live (:else) arm routes a fired, non-dry-run, non-gated trigger through
+  ;; spawn/spawn-records!, which creates a workstream + authoritative session and
+  ;; links the run back via :workstream-id. A non-triage trigger avoids the
+  ;; triage pre-spawn gate entirely. executor/submit! is no-op'd (the test only
+  ;; needs the records written, not an agent spawn); anomaly/record-spawn is
+  ;; no-op'd to keep the shared !detector atom clean across namespaces.
+  (gate-with-tmp
+    (fn [_]
+      (let [non-triage-trigger {:name    :investigate-new
+                                :skill   :investigate-bug
+                                :agent   :claude
+                                :payload "Investigate {{event/title}}"
+                                :source  {:type :notion-view :database "triage-db"}}
+            envelope           {:broadcast {:type          :notion-view
+                                            :source-config {:database "triage-db"}
+                                            :payload       {:source  :notion-view
+                                                            :page-id "pg"
+                                                            :id      "BR-5"
+                                                            :title   "Five"}}}]
+        (with-redefs [executor/submit!     (fn [& _] nil)
+                      anomaly/record-spawn (fn [det _] det)]
+          (#'core/process-envelope! envelope {:brian [non-triage-trigger]})
+          (let [run-id (first (runs/list-run-ids))
+                run    (runs/read-run run-id)]
+            (is (some? (:workstream-id run)) "run is linked to a workstream")
+            (is (some? (session/read-session (:project run) (:workstream-id run) (:session-name run)))
+                "an authoritative session was created for the run")
+            (is (= "BR-5" (-> (ws/find-by-ref (:project run) :notion "BR-5") :external-refs first :id))
+                "workstream is deduped on the BR external ref")))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Run-termination hook tests (Task 5)

@@ -19,6 +19,7 @@
    [nido.coordinator.reconcile :as reconcile]
    [nido.coordinator.review :as review]
    [nido.coordinator.runs :as runs]
+   [nido.coordinator.spawn :as spawn]
    [nido.coordinator.shim :as shim]
    [nido.coordinator.sources :as sources]
    [nido.coordinator.tickets :as tickets]
@@ -329,9 +330,9 @@
                          br " (" (name decision) ")"))))
 
       :else
-      (let [run (runs/create-run! routed
-                                  {:fired-at (clock/now-iso)
-                                   :fired-by (System/getenv "USER")})]
+      (let [run (spawn/spawn-records! routed
+                                      {:fired-at (clock/now-iso)
+                                       :fired-by (System/getenv "USER")})]
         (swap! !detector anomaly/record-spawn (clock/now-iso))
         (executor/submit! (:id run) (:priority run) (:uncapped? run)
                           (:trigger run) (-> routed :trigger :max-in-flight))))))
