@@ -426,3 +426,13 @@
   (is (= :preprocessing (runs/state->phase :preprocessing)))
   (is (= :failed  (runs/state->phase :dry-run-would-fire)))
   (is (every? runs/state->phase runs/states)))
+
+(deftest run-schema-accepts-optional-workstream-id
+  (let [base {:id "r1" :project :p :trigger :t :source {:type :test}
+              :event-payload {} :skill :noop :first-message "x" :agent :claude
+              :session-name "s1" :claude-session-id nil :limits {} :priority 0
+              :session-profile :full :uncapped? false :state :queued
+              :state-history [{:at "2026-06-08T00:00:00Z" :state :queued}]
+              :artifacts [] :error nil}]
+    (is (= base (runs/validate base)))
+    (is (= "ws-1" (:workstream-id (runs/validate (assoc base :workstream-id "ws-1")))))))

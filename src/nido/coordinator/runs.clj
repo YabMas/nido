@@ -41,6 +41,7 @@
    [:first-message     string?]
    [:agent             keyword?]
    [:session-name      string?]
+   [:workstream-id     {:optional true} [:maybe string?]]
    [:claude-session-id [:maybe string?]]
    [:limits            [:map-of keyword? any?]]
    [:priority          int?]
@@ -188,7 +189,7 @@
 (defn create-run!
   "Build a :queued Run record from a fire request and persist run.edn.
    `meta` carries source-call metadata: {:fired-at <iso> :fired-by <str>}."
-  [{:keys [project trigger payload priority session-profile uncapped?]} meta]
+  [{:keys [project trigger payload priority session-profile uncapped? workstream-id]} meta]
   (let [{:keys [run-id session-name]} (new-run-parts project (:name trigger))
         session-name (ticket-session-name trigger payload session-name)
         ;; First message format per spec §Agent launch: "/<skill> <interpolated-payload>".
@@ -206,6 +207,7 @@
                  :first-message   message
                  :agent           (or (:agent trigger) :claude)
                  :session-name    session-name
+                 :workstream-id   workstream-id
                  :claude-session-id nil
                  :limits          (or (:limits trigger) {:budget "30m" :max-failures 3})
                  :priority        (or priority 0)
