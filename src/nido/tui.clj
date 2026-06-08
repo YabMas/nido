@@ -12,6 +12,7 @@
   (:require
    [babashka.fs :as fs]
    [charm.components.list :as item-list]
+   [charm.components.spinner :as spinner]
    [charm.components.text-input :as text-input]
    [charm.components.viewport :as viewport]
    [charm.message :as msg]
@@ -330,6 +331,93 @@
 (defn- close-modal [state]
   (-> state (dissoc :modal :modal-target :modal-input)))
 
+;; Defined in the View section (needs the terminal-height stash); used by
+;; finish-action below to build the failure panel.
+(declare text-viewport)
+
+;; ---------------------------------------------------------------------------
+;; In-app async actions (prototype: session:down)
+;;
+;; Unlike the heavy verbs that quit-and-re-enter via the bb wrapper, `down`
+;; runs INSIDE the TUI as a charm cmd: we set `:busy`, kick off the work on a
+;; background go block, and show an animated spinner until a result message
+;; arrives. Four rules make this safe:
+;;   • catch-don't-throw — a thrown action becomes ::action-failed, not an
+;;     :error message (which charm turns into a program-stopping crash);
+;;   • silence stdout — the action's println/log-step output is captured to a
+;;     sink, else it prints into charm's alt-screen buffer and corrupts it;
+;;   • busy-guard — while `:busy`, update-fn swallows input so a second action
+;;     can't race the first (ctrl+c and the action/spinner messages still flow);
+;;   • the spinner self-drives via :spinner-tick (tag-matched, so the stale
+;;     ticks from a finished action are ignored).
+;; The cmd fn blocks one go-pool thread for the action's duration — fine at
+;; one-action-at-a-time; a future would free the pool if this ever fans out.
+;; ---------------------------------------------------------------------------
+
+(defn- start-session-down
+  "Begin an in-app `down` for session `sn` in project `p`. Returns the busy
+   state plus a batch of [spinner-tick, action] commands."
+  [state p sn]
+  (let [[spin spin-cmd] (spinner/spinner-init
+                         (spinner/spinner :dots :style (style/style :fg style/cyan)))]
+    [(assoc state :busy {:verb :down :project p :session sn :spinner spin})
+     (program/batch
+      spin-cmd
+      (program/cmd
+       (fn []
+         ;; down! logs via println/log-step → *out*, which in alt-screen would
+         ;; print INTO charm's managed buffer and corrupt it. Rebind *out*/*err*
+         ;; to a sink so nothing reaches the terminal (binding conveys into any
+         ;; futures down! spawns). The detail still lands in session log files;
+         ;; the spinner + final status is all the TUI needs to show.
+         (let [sink (java.io.StringWriter.)]
+           (try
+             (binding [*out* sink *err* sink]
+               (lifecycle/down! sn {:project p}))
+             ;; success: the captured output is discarded (nothing to show).
+             {:type ::action-done :verb :down :session sn}
+             ;; failure: carry the captured output so finish-action can show
+             ;; the [nido] log lines that led up to the error.
+             (catch Throwable t
+               {:type ::action-failed :verb :down :session sn
+                :error t :output (str sink)}))))))]))
+
+(defn- update-spinner-tick
+  "Advance the busy spinner (no-op when not busy / tag mismatch)."
+  [state msg]
+  (if-let [spin (-> state :busy :spinner)]
+    (let [[spin' cmd] (spinner/spinner-update spin msg)]
+      [(assoc-in state [:busy :spinner] spin') cmd])
+    [state nil]))
+
+(defn- action-error-content
+  "Panel text for a failed action: the error, then the captured [nido] output."
+  [session msg]
+  (let [out (:output msg)]
+    (str "✗ Failed to stop " session "\n"
+         (ex-message (:error msg)) "\n\n"
+         "─── captured output ───\n"
+         (if (seq out) out "(no output)"))))
+
+(defn- finish-action
+  "Clear :busy on a terminal action message. On success: a status line + refresh
+   so the now-down session shows immediately (output discarded). On failure: a
+   status line + a scrollable :action-error panel over the captured output."
+  [state msg]
+  (let [{:keys [session]} (:busy state)
+        base (dissoc state :busy)]
+    (if (= ::action-done (msg/msg-type msg))
+      [(-> base
+           (assoc :status (str "Stopped " session))
+           (refresh-list (current-rows base)))
+       nil]
+      [(-> base
+           (assoc :status (str "Failed to stop " session))
+           (assoc :modal :action-error
+                  :modal-target {:session session
+                                 :viewport (text-viewport base (action-error-content session msg))}))
+       nil])))
+
 (defn- update-sessions [state msg]
   (cond
     (msg/key-match? msg "escape")
@@ -347,9 +435,9 @@
     (with-selected-session state
       (fn [s p sn] [s (queue-action! [:up p sn])]))
 
+    ;; `down` runs in-app (async, spinner) rather than quitting to the wrapper.
     (msg/key-match? msg "d")
-    (with-selected-session state
-      (fn [s p sn] [s (queue-action! [:down p sn])]))
+    (with-selected-session state start-session-down)
 
     (msg/key-match? msg "x")
     (with-selected-session state
@@ -651,9 +739,10 @@
     [(close-modal state) nil]
     [state nil]))
 
-(defn- update-run-details
-  "Read-only run panel. `esc` closes; ↑↓ / pgup-pgdn / g-G scroll the agent.log
-   viewport (all other keys are swallowed by the viewport's :else)."
+(defn- update-viewport-modal
+  "Shared handler for read-only scrollable modals (run-details, action-error).
+   `esc` closes; ↑↓ / pgup-pgdn / g-G scroll the modal's :viewport (other keys
+   are swallowed by the viewport's :else)."
   [state msg]
   (if (msg/key-match? msg "escape")
     [(close-modal state) nil]
@@ -733,12 +822,20 @@
     (do (charm-patch/clear-on-resize!)
         [(assoc state :size [(:width msg) (:height msg)]) nil])
 
+    ;; In-app async action machinery (see start-session-down). These flow even
+    ;; while :busy — they ARE the busy lifecycle — so they precede the guard.
+    (spinner/tick-msg? msg)
+    (update-spinner-tick state msg)
+
+    (#{::action-done ::action-failed} (msg/msg-type msg))
+    (finish-action state msg)
+
     ;; Live-refresh tick. Re-read the active screen's rows and splice them in
-    ;; with set-items (cursor preserved). Skip the refresh while a modal is open
-    ;; — the list is hidden behind the modal and some modals own a text-input —
-    ;; but always re-arm so the dashboard is fresh the moment the modal closes.
+    ;; with set-items (cursor preserved). Skip the refresh while a modal OR a
+    ;; busy action is in flight (list hidden; some modals own a text-input) —
+    ;; but always re-arm so the dashboard is fresh the moment it clears.
     (= ::tick (msg/msg-type msg))
-    (if (:modal state)
+    (if (or (:modal state) (:busy state))
       [state (tick-cmd)]
       [(refresh-list state (current-rows state)) (tick-cmd)])
 
@@ -746,6 +843,12 @@
     ;; create-session text-input can accept it as a literal character.
     (msg/key-match? msg "ctrl+c")
     [state (queue-action! :quit)]
+
+    ;; Busy-guard: while an in-app action runs, swallow all other input so a
+    ;; second action can't race it (action/spinner/quit messages already
+    ;; handled above).
+    (:busy state)
+    [state nil]
 
     (and (nil? (:modal state)) (msg/key-match? msg "q"))
     [state (queue-action! :quit)]
@@ -757,8 +860,8 @@
     (= :session-info (:modal state))
     (update-session-info state msg)
 
-    (= :run-details (:modal state))
-    (update-run-details state msg)
+    (#{:run-details :action-error} (:modal state))
+    (update-viewport-modal state msg)
 
     (= :create-session (:modal state))
     (update-create-session state msg)
@@ -858,6 +961,7 @@
                                         " · " (-> state :modal-target :session)
                                         " · info")
                   :run-details         (str "nido — run · " (-> state :modal-target :run :id))
+                  :action-error        (str "nido — action failed · " (-> state :modal-target :session))
                   :delete-run-confirm  (str "nido — delete run · " (-> state :modal-target :run :id))
                   :fire-pick-project
                   "nido — fire trigger · pick project"
@@ -884,6 +988,7 @@
                   :create-session     "[↵] create  [esc] cancel"
                   :session-info       "[esc] back"
                   :run-details            "[↑↓/pgup/pgdn] scroll  [esc] back"
+                  :action-error           "[↑↓/pgup/pgdn] scroll  [esc] dismiss"
                   :delete-run-confirm     "[y] delete  [n/esc] cancel"
                   :fire-pick-project  "[↑↓] move  [↵] pick  [esc] cancel"
                   :fire-pick-trigger  "[↑↓] move  [↵] pick  [esc] cancel"
@@ -972,14 +1077,18 @@
          (style/render label-style "─── last 500 lines of agent.log (↑↓ scroll) ───") "\n"
          (or log-tail "(no agent.log yet)"))))
 
-(defn- run-details-viewport
-  "Viewport over `run-details-content`, sized to the stashed terminal height
-   (minus header/footer chrome); falls back to 22 lines before the first
-   window-size message arrives."
-  [state run]
+(defn- text-viewport
+  "Viewport over `content`, sized to the stashed terminal height (minus
+   header/footer chrome); falls back to 22 visible lines before the first
+   window-size message arrives. Shared by the run-details and action-error
+   panels."
+  [state content]
   (let [h  (or (some-> state :size second) 28)
         vh (max 5 (- h 6))]
-    (viewport/viewport (run-details-content run) :height vh)))
+    (viewport/viewport content :height vh)))
+
+(defn- run-details-viewport [state run]
+  (text-viewport state (run-details-content run)))
 
 (defn- modal-body [state]
   (case (:modal state)
@@ -994,6 +1103,9 @@
       (session-info-body project session data))
 
     :run-details
+    (viewport/viewport-view (:viewport (:modal-target state)))
+
+    :action-error
     (viewport/viewport-view (:viewport (:modal-target state)))
 
     :delete-run-confirm
@@ -1049,11 +1161,25 @@
     :clear-breaker
     (item-list/list-view (:picker (:modal-target state)))))
 
+(defn- busy-label [verb]
+  (case verb :down "Stopping " "Working on "))
+
 (defn- view [state]
-  (if (:modal state)
+  (cond
+    ;; In-app action in flight: spinner panel, input swallowed by the guard.
+    (:busy state)
+    (let [{:keys [verb session spinner]} (:busy state)]
+      (str (header state) "\n\n"
+           (spinner/spinner-view spinner) "  "
+           (busy-label verb) session " …\n\n"
+           (style/render subtle-style "please wait — this can't be interrupted")))
+
+    (:modal state)
     (str (header state) "\n\n"
          (modal-body state) "\n\n"
          (footer state))
+
+    :else
     (str (header state) "\n"
          (when (= :runs (:screen state))
            (str (status-bar) "\n"))
