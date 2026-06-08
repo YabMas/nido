@@ -293,18 +293,17 @@
 
 (defn- set-screen
   "Switch to `screen` and rebuild the embedded list with that screen's rows.
-   Also clears any open modal so tab-style nav can't trap us behind a panel.
-   Used by the `r`/`s` keybindings in `update-fn`."
+   Also clears any open modal and stale detail context so tab-style nav can't
+   trap us behind a panel. Used by the `r`/`s` keybindings in `update-fn`."
   [state screen]
   (let [rows (case screen
-               :runs     (run-rows)
-               :tickets  (ticket-rows)
-               :sessions (session-rows (:project state))
-               :projects (project-rows))]
+               :workstreams (workstream-list-rows (:project state))
+               :sessions    (session-rows (:project state))
+               :projects    (project-rows))]
     (-> state
         (assoc :screen screen :status nil)
         (rebuild-list rows)
-        (dissoc :modal :modal-target :modal-input))))
+        (dissoc :modal :modal-target :modal-input :ws-id :ws-label))))
 
 (defn- selected-data [state]
   (some-> (item-list/selected-item (:list state)) :data))
@@ -790,6 +789,43 @@
       [state nil])
 
     :else (picker-route state msg)))
+
+(defn- update-workstreams
+  "Workstreams list screen. ↵ drills into the highlighted workstream's session
+   detail. f/h/c carry over fire-trigger / halt / clear-breaker. Group-header
+   and empty rows are guarded by `selected-workstream` returning nil."
+  [state msg]
+  (cond
+    (msg/key-match? msg "enter")
+    (if-let [ws (selected-workstream state)]
+      [(enter-workstream state (:ws-id ws) (:label ws)) nil]
+      [state nil])
+
+    (msg/key-match? msg "f") (open-fire-trigger state)
+    (msg/key-match? msg "h") (open-halt-confirm state)
+    (msg/key-match? msg "c") (open-clear-breaker-picker state)
+
+    :else
+    (let [[lst cmd] (item-list/list-update (:list state) msg)]
+      [(assoc state :list lst) cmd])))
+
+(defn- update-workstream
+  "Workstream detail screen. ↵ routes into the highlighted session's home (same
+   handoff the Sessions screen uses → lands you in the chat). esc returns to the
+   list."
+  [state msg]
+  (cond
+    (msg/key-match? msg "escape")
+    [(set-screen state :workstreams) nil]
+
+    (msg/key-match? msg "enter")
+    (if-let [s (selected-session-row state)]
+      [state (queue-action! [:enter (name (:project s)) (:name s) :home])]
+      [state nil])
+
+    :else
+    (let [[lst cmd] (item-list/list-update (:list state) msg)]
+      [(assoc state :list lst) cmd])))
 
 ;; Defined in the View section (needs label-style); used by the `d` arm below.
 (declare run-details-viewport)
