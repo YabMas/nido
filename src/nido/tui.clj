@@ -28,6 +28,7 @@
    [nido.coordinator.runs-clean :as runs-clean]
    [nido.coordinator.runs-view :as runs-view]
    [nido.coordinator.tickets-view :as tickets-view]
+   [nido.coordinator.workstreams-view :as wsv]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.triggers :as triggers]
    [nido.project :as project]
@@ -167,6 +168,49 @@
       (vec rows))))
 
 ;; ---------------------------------------------------------------------------
+;; Workstreams surface — list (engagement groups) + detail (its sessions)
+;; ---------------------------------------------------------------------------
+
+(defn- workstream-group-rows
+  "Header row + one row per workstream for a single engagement group. nil when
+   the group is empty so the caller can `concat` without conditionals."
+  [label rows]
+  (when (seq rows)
+    (cons {:title       (str "── " label " (" (count rows) ") ──")
+           :description ""
+           :data        ::group-header}
+          (mapv (fn [r]
+                  {:title       (wsv/format-row r)
+                   :description (or (:last-activity r) "")
+                   :data        r})
+                rows))))
+
+(defn- workstream-list-rows [project]
+  (let [g    (wsv/grouped-workstreams (wsv/workstream-rows project))
+        rows (concat
+              (workstream-group-rows "Parked at gate (needs you)" (:parked g))
+              (workstream-group-rows "Active"                     (:active g))
+              (workstream-group-rows "Idle"                       (:idle g))
+              (workstream-group-rows "Settled (recent)"           (:settled g)))]
+    (if (empty? rows)
+      [{:title "No workstreams yet. Press 'f' to fire a trigger."
+        :description ""
+        :data ::empty}]
+      (vec rows))))
+
+(defn- ws-detail-rows [project ws-id]
+  (let [rows (wsv/session-rows project ws-id)]
+    (if (empty? rows)
+      [{:title "No sessions in this workstream yet."
+        :description ""
+        :data ::empty}]
+      (mapv (fn [r]
+              {:title       (wsv/format-session-row r)
+               :description (or (:last-activity r) "")
+               :data        r})
+            rows))))
+
+;; ---------------------------------------------------------------------------
 ;; charm list component
 ;; ---------------------------------------------------------------------------
 
@@ -240,6 +284,13 @@
       (assoc :screen :sessions :project project-name :status nil)
       (rebuild-list (session-rows project-name))))
 
+(defn- enter-workstream
+  "Drill from the workstreams list into one workstream's session detail."
+  [state ws-id label]
+  (-> state
+      (assoc :screen :workstream :ws-id ws-id :ws-label label :status nil)
+      (rebuild-list (ws-detail-rows (:project state) ws-id))))
+
 (defn- set-screen
   "Switch to `screen` and rebuild the embedded list with that screen's rows.
    Also clears any open modal so tab-style nav can't trap us behind a panel.
@@ -257,6 +308,19 @@
 
 (defn- selected-data [state]
   (some-> (item-list/selected-item (:list state)) :data))
+
+(defn- selected-workstream
+  "The highlighted workstreams-list row when it's a real workstream (carries
+   :ws-id); nil for group-header / empty sentinels."
+  [state]
+  (let [d (selected-data state)]
+    (when (and (map? d) (:ws-id d)) d)))
+
+(defn- selected-session-row
+  "The highlighted detail-screen session row (carries :name + :project); nil for sentinels."
+  [state]
+  (let [d (selected-data state)]
+    (when (and (map? d) (:name d) (:project d)) d)))
 
 (defn- selected-run
   "Returns the highlighted row's Run map, or nil when the highlighted row
