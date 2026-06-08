@@ -13,6 +13,7 @@
    [babashka.fs :as fs]
    [charm.components.list :as item-list]
    [charm.components.text-input :as text-input]
+   [charm.components.viewport :as viewport]
    [charm.message :as msg]
    [charm.program :as program]
    [charm.style.core :as style]
@@ -576,6 +577,9 @@
 
     :else (picker-route state msg)))
 
+;; Defined in the View section (needs label-style); used by the `d` arm below.
+(declare run-details-viewport)
+
 (defn- update-runs
   "Runs screen update handler. ↵ enters the highlighted Run's session-home;
    w enters its worktree. Both are terminal — they queue an `:enter-run`
@@ -599,7 +603,7 @@
     (if-let [run (selected-run state)]
       [(-> state
            (assoc :modal :run-details)
-           (assoc :modal-target {:run run}))
+           (assoc :modal-target {:run run :viewport (run-details-viewport state run)}))
        nil]
       [state nil])
 
@@ -648,12 +652,13 @@
     [state nil]))
 
 (defn- update-run-details
-  "Only `esc` closes the read-only run-details modal; other keys are
-   swallowed so the panel stays put until explicitly dismissed."
+  "Read-only run panel. `esc` closes; ↑↓ / pgup-pgdn / g-G scroll the agent.log
+   viewport (all other keys are swallowed by the viewport's :else)."
   [state msg]
   (if (msg/key-match? msg "escape")
     [(close-modal state) nil]
-    [state nil]))
+    (let [[vp cmd] (viewport/viewport-update (:viewport (:modal-target state)) msg)]
+      [(assoc-in state [:modal-target :viewport] vp) cmd])))
 
 (defn- update-create-session [state msg]
   (cond
@@ -721,12 +726,12 @@
     ;; Charm fires a window-size on startup and on every resize. In alt-screen
     ;; mode charm's loop resizes JLine's Display but never clears the physical
     ;; screen, stranding the previous frame; charm-patch/clear-on-resize! does
-    ;; the missing wipe + cache-invalidate. We hold our own state unchanged
-    ;; (the live-refresh tick owns repaints) and let charm's post-update render!
-    ;; redraw the full frame onto the cleared screen.
+    ;; the missing wipe + cache-invalidate. We stash the dims (the run-details
+    ;; viewport sizes its scroll window from the height) and let charm's
+    ;; post-update render! redraw the full frame onto the cleared screen.
     (msg/window-size? msg)
     (do (charm-patch/clear-on-resize!)
-        [state nil])
+        [(assoc state :size [(:width msg) (:height msg)]) nil])
 
     ;; Live-refresh tick. Re-read the active screen's rows and splice them in
     ;; with set-items (cursor preserved). Skip the refresh while a modal is open
@@ -878,7 +883,7 @@
                   :confirm-destroy    "[y] destroy  [n/esc] cancel"
                   :create-session     "[↵] create  [esc] cancel"
                   :session-info       "[esc] back"
-                  :run-details            "[esc] back"
+                  :run-details            "[↑↓/pgup/pgdn] scroll  [esc] back"
                   :delete-run-confirm     "[y] delete  [n/esc] cancel"
                   :fire-pick-project  "[↑↓] move  [↵] pick  [esc] cancel"
                   :fire-pick-trigger  "[↑↓] move  [↵] pick  [esc] cancel"
@@ -952,6 +957,30 @@
                  (cons "" (cons (info-row "links" "")
                                 link-rows)))))))
 
+(defn- run-details-content
+  "Full read-only run panel as one string: the run map pretty-printed, then the
+   tail of its agent.log. Fed to a scrollable viewport, so we keep a generous
+   tail (the viewport bounds what's visible)."
+  [run]
+  (let [log-path (cstate/run-agent-log (:id run))
+        log-tail (when (fs/exists? log-path)
+                   (->> (str/split-lines (slurp log-path))
+                        (take-last 500)
+                        (str/join "\n")))]
+    (str (with-out-str (clojure.pprint/pprint run))
+         "\n"
+         (style/render label-style "─── last 500 lines of agent.log (↑↓ scroll) ───") "\n"
+         (or log-tail "(no agent.log yet)"))))
+
+(defn- run-details-viewport
+  "Viewport over `run-details-content`, sized to the stashed terminal height
+   (minus header/footer chrome); falls back to 22 lines before the first
+   window-size message arrives."
+  [state run]
+  (let [h  (or (some-> state :size second) 28)
+        vh (max 5 (- h 6))]
+    (viewport/viewport (run-details-content run) :height vh)))
+
 (defn- modal-body [state]
   (case (:modal state)
     :confirm-destroy
@@ -965,17 +994,7 @@
       (session-info-body project session data))
 
     :run-details
-    (let [{:keys [run]} (:modal-target state)
-          log-path     (cstate/run-agent-log (:id run))
-          log-tail     (when (fs/exists? log-path)
-                         (->> (str/split-lines (slurp log-path))
-                              (take-last 50)
-                              (str/join "\n")))]
-      (str
-       (with-out-str (clojure.pprint/pprint run))
-       "\n\n"
-       (style/render label-style "─── last 50 lines of agent.log ───") "\n"
-       (or log-tail "(no agent.log yet)")))
+    (viewport/viewport-view (:viewport (:modal-target state)))
 
     :delete-run-confirm
     (let [{:keys [run]} (:modal-target state)
