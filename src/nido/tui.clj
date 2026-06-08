@@ -18,6 +18,7 @@
    [charm.style.core :as style]
    [clojure.pprint]
    [clojure.string :as str]
+   [nido.charm-patch :as charm-patch]
    [nido.coordinator.breakers :as breakers]
    [nido.coordinator.halt :as halt]
    [nido.coordinator.queue :as queue]
@@ -678,12 +679,15 @@
 
 (defn- update-fn [state msg]
   (cond
-    ;; Charm always fires a window-size on startup. Our view is
-    ;; dimension-independent, so we ignore it — anything we did here would
-    ;; cause a frame-to-frame state change and trigger a redraw that
-    ;; ghosts under JLine's non-fullscreen Display.
+    ;; Charm fires a window-size on startup and on every resize. In alt-screen
+    ;; mode charm's loop resizes JLine's Display but never clears the physical
+    ;; screen, stranding the previous frame; charm-patch/clear-on-resize! does
+    ;; the missing wipe + cache-invalidate. We hold our own state unchanged
+    ;; (the live-refresh tick owns repaints) and let charm's post-update render!
+    ;; redraw the full frame onto the cleared screen.
     (msg/window-size? msg)
-    [state nil]
+    (do (charm-patch/clear-on-resize!)
+        [state nil])
 
     ;; ctrl+c always quits. `q` only quits when no modal is active so the
     ;; create-session text-input can accept it as a literal character.
@@ -1013,16 +1017,17 @@
 (defn run-once
   "Run the TUI once. Returns the queued action — :quit | [:verb project session...].
 
-   We render inline (no alt-screen). charm's alt-screen path runs `update-size!`
-   after the initial render whenever the alt-screen-reported terminal size
-   differs from the size read at renderer construction; that clears JLine
-   Display's previous-content cache and the redraw lands one row below the
-   first paint, leaving ghost copies of the header and footer. Inline mode
-   sidesteps it cleanly."
+   Alt-screen (full-screen) mode. charm's alt-screen path historically stranded
+   the previous frame on resize (it resizes JLine's Display but never clears the
+   physical screen); `nido.charm-patch` vendors the fix — its create-renderer
+   wrapper captures the renderer, and `update-fn`'s window-size handler calls
+   `clear-on-resize!` to wipe + invalidate the cache before charm's render!.
+   `install!` is idempotent, so calling it on every run-once is safe."
   []
   (reset! exit-action :quit)
+  (charm-patch/install!)
   (program/run {:init     init-fn
                 :update   update-fn
                 :view     view
-                :alt-screen false})
+                :alt-screen true})
   @exit-action)
