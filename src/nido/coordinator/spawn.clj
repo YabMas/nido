@@ -71,9 +71,22 @@
 
 (defn spawn-records!
   "Orchestrate the live spawn: ensure workstream → create run (linked) → create
-   session. Returns the run (carrying :workstream-id) for the executor to submit."
+   session. Returns the run (carrying :workstream-id) for the executor to submit.
+   Atomic w.r.t. the workstream: if run/session creation throws after we MINTED a
+   new workstream (not a deduped pre-existing one) and it has no sessions, the
+   orphan is deleted before re-throwing, so a failed spawn never leaves a
+   session-less workstream behind."
   [routed meta]
-  (let [w   (ensure-workstream! (:project routed) (:payload routed) (initial-stage routed))
-        run (runs/create-run! (assoc routed :workstream-id (:id w)) meta)]
-    (create-session-for-run! run (:id w))
-    run))
+  (let [project (:project routed)
+        ref     (external-ref (:payload routed))
+        pre     (when ref (ws/find-by-ref project :notion (:id ref)))
+        w       (ensure-workstream! project (:payload routed) (initial-stage routed))
+        minted? (nil? pre)]
+    (try
+      (let [run (runs/create-run! (assoc routed :workstream-id (:id w)) meta)]
+        (create-session-for-run! run (:id w))
+        run)
+      (catch Throwable t
+        (when (and minted? (empty? (session/list-sessions project (:id w))))
+          (ws/delete! project (:id w)))
+        (throw t)))))

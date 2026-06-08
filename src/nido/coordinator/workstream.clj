@@ -129,6 +129,13 @@
       w
       (write! (update w :external-refs (fnil conj []) ref)))))
 
+(defn delete!
+  "Remove a workstream's directory (and everything under it). Idempotent —
+   no-op if absent. Used to clean up an orphan minted by a failed spawn."
+  [project ws-id]
+  (let [d (cstate/workstream-dir project ws-id)]
+    (when (fs/exists? d) (fs/delete-tree d))))
+
 (defn find-by-ref
   "Scan a project's workstreams for one carrying an external ref matching
    (adapter, external-id). Returns the workstream record or nil."

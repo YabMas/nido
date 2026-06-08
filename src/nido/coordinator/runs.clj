@@ -230,7 +230,7 @@
                  :workstream-id   workstream-id
                  :claude-session-id nil
                  :limits          (or (:limits trigger) {:budget "30m" :max-failures 3})
-                 :priority        (or priority 0)
+                 :priority        (if (int? priority) priority 0)
                  :session-profile (or session-profile :full)
                  :on-promote      (:on-promote trigger)
                  :uncapped?       (boolean uncapped?)

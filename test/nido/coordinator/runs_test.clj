@@ -457,3 +457,17 @@
               :artifacts [] :error nil}]
     (is (= base (runs/validate base)))
     (is (= "ws-1" (:workstream-id (runs/validate (assoc base :workstream-id "ws-1")))))))
+
+(deftest create-run-coerces-non-int-priority
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (cstate/ensure-dirs!)
+        (let [routed {:project :p :priority "2 - Should" :session-profile :full
+                      :uncapped? false
+                      :trigger {:name :t :skill :noop :agent :claude :payload ""
+                                :source {:type :test} :limits {}}
+                      :payload {}}
+              run (runs/create-run! routed {:fired-at "2026-06-08T00:00:00Z" :fired-by "x"})]
+          (is (= 0 (:priority run)))))
+      (finally (fs/delete-tree tmp)))))
