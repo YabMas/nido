@@ -354,33 +354,43 @@
 ;; one-action-at-a-time; a future would free the pool if this ever fans out.
 ;; ---------------------------------------------------------------------------
 
-(defn- start-session-down
-  "Begin an in-app `down` for session `sn` in project `p`. Returns the busy
-   state plus a batch of [spinner-tick, action] commands."
-  [state p sn]
-  (let [[spin spin-cmd] (spinner/spinner-init
+;; Per-verb display words. `:fn` is the lifecycle call; both up!/down! take
+;; [name {:project ...}] and log to *out* (captured below).
+(def ^:private session-actions
+  {:up   {:fn lifecycle/up!   :gerund "Starting" :past "Started" :failed "start"}
+   :down {:fn lifecycle/down! :gerund "Stopping" :past "Stopped" :failed "stop"}})
+
+(defn- start-session-action
+  "Begin an in-app session verb (`:up` / `:down`) for `sn` in project `p`.
+   Returns the busy state plus a batch of [spinner-tick, action] commands."
+  [verb state p sn]
+  (let [action-fn (get-in session-actions [verb :fn])
+        [spin spin-cmd] (spinner/spinner-init
                          (spinner/spinner :dots :style (style/style :fg style/cyan)))]
-    [(assoc state :busy {:verb :down :project p :session sn :spinner spin})
+    [(assoc state :busy {:verb verb :project p :session sn :spinner spin})
      (program/batch
       spin-cmd
       (program/cmd
        (fn []
-         ;; down! logs via println/log-step → *out*, which in alt-screen would
-         ;; print INTO charm's managed buffer and corrupt it. Rebind *out*/*err*
-         ;; to a sink so nothing reaches the terminal (binding conveys into any
-         ;; futures down! spawns). The detail still lands in session log files;
-         ;; the spinner + final status is all the TUI needs to show.
+         ;; up!/down! log via println/log-step → *out*, which in alt-screen
+         ;; would print INTO charm's managed buffer and corrupt it. Rebind
+         ;; *out*/*err* to a sink so nothing reaches the terminal (binding
+         ;; conveys into any futures the action spawns). Detail still lands in
+         ;; session log files; the spinner + final status is all the TUI shows.
          (let [sink (java.io.StringWriter.)]
            (try
              (binding [*out* sink *err* sink]
-               (lifecycle/down! sn {:project p}))
-             ;; success: the captured output is discarded (nothing to show).
-             {:type ::action-done :verb :down :session sn}
+               (action-fn sn {:project p}))
+             ;; success: captured output discarded (nothing to show).
+             {:type ::action-done :verb verb :session sn}
              ;; failure: carry the captured output so finish-action can show
              ;; the [nido] log lines that led up to the error.
              (catch Throwable t
-               {:type ::action-failed :verb :down :session sn
+               {:type ::action-failed :verb verb :session sn
                 :error t :output (str sink)}))))))]))
+
+(defn- start-session-down [state p sn] (start-session-action :down state p sn))
+(defn- start-session-up   [state p sn] (start-session-action :up   state p sn))
 
 (defn- update-spinner-tick
   "Advance the busy spinner (no-op when not busy / tag mismatch)."
@@ -392,30 +402,30 @@
 
 (defn- action-error-content
   "Panel text for a failed action: the error, then the captured [nido] output."
-  [session msg]
+  [verb session msg]
   (let [out (:output msg)]
-    (str "✗ Failed to stop " session "\n"
+    (str "✗ Failed to " (get-in session-actions [verb :failed]) " " session "\n"
          (ex-message (:error msg)) "\n\n"
          "─── captured output ───\n"
          (if (seq out) out "(no output)"))))
 
 (defn- finish-action
   "Clear :busy on a terminal action message. On success: a status line + refresh
-   so the now-down session shows immediately (output discarded). On failure: a
-   status line + a scrollable :action-error panel over the captured output."
+   so the session's new state shows immediately (output discarded). On failure:
+   a status line + a scrollable :action-error panel over the captured output."
   [state msg]
-  (let [{:keys [session]} (:busy state)
+  (let [{:keys [verb session]} (:busy state)
         base (dissoc state :busy)]
     (if (= ::action-done (msg/msg-type msg))
       [(-> base
-           (assoc :status (str "Stopped " session))
+           (assoc :status (str (get-in session-actions [verb :past]) " " session))
            (refresh-list (current-rows base)))
        nil]
       [(-> base
-           (assoc :status (str "Failed to stop " session))
+           (assoc :status (str "Failed to " (get-in session-actions [verb :failed]) " " session))
            (assoc :modal :action-error
                   :modal-target {:session session
-                                 :viewport (text-viewport base (action-error-content session msg))}))
+                                 :viewport (text-viewport base (action-error-content verb session msg))}))
        nil])))
 
 (defn- update-sessions [state msg]
@@ -431,11 +441,12 @@
     (with-selected-session state
       (fn [s p sn] [s (queue-action! [:enter p sn :worktree])]))
 
+    ;; `up` and `down` both run in-app (async, spinner) rather than quitting to
+    ;; the wrapper. `up` is the long one (PG clone + JVM + app); the spinner
+    ;; earns its keep here.
     (msg/key-match? msg "u")
-    (with-selected-session state
-      (fn [s p sn] [s (queue-action! [:up p sn])]))
+    (with-selected-session state start-session-up)
 
-    ;; `down` runs in-app (async, spinner) rather than quitting to the wrapper.
     (msg/key-match? msg "d")
     (with-selected-session state start-session-down)
 
@@ -1162,7 +1173,7 @@
     (item-list/list-view (:picker (:modal-target state)))))
 
 (defn- busy-label [verb]
-  (case verb :down "Stopping " "Working on "))
+  (str (get-in session-actions [verb :gerund] "Working on") " "))
 
 (defn- view [state]
   (cond

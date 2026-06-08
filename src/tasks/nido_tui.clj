@@ -4,9 +4,9 @@
    The TUI handles all interactive input (lists, modals, text input) while
    charm owns the terminal. Action keys queue an action and quit charm;
    this wrapper runs the matching `nido:session:*` verb and either
-   re-enters the TUI (`:up`, `:destroy`, `:add`) or exits cleanly
-   (`:enter` — see below). `:down` is handled in-app by the TUI (async,
-   spinner) and never reaches this wrapper.
+   re-enters the TUI (`:destroy`, `:add`) or exits cleanly (`:enter` — see
+   below). `:up` and `:down` are handled in-app by the TUI (async, spinner)
+   and never reach this wrapper.
 
    `:enter` doesn't spawn a subshell. bb cannot change its parent shell's
    cwd, so the action writes the session-home path to
@@ -97,9 +97,9 @@
                        (println (str "[nido:tui] Selected " link)))
                      :worktree
                      (session/enter ":project" p s ":cd" "worktree")))
-      :up      (let [[_ p s] action] (session/up      ":project" p s))
-      ;; :down has no arm — the sessions screen runs `down` in-app (async,
-      ;; with a spinner) and never queues it to this wrapper.
+      ;; :up / :down have no arms — the sessions screen runs both in-app
+      ;; (async, with a spinner) and never queues them to this wrapper.
+      ;; `:enter-run :home` still ups a session inline; that path stays.
       :destroy (let [[_ p s] action] (destroy-and-verify! p s))
       :add     (let [[_ p s] action] (session/up      ":project" p s))
       ;; Promote a triaged ticket → enqueue a provisioning Run. Call promote!
