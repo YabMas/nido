@@ -23,6 +23,7 @@
    [nido.charm-patch :as charm-patch]
    [nido.coordinator.breakers :as breakers]
    [nido.coordinator.halt :as halt]
+   [nido.coordinator.promote :as promote]
    [nido.coordinator.queue :as queue]
    [nido.coordinator.runs-clean :as runs-clean]
    [nido.coordinator.runs-view :as runs-view]
@@ -367,45 +368,80 @@
       (println (str "worktree survived destroy; removing " wt))
       (fs/delete-tree wt))))
 
-;; Per-verb display words. `:fn` is the lifecycle call; up!/down!/destroy-session!
-;; all take [name {:project ...}] and log to *out* (captured below).
-(def ^:private session-actions
-  {:up      {:fn lifecycle/up!    :gerund "Starting"   :past "Started"   :failed "start"}
-   :down    {:fn lifecycle/down!  :gerund "Stopping"   :past "Stopped"   :failed "stop"}
-   :destroy {:fn destroy-session! :gerund "Destroying" :past "Destroyed" :failed "destroy"}})
+;; Per-verb display words. `:fn` (when present) is the lifecycle call for the
+;; session-shaped verbs — up!/down!/destroy-session!/up! (add) all take
+;; [name {:project ...}] and log to *out* (captured below). `:promote` has no
+;; :fn — it acts on a ticket and is driven by its own runner (start-promote).
+;; `:fn` holds the VAR (not the fn value) so the call is late-bound — invoking a
+;; var resolves its current root, which keeps the table mockable and avoids
+;; stale captures.
+(def ^:private action-defs
+  {:up      {:fn #'lifecycle/up!    :gerund "Starting"   :past "Started"   :failed "start"}
+   :down    {:fn #'lifecycle/down!  :gerund "Stopping"   :past "Stopped"   :failed "stop"}
+   :destroy {:fn #'destroy-session! :gerund "Destroying" :past "Destroyed" :failed "destroy"}
+   :add     {:fn #'lifecycle/up!    :gerund "Creating"   :past "Created"   :failed "create"}
+   :promote {                       :gerund "Promoting"  :past "Promoted"  :failed "promote"}})
+
+(defn- with-spinner
+  "Common scaffold for an in-app action: a fresh spinner, `:busy` state carrying
+   `verb`/`subject`, and a batch of [spinner-tick, work-cmd]. `work-fn` is the
+   already-built charm cmd that runs the action and returns a result message."
+  [state verb subject work-cmd]
+  (let [[spin spin-cmd] (spinner/spinner-init
+                         (spinner/spinner :dots :style (style/style :fg style/cyan)))]
+    [(assoc state :busy {:verb verb :subject subject :spinner spin})
+     (program/batch spin-cmd work-cmd)]))
+
+(defn- captured-cmd
+  "A charm cmd that runs `thunk` with *out*/*err* captured to a sink (so its
+   println/log-step can't corrupt charm's alt-screen buffer), then maps the
+   outcome to a result message via `->msg` (fn [{:keys [ok? value error output]}])."
+  [thunk ->msg]
+  (program/cmd
+   (fn []
+     (let [sink (java.io.StringWriter.)]
+       (try
+         (let [value (binding [*out* sink *err* sink] (thunk))]
+           (->msg {:ok? true :value value :output (str sink)}))
+         (catch Throwable t
+           (->msg {:ok? false :error t :output (str sink)})))))))
 
 (defn- start-session-action
-  "Begin an in-app session verb (`:up` / `:down`) for `sn` in project `p`.
-   Returns the busy state plus a batch of [spinner-tick, action] commands."
+  "Begin a session-shaped verb (`:up`/`:down`/`:destroy`/`:add`) for `sn` in
+   project `p`. The verb's :fn takes [name {:project ...}]; any throw is a
+   failure carrying the captured output."
   [verb state p sn]
-  (let [action-fn (get-in session-actions [verb :fn])
-        [spin spin-cmd] (spinner/spinner-init
-                         (spinner/spinner :dots :style (style/style :fg style/cyan)))]
-    [(assoc state :busy {:verb verb :project p :session sn :spinner spin})
-     (program/batch
-      spin-cmd
-      (program/cmd
-       (fn []
-         ;; up!/down! log via println/log-step → *out*, which in alt-screen
-         ;; would print INTO charm's managed buffer and corrupt it. Rebind
-         ;; *out*/*err* to a sink so nothing reaches the terminal (binding
-         ;; conveys into any futures the action spawns). Detail still lands in
-         ;; session log files; the spinner + final status is all the TUI shows.
-         (let [sink (java.io.StringWriter.)]
-           (try
-             (binding [*out* sink *err* sink]
-               (action-fn sn {:project p}))
-             ;; success: captured output discarded (nothing to show).
-             {:type ::action-done :verb verb :session sn}
-             ;; failure: carry the captured output so finish-action can show
-             ;; the [nido] log lines that led up to the error.
-             (catch Throwable t
-               {:type ::action-failed :verb verb :session sn
-                :error t :output (str sink)}))))))]))
+  (let [action-fn (get-in action-defs [verb :fn])]
+    (with-spinner
+      state verb sn
+      (captured-cmd
+       (fn [] (action-fn sn {:project p}))
+       (fn [{:keys [ok? error output]}]
+         (if ok?
+           {:type ::action-done :verb verb :subject sn}
+           {:type ::action-failed :verb verb :subject sn :error error :output output}))))))
+
+(defn- start-promote
+  "Begin an in-app `promote` for ticket `br-id` in `project`. Unlike the session
+   verbs, promote! returns a {:decision …} map rather than throwing — a non
+   `:promote` decision is a refusal, surfaced in the failure panel."
+  [state project br-id]
+  (with-spinner
+    state :promote br-id
+    (captured-cmd
+     (fn [] (promote/promote! (keyword project) br-id))
+     (fn [{:keys [ok? value error output]}]
+       (cond
+         (not ok?) {:type ::action-failed :verb :promote :subject br-id :error error :output output}
+         (= :promote (:decision value)) {:type ::action-done :verb :promote :subject br-id}
+         :else {:type ::action-failed :verb :promote :subject br-id
+                :error (ex-info (str "promote refused: " (name (:decision value))) {})
+                :output output})))))
 
 (defn- start-session-down    [state p sn] (start-session-action :down    state p sn))
 (defn- start-session-up      [state p sn] (start-session-action :up      state p sn))
 (defn- start-session-destroy [state p sn] (start-session-action :destroy state p sn))
+(defn- start-session-add     [state p sn] (start-session-action :add     state p sn))
 
 (defn- update-spinner-tick
   "Advance the busy spinner (no-op when not busy / tag mismatch)."
@@ -417,30 +453,30 @@
 
 (defn- action-error-content
   "Panel text for a failed action: the error, then the captured [nido] output."
-  [verb session msg]
+  [verb subject msg]
   (let [out (:output msg)]
-    (str "✗ Failed to " (get-in session-actions [verb :failed]) " " session "\n"
+    (str "✗ Failed to " (get-in action-defs [verb :failed]) " " subject "\n"
          (ex-message (:error msg)) "\n\n"
          "─── captured output ───\n"
          (if (seq out) out "(no output)"))))
 
 (defn- finish-action
   "Clear :busy on a terminal action message. On success: a status line + refresh
-   so the session's new state shows immediately (output discarded). On failure:
+   so the subject's new state shows immediately (output discarded). On failure:
    a status line + a scrollable :action-error panel over the captured output."
   [state msg]
-  (let [{:keys [verb session]} (:busy state)
+  (let [{:keys [verb subject]} (:busy state)
         base (dissoc state :busy)]
     (if (= ::action-done (msg/msg-type msg))
       [(-> base
-           (assoc :status (str (get-in session-actions [verb :past]) " " session))
+           (assoc :status (str (get-in action-defs [verb :past]) " " subject))
            (refresh-list (current-rows base)))
        nil]
       [(-> base
-           (assoc :status (str "Failed to " (get-in session-actions [verb :failed]) " " session))
+           (assoc :status (str "Failed to " (get-in action-defs [verb :failed]) " " subject))
            (assoc :modal :action-error
-                  :modal-target {:session session
-                                 :viewport (text-viewport base (action-error-content verb session msg))}))
+                  :modal-target {:subject subject
+                                 :viewport (text-viewport base (action-error-content verb subject msg))}))
        nil])))
 
 (defn- update-sessions [state msg]
@@ -786,7 +822,9 @@
     (let [name (str/trim (text-input/value (:modal-input state)))
           {:keys [project]} (:modal-target state)]
       (if (seq name)
-        [(close-modal state) (queue-action! [:add project name])]
+        ;; Create + start the new session in-app (async, spinner) — `up!`
+        ;; creates the worktree if missing, so `add` is just `up` on a new name.
+        (start-session-add (close-modal state) project name)
         [(close-modal state) nil]))
 
     :else
@@ -822,16 +860,16 @@
       [(close-modal state) nil])))
 
 (defn- update-tickets
-  "Tickets screen: `↵`/`p` promotes the highlighted `:triaged` ticket — queues
-   `[:promote project br-id]`, which the wrapper runs as `bb nido:ticket:promote`
-   and then re-enters the TUI so the ticket moves into `In progress`. Other keys
+  "Tickets screen: `↵`/`p` promotes the highlighted `:triaged` ticket in-app
+   (async, spinner) via `start-promote`; on success the live-refresh moves the
+   ticket into `In progress`, and a refusal/error opens the failure panel. Other keys
    fall through to list navigation."
   [state msg]
   (cond
     (or (msg/key-match? msg "enter") (msg/key-match? msg "p"))
     (if-let [{:keys [project br-id]} (selected-promotable-ticket state)]
-      [(assoc state :status (str "Promoting " br-id " …"))
-       (queue-action! [:promote (name project) br-id])]
+      ;; Provision the impl session in-app (async, spinner) rather than quitting.
+      (start-promote state (name project) br-id)
       [(assoc state :status "Select a ticket in “Ready to implement” to promote.") nil])
 
     :else
@@ -989,7 +1027,7 @@
                                         " · " (-> state :modal-target :session)
                                         " · info")
                   :run-details         (str "nido — run · " (-> state :modal-target :run :id))
-                  :action-error        (str "nido — action failed · " (-> state :modal-target :session))
+                  :action-error        (str "nido — action failed · " (-> state :modal-target :subject))
                   :delete-run-confirm  (str "nido — delete run · " (-> state :modal-target :run :id))
                   :fire-pick-project
                   "nido — fire trigger · pick project"
@@ -1190,16 +1228,16 @@
     (item-list/list-view (:picker (:modal-target state)))))
 
 (defn- busy-label [verb]
-  (str (get-in session-actions [verb :gerund] "Working on") " "))
+  (str (get-in action-defs [verb :gerund] "Working on") " "))
 
 (defn- view [state]
   (cond
     ;; In-app action in flight: spinner panel, input swallowed by the guard.
     (:busy state)
-    (let [{:keys [verb session spinner]} (:busy state)]
+    (let [{:keys [verb subject spinner]} (:busy state)]
       (str (header state) "\n\n"
            (spinner/spinner-view spinner) "  "
-           (busy-label verb) session " …\n\n"
+           (busy-label verb) subject " …\n\n"
            (style/render subtle-style "please wait — this can't be interrupted")))
 
     (:modal state)

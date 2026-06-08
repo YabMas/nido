@@ -2,11 +2,12 @@
   "Bb task wrapper for the nido TUI.
 
    The TUI handles all interactive input (lists, modals, text input) while
-   charm owns the terminal. Action keys queue an action and quit charm;
-   this wrapper runs the matching `nido:session:*` verb and either
-   re-enters the TUI (`:add`, `:promote`) or exits cleanly (`:enter` — see
-   below). `:up`, `:down`, and `:destroy` are handled in-app by the TUI
-   (async, spinner) and never reach this wrapper.
+   charm owns the terminal. Every session/ticket-mutating verb (`:up` `:down`
+   `:destroy` `:add` `:promote`) now runs IN-APP (async, spinner) and stays in
+   the TUI. The only actions that reach this wrapper are `:enter` / `:enter-run`,
+   which MUST exit the process for the cwd handoff (see below). So this wrapper
+   has shrunk to: run-once → if the action is an enter, hand off and exit;
+   otherwise (just `:quit`) stop.
 
    `:enter` doesn't spawn a subshell. bb cannot change its parent shell's
    cwd, so the action writes the session-home path to
@@ -26,7 +27,6 @@
      bb nido:tui"
   (:require
    [babashka.fs :as fs]
-   [nido.coordinator.promote :as promote]
    [nido.coordinator.state :as cstate]
    [nido.core :as core]
    [nido.session.lifecycle :as lifecycle]
@@ -81,19 +81,12 @@
                          (spit target-file link))
                        (println (str "[nido:tui] Selected " link)))
                      :worktree
-                     (session/enter ":project" p s ":cd" "worktree")))
-      ;; :up / :down / :destroy have no arms — the sessions screen runs them
-      ;; in-app (async, with a spinner) and never queues them to this wrapper.
-      ;; `:enter-run :home` still ups a session inline; that path stays.
-      :add     (let [[_ p s] action] (session/up      ":project" p s))
-      ;; Promote a triaged ticket → enqueue a provisioning Run. Call promote!
-      ;; directly (NOT promote-cmd, which System/exits on refusal and would kill
-      ;; the TUI loop). Best-effort: print the outcome and re-enter the TUI.
-      :promote (let [[_ p br] action
-                     res (promote/promote! (keyword p) br)]
-                 (if (= :promote (:decision res))
-                   (println (str "[nido:tui] promoted " br " → impl session provisioning"))
-                   (println (str "[nido:tui] promote " br " refused: " (name (:decision res)))))))
+                     (session/enter ":project" p s ":cd" "worktree"))))
+      ;; All session/ticket-mutating verbs (:up :down :destroy :add :promote)
+      ;; now run in-app (async, with a spinner) and never reach this wrapper.
+      ;; Only :enter / :enter-run remain — they MUST exit the process so the
+      ;; parent shell wrapper can pick up the cwd handoff. `:enter-run :home`
+      ;; still ups a session inline; that path stays.
     (catch Throwable t
       (log-throwable! t (str "action failed: " (pr-str action)))
       (binding [*err* *err*]
@@ -103,27 +96,21 @@
 
 (defn run [& _args]
   (try
-    (loop []
-      (let [action (tui/run-once)]
-        (cond
-          (= :quit action)
-          nil
+    ;; No loop: every mutating verb runs in-app now, so run-once returns exactly
+    ;; once — either :quit (stop) or an :enter/:enter-run action that is terminal
+    ;; (writes ~/.nido/.last-cd; we exit so the parent shell picks up the cwd).
+    (let [action (tui/run-once)]
+      (cond
+        (= :quit action)
+        nil
 
-          ;; :enter (and its runs-screen sibling :enter-run) is
-          ;; terminal — the parent shell wrapper picks up
-          ;; ~/.nido/.last-cd after we exit. Looping back into charm
-          ;; here would erase the handoff signal.
-          (and (vector? action) (#{:enter :enter-run} (first action)))
-          (run-action action)
+        (and (vector? action) (#{:enter :enter-run} (first action)))
+        (run-action action)
 
-          (vector? action)
-          (do (run-action action)
-              (recur))
-
-          :else
-          (binding [*err* *err*]
-            (.println ^java.io.PrintWriter *err*
-                      (str "[nido:tui] unexpected action: " (pr-str action)))))))
+        :else
+        (binding [*err* *err*]
+          (.println ^java.io.PrintWriter *err*
+                    (str "[nido:tui] unexpected action: " (pr-str action))))))
     (catch Throwable t
       (log-throwable! t "tui loop crashed")
       (binding [*err* *err*]
