@@ -75,6 +75,7 @@
                                          :error error)
                                   (update :state-history conj history-entry))]
             (runs/write-run! updated)
+            (runs/mirror-run-phase! updated)
             ;; Keep the ticket record honest: an orphaned triage Run clears
             ;; a stale :investigating so the ticket is re-triable next poll.
             (tickets/on-run-terminal! updated state)))))))

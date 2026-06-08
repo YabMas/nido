@@ -5,7 +5,9 @@
    [malli.core :as m]
    [nido.coordinator.clock :as clock]
    [nido.coordinator.runs :as runs]
-   [nido.coordinator.state :as cstate]))
+   [nido.coordinator.session :as session]
+   [nido.coordinator.state :as cstate]
+   [nido.coordinator.workstream :as workstream]))
 
 (def example-run
   {:id              "2026-05-13-brian-investigate-bug-a1b2c3"
@@ -400,6 +402,25 @@
                                      :priority 0 :session-profile :full :uncapped? false}
                                     {:fired-at "t" :fired-by "u"})]
           (is (re-matches #"run-brian-plan-bug-[0-9a-f]{8}" (:session-name run)))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest mirror-run-phase-syncs-session-and-noops-without-ws
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (cstate/ensure-dirs!)
+        ;; no :workstream-id → no-op, no throw
+        (is (nil? (runs/mirror-run-phase! {:project :p :session-name "s" :state :running})))
+        ;; with a real session, mirrors state→phase (awaiting-review → parked)
+        (let [w (workstream/create! :p {:stage :triaging})]
+          (session/create! :p (:id w) {:name "s1" :weight :light
+                                       :autonomy {:skill :k :first-message "m" :agent :claude
+                                                  :claude-session-id nil :trigger :t :limits {}
+                                                  :priority 0 :uncapped? false :on-promote nil
+                                                  :phase :queued :phase-history [] :error nil}})
+          (runs/mirror-run-phase! {:project :p :workstream-id (:id w)
+                                   :session-name "s1" :state :awaiting-review})
+          (is (= :parked (get-in (session/read-session :p (:id w) "s1") [:autonomy :phase])))))
       (finally (fs/delete-tree tmp)))))
 
 (deftest teardown-skips-plan-bug-sessions-but-runs-for-triage

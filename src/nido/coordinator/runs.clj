@@ -7,6 +7,7 @@
    [clojure.string :as str]
    [malli.core :as m]
    [nido.coordinator.clock :as clock]
+   [nido.coordinator.session :as session]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.triggers :as triggers]
    [nido.io :as io]
@@ -127,6 +128,8 @@
   [from to]
   (contains? (get allowed-transitions from #{}) to))
 
+(declare mirror-run-phase!)
+
 (defn transition!
   "Atomically update a Run's state with history. Throws ex-info if the
    run is absent or the transition is invalid. Returns the updated Run."
@@ -142,7 +145,24 @@
                       (update :state-history conj
                               {:at (clock/now-iso) :state new-state}))]
       (write-run! updated)
+      (mirror-run-phase! updated)
       updated)))
+
+(defn mirror-run-phase!
+  "Best-effort mirror of a run's state onto its authoritative session's autonomy
+   phase. No-op when the run has no :workstream-id (legacy / dry-run / test runs).
+   Never throws — a missing or human session is logged to stderr and swallowed so
+   it can't re-fail a transition or reconcile pass."
+  [run]
+  (when-let [ws-id (:workstream-id run)]
+    (when-let [phase (state->phase (:state run))]
+      (try
+        (session/set-phase! (:project run) ws-id (:session-name run) phase)
+        (catch Exception e
+          (binding [*err* *err*]
+            (.println ^java.io.PrintWriter *err*
+                      (str "nido coordinator: phase mirror failed for "
+                           (:session-name run) " → " phase " — " (ex-message e)))))))))
 
 (defn- new-run-parts
   "Returns {:run-id ... :session-name ... :suffix ...} so callers don't have
