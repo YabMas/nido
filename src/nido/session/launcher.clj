@@ -21,6 +21,27 @@
    [nido.session.links :as links]
    [nido.session.state :as state]))
 
+(defn- run-workstream-context
+  "Given a run-id or a session-home path, return {:workstream-id … :br-id …}
+   for embedding in the briefing. Returns an empty map when no run is found or
+   the run carries no :workstream-id — so callers can always safely merge the
+   result without nil-checking. Safe to call on human/dry-run sessions."
+  [& {:keys [run-id session-home]}]
+  (let [run (cond
+              run-id
+              (let [path (cstate/run-edn-path run-id)]
+                (when (fs/exists? path)
+                  (io/read-edn path)))
+
+              session-home
+              (let [path (str (fs/path session-home "run-link" "run.edn"))]
+                (when (fs/exists? path)
+                  (io/read-edn path))))]
+    (if-let [ws-id (:workstream-id run)]
+      {:workstream-id ws-id
+       :br-id         (get-in run [:event-payload :id])}
+      {})))
+
 (defn- pg-service-def [session-edn]
   (->> (:services session-edn)
        (filter #(= :postgresql (:type %)))
@@ -190,10 +211,20 @@
     (when-let [resource (jio/resource (str "project-briefings/" project-name ".md"))]
       (slurp resource))))
 
+(defn- render-workstream-line
+  "Render the 'Workstream:' line when workstream-id is present.
+   Appends ' (<br-id>)' when br-id is also available."
+  [workstream-id br-id]
+  (when workstream-id
+    (str "- workstream: " workstream-id
+         (when (seq br-id) (str " (" br-id ")"))
+         "\n")))
+
 (defn- render-context
   [{:keys [project-name session-name worktree source-dir
            app-port app-url nrepl-port pg-port
-           profile links project-briefing]}]
+           profile links project-briefing
+           workstream-id br-id]}]
   (let [;; Lite sessions have no services; :services is :all (full) or a
         ;; vector allowlist ([] = lite). Default to "active" when profile
         ;; is absent — legacy sessions predating profile.edn were all full.
@@ -213,6 +244,7 @@
      (when app-port   (str "- app port: " app-port "\n"))
      (when nrepl-port (str "- nrepl port: " nrepl-port "\n"))
      (when pg-port    (str "- postgres port: " pg-port "\n"))
+     (render-workstream-line workstream-id br-id)
      "\n"
      (if services-active?
        "## Services are already running\n\nThe REPL, app server, and database for this worktree are managed by\nnido. Don't run project-local scripts that spin up a REPL/app/DB —\nconnect to what's already live. The postgres MCP is preconfigured to\nthis session's DB.\n\n"
@@ -352,17 +384,20 @@
     (let [profile      (read-profile-for-session instance-id)
           home         (state/session-home-dir project-name session-name)
           link-entries (when instance-id (links/read-links instance-id))
-          ctx-doc      (render-context {:session-name     session-name
-                                        :project-name     project-name
-                                        :worktree         worktree
-                                        :source-dir       (project-source-dir project-name)
-                                        :app-port         (get-in ctx [:app :port])
-                                        :app-url          (get-in ctx [:app :url])
-                                        :nrepl-port       (get-in ctx [:repl :port])
-                                        :pg-port          pg-port
-                                        :profile          profile
-                                        :links            link-entries
-                                        :project-briefing (read-project-briefing project-name)})
+          ws-ctx       (when-let [run-id (:owned-by-run session-edn)]
+                         (run-workstream-context :run-id run-id))
+          ctx-doc      (render-context (merge {:session-name     session-name
+                                               :project-name     project-name
+                                               :worktree         worktree
+                                               :source-dir       (project-source-dir project-name)
+                                               :app-port         (get-in ctx [:app :port])
+                                               :app-url          (get-in ctx [:app :url])
+                                               :nrepl-port       (get-in ctx [:repl :port])
+                                               :pg-port          pg-port
+                                               :profile          profile
+                                               :links            link-entries
+                                               :project-briefing (read-project-briefing project-name)}
+                                              ws-ctx))
           mcp-doc      (when (and pg-svc pg-port) (mcp-config pg-svc pg-port))]
       (fs/create-dirs home)
       (when mcp-doc
@@ -410,18 +445,20 @@
     (when (and ctx (fs/exists? home))
       (let [profile      (read-profile-for-session instance-id)
             link-entries (links/read-links instance-id)
+            ws-ctx       (run-workstream-context :session-home home)
             doc          (render-context
-                          {:session-name     session-name
-                           :project-name     project-name
-                           :worktree         worktree
-                           :source-dir       (project-source-dir project-name)
-                           :app-port         (get-in ctx [:app :port])
-                           :app-url          (get-in ctx [:app :url])
-                           :nrepl-port       (get-in ctx [:repl :port])
-                           :pg-port          (get-in ctx [:pg :port])
-                           :profile          profile
-                           :links            link-entries
-                           :project-briefing (read-project-briefing project-name)})]
+                          (merge {:session-name     session-name
+                                  :project-name     project-name
+                                  :worktree         worktree
+                                  :source-dir       (project-source-dir project-name)
+                                  :app-port         (get-in ctx [:app :port])
+                                  :app-url          (get-in ctx [:app :url])
+                                  :nrepl-port       (get-in ctx [:repl :port])
+                                  :pg-port          (get-in ctx [:pg :port])
+                                  :profile          profile
+                                  :links            link-entries
+                                  :project-briefing (read-project-briefing project-name)}
+                                 ws-ctx))]
         (io/write-text! (claude-md-path project-name session-name) doc)))))
 
 (defn remove-artifacts!

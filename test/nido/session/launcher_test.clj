@@ -189,3 +189,36 @@
           (is (= "brian shared"
                  (slurp (str (fs/path wt ".claude" "skills" "shared" "SKILL.md")))))))
       (finally (fs/delete-tree tmp)))))
+
+;; ---------------------------------------------------------------------------
+;; Workstream line in the briefing
+;; ---------------------------------------------------------------------------
+
+(deftest render-context-includes-workstream-line-when-present
+  (let [doc (@#'launcher/render-context
+              (assoc base-ctx
+                     :workstream-id "ws-2026-06-08-brian-impl-br-4659-abc123"
+                     :br-id "BR-4659"))]
+    (testing "workstream line appears in the rendered CLAUDE.md"
+      (is (str/includes? doc "ws-2026-06-08-brian-impl-br-4659-abc123")
+          "workstream-id should appear in the briefing"))
+    (testing "br-id is rendered in parentheses after the workstream-id"
+      (is (str/includes? doc "BR-4659")
+          "br-id should appear in the briefing"))
+    (testing "workstream line format matches expected pattern"
+      (is (str/includes? doc "- workstream: ws-2026-06-08-brian-impl-br-4659-abc123 (BR-4659)")
+          "line should be '- workstream: <ws-id> (<br-id>)'"))))
+
+(deftest render-context-includes-workstream-line-without-br-id
+  (let [doc (@#'launcher/render-context
+              (assoc base-ctx
+                     :workstream-id "ws-2026-06-08-brian-impl-abc123"))]
+    (testing "workstream line appears even without br-id"
+      (is (str/includes? doc "- workstream: ws-2026-06-08-brian-impl-abc123")
+          "workstream-id should appear without a br suffix"))))
+
+(deftest render-context-omits-workstream-line-when-absent
+  (let [doc (@#'launcher/render-context base-ctx)]
+    (testing "no workstream line for human/non-run sessions"
+      (is (not (str/includes? doc "workstream:"))
+          "no workstream line should appear when workstream-id is nil"))))
