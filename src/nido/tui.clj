@@ -354,11 +354,25 @@
 ;; one-action-at-a-time; a future would free the pool if this ever fans out.
 ;; ---------------------------------------------------------------------------
 
-;; Per-verb display words. `:fn` is the lifecycle call; both up!/down! take
-;; [name {:project ...}] and log to *out* (captured below).
+(defn- destroy-session!
+  "destroy! + verify: if the underlying `git worktree remove --force` swallowed
+   an error and left the worktree behind, remove it. In-app replacement for the
+   bb wrapper's old destroy-and-verify! (fs/delete-tree instead of shelling out;
+   the println is captured to the action sink)."
+  [sn {:keys [project] :as opts}]
+  (lifecycle/destroy! sn opts)
+  (let [{:keys [sessions]} (lifecycle/list-all-data {:project project})
+        wt (some #(when (= sn (:name %)) (:worktree %)) sessions)]
+    (when (and wt (fs/exists? wt))
+      (println (str "worktree survived destroy; removing " wt))
+      (fs/delete-tree wt))))
+
+;; Per-verb display words. `:fn` is the lifecycle call; up!/down!/destroy-session!
+;; all take [name {:project ...}] and log to *out* (captured below).
 (def ^:private session-actions
-  {:up   {:fn lifecycle/up!   :gerund "Starting" :past "Started" :failed "start"}
-   :down {:fn lifecycle/down! :gerund "Stopping" :past "Stopped" :failed "stop"}})
+  {:up      {:fn lifecycle/up!    :gerund "Starting"   :past "Started"   :failed "start"}
+   :down    {:fn lifecycle/down!  :gerund "Stopping"   :past "Stopped"   :failed "stop"}
+   :destroy {:fn destroy-session! :gerund "Destroying" :past "Destroyed" :failed "destroy"}})
 
 (defn- start-session-action
   "Begin an in-app session verb (`:up` / `:down`) for `sn` in project `p`.
@@ -389,8 +403,9 @@
                {:type ::action-failed :verb verb :session sn
                 :error t :output (str sink)}))))))]))
 
-(defn- start-session-down [state p sn] (start-session-action :down state p sn))
-(defn- start-session-up   [state p sn] (start-session-action :up   state p sn))
+(defn- start-session-down    [state p sn] (start-session-action :down    state p sn))
+(defn- start-session-up      [state p sn] (start-session-action :up      state p sn))
+(defn- start-session-destroy [state p sn] (start-session-action :destroy state p sn))
 
 (defn- update-spinner-tick
   "Advance the busy spinner (no-op when not busy / tag mismatch)."
@@ -736,7 +751,9 @@
   (cond
     (or (msg/key-match? msg "y") (msg/key-match? msg "Y"))
     (let [{:keys [project session]} (:modal-target state)]
-      [(close-modal state) (queue-action! [:destroy project session])])
+      ;; Confirmed: close the modal and run destroy in-app (async, spinner) —
+      ;; same path as up/down, just gated behind this confirmation first.
+      (start-session-destroy (close-modal state) project session))
 
     ;; n / esc / anything else cancels
     :else

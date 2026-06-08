@@ -4,9 +4,9 @@
    The TUI handles all interactive input (lists, modals, text input) while
    charm owns the terminal. Action keys queue an action and quit charm;
    this wrapper runs the matching `nido:session:*` verb and either
-   re-enters the TUI (`:destroy`, `:add`) or exits cleanly (`:enter` — see
-   below). `:up` and `:down` are handled in-app by the TUI (async, spinner)
-   and never reach this wrapper.
+   re-enters the TUI (`:add`, `:promote`) or exits cleanly (`:enter` — see
+   below). `:up`, `:down`, and `:destroy` are handled in-app by the TUI
+   (async, spinner) and never reach this wrapper.
 
    `:enter` doesn't spawn a subshell. bb cannot change its parent shell's
    cwd, so the action writes the session-home path to
@@ -26,7 +26,6 @@
      bb nido:tui"
   (:require
    [babashka.fs :as fs]
-   [babashka.process :refer [shell]]
    [nido.coordinator.promote :as promote]
    [nido.coordinator.state :as cstate]
    [nido.core :as core]
@@ -51,20 +50,6 @@
               (str (java.time.Instant/now) " " context "\n" sw "\n")
               :append true)
         (catch Exception _ nil)))))
-
-(defn- destroy-and-verify!
-  "Run destroy, then re-query and fall back to rm -rf if the worktree
-   somehow survived (the underlying `git worktree remove --force` swallows
-   errors and we want the TUI to actually reflect the user's intent)."
-  [p s]
-  (session/destroy ":project" p s)
-  (let [{:keys [sessions]} (lifecycle/list-all-data {:project p})
-        wt (some #(when (= s (:name %)) (:worktree %)) sessions)]
-    (when (and wt (fs/exists? wt))
-      (println (str "[nido:tui] worktree still exists; falling back to rm -rf " wt))
-      (try (shell {:continue true} "rm" "-rf" wt)
-           (catch Exception e
-             (println (str "[nido:tui] rm -rf failed: " (ex-message e))))))))
 
 (defn- run-action [action]
   (try
@@ -97,10 +82,9 @@
                        (println (str "[nido:tui] Selected " link)))
                      :worktree
                      (session/enter ":project" p s ":cd" "worktree")))
-      ;; :up / :down have no arms — the sessions screen runs both in-app
-      ;; (async, with a spinner) and never queues them to this wrapper.
+      ;; :up / :down / :destroy have no arms — the sessions screen runs them
+      ;; in-app (async, with a spinner) and never queues them to this wrapper.
       ;; `:enter-run :home` still ups a session inline; that path stays.
-      :destroy (let [[_ p s] action] (destroy-and-verify! p s))
       :add     (let [[_ p s] action] (session/up      ":project" p s))
       ;; Promote a triaged ticket → enqueue a provisioning Run. Call promote!
       ;; directly (NOT promote-cmd, which System/exits on refusal and would kill
