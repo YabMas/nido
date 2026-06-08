@@ -70,3 +70,58 @@
 (deftest label-falls-back-to-raw-id
   (let [ws {:id "ws-20260601-abcdef" :external-refs [] :entries []}]
     (is (= "ws-20260601-abcdef" (wsv/label ws [])))))
+
+;; ---------------------------------------------------------------------------
+;; last-activity — max ISO timestamp across stage-history + session histories
+;; ---------------------------------------------------------------------------
+
+(deftest last-activity-takes-max-across-sources
+  (let [ws {:stage-history [{:at "2026-06-01T00:00:00Z" :stage :investigating}]}
+        sessions [{:created-at "2026-06-02T00:00:00Z"
+                   :substrate-history [{:at "2026-06-02T00:00:00Z" :substrate :live}]
+                   :autonomy {:phase-history [{:at "2026-06-05T09:00:00Z" :phase :running}]}}]]
+    (is (= "2026-06-05T09:00:00Z" (wsv/last-activity ws sessions)))))
+
+(deftest last-activity-handles-no-sessions
+  (let [ws {:stage-history [{:at "2026-06-01T00:00:00Z" :stage :investigating}]}]
+    (is (= "2026-06-01T00:00:00Z" (wsv/last-activity ws [])))))
+
+;; ---------------------------------------------------------------------------
+;; workstream-rows — assembled from disk
+;; ---------------------------------------------------------------------------
+
+(deftest workstream-rows-projects-engagement-and-counts
+  (with-tmp
+    (fn [_]
+      ;; idle: open workstream, no sessions
+      (make-ws! :brian {:stage :triaged})
+      ;; active: one live autonomous session, running
+      (let [w (make-ws! :brian {:stage :implementing
+                                :external-refs [{:adapter :notion :id "BR-1" :title "Active one"}]})]
+        (make-session! :brian (:id w) "run-a" {:autonomy autonomy-running}))
+      (let [rows (wsv/workstream-rows :brian)
+            by-label (into {} (map (juxt :label identity)) rows)]
+        (is (= 2 (count rows)))
+        (is (= :active (:engagement (by-label "BR-1 · Active one"))))
+        (is (= 1 (:session-count (by-label "BR-1 · Active one"))))
+        (is (some #(= :idle (:engagement %)) rows))
+        (is (every? :ws-id rows))
+        (is (every? #(= :brian (:project %)) rows))))))
+
+(deftest workstream-rows-marks-closed-as-settled
+  (with-tmp
+    (fn [_]
+      (let [w (make-ws! :brian {:stage :implementing
+                                :closed {:at "2026-06-06T00:00:00Z" :outcome :done}})]
+        (make-session! :brian (:id w) "run-a" {:autonomy autonomy-running}))
+      (let [rows (wsv/workstream-rows :brian)]
+        (is (= [:settled] (map :engagement rows)))))))
+
+(deftest workstream-rows-parked-beats-active
+  (with-tmp
+    (fn [_]
+      (let [w (make-ws! :brian {:stage :planning})]
+        (make-session! :brian (:id w) "run-parked"
+                       {:autonomy (assoc autonomy-running :phase :parked)}))
+      (is (= [:parked-at-gate] (map :engagement (wsv/workstream-rows :brian)))))))
+

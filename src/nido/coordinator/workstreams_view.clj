@@ -36,3 +36,38 @@
       entry-title entry-title
       trigger     (str (name trigger) " · " (short-suffix (:id ws)))
       :else       (:id ws))))
+
+(defn- timestamps [ws sessions]
+  (concat
+   (map :at (:stage-history ws))
+   (mapcat (fn [s]
+             (concat (map :at (:substrate-history s))
+                     (map :at (get-in s [:autonomy :phase-history]))
+                     [(:created-at s)]))
+           sessions)))
+
+(defn last-activity
+  "Latest ISO-8601 timestamp across the workstream's stage-history and each
+   session's substrate-history / autonomy phase-history / created-at. ISO
+   strings sort lexically = chronologically. nil when nothing is present."
+  [ws sessions]
+  (->> (timestamps ws sessions) (remove nil?) sort last))
+
+(defn workstream-row
+  "One display row for a workstream: reads its sessions and projects engagement."
+  [project ws]
+  (let [sessions (session/list-sessions project (:id ws))]
+    {:ws-id         (:id ws)
+     :project       project
+     :label         (label ws sessions)
+     :stage         (:stage ws)
+     :engagement    (session/engagement-state (:closed ws) sessions)
+     :session-count (count sessions)
+     :last-activity (last-activity ws sessions)}))
+
+(defn workstream-rows
+  "All workstream rows for a project, read from disk."
+  [project]
+  (->> (workstream/list-ids project)
+       (keep #(workstream/read-ws project %))
+       (mapv #(workstream-row project %))))
