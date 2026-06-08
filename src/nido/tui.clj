@@ -178,6 +178,26 @@
                        :show-descriptions true
                        :cursor-style (style/style :fg style/cyan :bold true)))
 
+;; Single-line picker list (no descriptions) for the modal choosers. Items are
+;; `{:title <string> :data <value>}`; `enter` reads `selected-item`'s :data.
+;; Replaces the per-modal cursor/up/down/clamp bookkeeping with the same list
+;; component the main screens use.
+(defn- picker-list [items]
+  (item-list/item-list items
+                       :show-descriptions false
+                       :cursor-style (style/style :fg style/cyan :bold true)))
+
+(defn- picker-selected
+  "The :data of the highlighted picker item, or nil when empty."
+  [state]
+  (some-> (:picker (:modal-target state)) item-list/selected-item :data))
+
+(defn- picker-route
+  "Route a navigation key to the modal's picker list and store it back."
+  [state msg]
+  (let [[lst cmd] (item-list/list-update (:picker (:modal-target state)) msg)]
+    [(assoc-in state [:modal-target :picker] lst) cmd]))
+
 (defn- rebuild-list [state items]
   (assoc state
          :items items
@@ -410,14 +430,14 @@
       [(-> state
            (assoc :modal :fire-pick-trigger)
            (assoc :modal-target {:project project-kw
-                                 :triggers []
                                  :error "(no manual triggers for this project)"}))
        nil]
       [(-> state
            (assoc :modal :fire-pick-trigger)
-           (assoc :modal-target {:project project-kw
-                                 :triggers trigs
-                                 :cursor 0}))
+           (assoc :modal-target
+                  {:project project-kw
+                   :picker (picker-list
+                            (mapv (fn [t] {:title (name (:name t)) :data t}) trigs))}))
        nil])))
 
 (defn- open-fire-trigger
@@ -436,44 +456,34 @@
       :else
       [(-> state
            (assoc :modal :fire-pick-project)
-           (assoc :modal-target {:projects projects :cursor 0}))
+           (assoc :modal-target
+                  {:picker (picker-list (mapv (fn [p] {:title p :data p}) projects))}))
        nil])))
 
 (defn- update-fire-pick-project [state msg]
-  (let [{:keys [projects cursor]} (:modal-target state)]
-    (cond
-      (msg/key-match? msg "escape") [(close-modal state) nil]
+  (cond
+    (msg/key-match? msg "escape") [(close-modal state) nil]
 
-      (msg/key-match? msg "up")
-      [(assoc-in state [:modal-target :cursor] (max 0 (dec cursor))) nil]
+    (msg/key-match? msg "enter")
+    (if-let [p (picker-selected state)]
+      (open-fire-pick-trigger state p)
+      [state nil])
 
-      (msg/key-match? msg "down")
-      [(assoc-in state [:modal-target :cursor]
-                 (min (dec (count projects)) (inc cursor))) nil]
-
-      (msg/key-match? msg "enter")
-      (open-fire-pick-trigger state (nth projects cursor))
-
-      :else [state nil])))
+    :else (picker-route state msg)))
 
 (defn- update-fire-pick-trigger [state msg]
-  (let [{:keys [project triggers cursor]} (:modal-target state)]
+  (let [{:keys [project picker error]} (:modal-target state)]
     (cond
       (msg/key-match? msg "escape") [(close-modal state) nil]
 
-      (or (empty? triggers) (nil? cursor)) [state nil]
-
-      (msg/key-match? msg "up")
-      [(assoc-in state [:modal-target :cursor] (max 0 (dec cursor))) nil]
-
-      (msg/key-match? msg "down")
-      [(assoc-in state [:modal-target :cursor]
-                 (min (dec (count triggers)) (inc cursor))) nil]
+      (or error (nil? picker)) [state nil]
 
       (msg/key-match? msg "enter")
-      (start-payload-input state project (nth triggers cursor))
+      (if-let [t (picker-selected state)]
+        (start-payload-input state project t)
+        [state nil])
 
-      :else [state nil])))
+      :else (picker-route state msg))))
 
 (defn- update-fire-input-payload [state msg]
   (let [{:keys [project trigger keys idx values]} (:modal-target state)]
@@ -542,30 +552,29 @@
       [state nil]
       [(-> state
            (assoc :modal :clear-breaker)
-           (assoc :modal-target {:tripped tripped :cursor 0}))
+           (assoc :modal-target
+                  {:picker (picker-list
+                            (mapv (fn [{:keys [project trigger info] :as t}]
+                                    {:title (str (name project) "/" (name trigger)
+                                                 "  —  " (runs-view/breaker-reason info))
+                                     :data  t})
+                                  tripped))}))
        nil])))
 
 (defn- update-clear-breaker [state msg]
-  (let [{:keys [tripped cursor]} (:modal-target state)]
-    (cond
-      (msg/key-match? msg "escape") [(close-modal state) nil]
+  (cond
+    (msg/key-match? msg "escape") [(close-modal state) nil]
 
-      (msg/key-match? msg "up")
-      [(assoc-in state [:modal-target :cursor] (max 0 (dec cursor))) nil]
+    (msg/key-match? msg "enter")
+    (if-let [{:keys [project trigger]} (picker-selected state)]
+      (do (breakers/enable! project trigger)
+          [(-> state (close-modal)
+               (assoc :status (str "Breaker cleared: "
+                                   (name project) "/" (name trigger))))
+           nil])
+      [state nil])
 
-      (msg/key-match? msg "down")
-      [(assoc-in state [:modal-target :cursor]
-                 (min (dec (count tripped)) (inc cursor))) nil]
-
-      (msg/key-match? msg "enter")
-      (let [{:keys [project trigger]} (nth tripped cursor)]
-        (breakers/enable! project trigger)
-        [(-> state (close-modal)
-             (assoc :status (str "Breaker cleared: "
-                                 (name project) "/" (name trigger))))
-         nil])
-
-      :else [state nil])))
+    :else (picker-route state msg)))
 
 (defn- update-runs
   "Runs screen update handler. ↵ enters the highlighted Run's session-home;
@@ -987,21 +996,13 @@
     (text-input/text-input-view (:modal-input state))
 
     :fire-pick-project
-    (let [{:keys [projects cursor]} (:modal-target state)]
-      (str/join "\n"
-                (map-indexed (fn [i p]
-                               (str (if (= i cursor) "▸ " "  ") p))
-                             projects)))
+    (item-list/list-view (:picker (:modal-target state)))
 
     :fire-pick-trigger
-    (let [{:keys [triggers cursor error]} (:modal-target state)]
+    (let [{:keys [picker error]} (:modal-target state)]
       (if error
         error
-        (str/join "\n"
-                  (map-indexed (fn [i t]
-                                 (str (if (= i cursor) "▸ " "  ")
-                                      (name (:name t))))
-                               triggers))))
+        (item-list/list-view picker)))
 
     :fire-input-payload
     (let [{:keys [trigger keys idx values]} (:modal-target state)
@@ -1027,13 +1028,7 @@
                 ".")))
 
     :clear-breaker
-    (let [{:keys [tripped cursor]} (:modal-target state)]
-      (str/join "\n"
-                (map-indexed (fn [i {:keys [project trigger info]}]
-                               (str (if (= i cursor) "▸ " "  ")
-                                    (name project) "/" (name trigger)
-                                    "  —  " (runs-view/breaker-reason info)))
-                             tripped)))))
+    (item-list/list-view (:picker (:modal-target state)))))
 
 (defn- view [state]
   (if (:modal state)
