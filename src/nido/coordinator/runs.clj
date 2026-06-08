@@ -17,6 +17,19 @@
   "Permitted Run states. See spec §Runs / Lifecycle."
   #{:queued :preprocessing :running :awaiting-review :done :failed :halted :dry-run-would-fire})
 
+(def state->phase
+  "Run state → session autonomy phase. The single source of truth for mirroring
+   a run onto its authoritative session (used by transition!/reconcile and by
+   the migrate one-shot). :awaiting-review parks (human gate)."
+  {:queued             :queued
+   :preprocessing      :preprocessing
+   :running            :running
+   :awaiting-review    :parked
+   :done               :done
+   :failed             :failed
+   :halted             :halted
+   :dry-run-would-fire :failed})
+
 (def Run
   [:map {:closed true}
    [:id                string?]

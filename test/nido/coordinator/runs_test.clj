@@ -415,3 +415,14 @@
       (runs/teardown-session-for-run!
         {:skill :triage-bug :project :brian :session-name "run-triage-1" :id "r2"})
       (is (= ["run-triage-1"] @destroyed) "triage lite session is reclaimed"))))
+
+(deftest state->phase-maps-every-run-state
+  (is (= :running (runs/state->phase :running)))
+  (is (= :parked  (runs/state->phase :awaiting-review)))
+  (is (= :done    (runs/state->phase :done)))
+  (is (= :failed  (runs/state->phase :failed)))
+  (is (= :halted  (runs/state->phase :halted)))
+  (is (= :queued  (runs/state->phase :queued)))
+  (is (= :preprocessing (runs/state->phase :preprocessing)))
+  (is (= :failed  (runs/state->phase :dry-run-would-fire)))
+  (is (every? runs/state->phase runs/states)))

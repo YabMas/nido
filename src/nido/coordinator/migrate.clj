@@ -19,16 +19,6 @@
   "Legacy ticket statuses that mean the workstream is terminally settled."
   {:skipped :dropped})
 
-(def ^:private run-state->phase
-  {:queued          :queued
-   :preprocessing   :preprocessing
-   :running         :running
-   :awaiting-review :parked
-   :done            :done
-   :failed          :failed
-   :halted          :halted
-   :dry-run-would-fire :failed})
-
 (defn- run-state->substrate
   "A run still parked at :awaiting-review keeps a live substrate; everything
    else (terminal) is archived."
@@ -85,7 +75,7 @@
                     (str "ws-from-run-" id))
         substrate (run-state->substrate state)
         phases    (mapv (fn [{:keys [at state]}]
-                          {:at at :phase (run-state->phase state)})
+                          {:at at :phase (runs/state->phase state)})
                         state-history)]
     {:ws-id ws-id
      :session
@@ -104,7 +94,7 @@
                           :priority          (or priority 0)
                           :uncapped?         (boolean uncapped?)
                           :on-promote        on-promote
-                          :phase             (run-state->phase state)
+                          :phase             (runs/state->phase state)
                           :phase-history     phases
                           :error             error}
       :created-at        (or (:at (first state-history)) (clock/now-iso))}}))
