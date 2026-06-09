@@ -10,15 +10,16 @@
     (edn/read-string (slurp path))))
 
 (defn write-edn!
-  "Atomically write EDN to path: writes to <path>.tmp then renames.
-  Creates parent dirs as needed. Protects readers from observing torn
-  writes — the file is always either the previous good content or the
-  new good content, never partial."
+  "Atomically write EDN to path: writes to a unique temp file then atomically
+  renames it into place. Creates parent dirs as needed. Protects readers from
+  observing torn writes — the file is always either the previous good content or
+  the new good content, never partial. Using a unique temp name per call makes
+  concurrent writes to the same path safe from rename-races."
   [path data]
   (when-let [parent (fs/parent path)]
     (fs/create-dirs parent))
   (let [path-s (str path)
-        tmp    (str path-s ".tmp")]
+        tmp    (str path-s "." (java.util.UUID/randomUUID) ".tmp")]
     (spit tmp (str (pr-str data) "\n"))
     (fs/move tmp path-s {:replace-existing true})))
 
