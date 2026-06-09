@@ -1,7 +1,7 @@
 (ns nido.coordinator.workstreams-view-test
   (:require
    [babashka.fs :as fs]
-   [clojure.test :refer [deftest is testing]]
+   [clojure.test :refer [deftest is]]
    [nido.coordinator.session :as session]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.tickets :as tickets]
