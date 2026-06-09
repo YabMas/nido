@@ -180,3 +180,27 @@
           (is (= 0 (:workstreams again)))
           (is (= 0 (:sessions again)))))
       (finally (fs/delete-tree tmp)))))
+
+(defn- auton [skill phase]
+  {:skill skill :first-message "m" :agent :claude :claude-session-id nil
+   :trigger :t :limits {} :priority 0 :uncapped? false :on-promote nil
+   :phase phase :phase-history [] :error nil})
+
+(deftest archive-orphaned-live-archives-terminal-triage-but-not-plan-bug
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (let [w (ws/create! :brian {:stage :triaging})]
+          (sess/create! :brian (:id w) {:name "done-triage" :weight :light
+                                        :autonomy (auton :triage-bug :done)})
+          (sess/create! :brian (:id w) {:name "running-triage" :weight :light
+                                        :autonomy (auton :triage-bug :running)})
+          (sess/create! :brian (:id w) {:name "impl-handed" :weight :light
+                                        :autonomy (auton :plan-bug :done)})
+          (let [n (migrate/archive-orphaned-live! :brian)]
+            (is (= 1 n) "only the terminal triage session is archived")
+            (is (= :archived (:substrate (sess/read-session :brian (:id w) "done-triage"))))
+            (is (= :live (:substrate (sess/read-session :brian (:id w) "running-triage"))))
+            (is (= :live (:substrate (sess/read-session :brian (:id w) "impl-handed")))
+                "plan-bug session is the human's workspace — never archived"))))
+      (finally (fs/delete-tree tmp)))))
