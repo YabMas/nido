@@ -7,6 +7,7 @@
   (:require
    [clojure.string :as str]
    [nido.coordinator.session :as session]
+   [nido.coordinator.tickets :as tickets]
    [nido.coordinator.workstream :as workstream]))
 
 (defn notion-ref
@@ -54,13 +55,18 @@
   (->> (timestamps ws sessions) (remove nil?) sort last))
 
 (defn workstream-row
-  "One display row for a workstream: reads its sessions and projects engagement."
+  "One display row for a workstream: reads its sessions and projects engagement
+   + lifecycle stage."
   [project ws]
-  (let [sessions (session/list-sessions project (:id ws))]
+  (let [sessions (session/list-sessions project (:id ws))
+        br-id    (:id (notion-ref ws))
+        status   (when br-id (tickets/status project br-id))
+        proj     (session/stage-projection (:closed ws) status sessions (:stage ws))]
     {:ws-id         (:id ws)
      :project       project
      :label         (label ws sessions)
-     :stage         (:stage ws)
+     :stage         (:stage proj)
+     :needs-you     (:needs-you proj)
      :engagement    (session/engagement-state (:closed ws) sessions)
      :session-count (count sessions)
      :last-activity (last-activity ws sessions)}))
@@ -72,17 +78,22 @@
        (keep #(workstream/read-ws project %))
        (mapv #(workstream-row project %))))
 
-(defn grouped-workstreams
-  "Partition rows by engagement, newest-activity first within each group.
-   :settled is capped at the 10 most recent (mirrors runs-view/tickets-view)."
+(defn- by-needs-then-newest
+  "needs-you rows first, newest-activity first within each band. ISO strings
+   sort lexically = chronologically."
   [rows]
-  (let [by     (group-by :engagement rows)
-        newest (fn [rs] (vec (sort-by :last-activity #(compare %2 %1) rs)))]
-    {:parked  (newest (:parked-at-gate by []))
-     :active  (newest (:active by []))
-     :queued  (newest (:queued by []))
-     :idle    (newest (:idle by []))
-     :settled (vec (take 10 (newest (:settled by []))))}))
+  (let [newest (fn [rs] (sort-by :last-activity #(compare %2 %1) rs))]
+    (vec (concat (newest (filter :needs-you rows))
+                 (newest (remove :needs-you rows))))))
+
+(defn grouped-by-stage
+  "Partition rows by lifecycle stage for the overview. :done is intentionally
+   omitted — done is done, not shown. Each band: needs-you first, then newest."
+  [rows]
+  (let [by (group-by :stage rows)]
+    {:ready       (by-needs-then-newest (:ready by []))
+     :in-progress (by-needs-then-newest (:in-progress by []))
+     :triage      (by-needs-then-newest (:triage by []))}))
 
 (defn session-rows
   "Display rows for one workstream's coordinator-sessions. :phase is nil for
@@ -104,14 +115,25 @@
 (defn- truncate [s n]
   (if (> (count s) n) (str (subs s 0 n) "…") s))
 
+(defn engagement-substatus
+  "Short per-item liveness tag shown next to the label inside a stage row."
+  [eng]
+  (case eng
+    :parked-at-gate "parked"
+    :active         "running"
+    :queued         "queued"
+    :idle           "idle"
+    :settled        "done"
+    "—"))
+
 (defn format-row
-  "Display string for a workstream row: `<label>  ·  <stage>  ·  N session(s)`."
-  [{:keys [label stage session-count]}]
-  (format "%s  ·  %s  ·  %d session%s"
+  "Display string for a stage-grouped row: `⏸ <label>   <substatus>` (the marker
+   is two spaces when the row does not need you)."
+  [{:keys [label needs-you engagement]}]
+  (format "%s%s   %s"
+          (if needs-you "⏸ " "  ")
           (truncate (str label) title-max)
-          (name (or stage :?))
-          (int session-count)
-          (if (= 1 session-count) "" "s")))
+          (engagement-substatus engagement)))
 
 (defn format-session-row
   "Display string for a session row: `<name>  ·  <phase|human>  ·  <weight>  ·  <substrate>`."

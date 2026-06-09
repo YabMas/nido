@@ -4,6 +4,7 @@
    [clojure.test :refer [deftest is testing]]
    [nido.coordinator.session :as session]
    [nido.coordinator.state :as cstate]
+   [nido.coordinator.tickets :as tickets]
    [nido.coordinator.workstream :as workstream]
    [nido.coordinator.workstreams-view :as wsv]))
 
@@ -127,33 +128,39 @@
 
 
 ;; ---------------------------------------------------------------------------
-;; grouped-workstreams
+;; grouped-by-stage + workstream-rows stage projection
 ;; ---------------------------------------------------------------------------
 
-(defn- row [eng id at]
-  {:ws-id id :engagement eng :label id :stage :s :session-count 0 :last-activity at})
+(deftest workstream-rows-projects-stage-and-needs-you
+  (with-tmp
+    (fn [_]
+      (let [w (make-ws! :brian {:external-refs [{:adapter :notion :id "BR-9" :title "Ready one"}]
+                                :stage :triaging})]
+        (tickets/open! :brian "BR-9" {:title "Ready one"})
+        (tickets/set-status! :brian "BR-9" :triaged)
+        (make-session! :brian (:id w) "s1" {:substrate :archived
+                                            :autonomy (assoc autonomy-running :phase :done)})
+        (let [r (first (wsv/workstream-rows :brian))]
+          (is (= :ready (:stage r)))
+          (is (true? (:needs-you r))))))))
 
-(deftest grouped-orders-and-caps
-  (let [settled (for [n (range 12)]
-                  (row :settled (str "s" n) (format "2026-06-%02dT00:00:00Z" (inc n))))
-        rows (concat [(row :parked-at-gate "p1" "2026-06-01T00:00:00Z")
-                      (row :active "a1" "2026-06-01T00:00:00Z")
-                      (row :idle "i1" "2026-06-01T00:00:00Z")]
-                     settled)
-        g (wsv/grouped-workstreams rows)]
-    (is (= ["p1"] (map :ws-id (:parked g))))
-    (is (= ["a1"] (map :ws-id (:active g))))
-    (is (= ["i1"] (map :ws-id (:idle g))))
-    (testing "settled capped at 10, newest-activity first"
-      (is (= 10 (count (:settled g))))
-      (is (= "s11" (:ws-id (first (:settled g))))))))
+(deftest grouped-by-stage-orders-needs-you-first-and-drops-done
+  (let [rows [{:ws-id "r1" :stage :ready       :needs-you true  :last-activity "2026-06-01T00:00:00Z"}
+              {:ws-id "t1" :stage :triage      :needs-you false :last-activity "2026-06-03T00:00:00Z"}
+              {:ws-id "t2" :stage :triage      :needs-you true  :last-activity "2026-06-02T00:00:00Z"}
+              {:ws-id "p1" :stage :in-progress :needs-you false :last-activity "2026-06-01T00:00:00Z"}
+              {:ws-id "d1" :stage :done        :needs-you false :last-activity "2026-06-09T00:00:00Z"}]
+        g (wsv/grouped-by-stage rows)]
+    (is (= ["r1"] (map :ws-id (:ready g))))
+    (is (= ["p1"] (map :ws-id (:in-progress g))))
+    (is (= ["t2" "t1"] (map :ws-id (:triage g))) "needs-you first, then newest")
+    (is (nil? (:done g)) "done is dropped")))
 
-(deftest grouped-separates-queued-from-active
-  (let [rows [{:ws-id "a" :engagement :active :last-activity "2026-06-01T00:00:00Z"}
-              {:ws-id "q" :engagement :queued :last-activity "2026-06-01T00:00:00Z"}]
-        g (wsv/grouped-workstreams rows)]
-    (is (= ["a"] (map :ws-id (:active g))))
-    (is (= ["q"] (map :ws-id (:queued g))))))
+(deftest format-row-marks-needs-you-and-substatus
+  (is (= "⏸ BR-1 · x   parked"
+         (wsv/format-row {:label "BR-1 · x" :needs-you true :engagement :parked-at-gate})))
+  (is (= "  BR-2 · y   queued"
+         (wsv/format-row {:label "BR-2 · y" :needs-you false :engagement :queued}))))
 
 ;; ---------------------------------------------------------------------------
 ;; session-rows (workstream detail) + formatting
@@ -173,12 +180,6 @@
           (is (= :heavy   (:weight (by "run-auto"))))
           (is (= :live    (:substrate (by "run-auto"))))
           (is (nil?       (:phase (by "human-sess")))))))))
-
-(deftest format-row-renders-singular-plural
-  (is (= "BR-1 · Fix  ·  implementing  ·  1 session"
-         (wsv/format-row {:label "BR-1 · Fix" :stage :implementing :session-count 1})))
-  (is (= "BR-1 · Fix  ·  implementing  ·  2 sessions"
-         (wsv/format-row {:label "BR-1 · Fix" :stage :implementing :session-count 2}))))
 
 (deftest format-session-row-human-vs-autonomous
   (is (= "run-auto  ·  running  ·  heavy  ·  live"
