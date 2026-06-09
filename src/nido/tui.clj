@@ -107,13 +107,25 @@
                    :data        r})
                 rows))))
 
+(defn- collapsed-group-row
+  "A single summary line (count only, no item rows) for a non-actionable group
+   we deliberately don't expand — keeps Queued/Idle from flooding the list. nil
+   when empty so the caller can `concat` without conditionals."
+  [label rows]
+  (when (seq rows)
+    [{:title       (str "── " label " (" (count rows) ") ──")
+      :description "(summary — not expanded)"
+      :data        ::group-header}]))
+
 (defn- workstream-list-rows [project]
   (let [g    (wsv/grouped-workstreams (wsv/workstream-rows project))
         rows (concat
+              ;; Actionable groups expand; queued/idle collapse to a count line
+              ;; (you don't review queued work item-by-item).
               (workstream-group-rows "Parked at gate (needs you)" (:parked g))
               (workstream-group-rows "Active"                     (:active g))
-              (workstream-group-rows "Queued"                     (:queued g))
-              (workstream-group-rows "Idle"                       (:idle g))
+              (collapsed-group-row   "Queued"                     (:queued g))
+              (collapsed-group-row   "Idle"                       (:idle g))
               (workstream-group-rows "Settled (recent)"           (:settled g)))]
     (if (empty? rows)
       [{:title "No workstreams yet. Press 'f' to fire a trigger."
