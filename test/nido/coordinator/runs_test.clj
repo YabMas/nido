@@ -7,7 +7,8 @@
    [nido.coordinator.runs :as runs]
    [nido.coordinator.session :as session]
    [nido.coordinator.state :as cstate]
-   [nido.coordinator.workstream :as workstream]))
+   [nido.coordinator.workstream :as workstream]
+   [nido.session.lifecycle]))
 
 (def example-run
   {:id              "2026-05-13-brian-investigate-bug-a1b2c3"
@@ -470,4 +471,25 @@
                       :payload {}}
               run (runs/create-run! routed {:fired-at "2026-06-08T00:00:00Z" :fired-by "x"})]
           (is (= 0 (:priority run)))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest teardown-archives-coordinator-session-for-triage
+  ;; Reclaiming a triage run's session must flip the coordinator session record
+  ;; off :live, so engagement-state stops treating the dead session as live.
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))
+                    nido.session.lifecycle/destroy! (fn [_ _] nil)]
+        (let [w (workstream/create! :brian {:stage :triaging})
+              _ (session/create! :brian (:id w) {:name "run-triage-1" :weight :light
+                                                 :autonomy {:skill :triage-bug :first-message "m"
+                                                            :agent :claude :claude-session-id nil
+                                                            :trigger :t :limits {} :priority 0
+                                                            :uncapped? false :on-promote nil
+                                                            :phase :done :phase-history [] :error nil}})]
+          (runs/teardown-session-for-run!
+            {:skill :triage-bug :project :brian :workstream-id (:id w)
+             :session-name "run-triage-1" :id "r1"})
+          (is (= :archived (:substrate (session/read-session :brian (:id w) "run-triage-1")))
+              "triage teardown archives the coordinator session")))
       (finally (fs/delete-tree tmp)))))

@@ -284,7 +284,7 @@
    throwing — teardown must never re-fail a run that already reached terminal."
   [run]
   (when-not (= :plan-bug (:skill run))
-   (let [{:keys [project session-name id]} run]
+   (let [{:keys [project session-name id workstream-id]} run]
     (try
       (session-lifecycle/destroy! session-name {:project project})
       (catch Exception e
@@ -292,6 +292,17 @@
           (.println ^java.io.PrintWriter *err*
                     (str "nido coordinator: teardown destroy! failed for "
                          session-name " — " (ex-message e))))))
+    ;; Flip the coordinator session record off :live — destroy! only removes the
+    ;; launcher session; without this the record stays :live and engagement-state
+    ;; keeps projecting the workstream as :queued (the disappearing-ack bug).
+    (when workstream-id
+      (try
+        (session/archive! project workstream-id session-name)
+        (catch Exception e
+          (binding [*err* *err*]
+            (.println ^java.io.PrintWriter *err*
+                      (str "nido coordinator: teardown archive! failed for "
+                           session-name " — " (ex-message e)))))))
     (try
       (let [home (session-state/session-home-dir (name project) session-name)]
         (when (fs/exists? home) (fs/delete-tree home)))
