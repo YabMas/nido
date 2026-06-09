@@ -701,7 +701,10 @@
    progress. Synchronous: promote! is a local status write + enqueue."
   [state]
   (if-let [ws (selected-workstream state)]
-    (let [decision (:decision (promote/promote! (:project state) (:br-id ws)))]
+    ;; The coordinator keys envelopes on a keyword project; (:project state) is a
+    ;; string, so keyword-ize it (mirrors the fire path's project-kw) or the
+    ;; envelope is dropped as :unknown-project and no plan-bug run ever spawns.
+    (let [decision (:decision (promote/promote! (keyword (:project state)) (:br-id ws)))]
       [(-> state
            (refresh-list (current-rows state))
            (assoc :status (wsv/promote-result-message (:br-id ws) decision)))
