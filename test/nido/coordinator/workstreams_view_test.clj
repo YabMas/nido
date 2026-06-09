@@ -142,7 +142,8 @@
                                             :autonomy (assoc autonomy-running :phase :done)})
         (let [r (first (wsv/workstream-rows :brian))]
           (is (= :ready (:stage r)))
-          (is (true? (:needs-you r))))))))
+          (is (true? (:needs-you r)))
+          (is (= "BR-9" (:br-id r)) "row carries the ticket id for the promote shortcut"))))))
 
 (deftest grouped-by-stage-orders-needs-you-first-and-drops-done
   (let [rows [{:ws-id "r1" :stage :ready       :needs-you true  :last-activity "2026-06-01T00:00:00Z"}
@@ -161,6 +162,13 @@
          (wsv/format-row {:label "BR-1 · x" :needs-you true :engagement :parked-at-gate})))
   (is (= "  BR-2 · y   queued"
          (wsv/format-row {:label "BR-2 · y" :needs-you false :engagement :queued}))))
+
+(deftest promote-result-message-reads-the-decision
+  (is (= "promoted BR-7 → in progress"           (wsv/promote-result-message "BR-7" :promote)))
+  (is (= "BR-7 already promoted"                  (wsv/promote-result-message "BR-7" :skip-active)))
+  (is (= "BR-7 isn't triaged yet — not ready to pick up"
+         (wsv/promote-result-message "BR-7" :skip-untriaged)))
+  (is (= "no ticket on this workstream to promote" (wsv/promote-result-message nil :promote))))
 
 ;; ---------------------------------------------------------------------------
 ;; session-rows (workstream detail) + formatting

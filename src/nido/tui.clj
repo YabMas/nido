@@ -24,6 +24,7 @@
    [nido.charm-patch :as charm-patch]
    [nido.coordinator.breakers :as breakers]
    [nido.coordinator.halt :as halt]
+   [nido.coordinator.promote :as promote]
    [nido.coordinator.queue :as queue]
    [nido.coordinator.runs-view :as runs-view]
    [nido.coordinator.workstreams-view :as wsv]
@@ -693,16 +694,33 @@
 
     :else (picker-route state msg)))
 
+(defn- promote-selected
+  "Promote the highlighted workstream's ticket (status :triaged → planning Run).
+   Runs the same `promote/promote!` gate the CLI uses, surfaces its decision in
+   the status line, and refreshes the list so a promoted row moves Ready → In
+   progress. Synchronous: promote! is a local status write + enqueue."
+  [state]
+  (if-let [ws (selected-workstream state)]
+    (let [decision (:decision (promote/promote! (:project state) (:br-id ws)))]
+      [(-> state
+           (refresh-list (current-rows state))
+           (assoc :status (wsv/promote-result-message (:br-id ws) decision)))
+       nil])
+    [(assoc state :status "(no workstream selected)") nil]))
+
 (defn- update-workstreams
   "Workstreams list screen. ↵ drills into the highlighted workstream's session
-   detail. f/h/c carry over fire-trigger / halt / clear-breaker. Group-header
-   and empty rows are guarded by `selected-workstream` returning nil."
+   detail. p promotes the highlighted ticket; f/h/c carry over fire-trigger /
+   halt / clear-breaker. Group-header and empty rows are guarded by
+   `selected-workstream` returning nil."
   [state msg]
   (cond
     (msg/key-match? msg "enter")
     (if-let [ws (selected-workstream state)]
       [(enter-workstream state (:ws-id ws) (:label ws)) nil]
       [state nil])
+
+    (msg/key-match? msg "p") (promote-selected state)
 
     (msg/key-match? msg "f") (open-fire-trigger state)
     (msg/key-match? msg "h") (open-halt-confirm state)
@@ -962,7 +980,7 @@
                   (case (:screen state)
                     :projects    "[↵] open  [q]uit"
                     :sessions    "[↵/e] enter  [w]orktree  [i]nfo  [a]dd  [u]p  [d]own  [x] destroy  [r] workstreams  [esc] back  [q]uit"
-                    :workstreams "[↵] open  [f]ire  [h]alt  [c]lear breaker  [s]essions  [q]uit"
+                    :workstreams "[↵] open  [p]romote  [f]ire  [h]alt  [c]lear breaker  [s]essions  [q]uit"
                     :workstream  "[↵] open in chat  [esc] back  [s]essions  [q]uit"))))
 
 (defn- info-row [label value]
