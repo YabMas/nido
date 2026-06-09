@@ -93,40 +93,45 @@
 ;; Workstreams surface — list (engagement groups) + detail (its sessions)
 ;; ---------------------------------------------------------------------------
 
-(defn- workstream-group-rows
-  "Header row + one row per workstream for a single engagement group. nil when
-   the group is empty so the caller can `concat` without conditionals."
-  [label rows]
-  (when (seq rows)
-    (cons {:title       (str "── " label " (" (count rows) ") ──")
-           :description ""
-           :data        ::group-header}
-          (mapv (fn [r]
-                  {:title       (wsv/format-row r)
-                   :description (or (:last-activity r) "")
-                   :data        r})
-                rows))))
+(defn- ws-item-row
+  "One workstream display row inside a stage group."
+  [r]
+  {:title       (wsv/format-row r)
+   :description (or (:last-activity r) "")
+   :data        r})
 
-(defn- collapsed-group-row
-  "A single summary line (count only, no item rows) for a non-actionable group
-   we deliberately don't expand — keeps Queued/Idle from flooding the list. nil
-   when empty so the caller can `concat` without conditionals."
+(defn- stage-group-rows
+  "Header + one row per workstream for a fully-expanded stage group. nil when
+   empty so callers can `concat` without conditionals."
   [label rows]
   (when (seq rows)
-    [{:title       (str "── " label " (" (count rows) ") ──")
-      :description "(summary — not expanded)"
-      :data        ::group-header}]))
+    (cons {:title (str "── " label " (" (count rows) ") ──") :description "" :data ::group-header}
+          (mapv ws-item-row rows))))
+
+(def ^:private triage-expand-max 5)
+
+(defn- triage-group-rows
+  "Triage group: expand at most `triage-expand-max` needs-you (parked) rows
+   (already sorted needs-you-first by grouped-by-stage); everything else —
+   overflow parked plus all running/queued — collapses into a `+N` tail line."
+  [rows]
+  (when (seq rows)
+    (let [shown (take triage-expand-max (filter :needs-you rows))
+          tail  (- (count rows) (count shown))]
+      (concat
+       [{:title (str "── Triage (" (count rows) ") ──") :description "" :data ::group-header}]
+       (mapv ws-item-row shown)
+       (when (pos? tail)
+         [{:title (str "   + " tail " running / queued") :description "" :data ::group-header}])))))
 
 (defn- workstream-list-rows [project]
-  (let [g    (wsv/grouped-workstreams (wsv/workstream-rows project))
+  (let [g    (wsv/grouped-by-stage (wsv/workstream-rows project))
         rows (concat
-              ;; Actionable groups expand; queued/idle collapse to a count line
-              ;; (you don't review queued work item-by-item).
-              (workstream-group-rows "Parked at gate (needs you)" (:parked g))
-              (workstream-group-rows "Active"                     (:active g))
-              (collapsed-group-row   "Queued"                     (:queued g))
-              (collapsed-group-row   "Idle"                       (:idle g))
-              (workstream-group-rows "Settled (recent)"           (:settled g)))]
+              ;; Actionable-first: Triage is high-volume autonomous churn and
+              ;; would bury the rows you act on. Done is omitted entirely.
+              (stage-group-rows  "Ready to pick up" (:ready g))
+              (stage-group-rows  "In progress"      (:in-progress g))
+              (triage-group-rows (:triage g)))]
     (if (empty? rows)
       [{:title "No workstreams yet. Press 'f' to fire a trigger."
         :description ""
