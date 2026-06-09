@@ -112,6 +112,7 @@
         rows (concat
               (workstream-group-rows "Parked at gate (needs you)" (:parked g))
               (workstream-group-rows "Active"                     (:active g))
+              (workstream-group-rows "Queued"                     (:queued g))
               (workstream-group-rows "Idle"                       (:idle g))
               (workstream-group-rows "Settled (recent)"           (:settled g)))]
     (if (empty? rows)

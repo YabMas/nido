@@ -148,6 +148,13 @@
       (is (= 10 (count (:settled g))))
       (is (= "s11" (:ws-id (first (:settled g))))))))
 
+(deftest grouped-separates-queued-from-active
+  (let [rows [{:ws-id "a" :engagement :active :last-activity "2026-06-01T00:00:00Z"}
+              {:ws-id "q" :engagement :queued :last-activity "2026-06-01T00:00:00Z"}]
+        g (wsv/grouped-workstreams rows)]
+    (is (= ["a"] (map :ws-id (:active g))))
+    (is (= ["q"] (map :ws-id (:queued g))))))
+
 ;; ---------------------------------------------------------------------------
 ;; session-rows (workstream detail) + formatting
 ;; ---------------------------------------------------------------------------

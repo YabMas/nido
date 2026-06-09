@@ -80,6 +80,7 @@
         newest (fn [rs] (vec (sort-by :last-activity #(compare %2 %1) rs)))]
     {:parked  (newest (:parked-at-gate by []))
      :active  (newest (:active by []))
+     :queued  (newest (:queued by []))
      :idle    (newest (:idle by []))
      :settled (vec (take 10 (newest (:settled by []))))}))
 

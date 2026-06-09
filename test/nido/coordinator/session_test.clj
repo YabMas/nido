@@ -155,6 +155,19 @@
   (is (= :idle (sess/engagement-state nil [(assoc human-session :substrate :archived)])))
   (is (= :idle (sess/engagement-state nil []))))
 
+(deftest engagement-state-distinguishes-queued-from-active
+  (let [auton (fn [phase] {:substrate :live :autonomy {:phase phase}})
+        human {:substrate :live :autonomy nil}]
+    (is (= :settled        (sess/engagement-state {:at "t" :outcome :done} [(auton :running)])))
+    (is (= :parked-at-gate (sess/engagement-state nil [(auton :parked) (auton :queued)])))
+    (is (= :active         (sess/engagement-state nil [(auton :running)])))
+    (is (= :active         (sess/engagement-state nil [(auton :preprocessing)])))
+    (is (= :active         (sess/engagement-state nil [human])))
+    (is (= :queued         (sess/engagement-state nil [(auton :queued)])))
+    (is (= :active         (sess/engagement-state nil [(auton :queued) (auton :running)])))
+    (is (= :idle           (sess/engagement-state nil [{:substrate :archived :autonomy {:phase :done}}])))
+    (is (= :idle           (sess/engagement-state nil [])))))
+
 (deftest in-flight-by-trigger-counts-live-in-progress-autonomous-sessions
   (let [tmp (fs/create-temp-dir)]
     (try

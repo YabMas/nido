@@ -84,6 +84,20 @@
 (defn autonomous? [s] (some? (:autonomy s)))
 (defn parked?     [s] (and (live? s) (= :parked (get-in s [:autonomy :phase]))))
 
+(def active-phases
+  "Autonomy phases where the session is actively executing (not queued/parked)."
+  #{:preprocessing :running})
+
+(defn working?
+  "A live session doing actual work: a live human session (no autonomy), or a
+   live autonomous session in preprocessing/running. A queued or parked
+   autonomous session is NOT working."
+  [s]
+  (and (live? s)
+       (if (autonomous? s)
+         (contains? active-phases (get-in s [:autonomy :phase]))
+         true)))
+
 (defn- load! [project ws-id session-name]
   (or (read-session project ws-id session-name)
       (throw (ex-info "Session not found"
@@ -116,15 +130,20 @@
                            {:at (clock/now-iso) :phase new-phase})))))
 
 (defn engagement-state
-  "Pure projection of a workstream's engagement. `closed` is the workstream's
-   :closed value (nil or a map); `sessions` is the seq of its session records.
-   Order matters: parked is checked before active because a parked session is
-   also live."
+  "Pure projection of a workstream's engagement.
+   :settled        — workstream closed
+   :parked-at-gate — a live session is parked awaiting human review
+   :active         — a live session is actively executing (running/preprocessing, or a live human session)
+   :queued         — live session(s) exist but none are working or parked (queued/pending, not yet started)
+   :idle           — no live sessions
+   Order: settled > parked > active > queued > idle. A parked or queued session
+   is also live, so the phase-aware checks must precede the bare live? check."
   [closed sessions]
   (cond
     (some? closed)            :settled
     (some parked? sessions)   :parked-at-gate
-    (some live? sessions)     :active
+    (some working? sessions)  :active
+    (some live? sessions)     :queued
     :else                     :idle))
 
 (def in-progress-phases
