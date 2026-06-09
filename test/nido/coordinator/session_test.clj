@@ -209,3 +209,37 @@
           ;; in-flight-by-trigger (active work) still excludes parked
           (is (= {:triage-bug 1} (sess/in-flight-by-trigger :brian)))))
       (finally (fs/delete-tree tmp)))))
+
+(deftest stage-projection-derives-lifecycle
+  (let [live   (assoc autonomous-session :substrate :live :autonomy {:phase :running})
+        parked (assoc autonomous-session :substrate :live :autonomy {:phase :parked})
+        dead   (assoc autonomous-session :substrate :archived :autonomy {:phase :done})]
+    ;; closed workstream → :done
+    (is (= :done  (:stage (sess/stage-projection {:at "t" :outcome :done} :triaged [dead] :triaging))))
+    ;; ticket status drives the ladder
+    (is (= :done        (:stage (sess/stage-projection nil :skipped [dead] :triaging))))
+    (is (= :in-progress (:stage (sess/stage-projection nil :planning [live] :triaging))))
+    (is (= :in-progress (:stage (sess/stage-projection nil :implementing [live] :triaging))))
+    (is (= :ready       (:stage (sess/stage-projection nil :triaged [dead] :triaging))))
+    (is (= :triage      (:stage (sess/stage-projection nil :investigating [live] :triaging))))
+    (is (= :triage      (:stage (sess/stage-projection nil :awaiting-input [parked] :triaging))))
+    ;; no ticket status → engagement fallback
+    (is (= :triage      (:stage (sess/stage-projection nil nil [live] :triaging))))
+    (is (= :done        (:stage (sess/stage-projection nil nil [dead] :triaging))))
+    ;; manual override wins only when it names a lifecycle stage (:triaging default is ignored)
+    (is (= :in-progress (:stage (sess/stage-projection nil :triaged [dead] :in-progress))))
+    (is (= :ready       (:stage (sess/stage-projection nil :triaged [dead] :triaging))))))
+
+(deftest stage-projection-needs-you
+  (let [parked  (assoc autonomous-session :substrate :live :autonomy {:phase :parked})
+        running (assoc autonomous-session :substrate :live :autonomy {:phase :running})
+        dead    (assoc autonomous-session :substrate :archived :autonomy {:phase :done})]
+    ;; ready is always needs-you
+    (is (true?  (:needs-you (sess/stage-projection nil :triaged [dead] :triaging))))
+    ;; triage/in-progress need-you only when a session is parked
+    (is (true?  (:needs-you (sess/stage-projection nil :awaiting-input [parked] :triaging))))
+    (is (false? (:needs-you (sess/stage-projection nil :investigating [running] :triaging))))
+    (is (true?  (:needs-you (sess/stage-projection nil :implementing [parked] :triaging))))
+    (is (false? (:needs-you (sess/stage-projection nil :implementing [running] :triaging))))
+    ;; done never needs you
+    (is (false? (:needs-you (sess/stage-projection {:at "t" :outcome :done} :done [dead] :triaging))))))

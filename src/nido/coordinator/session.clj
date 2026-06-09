@@ -146,6 +146,45 @@
     (some live? sessions)     :queued
     :else                     :idle))
 
+(def lifecycle-stages
+  "The stage keywords the overview groups by. A workstream's stored :stage acts
+   as a manual override ONLY when it is one of these — the default :triaging that
+   create! writes is intentionally absent, so it never overrides the projection."
+  #{:triage :ready :in-progress :done})
+
+(defn- derive-stage
+  "Lifecycle stage from workstream :closed + local ticket status + sessions.
+   Falls back to engagement when there is no ticket status."
+  [closed ticket-status sessions]
+  (cond
+    (some? closed)                                              :done
+    (contains? #{:skipped :done} ticket-status)                 :done
+    (contains? #{:planning :implementing} ticket-status)        :in-progress
+    (= :triaged ticket-status)                                  :ready
+    (contains? #{:investigating :awaiting-input} ticket-status) :triage
+    (nil? ticket-status)                                        (if (some live? sessions) :triage :done)
+    :else                                                       :triage))
+
+(defn- stage-needs-you
+  "Does this stage want the human right now? :ready always (decide promote/drop);
+   :triage/:in-progress only when a session is parked at the gate; never for :done."
+  [stage sessions]
+  (case stage
+    :ready                 true
+    (:triage :in-progress) (boolean (some parked? sessions))
+    false))
+
+(defn stage-projection
+  "Pure lifecycle projection for a workstream → {:stage <kw> :needs-you <bool>}.
+   `ticket-status` is the local ticket meta :status (nil when no ticket ref);
+   `stage-override` is the workstream's stored :stage (honored only when it names
+   a lifecycle stage)."
+  [closed ticket-status sessions stage-override]
+  (let [stage (if (contains? lifecycle-stages stage-override)
+                stage-override
+                (derive-stage closed ticket-status sessions))]
+    {:stage stage :needs-you (stage-needs-you stage sessions)}))
+
 (def in-progress-phases
   "Autonomy phases that occupy a trigger's in-flight budget: spawned and not yet
    terminal or parked. :queued is the pending pool and does NOT count; :parked is
