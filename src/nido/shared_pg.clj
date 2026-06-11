@@ -114,7 +114,8 @@
   (let [data-dir (state/shared-pg-data-dir project-name)
         m        (try (state/read-shared-meta project-name) (catch Exception _ nil))
         seeded?  (fs/exists? (str (fs/path data-dir "PG_VERSION")))
-        running? (and seeded? (not (pg/template-stopped? data-dir)))]
+        running? (and seeded?
+                      (= :running (:status (pg/detect-running-postmaster data-dir))))]
     (println "nido shared cluster:")
     (println "  project:" project-name)
     (println "  data-dir:" data-dir)
@@ -125,12 +126,20 @@
       (when-let [t (:seeded-at m)] (println "  seeded-at:" t)))))
 
 (defn down!
-  "Stop the shared cluster (preserve data). No-op if not running."
+  "Stop the shared cluster (preserve data). Cleans a stale postmaster.pid if the
+   cluster died uncleanly. No-op if not seeded or already stopped."
   [project-name]
   (let [data-dir (state/shared-pg-data-dir project-name)]
-    (when (and (fs/exists? data-dir) (not (pg/template-stopped? data-dir)))
-      (pg/pg-ctl-stop! data-dir)
-      (core/log-step (str "Stopped shared cluster for " project-name)))))
+    (when (fs/exists? (str (fs/path data-dir "PG_VERSION")))
+      (let [{:keys [status pid-file]} (pg/detect-running-postmaster data-dir)]
+        (cond
+          (= :running status)
+          (do (pg/pg-ctl-stop! data-dir)
+              (core/log-step (str "Stopped shared cluster for " project-name)))
+
+          (= :stale status)
+          (do (fs/delete-if-exists pid-file)
+              (core/log-step (str "Removed stale shared postmaster.pid for " project-name))))))))
 
 (defn reset!
   "Stop, drop PGDATA, re-clone from template, start. Recovery path."

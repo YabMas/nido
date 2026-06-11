@@ -410,7 +410,7 @@
     (if (= :shared mode)
       (let [data-dir (state/shared-pg-data-dir project-name)
             running? (and (fs/exists? data-dir)
-                          (not (template-stopped? data-dir)))]
+                          (= :running (:status (detect-running-postmaster data-dir))))]
         {:alive? running? :listening? (and pg-port (proc/tcp-open? pg-port))
          :port pg-port :mode :shared})
       ;; --- private mode: EXISTING status body, unchanged ---
