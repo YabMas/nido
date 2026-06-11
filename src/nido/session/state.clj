@@ -139,6 +139,33 @@
   (io/write-edn! (shared-meta-file project-name) data))
 
 ;; ---------------------------------------------------------------------------
+;; Per-session PG mode override — lets a single session opt into :isolated (a
+;; private PGDATA clone) while the project default stays :shared. Lives at
+;; ~/.nido/state/<instance-id>/pg-mode-override.edn and survives down/up.
+;; ---------------------------------------------------------------------------
+
+(defn pg-mode-override-file
+  "Per-session PG mode override file: ~/.nido/state/<instance-id>/pg-mode-override.edn"
+  [instance-id]
+  (str (fs/path (instance-state-dir instance-id) "pg-mode-override.edn")))
+
+(defn read-pg-mode-override
+  "Return the override map {:mode <kw>} for a session, or nil if none set."
+  [instance-id]
+  (let [f (pg-mode-override-file instance-id)]
+    (when (fs/exists? f) (io/read-edn f))))
+
+(defn write-pg-mode-override!
+  "Persist {:mode <kw>} as this session's PG mode override."
+  [instance-id mode]
+  (io/write-edn! (pg-mode-override-file instance-id) {:mode mode}))
+
+(defn clear-pg-mode-override!
+  "Remove a session's PG mode override (if any)."
+  [instance-id]
+  (fs/delete-if-exists (pg-mode-override-file instance-id)))
+
+;; ---------------------------------------------------------------------------
 ;; Session read/write
 ;; ---------------------------------------------------------------------------
 

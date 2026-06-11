@@ -288,11 +288,22 @@
     (when (fs/exists? path)
       (io/read-edn path))))
 
+(defn- apply-pg-mode-override
+  "If this session has a persisted PG mode override, apply it to the
+   :postgresql service-def's :mode. Other services pass through untouched."
+  [services instance-id]
+  (if-let [ov (:mode (state/read-pg-mode-override instance-id))]
+    (mapv (fn [svc] (if (= :postgresql (:type svc)) (assoc svc :mode ov) svc))
+          services)
+    services))
+
 (defn- start-services! [project-dir project-name instance-id session-edn opts]
   (core/log-step (str "Starting session " instance-id " (" project-dir ")"))
   (let [profile  (:profile opts)
         allow    (or (:services profile) :all)
-        services (filter-services (:services session-edn) allow)
+        services (apply-pg-mode-override
+                  (filter-services (:services session-edn) allow)
+                  instance-id)
         pre-allocated (pre-allocate-ports services project-dir)
         jvm-cfg (resolve-jvm-config (:defaults session-edn) opts)
         session-name (:session-name opts)
