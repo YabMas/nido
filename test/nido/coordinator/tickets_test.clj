@@ -200,3 +200,25 @@
       (tickets/on-run-terminal! {:skill :plan-bug :project :brian
                                  :event-payload {:id "BR-3"}} :awaiting-review)
       (is (= :awaiting-input (tickets/status :brian "BR-3"))))))
+
+(deftest on-run-terminal-plan-bug-leaves-advanced-implementing-ticket-alone
+  ;; Regression: a promote burst can drive the ticket all the way to
+  ;; :implementing before the plan Run exits. The plan Run then terminates
+  ;; non-parked (:done via run-state-from-ticket, or :failed on a restart
+  ;; orphan), but ownership has already handed off to implementation — the
+  ;; plan Run must NOT yank the ticket back to :triaged.
+  (with-tmp
+    (fn [_]
+      (tickets/open! :brian "BR-4" {:notion-page-id "p" :url "u" :title "T"
+                                    :opened-by :triage-new :notion-last-edited-at "t0"})
+      (tickets/complete! :brian "BR-4" :triaged :applied)
+      (tickets/set-status! :brian "BR-4" :implementing)     ; burst advanced past planning
+      (tickets/on-run-terminal! {:skill :plan-bug :project :brian
+                                 :event-payload {:id "BR-4"}} :done)
+      (is (= :implementing (tickets/status :brian "BR-4"))
+          "plan Run terminating :done must not revert an :implementing ticket")
+      ;; same must hold for a restart-orphaned plan Run forced to :failed
+      (tickets/on-run-terminal! {:skill :plan-bug :project :brian
+                                 :event-payload {:id "BR-4"}} :failed)
+      (is (= :implementing (tickets/status :brian "BR-4"))
+          "a restart-orphaned plan Run must not revert an :implementing ticket"))))

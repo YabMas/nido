@@ -125,9 +125,13 @@
    parked coordinator state. No-op for other skills and record-less tickets.
    - run ended :awaiting-review        → leave (session parked)
    - meta already :triaged/:skipped    → leave (skill wrote the disposition)
+   - plan Run, ticket already advanced past :planning (e.g. the promote burst
+     drove it to :implementing) → leave: ownership handed off, the plan Run's
+     termination is not a failure of the work in flight.
    - otherwise (abnormal/stale status):
        :triage-bug → clear   (drop status → re-triable)
-       :plan-bug   → :triaged (revert → re-promotable, preserving triage)"
+       :plan-bug   → :triaged (revert → re-promotable, preserving triage)
+                     ONLY while the plan Run still owns the ticket (:planning)."
   [run run-state]
   (let [skill   (:skill run)
         project (:project run)
@@ -137,5 +141,6 @@
         (cond
           (= :awaiting-review run-state)     nil
           (#{:triaged :skipped} (:status m)) nil
-          (= :plan-bug skill)                (set-status! project br-id :triaged)
+          (= :plan-bug skill)                (when (= :planning (:status m))
+                                               (set-status! project br-id :triaged))
           :else                              (clear-status! project br-id))))))
