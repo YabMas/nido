@@ -68,12 +68,23 @@ Sessions stay up until explicitly stopped. There is no automatic idle-suspension
 
 ## PostgreSQL topology
 
-Two clusters per project. Every session gets its own database — there is no shared runtime cluster.
+The `:postgresql` service runs in one of three **modes** (`:mode` on the service def; resolved by `nido.session.services.postgresql/resolve-pg-mode`):
 
-- **Template cluster** — long-lived APFS clone source at `~/.nido/templates/<project>/pg-data/`. Initialized with `bb nido:template:pg:init :project <name>`; refreshed from a dump with `bb nido:template:pg:refresh`. Must always be stopped when not actively being refreshed (clones need a clean `postmaster.pid` absence). If a refresh aborts and leaves a stale `postmaster.pid`, `bb nido:template:pg:stop :project <name>` clears it (kill fallback included).
-- **Per-session cluster** — own cluster under `~/.nido/state/<instance-id>/pg-data/`, APFS-cloned from the template at `session:up` and torn down on `session:down`. Each session runs Flyway against its own DB on app boot, so destructive migrations can't leak between sessions.
+- **`:shared`** (default for brian) — every session connects to ONE long-lived running cluster per project at `~/.nido/shared/<project>/pg-data/`. No per-session PGDATA, so sessions don't each cost a 27 GB clone that diverges over time. Sessions share schema and data; each still runs Flyway on app boot (idempotent against the already-migrated shared schema).
+- **`:clone` / `:isolated`** — the legacy behavior: a private cluster under `~/.nido/state/<instance-id>/pg-data/`, APFS-cloned from the template at `session:up`, torn down on `session:down`. Use when a session must mutate data destructively without affecting others. `:clone-from-template true` (no `:mode`) is a back-compat alias for `:clone`.
 
-After a `template:pg:refresh`, running sessions still hold their original clone — use `bb nido:session:reset :project <p> <session>` to drop their PGDATA and re-clone from the new template. APFS clones are essentially free, so this is fast.
+Three cluster roles:
+
+- **Template cluster** — long-lived APFS clone source at `~/.nido/templates/<project>/pg-data/`. Initialized with `bb nido:template:pg:init :project <name>`; refreshed from a dump with `bb nido:template:pg:refresh`. Must always be stopped when not actively being refreshed — both clone paths (shared seed + per-session) need a clean `postmaster.pid` absence. `bb nido:template:pg:stop` clears a stale pid (kill fallback included).
+- **Shared cluster** — the running per-project cluster sessions use in `:shared` mode. Seeded once by APFS-cloning the (stopped) template, then left running across sessions. Manage with `bb nido:shared:pg:{up,status,down,reset,destroy} :project <name>`. `reset` re-clones from the current template (recovery after a divergent migration lands on the shared DB, or to pick up a `template:pg:refresh`).
+- **Per-session cluster** — only exists for `:clone`/`:isolated` sessions, as above.
+
+**Per-session escape hatch.** A session on the shared cluster can opt into a private clone for destructive work:
+
+- `bb nido:session:isolate :project <p> <session>` — sets a per-session `:isolated` override (persisted at `~/.nido/state/<instance-id>/pg-mode-override.edn`) and restarts the session against its own clone.
+- `bb nido:session:share :project <p> <session>` — clears the override, drops the private PGDATA, and restarts against the shared cluster.
+
+`bb nido:session:reset` refuses on a shared-mode session (it would reset the DB for everyone) — use `bb nido:shared:pg:reset` for the shared cluster, or `isolate` the session first. After a `template:pg:refresh`, `:clone`/`:isolated` sessions still hold their original clone — `reset` them to re-clone; for the shared cluster run `bb nido:shared:pg:reset`. APFS clones are essentially free, so this is fast.
 
 ### session.edn shape
 
@@ -89,8 +100,9 @@ The `:postgresql` service is a flat config map; the same fields apply to every s
    :schema "brian"
    :extensions ["vector"]
    :port-range [5500 7500]
-   :clone-from-template true
-   :baseline {...}}]}
+   :mode :shared            ; :shared (default) | :clone | :isolated
+   :clone-from-template true ; used only by :clone/:isolated mode
+   :baseline {...}}]}        ; first-init seed; ignored in :shared mode
 ```
 
 ### local.edn keys (brian)
