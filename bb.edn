@@ -97,6 +97,14 @@
   {:doc "Destroy a session: :project <p> <session> — down + remove worktree"
    :task (apply nido-session/destroy *command-line-args*)}
 
+  nido:session:isolate
+  {:doc "Switch a session to a private DB clone for destructive tests: :project <p> <session>"
+   :task (apply nido-session/isolate *command-line-args*)}
+
+  nido:session:share
+  {:doc "Switch a session back to the shared DB, dropping its private clone: :project <p> <session>"
+   :task (apply nido-session/share *command-line-args*)}
+
   nido:session:enter
   {:doc "Write session-home path to ~/.nido/.last-cd: :project <p> <session> [:cd home|worktree] (pair with the `nido` shell wrapper)"
    :task (apply nido-session/enter *command-line-args*)}

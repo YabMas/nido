@@ -137,3 +137,22 @@
         _project (require-project opts)]
     (require-no-positional pos)
     (lifecycle/list-all opts)))
+
+(defn isolate
+  "Switch a session to a private Postgres clone so it can run destructive
+   tests without affecting the shared cluster. Reverse with `share`.
+   Usage: bb nido:session:isolate :project <p> <session>"
+  [& args]
+  (let [[pos opts] (task-args/split-args args)
+        _project (require-project opts)
+        session (require-session-name pos)]
+    (lifecycle/isolate! session opts)))
+
+(defn share
+  "Switch a session back to the shared Postgres cluster, dropping its private
+   clone. Usage: bb nido:session:share :project <p> <session>"
+  [& args]
+  (let [[pos opts] (task-args/split-args args)
+        _project (require-project opts)
+        session (require-session-name pos)]
+    (lifecycle/share! session opts)))
