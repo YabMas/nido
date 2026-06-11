@@ -98,6 +98,47 @@
   (io/write-edn! (template-meta-file project-name) data))
 
 ;; ---------------------------------------------------------------------------
+;; Shared cluster — one long-lived running Postgres per project, shared by all
+;; sessions in :shared mode. Lives under ~/.nido/shared/<project-name>/.
+;; ---------------------------------------------------------------------------
+
+(defn shared-dir
+  "Root shared-cluster directory: ~/.nido/shared/"
+  []
+  (str (fs/path (core/nido-home) "shared")))
+
+(defn project-shared-dir
+  "Per-project shared dir: ~/.nido/shared/<project-name>/"
+  [project-name]
+  (str (fs/path (shared-dir) project-name)))
+
+(defn shared-pg-data-dir
+  "Shared cluster PGDATA: ~/.nido/shared/<project-name>/pg-data/"
+  [project-name]
+  (str (fs/path (project-shared-dir project-name) "pg-data")))
+
+(defn shared-log-file
+  "Shared cluster log: ~/.nido/shared/<project-name>/pg.log"
+  [project-name]
+  (str (fs/path (project-shared-dir project-name) "pg.log")))
+
+(defn shared-meta-file
+  "Shared cluster metadata: ~/.nido/shared/<project-name>/shared.edn"
+  [project-name]
+  (str (fs/path (project-shared-dir project-name) "shared.edn")))
+
+(defn shared-lock-file
+  "Lock file guarding shared-cluster creation: ~/.nido/shared/<project-name>/shared.lock"
+  [project-name]
+  (str (fs/path (project-shared-dir project-name) "shared.lock")))
+
+(defn read-shared-meta [project-name]
+  (io/read-edn (shared-meta-file project-name)))
+
+(defn write-shared-meta! [project-name data]
+  (io/write-edn! (shared-meta-file project-name) data))
+
+;; ---------------------------------------------------------------------------
 ;; Session read/write
 ;; ---------------------------------------------------------------------------
 
