@@ -54,6 +54,13 @@
   [ws sessions]
   (->> (timestamps ws sessions) (remove nil?) sort last))
 
+(defn- max-priority
+  "Highest autonomy :priority across a workstream's sessions (0 when none carry
+   one). This is the triage severity — `:triage-teacher-bugs` sets it from the
+   ticket's severity-calc, so it drives the same ordering the executor picks by."
+  [sessions]
+  (->> sessions (keep #(get-in % [:autonomy :priority])) (reduce max 0)))
+
 (defn workstream-row
   "One display row for a workstream: reads its sessions and projects engagement
    + lifecycle stage."
@@ -69,6 +76,7 @@
      :stage         (:stage proj)
      :needs-you     (:needs-you proj)
      :engagement    (session/engagement-state (:closed ws) sessions)
+     :priority      (max-priority sessions)
      :session-count (count sessions)
      :last-activity (last-activity ws sessions)}))
 
@@ -87,14 +95,40 @@
     (vec (concat (newest (filter :needs-you rows))
                  (newest (remove :needs-you rows))))))
 
+(defn- by-severity
+  "Highest priority (severity) first; ties broken by longest-waiting (oldest
+   activity at top). This mirrors the executor's pickup order — priority desc,
+   then FIFO (executor.clj) — so the list reads top-to-bottom in the order nido
+   actually works the triage queue, rather than by most-recently-touched."
+  [rows]
+  (vec (sort-by (juxt (comp - (fnil :priority 0)) #(or (:last-activity %) "")) rows)))
+
+(def triage-in-flight-engagements
+  "Engagement states that occupy a triage slot: a session is parked at the gate
+   for you, or actively running. Everything else in the triage stage is queued
+   backlog waiting for a free slot. Mirrors session/gating-phases."
+  #{:parked-at-gate :active})
+
+(defn- triage-split
+  "Split the triage band into the in-flight slots (parked/active — capped at the
+   trigger's :max-in-flight) and the queued backlog (waiting for a slot). Both
+   ordered highest-severity-first. The two are surfaced under separate headers so
+   the in-flight count reflects the max-5 model instead of summing the backlog."
+  [rows]
+  (let [in-flight? #(contains? triage-in-flight-engagements (:engagement %))]
+    {:in-flight (by-severity (filter in-flight? rows))
+     :queued    (by-severity (remove in-flight? rows))}))
+
 (defn grouped-by-stage
   "Partition rows by lifecycle stage for the overview. :done is intentionally
-   omitted — done is done, not shown. Each band: needs-you first, then newest."
+   omitted — done is done, not shown. Ready/in-progress: needs-you first, then
+   newest. Triage is returned as {:in-flight [...] :queued [...]} — see
+   triage-split — each ordered highest-severity-first."
   [rows]
   (let [by (group-by :stage rows)]
     {:ready       (by-needs-then-newest (:ready by []))
      :in-progress (by-needs-then-newest (:in-progress by []))
-     :triage      (by-needs-then-newest (:triage by []))}))
+     :triage      (triage-split (:triage by []))}))
 
 (defn session-rows
   "Display rows for one workstream's coordinator-sessions. :phase is nil for

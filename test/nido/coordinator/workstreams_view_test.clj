@@ -118,6 +118,15 @@
       (let [rows (wsv/workstream-rows :brian)]
         (is (= [:settled] (map :engagement rows)))))))
 
+(deftest workstream-rows-carries-max-session-priority
+  (with-tmp
+    (fn [_]
+      (let [w (make-ws! :brian {:stage :triaging})]
+        (make-session! :brian (:id w) "lo" {:autonomy (assoc autonomy-running :priority 3)})
+        (make-session! :brian (:id w) "hi" {:autonomy (assoc autonomy-running :priority 7)}))
+      (is (= 7 (:priority (first (wsv/workstream-rows :brian))))
+          "row severity = highest autonomy :priority across its sessions"))))
+
 (deftest workstream-rows-parked-beats-active
   (with-tmp
     (fn [_]
@@ -145,17 +154,33 @@
           (is (true? (:needs-you r)))
           (is (= "BR-9" (:br-id r)) "row carries the ticket id for the promote shortcut"))))))
 
-(deftest grouped-by-stage-orders-needs-you-first-and-drops-done
+(deftest grouped-by-stage-splits-triage-and-drops-done
   (let [rows [{:ws-id "r1" :stage :ready       :needs-you true  :last-activity "2026-06-01T00:00:00Z"}
-              {:ws-id "t1" :stage :triage      :needs-you false :last-activity "2026-06-03T00:00:00Z"}
-              {:ws-id "t2" :stage :triage      :needs-you true  :last-activity "2026-06-02T00:00:00Z"}
+              ;; triage in-flight: parked (high prio) + active (low prio)
+              {:ws-id "t-parked" :stage :triage :engagement :parked-at-gate :priority 5 :last-activity "2026-06-03T00:00:00Z"}
+              {:ws-id "t-active" :stage :triage :engagement :active         :priority 9 :last-activity "2026-06-02T00:00:00Z"}
+              ;; triage backlog: two queued, different severities
+              {:ws-id "t-q-lo"   :stage :triage :engagement :queued :priority 1 :last-activity "2026-06-04T00:00:00Z"}
+              {:ws-id "t-q-hi"   :stage :triage :engagement :queued :priority 8 :last-activity "2026-06-05T00:00:00Z"}
               {:ws-id "p1" :stage :in-progress :needs-you false :last-activity "2026-06-01T00:00:00Z"}
               {:ws-id "d1" :stage :done        :needs-you false :last-activity "2026-06-09T00:00:00Z"}]
         g (wsv/grouped-by-stage rows)]
     (is (= ["r1"] (map :ws-id (:ready g))))
     (is (= ["p1"] (map :ws-id (:in-progress g))))
-    (is (= ["t2" "t1"] (map :ws-id (:triage g))) "needs-you first, then newest")
+    (is (= ["t-active" "t-parked"]
+           (map :ws-id (get-in g [:triage :in-flight])))
+        "in-flight is parked+active, highest-severity first")
+    (is (= ["t-q-hi" "t-q-lo"]
+           (map :ws-id (get-in g [:triage :queued])))
+        "queued backlog separated, highest-severity first")
     (is (nil? (:done g)) "done is dropped")))
+
+(deftest triage-severity-ties-break-by-longest-waiting
+  (let [rows [{:ws-id "old" :stage :triage :engagement :parked-at-gate :priority 5 :last-activity "2026-06-01T00:00:00Z"}
+              {:ws-id "new" :stage :triage :engagement :parked-at-gate :priority 5 :last-activity "2026-06-09T00:00:00Z"}]
+        in-flight (get-in (wsv/grouped-by-stage rows) [:triage :in-flight])]
+    (is (= ["old" "new"] (map :ws-id in-flight))
+        "equal severity → longest-waiting (oldest activity) at top")))
 
 (deftest format-row-marks-needs-you-and-substatus
   (is (= "⏸ BR-1 · x   parked"

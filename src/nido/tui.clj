@@ -102,29 +102,48 @@
    :description (or (:last-activity r) "")
    :data        r})
 
+(def ^:private group-header-style (style/style :fg style/yellow :bold true))
+
+(defn- group-header
+  "A section divider row. The leading newline puts a blank line ABOVE the header
+   (the empty :description gives one BELOW it), so sections breathe; the title is
+   coloured via `group-header-style`. `::group-header` keeps it non-actionable.
+   The very first row's leading blank is stripped in workstream-list-rows."
+  [label]
+  {:title       (str "\n" (style/render group-header-style (str "── " label " ──")))
+   :description ""
+   :data        ::group-header})
+
 (defn- stage-group-rows
   "Header + one row per workstream for a fully-expanded stage group. nil when
    empty so callers can `concat` without conditionals."
   [label rows]
   (when (seq rows)
-    (cons {:title (str "── " label " (" (count rows) ") ──") :description "" :data ::group-header}
+    (cons (group-header (str label " (" (count rows) ")"))
           (mapv ws-item-row rows))))
 
-(def ^:private triage-expand-max 5)
-
 (defn- triage-group-rows
-  "Triage group: expand at most `triage-expand-max` needs-you (parked) rows
-   (already sorted needs-you-first by grouped-by-stage); everything else —
-   overflow parked plus all running/queued — collapses into a `+N` tail line."
+  "Triage renders as two separate headered sections (see wsv/triage-split):
+   `Triage · in flight` — the ≤ :max-in-flight slots nido is currently working
+   (parked at the gate for you, or running), expanded and highest-severity-first;
+   and `Triage · queued` — the backlog waiting for a free slot, shown as a single
+   count line so it never buries the rows you act on. Keeping the two apart is
+   what makes the in-flight count reflect the max-5 model instead of summing the
+   whole backlog into one `Triage (N)`."
+  [{:keys [in-flight queued]}]
+  (concat
+   (stage-group-rows "Triage · in flight" in-flight)
+   (when (seq queued)
+     [(group-header (str "Triage · queued (" (count queued) ")"))])))
+
+(defn- strip-leading-blank
+  "Drop the leading newline a group-header carries, so the list doesn't open with
+   a blank line under the cursor. Only touches the first row's title."
   [rows]
-  (when (seq rows)
-    (let [shown (take triage-expand-max (filter :needs-you rows))
-          tail  (- (count rows) (count shown))]
-      (concat
-       [{:title (str "── Triage (" (count rows) ") ──") :description "" :data ::group-header}]
-       (mapv ws-item-row shown)
-       (when (pos? tail)
-         [{:title (str "   + " tail " running / queued") :description "" :data ::group-header}])))))
+  (if-let [r (first rows)]
+    (cons (update r :title #(if (and (string? %) (str/starts-with? % "\n")) (subs % 1) %))
+          (rest rows))
+    rows))
 
 (defn- workstream-list-rows [project]
   (let [g    (wsv/grouped-by-stage (wsv/workstream-rows project))
@@ -138,7 +157,7 @@
       [{:title "No workstreams yet. Press 'f' to fire a trigger."
         :description ""
         :data ::empty}]
-      (vec rows))))
+      (vec (strip-leading-blank rows)))))
 
 (defn- ws-detail-rows [project ws-id]
   (let [rows (wsv/session-rows project ws-id)]
