@@ -204,12 +204,23 @@
    in-progress-phases, which is 'actively executing' work."
   #{:preprocessing :running :parked})
 
+(defn- ws-closed?
+  "True when the workstream's record carries a :closed settlement. Read directly
+   off disk (not via workstream/read-ws — that ns requires this one). A closed
+   workstream's sessions no longer occupy a trigger's in-flight budget even if a
+   session was left :live + :parked (e.g. the TUI [d]one lever, which closes the
+   workstream without resolving the ticket, so sweep-resolved! can't reap it)."
+  [project ws-id]
+  (some? (:closed (io/read-edn (cstate/workstream-edn-path project ws-id)))))
+
 (defn count-by-trigger
   "Map {trigger-kw → count} of LIVE autonomous sessions whose phase is in
-   `phase-set`, grouped by autonomy :trigger, across all of `project`'s
-   workstreams. Scans disk; restart-safe."
+   `phase-set`, grouped by autonomy :trigger, across all of `project`'s OPEN
+   workstreams. Sessions on closed workstreams are excluded — their work is
+   settled and must not pin a trigger at its cap. Scans disk; restart-safe."
   [project phase-set]
   (->> (list-ws-ids project)
+       (remove #(ws-closed? project %))
        (mapcat #(list-sessions project %))
        (filter live?)
        (filter autonomous?)

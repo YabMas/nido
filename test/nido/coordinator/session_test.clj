@@ -210,6 +210,29 @@
           (is (= {:triage-bug 1} (sess/in-flight-by-trigger :brian)))))
       (finally (fs/delete-tree tmp)))))
 
+(deftest gating-count-excludes-closed-workstream-sessions
+  ;; Regression: the TUI [d]one lever closes a workstream without resolving its
+  ;; ticket, so sweep-resolved! can't reap the still-:parked session. That ghost
+  ;; session must not keep pinning its trigger at :max-in-flight.
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))
+                    clock/now-iso (constantly "2026-06-05T09:00:00Z")]
+        (let [open   (ws/create! :brian {:stage :investigation})
+              closed (ws/create! :brian {:stage :investigation})
+              mk (fn [wsid nm phase]
+                   (sess/create! :brian wsid
+                                 {:name nm :weight :light
+                                  :autonomy (assoc (:autonomy autonomous-session)
+                                                   :phase phase
+                                                   :trigger :triage-bug)}))]
+          (mk (:id open) "live-park" :parked)
+          (mk (:id closed) "ghost-park" :parked)
+          (ws/close! :brian (:id closed) :done)
+          ;; only the open workstream's parked session counts toward the cap
+          (is (= {:triage-bug 1} (sess/gating-count-by-trigger :brian)))))
+      (finally (fs/delete-tree tmp)))))
+
 (deftest stage-projection-derives-lifecycle
   (let [live   (assoc autonomous-session :substrate :live :autonomy {:phase :running})
         parked (assoc autonomous-session :substrate :live :autonomy {:phase :parked})
