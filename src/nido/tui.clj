@@ -27,6 +27,7 @@
    [nido.coordinator.promote :as promote]
    [nido.coordinator.queue :as queue]
    [nido.coordinator.runs-view :as runs-view]
+   [nido.coordinator.workstream :as workstream]
    [nido.coordinator.workstreams-view :as wsv]
    [nido.coordinator.triggers :as triggers]
    [nido.project :as project]
@@ -711,11 +712,27 @@
        nil])
     [(assoc state :status "(no workstream selected)") nil]))
 
+(defn- done-selected
+  "Mark the highlighted workstream done (`workstream/close!` :done). It drops out
+   of the overview immediately — the :done band is hidden — which is the point:
+   the manual lever for work that landed but nido never observed merging. Touches
+   nothing but the workstream record's :closed key (no session/worktree), so it's
+   reversible by clearing :closed. Synchronous: a single local edn write."
+  [state]
+  (if-let [ws (selected-workstream state)]
+    (do
+      (workstream/close! (keyword (:project state)) (:ws-id ws) :done)
+      [(-> state
+           (refresh-list (current-rows state))
+           (assoc :status (str "marked " (or (:br-id ws) (:ws-id ws)) " done")))
+       nil])
+    [(assoc state :status "(no workstream selected)") nil]))
+
 (defn- update-workstreams
   "Workstreams list screen. ↵ drills into the highlighted workstream's session
-   detail. p promotes the highlighted ticket; f/h/c carry over fire-trigger /
-   halt / clear-breaker. Group-header and empty rows are guarded by
-   `selected-workstream` returning nil."
+   detail. p promotes the highlighted ticket; d marks it done (drops it from the
+   overview); f/h/c carry over fire-trigger / halt / clear-breaker. Group-header
+   and empty rows are guarded by `selected-workstream` returning nil."
   [state msg]
   (cond
     (msg/key-match? msg "enter")
@@ -724,6 +741,7 @@
       [state nil])
 
     (msg/key-match? msg "p") (promote-selected state)
+    (msg/key-match? msg "d") (done-selected state)
 
     (msg/key-match? msg "f") (open-fire-trigger state)
     (msg/key-match? msg "h") (open-halt-confirm state)
@@ -983,7 +1001,7 @@
                   (case (:screen state)
                     :projects    "[↵] open  [q]uit"
                     :sessions    "[↵/e] enter  [w]orktree  [i]nfo  [a]dd  [u]p  [d]own  [x] destroy  [r] workstreams  [esc] back  [q]uit"
-                    :workstreams "[↵] open  [p]romote  [f]ire  [h]alt  [c]lear breaker  [s]essions  [q]uit"
+                    :workstreams "[↵] open  [p]romote  [d]one  [f]ire  [h]alt  [c]lear breaker  [s]essions  [q]uit"
                     :workstream  "[↵] open in chat  [esc] back  [s]essions  [q]uit"))))
 
 (defn- info-row [label value]
