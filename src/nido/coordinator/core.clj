@@ -6,6 +6,7 @@
   (:require
    [babashka.fs :as fs]
    [clojure.set :as set]
+   [clojure.string :as str]
    [nido.coordinator.agent :as agent]
    [nido.coordinator.anomaly :as anomaly]
    [nido.coordinator.breakers :as breakers]
@@ -30,12 +31,21 @@
    [nido.coordinator.triggers :as triggers]
    [nido.core :as nido-core]
    [nido.project :as project]
+   [nido.reclaim :as reclaim]
    [nido.session.profiles :as profiles]))
 
 (def ^:private defaults
   {:poll-ms             1000
    :global-parallel-cap 2
    :executor            {:shutdown-grace-ms 5000}
+   ;; Periodic disk hygiene: reclaim orphaned per-session state dirs (PGDATA
+   ;; clones left behind by kill -9 / host crash / a rolled-back spawn). Runs
+   ;; once per :reclaim-interval-ms (and on the first tick after startup, since
+   ;; the throttle clock starts at 0). :reclaim-min-age-ms is the grace window
+   ;; that protects a session still booting — its dir exists before the registry
+   ;; entry is written, so a young orphan may actually be a live boot in flight.
+   :reclaim-interval-ms (* 60 60 1000)   ; hourly
+   :reclaim-min-age-ms  (* 60 60 1000)   ; only orphans idle ≥ 1h
    :system-prompt       "You are running inside a nido auto-triggered session. The user is not present yet. Write artifacts under <session-home>/artifacts/ with stable filenames. Update <session-home>/_run-status.edn at phase transitions with {:phase :awaiting-input | :working | :complete | :error :note <str>}."
    ;; Pre-orientation burst for a promoted ticket (the /continue-ticket leg).
    ;; Unlike triage, the human WILL own this exact session — they'll resume this
@@ -50,6 +60,29 @@
 (defonce ^:private !detector (atom (anomaly/empty-detector)))
 
 (defonce ^:private !source-instances (atom {}))
+
+;; Last wall-clock ms an auto-reclaim sweep ran. Starts at 0 so the first tick
+;; after a daemon (re)start sweeps immediately, then throttles to the interval.
+(defonce ^:private !last-reclaim-ms (atom 0))
+
+(defn- maybe-reclaim!
+  "Throttled disk-hygiene sweep: at most once per :reclaim-interval-ms, delete
+   orphaned per-session state dirs older than :reclaim-min-age-ms. Never throws
+   into the tick loop — a reclaim failure must not stall the coordinator."
+  [now-ms]
+  (when (>= (- now-ms @!last-reclaim-ms) (:reclaim-interval-ms defaults))
+    (reset! !last-reclaim-ms now-ms)
+    (try
+      (let [deleted (reclaim/reclaim-orphans! {:min-age-ms (:reclaim-min-age-ms defaults)
+                                               :now-ms     now-ms})]
+        (when (seq deleted)
+          (println (str "nido coordinator: auto-reclaimed " (count deleted)
+                        " orphan state dir(s): "
+                        (str/join ", " (map first deleted))))))
+      (catch Throwable t
+        (binding [*err* *err*]
+          (.println ^java.io.PrintWriter *err*
+                    (str "WARN: auto-reclaim threw — " (ex-message t))))))))
 
 (defn- registered-projects []
   ;; nido.project/list-projects returns {<string-name> {:directory ...}}.
@@ -384,7 +417,9 @@
                 (binding [*err* *err*]
                   (.println ^java.io.PrintWriter *err*
                             (str "WARN: source " hash " poll! threw — " (ex-message e))))))
-            (swap! !source-instances assoc-in [hash :last-polled-ms] now-ms)))
+            (swap! !source-instances assoc-in [hash :last-polled-ms] now-ms))
+          ;; Periodic disk hygiene (throttled to :reclaim-interval-ms).
+          (maybe-reclaim! now-ms))
         ;; After draining + polling, check anomaly thresholds.
         (when-let [trip (anomaly/check @!detector anomaly-thresholds)]
           (halt/halt! {:source  :auto

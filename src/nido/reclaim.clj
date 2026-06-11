@@ -28,6 +28,32 @@
            (remove (fn [[id _]] (contains? tracked id)))
            (sort-by first)))))
 
+(defn- dir-age-ms
+  "Wall-clock ms since the state dir was last structurally modified. A
+   session's instance dir is touched when its pg-data/ + logs/ + session.edn
+   are created at boot, so a mid-boot session reads as 'young' — which is
+   exactly the window we must NOT reclaim (the registry entry is written LAST,
+   after PGDATA clone + app boot, so a booting session has a dir but no
+   registry entry yet and would otherwise look like an orphan)."
+  [path now-ms]
+  (- now-ms (.toMillis (fs/last-modified-time path))))
+
+(defn reclaim-orphans!
+  "Programmatic, age-guarded reclaim for the coordinator's periodic sweep.
+   Deletes only orphan state dirs whose instance dir is older than
+   :min-age-ms (the grace window that protects sessions still booting).
+   Returns the seq of deleted [id path]. :now-ms overridable for tests.
+
+   Distinct from reclaim! (the interactive CLI flow): no printing, no
+   confirm gate, and it never deletes a young orphan."
+  [{:keys [min-age-ms now-ms] :or {min-age-ms 0}}]
+  (let [now-ms  (or now-ms (System/currentTimeMillis))
+        targets (filter (fn [[_ path]] (>= (dir-age-ms path now-ms) min-age-ms))
+                        (orphan-instance-dirs))]
+    (doseq [[_ path] targets]
+      (when (fs/exists? path) (fs/delete-tree path)))
+    (vec targets)))
+
 (defn reclaim!
   "List orphaned per-instance state dirs. With :force? true, delete
    them. An instance is orphaned iff its id is not present in any

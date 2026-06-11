@@ -129,6 +129,8 @@ These produce `-J-Xmx...` and `-M:a:b:c` on the `clojure` command line without a
 
 `bb nido:reclaim` lists per-instance state dirs under `~/.nido/state/` that have no matching registry entry; re-run with `:force? true` to delete. Useful after destroying sessions whose PGDATA was left behind (kill -9, host crash, manual rm).
 
+The coordinator daemon also reclaims orphans automatically: once per hour (and on the first tick after startup) it deletes untracked state dirs older than a 1h grace window. The grace window is load-bearing — a session's state dir (PGDATA clone) exists for the whole boot *before* its registry entry is written, so a freshly-untracked dir may be a live boot in flight, not garbage. Tuned via `:reclaim-interval-ms` / `:reclaim-min-age-ms` in `nido.coordinator.core/defaults`. The manual `bb nido:reclaim :force? true` has no grace window (deletes all orphans now) — only run it when no session is mid-boot.
+
 ## Project-specific: brian-next
 
 - `development/start` accepts `{:datastar-port N}` which threads through mount/args as `:datastar/port`
