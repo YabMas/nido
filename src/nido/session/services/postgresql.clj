@@ -302,6 +302,17 @@
 ;; from the project's template cluster.
 ;; ---------------------------------------------------------------------------
 
+(defn resolve-pg-mode
+  "Resolve the effective PG provisioning mode from a service-def.
+     :shared             — connect to the project's shared cluster (no clone).
+     :isolated / :clone  — private per-session PGDATA (APFS clone of template).
+   Back-compat: :clone-from-template true (no :mode) resolves to :clone."
+  [service-def]
+  (let [{:keys [mode]} service-def]
+    (if (#{:shared :isolated :clone} mode)
+      mode
+      :clone)))
+
 (defmethod service/start-service! :postgresql
   [service-def ctx _opts]
   (let [{:keys [db-name db-user db-password schema extensions port-range
