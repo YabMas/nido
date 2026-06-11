@@ -36,6 +36,7 @@
    [nido.session.launcher :as launcher]
    [nido.session.links :as links]
    [nido.session.profiles :as profiles]
+   [nido.session.services.postgresql :as pg]
    [nido.session.state :as state]))
 
 ;; ---------------------------------------------------------------------------
@@ -324,23 +325,74 @@
   (let [{:keys [wt-path]} (with-context name opts)]
     (engine/start-session! wt-path (assoc opts :session-name name))))
 
+(defn- effective-pg-mode
+  "Resolved PG mode for a session: the per-session override if set, else the
+   project's :postgresql service-def mode."
+  [project-name instance-id]
+  (or (:mode (state/read-pg-mode-override instance-id))
+      (let [svc (->> (:services (engine/load-session-edn project-name))
+                     (filter #(= :postgresql (:type %)))
+                     first)]
+        (pg/resolve-pg-mode (or svc {})))))
+
 (defn reset!
   "Nuclear recovery for a session in a bad state: stop the session,
    drop its PGDATA, then start it again so the :postgresql service
    re-clones a fresh PGDATA from the current template. Distinct from
    `down!` + `up!` (which preserves PGDATA) — call this when the local
    DB is wedged or after `bb nido:template:pg:refresh` to pick up the
-   new template content."
+   new template content.
+
+   Refuses for sessions on the shared cluster — a per-session reset there
+   would reset the DB for every session. Use `bb nido:shared:pg:reset`."
   [name opts]
-  (let [{:keys [wt-path]} (with-context name opts)]
+  (let [{:keys [wt-path project-name instance-id]} (with-context name opts)]
+    (when (= :shared (effective-pg-mode project-name instance-id))
+      (throw (ex-info (str "This session uses the shared cluster — a per-session "
+                           "reset would reset the shared DB for every session. Use "
+                           "`bb nido:shared:pg:reset :project " project-name "` instead, "
+                           "or `bb nido:session:isolate` this session first.")
+                      {:project-name project-name :session name})))
     (when-not (fs/exists? wt-path)
       (throw (ex-info "Worktree does not exist" {:path wt-path :name name})))
     (try (engine/stop-session! wt-path)
          (catch Exception e
            (core/log-step (str "warning: stop during reset: " (ex-message e)))))
-    (let [pg-data (state/pg-data-dir (engine/resolve-instance-id wt-path))]
+    (let [pg-data (state/pg-data-dir instance-id)]
       (when (fs/exists? pg-data)
         (core/log-step (str "Dropping PGDATA at " pg-data))
+        (fs/delete-tree pg-data)))
+    (engine/start-session! wt-path (assoc opts :session-name name))))
+
+(defn isolate!
+  "Switch a session to a PRIVATE Postgres clone (for destructive tests): set a
+   per-session :isolated override, then stop+start so it re-provisions its own
+   PGDATA from the template. Other sessions are unaffected. Reverse with `share!`."
+  [name opts]
+  (let [{:keys [wt-path instance-id]} (with-context name opts)]
+    (when-not (fs/exists? wt-path)
+      (throw (ex-info "Worktree does not exist" {:path wt-path :name name})))
+    (state/write-pg-mode-override! instance-id :isolated)
+    (try (engine/stop-session! wt-path)
+         (catch Exception e
+           (core/log-step (str "warning: stop during isolate: " (ex-message e)))))
+    (engine/start-session! wt-path (assoc opts :session-name name))))
+
+(defn share!
+  "Switch a session back to the shared cluster: clear its :isolated override,
+   drop its private PGDATA, then stop+start so it re-provisions against the
+   shared cluster. Safe to call on an already-shared session."
+  [name opts]
+  (let [{:keys [wt-path instance-id]} (with-context name opts)]
+    (when-not (fs/exists? wt-path)
+      (throw (ex-info "Worktree does not exist" {:path wt-path :name name})))
+    (state/clear-pg-mode-override! instance-id)
+    (try (engine/stop-session! wt-path)
+         (catch Exception e
+           (core/log-step (str "warning: stop during share: " (ex-message e)))))
+    (let [pg-data (state/pg-data-dir instance-id)]
+      (when (fs/exists? pg-data)
+        (core/log-step (str "Dropping private PGDATA at " pg-data))
         (fs/delete-tree pg-data)))
     (engine/start-session! wt-path (assoc opts :session-name name))))
 
