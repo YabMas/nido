@@ -21,7 +21,6 @@
    [nido.coordinator.runs :as runs]
    [nido.coordinator.session :as session]
    [nido.coordinator.spawn :as spawn]
-   [nido.coordinator.shim :as shim]
    [nido.coordinator.sources :as sources]
    [nido.coordinator.tickets :as tickets]
    [nido.coordinator.sources.notion :as nsource]
@@ -37,7 +36,12 @@
   {:poll-ms             1000
    :global-parallel-cap 2
    :executor            {:shutdown-grace-ms 5000}
-   :system-prompt       "You are running inside a nido auto-triggered session. The user is not present yet. Write artifacts under <session-home>/artifacts/ with stable filenames. Update <session-home>/_run-status.edn at phase transitions with {:phase :awaiting-input | :working | :complete | :error :note <str>}."})
+   :system-prompt       "You are running inside a nido auto-triggered session. The user is not present yet. Write artifacts under <session-home>/artifacts/ with stable filenames. Update <session-home>/_run-status.edn at phase transitions with {:phase :awaiting-input | :working | :complete | :error :note <str>}."
+   ;; Pre-orientation burst for a promoted ticket (the /continue-ticket leg).
+   ;; Unlike triage, the human WILL own this exact session — they'll resume this
+   ;; conversation — so this prompt is about parking cleanly for them, not about
+   ;; artifacts/_run-status.edn (plan-bug derives Run state from the ticket).
+   :plan-system-prompt  "You are pre-orienting a nido impl session unattended: the human who owns this session is not here yet but will resume THIS conversation shortly. Run /continue-ticket to pick up where the pipeline left off, then do clear, low-risk implementation work autonomously as the skill directs. The moment you reach something that needs a human decision — a product/design call, genuine ambiguity, or a risky/destructive change — STOP and leave a concise summary of what you did, where things stand, and exactly what you need from the user; do not guess. Do not touch Notion (nido already set the ticket's status when this session was provisioned)."})
 
 (def ^:private anomaly-thresholds
   {:spawn-window-ms 60000  :spawn-threshold 5
@@ -174,14 +178,15 @@
         ;; BEFORE launch, so a restart mid-session (or any interruption) never
         ;; strands the Run without a resumable id — the resume shim reads this.
         ;; Passed to claude as --session-id so the transcript uses it.
-        ;; :plan-bug is "provision only": promote brings up the :full session and
-        ;; flips Notion → "In progress", then parks ready-for-human. No headless
-        ;; burst and no skill runs — the human enters the session and the shim
-        ;; auto-runs /continue-ticket on first entry (see the marker written in
-        ;; the provision branch below), picking up the triage findings. The
-        ;; session-id is still generated + persisted so that first launch can use
-        ;; `--session-id` and later entries `--resume` the same conversation.
-        ;; plan-bug bypasses the skill-resolvable? gate and agent/launch!.
+        ;; :plan-bug is the "promote" leg: promote brings up the :full session,
+        ;; flips Notion → "In progress", then launches /continue-ticket headlessly
+        ;; so the session is already oriented (triage findings picked up, clear
+        ;; low-risk work underway) and parked by the time the human arrives. The
+        ;; human enters the session and the shim `--resume`s this same conversation.
+        ;; The session-id is generated + persisted up front so the headless launch
+        ;; uses `--session-id` and later entries `--resume` the same conversation.
+        ;; plan-bug bypasses only the skill-resolvable? gate (/continue-ticket is a
+        ;; harness-injected skill, always present regardless of checkout).
         ;; (`:plan-bug` is the internal trigger id; the command is /continue-ticket.)
         provision-only? (= :plan-bug (:skill (runs/read-run run-id)))
         session-id   (str (java.util.UUID/randomUUID))
@@ -202,20 +207,27 @@
         ;; fail fast WITHOUT building a session — no doomed spawn, and the
         ;; breaker still trips. See skill-resolvable?.
         result       (cond
-                       ;; Provision-only: bring the :full session up + flip Notion,
-                       ;; drop the first-enter marker so the shim auto-runs
-                       ;; /continue-ticket, then synthesize a clean exit so
-                       ;; next-state derives the parked state from the ticket
-                       ;; (:planning → :awaiting-review). The session stays up for
-                       ;; the human; /continue-ticket later sets :implementing,
-                       ;; letting the sweep resolve this → :done.
+                       ;; Promote leg: bring the :full session up, flip Notion,
+                       ;; then launch /continue-ticket headlessly so the session is
+                       ;; oriented + clear work underway by the time the human
+                       ;; arrives (they `--resume` this conversation via the shim).
+                       ;; next-state derives from the resulting ticket status: if
+                       ;; the burst set :implementing → :done (slot freed; teardown
+                       ;; is a no-op for plan-bug so the session survives for the
+                       ;; human); if it parked early still :planning → :awaiting-review.
                        provision-only?
                        (try
                          (runs/spawn-session-for-run! run)
                          (notify/on-plan-spawn! run)
-                         (shim/mark-continue-on-first-enter!
-                           (cstate/run-session-home-link run-id))
-                         {:exit-code 0 :provisioned true}
+                         ;; /continue-ticket, NOT (:first-message run): the run's
+                         ;; first-message is "/plan-bug …" (skill = trigger id), but
+                         ;; the actual command is /continue-ticket (see note above).
+                         (agent/launch! {:run-id            run-id
+                                         :cwd               (cstate/run-session-home-link run-id)
+                                         :first-message     "/continue-ticket"
+                                         :system-prompt     (:plan-system-prompt defaults)
+                                         :budget            (-> run :limits :budget)
+                                         :claude-session-id session-id})
                          (catch Throwable t
                            {:spawn-error true :detail (.getMessage t)}))
 
