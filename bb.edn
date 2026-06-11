@@ -29,7 +29,8 @@
              [tasks.nido-migrate :as nido-migrate]
              [tasks.nido-transcribe :as nido-transcribe]
              [tasks.nido-notion-preprocess :as nido-notion-preprocess]
-             [tasks.nido-workstream :as nido-workstream])
+             [tasks.nido-workstream :as nido-workstream]
+             [tasks.nido-shared-pg :as nido-shared-pg])
 
   :init (do
           ;; Disable babashka.process/shell's default destroy-tree JVM
@@ -139,6 +140,26 @@
   nido:template:pg:destroy
   {:doc "Delete the template cluster for a project"
    :task (apply nido-template/destroy *command-line-args*)}
+
+  nido:shared:pg:up
+  {:doc "Ensure the project's shared Postgres cluster is up (seed+start). Idempotent."
+   :task (apply nido-shared-pg/up *command-line-args*)}
+
+  nido:shared:pg:status
+  {:doc "Show shared cluster status for a project"
+   :task (apply nido-shared-pg/status *command-line-args*)}
+
+  nido:shared:pg:down
+  {:doc "Stop the shared cluster (preserves data; does not run on session down)"
+   :task (apply nido-shared-pg/down *command-line-args*)}
+
+  nido:shared:pg:reset
+  {:doc "Stop, drop PGDATA, re-clone from template, start — recover from a bad migration"
+   :task (apply nido-shared-pg/reset *command-line-args*)}
+
+  nido:shared:pg:destroy
+  {:doc "Delete the shared cluster for a project"
+   :task (apply nido-shared-pg/destroy *command-line-args*)}
 
   nido:reclaim
   {:doc "List (or with :force? true, delete) per-instance state dirs not tracked in the registry"
