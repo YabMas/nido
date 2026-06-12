@@ -20,6 +20,24 @@
         (is (= "Bearer tok" (get-in @captured [:opts :headers "Authorization"])))
         (is (= "2025-09-03" (get-in @captured [:opts :headers "Notion-Version"])))))))
 
+(deftest update-page-properties-sends-arbitrary-properties
+  (let [captured (atom nil)]
+    (with-redefs [notion/http-request
+                  (fn [method url opts]
+                    (reset! captured {:method method :url url :opts opts})
+                    {:status 200 :body "{}"})]
+      (let [res (notion/update-page-properties!
+                  "PAGE1"
+                  {"Ball Holder"  {:people [{:id "u1"}]}
+                   "Participants" {:people [{:id "u1"} {:id "u2"}]}}
+                  "tok")]
+        (is (= {:ok true} res))
+        (is (= :patch (:method @captured)))
+        (is (= {"properties" {"Ball Holder"  {"people" [{"id" "u1"}]}
+                              "Participants" {"people" [{"id" "u1"} {"id" "u2"}]}}}
+               (json/parse-string (-> @captured :opts :body) false))
+            "people-type properties use {:people [{:id ...}]}")))))
+
 (deftest update-page-status-maps-error-codes
   (with-redefs [notion/http-request (fn [_ _ _] {:status 401 :body ""})]
     (is (= {:error :auth} (notion/update-page-status! "P" "Status" "X" "tok"))))

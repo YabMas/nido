@@ -148,13 +148,34 @@
       (= status 0)    {:status 0 :error :network}
       :else           {:status status :error :http})))
 
-(defn update-page-status!
-  "PATCH /v1/pages/<page-id>, setting a Status-type property to a named option.
-   Returns {:ok true} on 200, else {:error :kw} (with :status for generic HTTP).
-   Notion 'Status' properties take {:status {:name <option>}} — NOT :select.
-   property-name is a string matching the Notion property name exactly (e.g.
-   \"Status\"), used verbatim as the JSON key."
-  [page-id property-name status-name token]
+(defn retrieve-page
+  "GET /v1/pages/<page-id>. Returns parsed JSON (including :properties) or
+   {:error :kw}. Keys are keywordised, so a property named \"Participants\"
+   is reached at (get-in page [:properties :Participants])."
+  [page-id token]
+  (let [resp (try
+               (http-request
+                 :get
+                 (str "https://api.notion.com/v1/pages/" page-id)
+                 {:headers {"Authorization"  (str "Bearer " token)
+                            "Notion-Version" notion-api-version}
+                  :timeout 10000})
+               (catch Exception e {:status 0 :exception e}))
+        {:keys [status body]} resp]
+    (cond
+      (= status 200) (json/parse-string body true)
+      (= status 401) {:error :auth}
+      (>= status 500) {:error :server}
+      (= status 0)   {:error :network}
+      :else          {:error :http :status status})))
+
+(defn update-page-properties!
+  "PATCH /v1/pages/<page-id> with a Notion-shaped :properties map. Keys are
+   property names used verbatim as JSON keys; values are Notion property-value
+   maps (e.g. {:status {:name \"In progress\"}} for a status property,
+   {:people [{:id <user-id>}]} for a people property). Returns {:ok true} on
+   200, else {:error :kw} (with :status for generic HTTP)."
+  [page-id properties token]
   (let [resp (try
                (http-request
                  :patch
@@ -162,8 +183,7 @@
                  {:headers {"Authorization"  (str "Bearer " token)
                             "Notion-Version" notion-api-version
                             "Content-Type"   "application/json"}
-                  :body    (json/generate-string
-                             {:properties {property-name {:status {:name status-name}}}})
+                  :body    (json/generate-string {:properties properties})
                   :timeout 10000})
                (catch Exception e {:status 0 :exception e}))
         {:keys [status]} resp]
@@ -173,6 +193,14 @@
       (>= status 500) {:error :server}
       (= status 0)    {:error :network}
       :else           {:error :http :status status})))
+
+(defn update-page-status!
+  "PATCH /v1/pages/<page-id>, setting a Status-type property to a named option.
+   Notion 'Status' properties take {:status {:name <option>}} — NOT :select.
+   property-name is a string matching the Notion property name exactly (e.g.
+   \"Status\"). Thin wrapper over update-page-properties!."
+  [page-id property-name status-name token]
+  (update-page-properties! page-id {property-name {:status {:name status-name}}} token))
 
 (defn- normalise-property-name
   "\"Ticket ID\" → :ticket-id"
