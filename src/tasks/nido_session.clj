@@ -29,6 +29,7 @@
      bb nido:session:status  :project brian feat-auth
      bb nido:session:list    :project brian"
   (:require
+   [nido.coordinator.scratch :as scratch]
    [nido.session.lifecycle :as lifecycle]
    [nido.session.state :as state]
    [nido.task-args :as task-args]))
@@ -63,6 +64,7 @@
         project (require-project opts)
         session (require-session-name pos)]
     (lifecycle/up! session opts)
+    (scratch/birth! (keyword project) session)
     (let [home (state/session-home-dir project session)]
       (println)
       (println (str "Session ready: " project "/" session))
@@ -90,12 +92,15 @@
 
 (defn destroy
   "Bring the named session down and remove its worktree.
-   Pass :delete-branch? true to also drop the git branch."
+   Pass :delete-branch? true to also drop the git branch.
+   Reaps the session's loose (scratch) workstream when it never grew a ref or
+   ledger entry; a Notion/GitHub workstream (carrying a ref) is left intact."
   [& args]
   (let [[pos opts] (task-args/split-args args)
-        _project (require-project opts)
+        project (require-project opts)
         session (require-session-name pos)]
-    (lifecycle/destroy! session opts)))
+    (lifecycle/destroy! session opts)
+    (scratch/reap! (keyword project) session)))
 
 (defn enter
   "Hand off a cwd to the parent shell via `~/.nido/.last-cd`. Paired with
