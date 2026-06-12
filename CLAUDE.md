@@ -13,11 +13,14 @@ Nido is the harness; the active project (e.g. brian) is the workspace. Each runn
 - `worktree/` — symlink to the code (`~/Code/<project>-worktrees/<session>/`).
 - `.claude/` — symlink to `worktree/.claude/` so project-local skills/agents/commands resolve from the session home.
 
-`bb nido:session:up` brings the session up. To pick a session interactively, use the TUI (`bb nido:tui`) and press enter — your shell `cd`s into the session-home (see "Shell wrapper" below). From there, run `claude`, `codex`, or any other agent — they pick up the briefing and MCP config from cwd, and `cd worktree` reaches the code.
+`bb nido:session:up` brings the session up. To pick a session interactively, use the TUI (`bb nido:tui`) and press enter to land in the session-home. From there, run `claude`, `codex`, or any other agent — they pick up the briefing and MCP config from cwd, and `cd worktree` reaches the code.
 
-### Shell wrapper
+How "land in the session" works depends on the terminal:
 
-`bb` is a child process and can't change its parent shell's cwd, so the TUI hands off via `~/.nido/.last-cd` and a tiny shell function does the actual `cd`. Add to `~/.zshrc` (or your shell's equivalent):
+- **Warp** — enter opens a **new tab in the current window** at the session-home (`<kbd>w</kbd>` targets the worktree instead) and **leaves the TUI running**, so you orchestrate from one persistent nido tab and spin off a tab per session. Warp's URI scheme (`warp://action/new_tab?path=…`) can't run a command or set a title, so the tab lands at a bare shell; name it with the precmd hook below.
+- **Every other terminal** — enter falls back to the `cd`-handoff: the TUI writes `~/.nido/.last-cd`, quits, and a tiny shell function `cd`s the parent shell there (bb is a child process and can't change its parent's cwd itself).
+
+### Shell wrapper (non-Warp cd-handoff)
 
 ```zsh
 nido() {
@@ -28,7 +31,27 @@ nido() {
 }
 ```
 
-Then launch the TUI as `nido` rather than `bb nido:tui`. Without the wrapper the TUI still works as a viewer — pressing enter writes the path but nothing reads it.
+Launch the TUI as `nido` rather than `bb nido:tui`. (In Warp the wrapper is harmless — enter spawns a tab and never writes `.last-cd`, so the trailing `cd` is simply skipped.)
+
+### Tab naming (Warp)
+
+Warp's URI can't title the tab, so a shell hook does it from `$PWD` on the new tab's first prompt. Warp ignores shell-set titles unless `WARP_DISABLE_AUTO_TITLE=true`. Add to `~/.zshrc`:
+
+```zsh
+# Name a Warp tab opened into a nido session-home <project>/<session>.
+autoload -Uz add-zsh-hook
+_nido_tab_title() {
+  case "$PWD" in
+    "$HOME/.nido/sessions/"*)
+      local rel="${PWD#$HOME/.nido/sessions/}"
+      export WARP_DISABLE_AUTO_TITLE=true
+      printf '\033]0;%s\007' "${rel%/}"
+      ;;
+  esac
+  add-zsh-hook -d precmd _nido_tab_title   # one-shot: only the opening dir names the tab
+}
+add-zsh-hook precmd _nido_tab_title
+```
 
 Rules of engagement:
 
@@ -52,7 +75,7 @@ Brian's domain agents and most of its skills are mirrored under `nido/.claude/` 
 All session verbs take `:project <project>` plus a positional `<session>` (any order).
 
 - `bb nido:session:up :project <p> <session>` — create the worktree if missing, start PG + JVM + app, write the session home. Idempotent. Prints the session-home path on success.
-- `bb nido:session:enter :project <p> <session>` — write the session-home path to `~/.nido/.last-cd` and exit. Pair with the `nido` shell function (see "Shell wrapper" above) to actually `cd` your shell there. Refuses if the session is down. Pass `:cd worktree` to land in the worktree (the actual code) instead — useful when you want to edit / git-grep without the extra `cd worktree`. The TUI exposes the same opt-in: <kbd>e</kbd> / <kbd>↵</kbd> for session-home, <kbd>w</kbd> for worktree.
+- `bb nido:session:enter :project <p> <session>` — write the session-home path to `~/.nido/.last-cd` and exit. Pair with the `nido` shell function (see "Shell wrapper" above) to actually `cd` your shell there. Refuses if the session is down. Pass `:cd worktree` to land in the worktree (the actual code) instead — useful when you want to edit / git-grep without the extra `cd worktree`. The TUI exposes the same opt-in: <kbd>e</kbd> / <kbd>↵</kbd> for session-home, <kbd>w</kbd> for worktree — but in Warp the TUI spawns a new tab in place rather than quitting to this `cd`-handoff (see "How land in the session works" above). The CLI verb always uses the `.last-cd` handoff.
 - `bb nido:session:down :project <p> <session>` — stop the session; worktree + on-disk state preserved.
 - `bb nido:session:reset :project <p> <session>` — nuclear recovery. Down → drop PGDATA → re-clone from the current template → up. The "I'm wedged, fix it" button.
 - `bb nido:session:destroy :project <p> <session>` — down + remove the worktree.

@@ -43,6 +43,9 @@
 ;;        | [:up p s] | [:down p s] | [:destroy p s]
 ;;        | [:add p s]
 ;;        target = :home | :worktree
+;; `:enter` is the non-Warp fallback: it quits to the wrapper, which `cd`s the
+;; parent shell. In Warp `enter-session` spawns a tab in-app and never queues —
+;; nido stays up (see `lifecycle/warp?` / `lifecycle/spawn-tab!`).
 ;; ---------------------------------------------------------------------------
 
 (def ^:private exit-action (atom :quit))
@@ -425,6 +428,21 @@
            {:type ::action-done :verb verb :subject sn}
            {:type ::action-failed :verb verb :subject sn :error error :output output}))))))
 
+(defn- enter-session
+  "Land the user in session `sn` (target `:home` | `:worktree`). In Warp, open
+   a new tab in the *current* window in-app so nido stays up to orchestrate from
+   — errors surface as a status line. Every other terminal falls back to the
+   `cd-target-file` handoff: queue an `:enter` action and quit so the `nido`
+   shell wrapper `cd`s the parent shell there."
+  [state p sn target]
+  (if (lifecycle/warp?)
+    (try
+      (let [path (lifecycle/spawn-tab! sn {:project p :cd target})]
+        [(assoc state :status (str "Opened tab → " path)) nil])
+      (catch Throwable t
+        [(assoc state :status (str "✗ " (ex-message t))) nil]))
+    [state (queue-action! [:enter p sn target])]))
+
 (defn- start-session-down    [state p sn] (start-session-action :down    state p sn))
 (defn- start-session-up      [state p sn] (start-session-action :up      state p sn))
 (defn- start-session-destroy [state p sn] (start-session-action :destroy state p sn))
@@ -473,11 +491,11 @@
 
     (or (msg/key-match? msg "enter") (msg/key-match? msg "e"))
     (with-selected-session state
-      (fn [s p sn] [s (queue-action! [:enter p sn :home])]))
+      (fn [s p sn] (enter-session s p sn :home)))
 
     (msg/key-match? msg "w")
     (with-selected-session state
-      (fn [s p sn] [s (queue-action! [:enter p sn :worktree])]))
+      (fn [s p sn] (enter-session s p sn :worktree)))
 
     ;; `up` and `down` both run in-app (async, spinner) rather than quitting to
     ;; the wrapper. `up` is the long one (PG clone + JVM + app); the spinner
@@ -781,7 +799,7 @@
 
     (msg/key-match? msg "enter")
     (if-let [s (selected-session-row state)]
-      [state (queue-action! [:enter (name (:project s)) (:name s) :home])]
+      (enter-session state (name (:project s)) (:name s) :home)
       [state nil])
 
     :else

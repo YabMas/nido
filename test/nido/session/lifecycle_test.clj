@@ -1,6 +1,8 @@
 (ns nido.session.lifecycle-test
   (:require
    [babashka.fs :as fs]
+   [babashka.process]
+   [clojure.string :as str]
    [clojure.test :refer [deftest is]]
    [nido.core]
    [nido.session.engine]
@@ -128,6 +130,51 @@
                       (catch clojure.lang.ExceptionInfo e e))]
           (is ex "enter! must throw when neither session-home nor worktree exists")
           (is (re-find #"Worktree no longer exists for 'feat-x'" (ex-message ex)))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest spawn-tab!-opens-warp-new-tab-at-session-home-without-handoff-file
+  (let [tmp (fs/create-temp-dir)
+        project-name "fakeproj"
+        session-name "feat-x"
+        session-home (str (fs/path tmp "sessions" project-name session-name))
+        captured     (atom nil)]
+    (try
+      (fs/create-dirs session-home)
+      (with-redefs [nido.core/nido-home                 (constantly (str tmp))
+                    nido.session.state/session-home-dir (fn [_ _] session-home)
+                    nido.session.lifecycle/resolve-project
+                    (fn [_] [project-name {:directory (str tmp)}])
+                    babashka.process/shell
+                    (fn [& args] (reset! captured (vec args)) nil)]
+        (let [ret (lifecycle/spawn-tab! session-name {:project project-name})]
+          (is (= session-home ret) "spawn-tab! returns the resolved cwd")
+          (is (= ["open" (str "warp://action/new_tab?path=" session-home)]
+                 (remove map? @captured))
+              "opens a Warp new_tab URI at the session-home")
+          (is (not (fs/exists? (str (fs/path tmp ".last-cd"))))
+              "spawn-tab! must NOT write the cd-target-file handoff")))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest spawn-tab!-url-encodes-the-path-but-keeps-slashes-literal
+  (let [tmp (fs/create-temp-dir)
+        project-name "fakeproj"
+        session-name "feat x"                  ; a space forces encoding
+        session-home (str (fs/path tmp "sessions" project-name session-name))
+        captured     (atom nil)]
+    (try
+      (fs/create-dirs session-home)
+      (with-redefs [nido.core/nido-home                 (constantly (str tmp))
+                    nido.session.state/session-home-dir (fn [_ _] session-home)
+                    nido.session.lifecycle/resolve-project
+                    (fn [_] [project-name {:directory (str tmp)}])
+                    babashka.process/shell
+                    (fn [& args] (reset! captured (vec args)) nil)]
+        (lifecycle/spawn-tab! session-name {:project project-name})
+        (let [uri (last (remove map? @captured))]
+          (is (str/starts-with? uri "warp://action/new_tab?path=/")
+              "leading path slashes stay literal (Warp accepts them)")
+          (is (str/includes? uri "feat%20x") "spaces are percent-encoded")
+          (is (not (str/includes? uri "feat x")) "no raw space survives in the URI")))
       (finally (fs/delete-tree tmp)))))
 
 ;; bookmark-exists? — `jj bookmark list <name>` exits 0 for both hit and miss,

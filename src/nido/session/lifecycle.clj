@@ -470,10 +470,10 @@
                        :valid #{"home" "worktree"}
                        :hint "Pass :cd home (default) or :cd worktree"})))))
 
-(defn enter!
-  "Hand off a cwd to the parent shell via `cd-target-file`. bb cannot change
-   its parent's cwd, so a tiny zsh function (see Nido's CLAUDE.md) reads
-   this file after the bb task exits and `cd`s the user there.
+(defn resolve-cd-target
+  "Resolve (as a path string) the cwd a session `:enter` should land in, or
+   throw with a hint. Shared by `enter!` (writes it to `cd-target-file` for the
+   parent-shell handoff) and `spawn-tab!` (opens it as a Warp tab).
 
    `:cd` selects the target:
      :home (default) — the session-home (CLAUDE.md, .mcp.json live here)
@@ -482,15 +482,9 @@
                        session-home is gone (downed sessions retain
                        their worktree).
 
-   `:auto-up?` (default false) — call `up!` first. Idempotent on a running
-   session. Used by the TUI runs screen so `↵` on a downed run
-   transparently resumes the session.
-
-   Throws if `:cd home` is requested without `:auto-up?` and the
-   session-home is missing, or if `:cd worktree` is requested and neither
-   the session-home symlink nor the on-disk worktree exists."
+   Throws if `:cd home` and the session-home is missing, or if `:cd worktree`
+   and neither the session-home symlink nor the on-disk worktree exists."
   [name opts]
-  (when (:auto-up? opts) (up! name opts))
   (let [[project-name project] (resolve-project opts)
         cd-target    (parse-cd-target (:cd opts))
         session-home (state/session-home-dir project-name name)
@@ -502,10 +496,7 @@
           (throw (ex-info (str "No session home for '" name "' — is it running?")
                           {:expected session-home
                            :hint "Run `bb nido:session:up` to bring it up."})))
-        (let [target (cd-target-file)]
-          (fs/create-dirs (fs/parent target))
-          (spit target session-home)
-          (core/log-step (str "Selected " session-home))))
+        session-home)
 
       :worktree
       (let [via-home   (str (fs/path session-home "worktree"))
@@ -519,10 +510,59 @@
                           {:session-home via-home
                            :on-disk      on-disk
                            :hint "Run `bb nido:session:up` to recreate the worktree."})))
-        (let [target (cd-target-file)]
-          (fs/create-dirs (fs/parent target))
-          (spit target resolved)
-          (core/log-step (str "Selected " resolved)))))))
+        resolved))))
+
+(defn enter!
+  "Hand off a cwd to the parent shell via `cd-target-file`. bb cannot change
+   its parent's cwd, so a tiny zsh function (see Nido's CLAUDE.md) reads
+   this file after the bb task exits and `cd`s the user there. Used by the
+   CLI verb and, in non-Warp terminals, by the TUI (see `spawn-tab!` for the
+   Warp path).
+
+   `:cd` selects the target (see `resolve-cd-target`).
+
+   `:auto-up?` (default false) — call `up!` first. Idempotent on a running
+   session. Used by the TUI runs screen so `↵` on a downed run
+   transparently resumes the session."
+  [name opts]
+  (when (:auto-up? opts) (up! name opts))
+  (let [resolved (resolve-cd-target name opts)
+        target   (cd-target-file)]
+    (fs/create-dirs (fs/parent target))
+    (spit target resolved)
+    (core/log-step (str "Selected " resolved))))
+
+(defn warp?
+  "True when running inside Warp. Warp is the only terminal whose URI scheme
+   can open a tab in the *current* window, so it's the only one that gets the
+   in-app spawn; every other terminal falls back to the `cd-target-file`
+   handoff (`enter!`)."
+  []
+  (= "WarpTerminal" (System/getenv "TERM_PROGRAM")))
+
+(defn- warp-new-tab-uri
+  "`warp://action/new_tab` URI that lands a fresh tab at `path`. The path is
+   URL-encoded (slashes kept literal — Warp accepts them and they're the common
+   case) so spaces or specials in a session path don't break the URI."
+  [path]
+  (str "warp://action/new_tab?path="
+       (-> (java.net.URLEncoder/encode (str path) "UTF-8")
+           (str/replace "+" "%20")
+           (str/replace "%2F" "/"))))
+
+(defn spawn-tab!
+  "Open a new Warp tab in the *current* window at the session's `:enter` cwd and
+   return that path. Warp's URI scheme can neither run a command nor set the tab
+   title, so the tab lands at a bare shell; the title is set by the zsh precmd
+   hook (see CLAUDE.md) from $PWD. The TUI calls this in Warp so nido stays put;
+   other terminals use `enter!` + the parent-shell handoff instead.
+
+   `:cd` / `:auto-up?` behave as in `enter!`."
+  [name opts]
+  (when (:auto-up? opts) (up! name opts))
+  (let [path (resolve-cd-target name opts)]
+    (shell {:out :string :err :string} "open" (warp-new-tab-uri path))
+    path))
 
 (defn- worktree-dir?
   "True if `dir` is a session worktree root. A git worktree's root has a
