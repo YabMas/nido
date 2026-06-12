@@ -30,7 +30,8 @@
              [tasks.nido-transcribe :as nido-transcribe]
              [tasks.nido-notion-preprocess :as nido-notion-preprocess]
              [tasks.nido-workstream :as nido-workstream]
-             [tasks.nido-shared-pg :as nido-shared-pg])
+             [tasks.nido-shared-pg :as nido-shared-pg]
+             [tasks.nido-scratch :as nido-scratch])
 
   :init (do
           ;; Disable babashka.process/shell's default destroy-tree JVM
@@ -96,6 +97,10 @@
   nido:session:destroy
   {:doc "Destroy a session: :project <p> <session> — down + remove worktree"
    :task (apply nido-session/destroy *command-line-args*)}
+
+  nido:scratch:backfill
+  {:doc "Backfill a loose workstream for every existing session: :project <p> (idempotent)"
+   :task (apply nido-scratch/backfill *command-line-args*)}
 
   nido:session:isolate
   {:doc "Switch a session to a private DB clone for destructive tests: :project <p> <session>"
