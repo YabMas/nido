@@ -187,6 +187,8 @@ bb nido:coordinator:down        # graceful stop (SIGTERM); :force true → SIGKI
 
 `up` refuses if a live daemon already holds the PID file. `down` cleans the PID file even when the daemon was already gone (stale PID).
 
+**The daemon is a single long-lived process that reads `src/` once at startup — editing coordinator code does NOT affect the running daemon.** After changing any coordinator namespace, restart it (`bb nido:coordinator:restart` under launchd, otherwise `down` then `up`) or the fix never loads. This bites silently: a fix can sit committed on disk for hours while the live daemon keeps running the old logic — when debugging behaviour that contradicts the on-disk code, check the daemon's start time (`ps -o lstart -p $(cat ~/.nido/coordinator/coordinator.pid)`) against the relevant commit before assuming the code is wrong. (Restarting also loads any uncommitted working-tree changes.)
+
 **Auto-start at login (Stage 4):**
 
 ```
