@@ -7,6 +7,7 @@
    PR-creation time by the prepare-draft-pr skill. Best-effort throughout."
   (:require
    [clojure.string :as str]
+   [nido.coordinator.clock :as clock]
    [nido.coordinator.sources.state :as sstate]
    [nido.coordinator.workstream :as ws]
    [nido.github.client :as gh]
@@ -18,6 +19,27 @@
     (.println ^java.io.PrintWriter *err* (str "WARN: " msg))))
 
 (defn- state-key [project] (str "github-" (name project)))
+
+;; Half-open breaker: once tripped, suppress polling for this long, then allow
+;; one probe poll — success clears it, failure re-arms the cooldown. Auth
+;; failures need a human to re-auth `gh`, so this backs off (30m) instead of
+;; hammering gh + warning every 5m poll, and self-heals once the token is fixed.
+;; Mirrors the :notion-view source's breaker (nido.coordinator.sources.notion).
+(def ^:private breaker-cooldown-s (* 30 60))
+
+(defn- cooldown-elapsed?
+  "True if a tripped breaker is due for a half-open probe. Permissive when no
+   :breaker-opened-at is recorded (legacy/hand-edited state) so the poller never
+   stays dark forever."
+  [state]
+  (if-let [opened (:breaker-opened-at state)]
+    (try
+      (>= (.toSeconds (java.time.Duration/between
+                        (java.time.Instant/parse opened)
+                        (java.time.Instant/parse (clock/now-iso))))
+          breaker-cooldown-s)
+      (catch Exception _ true))
+    true))
 
 (defn- pr-id [repo number] (str repo "#" number))
 
@@ -76,28 +98,38 @@
 (defn poll-and-react!
   "One poll for a project. Lists merged PRs, dedups against the snapshot
    (first poll seeds + reacts to nothing), reacts to genuinely-new merges,
-   persists the new snapshot. Breaker state is recorded on failure (auth, or
-   ≥3 consecutive) for visibility only — v1 does NOT self-gate on it, so the
-   daemon keeps re-polling (a 401 keeps warning every poll until the token is
-   fixed)."
+   persists the new snapshot.
+
+   Half-open breaker: an :auth failure (or ≥3 consecutive failures) opens it.
+   While open the poll is SKIPPED — no `gh` call, no warning — until
+   breaker-cooldown-s has elapsed since :breaker-opened-at, then exactly one
+   probe runs: success clears the breaker, failure re-arms the cooldown. So a
+   broken `gh` auth backs off to one retry per cooldown instead of warning every
+   poll, and self-heals once the token is fixed."
   [project {:keys [repo on-merge]}]
   (let [k     (state-key project)
-        prior (sstate/read-state k)
-        res   (gh/list-merged-prs repo)]
-    (if (:error res)
-      (let [auth? (= :auth (:error res))
-            fails (inc (or (:consecutive-failures prior) 0))]
-        (sstate/write-state! k (merge (or prior {:type :github-merge :project project :reacted #{}})
-                                      {:consecutive-failures fails
-                                       :breaker (if (or auth? (>= fails 3)) :open (:breaker prior))}))
-        (warn (str "github-merge: gh poll failed for " project " — " (:error res))))
-      (let [ids       (into #{} (map #(pr-id repo (:number %))) (:prs res))
-            first?    (nil? prior)
-            seen      (or (:reacted prior) #{})]
-        (when-not first?
-          (doseq [pr (:prs res)
-                  :when (not (contains? seen (pr-id repo (:number pr))))]
-            (react-to-merge! project on-merge repo pr)))
-        (sstate/write-state! k {:type :github-merge :project project
-                                :reacted ids :consecutive-failures 0 :breaker nil})))
+        prior (sstate/read-state k)]
+    (when-not (and (= :open (:breaker prior)) (not (cooldown-elapsed? prior)))
+      (let [res (gh/list-merged-prs repo)]
+        (if (:error res)
+          (let [auth? (= :auth (:error res))
+                fails (inc (or (:consecutive-failures prior) 0))
+                ;; open on auth, on crossing the threshold, or re-arm a failed
+                ;; half-open probe (breaker was already open).
+                open? (or auth? (>= fails 3) (= :open (:breaker prior)))]
+            (sstate/write-state! k (merge (or prior {:type :github-merge :project project :reacted #{}})
+                                          (cond-> {:consecutive-failures fails
+                                                   :breaker (if open? :open (:breaker prior))}
+                                            open? (assoc :breaker-opened-at (clock/now-iso)))))
+            (warn (str "github-merge: gh poll failed for " project " — " (:error res))))
+          (let [ids    (into #{} (map #(pr-id repo (:number %))) (:prs res))
+                first? (nil? prior)
+                seen   (or (:reacted prior) #{})]
+            (when-not first?
+              (doseq [pr (:prs res)
+                      :when (not (contains? seen (pr-id repo (:number pr))))]
+                (react-to-merge! project on-merge repo pr)))
+            ;; success clears the breaker (fresh map drops :breaker-opened-at).
+            (sstate/write-state! k {:type :github-merge :project project
+                                    :reacted ids :consecutive-failures 0 :breaker nil})))))
     nil))

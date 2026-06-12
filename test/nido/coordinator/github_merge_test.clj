@@ -2,6 +2,7 @@
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
+   [nido.coordinator.clock :as clock]
    [nido.coordinator.github-merge :as gm]
    [nido.coordinator.sources.state :as sstate]
    [nido.coordinator.state :as cstate]
@@ -103,6 +104,48 @@
         (let [s (sstate/read-state "github-brian")]
           (is (= 1 (:consecutive-failures s)) "counter incremented")
           (is (nil? (:breaker s)) "single non-auth failure stays below threshold"))))))
+
+(deftest breaker-open-within-cooldown-skips-poll
+  (with-tmp
+    (fn [_]
+      (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}
+                                           :breaker :open :breaker-opened-at "2026-06-12T10:00:00Z"
+                                           :consecutive-failures 1})
+      (let [called (atom false)]
+        (with-redefs [clock/now-iso       (constantly "2026-06-12T10:10:00Z")   ; 10m < 30m cooldown
+                      gh/list-merged-prs  (fn [_] (reset! called true) {:status :ok :prs []})]
+          (gm/poll-and-react! :brian cfg)
+          (is (false? @called) "breaker open + cooldown not elapsed ⇒ no gh poll, no warn")
+          (is (= :open (:breaker (sstate/read-state "github-brian"))) "stays open, state untouched"))))))
+
+(deftest breaker-half-open-probe-after-cooldown-clears-on-success
+  (with-tmp
+    (fn [_]
+      (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}
+                                           :breaker :open :breaker-opened-at "2026-06-12T10:00:00Z"
+                                           :consecutive-failures 5})
+      (let [called (atom false)]
+        (with-redefs [clock/now-iso       (constantly "2026-06-12T11:00:00Z")   ; 60m > 30m cooldown
+                      gh/list-merged-prs  (fn [_] (reset! called true) {:status :ok :prs []})]
+          (gm/poll-and-react! :brian cfg)
+          (is (true? @called) "cooldown elapsed ⇒ one probe poll runs")
+          (let [s (sstate/read-state "github-brian")]
+            (is (nil? (:breaker s)) "successful probe clears the breaker")
+            (is (zero? (:consecutive-failures s)) "failures reset")))))))
+
+(deftest breaker-half-open-probe-failure-rearms-cooldown
+  (with-tmp
+    (fn [_]
+      (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}
+                                           :breaker :open :breaker-opened-at "2026-06-12T10:00:00Z"
+                                           :consecutive-failures 5})
+      (with-redefs [clock/now-iso      (constantly "2026-06-12T11:00:00Z")   ; probe time
+                    gh/list-merged-prs (fn [_] {:error :auth})]
+        (gm/poll-and-react! :brian cfg)
+        (let [s (sstate/read-state "github-brian")]
+          (is (= :open (:breaker s)) "failed probe keeps the breaker open")
+          (is (= "2026-06-12T11:00:00Z" (:breaker-opened-at s))
+              "cooldown re-armed to the probe time, so the next probe waits another full cooldown"))))))
 
 (deftest correlation-is-case-insensitive
   (with-tmp
