@@ -772,6 +772,9 @@
    and empty rows are guarded by `selected-workstream` returning nil."
   [state msg]
   (cond
+    (msg/key-match? msg "escape")
+    [(enter-projects state) nil]
+
     (msg/key-match? msg "enter")
     (if-let [ws (selected-workstream state)]
       [(enter-workstream state (:ws-id ws) (:label ws)) nil]
@@ -1038,7 +1041,7 @@
                   (case (:screen state)
                     :projects    "[↵] open  [q]uit"
                     :sessions    "[↵/e] enter  [w]orktree  [i]nfo  [a]dd  [u]p  [d]own  [x] destroy  [r] workstreams  [esc] back  [q]uit"
-                    :workstreams "[↵] open  [p]romote  [d]one  [f]ire  [h]alt  [c]lear breaker  [s]essions  [q]uit"
+                    :workstreams "[↵] open  [p]romote  [d]one  [f]ire  [h]alt  [c]lear breaker  [s]essions  [esc] back  [q]uit"
                     :workstream  "[↵] open in chat  [esc] back  [s]essions  [q]uit"))))
 
 (defn- info-row [label value]

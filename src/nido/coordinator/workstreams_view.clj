@@ -131,8 +131,8 @@
      :triage      (triage-split (:triage by []))}))
 
 (defn session-rows
-  "Display rows for one workstream's coordinator-sessions. :phase is nil for
-   human (non-autonomous) sessions."
+  "Display rows for one workstream's coordinator-sessions, ordered most-recently-
+   active first. :phase is nil for human (non-autonomous) sessions."
   [project ws-id]
   (->> (session/list-sessions project ws-id)
        (mapv (fn [s]
@@ -143,7 +143,10 @@
                 :substrate     (:substrate s)
                 :last-activity (or (some-> s :autonomy :phase-history last :at)
                                    (some-> s :substrate-history last :at)
-                                   (:created-at s))}))))
+                                   (:created-at s))}))
+       ;; newest-active first; nil :last-activity sorts last. Lexical = chronological.
+       (sort-by #(or (:last-activity %) "") #(compare %2 %1))
+       vec))
 
 (def ^:private title-max 52)
 
