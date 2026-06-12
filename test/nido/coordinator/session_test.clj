@@ -8,6 +8,13 @@
    [nido.coordinator.state :as cstate]
    [nido.coordinator.workstream :as ws]))
 
+(defn- with-tmp [f]
+  (let [tmp (fs/create-temp-dir)]
+    (try (with-redefs [cstate/nido-root (constantly (str tmp))
+                       clock/now-iso    (constantly "2026-06-05T09:00:00Z")]
+           (cstate/ensure-dirs!) (f tmp))
+         (finally (fs/delete-tree tmp)))))
+
 (def human-session
   {:name "explore-firefox"
    :workstream-id "ws-1"
@@ -266,3 +273,20 @@
     (is (false? (:needs-you (sess/stage-projection nil :implementing [running] :triaging))))
     ;; done never needs you
     (is (false? (:needs-you (sess/stage-projection {:at "t" :outcome :done} :done [dead] :triaging))))))
+
+(deftest list-sessions-round-trips-a-slash-containing-name
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :scratch :external-refs []})]
+        (sess/create! :brian (:id w)
+                      {:name "feat/course-materials-tab" :weight :light :autonomy nil})
+        (is (= ["feat/course-materials-tab"]
+               (mapv :name (sess/list-sessions :brian (:id w))))
+            "a '/'-containing session name round-trips through list-sessions")))))
+
+(deftest list-sessions-still-handles-flat-names
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :scratch :external-refs []})]
+        (sess/create! :brian (:id w) {:name "refshot" :weight :light :autonomy nil})
+        (is (= ["refshot"] (mapv :name (sess/list-sessions :brian (:id w)))))))))

@@ -12,6 +12,7 @@
      ~/.nido/projects/<project>/workstreams/<ws-id>/{workstream.edn, entries/, sessions/<name>/session.edn}
      ~/.nido/projects/<project>/_pre-unification/   (legacy run/ticket records archived by migration)"
   (:require [babashka.fs :as fs]
+            [clojure.string :as str]
             [nido.core :as core]))
 
 (defn nido-root []
@@ -84,8 +85,21 @@
 (defn ws-sessions-dir [project ws-id]
   (str (fs/path (workstream-dir project ws-id) "sessions")))
 
+(defn- session-key
+  "Filesystem-safe directory key for a session name. Lifecycle session names can
+   contain '/' (e.g. a 'feat/foo' branch); used raw as a path segment they would
+   nest session.edn and break enumeration in list-sessions. Percent-encode the
+   path separators so the key is always a single flat segment. The true name is
+   preserved in the session record's :name — this is only the on-disk dir key.
+   '%' is escaped first so the encoding is unambiguous."
+  [session-name]
+  (-> (str session-name)
+      (str/replace "%" "%25")
+      (str/replace "/" "%2F")
+      (str/replace "\\" "%5C")))
+
 (defn session-dir [project ws-id session-name]
-  (str (fs/path (ws-sessions-dir project ws-id) session-name)))
+  (str (fs/path (ws-sessions-dir project ws-id) (session-key session-name))))
 
 (defn session-edn-path [project ws-id session-name]
   (str (fs/path (session-dir project ws-id session-name) "session.edn")))

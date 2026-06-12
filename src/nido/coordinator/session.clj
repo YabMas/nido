@@ -71,13 +71,18 @@
              :created-at        now})))
 
 (defn list-sessions
-  "Seq of session records under one workstream's sessions/ dir."
+  "Seq of session records under one workstream's sessions/ dir. Reads each
+   session.edn directly (rather than re-deriving the path from the directory
+   name) so a session whose name was percent-encoded into the dir key — e.g.
+   'feat/foo' → 'feat%2Ffoo' — still round-trips via the record's :name."
   [project ws-id]
   (let [d (cstate/ws-sessions-dir project ws-id)]
     (if (fs/exists? d)
       (->> (fs/list-dir d)
            (filter fs/directory?)
-           (keep #(read-session project ws-id (str (fs/file-name %)))))
+           (map #(str (fs/path % "session.edn")))
+           (filter fs/exists?)
+           (keep io/read-edn))
       [])))
 
 (defn live?       [s] (= :live (:substrate s)))

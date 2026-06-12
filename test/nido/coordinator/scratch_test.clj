@@ -77,3 +77,11 @@
   (with-tmp
     (fn [_]
       (is (nil? (scratch/reap! :brian "ghost"))))))
+
+(deftest birth-is-idempotent-for-slash-names
+  (with-tmp
+    (fn [_]
+      (let [a (scratch/birth! :brian "feat/x")
+            b (scratch/birth! :brian "feat/x")]
+        (is (= a b) "slash-named session: same ws-id, no duplicate workstream")
+        (is (= 1 (count (workstream/list-ids :brian))))))))
