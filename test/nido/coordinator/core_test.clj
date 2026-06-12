@@ -7,6 +7,8 @@
    [nido.coordinator.agent :as agent]
    [nido.coordinator.core :as core]
    [nido.coordinator.executor :as executor]
+   [nido.coordinator.github-merge :as github-merge]
+   [nido.github.config :as gh-config]
    [nido.coordinator.anomaly :as anomaly]
    [nido.coordinator.breakers :as breakers]
    [nido.coordinator.notify :as notify]
@@ -58,6 +60,25 @@
 
 (deftest defaults-include-executor-shutdown-grace
   (is (= 5000 (core/shutdown-grace-ms))))
+
+(deftest maybe-poll-github-merges-throttles-and-calls
+  (let [calls (atom [])]
+    ;; !last-github-poll-ms is a defonce atom that persists across test runs in
+    ;; the same JVM — reset it so the "first call at t=0 polls" assumption holds.
+    (reset! @#'core/!last-github-poll-ms {})
+    (with-redefs [gh-config/load-config
+                  (fn [p] (when (= :brian p) {:repo "brian-study/brian" :poll "5m"}))
+                  core/registered-projects (constantly [:brian])
+                  github-merge/poll-and-react!
+                  (fn [p _] (swap! calls conj p))]
+      ;; first call at t=0 polls (last-poll seeded to 0, interval elapsed)
+      (#'core/maybe-poll-github-merges! 0)
+      ;; immediate re-call is throttled (interval not elapsed)
+      (#'core/maybe-poll-github-merges! 1000)
+      (is (= [:brian] @calls) "polled once, second call throttled")
+      ;; after the interval, polls again
+      (#'core/maybe-poll-github-merges! (* 5 60 1000))
+      (is (= [:brian :brian] @calls)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Triage pre-spawn gate tests (Task 4)
