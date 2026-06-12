@@ -7,7 +7,7 @@ description: Triage a Notion bug-report ticket. Investigates the brian codebase,
 
 > **Harness-side skill, owned by nido.** It lives at `nido/.claude/skills/triage-bug/` and is injected as a native harness skill into every spawned session's composed `.claude/skills/` (see `nido.session.launcher/compose-claude-dir!`), so claude resolves `/triage-bug` independent of the target project's checked-out branch. (Previously it lived in brian's `.claude/`, which coupled it to whatever branch was checked out — when that branch changed, the skill silently disappeared and triage runs no-op'd.)
 >
-> **Triage state + the report live in the nido ticket record**, not in Notion. Each ticket gets a per-ticket record at `~/.nido/projects/brian/tickets/BR-####/` (`meta.edn` + `report.md` + `entries/`), managed via `bb nido:ticket:*`. Notion only receives the human-confirmed structured properties on `apply`. There is no longer a `🤖 Triaged` Notion comment.
+> **Triage state + the full report live in the nido ticket record**, not in Notion. Each ticket gets a per-ticket record at `~/.nido/projects/brian/tickets/BR-####/` (`meta.edn` + `report.md` + `entries/`), managed via `bb nido:ticket:*`. On `apply` Notion receives the human-confirmed structured properties (Type/Effort/Status), the **enriched title**, and an **enriched-description callout prepended above the reporter's original body** (the original is preserved intact, never overwritten). Comments are never written, and there is no longer a `🤖 Triaged` Notion comment.
 
 ## When this fires
 
@@ -111,8 +111,10 @@ Write this body to a temp file (then append it via `bb nido:ticket:append`, per 
 **Source view:** new-reports | bugs
 **Determination:** bug | not-a-bug | needs-info
 
-## 1. Enriched description
-<2–6 sentences. What the report is actually about, self-contained — assumes the reader hasn't seen the original.>
+## 1. Enriched title + description
+**Enriched title:** <concise, no `BR-####` prefix, no trailing punctuation. ALWAYS propose one; keep it identical to the original when the original is already good. This is written to the Notion title property on `apply`.>
+
+<2–6 sentences of enriched description. What the report is actually about, self-contained — assumes the reader hasn't seen the original. This is prepended as a callout above the reporter's original body on `apply`.>
 
 **Confidence in this analysis:** high | medium | low — <one-line reason>
 
@@ -124,10 +126,13 @@ Write this body to a temp file (then append it via `bb nido:ticket:append`, per 
 - Type: <unchanged | "bug">
 - Effort: M
 - Status: `Needs verification` → `Not started`     (for triage-new only)
+- Title: <enriched title from §1, or "unchanged" when identical to original>
+- Description: prepend enriched callout (§1) above the original body
 
-(Only Type / Effort / Status go to Notion. The reporter's original title and
-description are left untouched — the enriched narrative in §1 lives in the
-nido record, not Notion.)
+(Type / Effort / Status are property writes. Title is a property write. The
+enriched description is prepended as a callout block at the top of the page —
+the reporter's original body is preserved intact below it. Comments are never
+written. The full report still lives in the nido record.)
 
 ## 4. If you want to skip instead
 **Recommended disposition:** Not Done | On Hold | leave-as-is | delete
@@ -174,32 +179,48 @@ Wait for re-confirmation in chat before proceeding.
 
 ### If concurrency check passes (or user reconfirms):
 
-1. **Property update (the only Notion write)** — `mcp__notionApi__API-patch-page` with the page-id and **only** these properties:
+1. **Property update** — `mcp__notionApi__API-patch-page` with the page-id and these properties:
    - **Type** (select) — must be one of `bug`, `feature`, `improvement`, `research`, `chore`
    - **Effort** (select) — must be one of `XS`, `S`, `M`, `L`, `XL`
    - **Status** (status) — for `:triage-new`, transition `Needs verification` → `Not started` (or `On Hold` if you assessed not-actionable). For `:triage-backlog`, leave unchanged.
+   - **Title** — set the title property to the **enriched title** from §1. When the enriched title is identical to the original, this is a harmless no-op — write it anyway, don't special-case it.
 
-   Do NOT touch the title or the description body — the reporter's original text stays as written; the enriched narrative lives in the nido record.
+   Do NOT overwrite the description body here — that's the prepend in step 2, which leaves the reporter's original text intact.
 
-2. **Complete the record** — on success:
+2. **Description prepend** — prepend the enriched description as a single **callout** above the reporter's original body. The original body is never overwritten.
+
+   a. **Idempotency guard.** A ticket can hit both triage triggers (`:triage-new` then `:triage-backlog`), so an enriched callout from a prior triage may already exist. Fetch the page's first child block (`mcp__notionApi__API-get-block-children`, look at index 0). If it is a callout whose text contains the marker `🤖 Enriched (triage BR-####)` for THIS `BR-####`, delete it first with `mcp__notionApi__API-delete-a-block` — it's our own block, never the reporter's content. This prevents stacking duplicate callouts.
+
+   b. **Prepend the callout** via `mcp__notionApi__API-patch-block-children` on the page-id, passing `position: {"type": "start"}` so the block lands at the **top** of the page (not the end). The single child block:
+
+   ```json
+   {"type": "callout",
+    "callout": {"icon": {"type": "emoji", "emoji": "🤖"},
+                "rich_text": [{"type": "text",
+                               "text": {"content": "🤖 Enriched (triage BR-####)\n<enriched description from §1>"}}]}}
+   ```
+
+   c. **Verify the prepend landed at the top.** The MCP tool declares the deprecated `after` param, not `position`, so although `position` is most likely forwarded to the REST API, it is not guaranteed. Re-fetch the page's first child block and confirm it is the enriched callout. **If it is NOT at index 0** (the callout appended at the bottom instead — `position` was stripped), treat it like a partial write: post `⚠️ enriched callout landed at the bottom, not the top (position param not honored) — fix placement manually`, log it per "Partial-write handling" below, and do NOT complete the record cleanly.
+
+3. **Complete the record** — on success (title + description both landed correctly):
 
    ```bash
    bb nido:ticket:complete :project brian :br <BR-####> :status triaged :disposition applied
    ```
 
-3. **Audit log** — append one line to `~/.nido/coordinator/notion-mutations.log`:
+4. **Audit log** — append one line to `~/.nido/coordinator/notion-mutations.log`:
 
 ```bash
-printf '%s %s page=%s writes=type,effort,status\n' \
+printf '%s %s page=%s writes=type,effort,status,title,description\n' \
        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "<run-id>" "<page-id>" \
        >> ~/.nido/coordinator/notion-mutations.log
 ```
 
-4. Print summary to chat (what landed, what didn't).
+5. Print summary to chat (what landed, what didn't).
 
 ### Partial-write handling
 
-If the property update fails after a partial write (e.g. some properties landed but the patch errored midway), DON'T try to roll back — Notion has no transactions, and rollback is fragile and worse than honest partial state. Instead:
+If any apply write fails after a partial write (some properties landed but the patch errored midway; the title wrote but the callout prepend failed; or the callout landed at the bottom per step 2c), DON'T try to roll back — Notion has no transactions, and rollback is fragile and worse than honest partial state. Instead:
 
 1. Post a clear warning into chat: `⚠️ partial triage — wrote <what landed>, failed to write <what didn't>: <error>. Re-triage manually.`
 
@@ -262,7 +283,7 @@ Triage triggers deliberately do NOT use `:dry-run? true`. The coordinator's dry-
 
 The real safety mechanism for triage is the HITL halt at `:awaiting-input` (Step 1.7 + Step 3): the agent ALWAYS pauses for a chat verdict before any Notion write. No Notion mutation happens until you respond with `apply`. If you say `cancel`, `skip`, or `redo`, the apply branch never runs.
 
-Treat this as a hard contract: never call a Notion-write MCP tool (`API-patch-page`, `API-delete-a-block`) outside the explicit `apply` or `skip` branches in Step 4 / Step 5. On `apply`, the only Notion write is the Type/Effort/Status property patch — never touch the title, description body, or comments.
+Treat this as a hard contract: never call a Notion-write MCP tool (`API-patch-page`, `API-patch-block-children`, `API-delete-a-block`) outside the explicit `apply` or `skip` branches in Step 4 / Step 5. On `apply`, the permitted writes are: the Type/Effort/Status/Title property patch, and the prepend (plus idempotency-delete) of **our own** enriched callout. Never overwrite the reporter's original body, and never write comments.
 
 ## Resume behaviour
 
