@@ -26,6 +26,12 @@
 (defn close* [{:keys [project outcome] :as opts}]
   (ws/close! (keyword project) (resolve-ws-id opts) (keyword (or outcome "done"))))
 
+(defn ref-add* [{:keys [project adapter id url title] :as opts}]
+  (ws/add-ref! (keyword project) (resolve-ws-id opts)
+               (cond-> {:adapter (keyword adapter) :id id}
+                 url   (assoc :url url)
+                 title (assoc :title title))))
+
 (defn- run* [f args]
   (let [[_ opts] (task-args/split-args args)]
     (f opts)
@@ -34,3 +40,4 @@
 (defn entry-add     [& args] (run* entry-add* args))
 (defn stage-advance [& args] (run* stage-advance* args))
 (defn close-cmd     [& args] (run* close* args))
+(defn ref-add       [& args] (run* ref-add* args))

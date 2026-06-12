@@ -361,4 +361,8 @@
   {:doc "Close a workstream. :project <p> (:ws-id <id> | :ref <BR-####>) :outcome <done|dropped>"
    :task (apply nido-workstream/close-cmd *command-line-args*)}
 
+  nido:workstream:ref:add
+  {:doc "Add an external ref to a workstream. :project <p> (:ws-id <id> | :ref <BR-####>) :adapter <kw> :id <str> [:url <str> :title <str>]"
+   :task (apply nido-workstream/ref-add *command-line-args*)}
+
   }}

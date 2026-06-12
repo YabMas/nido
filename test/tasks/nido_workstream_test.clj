@@ -25,3 +25,23 @@
         (is (= :investigating (:stage (ws/read-ws :brian (:id w)))))
         (task/close* {:project "brian" :ref "BR-3" :outcome "done"})
         (is (= :done (-> (ws/read-ws :brian (:id w)) :closed :outcome)))))))
+
+(deftest ref-add-stamps-github-ref
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :in-progress
+                                  :external-refs [{:adapter :notion :id "BR-9"}]})]
+        (task/ref-add* {:project "brian" :ref "BR-9"
+                        :adapter "github" :id "brian-study/brian#412"
+                        :url "https://github.com/brian-study/brian/pull/412"
+                        :title "Fix X"})
+        (let [refs (:external-refs (ws/read-ws :brian (:id w)))]
+          (is (= 2 (count refs)))
+          (is (some #(and (= :github (:adapter %))
+                          (= "brian-study/brian#412" (:id %))
+                          (= "https://github.com/brian-study/brian/pull/412" (:url %)))
+                    refs)))
+        ;; idempotent: same id ⇒ no duplicate
+        (task/ref-add* {:project "brian" :ref "BR-9"
+                        :adapter "github" :id "brian-study/brian#412"})
+        (is (= 2 (count (:external-refs (ws/read-ws :brian (:id w))))))))))
