@@ -84,6 +84,7 @@
     {:ws-id         (:id ws)
      :project       project
      :br-id         br-id
+     :promote-id    (or br-id (some #(when (= :github-issue (:adapter %)) (:id %)) (:external-refs ws)))
      :label         (label ws sessions)
      :source        (ws-source ws)
      :stage         (:stage proj)
@@ -201,18 +202,21 @@
           (engagement-substatus engagement)))
 
 (defn promote-result-message
-  "Status-line string for a `promote/promote!` decision on `br`. `:promote`
-   confirms the planning leg started; every refusal reads as why it wasn't
-   promotable. nil br (no ticket on the workstream) is its own message."
+  "Status-line string for a `promote/promote-workstream!` decision on `br`.
+   `br` is the Notion BR-#### id, GitHub issue ref (e.g. \"o/r#42\"), or nil
+   for a scratch/ref-less workstream. `:promote` confirms the planning leg
+   started; every refusal reads as why it wasn't promotable."
   [br decision]
   (if (nil? br)
-    "no ticket on this workstream to promote"
+    "nothing to promote on this workstream"
     (case decision
-      :promote        (str "promoted " br " → in progress")
-      :skip-active    (str br " already promoted")
-      :skip-completed (str br " was skipped in triage — nothing to promote")
-      :skip-no-record (str br " has no triage record yet")
-      :skip-untriaged (str br " isn't triaged yet — not ready to pick up")
+      :promote             (str "promoted " br " → in progress")
+      :skip-active         (str br " already promoted")
+      :skip-completed      (str br " was skipped in triage — nothing to promote")
+      :skip-no-record      (str br " has no triage record yet")
+      :skip-untriaged      (str br " isn't triaged yet — not ready to pick up")
+      :gh-error            (str "couldn't reach GitHub for " br " — try again")
+      :skip-not-promotable (str "nothing to promote on " br)
       (str "refused " br " — " (name decision)))))
 
 (defn format-session-row

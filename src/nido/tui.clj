@@ -778,19 +778,19 @@
     :else (picker-route state msg)))
 
 (defn- promote-selected
-  "Promote the highlighted workstream's ticket (status :triaged → planning Run).
-   Runs the same `promote/promote!` gate the CLI uses, surfaces its decision in
-   the status line, and refreshes the list so a promoted row moves Ready → In
-   progress. Synchronous: promote! is a local status write + enqueue."
+  "Promote the highlighted workstream (dispatches on source: Notion or GitHub).
+   Calls `promote/promote-workstream!` with the workstream id, surfaces its
+   decision in the status line, and refreshes the list so a promoted row moves
+   Ready → In progress. Synchronous: a local status write + enqueue."
   [state]
   (if-let [ws (selected-workstream state)]
     ;; The coordinator keys envelopes on a keyword project; (:project state) is a
     ;; string, so keyword-ize it (mirrors the fire path's project-kw) or the
     ;; envelope is dropped as :unknown-project and no plan-bug run ever spawns.
-    (let [decision (:decision (promote/promote! (keyword (:project state)) (:br-id ws)))]
+    (let [decision (:decision (promote/promote-workstream! (keyword (:project state)) (:ws-id ws)))]
       [(-> state
            (refresh-list (current-rows state))
-           (assoc :status (wsv/promote-result-message (:br-id ws) decision)))
+           (assoc :status (wsv/promote-result-message (:promote-id ws) decision)))
        nil])
     [(assoc state :status "(no workstream selected)") nil]))
 
