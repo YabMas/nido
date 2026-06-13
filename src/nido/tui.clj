@@ -170,19 +170,31 @@
           (rest rows))
     rows))
 
-(defn- workstream-list-rows [project]
-  (let [g    (wsv/grouped-by-stage (wsv/workstream-rows project))
-        rows (concat
-              ;; Actionable-first: Triage is high-volume autonomous churn and
-              ;; would bury the rows you act on. Done is omitted entirely.
-              (stage-group-rows  "Ready to pick up" (:ready g))
-              (stage-group-rows  "In progress"      (:in-progress g))
-              (triage-group-rows (:triage g)))]
-    (if (empty? rows)
-      [{:title "No workstreams yet. Press 'f' to fire a trigger."
+(defn- workstream-list-rows
+  "List rows for one source's workstreams. Notion (and any future stage-driven
+   source) groups Ready/In-progress/Triage; Scratch — one-offs with no lifecycle
+   stage — groups by engagement (Active/Idle)."
+  [project source]
+  (let [rows (filterv #(= source (:source %)) (wsv/workstream-rows project))
+        list-rows (if (= :scratch source)
+                    (let [g (wsv/grouped-by-engagement rows)]
+                      (concat
+                       (stage-group-rows "Active" (:active g))
+                       (stage-group-rows "Idle"   (:idle g))))
+                    (let [g (wsv/grouped-by-stage rows)]
+                      (concat
+                       ;; Actionable-first: Triage is high-volume autonomous churn
+                       ;; and would bury the rows you act on. Done is omitted.
+                       (stage-group-rows  "Ready to pick up" (:ready g))
+                       (stage-group-rows  "In progress"      (:in-progress g))
+                       (triage-group-rows (:triage g)))))]
+    (if (empty? list-rows)
+      [{:title (if (= :scratch source)
+                 "No one-off sessions here yet."
+                 "No workstreams yet. Press 'f' to fire a trigger.")
         :description ""
         :data ::empty}]
-      (vec (strip-leading-blank rows)))))
+      (vec (strip-leading-blank list-rows)))))
 
 (defn- ws-detail-rows [project ws-id]
   (let [rows (wsv/session-rows project ws-id)]
@@ -246,15 +258,23 @@
       (assoc :items items)
       (update :list item-list/set-items items)))
 
+(defn- active-view
+  "The view-def for the board's active :view (defaults to the first view)."
+  [state]
+  (view-for-id (:view state)))
+
 (defn- current-rows
   "Rows for the active screen — the source the live-refresh tick re-reads.
-   Mirrors `set-screen`'s screen→rows mapping."
+   On :board, dispatches on the active view: an :ops view shows the flat
+   substrate list; a :workstreams view shows that source's filtered workstreams."
   [state]
   (case (:screen state)
-    :workstreams (workstream-list-rows (:project state))
-    :workstream  (ws-detail-rows (:project state) (:ws-id state))
-    :sessions    (session-rows (:project state))
-    :projects    (project-rows)))
+    :board      (let [v (active-view state)]
+                  (if (= :ops (:kind v))
+                    (session-rows (:project state))
+                    (workstream-list-rows (:project state) (:source v))))
+    :workstream (ws-detail-rows (:project state) (:ws-id state))
+    :projects   (project-rows)))
 
 ;; ---------------------------------------------------------------------------
 ;; Screen transitions
@@ -265,10 +285,11 @@
       (assoc :screen :projects :project nil :status nil)
       (rebuild-list (project-rows))))
 
-(defn- enter-sessions [state project-name]
-  (-> state
-      (assoc :screen :sessions :project project-name :status nil)
-      (rebuild-list (session-rows project-name))))
+(defn- enter-board
+  "Drill from the projects list into a project's board, on the default view."
+  [state project-name]
+  (let [s (assoc state :screen :board :project project-name :view :notion :status nil)]
+    (rebuild-list s (current-rows s))))
 
 (defn- enter-workstream
   "Drill from the workstreams list into one workstream's session detail."
@@ -277,18 +298,15 @@
       (assoc :screen :workstream :ws-id ws-id :ws-label label :status nil)
       (rebuild-list (ws-detail-rows (:project state) ws-id))))
 
-(defn- set-screen
-  "Switch to `screen` and rebuild the embedded list with that screen's rows.
-   Also clears any open modal and stale detail context so tab-style nav can't
-   trap us behind a panel. Used by the `r`/`s` keybindings in `update-fn`."
-  [state screen]
-  (let [rows (case screen
-               :workstreams (workstream-list-rows (:project state))
-               :sessions    (session-rows (:project state))
-               :projects    (project-rows))]
-    (-> state
-        (assoc :screen screen :status nil)
-        (rebuild-list rows)
+(defn- set-view
+  "Switch the board to `view-id` and rebuild the list with that view's rows.
+   Clears any open modal and stale detail context so view nav can't trap us
+   behind a panel or in a drilled-in workstream. Used by the view-cycling keys
+   and by the detail screen's `esc` (back to the board at the current view)."
+  [state view-id]
+  (let [s (assoc state :screen :board :view view-id :status nil)]
+    (-> s
+        (rebuild-list (current-rows s))
         (dissoc :modal :modal-target :modal-input :ws-id :ws-label))))
 
 (defn- selected-data [state]
@@ -328,7 +346,7 @@
   (cond
     (msg/key-match? msg "enter")
     (if-let [{:keys [name]} (selected-data state)]
-      [(enter-sessions state name) nil]
+      [(enter-board state name) nil]
       [state nil])
 
     :else
@@ -820,7 +838,7 @@
   [state msg]
   (cond
     (msg/key-match? msg "escape")
-    [(set-screen state :workstreams) nil]
+    [(set-view state (:view state)) nil]
 
     (msg/key-match? msg "enter")
     (if-let [s (selected-session-row state)]
@@ -957,23 +975,25 @@
     (= :clear-breaker (:modal state))
     (update-clear-breaker state msg)
 
-    ;; Tab-style navigation between screens. Always available (outside modals),
-    ;; so users can flip from any screen to workstreams and back to sessions
-    ;; when a project context exists. Both are gated on `(:project state)`.
-    (and (nil? (:modal state)) (msg/key-match? msg "r")
-         (not= :workstreams (:screen state)) (:project state))
-    [(set-screen state :workstreams) nil]
+    ;; View cycling on the board: Tab / → next view, Shift-Tab / ← previous.
+    ;; Pure in-process state changes (no action-channel exit), available outside
+    ;; modals on the board screen only — from a drilled-in workstream you `esc`
+    ;; back to the board first.
+    (and (nil? (:modal state)) (= :board (:screen state))
+         (or (msg/key-match? msg "tab") (msg/key-match? msg "right")))
+    [(set-view state (next-view (:view state))) nil]
 
-    (and (nil? (:modal state)) (msg/key-match? msg "s")
-         (not= :sessions (:screen state)) (:project state))
-    [(set-screen state :sessions) nil]
+    (and (nil? (:modal state)) (= :board (:screen state))
+         (or (msg/key-match? msg "shift+tab") (msg/key-match? msg "left")))
+    [(set-view state (prev-view (:view state))) nil]
 
     :else
     (case (:screen state)
-      :projects    (update-projects state msg)
-      :sessions    (update-sessions state msg)
-      :workstreams (update-workstreams state msg)
-      :workstream  (update-workstream state msg))))
+      :projects   (update-projects state msg)
+      :board      (if (= :ops (:kind (active-view state)))
+                    (update-sessions state msg)
+                    (update-workstreams state msg))
+      :workstream (update-workstream state msg))))
 
 ;; ---------------------------------------------------------------------------
 ;; View
@@ -1042,10 +1062,10 @@
                   :halt-resume-confirm  "nido — resume coordinator?"
                   :clear-breaker        "nido — clear breaker"
                   (case (:screen state)
-                    :projects    "nido — projects"
-                    :sessions    (str "nido — " (:project state) " · sessions")
-                    :workstreams (str "nido — " (:project state) " · workstreams")
-                    :workstream  (str "nido — " (:project state) " · " (:ws-label state))))))
+                    :projects   "nido — projects"
+                    :board      (str "nido — " (:project state) " · "
+                                     (:label (active-view state)))
+                    :workstream (str "nido — " (:project state) " · " (:ws-label state))))))
 
 (defn- footer [state]
   (style/render subtle-style
@@ -1061,10 +1081,11 @@
                   :halt-resume-confirm  "[y] resume  [n/esc] cancel"
                   :clear-breaker        "[↑↓] move  [↵] clear  [esc] cancel"
                   (case (:screen state)
-                    :projects    "[↵] open  [q]uit"
-                    :sessions    "[↵/e] enter  [w]orktree  [i]nfo  [a]dd  [u]p  [d]own  [x] destroy  [r] workstreams  [esc] back  [q]uit"
-                    :workstreams "[↵] open  [p]romote  [d]one  [f]ire  [h]alt  [c]lear breaker  [s]essions  [esc] back  [q]uit"
-                    :workstream  "[↵] open in chat  [esc] back  [s]essions  [q]uit"))))
+                    :projects   "[↵] open  [q]uit"
+                    :board      (if (= :ops (:kind (active-view state)))
+                                  "[↵/e] enter  [w]orktree  [i]nfo  [a]dd  [u]p  [d]own  [x] destroy  [⇄ tab] view  [esc] back  [q]uit"
+                                  "[↵] open  [p]romote  [d]one  [f]ire  [h]alt  [c]lear breaker  [⇄ tab] view  [esc] back  [q]uit")
+                    :workstream "[↵] open in chat  [esc] back  [q]uit"))))
 
 (defn- info-row [label value]
   (str (style/render label-style (format "%-13s" label)) " " value))
@@ -1208,7 +1229,8 @@
 
     :else
     (str (header state) "\n"
-         (when (= :workstreams (:screen state))
+         (when (and (= :board (:screen state))
+                    (= :workstreams (:kind (active-view state))))
            (str (status-bar) "\n"))
          "\n"
          (item-list/list-view (:list state)) "\n\n"
