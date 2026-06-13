@@ -40,3 +40,17 @@
 (deftest list-assigned-issues-flags-auth-errors
   (with-redefs [gh/sh! (fn [_] {:exit 1 :out "" :err "gh auth login required"})]
     (is (= :auth (:error (gh/list-assigned-issues "o/r" "@me"))))))
+
+(deftest view-issue-parses-body
+  (with-redefs [gh/sh! (fn [args]
+                         (is (= ["gh" "issue" "view" "42" "--repo" "o/r"
+                                 "--json" "number,url,title,body"] args))
+                         {:exit 0
+                          :out "{\"number\":42,\"url\":\"u\",\"title\":\"t\",\"body\":\"do the thing\"}"
+                          :err ""})]
+    (is (= {:status :ok :issue {:number 42 :url "u" :title "t" :body "do the thing"}}
+           (gh/view-issue "o/r" 42)))))
+
+(deftest view-issue-flags-auth-errors
+  (with-redefs [gh/sh! (fn [_] {:exit 1 :out "" :err "gh auth required"})]
+    (is (= :auth (:error (gh/view-issue "o/r" 42))))))

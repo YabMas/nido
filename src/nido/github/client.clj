@@ -53,3 +53,16 @@
                                     :url    (:url m)
                                     :title  (:title m)})))}
        {:error (if (auth-error? err) :auth :gh) :detail (str/trim (or err ""))}))))
+
+(defn view-issue
+  "Fetch one issue's metadata + body. Returns
+   {:status :ok :issue {:number :url :title :body}} or {:error :auth|:gh}."
+  [repo number]
+  (let [{:keys [exit out err]}
+        (sh! ["gh" "issue" "view" (str number) "--repo" repo
+              "--json" "number,url,title,body"])]
+    (if (zero? exit)
+      {:status :ok
+       :issue  (let [m (json/parse-string out true)]
+                 {:number (:number m) :url (:url m) :title (:title m) :body (:body m)})}
+      {:error (if (auth-error? err) :auth :gh) :detail (str/trim (or err ""))})))
