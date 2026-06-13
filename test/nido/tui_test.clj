@@ -3,15 +3,21 @@
    [clojure.test :refer [deftest is]]
    [nido.tui :as tui]))
 
-(deftest view-order-is-notion-scratch-sessions
-  (is (= [:notion :scratch :sessions] (mapv :id @#'tui/view-defs))))
+(deftest view-order-is-notion-github-scratch-sessions
+  (is (= [:notion :github :scratch :sessions] (mapv :id @#'tui/view-defs))))
+
+(deftest github-view-is-a-workstreams-view-on-the-github-source
+  (let [v (#'tui/view-for-id :github)]
+    (is (= :workstreams (:kind v)))
+    (is (= :github (:source v)))))
 
 (deftest cycling-wraps-both-directions
-  (is (= :scratch  (#'tui/next-view :notion)))
+  (is (= :github   (#'tui/next-view :notion)))
+  (is (= :scratch  (#'tui/next-view :github)))
   (is (= :sessions (#'tui/next-view :scratch)))
   (is (= :notion   (#'tui/next-view :sessions)) "wraps forward")
   (is (= :sessions (#'tui/prev-view :notion)) "wraps back")
-  (is (= :notion   (#'tui/prev-view :scratch))))
+  (is (= :github   (#'tui/prev-view :scratch))))
 
 (deftest view-for-id-resolves
   (is (= :scratch (:id (#'tui/view-for-id :scratch))))

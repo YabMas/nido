@@ -68,6 +68,7 @@
 
 (def ^:private view-defs
   [{:id :notion   :label "Notion"   :kind :workstreams :source :notion}
+   {:id :github   :label "GitHub"   :kind :workstreams :source :github}
    {:id :scratch  :label "Scratch"  :kind :workstreams :source :scratch}
    {:id :sessions :label "Sessions" :kind :ops}])
 
