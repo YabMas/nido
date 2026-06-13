@@ -31,6 +31,7 @@
    [nido.coordinator.promote :as promote]
    [nido.coordinator.queue :as queue]
    [nido.coordinator.runs-view :as runs-view]
+   [nido.coordinator.scratch :as scratch]
    [nido.coordinator.workstream :as workstream]
    [nido.coordinator.workstreams-view :as wsv]
    [nido.coordinator.triggers :as triggers]
@@ -428,11 +429,31 @@
 ;; `:fn` holds the VAR (not the fn value) so the call is late-bound — invoking a
 ;; var resolves its current root, which keeps the table mockable and avoids
 ;; stale captures.
+;; `:after` is the scratch-workstream hook (fn [project-str session-name]) run
+;; after a successful lifecycle call, so the TUI's up/add/destroy stay in sync
+;; with the loose-workstream model the bb task layer maintains (spec line 82):
+;; up/add birth the loose workstream (idempotent — no-ops when the session
+;; already belongs to one), destroy reaps it (spares ref-carrying workstreams).
+(defn- birth-scratch!   [p sn] (scratch/birth! (keyword p) sn))
+(defn- reap-scratch!    [p sn] (scratch/reap!  (keyword p) sn))
+
 (def ^:private action-defs
-  {:up      {:fn #'lifecycle/up!    :gerund "Starting"   :past "Started"   :failed "start"}
-   :down    {:fn #'lifecycle/down!  :gerund "Stopping"   :past "Stopped"   :failed "stop"}
-   :destroy {:fn #'destroy-session! :gerund "Destroying" :past "Destroyed" :failed "destroy"}
-   :add     {:fn #'lifecycle/up!    :gerund "Creating"   :past "Created"   :failed "create"}})
+  {:up      {:fn #'lifecycle/up!    :after birth-scratch! :gerund "Starting"   :past "Started"   :failed "start"}
+   :down    {:fn #'lifecycle/down!                        :gerund "Stopping"   :past "Stopped"   :failed "stop"}
+   :destroy {:fn #'destroy-session! :after reap-scratch!  :gerund "Destroying" :past "Destroyed" :failed "destroy"}
+   :add     {:fn #'lifecycle/up!    :after birth-scratch! :gerund "Creating"   :past "Created"   :failed "create"}})
+
+(defn- run-session-action!
+  "Run `verb`'s lifecycle fn for session `sn` in project `p`, then its `:after`
+   scratch-workstream hook (birth/reap) when present. Sequential and in the same
+   captured-output context as the lifecycle call (see start-session-action), so a
+   hook throw surfaces as the action's failure — matching the bb task layer's
+   `(lifecycle/up! …) (scratch/birth! …)` ordering."
+  [verb p sn]
+  (let [{action-fn :fn after :after} (get action-defs verb)
+        v (action-fn sn {:project p})]
+    (when after (after p sn))
+    v))
 
 (defn- with-spinner
   "Common scaffold for an in-app action: a fresh spinner, `:busy` state carrying
@@ -463,15 +484,14 @@
    project `p`. The verb's :fn takes [name {:project ...}]; any throw is a
    failure carrying the captured output."
   [verb state p sn]
-  (let [action-fn (get-in action-defs [verb :fn])]
-    (with-spinner
-      state verb sn
-      (captured-cmd
-       (fn [] (action-fn sn {:project p}))
-       (fn [{:keys [ok? error output]}]
-         (if ok?
-           {:type ::action-done :verb verb :subject sn}
-           {:type ::action-failed :verb verb :subject sn :error error :output output}))))))
+  (with-spinner
+    state verb sn
+    (captured-cmd
+     (fn [] (run-session-action! verb p sn))
+     (fn [{:keys [ok? error output]}]
+       (if ok?
+         {:type ::action-done :verb verb :subject sn}
+         {:type ::action-failed :verb verb :subject sn :error error :output output})))))
 
 (defn- enter-session
   "Land the user in session `sn` (target `:home` | `:worktree`). In Warp, open
@@ -811,11 +831,14 @@
     [(assoc state :status "(no workstream selected)") nil]))
 
 (defn- update-workstreams
-  "A workstreams board view (Notion/Scratch). ↵ drills into the highlighted
+  "A workstreams board view (Notion/GitHub/Scratch). ↵ drills into the highlighted
    workstream's session detail. p promotes the highlighted ticket; d marks it
    done (drops it from the overview); f/h/c carry over fire-trigger / halt /
-   clear-breaker. Group-header and empty rows are guarded by `selected-workstream`
-   returning nil. View cycling (Tab/←→) is handled upstream in `update-fn`."
+   clear-breaker. On the Scratch view `a` creates a one-off session (Scratch is
+   the home for one-offs — spec line 73); ref-sourced views (Notion/GitHub) come
+   from external refs, so creation is meaningless there and `a` is inert.
+   Group-header and empty rows are guarded by `selected-workstream` returning nil.
+   View cycling (Tab/←→) is handled upstream in `update-fn`."
   [state msg]
   (cond
     (msg/key-match? msg "escape")
@@ -825,6 +848,9 @@
     (if-let [ws (selected-workstream state)]
       [(enter-workstream state (:ws-id ws) (:label ws)) nil]
       [state nil])
+
+    (and (msg/key-match? msg "a") (= :scratch (:source (active-view state))))
+    (open-create-session state (:project state))
 
     (msg/key-match? msg "p") (promote-selected state)
     (msg/key-match? msg "d") (done-selected state)
@@ -1102,9 +1128,16 @@
                   :clear-breaker        "[↑↓] move  [↵] clear  [esc] cancel"
                   (case (:screen state)
                     :projects   "[↵] open  [q]uit"
-                    :board      (if (= :ops (:kind (active-view state)))
-                                  "[↵/e] enter  [w]orktree  [i]nfo  [a]dd  [u]p  [d]own  [x] destroy  [⇄ tab] view  [esc] back  [q]uit"
-                                  "[↵] open  [p]romote  [d]one  [f]ire  [h]alt  [c]lear breaker  [⇄ tab] view  [esc] back  [q]uit")
+                    :board      (let [v (active-view state)]
+                                  (cond
+                                    (= :ops (:kind v))
+                                    "[↵/e] enter  [w]orktree  [i]nfo  [a]dd  [u]p  [d]own  [x] destroy  [⇄ tab] view  [esc] back  [q]uit"
+                                    ;; Scratch is where one-offs are born — surface [a]dd; promote
+                                    ;; is meaningless for ref-less workstreams, so it's omitted.
+                                    (= :scratch (:source v))
+                                    "[↵] open  [a]dd  [d]one  [f]ire  [h]alt  [c]lear breaker  [⇄ tab] view  [esc] back  [q]uit"
+                                    :else
+                                    "[↵] open  [p]romote  [d]one  [f]ire  [h]alt  [c]lear breaker  [⇄ tab] view  [esc] back  [q]uit"))
                     :workstream "[↵] open in chat  [esc] back  [q]uit"))))
 
 (defn- info-row [label value]
