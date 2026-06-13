@@ -54,7 +54,11 @@
    ;; Unlike triage, the human WILL own this exact session — they'll resume this
    ;; conversation — so this prompt is about parking cleanly for them, not about
    ;; artifacts/_run-status.edn (plan-bug derives Run state from the ticket).
-   :plan-system-prompt  "You are pre-orienting a nido impl session unattended: the human who owns this session is not here yet but will resume THIS conversation shortly. Run /continue-ticket to pick up where the pipeline left off, then do clear, low-risk implementation work autonomously as the skill directs. The moment you reach something that needs a human decision — a product/design call, genuine ambiguity, or a risky/destructive change — STOP and leave a concise summary of what you did, where things stand, and exactly what you need from the user; do not guess. Do not touch Notion (nido already set the ticket's status when this session was provisioned)."})
+   :plan-system-prompt  "You are pre-orienting a nido impl session unattended: the human who owns this session is not here yet but will resume THIS conversation shortly. Run /continue-ticket to pick up where the pipeline left off, then do clear, low-risk implementation work autonomously as the skill directs. The moment you reach something that needs a human decision — a product/design call, genuine ambiguity, or a risky/destructive change — STOP and leave a concise summary of what you did, where things stand, and exactly what you need from the user; do not guess. Do not touch Notion (nido already set the ticket's status when this session was provisioned)."
+   ;; GitHub-issue promote leg. Like :plan-system-prompt but there's no ledger to
+   ;; continue from — the first message IS the issue body, so no /continue-ticket
+   ;; and no Notion.
+   :plan-issue-system-prompt  "You are pre-orienting a nido impl session unattended: the human who owns this session is not here yet but will resume THIS conversation shortly. Your first message is the GitHub issue to implement. Do clear, low-risk implementation work autonomously toward a draft PR. The moment you reach something that needs a human decision — a product/design call, genuine ambiguity, or a risky/destructive change — STOP and leave a concise summary of what you did, where things stand, and exactly what you need; do not guess."})
 
 (def ^:private anomaly-thresholds
   {:spawn-window-ms 60000  :spawn-threshold 5
@@ -262,6 +266,13 @@
               true))))
     (catch Throwable _ true)))
 
+(defn- issue-impl-brief
+  "First message for a promoted GitHub issue's provision-only session: the issue
+   itself as the brief (no slash command — there's no ledger to continue from)."
+  [{:keys [title url body]}]
+  (str "Implement this GitHub issue, then open a draft PR when the work is ready.\n\n"
+       "# " title "\n" url "\n\n" body))
+
 (defn- run-blocking!
   "Drive a single :queued Run to terminal/awaiting-review state.
    Called inside an executor-spawned future (one per slot). The name
@@ -284,7 +295,7 @@
         ;; plan-bug bypasses only the skill-resolvable? gate (/continue-ticket is a
         ;; harness-injected skill, always present regardless of checkout).
         ;; (`:plan-bug` is the internal trigger id; the command is /continue-ticket.)
-        provision-only? (= :plan-bug (:skill (runs/read-run run-id)))
+        provision-only? (#{:plan-bug :plan-github-issue} (:skill (runs/read-run run-id)))
         session-id   (str (java.util.UUID/randomUUID))
         run          (let [r (assoc (runs/read-run run-id) :claude-session-id session-id)]
                        (runs/write-run! r) r)
@@ -307,23 +318,29 @@
                        ;; then launch /continue-ticket headlessly so the session is
                        ;; oriented + clear work underway by the time the human
                        ;; arrives (they `--resume` this conversation via the shim).
-                       ;; next-state derives from the resulting ticket status: if
-                       ;; the burst set :implementing → :done (slot freed; teardown
-                       ;; is a no-op for plan-bug so the session survives for the
-                       ;; human); if it parked early still :planning → :awaiting-review.
+                       ;; next-state (see the cond below): the Notion leg derives
+                       ;; from the resulting ticket status (:implementing → :done,
+                       ;; slot freed; still :planning → :awaiting-review). The GitHub
+                       ;; leg has no ticket, so it goes straight to :done. In both
+                       ;; cases teardown is a no-op so the session survives for the human.
                        provision-only?
                        (try
                          (runs/spawn-session-for-run! run)
-                         (notify/on-plan-spawn! run)
-                         ;; /continue-ticket, NOT (:first-message run): the run's
-                         ;; first-message is "/plan-bug …" (skill = trigger id), but
-                         ;; the actual command is /continue-ticket (see note above).
-                         (agent/launch! {:run-id            run-id
-                                         :cwd               (cstate/run-session-home-link run-id)
-                                         :first-message     "/continue-ticket"
-                                         :system-prompt     (:plan-system-prompt defaults)
-                                         :budget            (-> run :limits :budget)
-                                         :claude-session-id session-id})
+                         (notify/on-plan-spawn! run)        ; Notion nudge; no-op for the GitHub leg
+                         ;; Notion leg → /continue-ticket (NOT the run's "/plan-bug …"
+                         ;; first-message; see note above). GitHub leg → the issue body
+                         ;; itself as the brief (no ledger to continue from).
+                         (let [github? (= :plan-github-issue (:skill run))]
+                           (agent/launch! {:run-id            run-id
+                                           :cwd               (cstate/run-session-home-link run-id)
+                                           :first-message     (if github?
+                                                                (issue-impl-brief (:event-payload run))
+                                                                "/continue-ticket")
+                                           :system-prompt     (if github?
+                                                                (:plan-issue-system-prompt defaults)
+                                                                (:plan-system-prompt defaults))
+                                           :budget            (-> run :limits :budget)
+                                           :claude-session-id session-id}))
                          (catch Throwable t
                            {:spawn-error true :detail (.getMessage t)}))
 
@@ -350,9 +367,16 @@
                      ;; the in-flight slot isn't silently freed (see agent-no-op?).
                      (agent-no-op? result) :failed
                      (zero? (:exit-code result))
-                     (if (#{:triage-bug :plan-bug} (:skill run))
+                     (cond
+                       ;; GitHub provision-only leg: no ticket to derive from. The
+                       ;; burst parked the session for the human, so the run is :done
+                       ;; (frees the trigger's slot) and the session OUTLIVES it (the
+                       ;; teardown no-op in runs/teardown-session-for-run!).
+                       (= :plan-github-issue (:skill run)) :done
+                       (#{:triage-bug :plan-bug} (:skill run))
                        (review/run-state-from-ticket
                          (tickets/status (:project run) (some-> run :event-payload :id)))
+                       :else
                        (status-file/derive-state-after-exit
                          (status-file/read-status run-id)))
                      :else :failed)]

@@ -106,15 +106,16 @@
 (defn archive-orphaned-live!
   "One-shot repair: archive every coordinator session whose substrate is still
    :live but whose autonomy phase is terminal (:done/:failed/:halted), EXCEPT
-   :plan-bug sessions (handed to the human — their substrate must outlive the
-   run). Returns the count archived. Safe to re-run (archive! is idempotent)."
+   provision-only (:plan-bug / :plan-github-issue) sessions (handed to the human —
+   their substrate must outlive the run). Returns the count archived. Safe to
+   re-run (archive! is idempotent)."
   [project]
   (->> (ws/list-ids project)
        (mapcat #(session/list-sessions project %))
        (filter (fn [s]
                  (and (= :live (:substrate s))
                       (terminal-phases (get-in s [:autonomy :phase]))
-                      (not= :plan-bug (get-in s [:autonomy :skill])))))
+                      (not (#{:plan-bug :plan-github-issue} (get-in s [:autonomy :skill]))))))
        (reduce (fn [n s]
                  (session/archive! project (:workstream-id s) (:name s))
                  (inc n))
