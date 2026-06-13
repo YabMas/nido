@@ -15,6 +15,18 @@
   [ws]
   (some #(when (= :notion (:adapter %)) %) (:external-refs ws)))
 
+(defn ws-source
+  "Source bucket of a workstream, classified from its RAW record (not a projected
+   row — workstream-row's :stage is unreliable for scratch). :scratch when the
+   stored stage is :scratch (a one-off, set by scratch/birth!); :github when it
+   carries a :github-issue ref (Phase 3); else :notion — the default/coordinator
+   bucket, so a ref-less coordinator workstream is never dropped from every view."
+  [ws]
+  (cond
+    (= :scratch (:stage ws))                                   :scratch
+    (some #(= :github-issue (:adapter %)) (:external-refs ws)) :github
+    :else                                                       :notion))
+
 (defn- short-suffix
   "The rand6 tail of a ws-id (segment after the final dash)."
   [ws-id]
@@ -73,6 +85,7 @@
      :project       project
      :br-id         br-id
      :label         (label ws sessions)
+     :source        (ws-source ws)
      :stage         (:stage proj)
      :needs-you     (:needs-you proj)
      :engagement    (session/engagement-state (:closed ws) sessions)
@@ -129,6 +142,20 @@
     {:ready       (by-needs-then-newest (:ready by []))
      :in-progress (by-needs-then-newest (:in-progress by []))
      :triage      (triage-split (:triage by []))}))
+
+(def ^:private live-engagements
+  "Engagement states where a session is present/working/awaiting you — the
+   'active' band of the Scratch view. :idle and :settled fall to the idle band."
+  #{:active :parked-at-gate :queued})
+
+(defn grouped-by-engagement
+  "Group scratch rows by liveness for the Scratch view (no lifecycle stage).
+   {:active [...] :idle [...]}, each newest-activity first."
+  [rows]
+  (let [newest (fn [rs] (sort-by :last-activity #(compare %2 %1) rs))
+        live?  #(contains? live-engagements (:engagement %))]
+    {:active (newest (filter live? rows))
+     :idle   (newest (remove live? rows))}))
 
 (defn session-rows
   "Display rows for one workstream's coordinator-sessions, ordered most-recently-

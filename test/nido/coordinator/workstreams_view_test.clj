@@ -220,3 +220,31 @@
   (is (= "human-sess  ·  human  ·  light  ·  live"
          (wsv/format-session-row {:name "human-sess" :phase nil :weight :light :substrate :live}))))
 
+;; ---------------------------------------------------------------------------
+;; ws-source + workstream-row :source + grouped-by-engagement (Phase 2)
+;; ---------------------------------------------------------------------------
+
+(deftest ws-source-classifies-from-the-raw-record
+  (is (= :scratch (wsv/ws-source {:stage :scratch :external-refs []})))
+  (is (= :notion  (wsv/ws-source {:stage :triaging
+                                  :external-refs [{:adapter :notion :id "BR-1"}]})))
+  (is (= :notion  (wsv/ws-source {:stage :triaging :external-refs []})))
+  (is (= :github  (wsv/ws-source {:stage :ready
+                                  :external-refs [{:adapter :github-issue :id "42"}]}))))
+
+(deftest workstream-row-carries-source
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :scratch :external-refs []})]
+        (session/create! :brian (:id w) {:name "refshot" :weight :light :autonomy nil})
+        (is (= :scratch (:source (wsv/workstream-row :brian (workstream/read-ws :brian (:id w))))))))))
+
+(deftest grouped-by-engagement-splits-active-and-idle
+  (let [rows [{:engagement :active :label "a"}
+              {:engagement :parked-at-gate :label "b"}
+              {:engagement :idle :label "c"}
+              {:engagement :queued :label "d"}]
+        g (wsv/grouped-by-engagement rows)]
+    (is (= #{"a" "b" "d"} (set (map :label (:active g)))))
+    (is (= #{"c"} (set (map :label (:idle g)))))))
+
