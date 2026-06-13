@@ -7,7 +7,10 @@
    [babashka.fs :as fs]
    [nido.coordinator.queue :as queue]
    [nido.coordinator.state :as cstate]
-   [nido.coordinator.tickets :as tickets]))
+   [nido.coordinator.tickets :as tickets]
+   [nido.coordinator.workstream :as ws]
+   [nido.coordinator.workstreams-view :as wsv]
+   [nido.github.client :as gh]))
 
 (defn- latest-entry-of-kind
   "Absolute path to the most recent ledger entry of `kind`, or nil."
@@ -35,3 +38,43 @@
         {:decision :promote
          :queued   (queue/enqueue! {:target  {:project project :trigger :plan-bug}
                                     :payload payload})}))))
+
+(defn- notion-br-id [w]
+  (some #(when (= :notion (:adapter %)) (:id %)) (:external-refs w)))
+
+(defn- github-issue-ref [w]
+  (some #(when (= :github-issue (:adapter %)) %) (:external-refs w)))
+
+(defn- parse-issue-id
+  "\"owner/repo#42\" → {:repo \"owner/repo\" :number 42}."
+  [id]
+  (let [i (.lastIndexOf ^String id "#")]
+    {:repo (subs id 0 i) :number (parse-long (subs id (inc i)))}))
+
+(defn- promote-github! [project w]
+  (if (not= :ready (:stage w))
+    {:decision :skip-active}
+    (let [ref (github-issue-ref w)
+          {:keys [repo number]} (parse-issue-id (:id ref))
+          res (gh/view-issue repo number)]
+      (if (:error res)
+        {:decision :gh-error}
+        (let [{:keys [title url body]} (:issue res)
+              payload {:id (:id ref) :url url :title title :body body}]
+          (cstate/ensure-dirs!)
+          (ws/advance-stage! project (:id w) :in-progress)
+          {:decision :promote
+           :queued   (queue/enqueue! {:target  {:project project :trigger :plan-github-issue}
+                                      :payload payload})})))))
+
+(defn promote-workstream!
+  "Promote a workstream by id, dispatching on its source. :notion → the existing
+   triage-gated :plan-bug leg; :github → fetch the issue body + provision the
+   issue-impl leg; anything else (scratch) isn't promotable. Returns {:decision}."
+  [project ws-id]
+  (if-let [w (ws/read-ws project ws-id)]
+    (case (wsv/ws-source w)
+      :notion (promote! project (notion-br-id w))
+      :github (promote-github! project w)
+      {:decision :skip-not-promotable})
+    {:decision :skip-not-promotable}))

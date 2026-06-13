@@ -5,7 +5,9 @@
    [clojure.test :refer [deftest is]]
    [nido.coordinator.promote :as promote]
    [nido.coordinator.state :as cstate]
-   [nido.coordinator.tickets :as tickets]))
+   [nido.coordinator.tickets :as tickets]
+   [nido.coordinator.workstream :as ws]
+   [nido.github.client :as gh]))
 
 (defn- with-tmp [f]
   (let [tmp (fs/create-temp-dir)]
@@ -42,3 +44,54 @@
       ;; second promote now refused (already :planning) and enqueues nothing more
       (is (= {:decision :skip-active} (promote/promote! :brian "BR-7")))
       (is (= 1 (count (queued-envelopes)))))))
+
+(deftest promote-workstream-routes-notion-to-the-plan-bug-leg
+  (with-tmp
+    (fn [_]
+      (tickets/open! :brian "BR-7" {:notion-page-id "pg" :url "nu" :title "nt"
+                                    :opened-by :triage-new :notion-last-edited-at "t"})
+      (tickets/complete! :brian "BR-7" :triaged :applied)
+      (let [w   (ws/create! :brian {:stage :ready :external-refs [{:adapter :notion :id "BR-7" :page-id "pg"}]})
+            res (promote/promote-workstream! :brian (:id w))]
+        (is (= :promote (:decision res)))
+        (let [[env] (queued-envelopes)]
+          (is (= {:project :brian :trigger :plan-bug} (:target env)))
+          (is (= "BR-7" (-> env :payload :id))))))))
+
+(deftest promote-workstream-github-enqueues-issue-leg-and-advances-stage
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :ready
+                                  :external-refs [{:adapter :github-issue :id "o/r#42" :url "iu" :title "it"}]})]
+        (with-redefs [gh/view-issue (fn [repo n]
+                                      (is (= "o/r" repo)) (is (= 42 n))
+                                      {:status :ok :issue {:number 42 :url "iu" :title "it" :body "do it"}})]
+          (let [res (promote/promote-workstream! :brian (:id w))]
+            (is (= :promote (:decision res)))
+            (is (= :in-progress (:stage (ws/read-ws :brian (:id w)))))
+            (let [[env] (queued-envelopes)]
+              (is (= {:project :brian :trigger :plan-github-issue} (:target env)))
+              (is (= "o/r#42" (-> env :payload :id)))
+              (is (= "do it"  (-> env :payload :body))))))))))
+
+(deftest promote-workstream-github-refuses-when-already-promoted
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :in-progress :external-refs [{:adapter :github-issue :id "o/r#42"}]})]
+        (is (= :skip-active (:decision (promote/promote-workstream! :brian (:id w)))))
+        (is (empty? (queued-envelopes)))))))
+
+(deftest promote-workstream-github-surfaces-a-fetch-error
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :ready :external-refs [{:adapter :github-issue :id "o/r#42"}]})]
+        (with-redefs [gh/view-issue (fn [_ _] {:error :auth})]
+          (is (= :gh-error (:decision (promote/promote-workstream! :brian (:id w)))))
+          (is (= :ready (:stage (ws/read-ws :brian (:id w)))))
+          (is (empty? (queued-envelopes))))))))
+
+(deftest promote-workstream-scratch-is-not-promotable
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :scratch :external-refs []})]
+        (is (= :skip-not-promotable (:decision (promote/promote-workstream! :brian (:id w)))))))))
