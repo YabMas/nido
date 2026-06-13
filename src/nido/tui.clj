@@ -57,6 +57,28 @@
   program/quit-cmd)
 
 ;; ---------------------------------------------------------------------------
+;; Views: the source-scoped tabs the user cycles within a project. Ordered.
+;; :kind :workstreams → filtered workstream list; :kind :ops → flat substrate.
+;; GitHub becomes a 4th entry in Phase 3 — just insert {:id :github ...}.
+;; ---------------------------------------------------------------------------
+
+(def ^:private view-defs
+  [{:id :notion   :label "Notion"   :kind :workstreams :source :notion}
+   {:id :scratch  :label "Scratch"  :kind :workstreams :source :scratch}
+   {:id :sessions :label "Sessions" :kind :ops}])
+
+(defn- view-for-id [id]
+  (or (some #(when (= id (:id %)) %) view-defs) (first view-defs)))
+
+(defn- step-view [id delta]
+  (let [ids (mapv :id view-defs)
+        i   (.indexOf ids id)]
+    (nth ids (mod (+ (max i 0) delta) (count ids)))))
+
+(defn- next-view [id] (step-view id 1))
+(defn- prev-view [id] (step-view id -1))
+
+;; ---------------------------------------------------------------------------
 ;; Data → list rows
 ;; ---------------------------------------------------------------------------
 
