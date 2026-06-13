@@ -29,6 +29,7 @@
    [nido.coordinator.status-file :as status-file]
    [nido.coordinator.executor :as executor]
    [nido.coordinator.github-merge :as github-merge]
+   [nido.coordinator.github-issue-intake :as github-issue-intake]
    [nido.github.config :as gh-config]
    [nido.coordinator.triggers :as triggers]
    [nido.core :as nido-core]
@@ -71,6 +72,8 @@
 ;; tick after (re)start polls each configured project immediately, then throttles
 ;; to that project's github.edn :poll interval.
 (defonce ^:private !last-github-poll-ms (atom {}))
+
+(defonce ^:private !last-github-issue-poll-ms (atom {}))
 
 (defn- maybe-reclaim!
   "Throttled disk-hygiene sweep: at most once per :reclaim-interval-ms, delete
@@ -135,6 +138,33 @@
         (binding [*err* *err*]
           (.println ^java.io.PrintWriter *err*
                     (str "WARN: github-merge poll threw for " project " — " (ex-message t))))))))
+
+(defn- maybe-poll-github-issues!
+  "Throttled GitHub-issue intake, per project whose github.edn carries an
+   :issues block (and :enabled is not false). At most once per the project's
+   :poll interval (default 5m). Never throws into the tick loop."
+  [now-ms]
+  (doseq [project (registered-projects)
+          :let [cfg (try (gh-config/load-config project)
+                         (catch Throwable t
+                           (binding [*err* *err*]
+                             (.println ^java.io.PrintWriter *err*
+                                       (str "WARN: github.edn load failed for " project
+                                            " — " (ex-message t))))
+                           nil))]
+          :when (and cfg (:issues cfg) (not (false? (:enabled (:issues cfg)))))
+          :let [interval (or (parse-duration-ms (or (:poll cfg) "5m")) 300000)
+                last-ms  (get @!last-github-issue-poll-ms project)]
+          ;; Never polled ⇒ due immediately (first tick after restart). Otherwise
+          ;; throttle to the project's :poll interval.
+          :when (or (nil? last-ms) (>= (- now-ms last-ms) interval))]
+    (swap! !last-github-issue-poll-ms assoc project now-ms)
+    (try
+      (github-issue-intake/poll-and-reconcile! project cfg)
+      (catch Throwable t
+        (binding [*err* *err*]
+          (.println ^java.io.PrintWriter *err*
+                    (str "WARN: github-issue poll threw for " project " — " (ex-message t))))))))
 
 (defn- discover-source-configs
   "Walk loaded triggers and return distinct source-configs whose type is
@@ -453,7 +483,8 @@
             (swap! !source-instances assoc-in [hash :last-polled-ms] now-ms))
           ;; Periodic disk hygiene (throttled to :reclaim-interval-ms).
           (maybe-reclaim! now-ms)
-          (maybe-poll-github-merges! now-ms))
+          (maybe-poll-github-merges! now-ms)
+          (maybe-poll-github-issues! now-ms))
         ;; After draining + polling, check anomaly thresholds.
         (when-let [trip (anomaly/check @!detector anomaly-thresholds)]
           (halt/halt! {:source  :auto
