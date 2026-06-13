@@ -2,10 +2,14 @@
   "Tiny charm.clj-based terminal UI over the existing session lifecycle.
 
    Screens:
-     :projects    — registered projects (one row per project) → enter drills in
-     :sessions    — dev sessions for the active project, with the action keys
-     :workstreams — engagement-grouped workstreams for the project; ↵ drills in
-     :workstream  — the highlighted workstream's sessions; ↵ enters one in chat
+     :projects   — registered projects (one row per project) → enter drills in
+     :board      — the active project's source-scoped views, cycled with Tab/←→.
+                   Each view (see view-defs) is either a filtered workstream list
+                   (Notion, Scratch) or the flat substrate list (Sessions/ops).
+                   ↵ on a workstream drills into its detail; ↵ on a session enters
+                   it in chat.
+     :workstream — the highlighted workstream's sessions; ↵ enters one in chat,
+                   esc returns to the board at the active view.
 
    The TUI itself does no service work. Action keys queue an action into
    `exit-action` and quit the program; the bb task wrapper (`tasks.nido-tui`)
@@ -562,7 +566,7 @@
       [(assoc state :list lst) cmd])))
 
 ;; ---------------------------------------------------------------------------
-;; Fire-trigger modal (workstreams screen, `f` key)
+;; Fire-trigger modal (workstreams board view, `f` key)
 ;;
 ;; Three sub-states cooperate to walk the user through:
 ;;   :fire-pick-project  — choose project (skipped when only one is registered)
@@ -588,7 +592,7 @@
   "One-line status message confirming an envelope was enqueued."
   [project trigger-name]
   (str "queued: " (name project) "/" (name trigger-name)
-       " — refresh with 'r' to see it"))
+       " — it'll appear on the next refresh"))
 
 (defn- start-payload-input
   "Either enqueue immediately (no placeholders) or open the payload-input
@@ -637,7 +641,7 @@
        nil])))
 
 (defn- open-fire-trigger
-  "Entry point bound to `f` on the workstreams screen. Routes to the project
+  "Entry point bound to `f` on a workstreams board view. Routes to the project
    picker when more than one project is registered; otherwise skips
    straight to the trigger picker."
   [state]
@@ -806,10 +810,11 @@
     [(assoc state :status "(no workstream selected)") nil]))
 
 (defn- update-workstreams
-  "Workstreams list screen. ↵ drills into the highlighted workstream's session
-   detail. p promotes the highlighted ticket; d marks it done (drops it from the
-   overview); f/h/c carry over fire-trigger / halt / clear-breaker. Group-header
-   and empty rows are guarded by `selected-workstream` returning nil."
+  "A workstreams board view (Notion/Scratch). ↵ drills into the highlighted
+   workstream's session detail. p promotes the highlighted ticket; d marks it
+   done (drops it from the overview); f/h/c carry over fire-trigger / halt /
+   clear-breaker. Group-header and empty rows are guarded by `selected-workstream`
+   returning nil. View cycling (Tab/←→) is handled upstream in `update-fn`."
   [state msg]
   (cond
     (msg/key-match? msg "escape")
@@ -833,8 +838,8 @@
 
 (defn- update-workstream
   "Workstream detail screen. ↵ routes into the highlighted session's home (same
-   handoff the Sessions screen uses → lands you in the chat). esc returns to the
-   list."
+   handoff the Sessions view uses → lands you in the chat). esc returns to the
+   board at the active view."
   [state msg]
   (cond
     (msg/key-match? msg "escape")
