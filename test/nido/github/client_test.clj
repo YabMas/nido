@@ -25,3 +25,18 @@
 (deftest list-merged-maps-generic-error
   (with-redefs [gh/sh! (fn [_] {:exit 1 :out "" :err "could not resolve to a Repository"})]
     (is (= :gh (:error (gh/list-merged-prs "o/r"))))))
+
+(deftest list-assigned-issues-parses-and-shapes
+  (with-redefs [gh/sh! (fn [args]
+                         (is (= ["gh" "issue" "list" "--repo" "o/r"
+                                 "--assignee" "@me" "--state" "open"
+                                 "--json" "number,url,title" "--limit" "100"] args))
+                         {:exit 0
+                          :out "[{\"number\":42,\"url\":\"u\",\"title\":\"t\"}]"
+                          :err ""})]
+    (is (= {:status :ok :issues [{:number 42 :url "u" :title "t"}]}
+           (gh/list-assigned-issues "o/r" "@me")))))
+
+(deftest list-assigned-issues-flags-auth-errors
+  (with-redefs [gh/sh! (fn [_] {:exit 1 :out "" :err "gh auth login required"})]
+    (is (= :auth (:error (gh/list-assigned-issues "o/r" "@me"))))))

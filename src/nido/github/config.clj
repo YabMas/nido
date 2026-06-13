@@ -14,7 +14,11 @@
    [:on-merge {:optional true}
     [:map
      [:notion-status      {:optional true} string?]
-     [:remove-ball-holder {:optional true} string?]]]])
+     [:remove-ball-holder {:optional true} string?]]]
+   [:issues {:optional true}
+    [:map {:closed true}
+     [:assignee {:optional true} string?]
+     [:enabled  {:optional true} boolean?]]]])
 
 (defn- config-path [project]
   (str (fs/path (cstate/nido-root) "projects" (name project) "github.edn")))

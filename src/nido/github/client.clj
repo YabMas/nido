@@ -33,3 +33,23 @@
                                     :title     (:title m)
                                     :merged-at (:mergedAt m)})))}
        {:error (if (auth-error? err) :auth :gh) :detail (str/trim (or err ""))}))))
+
+(defn list-assigned-issues
+  "Open issues in `repo` assigned to `assignee` (e.g. \"@me\"), capped at `limit`
+   (default 100). Returns {:status :ok :issues [{:number :url :title}]}
+   or {:error :auth|:gh}."
+  ([repo assignee] (list-assigned-issues repo assignee 100))
+  ([repo assignee limit]
+   (let [{:keys [exit out err]}
+         (sh! ["gh" "issue" "list" "--repo" repo
+               "--assignee" assignee
+               "--state" "open"
+               "--json" "number,url,title"
+               "--limit" (str limit)])]
+     (if (zero? exit)
+       {:status :ok
+        :issues (->> (json/parse-string out true)
+                     (mapv (fn [m] {:number (:number m)
+                                    :url    (:url m)
+                                    :title  (:title m)})))}
+       {:error (if (auth-error? err) :auth :gh) :detail (str/trim (or err ""))}))))

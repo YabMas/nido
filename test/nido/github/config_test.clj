@@ -40,3 +40,24 @@
         (io/write-edn! (str (fs/path dir "github.edn")) {:poll "5m"}))
       (is (thrown-with-msg? Exception #"github.edn"
             (gh-config/load-config :brian))))))
+
+(deftest load-config-accepts-issues-block
+  (with-tmp
+    (fn [tmp]
+      (let [dir (fs/path (str tmp) "projects" "brian")]
+        (fs/create-dirs dir)
+        (io/write-edn! (str (fs/path dir "github.edn"))
+                       {:repo "o/r" :issues {:assignee "@me"}}))
+      (let [c (gh-config/load-config :brian)]
+        (is (= "o/r" (:repo c)))
+        (is (= "@me" (-> c :issues :assignee)))))))
+
+(deftest load-config-rejects-unknown-issues-key
+  (with-tmp
+    (fn [tmp]
+      (let [dir (fs/path (str tmp) "projects" "brian")]
+        (fs/create-dirs dir)
+        (io/write-edn! (str (fs/path dir "github.edn"))
+                       {:repo "o/r" :issues {:assignee "@me" :unknown-key "bad"}}))
+      (is (thrown-with-msg? Exception #"github.edn"
+            (gh-config/load-config :brian))))))
