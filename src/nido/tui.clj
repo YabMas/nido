@@ -1039,6 +1039,20 @@
                 (when (pos? breakers-paused)
                   (style/render label-style (str breakers-paused " paused"))))))))
 
+(def ^:private active-tab-style   (style/style :fg style/cyan :bold true))
+(def ^:private inactive-tab-style (style/style :fg 240))
+
+(defn- tab-bar
+  "One-line view switcher rendered above the board list: each view's label, the
+   active one bracketed + bright, the rest dim. Pure string (modulo styling)."
+  [active-id]
+  (->> view-defs
+       (map (fn [{:keys [id label]}]
+              (if (= id active-id)
+                (style/render active-tab-style (str "[" label "]"))
+                (style/render inactive-tab-style (str " " label " ")))))
+       (str/join "  ")))
+
 (defn- header [state]
   (style/render title-style
                 (case (:modal state)
@@ -1229,6 +1243,8 @@
 
     :else
     (str (header state) "\n"
+         (when (= :board (:screen state))
+           (str (tab-bar (:view state)) "\n"))
          (when (and (= :board (:screen state))
                     (= :workstreams (:kind (active-view state))))
            (str (status-bar) "\n"))

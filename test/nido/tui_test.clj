@@ -17,3 +17,11 @@
   (is (= :scratch (:id (#'tui/view-for-id :scratch))))
   (is (= :ops     (:kind (#'tui/view-for-id :sessions))))
   (is (= :workstreams (:kind (#'tui/view-for-id :notion)))))
+
+(deftest tab-bar-marks-the-active-view
+  (let [s (#'tui/tab-bar :scratch)]
+    (is (re-find #"Notion" s))
+    (is (re-find #"Scratch" s))
+    (is (re-find #"Sessions" s))
+    (is (re-find #"\[Scratch\]" s) "active view bracketed")
+    (is (not (re-find #"\[Notion\]" s)) "inactive view not bracketed")))
