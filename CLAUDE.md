@@ -185,6 +185,16 @@ bb nido:coordinator:logs        # last 50 lines (or :follow true to tail -f)
 bb nido:coordinator:down        # graceful stop (SIGTERM); :force true → SIGKILL
 ```
 
+**Web dashboard (bundled with the daemon):** the coordinator runs the dashboard
+in-process. With the daemon up it's always at `http://localhost:8800` — the home
+page is a flat, live-first board of every session across projects, each live
+session a clickable friendly-host link (`<session>.<project>.localhost`). Override
+with `bb nido:coordinator:up :dashboard-port <n>`; disable with `:no-dashboard true`.
+`bb nido:coordinator:status` shows a `Dashboard:` line (port + reachability).
+
+The standalone `bb nido:ui [:port 8800]` task still exists for UI iteration or when
+the daemon is down — but it and the daemon both bind 8800, so don't run both.
+
 `up` refuses if a live daemon already holds the PID file. `down` cleans the PID file even when the daemon was already gone (stale PID).
 
 **The daemon is a single long-lived process that reads `src/` once at startup — editing coordinator code does NOT affect the running daemon.** After changing any coordinator namespace, restart it (`bb nido:coordinator:restart` under launchd, otherwise `down` then `up`) or the fix never loads. This bites silently: a fix can sit committed on disk for hours while the live daemon keeps running the old logic — when debugging behaviour that contradicts the on-disk code, check the daemon's start time (`ps -o lstart -p $(cat ~/.nido/coordinator/coordinator.pid)`) against the relevant commit before assuming the code is wrong. (Restarting also loads any uncommitted working-tree changes.)

@@ -15,6 +15,7 @@
    [nido.coordinator.launchctl :as lc]
    [nido.coordinator.sources.state :as sst]
    [nido.io :as io]
+   [nido.process :as proc]
    [clojure.string :as str]
    [nido.task-args :as task-args]))
 
@@ -50,7 +51,9 @@
       (let [s (io/read-edn p)]
         (println "Coordinator:" (some-> (:status s) name))
         (println "Heartbeat:  " (:heartbeat-at s))
-        (println "Slots:      " (:slots-in-use s)))
+        (println "Slots:      " (:slots-in-use s))
+        (when-let [dport (:dashboard-port s)]
+          (println (core/dashboard-status-line dport (proc/tcp-open? dport)))))
       (println "Coordinator: no status.edn (never started or already cleaned up)"))
     (when h
       (println "Halted:     " (name (:source h)) "—" (or (:note h) "(no note)"))

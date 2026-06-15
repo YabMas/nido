@@ -94,6 +94,12 @@
     {:enabled? (boolean (and (:enabled? d) (not no-dashboard)))
      :port     (or dashboard-port (:port d))}))
 
+(defn dashboard-status-line
+  "Format the `status` Dashboard line for a resolved port + reachability."
+  [port reachable?]
+  (format "Dashboard:   http://localhost:%s (%s)"
+          port (if reachable? "reachable" "not reachable")))
+
 (defn- maybe-reclaim!
   "Throttled disk-hygiene sweep: at most once per :reclaim-interval-ms, delete
    orphaned per-session state dirs older than :reclaim-min-age-ms. Never throws
