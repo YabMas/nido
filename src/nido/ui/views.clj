@@ -238,7 +238,7 @@
   (let [app-port (:app-port entry)
         pg-port (:pg-port entry)
         repl-port (:nrepl-port entry)
-        url (:url entry)
+        url (:app-url entry)
         pending-kw (cond
                      (map? pending-state)     (:state pending-state)
                      (keyword? pending-state) pending-state)
