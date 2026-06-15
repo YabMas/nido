@@ -17,3 +17,21 @@
     ;; live-first, then project, then name; each row tagged with :project
     (is (= [["brian" "b-up" true] ["foo" "f-up" true] ["brian" "b-down" false]]
            (map (juxt :project :name :live?) rows)))))
+
+(deftest home-route-renders-board
+  (with-redefs [server/all-session-rows (fn [] [])]
+    (let [resp (server/handle-request {:request-method :get :uri "/"})]
+      (is (= 200 (:status resp)))
+      (is (str/includes? (:body resp) "live sessions")))))
+
+(deftest projects-route-renders-grid
+  (with-redefs [project/list-projects (fn [] {"brian" {:directory "/x"}})]
+    (let [resp (server/handle-request {:request-method :get :uri "/projects"})]
+      (is (= 200 (:status resp)))
+      (is (str/includes? (:body resp) "brian")))))
+
+(deftest live-fragment-route-is-sse
+  (with-redefs [server/all-session-rows (fn [] [])]
+    (let [resp (server/handle-request {:request-method :get :uri "/_fragment/live"})]
+      (is (= 200 (:status resp)))
+      (is (str/includes? (get-in resp [:headers "Content-Type"]) "text/event-stream")))))

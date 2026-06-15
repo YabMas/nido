@@ -251,9 +251,17 @@
 (defn- handle-get [{:keys [uri]}]
   (let [segments (parse-path uri)]
     (case segments
-      ;; GET / — project listing
+      ;; GET / — live-sessions board across all projects (dashboard home)
       []
+      (html-response 200 (views/live-board-page (all-session-rows)))
+
+      ;; GET /projects — the original project grid
+      ["projects"]
       (html-response 200 (views/home-page (project/list-projects)))
+
+      ;; GET /_fragment/live — SSE board tbody
+      ["_fragment" "live"]
+      (sse-response (sse-fragment (views/live-board-fragment (all-session-rows))))
 
       ;; Otherwise, dispatch on structure
       (let [project-name (first segments)]
@@ -353,7 +361,7 @@
               (html-response 404 (views/not-found-page))))
           (html-response 404 (views/not-found-page)))))))
 
-(defn- handle-request [{:keys [request-method] :as req}]
+(defn handle-request [{:keys [request-method] :as req}]
   (case request-method
     :post (handle-post req)
     (handle-get req)))
