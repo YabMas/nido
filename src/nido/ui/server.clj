@@ -155,6 +155,18 @@
                      :heap-max heap-max})))
            (sort-by :name)))))
 
+(defn all-session-rows
+  "Aggregate session rows across all registered projects into one flat,
+   live-first list. Each row is tagged with its :project. The 2-arity is pure
+   given the per-project row builder + projects map, so it is unit-testable;
+   the 0-arity wires the real `session-rows` and registry."
+  ([] (all-session-rows session-rows (project/list-projects)))
+  ([rows-fn projects]
+   (->> (for [[pname entry] projects
+              row           (or (rows-fn pname (:directory entry)) [])]
+          (assoc row :project pname))
+        (sort-by (juxt #(if (:live? %) 0 1) :project :name)))))
+
 ;; ---------------------------------------------------------------------------
 ;; Routing
 
