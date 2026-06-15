@@ -176,12 +176,25 @@
           (rest rows))
     rows))
 
+(defn- live-session-names
+  "Set of session names for `project` that are actually up — i.e. hold a pg/app/
+   nrepl port in the registry. Threaded into the workstream projection so a human
+   one-off's engagement tracks real service state instead of its static
+   coordinator-session :substrate (which is never synced on down)."
+  [project]
+  (->> (lifecycle/list-all-data {:project project})
+       :sessions
+       (keep (fn [s] (when (or (:pg-port s) (:app-port s) (:nrepl-port s)) (:name s))))
+       set))
+
 (defn- workstream-list-rows
   "List rows for one source's workstreams. Notion (and any future stage-driven
    source) groups Ready/In-progress/Triage; Scratch — one-offs with no lifecycle
-   stage — groups by engagement (Active/Idle)."
+   stage — groups by engagement (Active/Idle). Real liveness (registry ports)
+   drives engagement via live-session-names, so a downed one-off reads Idle."
   [project source]
-  (let [rows (filterv #(= source (:source %)) (wsv/workstream-rows project))
+  (let [rows (filterv #(= source (:source %))
+                      (wsv/workstream-rows project (live-session-names project)))
         list-rows (if (= :scratch source)
                     (let [g (wsv/grouped-by-engagement rows)]
                       (concat

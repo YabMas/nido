@@ -93,6 +93,15 @@
     (is (not (re-find #"\[a\]dd" f)) "no create affordance on the Notion view")
     (is (re-find #"\[p\]romote" f))))
 
+(deftest live-session-names-are-the-ones-with-ports
+  (with-redefs [lifecycle/list-all-data
+                (fn [_] {:sessions [{:name "up"      :app-port 3100}
+                                    {:name "also-up" :pg-port 5500}
+                                    {:name "repl-up" :nrepl-port 49999}
+                                    {:name "down"    :app-port nil :pg-port nil :nrepl-port nil}]})]
+    (is (= #{"up" "also-up" "repl-up"} (#'tui/live-session-names "brian"))
+        "a session is live iff it holds a pg/app/nrepl port")))
+
 (deftest down-touches-no-workstream
   (let [calls (atom [])]
     (with-redefs [lifecycle/down! (fn [sn opts] (swap! calls conj [:down sn opts]))

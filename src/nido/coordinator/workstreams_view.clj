@@ -37,17 +37,21 @@
    1. Notion external-ref → \"BR-#### · <title>\" (or just BR-#### with no/blank title)
    2. latest ledger entry's :title (when present and non-blank)
    3. originating trigger (from a session's autonomy) + short ws-id suffix
-   4. raw ws-id."
+   4. a session name (human one-offs have no ref/entry/trigger — the name reads
+      far better than the raw ws-id)
+   5. raw ws-id."
   [ws sessions]
   (let [nref        (notion-ref ws)
         entry-title (not-empty (some-> ws :entries last :title))
-        trigger     (some #(get-in % [:autonomy :trigger]) sessions)]
+        trigger     (some #(get-in % [:autonomy :trigger]) sessions)
+        sname       (some (comp not-empty :name) sessions)]
     (cond
       nref        (if-let [t (not-empty (:title nref))]
                     (str (:id nref) " · " t)
                     (:id nref))
       entry-title entry-title
       trigger     (str (name trigger) " · " (short-suffix (:id ws)))
+      sname       sname
       :else       (:id ws))))
 
 (defn- timestamps [ws sessions]
@@ -73,33 +77,55 @@
   [sessions]
   (->> sessions (keep #(get-in % [:autonomy :priority])) (reduce max 0)))
 
+(defn- reconcile-liveness
+  "A human (non-autonomous) session carries a static :substrate that is never
+   synced to real service state, so a downed one-off would read :live — and thus
+   :active — forever. Downgrade a human :live session whose name is NOT in
+   `live-names` (the set of sessions actually holding ports) to :archived for the
+   projection only, so engagement reflects reality. Autonomous sessions are
+   coordinator-managed (substrate flips via archive! on Run teardown) and pass
+   through untouched."
+  [live-names s]
+  (if (and (nil? (:autonomy s))
+           (= :live (:substrate s))
+           (not (contains? live-names (:name s))))
+    (assoc s :substrate :archived)
+    s))
+
 (defn workstream-row
   "One display row for a workstream: reads its sessions and projects engagement
-   + lifecycle stage."
-  [project ws]
-  (let [sessions (session/list-sessions project (:id ws))
-        br-id    (:id (notion-ref ws))
-        status   (when br-id (tickets/status project br-id))
-        proj     (session/stage-projection (:closed ws) status sessions (:stage ws))]
-    {:ws-id         (:id ws)
-     :project       project
-     :br-id         br-id
-     :promote-id    (or br-id (some #(when (= :github-issue (:adapter %)) (:id %)) (:external-refs ws)))
-     :label         (label ws sessions)
-     :source        (ws-source ws)
-     :stage         (:stage proj)
-     :needs-you     (:needs-you proj)
-     :engagement    (session/engagement-state (:closed ws) sessions)
-     :priority      (max-priority sessions)
-     :session-count (count sessions)
-     :last-activity (last-activity ws sessions)}))
+   + lifecycle stage. `live-names` (optional) is the set of session names actually
+   holding ports; when supplied, a human session not in it is treated as down so
+   :engagement reflects real liveness rather than the static :substrate. Omit it
+   (or pass nil) for the legacy substrate-only projection."
+  ([project ws] (workstream-row project ws nil))
+  ([project ws live-names]
+   (let [sessions     (session/list-sessions project (:id ws))
+         eng-sessions (if live-names (mapv #(reconcile-liveness live-names %) sessions) sessions)
+         br-id        (:id (notion-ref ws))
+         status       (when br-id (tickets/status project br-id))
+         proj         (session/stage-projection (:closed ws) status sessions (:stage ws))]
+     {:ws-id         (:id ws)
+      :project       project
+      :br-id         br-id
+      :promote-id    (or br-id (some #(when (= :github-issue (:adapter %)) (:id %)) (:external-refs ws)))
+      :label         (label ws sessions)
+      :source        (ws-source ws)
+      :stage         (:stage proj)
+      :needs-you     (:needs-you proj)
+      :engagement    (session/engagement-state (:closed ws) eng-sessions)
+      :priority      (max-priority sessions)
+      :session-count (count sessions)
+      :last-activity (last-activity ws sessions)})))
 
 (defn workstream-rows
-  "All workstream rows for a project, read from disk."
-  [project]
-  (->> (workstream/list-ids project)
-       (keep #(workstream/read-ws project %))
-       (mapv #(workstream-row project %))))
+  "All workstream rows for a project, read from disk. `live-names` (optional) is
+   threaded into each row's engagement projection — see workstream-row."
+  ([project] (workstream-rows project nil))
+  ([project live-names]
+   (->> (workstream/list-ids project)
+        (keep #(workstream/read-ws project %))
+        (mapv #(workstream-row project % live-names)))))
 
 (defn- by-needs-then-newest
   "needs-you rows first, newest-activity first within each band. ISO strings

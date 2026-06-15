@@ -68,6 +68,18 @@
         sessions [{:autonomy {:trigger :triage-bug}}]]
     (is (= "triage-bug · abcdef" (wsv/label ws sessions)))))
 
+(deftest label-falls-back-to-session-name-before-raw-id
+  ;; A human scratch workstream has no ref/entry/trigger — its session name is
+  ;; far more legible than the raw ws-id.
+  (let [ws {:id "ws-20260613-7aeaed" :external-refs [] :entries []}
+        sessions [{:name "text2speech-latex" :autonomy nil}]]
+    (is (= "text2speech-latex" (wsv/label ws sessions)))))
+
+(deftest label-trigger-still-beats-session-name
+  (let [ws {:id "ws-20260601-abcdef" :external-refs [] :entries []}
+        sessions [{:name "run-a" :autonomy {:trigger :triage-bug}}]]
+    (is (= "triage-bug · abcdef" (wsv/label ws sessions)))))
+
 (deftest label-falls-back-to-raw-id
   (let [ws {:id "ws-20260601-abcdef" :external-refs [] :entries []}]
     (is (= "ws-20260601-abcdef" (wsv/label ws [])))))
@@ -108,6 +120,36 @@
         (is (some #(= :idle (:engagement %)) rows))
         (is (every? :ws-id rows))
         (is (every? #(= :brian (:project %)) rows))))))
+
+(deftest human-engagement-reflects-real-liveness-via-live-names
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :scratch :external-refs []})]
+        (session/create! :brian (:id w) {:name "refshot" :weight :light :autonomy nil})
+        (let [ws (workstream/read-ws :brian (:id w))]
+          (is (= :active (:engagement (wsv/workstream-row :brian ws)))
+              "default arity = legacy behavior (static :live ⇒ :active)")
+          (is (= :idle (:engagement (wsv/workstream-row :brian ws #{})))
+              "human session not in the live-set ⇒ downgraded to :idle")
+          (is (= :active (:engagement (wsv/workstream-row :brian ws #{"refshot"})))
+              "human session in the live-set ⇒ stays :active"))))))
+
+(deftest autonomous-engagement-ignores-live-names
+  (with-tmp
+    (fn [_]
+      (let [w (make-ws! :brian {:stage :implementing
+                                :external-refs [{:adapter :notion :id "BR-1"}]})]
+        (make-session! :brian (:id w) "run-a" {:autonomy autonomy-running})
+        (is (= :active (:engagement (wsv/workstream-row :brian (workstream/read-ws :brian (:id w)) #{})))
+            "autonomous (coordinator-managed) sessions aren't downgraded by the live-set")))))
+
+(deftest workstream-rows-threads-live-names
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :scratch :external-refs []})]
+        (session/create! :brian (:id w) {:name "downie" :weight :light :autonomy nil}))
+      (is (= [:idle]   (map :engagement (wsv/workstream-rows :brian #{}))))
+      (is (= [:active] (map :engagement (wsv/workstream-rows :brian #{"downie"})))))))
 
 (deftest workstream-rows-marks-closed-as-settled
   (with-tmp
