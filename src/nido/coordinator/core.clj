@@ -35,7 +35,8 @@
    [nido.core :as nido-core]
    [nido.project :as project]
    [nido.reclaim :as reclaim]
-   [nido.session.profiles :as profiles]))
+   [nido.session.profiles :as profiles]
+   [nido.ui.server :as ui-server]))
 
 (def ^:private defaults
   {:poll-ms             1000
@@ -58,7 +59,8 @@
    ;; GitHub-issue promote leg. Like :plan-system-prompt but there's no ledger to
    ;; continue from — the first message IS the issue body, so no /continue-ticket
    ;; and no Notion.
-   :plan-issue-system-prompt  "You are pre-orienting a nido impl session unattended: the human who owns this session is not here yet but will resume THIS conversation shortly. Your first message is the GitHub issue to implement. Do clear, low-risk implementation work autonomously toward a draft PR. The moment you reach something that needs a human decision — a product/design call, genuine ambiguity, or a risky/destructive change — STOP and leave a concise summary of what you did, where things stand, and exactly what you need; do not guess."})
+   :plan-issue-system-prompt  "You are pre-orienting a nido impl session unattended: the human who owns this session is not here yet but will resume THIS conversation shortly. Your first message is the GitHub issue to implement. Do clear, low-risk implementation work autonomously toward a draft PR. The moment you reach something that needs a human decision — a product/design call, genuine ambiguity, or a risky/destructive change — STOP and leave a concise summary of what you did, where things stand, and exactly what you need; do not guess."
+   :dashboard           {:enabled? true :port 8800}})
 
 (def ^:private anomaly-thresholds
   {:spawn-window-ms 60000  :spawn-threshold 5
@@ -78,6 +80,19 @@
 (defonce ^:private !last-github-poll-ms (atom {}))
 
 (defonce ^:private !last-github-issue-poll-ms (atom {}))
+
+;; Resolved dashboard port for the running daemon (nil when disabled). Recorded
+;; in the heartbeat so `status` can report + probe the right port.
+(defonce ^:private !dashboard-port (atom nil))
+
+(defn dashboard-config
+  "Resolve {:enabled? :port} for the in-process dashboard from run! opts over
+   `defaults`. `:no-dashboard true` disables it; `:dashboard-port` overrides the
+   port."
+  [{:keys [dashboard-port no-dashboard]}]
+  (let [d (:dashboard defaults)]
+    {:enabled? (boolean (and (:enabled? d) (not no-dashboard)))
+     :port     (or dashboard-port (:port d))}))
 
 (defn- maybe-reclaim!
   "Throttled disk-hygiene sweep: at most once per :reclaim-interval-ms, delete
@@ -479,9 +494,10 @@
       (heartbeat/write! {:status       :halted
                          :halted-by    (:source halt-info)
                          :halt-note    (:note halt-info)
-                         :slots-in-use 0})
+                         :slots-in-use 0
+                         :dashboard-port @!dashboard-port})
       (do
-        (heartbeat/write! {:status :running :slots-in-use 0})
+        (heartbeat/write! {:status :running :slots-in-use 0 :dashboard-port @!dashboard-port})
         (reconcile-sources! triggers-by-project)
         ;; Drain queue first — this consumes envelopes emitted on the PREVIOUS
         ;; tick by source polls. Keeps each tick's unit of work small.
@@ -522,6 +538,7 @@
     (Runtime/getRuntime)
     (Thread.
       (fn []
+        (try (ui-server/stop!) (catch Exception _ nil))
         (doseq [hash (keys @!source-instances)]
           (stop-source! hash))
         (try (heartbeat/write! {:status :stopped :slots-in-use 0})
@@ -550,15 +567,25 @@
 (defn run!
   "Start the foreground loop. Blocks until interrupted.
    Also installs the daemon lifecycle: writes coordinator.pid, runs the
-   crash-recovery reconcile pass, and registers a JVM shutdown hook."
-  [& {:keys [poll-ms] :or {poll-ms (:poll-ms defaults)}}]
+   crash-recovery reconcile pass, starts the in-process dashboard, and
+   registers a JVM shutdown hook."
+  [& {:keys [poll-ms] :as opts :or {poll-ms (:poll-ms defaults)}}]
   (cstate/ensure-dirs!)
   (println "nido coordinator: starting (poll" poll-ms "ms)")
   (reconcile/reconcile!)
   (resubmit-queued! (load-all-triggers))
+  (let [{:keys [enabled? port]} (dashboard-config opts)]
+    (reset! !dashboard-port (when enabled? port))
+    (when enabled?
+      (try (ui-server/start! {:port port})
+           (catch Throwable t
+             (reset! !dashboard-port nil)
+             (binding [*err* *err*]
+               (.println ^java.io.PrintWriter *err*
+                         (str "WARN: dashboard failed to start — " (ex-message t))))))))
   (pid/write! (long (.pid (java.lang.ProcessHandle/current))))
   (install-shutdown-hook!)
-  (heartbeat/write! {:status :running :slots-in-use 0})
+  (heartbeat/write! {:status :running :slots-in-use 0 :dashboard-port @!dashboard-port})
   (executor/configure! {:global-cap (:global-parallel-cap defaults)})
   (nsource/register!)                                 ; register Notion source plugin
   (loop []

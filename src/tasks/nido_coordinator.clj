@@ -19,11 +19,14 @@
    [nido.task-args :as task-args]))
 
 (defn run [& args]
-  (let [[_ opts] (task-args/split-args args)
-        ms       (some-> (:poll-ms opts) str parse-long)]
-    (if ms
-      (core/run! :poll-ms ms)
-      (core/run!))))
+  (let [[_ opts]  (task-args/split-args args)
+        ms        (some-> (:poll-ms opts) str parse-long)
+        dport     (some-> (:dashboard-port opts) str parse-long)
+        no-dash?  (= true (:no-dashboard opts))]
+    (apply core/run! (cond-> []
+                       ms       (into [:poll-ms ms])
+                       dport    (into [:dashboard-port dport])
+                       no-dash? (into [:no-dashboard true])))))
 
 (defn status [& _args]
   (let [p          (cstate/status-path)
@@ -113,7 +116,9 @@
         (cstate/ensure-dirs!)
         (let [log-file  (java.io.File. ^String (cstate/log-path))
               cmd       (cond-> ["bb" "nido:coordinator:run"]
-                          (:poll-ms opts) (into [":poll-ms" (str (:poll-ms opts))]))
+                          (:poll-ms opts)        (into [":poll-ms" (str (:poll-ms opts))])
+                          (:dashboard-port opts) (into [":dashboard-port" (str (:dashboard-port opts))])
+                          (= true (:no-dashboard opts)) (into [":no-dashboard" "true"]))
               proc      (p/process cmd {:in        ""
                                         :out       :append
                                         :out-file  log-file
