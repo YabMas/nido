@@ -35,3 +35,14 @@
     (let [resp (server/handle-request {:request-method :get :uri "/_fragment/live"})]
       (is (= 200 (:status resp)))
       (is (str/includes? (get-in resp [:headers "Content-Type"]) "text/event-stream")))))
+
+(deftest all-session-rows-skips-unreadable-projects
+  ;; A project with no session.edn makes the real session-rows throw
+  ;; (worktrees-dir → load-session-edn). The board must skip it, not crash.
+  (let [rows-fn  (fn [pname _dir]
+                   (if (= pname "broken")
+                     (throw (ex-info "No session.edn found for project 'broken'" {}))
+                     [{:name "ok" :live? true :entry {:app-url "u"}}]))
+        projects {"good" {:directory "/g"} "broken" {:directory "/b"}}
+        rows     (server/all-session-rows rows-fn projects)]
+    (is (= [["good" "ok" true]] (map (juxt :project :name :live?) rows)))))

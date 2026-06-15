@@ -163,7 +163,12 @@
   ([] (all-session-rows session-rows (project/list-projects)))
   ([rows-fn projects]
    (->> (for [[pname entry] projects
-              row           (or (rows-fn pname (:directory entry)) [])]
+              row           (or (try (rows-fn pname (:directory entry))
+                                     ;; A project that can't be read (e.g. no
+                                     ;; session.edn) contributes no rows rather
+                                     ;; than crashing the whole board.
+                                     (catch Throwable _ nil))
+                                 [])]
           (assoc row :project pname))
         (sort-by (juxt #(if (:live? %) 0 1) :project :name)))))
 
