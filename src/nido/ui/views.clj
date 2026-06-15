@@ -351,6 +351,50 @@
       [:tr [:th "session"] [:th "url"] [:th "pg"] [:th "repl"] [:th "app"] [:th "app-state"] [:th "actions"]]]
      (h/raw (sessions-table-fragment project-name rows))]]))
 
+;; ---------------------------------------------------------------------------
+;; Live-sessions board (dashboard home)
+
+(defn- board-row
+  "One board row: project · session · status · dev URL. Live sessions get the
+   clickable friendly-host link (new tab → own cookie jar); down sessions route
+   to the per-project page where start/stop controls live."
+  [{:keys [project name live? entry]}]
+  (let [url (:app-url entry)]
+    [:tr
+     [:td.mono project]
+     [:td [:a {:href (str "/" project "/sessions/" name "/logs/repl")} [:strong name]]]
+     [:td (if live?
+            [:span {:style "color:#4ade80"} "● up"]
+            [:span.meta "○ down"])]
+     [:td (cond
+            (and live? url) [:a {:href url :target "_blank"} url]
+            live?           [:span.meta "—"]
+            :else           [:a {:href (str "/" project "/sessions")} "start →"])]]))
+
+(defn live-board-fragment
+  "Just the board tbody — initial render + SSE refresh."
+  [rows]
+  (str
+   (h/html
+    (if (seq rows)
+      [:tbody {:id "board-body"}
+       (for [row rows] (board-row row))]
+      [:tbody {:id "board-body"}
+       [:tr [:td {:colspan "4"} [:span.empty "No sessions yet — run `bb nido:session:up <name>`."]]]]))))
+
+(defn live-board-page
+  "Dashboard home: a flat, live-first board of every session across projects."
+  [rows]
+  (layout
+   "live sessions"
+   [:h1 "nido — live sessions"]
+   [:p.meta [:a {:href "/projects"} "all projects →"]]
+   [:div {:data-on-interval__duration.3s "@get('/_fragment/live')"}
+    [:table
+     [:thead
+      [:tr [:th "project"] [:th "session"] [:th "status"] [:th "dev url"]]]
+     (h/raw (live-board-fragment rows))]]))
+
 (defn vsdd-runs-page
   "VSDD runs list for a project."
   [project-name runs has-in-progress?]
