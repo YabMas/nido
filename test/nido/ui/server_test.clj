@@ -10,8 +10,8 @@
   (let [rows-fn  (fn [pname _dir]
                    (case pname
                      "brian" [{:name "b-down" :live? false :entry nil}
-                              {:name "b-up"   :live? true  :entry {:app-url "u1"}}]
-                     "foo"   [{:name "f-up"   :live? true  :entry {:app-url "u2"}}]))
+                              {:name "b-up"   :live? true  :entry {:url "u1"}}]
+                     "foo"   [{:name "f-up"   :live? true  :entry {:url "u2"}}]))
         projects {"brian" {:directory "/x"} "foo" {:directory "/y"}}
         rows     (server/all-session-rows rows-fn projects)]
     ;; live-first, then project, then name; each row tagged with :project
@@ -42,7 +42,7 @@
   (let [rows-fn  (fn [pname _dir]
                    (if (= pname "broken")
                      (throw (ex-info "No session.edn found for project 'broken'" {}))
-                     [{:name "ok" :live? true :entry {:app-url "u"}}]))
+                     [{:name "ok" :live? true :entry {:url "u"}}]))
         projects {"good" {:directory "/g"} "broken" {:directory "/b"}}
         rows     (server/all-session-rows rows-fn projects)]
     (is (= [["good" "ok" true]] (map (juxt :project :name :live?) rows)))))

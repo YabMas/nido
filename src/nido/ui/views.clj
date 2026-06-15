@@ -238,7 +238,7 @@
   (let [app-port (:app-port entry)
         pg-port (:pg-port entry)
         repl-port (:nrepl-port entry)
-        url (:app-url entry)
+        url (:url entry)
         pending-kw (cond
                      (map? pending-state)     (:state pending-state)
                      (keyword? pending-state) pending-state)
@@ -356,20 +356,34 @@
 
 (defn- board-row
   "One board row: project · session · status · dev URL. Live sessions get the
-   clickable friendly-host link (new tab → own cookie jar); down sessions route
-   to the per-project page where start/stop controls live."
-  [{:keys [project name live? entry]}]
-  (let [url (:app-url entry)]
+   clickable friendly-host link (`:url` in the registry entry — the per-session
+   friendly host, opened in a new tab → own cookie jar). Down sessions get a
+   real start button that POSTs the existing lifecycle action; the board's 3s
+   poll then reflects the `starting…` state (set in the server's app-states
+   atom) and finally the live URL. pending-state mirrors session-row so an
+   in-flight start/stop shows through between polls."
+  [{:keys [project name live? entry pending-state]}]
+  (let [url         (:url entry)
+        pending-kw  (cond
+                      (map? pending-state)     (:state pending-state)
+                      (keyword? pending-state) pending-state)
+        action-base (str "/" project "/sessions/" name)]
     [:tr
      [:td.mono project]
-     [:td [:a {:href (str "/" project "/sessions/" name "/logs/repl")} [:strong name]]]
-     [:td (if live?
-            [:span {:style "color:#4ade80"} "● up"]
-            [:span.meta "○ down"])]
+     [:td [:a {:href (str action-base "/logs/repl")} [:strong name]]]
      [:td (cond
-            (and live? url) [:a {:href url :target "_blank"} url]
-            live?           [:span.meta "—"]
-            :else           [:a {:href (str "/" project "/sessions")} "start →"])]]))
+            live?                                  [:span {:style "color:#4ade80"} "● up"]
+            (#{:starting :restarting} pending-kw)  [:span.meta "… starting"]
+            (= :stopping pending-kw)               [:span.meta "… stopping"]
+            :else                                  [:span.meta "○ down"])]
+     [:td (cond
+            (and live? url)                        [:a {:href url :target "_blank"} url]
+            live?                                  [:span.meta "—"]
+            (#{:starting :restarting} pending-kw)  [:span.meta "working…"]
+            :else
+            [:button.btn.btn-primary
+             {"data-on:click" (str "@post('" action-base "/start')")}
+             "start"])]]))
 
 (defn live-board-fragment
   "Just the board tbody — initial render + SSE refresh."
