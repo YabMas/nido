@@ -172,3 +172,16 @@
       (is (some #(re-find #"parked|autonomous" %) titles) "autonomy state shown")
       (is (some #(re-find #"me" %) titles))
       (is (some #(= "auto" (-> % :data :name)) rows) "session rows carry :name for open"))))
+
+(deftest stage-picker-promotes-to-the-chosen-target
+  (let [calls (atom [])]
+    (with-redefs [nido.tui/selected-workstream (fn [_] {:ws-id "w1" :promote-id "BR-1"})
+                  nido.work/set-stage! (fn [_ id t] (swap! calls conj [id t]) {:decision :advanced})
+                  nido.tui/current-rows (constantly [])]
+      (let [opened (first (#'tui/open-stage-picker (board-state :all)))]
+        (is (= :stage-picker (:modal opened)))
+        (let [picked (assoc-in opened [:modal-target :picker]
+                               (#'tui/picker-list [{:title "ready" :data :ready}]))
+              [s' _] (#'tui/update-stage-picker picked (msg/key-press "enter"))]
+          (is (= [["w1" :ready]] @calls) "P → set-stage! to the picked stage")
+          (is (nil? (:modal s')) "picker closes after pick"))))))

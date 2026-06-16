@@ -952,7 +952,33 @@
 
 (declare open-stage-picker enter-system)
 
-(defn- open-stage-picker [state] [(assoc state :status "(stage picker — Phase 2)") nil])
+(defn- open-stage-picker
+  "Open a picker over the spine stages to aim `promote` at a target (the override
+   for the default `p`). Empty when no workstream is selected."
+  [state]
+  (if-let [ws (selected-workstream state)]
+    [(-> state
+         (assoc :modal :stage-picker)
+         (assoc :modal-target
+                {:ws-id (:ws-id ws) :promote-id (:promote-id ws)
+                 :picker (picker-list (mapv (fn [s] {:title (name s) :data s}) work/stages))}))
+     nil]
+    [(assoc state :status "(no workstream selected)") nil]))
+
+(defn- update-stage-picker [state msg]
+  (cond
+    (msg/key-match? msg "escape") [(close-modal state) nil]
+    (msg/key-match? msg "enter")
+    (if-let [target (picker-selected state)]
+      (let [{:keys [ws-id promote-id]} (:modal-target state)
+            decision (:decision (work/set-stage! (:project state) ws-id target))]
+        [(-> state close-modal
+             (refresh-list (current-rows state))
+             (assoc :status (wsv/promote-result-message promote-id decision)))
+         nil])
+      [state nil])
+    :else (picker-route state msg)))
+
 (defn- enter-system [state] (assoc state :screen :system :status "(system surface — Phase 3)"))
 
 (defn- update-board [state msg]
@@ -1147,6 +1173,9 @@
     (= :clear-breaker (:modal state))
     (update-clear-breaker state msg)
 
+    (= :stage-picker (:modal state))
+    (update-stage-picker state msg)
+
     ;; Origin cycling on the board: Tab / → step forward, Shift-Tab / ← step back.
     ;; Pure in-process state changes (no action-channel exit), available outside
     ;; modals on the board screen only — from a drilled-in workstream you `esc`
@@ -1256,6 +1285,7 @@
                   :halt-confirm         "nido — halt coordinator?"
                   :halt-resume-confirm  "nido — resume coordinator?"
                   :clear-breaker        "nido — clear breaker"
+                  :stage-picker         "nido — promote to…"
                   (case (:screen state)
                     :projects   "nido — projects"
                     :board      (str "nido — " (:project state) " · " (name (:origin state)))
@@ -1274,6 +1304,7 @@
                   :halt-confirm         "[y] halt  [n/esc] cancel"
                   :halt-resume-confirm  "[y] resume  [n/esc] cancel"
                   :clear-breaker        "[↑↓] move  [↵] clear  [esc] cancel"
+                  :stage-picker         "[↑↓] move  [↵] promote here  [esc] cancel"
                   (case (:screen state)
                     :projects   "[↵] open  [q]uit"
                     :board      "[↵/o] open  [i]nspect  [n]ew  [p]romote  [P] promote to…  [d]one  [⇄ tab] origin  [s]ystem  [esc] back  [q]uit"
@@ -1399,6 +1430,9 @@
                 ".")))
 
     :clear-breaker
+    (item-list/list-view (:picker (:modal-target state)))
+
+    :stage-picker
     (item-list/list-view (:picker (:modal-target state)))))
 
 (defn- busy-label [verb]
