@@ -17,26 +17,6 @@
   (is (= :scratch (#'tui/step-origin :all -1)) "wraps back"))
 
 ;; ---------------------------------------------------------------------------
-;; Scratch view = the place to create a one-off session.
-;; ---------------------------------------------------------------------------
-
-(deftest scratch-view-a-opens-create-session
-  (let [state  {:screen :board :view :scratch :project "brian"
-                :list (#'tui/list-component [])}
-        [s' _] (#'tui/update-workstreams state (msg/key-press "a"))]
-    (is (= :create-session (:modal s')) "a opens the create-session modal")
-    (is (= "brian" (-> s' :modal-target :project)))))
-
-(deftest a-does-not-create-sessions-on-ref-sourced-views
-  ;; Notion/GitHub workstreams come from external refs — creating an arbitrary
-  ;; session under them is meaningless, so `a` must stay inert there.
-  (doseq [view [:notion :github]]
-    (let [state  {:screen :board :view view :project "brian"
-                  :list (#'tui/list-component [])}
-          [s' _] (#'tui/update-workstreams state (msg/key-press "a"))]
-      (is (nil? (:modal s')) (str "no create-session on the " view " view")))))
-
-;; ---------------------------------------------------------------------------
 ;; TUI up/add/destroy stay in sync with the scratch-workstream model
 ;; (same birth/reap the bb task layer does — spec line 82).
 ;; ---------------------------------------------------------------------------

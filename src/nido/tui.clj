@@ -3,13 +3,12 @@
 
    Screens:
      :projects   — registered projects (one row per project) → enter drills in
-     :board      — the active project's source-scoped views, cycled with Tab/←→.
-                   Each view (see view-defs) is either a filtered workstream list
-                   (Notion, Scratch) or the flat substrate list (Sessions/ops).
-                   ↵ on a workstream drills into its detail; ↵ on a session enters
-                   it in chat.
+     :board      — the active project's workstreams grouped by stage, filtered by
+                   origin (All/Notion/GitHub/Slack/Scratch) via Tab/←→.
+                   ↵ opens the workstream's session; [i] drills into detail; [s] system.
      :workstream — the highlighted workstream's sessions; ↵ enters one in chat,
-                   esc returns to the board at the active view.
+                   esc returns to the board.
+     :system     — session plumbing (up/down/destroy) + coordinator levers.
 
    The TUI itself does no service work. Action keys queue an action into
    `exit-action` and quit the program; the bb task wrapper (`tasks.nido-tui`)
@@ -28,11 +27,9 @@
    [nido.charm-patch :as charm-patch]
    [nido.coordinator.breakers :as breakers]
    [nido.coordinator.halt :as halt]
-   [nido.coordinator.promote :as promote]
    [nido.coordinator.queue :as queue]
    [nido.coordinator.runs-view :as runs-view]
    [nido.coordinator.scratch :as scratch]
-   [nido.coordinator.workstream :as workstream]
    [nido.coordinator.workstreams-view :as wsv]
    [nido.coordinator.triggers :as triggers]
    [nido.project :as project]
@@ -63,34 +60,8 @@
   program/quit-cmd)
 
 ;; ---------------------------------------------------------------------------
-;; Views: the source-scoped tabs the user cycles within a project. Ordered.
-;; :kind :workstreams → filtered workstream list (by :source); :kind :ops → flat substrate.
-;; To add a source intake, insert a {:id .. :label .. :kind :workstreams :source ..}
-;; whose :source matches the ws-source classifier (workstreams-view/ws-source).
-;; ---------------------------------------------------------------------------
-
-(def ^:private view-defs
-  [{:id :notion   :label "Notion"   :kind :workstreams :source :notion}
-   {:id :github   :label "GitHub"   :kind :workstreams :source :github}
-   {:id :slack    :label "Slack"    :kind :workstreams :source :slack}
-   {:id :scratch  :label "Scratch"  :kind :workstreams :source :scratch}
-   {:id :sessions :label "Sessions" :kind :ops}])
-
-(defn- view-for-id [id]
-  (or (some #(when (= id (:id %)) %) view-defs) (first view-defs)))
-
-(defn- step-view [id delta]
-  (let [ids (mapv :id view-defs)
-        i   (.indexOf ids id)]
-    (nth ids (mod (+ (max i 0) delta) (count ids)))))
-
-(defn- next-view [id] (step-view id 1))
-(defn- prev-view [id] (step-view id -1))
-
-;; ---------------------------------------------------------------------------
 ;; Origin filter: the board is one stage-grouped list (nido.work/grouped); the
 ;; workstream's origin is a badge per row and a filter, not a separate screen.
-;; (Plan B; replaces view-defs cycling once the board is rewired.)
 ;; ---------------------------------------------------------------------------
 
 (def ^:private origin-filters
@@ -147,46 +118,17 @@
 ;; Workstreams surface — list (engagement groups) + detail (its sessions)
 ;; ---------------------------------------------------------------------------
 
-(defn- ws-item-row
-  "One workstream display row inside a stage group."
-  [r]
-  {:title       (wsv/format-row r)
-   :description (or (:last-activity r) "")
-   :data        r})
-
 (def ^:private group-header-style (style/style :fg style/yellow :bold true))
 
 (defn- group-header
   "A section divider row. The leading newline puts a blank line ABOVE the header
    (the empty :description gives one BELOW it), so sections breathe; the title is
    coloured via `group-header-style`. `::group-header` keeps it non-actionable.
-   The very first row's leading blank is stripped in workstream-list-rows."
+   The very first row's leading blank is stripped by strip-leading-blank."
   [label]
   {:title       (str "\n" (style/render group-header-style (str "── " label " ──")))
    :description ""
    :data        ::group-header})
-
-(defn- stage-group-rows
-  "Header + one row per workstream for a fully-expanded stage group. nil when
-   empty so callers can `concat` without conditionals."
-  [label rows]
-  (when (seq rows)
-    (cons (group-header (str label " (" (count rows) ")"))
-          (mapv ws-item-row rows))))
-
-(defn- triage-group-rows
-  "Triage renders as two separate headered sections (see wsv/triage-split):
-   `Triage · in flight` — the ≤ :max-in-flight slots nido is currently working
-   (parked at the gate for you, or running), expanded and highest-severity-first;
-   and `Triage · queued` — the backlog waiting for a free slot, shown as a single
-   count line so it never buries the rows you act on. Keeping the two apart is
-   what makes the in-flight count reflect the max-5 model instead of summing the
-   whole backlog into one `Triage (N)`."
-  [{:keys [in-flight queued]}]
-  (concat
-   (stage-group-rows "Triage · in flight" in-flight)
-   (when (seq queued)
-     [(group-header (str "Triage · queued (" (count queued) ")"))])))
 
 (defn- strip-leading-blank
   "Drop the leading newline a group-header carries, so the list doesn't open with
@@ -209,10 +151,7 @@
        set))
 
 ;; ---------------------------------------------------------------------------
-;; Board rows — Plan B spine board (Task 1.2)
-;; Reads nido.work/grouped, badges each row by origin, and supports an
-;; origin filter. Task 1.3 rewires current-rows to these; for now they
-;; coexist with workstream-list-rows (which Task 4.1 will delete).
+;; Board rows — spine board: nido.work/grouped, badged by origin, origin-filtered.
 ;; ---------------------------------------------------------------------------
 
 (def ^:private origin-badges
@@ -263,46 +202,6 @@
       [{:title "No workstreams here. [n] new · [s] system · [f via system] fire"
         :description "" :data ::empty}]
       (vec (strip-leading-blank rows)))))
-
-(defn- workstream-list-rows
-  "List rows for one source's workstreams. Notion (and any future stage-driven
-   source) groups Ready/In-progress/Triage; Scratch — one-offs with no lifecycle
-   stage — groups by engagement (Active/Idle). Real liveness (registry ports)
-   drives engagement via live-session-names, so a downed one-off reads Idle."
-  [project source]
-  (let [rows (filterv #(= source (:source %))
-                      (wsv/workstream-rows project (live-session-names project)))
-        list-rows (if (= :scratch source)
-                    (let [g (wsv/grouped-by-engagement rows)]
-                      (concat
-                       (stage-group-rows "Active" (:active g))
-                       (stage-group-rows "Idle"   (:idle g))))
-                    (let [g (wsv/grouped-by-stage rows)]
-                      (concat
-                       ;; Actionable-first: Triage is high-volume autonomous churn
-                       ;; and would bury the rows you act on. Done is omitted.
-                       (stage-group-rows  "Ready to pick up" (:ready g))
-                       (stage-group-rows  "In progress"      (:in-progress g))
-                       (triage-group-rows (:triage g)))))]
-    (if (empty? list-rows)
-      [{:title (if (= :scratch source)
-                 "No one-off sessions here yet."
-                 "No workstreams yet. Press 'f' to fire a trigger.")
-        :description ""
-        :data ::empty}]
-      (vec (strip-leading-blank list-rows)))))
-
-(defn- ws-detail-rows [project ws-id]
-  (let [rows (wsv/session-rows project ws-id)]
-    (if (empty? rows)
-      [{:title "No sessions in this workstream yet."
-        :description ""
-        :data ::empty}]
-      (mapv (fn [r]
-              {:title       (wsv/format-session-row r)
-               :description (or (:last-activity r) "")
-               :data        r})
-            rows))))
 
 (defn- format-detail-session
   "Display string for a session on the autonomy axis."
@@ -381,11 +280,6 @@
       (assoc :items items)
       (update :list item-list/set-items items)))
 
-(defn- active-view
-  "The view-def for the board's active :view (defaults to the first view)."
-  [state]
-  (view-for-id (:view state)))
-
 (defn- current-rows
   "Rows for the active screen — the source the live-refresh tick re-reads.
    On :board, dispatches on origin filter for the spine board.
@@ -420,17 +314,6 @@
       (assoc :screen :workstream :ws-id ws-id :ws-label label :status nil)
       (rebuild-list (detail-rows (:project state) ws-id))))
 
-(defn- set-view
-  "Switch the board to `view-id` and rebuild the list with that view's rows.
-   Clears any open modal and stale detail context so view nav can't trap us
-   behind a panel or in a drilled-in workstream. Used by the view-cycling keys
-   and by the detail screen's `esc` (back to the board at the current view)."
-  [state view-id]
-  (let [s (assoc state :screen :board :view view-id :status nil)]
-    (-> s
-        (rebuild-list (current-rows s))
-        (dissoc :modal :modal-target :modal-input :ws-id :ws-label))))
-
 (defn- set-origin
   "Switch the board to `origin` filter and rebuild the list.
    Clears any open modal and stale detail context."
@@ -448,12 +331,6 @@
   [state]
   (let [d (selected-data state)]
     (when (and (map? d) (:ws-id d)) d)))
-
-(defn- selected-session-row
-  "The highlighted detail-screen session row (carries :name + :project); nil for sentinels."
-  [state]
-  (let [d (selected-data state)]
-    (when (and (map? d) (:name d) (:project d)) d)))
 
 ;; ---------------------------------------------------------------------------
 ;; Elm: init / update / view
@@ -684,7 +561,7 @@
 ;; The final state enqueues an envelope via `queue/enqueue!` and surfaces a
 ;; status-bar message so the user can confirm by pressing `r` to refresh.
 ;; Defined here (rather than alongside the other modal handlers below) so
-;; `update-workstreams` can call `open-fire-trigger` without a forward declaration.
+;; update-board and update-system can call open-fire-trigger without a forward declaration.
 ;; ---------------------------------------------------------------------------
 
 (defn- placeholder-keys
@@ -970,39 +847,6 @@
     :else (let [[lst cmd] (item-list/list-update (:list state) msg)]
             [(assoc state :list lst) cmd])))
 
-(defn- update-workstreams
-  "A workstreams board view (Notion/GitHub/Scratch). ↵ drills into the highlighted
-   workstream's session detail. p promotes the highlighted ticket; d marks it
-   done (drops it from the overview); f/h/c carry over fire-trigger / halt /
-   clear-breaker. On the Scratch view `a` creates a one-off session (Scratch is
-   the home for one-offs — spec line 73); ref-sourced views (Notion/GitHub) come
-   from external refs, so creation is meaningless there and `a` is inert.
-   Group-header and empty rows are guarded by `selected-workstream` returning nil.
-   View cycling (Tab/←→) is handled upstream in `update-fn`."
-  [state msg]
-  (cond
-    (msg/key-match? msg "escape")
-    [(enter-projects state) nil]
-
-    (msg/key-match? msg "enter")
-    (if-let [ws (selected-workstream state)]
-      [(enter-workstream state (:ws-id ws) (:label ws)) nil]
-      [state nil])
-
-    (and (msg/key-match? msg "a") (= :scratch (:source (active-view state))))
-    (open-create-session state (:project state))
-
-    (msg/key-match? msg "p") (promote-selected state)
-    (msg/key-match? msg "d") (done-selected state)
-
-    (msg/key-match? msg "f") (open-fire-trigger state)
-    (msg/key-match? msg "h") (open-halt-confirm state)
-    (msg/key-match? msg "c") (open-clear-breaker-picker state)
-
-    :else
-    (let [[lst cmd] (item-list/list-update (:list state) msg)]
-      [(assoc state :list lst) cmd])))
-
 (defn- update-workstream
   "Workstream detail screen. ↵ routes into the highlighted session's home (same
    handoff the Sessions view uses → lands you in the chat). esc returns to the
@@ -1227,17 +1071,6 @@
 
 (def ^:private active-tab-style   (style/style :fg style/cyan :bold true))
 (def ^:private inactive-tab-style (style/style :fg 240))
-
-(defn- tab-bar
-  "One-line view switcher rendered above the board list: each view's label, the
-   active one bracketed + bright, the rest dim. Pure string (modulo styling)."
-  [active-id]
-  (->> view-defs
-       (map (fn [{:keys [id label]}]
-              (if (= id active-id)
-                (style/render active-tab-style (str "[" label "]"))
-                (style/render inactive-tab-style (str " " label " ")))))
-       (str/join "  ")))
 
 (defn- origin-strip
   "One-line origin filter rendered above the board list: each origin label, the
