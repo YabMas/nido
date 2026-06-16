@@ -2,6 +2,7 @@
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
+   [nido.config]
    [nido.coordinator.session :as session]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.tickets :as tickets]
@@ -112,3 +113,22 @@
   (with-tmp
     (fn [_]
       (is (nil? (work/workstream :brian "ws-does-not-exist"))))))
+
+(deftest default-target-falls-back-to-in-progress
+  (with-redefs [nido.config/read-projects (constantly {})]
+    (is (= :in-progress (work/default-target :brian :promote)))
+    (is (= :in-progress (work/default-target :brian :new)))))
+
+(deftest default-target-honors-configured-stage
+  (with-redefs [nido.config/read-projects
+                (constantly {'brian {:workstream-defaults {:promote :ready}}})]
+    (is (= :ready (work/default-target :brian :promote))
+        "configured target wins, project key matched by name")
+    (is (= :in-progress (work/default-target :brian :new))
+        "unset action falls back to canonical")))
+
+(deftest default-target-rejects-non-stage-config
+  (with-redefs [nido.config/read-projects
+                (constantly {'brian {:workstream-defaults {:promote :nonsense}}})]
+    (is (= :in-progress (work/default-target :brian :promote))
+        "a configured value that isn't a spine stage is ignored")))

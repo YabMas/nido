@@ -9,6 +9,7 @@
    Surfaces render + route; all model logic lives here. Ships as a projection over
    today's storage — no migration."
   (:require
+   [nido.config :as config]
    [nido.coordinator.session :as csession]
    [nido.coordinator.tickets :as tickets]
    [nido.coordinator.workstream :as cws]
@@ -101,3 +102,26 @@
        :label    (:label row)
        :ledger   (ledger-summary project (:br-id row))
        :sessions (mapv session-facet sessions)})))
+
+(def ^:private canonical-default-target
+  "Fallback when a project hasn't configured a default for the action."
+  {:promote :in-progress :new :in-progress})
+
+(defn- project-entry
+  "projects.edn entry for `project`, tolerating symbol / keyword / string keys."
+  [projects project]
+  (or (get projects project)
+      (get projects (symbol (name project)))
+      (get projects (keyword (name project)))
+      (get projects (name project))))
+
+(defn default-target
+  "Default target stage for a `new`/`promote` gesture in `project`. `action` is
+   :promote or :new. A value configured under the project's :workstream-defaults
+   is honored only when it names a spine stage; otherwise the canonical default."
+  [project action]
+  (let [configured (get-in (project-entry (config/read-projects) project)
+                           [:workstream-defaults action])]
+    (if (some #{configured} stages)
+      configured
+      (canonical-default-target action))))
