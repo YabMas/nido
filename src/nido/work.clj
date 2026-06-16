@@ -22,3 +22,24 @@
    workstreams are NOT scratch — scratch is keyed on the :scratch stage marker)."
   [ws]
   (wsv/ws-source ws))
+
+(defn- to-spine
+  "Project one wsv row onto the single spine: rename :source→:origin, fold a
+   scratch workstream to :in-progress, and a settled (closed) one to :done."
+  [row]
+  (let [origin (:source row)
+        stage  (cond
+                 (= :settled (:engagement row)) :done
+                 (= :scratch origin)            :in-progress
+                 :else                          (:stage row))]
+    (-> row
+        (assoc :origin origin :stage stage)
+        (dissoc :source))))
+
+(defn list-workstreams
+  "All of a project's workstreams as enriched rows on the single spine. `live-names`
+   (optional set of session names actually holding ports) is threaded into the
+   engagement projection — pass it so a downed one-off reads idle."
+  ([project] (list-workstreams project nil))
+  ([project live-names]
+   (mapv to-spine (wsv/workstream-rows project live-names))))
