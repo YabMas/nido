@@ -1,6 +1,6 @@
 ---
 name: triage-bug
-description: Triage a Notion bug-report ticket. Investigates the brian codebase, drafts a structured report, halts for human review in the session chat, and applies the human-confirmed verdict to Notion.
+description: Triage a bug-report ticket (Notion ticket or Slack-channel message). Investigates the brian codebase, drafts a structured report, halts for human review in the session chat, and applies the human-confirmed verdict — to Notion for Notion tickets, or to the nido ledger only for Slack-sourced reports.
 ---
 
 # triage-bug skill
@@ -11,20 +11,43 @@ description: Triage a Notion bug-report ticket. Investigates the brian codebase,
 
 ## When this fires
 
-The nido coordinator fires this skill when a Notion row matches one of the two triage triggers:
-- `:triage-new` — `Status = Needs verification` view
-- `:triage-backlog` — `Type = bug AND Status NOT IN {Done, Not Done, Needs verification, Review}` view, filtered to rows with no `Effort` set
+The nido coordinator fires this skill when a triage trigger matches — from a Notion view or the Slack bug channel:
+- `:triage-new` — `Status = Needs verification` Notion view
+- `:triage-backlog` — `Type = bug AND Status NOT IN {Done, Not Done, Needs verification, Review}` Notion view, filtered to rows with no `Effort` set
+- `:triage-slack-bugs` — a new top-level message in the Slack bug channel (`:source {:type :slack-channel ...}`)
 
-The envelope payload (per nido's normalised Notion event) includes:
+The envelope payload for a **Notion** run (per nido's normalised Notion event) includes:
 - `:page-id` — Notion page id
 - `:url` — Notion page URL
 - `:title` — page title
 - `:trigger-name` — `:triage-new` or `:triage-backlog`
 - Other Notion properties flattened (e.g. `:type`, `:status`, `:priority`)
 
+The envelope payload for a **Slack** run includes `:adapter :slack-message`, `:id` (e.g. `slack-C123-1718000000.000123`), `:url` (Slack permalink), `:title` (truncated text), and `:text` (the full message). It has **no `:page-id`** — see "Source adapter" below.
+
 The session is a **lite session**: the worktree at `./worktree` is a symlink to `~/Code/brian` (read-only intent). No PG, no JVM, no app server. Only the notion MCP server is wired into `.mcp.json`.
 
 The Run record lives at `./run-link/` (symlink to `~/.nido/coordinator/runs/<run-id>/`).
+
+## Source adapter (Notion vs Slack)
+
+This skill triages reports from two sources. Branch on the payload's `:adapter`:
+
+- **Notion ticket** (`:adapter` absent / the payload carries a `:page-id`) — the original path. The **ticket key** is the `BR-####` resolved from the Notion page. On `apply`, the verdict is written back to Notion.
+- **Slack message** (`:adapter :slack-message`) — a bug posted in the Slack bug channel. The payload carries `:id` (e.g. `slack-C123-1718000000.000123`), `:url` (Slack permalink), `:title`, and `:text` (full message). There is **no `:page-id`** and **no Notion ticket**. The **ticket key** is the payload `:id`.
+
+The **ticket key** is what goes in every `bb nido:ticket:*` call's `:br` argument below — `BR-####` for a Notion run, the payload `:id` for a Slack run. (`bb nido:ticket:*` accepts any string as `:br`, so the slack id works as the ledger key directly.)
+
+**Global rule for Slack runs — ledger-only, never touch Notion.** When `:adapter` is `:slack-message`, skip EVERY Notion MCP interaction:
+
+- **Step 1.2 / 1.3:** do NOT fetch the Notion page or block-children. The brief IS the payload — investigate from `:text` (the report body) and `:url` (the Slack permalink). Open the record with the slack `:id` as `:br` and **omit `:page`** (there is no page-id):
+  ```bash
+  bb nido:ticket:open :project brian :br <slack-id> :url <url> :title "<title>" :opened-by triage-slack-bugs
+  ```
+- **Step 4 (apply):** skip the optimistic concurrency check and ALL Notion writes (`API-patch-page`, `API-patch-block-children`, `API-delete-a-block`). The verdict is already captured in the nido record (Step 1.6) — just `bb nido:ticket:complete … :status triaged :disposition applied`. There is no Notion mutation, so write **no** `notion-mutations.log` entry — the nido record is the audit trail.
+- **Step 5 (skip):** skip the Notion Status/archive write — just `bb nido:ticket:complete … :status skipped :disposition <…>`. No `notion-mutations.log` entry.
+
+Everything else is **identical** for both sources: the codebase investigation, the report format (§3 "Proposed Notion writes" is simply omitted for Slack — there are none), the HITL halt at `:awaiting-input`, the `bb nido:ticket:*` ledger writes, and the verb grammar. Wherever a step below says "fetch the page", "BR-####", or names a Notion-write MCP tool, a Slack run uses the payload brief, the slack `:id`, or skips the call, respectively.
 
 ## Lifecycle: ticket status
 
@@ -32,9 +55,9 @@ Triage state lives in the nido ticket record, keyed by `BR-####`. Set the record
 
 | Status | Set by | Means |
 |---|---|---|
-| `:investigating` | `bb nido:ticket:open` (Step 1), and `redo:` | Fetching page, walking codebase, drafting report |
+| `:investigating` | `bb nido:ticket:open` (Step 1), and `redo:` | Reading the report (Notion page or Slack brief), walking codebase, drafting report |
 | `:awaiting-input` | `bb nido:ticket:status … :status awaiting-input` | Draft written + appended to the record. Awaiting human reply in chat. |
-| `:triaged` | `bb nido:ticket:complete … :status triaged` | Notion properties written on `apply`. Run done. |
+| `:triaged` | `bb nido:ticket:complete … :status triaged` | Verdict applied — Notion properties written on `apply` (Notion run); ledger-only, no Notion (Slack run). Run done. |
 | `:skipped` | `bb nido:ticket:complete … :status skipped` | Skip disposition applied. Run done. |
 
 To set a non-terminal status mid-run:
@@ -46,14 +69,14 @@ bb nido:ticket:status :project brian :br <BR-####> :status awaiting-input
 ## Step 1 — Investigate (autonomous)
 
 1. Read the envelope payload to get `:page-id`, `:url`, `:title`, `:trigger-name`. The payload is in the first user message you receive at session start.
-2. **Resolve BR-#### and open the record (first recorded action).** Fetch the page (`mcp__notionApi__API-retrieve-a-page`) and read the **"ID" property** — a Notion `unique_id` property with prefix `BR` (e.g. `BR-5236`) — to get the `BR-####`. This is the key for every later `bb nido:ticket:*` call. Then open the nido record as your first recorded action:
+2. **Resolve the ticket key and open the record (first recorded action).** **(Notion run; a Slack run skips this fetch — see "Source adapter" above, open the record with the slack `:id`.)** Fetch the page (`mcp__notionApi__API-retrieve-a-page`) and read the **"ID" property** — a Notion `unique_id` property with prefix `BR` (e.g. `BR-5236`) — to get the `BR-####`. This is the key for every later `bb nido:ticket:*` call. Then open the nido record as your first recorded action:
 
    ```bash
    bb nido:ticket:open :project brian :br <BR-####> :page <page-id> :url <url> :title "<title>" :opened-by <trigger-name> :edited <last_edited_time>
    ```
 
    `open` creates/refreshes the record and sets status `:investigating`. The `:edited` value is stored as `:notion-last-edited-at` in `meta.edn` for future change-detection. (There is no dedup step here — nido's coordinator pre-spawn gate already reads this record and won't spawn a Run for a ticket that's already triaged/skipped or has a live session.)
-3. While you have the page response from step 2, capture `last_edited_time` — needed for optimistic concurrency at apply time. Also fetch the body blocks via `mcp__notionApi__API-get-block-children` (description text).
+3. While you have the page response from step 2, capture `last_edited_time` — needed for optimistic concurrency at apply time. Also fetch the body blocks via `mcp__notionApi__API-get-block-children` (description text). **(Notion run only — a Slack run has no page; the description body is the payload `:text`, and there is no concurrency check.)**
 
 ### Pre-staged artifacts (videos)
 
@@ -106,15 +129,16 @@ video.
 Write this body to a temp file (then append it via `bb nido:ticket:append`, per Step 1.6):
 
 ```markdown
-# Triage: BR-#### — <original title>
+# Triage: <ticket-key> — <original title>
+<!-- ticket-key = BR-#### for a Notion run, the slack :id for a Slack run -->
 
-**Source view:** new-reports | bugs
+**Source view:** new-reports | bugs | slack-bugs
 **Determination:** bug | not-a-bug | needs-info
 
 ## 1. Enriched title + description
-**Enriched title:** <concise, no `BR-####` prefix, no trailing punctuation. ALWAYS propose one; keep it identical to the original when the original is already good. This is written to the Notion title property on `apply`.>
+**Enriched title:** <concise, no `BR-####` prefix, no trailing punctuation. ALWAYS propose one; keep it identical to the original when the original is already good. On `apply` this is written to the Notion title property (Notion run); for a Slack run it lives only in the nido record — no Notion write.>
 
-<2–6 sentences of enriched description. What the report is actually about, self-contained — assumes the reader hasn't seen the original. This is prepended as a callout above the reporter's original body on `apply`.>
+<2–6 sentences of enriched description. What the report is actually about, self-contained — assumes the reader hasn't seen the original. On `apply` this is prepended as a callout above the reporter's original Notion body (Notion run); for a Slack run it lives only in the nido record.>
 
 **Confidence in this analysis:** high | medium | low — <one-line reason>
 
@@ -122,7 +146,7 @@ Write this body to a temp file (then append it via `bb nido:ticket:append`, per 
 - **Direction A** — <shape, 1 sentence>. Effort: M. Confidence: medium — <reason>
 - **Direction B** — <shape>. Effort: L. Confidence: low — <reason>
 
-## 3. Proposed Notion writes (on `apply`)
+## 3. Proposed Notion writes (on `apply`)   <!-- Notion run only — OMIT this whole section for a Slack run; there are no Notion writes -->
 - Type: <unchanged | "bug">
 - Effort: M
 - Status: `Needs verification` → `Not started`     (for triage-new only)
@@ -169,9 +193,11 @@ If they say no, treat as redo or cancel.
 
 ## Step 4 — Apply (the only Notion-write step)
 
+> **Slack run:** this entire step is Notion-only. For a Slack run, `apply` does NOT touch Notion — the verdict already lives in the nido record (Step 1.6). Skip the concurrency check and all property/description writes below; jump straight to "Complete the record" (4.3) with the slack `:id` as `:br`. There is no Notion mutation → write no `notion-mutations.log` entry. See "Source adapter".
+
 ### Optimistic concurrency check first
 
-Re-fetch the page via `mcp__notionApi__API-retrieve-a-page`. Compare `last_edited_time` against the value captured in Step 1. If they differ — a human touched the ticket while we were reviewing — post a warning in chat:
+**(Notion run only — skip for a Slack run.)** Re-fetch the page via `mcp__notionApi__API-retrieve-a-page`. Compare `last_edited_time` against the value captured in Step 1. If they differ — a human touched the ticket while we were reviewing — post a warning in chat:
 
 > "⚠️ Ticket was edited externally during review (was: `<old>`, now: `<new>`). Re-read and reconfirm before I apply?"
 
@@ -233,6 +259,8 @@ If any apply write fails after a partial write (some properties landed but the p
 3. Do NOT call `bb nido:ticket:complete` — leave the record non-terminal so the ticket can be re-triaged.
 
 ## Step 5 — Skip
+
+> **Slack run:** skip the Notion Status/archive write entirely. A Slack `skip` just records the disposition in the nido record (`bb nido:ticket:complete … :status skipped …` with the slack `:id` as `:br`); no `notion-mutations.log` entry. Ignore the Notion dispositions below.
 
 Dispositions (the Status / archive write is the only Notion mutation — no skip comment):
 
