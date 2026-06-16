@@ -70,7 +70,7 @@
 (defn promote-workstream!
   "Promote a workstream by id, dispatching on its source. :notion → the existing
    triage-gated :plan-bug leg; :github → fetch the issue body + provision the
-   issue-impl leg; anything else (scratch) isn't promotable. Returns {:decision}."
+   issue-impl leg; anything else (scratch, slack) isn't promotable. Returns {:decision}."
   [project ws-id]
   (if-let [w (ws/read-ws project ws-id)]
     (case (wsv/ws-source w)
