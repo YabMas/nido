@@ -9,6 +9,9 @@
    Surfaces render + route; all model logic lives here. Ships as a projection over
    today's storage — no migration."
   (:require
+   [nido.coordinator.session :as csession]
+   [nido.coordinator.tickets :as tickets]
+   [nido.coordinator.workstream :as cws]
    [nido.coordinator.workstreams-view :as wsv]))
 
 (def stages
@@ -52,3 +55,49 @@
   ([project] (grouped project nil))
   ([project live-names]
    (wsv/grouped-by-stage (list-workstreams project live-names))))
+
+(defn- session-status
+  "Unified status across the autonomy axis: an autonomous session reports its
+   burst phase; an interactive (human) session reads :up when live, :down when
+   archived."
+  [s]
+  (if (:autonomy s)
+    (get-in s [:autonomy :phase])
+    (if (csession/live? s) :up :down)))
+
+(defn- session-facet
+  "One session on the autonomy axis."
+  [s]
+  (let [auto (:autonomy s)]
+    {:name           (:name s)
+     :autonomy-level (if auto :autonomous :interactive)
+     :parked?        (csession/parked? s)
+     :status         (session-status s)
+     :brakes         (when auto (:limits auto))}))
+
+(defn- ledger-summary
+  "Light ledger facet for the detail view: its key (BR-#### / slack id), status,
+   and report count. nil when `k` is nil (the workstream carries no ledger ref)."
+  [project k]
+  (when k
+    (let [m (tickets/read-meta project k)]
+      {:key          k
+       :status       (:status m)
+       :report-count (count (:entries m))})))
+
+(defn workstream
+  "Full detail for one workstream: origin, spine stage, label, a light ledger
+   facet, and its sessions on the autonomy axis. nil when absent. Reads the
+   workstream record once and projects it via wsv/workstream-row (no
+   full-project scan), keeping w/row consistent."
+  [project ws-id]
+  (when-let [w (cws/read-ws project ws-id)]
+    (let [sessions (csession/list-sessions project ws-id)
+          row      (to-spine (wsv/workstream-row project w))]
+      {:id       ws-id
+       :project  project
+       :origin   (classify-origin w)
+       :stage    (:stage row)
+       :label    (:label row)
+       :ledger   (ledger-summary project (:br-id row))
+       :sessions (mapv session-facet sessions)})))

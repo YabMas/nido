@@ -75,3 +75,40 @@
         (is (= 1 (count (:ready g))) "the triaged notion ticket is in :ready")
         (is (= 1 (count (:in-progress g))) "the scratch one-off folds into :in-progress")
         (is (= "BR-3 · t" (:label (first (:ready g)))))))))
+
+(def ^:private autonomy-running
+  {:skill :triage-bug :first-message "x" :agent :claude :claude-session-id nil
+   :trigger :triage-bug :limits {:budget "30m"} :priority 4 :uncapped? false :on-promote nil
+   :phase :running :phase-history [{:at "2026-06-01T00:00:00Z" :phase :running}]
+   :error nil})
+
+(deftest workstream-detail-presents-sessions-on-the-autonomy-axis
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :triaging
+                                          :external-refs [{:adapter :notion :id "BR-5" :title "t"}]})]
+        (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-running})
+        (session/create! :brian (:id w) {:name "me"   :weight :light :autonomy nil})
+        (let [d  (work/workstream :brian (:id w))
+              by (into {} (map (juxt :name identity)) (:sessions d))]
+          (is (= :notion (:origin d)))
+          (is (= :autonomous (:autonomy-level (by "auto"))))
+          (is (= {:budget "30m"} (:brakes (by "auto"))) "brakes = the autonomy :limits")
+          (is (= :running (:status (by "auto"))))
+          (is (= :interactive (:autonomy-level (by "me"))))
+          (is (nil? (:brakes (by "me"))) "interactive sessions carry no brakes")
+          (is (= :up (:status (by "me"))) "a live human session reads :up"))))))
+
+(deftest workstream-detail-flags-the-hitl-gate
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :triaging :external-refs []})]
+        (session/create! :brian (:id w) {:name "gate" :weight :heavy
+                                         :autonomy (assoc autonomy-running :phase :parked)})
+        (is (true? (:parked? (first (:sessions (work/workstream :brian (:id w))))))
+            "a parked autonomous session is at the HITL gate")))))
+
+(deftest workstream-detail-nil-for-absent
+  (with-tmp
+    (fn [_]
+      (is (nil? (work/workstream :brian "ws-does-not-exist"))))))
