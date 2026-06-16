@@ -23,6 +23,7 @@
              [tasks.nido-runs :as nido-runs]
              [tasks.nido-runs-clean :as nido-runs-clean]
              [tasks.nido-notion :as nido-notion]
+             [tasks.nido-slack :as nido-slack]
              [tasks.nido-notion-views :as nido-notion-views]
              [tasks.nido-coordinator-source :as nido-coordinator-source]
              [tasks.nido-ticket :as nido-ticket]
@@ -269,6 +270,14 @@
   nido:notion:auth:check
   {:doc "Print whether a Notion token is present in the macOS Keychain."
    :task (apply nido-notion/auth-check *command-line-args*)}
+
+  nido:slack:auth:set
+  {:doc "Store a Slack bot token in the macOS Keychain (interactive)."
+   :task (apply nido-slack/auth-set *command-line-args*)}
+
+  nido:slack:auth:check
+  {:doc "Print whether a Slack token is present in the macOS Keychain."
+   :task (apply nido-slack/auth-check *command-line-args*)}
 
   nido:notion:views:check
   {:doc "Validate ~/.nido/projects/<p>/notion-views.edn against the live database. :project <p>."
