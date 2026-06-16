@@ -185,3 +185,12 @@
               [s' _] (#'tui/update-stage-picker picked (msg/key-press "enter"))]
           (is (= [["w1" :ready]] @calls) "P → set-stage! to the picked stage")
           (is (nil? (:modal s')) "picker closes after pick"))))))
+
+(deftest system-surface-opens-from-board-and-returns
+  ;; enter-system reads session-rows; esc → set-origin → current-rows. Stub both.
+  (with-redefs [nido.tui/session-rows (constantly [])
+                nido.tui/current-rows (constantly [])]
+    (let [opened (#'tui/enter-system (board-state :all))]
+      (is (= :system (:screen opened)))
+      (let [[back _] (#'tui/update-system opened (msg/key-press "escape"))]
+        (is (= :board (:screen back)) "esc returns to the board")))))

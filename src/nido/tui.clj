@@ -389,11 +389,13 @@
 (defn- current-rows
   "Rows for the active screen — the source the live-refresh tick re-reads.
    On :board, dispatches on origin filter for the spine board.
-   On :workstream, shows the detail rows for the highlighted workstream."
+   On :workstream, shows the detail rows for the highlighted workstream.
+   On :system, shows the session-plumbing rows for the active project."
   [state]
   (case (:screen state)
     :board      (board-rows (:project state) (:origin state))
     :workstream (detail-rows (:project state) (:ws-id state))
+    :system     (session-rows (:project state))
     :projects   (project-rows)))
 
 ;; ---------------------------------------------------------------------------
@@ -979,7 +981,11 @@
       [state nil])
     :else (picker-route state msg)))
 
-(defn- enter-system [state] (assoc state :screen :system :status "(system surface — Phase 3)"))
+(defn- enter-system
+  "Drill from the board into the system surface (daemon health + session plumbing)."
+  [state]
+  (let [s (assoc state :screen :system :status nil)]
+    (rebuild-list s (session-rows (:project state)))))
 
 (defn- update-board [state msg]
   (cond
@@ -1044,6 +1050,12 @@
     (if-let [sname (some-> (selected-data state) :name)]
       (enter-session state (:project state) sname :home)
       [state nil])
+    :else (let [[lst cmd] (item-list/list-update (:list state) msg)]
+            [(assoc state :list lst) cmd])))
+
+(defn- update-system [state msg]
+  (cond
+    (msg/key-match? msg "escape") [(set-origin state (:origin state)) nil]
     :else (let [[lst cmd] (item-list/list-update (:list state) msg)]
             [(assoc state :list lst) cmd])))
 
@@ -1192,7 +1204,8 @@
     (case (:screen state)
       :projects   (update-projects state msg)
       :board      (update-board state msg)
-      :workstream (update-workstream state msg))))
+      :workstream (update-workstream state msg)
+      :system     (update-system state msg))))
 
 ;; ---------------------------------------------------------------------------
 ;; View
@@ -1289,7 +1302,8 @@
                   (case (:screen state)
                     :projects   "nido — projects"
                     :board      (str "nido — " (:project state) " · " (name (:origin state)))
-                    :workstream (str "nido — " (:project state) " · " (:ws-label state))))))
+                    :workstream (str "nido — " (:project state) " · " (:ws-label state))
+                    :system     (str "nido — " (:project state) " · system")))))
 
 (defn- footer [state]
   (style/render subtle-style
@@ -1308,7 +1322,8 @@
                   (case (:screen state)
                     :projects   "[↵] open  [q]uit"
                     :board      "[↵/o] open  [i]nspect  [n]ew  [p]romote  [P] promote to…  [d]one  [⇄ tab] origin  [s]ystem  [esc] back  [q]uit"
-                    :workstream "[↵] open in chat  [esc] back  [q]uit"))))
+                    :workstream "[↵] open in chat  [esc] back  [q]uit"
+                    :system     "[esc] back  [q]uit"))))
 
 (defn- info-row [label value]
   (str (style/render label-style (format "%-13s" label)) " " value))
@@ -1457,6 +1472,8 @@
     (str (header state) "\n"
          (when (= :board (:screen state))
            (str (origin-strip (:origin state)) "\n"))
+         (when (= :system (:screen state))
+           (str (status-bar) "\n"))
          "\n"
          (item-list/list-view (:list state)) "\n\n"
          (when-let [s (:status state)]
