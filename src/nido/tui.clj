@@ -87,6 +87,24 @@
 (defn- prev-view [id] (step-view id -1))
 
 ;; ---------------------------------------------------------------------------
+;; Origin filter: the board is one stage-grouped list (nido.work/grouped); the
+;; workstream's origin is a badge per row and a filter, not a separate screen.
+;; (Plan B; replaces view-defs cycling once the board is rewired.)
+;; ---------------------------------------------------------------------------
+
+(def ^:private origin-filters
+  [{:id :all     :label "All"}
+   {:id :notion  :label "Notion"}
+   {:id :github  :label "GitHub"}
+   {:id :slack   :label "Slack"}
+   {:id :scratch :label "Scratch"}])
+
+(defn- step-origin [id delta]
+  (let [ids (mapv :id origin-filters)
+        i   (.indexOf ids id)]
+    (nth ids (mod (+ (max i 0) delta) (count ids)))))
+
+;; ---------------------------------------------------------------------------
 ;; Data → list rows
 ;; ---------------------------------------------------------------------------
 
