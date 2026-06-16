@@ -82,3 +82,37 @@
           (is (thrown? clojure.lang.ExceptionInfo (spawn/spawn-records! routed {:fired-at "t" :fired-by "x"}))))
         ;; pre-existing workstream survives
         (is (= (:id pre) (:id (ws/find-by-ref :brian :notion "BR-KEEP"))))))))
+
+(deftest external-ref-defaults-to-notion-when-no-adapter
+  ;; Regression pin: existing Notion payloads (no :adapter) stay :notion.
+  (is (= :notion (:adapter (spawn/external-ref {:id "BR-1" :title "T"})))))
+
+(deftest external-ref-honors-slack-adapter
+  (let [p {:adapter :slack-message :id "slack-C1-1.0" :title "broken" :url "u"}]
+    (is (= {:adapter :slack-message :id "slack-C1-1.0" :title "broken" :url "u"}
+           (spawn/external-ref p)))))
+
+(deftest ensure-workstream-dedups-slack-on-its-own-adapter
+  (with-tmp
+    (fn [_]
+      (let [p {:adapter :slack-message :id "slack-C1-1.0" :title "broken"}
+            a (spawn/ensure-workstream! :brian p :triaging)
+            b (spawn/ensure-workstream! :brian p :triaging)]
+        (is (= (:id a) (:id b)) "same Slack message must not mint two workstreams")
+        (is (= 1 (count (ws/list-ids :brian))))
+        (is (= :slack-message (-> (ws/read-ws :brian (:id a)) :external-refs first :adapter)))))))
+
+(deftest spawn-records-creates-slack-workstream-ledger-and-session
+  (with-tmp
+    (fn [_]
+      (let [routed {:project :brian
+                    :trigger {:name :triage-slack-bugs :skill :triage-bug :agent :claude
+                              :payload "Triage {{event/title}}" :limits {:budget "15m"}
+                              :source {:type :slack-channel}}
+                    :payload {:adapter :slack-message :id "slack-C1-9.0" :title "Nine" :text "boom" :url "u"}
+                    :priority 0 :session-profile :lite :uncapped? false}
+            run    (spawn/spawn-records! routed {:fired-at "2026-06-16T00:00:00Z" :fired-by "t"})
+            ws-id  (:workstream-id run)]
+        (is (some? ws-id))
+        (is (= "slack-C1-9.0"
+               (-> (ws/find-by-ref :brian :slack-message "slack-C1-9.0") :external-refs first :id)))))))

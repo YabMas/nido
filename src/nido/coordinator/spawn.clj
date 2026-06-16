@@ -12,12 +12,15 @@
    [nido.coordinator.workstream :as ws]))
 
 (defn external-ref
-  "Notion external ref derived from an event payload, or nil when the payload
-   carries no usable id. Optional fields included when present."
+  "External ref derived from an event payload, or nil when the payload carries
+   no usable id. The adapter comes from the payload (:adapter), defaulting to
+   :notion so existing Notion payloads are unchanged. Optional fields are
+   included when present (Slack payloads carry no :page-id, so it is omitted)."
   [payload]
-  (let [id (:id payload)]
+  (let [adapter (or (:adapter payload) :notion)
+        id      (:id payload)]
     (when (and id (not (str/blank? id)))
-      (cond-> {:adapter :notion :id id}
+      (cond-> {:adapter adapter :id id}
         (:title payload)   (assoc :title (:title payload))
         (:url payload)     (assoc :url (:url payload))
         (:page-id payload) (assoc :page-id (:page-id payload))))))
@@ -32,7 +35,7 @@
    ref can't race here."
   [project payload stage]
   (if-let [ref (external-ref payload)]
-    (or (ws/find-by-ref project :notion (:id ref))
+    (or (ws/find-by-ref project (:adapter ref) (:id ref))
         (ws/create! project {:stage stage :external-refs [ref]}))
     (ws/create! project {:stage stage :external-refs []})))
 
@@ -79,7 +82,7 @@
   [routed meta]
   (let [project (:project routed)
         ref     (external-ref (:payload routed))
-        pre     (when ref (ws/find-by-ref project :notion (:id ref)))
+        pre     (when ref (ws/find-by-ref project (:adapter ref) (:id ref)))
         w       (ensure-workstream! project (:payload routed) (initial-stage routed))
         minted? (nil? pre)]
     (try
