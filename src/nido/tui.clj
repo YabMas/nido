@@ -36,6 +36,7 @@
    [nido.coordinator.workstreams-view :as wsv]
    [nido.coordinator.triggers :as triggers]
    [nido.project :as project]
+   [nido.work :as work]
    [nido.session.engine :as engine]
    [nido.session.lifecycle :as lifecycle]
    [nido.session.links :as links]
@@ -206,6 +207,62 @@
        :sessions
        (keep (fn [s] (when (or (:pg-port s) (:app-port s) (:nrepl-port s)) (:name s))))
        set))
+
+;; ---------------------------------------------------------------------------
+;; Board rows — Plan B spine board (Task 1.2)
+;; Reads nido.work/grouped, badges each row by origin, and supports an
+;; origin filter. Task 1.3 rewires current-rows to these; for now they
+;; coexist with workstream-list-rows (which Task 4.1 will delete).
+;; ---------------------------------------------------------------------------
+
+(def ^:private origin-badges
+  {:notion "N" :github "G" :slack "S" :scratch "·"})
+
+(defn- origin-badge [origin]
+  (get origin-badges origin "?"))
+
+(defn- badged-item-row
+  "One workstream row for the spine board: origin badge + the wsv display string."
+  [r]
+  {:title       (str (origin-badge (:origin r)) "  " (wsv/format-row r))
+   :description (or (:last-activity r) "")
+   :data        r})
+
+(defn- filter-origin
+  "Keep only rows of `origin` (or all rows when `origin` is :all)."
+  [origin rows]
+  (if (= :all origin) rows (filterv #(= origin (:origin %)) rows)))
+
+(defn- spine-group-rows
+  "Header + badged rows for a stage band; nil when empty (so callers `concat`)."
+  [label rows]
+  (when (seq rows)
+    (cons (group-header (str label " (" (count rows) ")"))
+          (mapv badged-item-row rows))))
+
+(defn- triage-spine-rows
+  "Triage rendered as in-flight (expanded) + a queued count line."
+  [{:keys [in-flight queued]}]
+  (concat
+   (spine-group-rows "Triage · in flight" in-flight)
+   (when (seq queued)
+     [(group-header (str "Triage · queued (" (count queued) ")"))])))
+
+(defn- board-rows
+  "Rows for the spine board: work/grouped, filtered by `origin`, as Ready /
+   In progress / Triage bands with origin badges. Empty-state sentinel when none."
+  [project origin]
+  (let [g    (work/grouped project (live-session-names project))
+        keep #(filter-origin origin %)
+        rows (concat
+              (spine-group-rows "Ready to pick up" (keep (:ready g)))
+              (spine-group-rows "In progress"      (keep (:in-progress g)))
+              (triage-spine-rows {:in-flight (keep (get-in g [:triage :in-flight]))
+                                  :queued    (keep (get-in g [:triage :queued]))}))]
+    (if (empty? rows)
+      [{:title "No workstreams here. [n] new · [s] system · [f via system] fire"
+        :description "" :data ::empty}]
+      (vec (strip-leading-blank rows)))))
 
 (defn- workstream-list-rows
   "List rows for one source's workstreams. Notion (and any future stage-driven

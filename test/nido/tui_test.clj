@@ -4,7 +4,8 @@
    [clojure.test :refer [deftest is]]
    [nido.coordinator.scratch :as scratch]
    [nido.session.lifecycle :as lifecycle]
-   [nido.tui :as tui]))
+   [nido.tui :as tui]
+   [nido.work]))
 
 (deftest origin-filter-cycles-all-then-each-origin
   (is (= [:all :notion :github :slack :scratch] (mapv :id @#'tui/origin-filters)))
@@ -88,3 +89,27 @@
       (#'tui/run-session-action! :down "brian" "refshot")
       (is (= [[:down "refshot" {:project "brian"}]] @calls)
           "down has no birth/reap hook"))))
+
+(deftest origin-badge-tags-each-source
+  (is (= "N" (#'tui/origin-badge :notion)))
+  (is (= "G" (#'tui/origin-badge :github)))
+  (is (= "S" (#'tui/origin-badge :slack)))
+  (is (= "·" (#'tui/origin-badge :scratch))))
+
+(deftest board-rows-group-by-spine-and-filter-by-origin
+  (with-redefs [nido.work/grouped
+                (fn [_ _]
+                  {:ready       [{:ws-id "r1" :origin :notion :label "BR-1 · a"
+                                  :needs-you true :engagement :idle}]
+                   :in-progress [{:ws-id "p1" :origin :scratch :label "spike"
+                                  :needs-you false :engagement :active}]
+                   :triage      {:in-flight [] :queued []}})
+                nido.tui/live-session-names (constantly #{})]
+    (let [all (#'tui/board-rows "brian" :all)
+          labels (keep #(get-in % [:data :ws-id]) all)]
+      (is (= ["r1" "p1"] (vec labels)) "ready then in-progress, all origins")
+      (is (some #(re-find #"Ready to pick up" (:title %)) all))
+      (is (some #(re-find #"In progress" (:title %)) all)))
+    (let [scratch-only (#'tui/board-rows "brian" :scratch)
+          ids (keep #(get-in % [:data :ws-id]) scratch-only)]
+      (is (= ["p1"] (vec ids)) "origin filter keeps only scratch rows"))))
