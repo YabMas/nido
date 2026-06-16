@@ -45,18 +45,20 @@
           "destroy! first, then a keyword-project reap!"))))
 
 (deftest board-footer-has-work-verbs
-  ;; The board now has a unified footer with work verbs (origin-based board,
-  ;; no per-source split). Task 4.2 will revisit once dead code is purged.
+  ;; The unified spine board surfaces the work verbs in one footer (no per-source
+  ;; split). System levers live on the system surface, not here.
   (let [f (#'tui/footer {:screen :board :origin :all})]
     (is (re-find #"\[p\]romote" f) "board footer surfaces promote")
     (is (re-find #"\[d\]one" f) "board footer surfaces done")
-    (is (re-find #"\[n\]ew" f) "board footer surfaces new")))
+    (is (re-find #"\[n\]ew" f) "board footer surfaces new")
+    (is (re-find #"\[s\]ystem" f) "board footer points at the system surface")
+    (is (not (re-find #"\[h\]alt" f)) "no coordinator levers on the board footer")))
 
-(deftest ref-sourced-footer-has-no-add
-  ;; Origin-based board: all origins show the same footer (no per-source split).
-  ;; Task 4.2 will revisit once dead code is purged.
-  (let [f (#'tui/footer {:screen :board :origin :notion})]
-    (is (re-find #"\[p\]romote" f) "board footer has promote")))
+(deftest board-footer-is-origin-agnostic
+  ;; Origin is a filter/badge, not a screen — the footer is identical regardless
+  ;; of which origin is active.
+  (is (= (#'tui/footer {:screen :board :origin :all})
+         (#'tui/footer {:screen :board :origin :notion}))))
 
 (deftest live-session-names-are-the-ones-with-ports
   (with-redefs [lifecycle/list-all-data
@@ -123,8 +125,8 @@
     (with-redefs [nido.tui/selected-workstream (fn [_] {:ws-id "w1" :br-id "BR-1"})
                   nido.work/set-stage! (fn [_ id target] (swap! calls conj [id target]) {:decision :done})
                   nido.tui/current-rows (constantly [])]
-      (let [[s' _] (#'tui/update-board (board-state :all) (msg/key-press "d"))]
-        (is (= [["w1" :done]] @calls) "d → set-stage! :done")))))
+      (#'tui/update-board (board-state :all) (msg/key-press "d"))
+      (is (= [["w1" :done]] @calls) "d → set-stage! :done"))))
 
 (deftest board-n-opens-create-session
   (let [[s' _] (#'tui/update-board (board-state :all) (msg/key-press "n"))]
