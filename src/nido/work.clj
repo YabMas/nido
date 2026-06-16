@@ -43,3 +43,12 @@
   ([project] (list-workstreams project nil))
   ([project live-names]
    (mapv to-spine (wsv/workstream-rows project live-names))))
+
+(defn grouped
+  "Workstreams grouped along the single spine for the board:
+   {:triage {:in-flight [..] :queued [..]} :ready [..] :in-progress [..]}.
+   Scratch one-offs fold into :in-progress (done via list-workstreams' remap);
+   :done is omitted. The board renders these groups directly."
+  ([project] (grouped project nil))
+  ([project live-names]
+   (wsv/grouped-by-stage (list-workstreams project live-names))))

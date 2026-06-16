@@ -58,3 +58,20 @@
       (let [row (first (work/list-workstreams :brian))]
         (is (= :notion (:origin row)))
         (is (= :ready (:stage row)) "a triaged notion ticket projects to :ready, unchanged")))))
+
+(deftest grouped-folds-scratch-into-in-progress-group
+  (with-tmp
+    (fn [_]
+      ;; a scratch one-off
+      (let [s (workstream/create! :brian {:stage :scratch :external-refs []})]
+        (session/create! :brian (:id s) {:name "poke" :weight :light :autonomy nil}))
+      ;; a triaged notion ticket → :ready
+      (let [n (workstream/create! :brian {:stage :triaging
+                                          :external-refs [{:adapter :notion :id "BR-3" :title "t"}]})]
+        (tickets/open! :brian "BR-3" {:title "t"})
+        (tickets/set-status! :brian "BR-3" :triaged)
+        (session/create! :brian (:id n) {:name "s" :weight :light :autonomy nil}))
+      (let [g (work/grouped :brian #{"poke"})]
+        (is (= 1 (count (:ready g))) "the triaged notion ticket is in :ready")
+        (is (= 1 (count (:in-progress g))) "the scratch one-off folds into :in-progress")
+        (is (= "BR-3 · t" (:label (first (:ready g)))))))))
