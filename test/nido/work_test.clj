@@ -8,6 +8,7 @@
    [nido.coordinator.state :as cstate]
    [nido.coordinator.tickets :as tickets]
    [nido.coordinator.workstream :as workstream]
+   [nido.session.lifecycle]
    [nido.work :as work]))
 
 (defn- with-tmp [f]
@@ -157,3 +158,32 @@
                       (fn [p id] (swap! calls conj [p id]) {:decision :promote})]
           (is (= {:decision :promote} (work/set-stage! :brian (:id w) :in-progress)))
           (is (= [[:brian (:id w)]] @calls) "delegates to the shared promote gesture"))))))
+
+(deftest new!-births-a-scratch-workstream-with-its-session
+  (with-tmp
+    (fn [_]
+      (let [ups (atom [])]
+        (with-redefs [nido.session.lifecycle/up! (fn [n opts] (swap! ups conj [n opts]) nil)]
+          (let [ws-id (work/new! :brian "spike-thing")]
+            (is (string? ws-id))
+            (is (= [["spike-thing" {:project "brian"}]] @ups) "session brought up via lifecycle")
+            (let [w (workstream/read-ws :brian ws-id)]
+              (is (= :scratch (work/classify-origin w)) "ref-less scratch workstream")
+              (is (= ["spike-thing"]
+                     (map :name (session/list-sessions :brian ws-id)))))))))))
+
+(deftest open-target-prefers-the-live-session
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :triaging :external-refs []})]
+        (session/create! :brian (:id w) {:name "old"  :weight :light :autonomy nil})
+        (session/archive! :brian (:id w) "old")
+        (session/create! :brian (:id w) {:name "live" :weight :light :autonomy nil})
+        (is (= {:project :brian :session "live"} (work/open-target :brian (:id w)))
+            "open lands in the live session, not the archived one")))))
+
+(deftest open-target-nil-when-no-sessions
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :triaging :external-refs []})]
+        (is (nil? (work/open-target :brian (:id w))))))))

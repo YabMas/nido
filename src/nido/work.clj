@@ -11,10 +11,12 @@
   (:require
    [nido.config :as config]
    [nido.coordinator.promote :as promote]
+   [nido.coordinator.scratch :as scratch]
    [nido.coordinator.session :as csession]
    [nido.coordinator.tickets :as tickets]
    [nido.coordinator.workstream :as cws]
-   [nido.coordinator.workstreams-view :as wsv]))
+   [nido.coordinator.workstreams-view :as wsv]
+   [nido.session.lifecycle :as lifecycle]))
 
 (def stages
   "The canonical spine, in order. A PR merge is the event that advances
@@ -139,3 +141,27 @@
     :in-progress (promote/promote-workstream! project ws-id)
     :done        (do (cws/close! project ws-id :done) {:decision :done})
     (do (cws/advance-stage! project ws-id target) {:decision :advanced})))
+
+(defn new!
+  "Birth a scratch workstream and bring its session up. Mirrors the proven add
+   path: lifecycle/up! creates the worktree + services (it is heavy and slow —
+   surfaces wrap this in their own progress UI); scratch/birth! births the
+   ref-less workstream + human session. Idempotent on an existing session name.
+   Returns the ws-id. `project` may be a keyword or string."
+  [project session-name]
+  (lifecycle/up! session-name {:project (name project)})
+  (scratch/birth! (keyword (name project)) session-name))
+
+(defn open-target
+  "Where `open` lands for a workstream: the most-recently-active LIVE session,
+   else the most-recently-active session, else nil. Returns {:project :session}.
+   Ordering reuses wsv/session-rows (newest-active first)."
+  [project ws-id]
+  (let [rows       (wsv/session-rows project ws-id)
+        live-names (->> (csession/list-sessions project ws-id)
+                        (filter csession/live?)
+                        (map :name)
+                        set)
+        pick       (or (first (filter #(live-names (:name %)) rows))
+                       (first rows))]
+    (when pick {:project project :session (:name pick)})))
