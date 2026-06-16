@@ -361,14 +361,11 @@
 
 (defn- current-rows
   "Rows for the active screen — the source the live-refresh tick re-reads.
-   On :board, dispatches on the active view: an :ops view shows the flat
-   substrate list; a :workstreams view shows that source's filtered workstreams."
+   On :board, dispatches on origin filter for the spine board.
+   On :workstream, shows the detail rows for the highlighted workstream."
   [state]
   (case (:screen state)
-    :board      (let [v (active-view state)]
-                  (if (= :ops (:kind v))
-                    (session-rows (:project state))
-                    (workstream-list-rows (:project state) (:source v))))
+    :board      (board-rows (:project state) (:origin state))
     :workstream (ws-detail-rows (:project state) (:ws-id state))
     :projects   (project-rows)))
 
@@ -382,9 +379,9 @@
       (rebuild-list (project-rows))))
 
 (defn- enter-board
-  "Drill from the projects list into a project's board, on the default view."
+  "Drill from the projects list into a project's board, on the :all origin."
   [state project-name]
-  (let [s (assoc state :screen :board :project project-name :view :notion :status nil)]
+  (let [s (assoc state :screen :board :project project-name :origin :all :status nil)]
     (rebuild-list s (current-rows s))))
 
 (defn- enter-workstream
@@ -403,6 +400,14 @@
   (let [s (assoc state :screen :board :view view-id :status nil)]
     (-> s
         (rebuild-list (current-rows s))
+        (dissoc :modal :modal-target :modal-input :ws-id :ws-label))))
+
+(defn- set-origin
+  "Switch the board to `origin` filter and rebuild the list.
+   Clears any open modal and stale detail context."
+  [state origin]
+  (let [s (assoc state :screen :board :origin origin :status nil)]
+    (-> s (rebuild-list (current-rows s))
         (dissoc :modal :modal-target :modal-input :ws-id :ws-label))))
 
 (defn- selected-data [state]
@@ -887,38 +892,60 @@
 
     :else (picker-route state msg)))
 
-(defn- promote-selected
-  "Promote the highlighted workstream (dispatches on source: Notion or GitHub).
-   Calls `promote/promote-workstream!` with the workstream id, surfaces its
-   decision in the status line, and refreshes the list so a promoted row moves
-   Ready → In progress. Synchronous: a local status write + enqueue."
+(defn- open-selected
+  "Open the highlighted workstream's session/chat via work/open-target."
   [state]
   (if-let [ws (selected-workstream state)]
-    ;; The coordinator keys envelopes on a keyword project; (:project state) is a
-    ;; string, so keyword-ize it (mirrors the fire path's project-kw) or the
-    ;; envelope is dropped as :unknown-project and no plan-bug run ever spawns.
-    (let [decision (:decision (promote/promote-workstream! (keyword (:project state)) (:ws-id ws)))]
-      [(-> state
-           (refresh-list (current-rows state))
+    (if-let [{:keys [session]} (work/open-target (:project state) (:ws-id ws))]
+      (enter-session state (:project state) session :home)
+      [(assoc state :status "(no session to open yet)") nil])
+    [(assoc state :status "(no workstream selected)") nil]))
+
+(defn- promote-selected
+  "Promote the highlighted workstream via work/default-target + work/set-stage!.
+   Surfaces the decision in the status line and refreshes the list."
+  [state]
+  (if-let [ws (selected-workstream state)]
+    (let [target   (work/default-target (:project state) :promote)
+          decision (:decision (work/set-stage! (:project state) (:ws-id ws) target))]
+      [(-> state (refresh-list (current-rows state))
            (assoc :status (wsv/promote-result-message (:promote-id ws) decision)))
        nil])
     [(assoc state :status "(no workstream selected)") nil]))
 
 (defn- done-selected
-  "Mark the highlighted workstream done (`workstream/close!` :done). It drops out
-   of the overview immediately — the :done band is hidden — which is the point:
-   the manual lever for work that landed but nido never observed merging. Touches
-   nothing but the workstream record's :closed key (no session/worktree), so it's
-   reversible by clearing :closed. Synchronous: a single local edn write."
+  "Mark the highlighted workstream done via work/set-stage! :done."
   [state]
   (if-let [ws (selected-workstream state)]
-    (do
-      (workstream/close! (keyword (:project state)) (:ws-id ws) :done)
-      [(-> state
-           (refresh-list (current-rows state))
-           (assoc :status (str "marked " (or (:br-id ws) (:ws-id ws)) " done")))
-       nil])
+    (do (work/set-stage! (:project state) (:ws-id ws) :done)
+        [(-> state (refresh-list (current-rows state))
+             (assoc :status (str "marked " (or (:br-id ws) (:ws-id ws)) " done")))
+         nil])
     [(assoc state :status "(no workstream selected)") nil]))
+
+(declare open-stage-picker enter-system)
+
+(defn- open-stage-picker [state] [(assoc state :status "(stage picker — Phase 2)") nil])
+(defn- enter-system [state] (assoc state :screen :system :status "(system surface — Phase 3)"))
+
+(defn- update-board [state msg]
+  (cond
+    (msg/key-match? msg "escape") [(enter-projects state) nil]
+    (or (msg/key-match? msg "enter") (msg/key-match? msg "o")) (open-selected state)
+    (msg/key-match? msg "i")
+    (if-let [ws (selected-workstream state)]
+      [(enter-workstream state (:ws-id ws) (:label ws)) nil] [state nil])
+    (msg/key-match? msg "n") (open-create-session state (:project state))
+    (msg/key-match? msg "p") (promote-selected state)
+    (msg/key-match? msg "P") (open-stage-picker state)
+    (msg/key-match? msg "d") (done-selected state)
+    (msg/key-match? msg "s") [(enter-system state) nil]
+    (or (msg/key-match? msg "tab") (msg/key-match? msg "right"))
+    [(set-origin state (step-origin (:origin state) 1)) nil]
+    (or (msg/key-match? msg "shift+tab") (msg/key-match? msg "left"))
+    [(set-origin state (step-origin (:origin state) -1)) nil]
+    :else (let [[lst cmd] (item-list/list-update (:list state) msg)]
+            [(assoc state :list lst) cmd])))
 
 (defn- update-workstreams
   "A workstreams board view (Notion/GitHub/Scratch). ↵ drills into the highlighted
@@ -956,11 +983,11 @@
 (defn- update-workstream
   "Workstream detail screen. ↵ routes into the highlighted session's home (same
    handoff the Sessions view uses → lands you in the chat). esc returns to the
-   board at the active view."
+   board at the active origin."
   [state msg]
   (cond
     (msg/key-match? msg "escape")
-    [(set-view state (:view state)) nil]
+    [(set-origin state (:origin state)) nil]
 
     (msg/key-match? msg "enter")
     (if-let [s (selected-session-row state)]
@@ -1097,24 +1124,22 @@
     (= :clear-breaker (:modal state))
     (update-clear-breaker state msg)
 
-    ;; View cycling on the board: Tab / → next view, Shift-Tab / ← previous.
+    ;; Origin cycling on the board: Tab / → step forward, Shift-Tab / ← step back.
     ;; Pure in-process state changes (no action-channel exit), available outside
     ;; modals on the board screen only — from a drilled-in workstream you `esc`
     ;; back to the board first.
     (and (nil? (:modal state)) (= :board (:screen state))
          (or (msg/key-match? msg "tab") (msg/key-match? msg "right")))
-    [(set-view state (next-view (:view state))) nil]
+    [(set-origin state (step-origin (:origin state) 1)) nil]
 
     (and (nil? (:modal state)) (= :board (:screen state))
          (or (msg/key-match? msg "shift+tab") (msg/key-match? msg "left")))
-    [(set-view state (prev-view (:view state))) nil]
+    [(set-origin state (step-origin (:origin state) -1)) nil]
 
     :else
     (case (:screen state)
       :projects   (update-projects state msg)
-      :board      (if (= :ops (:kind (active-view state)))
-                    (update-sessions state msg)
-                    (update-workstreams state msg))
+      :board      (update-board state msg)
       :workstream (update-workstream state msg))))
 
 ;; ---------------------------------------------------------------------------
@@ -1175,6 +1200,17 @@
                 (style/render inactive-tab-style (str " " label " ")))))
        (str/join "  ")))
 
+(defn- origin-strip
+  "One-line origin filter rendered above the board list: each origin label, the
+   active one bracketed + bright, the rest dim. Pure string (modulo styling)."
+  [active-id]
+  (->> origin-filters
+       (map (fn [{:keys [id label]}]
+              (if (= id active-id)
+                (style/render active-tab-style (str "[" label "]"))
+                (style/render inactive-tab-style (str " " label " ")))))
+       (str/join "  ")))
+
 (defn- header [state]
   (style/render title-style
                 (case (:modal state)
@@ -1199,8 +1235,7 @@
                   :clear-breaker        "nido — clear breaker"
                   (case (:screen state)
                     :projects   "nido — projects"
-                    :board      (str "nido — " (:project state) " · "
-                                     (:label (active-view state)))
+                    :board      (str "nido — " (:project state) " · " (name (:origin state)))
                     :workstream (str "nido — " (:project state) " · " (:ws-label state))))))
 
 (defn- footer [state]
@@ -1218,16 +1253,7 @@
                   :clear-breaker        "[↑↓] move  [↵] clear  [esc] cancel"
                   (case (:screen state)
                     :projects   "[↵] open  [q]uit"
-                    :board      (let [v (active-view state)]
-                                  (cond
-                                    (= :ops (:kind v))
-                                    "[↵/e] enter  [w]orktree  [i]nfo  [a]dd  [u]p  [d]own  [x] destroy  [⇄ tab] view  [esc] back  [q]uit"
-                                    ;; Scratch is where one-offs are born — surface [a]dd; promote
-                                    ;; is meaningless for ref-less workstreams, so it's omitted.
-                                    (= :scratch (:source v))
-                                    "[↵] open  [a]dd  [d]one  [f]ire  [h]alt  [c]lear breaker  [⇄ tab] view  [esc] back  [q]uit"
-                                    :else
-                                    "[↵] open  [p]romote  [d]one  [f]ire  [h]alt  [c]lear breaker  [⇄ tab] view  [esc] back  [q]uit"))
+                    :board      "[↵/o] open  [i]nspect  [n]ew  [p]romote  [P] promote to…  [d]one  [⇄ tab] origin  [s]ystem  [esc] back  [q]uit"
                     :workstream "[↵] open in chat  [esc] back  [q]uit"))))
 
 (defn- info-row [label value]
@@ -1373,10 +1399,7 @@
     :else
     (str (header state) "\n"
          (when (= :board (:screen state))
-           (str (tab-bar (:view state)) "\n"))
-         (when (and (= :board (:screen state))
-                    (= :workstreams (:kind (active-view state))))
-           (str (status-bar) "\n"))
+           (str (origin-strip (:origin state)) "\n"))
          "\n"
          (item-list/list-view (:list state)) "\n\n"
          (when-let [s (:status state)]

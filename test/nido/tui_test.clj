@@ -62,15 +62,19 @@
       (is (= [[:destroy "refshot" {:project "brian"}] [:reap :brian "refshot"]] @calls)
           "destroy! first, then a keyword-project reap!"))))
 
-(deftest scratch-footer-advertises-add
-  (let [f (#'tui/footer {:screen :board :view :scratch})]
-    (is (re-find #"\[a\]dd" f) "Scratch footer surfaces the create affordance")
-    (is (not (re-find #"\[p\]romote" f)) "promote omitted for ref-less one-offs")))
+(deftest board-footer-has-work-verbs
+  ;; The board now has a unified footer with work verbs (origin-based board,
+  ;; no per-source split). Task 4.2 will revisit once dead code is purged.
+  (let [f (#'tui/footer {:screen :board :origin :all})]
+    (is (re-find #"\[p\]romote" f) "board footer surfaces promote")
+    (is (re-find #"\[d\]one" f) "board footer surfaces done")
+    (is (re-find #"\[n\]ew" f) "board footer surfaces new")))
 
 (deftest ref-sourced-footer-has-no-add
-  (let [f (#'tui/footer {:screen :board :view :notion})]
-    (is (not (re-find #"\[a\]dd" f)) "no create affordance on the Notion view")
-    (is (re-find #"\[p\]romote" f))))
+  ;; Origin-based board: all origins show the same footer (no per-source split).
+  ;; Task 4.2 will revisit once dead code is purged.
+  (let [f (#'tui/footer {:screen :board :origin :notion})]
+    (is (re-find #"\[p\]romote" f) "board footer has promote")))
 
 (deftest live-session-names-are-the-ones-with-ports
   (with-redefs [lifecycle/list-all-data
@@ -113,3 +117,41 @@
     (let [scratch-only (#'tui/board-rows "brian" :scratch)
           ids (keep #(get-in % [:data :ws-id]) scratch-only)]
       (is (= ["p1"] (vec ids)) "origin filter keeps only scratch rows"))))
+
+(defn- board-state [origin]
+  {:screen :board :origin origin :project "brian" :list (#'tui/list-component [])})
+
+(deftest board-open-routes-through-open-target
+  (with-redefs [nido.work/open-target (fn [_ _] {:project :brian :session "live"})
+                nido.tui/selected-workstream (fn [_] {:ws-id "w1"})
+                nido.tui/enter-session (fn [s _ sn _] [(assoc s ::opened sn) nil])]
+    (let [[s' _] (#'tui/update-board (board-state :all) (msg/key-press "o"))]
+      (is (= "live" (::opened s')) "open resolves the session via work/open-target"))))
+
+(deftest board-promote-uses-default-target
+  (with-redefs [nido.tui/selected-workstream (fn [_] {:ws-id "w1" :promote-id "BR-1"})
+                nido.work/default-target (fn [_ action] (is (= :promote action)) :in-progress)
+                nido.work/set-stage! (fn [_ id target] {:decision :promote :id id :target target})
+                nido.tui/current-rows (constantly [])]
+    (let [[s' _] (#'tui/update-board (board-state :all) (msg/key-press "p"))]
+      (is (re-find #"promoted|in progress" (:status s'))))))
+
+(deftest board-done-sets-stage-done
+  (let [calls (atom [])]
+    (with-redefs [nido.tui/selected-workstream (fn [_] {:ws-id "w1" :br-id "BR-1"})
+                  nido.work/set-stage! (fn [_ id target] (swap! calls conj [id target]) {:decision :done})
+                  nido.tui/current-rows (constantly [])]
+      (let [[s' _] (#'tui/update-board (board-state :all) (msg/key-press "d"))]
+        (is (= [["w1" :done]] @calls) "d → set-stage! :done")))))
+
+(deftest board-n-opens-create-session
+  (let [[s' _] (#'tui/update-board (board-state :all) (msg/key-press "n"))]
+    (is (= :create-session (:modal s')) "n opens the new-workstream modal"))
+  (with-redefs [nido.tui/session-rows (constantly [])]
+    (is (= :system (:screen (first (#'tui/update-board (board-state :all) (msg/key-press "s")))))
+        "s opens the system surface")))
+
+(deftest board-tab-cycles-origin-filter
+  (with-redefs [nido.tui/current-rows (constantly [])]
+    (let [[s' _] (#'tui/update-board (board-state :all) (msg/key-press "tab"))]
+      (is (= :notion (:origin s'))))))
