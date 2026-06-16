@@ -194,3 +194,16 @@
       (is (= :system (:screen opened)))
       (let [[back _] (#'tui/update-system opened (msg/key-press "escape"))]
         (is (= :board (:screen back)) "esc returns to the board")))))
+
+(deftest system-down-runs-the-async-action
+  (with-redefs [nido.tui/selected-data (fn [_] {:name "sess"})
+                nido.tui/start-session-down (fn [s _ sn] [(assoc s ::down sn) nil])]
+    (let [st (assoc (board-state :all) :screen :system)
+          [s' _] (#'tui/update-system st (msg/key-press "d"))]
+      (is (= "sess" (::down s')) "d on the system surface stops the highlighted session"))))
+
+(deftest system-x-opens-confirm-destroy
+  (with-redefs [nido.tui/selected-data (fn [_] {:name "sess"})]
+    (let [st (assoc (board-state :all) :screen :system)
+          [s' _] (#'tui/update-system st (msg/key-press "x"))]
+      (is (= :confirm-destroy (:modal s'))))))

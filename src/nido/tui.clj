@@ -673,42 +673,6 @@
                                  :viewport (text-viewport base (action-error-content verb subject msg))}))
        nil])))
 
-(defn- update-sessions [state msg]
-  (cond
-    (msg/key-match? msg "escape")
-    [(enter-projects state) nil]
-
-    (or (msg/key-match? msg "enter") (msg/key-match? msg "e"))
-    (with-selected-session state
-      (fn [s p sn] (enter-session s p sn :home)))
-
-    (msg/key-match? msg "w")
-    (with-selected-session state
-      (fn [s p sn] (enter-session s p sn :worktree)))
-
-    ;; `up` and `down` both run in-app (async, spinner) rather than quitting to
-    ;; the wrapper. `up` is the long one (PG clone + JVM + app); the spinner
-    ;; earns its keep here.
-    (msg/key-match? msg "u")
-    (with-selected-session state start-session-up)
-
-    (msg/key-match? msg "d")
-    (with-selected-session state start-session-down)
-
-    (msg/key-match? msg "x")
-    (with-selected-session state
-      (fn [s p sn] (open-confirm-destroy s p sn)))
-
-    (msg/key-match? msg "i")
-    (with-selected-session state
-      (fn [s p sn] (open-session-info s p sn)))
-
-    (msg/key-match? msg "a")
-    (open-create-session state (:project state))
-
-    :else
-    (let [[lst cmd] (item-list/list-update (:list state) msg)]
-      [(assoc state :list lst) cmd])))
 
 ;; ---------------------------------------------------------------------------
 ;; Fire-trigger modal (workstreams board view, `f` key)
@@ -1056,6 +1020,14 @@
 (defn- update-system [state msg]
   (cond
     (msg/key-match? msg "escape") [(set-origin state (:origin state)) nil]
+    (or (msg/key-match? msg "enter") (msg/key-match? msg "e"))
+    (with-selected-session state (fn [s p sn] (enter-session s p sn :home)))
+    (msg/key-match? msg "w") (with-selected-session state (fn [s p sn] (enter-session s p sn :worktree)))
+    (msg/key-match? msg "u") (with-selected-session state start-session-up)
+    (msg/key-match? msg "d") (with-selected-session state start-session-down)
+    (msg/key-match? msg "x") (with-selected-session state (fn [s p sn] (open-confirm-destroy s p sn)))
+    (msg/key-match? msg "i") (with-selected-session state (fn [s p sn] (open-session-info s p sn)))
+    ;; coordinator levers (f/h/c) added in Task 3.3
     :else (let [[lst cmd] (item-list/list-update (:list state) msg)]
             [(assoc state :list lst) cmd])))
 
@@ -1323,7 +1295,7 @@
                     :projects   "[↵] open  [q]uit"
                     :board      "[↵/o] open  [i]nspect  [n]ew  [p]romote  [P] promote to…  [d]one  [⇄ tab] origin  [s]ystem  [esc] back  [q]uit"
                     :workstream "[↵] open in chat  [esc] back  [q]uit"
-                    :system     "[esc] back  [q]uit"))))
+                    :system     "[↵/e] enter  [w]orktree  [i]nfo  [u]p  [d]own  [x] destroy  [esc] back  [q]uit"))))
 
 (defn- info-row [label value]
   (str (style/render label-style (format "%-13s" label)) " " value))
