@@ -15,6 +15,18 @@
   [ws]
   (some #(when (= :notion (:adapter %)) %) (:external-refs ws)))
 
+(defn- slack-ref
+  "The workstream's :slack-message external-ref map, or nil."
+  [ws]
+  (some #(when (= :slack-message (:adapter %)) %) (:external-refs ws)))
+
+(defn- ledger-ref
+  "The external-ref whose :id keys the per-ticket ledger (`bb nido:ticket:*` :br):
+   the :notion ref (BR-####) or the :slack-message ref (slack-<channel>-<ts>).
+   Either is the key the triage skill writes its record under."
+  [ws]
+  (or (notion-ref ws) (slack-ref ws)))
+
 (defn ws-source
   "Source bucket of a workstream, classified from its RAW record (not a projected
    row — workstream-row's :stage is unreliable for scratch). :scratch when the
@@ -37,6 +49,8 @@
 (defn label
   "Display label for a workstream, resolved by fallback:
    1. Notion external-ref → \"BR-#### · <title>\" (or just BR-#### with no/blank title)
+   1b. Slack external-ref → the message text (its :title); the slack-<channel>-<ts>
+       id is too noisy to show, and the title IS the report body
    2. latest ledger entry's :title (when present and non-blank)
    3. originating trigger (from a session's autonomy) + short ws-id suffix
    4. a session name (human one-offs have no ref/entry/trigger — the name reads
@@ -44,6 +58,7 @@
    5. raw ws-id."
   [ws sessions]
   (let [nref        (notion-ref ws)
+        sref        (slack-ref ws)
         entry-title (not-empty (some-> ws :entries last :title))
         trigger     (some #(get-in % [:autonomy :trigger]) sessions)
         sname       (some (comp not-empty :name) sessions)]
@@ -51,6 +66,7 @@
       nref        (if-let [t (not-empty (:title nref))]
                     (str (:id nref) " · " t)
                     (:id nref))
+      sref        (or (not-empty (:title sref)) entry-title (:id ws))
       entry-title entry-title
       trigger     (str (name trigger) " · " (short-suffix (:id ws)))
       sname       sname
@@ -104,13 +120,16 @@
   ([project ws live-names]
    (let [sessions     (session/list-sessions project (:id ws))
          eng-sessions (if live-names (mapv #(reconcile-liveness live-names %) sessions) sessions)
-         br-id        (:id (notion-ref ws))
+         br-id        (:id (ledger-ref ws))
          status       (when br-id (tickets/status project br-id))
          proj         (session/stage-projection (:closed ws) status sessions (:stage ws))]
      {:ws-id         (:id ws)
       :project       project
       :br-id         br-id
-      :promote-id    (or br-id (some #(when (= :github-issue (:adapter %)) (:id %)) (:external-refs ws)))
+      ;; promote-id stays Notion-or-GitHub: a Slack workstream isn't promotable
+      ;; (promote-workstream! returns :skip-not-promotable), so it gets no promote-id.
+      :promote-id    (or (:id (notion-ref ws))
+                         (some #(when (= :github-issue (:adapter %)) (:id %)) (:external-refs ws)))
       :label         (label ws sessions)
       :source        (ws-source ws)
       :stage         (:stage proj)

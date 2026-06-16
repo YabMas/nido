@@ -57,6 +57,19 @@
             :entries []}]
     (is (= "BR-1421" (wsv/label ws [])))))
 
+(deftest label-uses-slack-message-text
+  ;; A slack workstream is labelled by the message text (the slack id is noise).
+  (let [ws {:id "ws-20260601-aaaaaa"
+            :external-refs [{:adapter :slack-message :id "slack-C1-1781.0" :title "login button broken"}]
+            :entries []}]
+    (is (= "login button broken" (wsv/label ws [])))))
+
+(deftest label-slack-without-title-falls-back-to-ws-id
+  (let [ws {:id "ws-20260601-aaaaaa"
+            :external-refs [{:adapter :slack-message :id "slack-C1-1781.0"}]
+            :entries []}]
+    (is (= "ws-20260601-aaaaaa" (wsv/label ws [])))))
+
 (deftest label-falls-back-to-latest-entry-title
   (let [ws {:id "ws-20260601-aaaaaa"
             :external-refs []
@@ -282,6 +295,24 @@
       (let [w (workstream/create! :brian {:stage :scratch :external-refs []})]
         (session/create! :brian (:id w) {:name "refshot" :weight :light :autonomy nil})
         (is (= :scratch (:source (wsv/workstream-row :brian (workstream/read-ws :brian (:id w))))))))))
+
+(deftest workstream-row-resolves-slack-ledger-key-and-is-not-promotable
+  ;; A slack workstream's ledger is keyed by the slack ref id, not a Notion BR.
+  ;; The row must resolve :br-id from the slack ref (so triage status is read)
+  ;; and expose no :promote-id (slack workstreams aren't promotable).
+  (with-tmp
+    (fn [_]
+      (let [slack-id "slack-C1-1781.000123"
+            w (workstream/create! :brian {:stage :triaging
+                                          :external-refs [{:adapter :slack-message
+                                                           :id slack-id :title "boom"}]})]
+        (tickets/open! :brian slack-id {:title "boom"})
+        (tickets/set-status! :brian slack-id :awaiting-input)
+        (let [row (wsv/workstream-row :brian (workstream/read-ws :brian (:id w)))]
+          (is (= :slack (:source row)))
+          (is (= slack-id (:br-id row)) "ledger key resolves from the slack ref")
+          (is (nil? (:promote-id row)) "slack workstreams are not promotable")
+          (is (= "boom" (:label row)) "labelled by the slack message text"))))))
 
 (deftest grouped-by-engagement-splits-active-and-idle
   (let [rows [{:engagement :active :label "a"}
