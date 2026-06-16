@@ -10,6 +10,7 @@
    today's storage — no migration."
   (:require
    [nido.config :as config]
+   [nido.coordinator.promote :as promote]
    [nido.coordinator.session :as csession]
    [nido.coordinator.tickets :as tickets]
    [nido.coordinator.workstream :as cws]
@@ -125,3 +126,16 @@
     (if (some #{configured} stages)
       configured
       (canonical-default-target action))))
+
+(defn set-stage!
+  "Move a workstream to `target` stage — the single mutation behind the
+   new/promote/done surface verbs. Dispatch:
+     :in-progress → the full promote gesture (gate + provision the planning leg)
+     :done        → close the workstream (:done outcome)
+     other        → advance the stored stage only (no autonomous leg)
+   Returns {:decision <kw>}: promote's decision verbatim, else :done / :advanced."
+  [project ws-id target]
+  (case target
+    :in-progress (promote/promote-workstream! project ws-id)
+    :done        (do (cws/close! project ws-id :done) {:decision :done})
+    (do (cws/advance-stage! project ws-id target) {:decision :advanced})))

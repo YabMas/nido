@@ -3,6 +3,7 @@
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
    [nido.config]
+   [nido.coordinator.promote]
    [nido.coordinator.session :as session]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.tickets :as tickets]
@@ -132,3 +133,27 @@
                 (constantly {'brian {:workstream-defaults {:promote :nonsense}}})]
     (is (= :in-progress (work/default-target :brian :promote))
         "a configured value that isn't a spine stage is ignored")))
+
+(deftest set-stage-done-closes-the-workstream
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :triaging :external-refs []})]
+        (is (= {:decision :done} (work/set-stage! :brian (:id w) :done)))
+        (is (some? (:closed (workstream/read-ws :brian (:id w)))))))))
+
+(deftest set-stage-advance-moves-stage-without-a-leg
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :triaging :external-refs []})]
+        (is (= {:decision :advanced} (work/set-stage! :brian (:id w) :ready)))
+        (is (= :ready (:stage (workstream/read-ws :brian (:id w)))))))))
+
+(deftest set-stage-in-progress-runs-the-promote-gesture
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :triaging :external-refs []})
+            calls (atom [])]
+        (with-redefs [nido.coordinator.promote/promote-workstream!
+                      (fn [p id] (swap! calls conj [p id]) {:decision :promote})]
+          (is (= {:decision :promote} (work/set-stage! :brian (:id w) :in-progress)))
+          (is (= [[:brian (:id w)]] @calls) "delegates to the shared promote gesture"))))))
