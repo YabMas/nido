@@ -272,7 +272,9 @@
                                   :external-refs [{:adapter :notion :id "BR-1"}]})))
   (is (= :notion  (wsv/ws-source {:stage :triaging :external-refs []})))
   (is (= :github  (wsv/ws-source {:stage :ready
-                                  :external-refs [{:adapter :github-issue :id "42"}]}))))
+                                  :external-refs [{:adapter :github-issue :id "42"}]})))
+  (is (= :slack   (wsv/ws-source {:stage :triaging
+                                  :external-refs [{:adapter :slack-message :id "slack-C1-1.0"}]}))))
 
 (deftest workstream-row-carries-source
   (with-tmp
