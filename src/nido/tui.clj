@@ -552,16 +552,16 @@
 
 
 ;; ---------------------------------------------------------------------------
-;; Fire-trigger modal (workstreams board view, `f` key)
+;; Fire-trigger modal (system surface, `f` key)
 ;;
 ;; Three sub-states cooperate to walk the user through:
 ;;   :fire-pick-project  — choose project (skipped when only one is registered)
 ;;   :fire-pick-trigger  — choose a :manual trigger from that project
 ;;   :fire-input-payload — fill placeholder kwargs one field at a time
 ;; The final state enqueues an envelope via `queue/enqueue!` and surfaces a
-;; status-bar message so the user can confirm by pressing `r` to refresh.
+;; status-line message; the live-refresh tick picks up the result automatically.
 ;; Defined here (rather than alongside the other modal handlers below) so
-;; update-board and update-system can call open-fire-trigger without a forward declaration.
+;; update-system can call open-fire-trigger without a forward declaration.
 ;; ---------------------------------------------------------------------------
 
 (defn- placeholder-keys
@@ -1006,18 +1006,8 @@
     (= :stage-picker (:modal state))
     (update-stage-picker state msg)
 
-    ;; Origin cycling on the board: Tab / → step forward, Shift-Tab / ← step back.
-    ;; Pure in-process state changes (no action-channel exit), available outside
-    ;; modals on the board screen only — from a drilled-in workstream you `esc`
-    ;; back to the board first.
-    (and (nil? (:modal state)) (= :board (:screen state))
-         (or (msg/key-match? msg "tab") (msg/key-match? msg "right")))
-    [(set-origin state (step-origin (:origin state) 1)) nil]
-
-    (and (nil? (:modal state)) (= :board (:screen state))
-         (or (msg/key-match? msg "shift+tab") (msg/key-match? msg "left")))
-    [(set-origin state (step-origin (:origin state) -1)) nil]
-
+    ;; No modal: route to the active screen's handler. Origin cycling (Tab/←→) is
+    ;; owned by update-board, alongside the other board keys.
     :else
     (case (:screen state)
       :projects   (update-projects state msg)

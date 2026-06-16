@@ -157,6 +157,19 @@
       (is (some #(re-find #"me" %) titles))
       (is (some #(= "auto" (-> % :data :name)) rows) "session rows carry :name for open"))))
 
+(deftest workstream-detail-transitions
+  ;; esc → board (set-origin → current-rows); stub current-rows for hermeticity.
+  (with-redefs [nido.tui/current-rows (constantly [])]
+    (let [st (assoc (board-state :all) :screen :workstream :ws-id "w1" :ws-label "x")
+          [back _] (#'tui/update-workstream st (msg/key-press "escape"))]
+      (is (= :board (:screen back)) "esc returns to the board")))
+  ;; ↵ opens the highlighted session via enter-session
+  (with-redefs [nido.tui/selected-data (fn [_] {:name "sess"})
+                nido.tui/enter-session (fn [s _ sn _] [(assoc s ::opened sn) nil])]
+    (let [st (assoc (board-state :all) :screen :workstream)
+          [s' _] (#'tui/update-workstream st (msg/key-press "enter"))]
+      (is (= "sess" (::opened s')) "enter opens the highlighted session"))))
+
 (deftest stage-picker-promotes-to-the-chosen-target
   (let [calls (atom [])]
     (with-redefs [nido.tui/selected-workstream (fn [_] {:ws-id "w1" :promote-id "BR-1"})
