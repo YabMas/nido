@@ -304,6 +304,33 @@
                :data        r})
             rows))))
 
+(defn- format-detail-session
+  "Display string for a session on the autonomy axis."
+  [{:keys [name autonomy-level status parked? brakes]}]
+  (format "%s%s  ·  %s  ·  %s%s"
+          (if parked? "⏸ " "  ")
+          name
+          (clojure.core/name (or autonomy-level :?))
+          (clojure.core/name (or status :?))
+          (if brakes (str "  ·  " (clojure.core/name (ffirst brakes)) " " (val (first brakes))) "")))
+
+(defn- detail-rows
+  "Read-only detail rows for one workstream: a ledger line (when present) plus its
+   sessions on the autonomy axis. Reads nido.work/workstream (string project ok)."
+  [project ws-id]
+  (let [{:keys [ledger sessions]} (work/workstream project ws-id)
+        ledger-row (when ledger
+                     [{:title (str "ledger: " (:key ledger) " · "
+                                   (clojure.core/name (or (:status ledger) :?)) " · "
+                                   (:report-count ledger) " report(s)")
+                       :description "" :data ::ledger}])]
+    (vec
+     (concat
+      ledger-row
+      (if (seq sessions)
+        (mapv (fn [s] {:title (format-detail-session s) :description "" :data s}) sessions)
+        [{:title "No sessions in this workstream yet." :description "" :data ::empty}])))))
+
 ;; ---------------------------------------------------------------------------
 ;; charm list component
 ;; ---------------------------------------------------------------------------
@@ -366,7 +393,7 @@
   [state]
   (case (:screen state)
     :board      (board-rows (:project state) (:origin state))
-    :workstream (ws-detail-rows (:project state) (:ws-id state))
+    :workstream (detail-rows (:project state) (:ws-id state))
     :projects   (project-rows)))
 
 ;; ---------------------------------------------------------------------------
@@ -389,7 +416,7 @@
   [state ws-id label]
   (-> state
       (assoc :screen :workstream :ws-id ws-id :ws-label label :status nil)
-      (rebuild-list (ws-detail-rows (:project state) ws-id))))
+      (rebuild-list (detail-rows (:project state) ws-id))))
 
 (defn- set-view
   "Switch the board to `view-id` and rebuild the list with that view's rows.
@@ -986,17 +1013,13 @@
    board at the active origin."
   [state msg]
   (cond
-    (msg/key-match? msg "escape")
-    [(set-origin state (:origin state)) nil]
-
-    (msg/key-match? msg "enter")
-    (if-let [s (selected-session-row state)]
-      (enter-session state (name (:project s)) (:name s) :home)
+    (msg/key-match? msg "escape") [(set-origin state (:origin state)) nil]
+    (or (msg/key-match? msg "enter") (msg/key-match? msg "o"))
+    (if-let [sname (some-> (selected-data state) :name)]
+      (enter-session state (:project state) sname :home)
       [state nil])
-
-    :else
-    (let [[lst cmd] (item-list/list-update (:list state) msg)]
-      [(assoc state :list lst) cmd])))
+    :else (let [[lst cmd] (item-list/list-update (:list state) msg)]
+            [(assoc state :list lst) cmd])))
 
 ;; ---------------------------------------------------------------------------
 ;; Modals — handled before the regular screen update so input is captured.

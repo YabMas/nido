@@ -155,3 +155,20 @@
   (with-redefs [nido.tui/current-rows (constantly [])]
     (let [[s' _] (#'tui/update-board (board-state :all) (msg/key-press "tab"))]
       (is (= :notion (:origin s'))))))
+
+(deftest detail-rows-render-sessions-on-the-autonomy-axis
+  (with-redefs [nido.work/workstream
+                (fn [_ _]
+                  {:ws-id "w1" :origin :notion :stage :triage :label "BR-1 · a"
+                   :ledger {:key "BR-1" :status :investigating :report-count 1}
+                   :sessions [{:name "auto" :autonomy-level :autonomous :parked? true
+                               :status :parked :brakes {:budget "30m"}}
+                              {:name "me" :autonomy-level :interactive :parked? false
+                               :status :up :brakes nil}]})]
+    (let [rows (#'tui/detail-rows "brian" "w1")
+          titles (mapv :title rows)]
+      (is (some #(re-find #"ledger: BR-1" %) titles) "ledger line rendered first")
+      (is (some #(re-find #"auto" %) titles))
+      (is (some #(re-find #"parked|autonomous" %) titles) "autonomy state shown")
+      (is (some #(re-find #"me" %) titles))
+      (is (some #(= "auto" (-> % :data :name)) rows) "session rows carry :name for open"))))
