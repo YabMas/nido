@@ -94,6 +94,7 @@
         (session/create! :brian (:id w) {:name "me"   :weight :light :autonomy nil})
         (let [d  (work/workstream :brian (:id w))
               by (into {} (map (juxt :name identity)) (:sessions d))]
+          (is (= (:id w) (:ws-id d)) "detail uses the same :ws-id key as list-workstreams rows")
           (is (= :notion (:origin d)))
           (is (= :autonomous (:autonomy-level (by "auto"))))
           (is (= {:budget "30m"} (:brakes (by "auto"))) "brakes = the autonomy :limits")

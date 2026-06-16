@@ -98,7 +98,7 @@
   (when-let [w (cws/read-ws project ws-id)]
     (let [sessions (csession/list-sessions project ws-id)
           row      (to-spine (wsv/workstream-row project w))]
-      {:id       ws-id
+      {:ws-id    ws-id
        :project  project
        :origin   (classify-origin w)
        :stage    (:stage row)
