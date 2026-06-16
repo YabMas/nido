@@ -214,12 +214,16 @@ Once installed, `bb nido:coordinator:up` / `down` wrap `launchctl bootstrap` / `
 ```
 bb nido:notion:auth:set                # store Notion Personal Access Token (PAT) in macOS Keychain
 bb nido:notion:auth:check              # confirm token presence
+bb nido:slack:auth:set                 # store Slack bot token (xoxb-) in macOS Keychain
+bb nido:slack:auth:check               # confirm token presence
 bb nido:coordinator:source:list        # one row per source-instance on disk
 bb nido:coordinator:source:reset :type notion-view :database <id> :view <name> :poll <dur>
                                        # clear an open breaker
 ```
 
 A trigger with `:source {:type :notion-view :database "..." :view "..." :poll "5m"}` polls the database every 5 minutes and emits one event per row that newly enters the view. The first poll seeds the snapshot and emits nothing. Status shows per-source health under a `Sources:` section; breakers open after 3 consecutive failures (or immediately on 401).
+
+A trigger with `:source {:type :slack-channel :channel "C..." :poll "2m"}` polls a Slack channel's top-level messages and emits one event per new message (watermarked on message `ts`). The first poll seeds the watermark and emits nothing — it does not replay channel history. Each new message auto-fires a triage session; the verdict stays in nido's ledger (no Slack/Notion writeback). The bot token needs `channels:history` (public) or `groups:history` (private) scope and the bot must be a channel member. Breaker opens on `invalid_auth` (or ≥3 consecutive server errors); rate-limit (429) and connectivity blips are transient and never trip it.
 
 **Foreground (still supported for development):**
 
