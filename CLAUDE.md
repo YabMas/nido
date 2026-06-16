@@ -75,7 +75,7 @@ Brian's domain agents and most of its skills are mirrored under `nido/.claude/` 
 All session verbs take `:project <project>` plus a positional `<session>` (any order).
 
 - `bb nido:session:up :project <p> <session>` — create the worktree if missing, start PG + JVM + app, write the session home. Idempotent. Prints the session-home path on success.
-- `bb nido:session:enter :project <p> <session>` — write the session-home path to `~/.nido/.last-cd` and exit. Pair with the `nido` shell function (see "Shell wrapper" above) to actually `cd` your shell there. Refuses if the session is down. Pass `:cd worktree` to land in the worktree (the actual code) instead — useful when you want to edit / git-grep without the extra `cd worktree`. The TUI exposes the same opt-in: <kbd>e</kbd> / <kbd>↵</kbd> for session-home, <kbd>w</kbd> for worktree — but in Warp the TUI spawns a new tab in place rather than quitting to this `cd`-handoff (see "How land in the session works" above). The CLI verb always uses the `.last-cd` handoff.
+- `bb nido:session:enter :project <p> <session>` — write the session-home path to `~/.nido/.last-cd` and exit. Pair with the `nido` shell function (see "Shell wrapper" above) to actually `cd` your shell there. Refuses if the session is down. Pass `:cd worktree` to land in the worktree (the actual code) instead — useful when you want to edit / git-grep without the extra `cd worktree`. The TUI exposes the same opt-in on its **system surface** (`s`): <kbd>e</kbd> / <kbd>↵</kbd> for session-home, <kbd>w</kbd> for worktree (and the board's <kbd>↵</kbd>/<kbd>o</kbd> opens a workstream's session-home directly) — but in Warp the TUI spawns a new tab in place rather than quitting to this `cd`-handoff (see "How land in the session works" above). The CLI verb always uses the `.last-cd` handoff.
 - `bb nido:session:down :project <p> <session>` — stop the session; worktree + on-disk state preserved.
 - `bb nido:session:reset :project <p> <session>` — nuclear recovery. Down → drop PGDATA → re-clone from the current template → up. The "I'm wedged, fix it" button.
 - `bb nido:session:destroy :project <p> <session>` — down + remove the worktree.
@@ -238,9 +238,9 @@ bb nido:trigger:fire :project brian <name> :<key> <value>
 bb nido:runs:list / bb nido:runs:show <id>
 ```
 
-Or in the TUI press `r` for the runs surface.
+Or in the TUI: the spine board lists workstreams by stage — `↵`/`o` opens a workstream's session, `i` inspects its sessions (autonomous runs show on the autonomy axis), `n` starts a new one-off, `p`/`P` promote (default / pick-a-stage), `d` marks done, `tab` cycles the origin filter, and `s` opens the system surface.
 
-**Safety brakes (Stage 2):** per-Run wall-clock budget (`:limits.budget`, default 30m, SIGTERM→SIGKILL), per-trigger circuit breaker (`:limits.max-failures`, default 3), daemon-wide anomaly auto-halt, kill switch (`bb nido:halt` + `bb nido:coordinator:resume`). TUI `h` halts, `c` clears a breaker.
+**Safety brakes (Stage 2):** per-Run wall-clock budget (`:limits.budget`, default 30m, SIGTERM→SIGKILL), per-trigger circuit breaker (`:limits.max-failures`, default 3), daemon-wide anomaly auto-halt, kill switch (`bb nido:halt` + `bb nido:coordinator:resume`). On the TUI **system surface** (`s`): `h` halts, `c` clears a breaker, `f` fires a trigger.
 
 **Startup reconciliation (Stage 3):** when the daemon starts, any non-terminal Run on disk is forced to a terminal state from observable evidence (artifacts, `_run-status.edn`, agent.log). Crashed/orphaned Runs get marked `:failed :reason :orphaned-from-restart` so the dashboard stays honest.
 
