@@ -25,6 +25,7 @@
    [nido.coordinator.sources :as sources]
    [nido.coordinator.tickets :as tickets]
    [nido.coordinator.sources.notion :as nsource]
+   [nido.coordinator.sources.slack :as slack-source]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.status-file :as status-file]
    [nido.coordinator.executor :as executor]
@@ -594,6 +595,7 @@
   (heartbeat/write! {:status :running :slots-in-use 0 :dashboard-port @!dashboard-port})
   (executor/configure! {:global-cap (:global-parallel-cap defaults)})
   (nsource/register!)                                 ; register Notion source plugin
+  (slack-source/register!)                            ; register Slack source plugin
   (loop []
     (tick!)
     (Thread/sleep poll-ms)
