@@ -63,13 +63,15 @@
 
 ;; ---------------------------------------------------------------------------
 ;; Views: the source-scoped tabs the user cycles within a project. Ordered.
-;; :kind :workstreams → filtered workstream list; :kind :ops → flat substrate.
-;; GitHub becomes a 4th entry in Phase 3 — just insert {:id :github ...}.
+;; :kind :workstreams → filtered workstream list (by :source); :kind :ops → flat substrate.
+;; To add a source intake, insert a {:id .. :label .. :kind :workstreams :source ..}
+;; whose :source matches the ws-source classifier (workstreams-view/ws-source).
 ;; ---------------------------------------------------------------------------
 
 (def ^:private view-defs
   [{:id :notion   :label "Notion"   :kind :workstreams :source :notion}
    {:id :github   :label "GitHub"   :kind :workstreams :source :github}
+   {:id :slack    :label "Slack"    :kind :workstreams :source :slack}
    {:id :scratch  :label "Scratch"  :kind :workstreams :source :scratch}
    {:id :sessions :label "Sessions" :kind :ops}])
 
