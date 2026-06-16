@@ -3,6 +3,8 @@
    [charm.message :as msg]
    [clojure.test :refer [deftest is]]
    [nido.coordinator.scratch :as scratch]
+   [nido.coordinator.triggers]
+   [nido.project :as project]
    [nido.session.lifecycle :as lifecycle]
    [nido.tui :as tui]
    [nido.work]))
@@ -207,3 +209,17 @@
     (let [st (assoc (board-state :all) :screen :system)
           [s' _] (#'tui/update-system st (msg/key-press "x"))]
       (is (= :confirm-destroy (:modal s'))))))
+
+(deftest system-f-opens-fire-trigger
+  ;; Stub the project list (1 project skips the project picker) and triggers so
+  ;; fire opens the trigger picker in its no-triggers error state — hermetic.
+  (with-redefs [nido.project/list-projects (constantly {"brian" {}})
+                nido.coordinator.triggers/load-for-project (constantly [])]
+    (let [st (assoc (board-state :all) :screen :system)
+          [s' _] (#'tui/update-system st (msg/key-press "f"))]
+      (is (= :fire-pick-trigger (:modal s'))))))
+
+(deftest board-no-longer-handles-system-levers
+  (doseq [k ["f" "h" "c"]]
+    (let [[s' _] (#'tui/update-board (board-state :all) (msg/key-press k))]
+      (is (nil? (:modal s')) (str "board key " k " no longer opens a coordinator modal")))))

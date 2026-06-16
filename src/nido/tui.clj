@@ -1027,7 +1027,9 @@
     (msg/key-match? msg "d") (with-selected-session state start-session-down)
     (msg/key-match? msg "x") (with-selected-session state (fn [s p sn] (open-confirm-destroy s p sn)))
     (msg/key-match? msg "i") (with-selected-session state (fn [s p sn] (open-session-info s p sn)))
-    ;; coordinator levers (f/h/c) added in Task 3.3
+    (msg/key-match? msg "f") (open-fire-trigger state)
+    (msg/key-match? msg "h") (open-halt-confirm state)
+    (msg/key-match? msg "c") (open-clear-breaker-picker state)
     :else (let [[lst cmd] (item-list/list-update (:list state) msg)]
             [(assoc state :list lst) cmd])))
 
@@ -1295,7 +1297,7 @@
                     :projects   "[↵] open  [q]uit"
                     :board      "[↵/o] open  [i]nspect  [n]ew  [p]romote  [P] promote to…  [d]one  [⇄ tab] origin  [s]ystem  [esc] back  [q]uit"
                     :workstream "[↵] open in chat  [esc] back  [q]uit"
-                    :system     "[↵/e] enter  [w]orktree  [i]nfo  [u]p  [d]own  [x] destroy  [esc] back  [q]uit"))))
+                    :system     "[↵/e] enter  [w]orktree  [i]nfo  [u]p  [d]own  [x] destroy  •  [f]ire  [h]alt  [c]lear breaker  [esc] back  [q]uit"))))
 
 (defn- info-row [label value]
   (str (style/render label-style (format "%-13s" label)) " " value))
