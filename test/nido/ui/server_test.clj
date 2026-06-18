@@ -124,3 +124,12 @@
     (doseq [uri ["/" "/board" "/system"]]
       (is (= 200 (:status (server/handle-request {:request-method :get :uri uri})))
           (str uri " serves 200")))))
+
+(deftest post-gate-mutation-returns-confirm-pane-with-follow-links
+  (with-redefs [nido.work/resolve-gate! (fn [& _] {:decision :promote})]
+    (let [resp (server/handle-request {:request-method :post :uri "/gate/brian/ws-1/promote"})]
+      (Thread/sleep 50)
+      (is (str/includes? (:body resp) "gate-pane"))
+      (is (str/includes? (:body resp) "Promoting"))
+      (is (str/includes? (:body resp) "/ws/brian/ws-1"))
+      (is (str/includes? (:body resp) "/board")))))

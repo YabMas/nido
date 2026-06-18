@@ -284,9 +284,7 @@
             action-id (keyword (nth segs 3))
             input     (when (= :reply action-id) (:reply (parse-json-body body)))]
         (gate-resolve! project ws-id action-id input)
-        (if (= :reply action-id)
-          (sse-response (sse-fragment (views/gate-resuming-fragment project ws-id)))
-          (sse-response (sse-fragment (views/gate-inbox-fragment (work/all-gates) ws-id)))))
+        (sse-response (sse-fragment (views/gate-action-confirm-fragment action-id project ws-id))))
 
       ;; POST /:project/sessions/:name/:action — session lifecycle action
       (and (>= (count segs) 4)

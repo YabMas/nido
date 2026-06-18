@@ -270,19 +270,28 @@
        (for [g gates] (gate-card g (= sel (:ws-id g))))]
       [:div {:id "gate-inbox"} [:p.empty "No gates — nothing needs you right now."]]))))
 
-(defn gate-resuming-fragment
-  "Immediate pane feedback after a reply: the resume runs in the background
-   (re-hydrating the session if its runtime was reclaimed). Patches the pane."
-  [project ws-id]
-  (str
-   (h/html
-    [:div {:id "gate-pane"}
-     [:div.breadcrumb project " / gate"]
-     [:h1 "Resuming…"]
-     [:p.meta "ws " ws-id]
-     [:p "Re-hydrating the session if its runtime was reclaimed, then resuming the "
-      "conversation. Watch the inbox — this gate will advance, or re-appear with an "
-      "error, when the turn finishes."]])))
+(defn gate-action-confirm-fragment
+  "Pane confirmation after a gate action: the per-action outcome + follow-links to
+   where the item now lives. Patches the pane (#gate-pane). The action runs on a
+   background future; this is the immediate, action-keyed feedback."
+  [action-id project ws-id]
+  (let [msg (case action-id
+              :promote "Promoting → in-progress… provisioning the work session."
+              :skip    "✓ Skipped — dropped, not pursued."
+              :drop    "✓ Dropped — not pursued."
+              :done    "✓ Marked done."
+              :reply   "Resuming… re-hydrating the session if needed, then resuming the conversation."
+              "Done.")]
+    (str
+     (h/html
+      [:div {:id "gate-pane"}
+       [:div.breadcrumb project " / gate"]
+       [:h1 msg]
+       [:p.meta "ws " ws-id]
+       [:p "Follow it: "
+        [:a {:href (str "/ws/" project "/" ws-id)} "open workstream →"]
+        " · "
+        [:a {:href "/board"} "board →"]]]))))
 
 (defn gate-pane
   "The detail pane: rendered report + follow-actions. nil -> placeholder."

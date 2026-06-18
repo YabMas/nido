@@ -105,10 +105,20 @@
     (is (str/includes? html "parked"))
     (is (str/includes? html "http://auto.brian.localhost:3142") "route-in link when a live url is known")))
 
-(deftest gate-resuming-fragment-targets-the-pane
-  (let [html (views/gate-resuming-fragment "brian" "ws-1")]
+(deftest gate-action-confirm-reply-targets-the-pane
+  (let [html (views/gate-action-confirm-fragment :reply "brian" "ws-1")]
     (is (str/includes? html "id=\"gate-pane\""))
     (is (str/includes? html "Resuming"))))
+
+(deftest gate-action-confirm-renders-per-action-message-and-follow-links
+  (doseq [[action needle] [[:promote "Promoting"] [:skip "Skipped"]
+                           [:drop "Dropped"] [:done "done"] [:reply "Resuming"]]]
+    (let [html (views/gate-action-confirm-fragment action "brian" "ws-1")]
+      (is (str/includes? html needle) (str action " message"))
+      (is (str/includes? html "/ws/brian/ws-1") (str action " links to the workstream"))
+      (is (str/includes? html "/board") (str action " links to the board"))))
+  (let [html (views/gate-action-confirm-fragment :wat "brian" "ws-1")]
+    (is (str/includes? html "id=\"gate-pane\""))))
 
 (deftest gate-card-shows-resume-error-badge
   (let [g (assoc sample-gate :resume-error {:reason :resume-failed :message "exec failed"})
