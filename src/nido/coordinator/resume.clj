@@ -6,7 +6,9 @@
    not a Run state — so this works whether the owning Run is :awaiting-review or
    already terminal). This is the :reply resolver behind nido.work/resolve-gate!."
   (:require
+   [babashka.fs :as fs]
    [nido.coordinator.agent :as agent]
+   [nido.coordinator.clock :as clock]
    [nido.coordinator.runs :as runs]
    [nido.coordinator.session :as session]
    [nido.coordinator.state :as cstate]))
@@ -18,19 +20,41 @@
        (filter session/parked?)
        first))
 
+(defn- home-present?
+  "Does the run's session-home runtime still exist? (`fs/exists?` follows the
+   symlink, so a dangling/reclaimed home reads absent.)"
+  [run]
+  (fs/exists? (cstate/run-session-home-link (:id run))))
+
 (defn- run-turn!
-  "Synchronous body: launch one resume turn for `run`, then re-park `session-name`
-   for re-review regardless of outcome (the agent itself writes the next report
-   entry; a failure leaves the agent.log under the run-dir). Claude runs with the
-   session-home as cwd so `--resume` resolves the transcript (per run-blocking!)."
+  "Synchronous body for one resume turn. Re-provisions the session-home first if it
+   was reclaimed — the transcript survives, keyed by the home path, so re-provision
+   at the same path re-anchors it (runs/spawn-session-for-run! is idempotent). Then
+   launches one bounded `claude --resume` turn, records the outcome on the session
+   (`:error` cleared on success / set on failure, logged to *err* for operators),
+   and re-parks for re-review regardless."
   [project ws-id session-name run input]
   (try
+    (when-not (home-present? run)
+      (try (runs/spawn-session-for-run! run)
+           (catch Throwable t
+             (throw (ex-info "Re-hydration failed" {:reason :rehydrate-failed} t)))))
     (agent/launch! {:run-id            (:id run)
                     :cwd               (cstate/run-session-home-link (:id run))
                     :first-message     input
                     :claude-session-id (:claude-session-id run)
                     :resume?           true
                     :budget            (-> run :limits :budget)})
+    (session/set-error! project ws-id session-name nil)
+    (catch Throwable t
+      (binding [*err* *err*]
+        (.println ^java.io.PrintWriter *err*
+                  (str "nido coordinator: resume turn failed for " session-name
+                       " — " (ex-message t))))
+      (session/set-error! project ws-id session-name
+                          {:at      (clock/now-iso)
+                           :reason  (or (:reason (ex-data t)) :resume-failed)
+                           :message (ex-message t)}))
     (finally
       (session/set-phase! project ws-id session-name :parked))))
 
@@ -46,15 +70,12 @@
                       {:reason :not-parked :project project :ws-id ws-id})))
     (let [run (runs/find-for-session project ws-id (:name s))]
       (when-not (and run (:claude-session-id run))
+        (session/set-error! project ws-id (:name s)
+                            {:at      (clock/now-iso)
+                             :reason  :no-claude-session
+                             :message "No resumable conversation — open the session in the terminal"})
         (throw (ex-info "No resumable conversation — open the session in the terminal"
                         {:reason :no-claude-session :project project :ws-id ws-id})))
       (session/set-phase! project ws-id (:name s) :running)
-      (future
-        (try
-          (run-turn! project ws-id (:name s) run input)
-          (catch Throwable t
-            (binding [*err* *err*]
-              (.println ^java.io.PrintWriter *err*
-                        (str "nido coordinator: resume turn failed for "
-                             (:name s) " — " (ex-message t)))))))
+      (future (run-turn! project ws-id (:name s) run input))
       {:resumed (:name s)})))

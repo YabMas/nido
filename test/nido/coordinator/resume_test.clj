@@ -43,7 +43,8 @@
                          {:name "auto" :weight :heavy :autonomy autonomy-parked})
         (session/set-phase! :brian (:id w) "auto" :running)
         (write-run! "r1" (:id w) "auto" "sid-9")
-        (with-redefs [agent/launch! (fn [opts] (reset! calls opts) {:exit-code 0 :num-turns 1})]
+        (with-redefs [resume/home-present? (fn [_] true)
+                      agent/launch! (fn [opts] (reset! calls opts) {:exit-code 0 :num-turns 1})]
           (#'resume/run-turn! :brian (:id w) "auto" (runs/read-run "r1") "do the fix"))
         (is (= "sid-9" (:claude-session-id @calls)))
         (is (true? (:resume? @calls)) "continues the recorded conversation")
@@ -60,9 +61,9 @@
         (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
         (session/set-phase! :brian (:id w) "auto" :running)
         (write-run! "r1" (:id w) "auto" "sid-9")
-        (with-redefs [agent/launch! (fn [_] (throw (ex-info "boom" {})))]
-          (is (thrown? clojure.lang.ExceptionInfo
-                       (#'resume/run-turn! :brian (:id w) "auto" (runs/read-run "r1") "x"))))
+        (with-redefs [resume/home-present? (fn [_] true)
+                      agent/launch! (fn [_] (throw (ex-info "boom" {})))]
+          (#'resume/run-turn! :brian (:id w) "auto" (runs/read-run "r1") "x"))
         (is (= :parked (get-in (first (session/list-sessions :brian (:id w))) [:autonomy :phase]))
             "re-parks even when the launch throws")))))
 
@@ -97,3 +98,91 @@
         ;; no run on disk → no recoverable claude-session-id
         (is (thrown? clojure.lang.ExceptionInfo
                      (resume/resume! :brian (:id w) "go")))))))
+
+(deftest resume!-records-error-when-no-claude-session
+  (with-tmp
+    (fn []
+      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+        (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
+        ;; no run on disk → no recoverable claude-session-id
+        (is (thrown? clojure.lang.ExceptionInfo (resume/resume! :brian (:id w) "go")))
+        (is (= :no-claude-session
+               (-> (first (session/list-sessions :brian (:id w))) :autonomy :error :reason))
+            "the pre-flight failure is recorded on the parked session so the badge surfaces it")))))
+
+(deftest run-turn-skips-rehydrate-when-home-present
+  (with-tmp
+    (fn []
+      (let [w (ws/create! :brian {:stage :triaging :external-refs []})
+            spawned (atom 0) launched (atom nil)]
+        (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
+        (session/set-phase! :brian (:id w) "auto" :running)
+        (write-run! "r1" (:id w) "auto" "sid-9")
+        (with-redefs [resume/home-present? (fn [_] true)
+                      runs/spawn-session-for-run! (fn [_] (swap! spawned inc))
+                      agent/launch! (fn [opts] (reset! launched opts) {:exit-code 0 :num-turns 1})]
+          (#'resume/run-turn! :brian (:id w) "auto" (runs/read-run "r1") "apply"))
+        (is (zero? @spawned) "home present → no re-provision")
+        (is (= "sid-9" (:claude-session-id @launched)) "launches --resume")
+        (is (= :parked (get-in (first (session/list-sessions :brian (:id w))) [:autonomy :phase])))))))
+
+(deftest run-turn-rehydrates-when-home-absent
+  (with-tmp
+    (fn []
+      (let [w (ws/create! :brian {:stage :triaging :external-refs []})
+            spawned (atom 0) launched (atom nil)]
+        (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
+        (session/set-phase! :brian (:id w) "auto" :running)
+        (write-run! "r1" (:id w) "auto" "sid-9")
+        (with-redefs [resume/home-present? (fn [_] false)
+                      runs/spawn-session-for-run! (fn [_] (swap! spawned inc))
+                      agent/launch! (fn [opts] (reset! launched opts) {:exit-code 0})]
+          (#'resume/run-turn! :brian (:id w) "auto" (runs/read-run "r1") "apply"))
+        (is (= 1 @spawned) "home absent → re-provision once")
+        (is (some? @launched) "then launches --resume")
+        (is (= :parked (get-in (first (session/list-sessions :brian (:id w))) [:autonomy :phase])))))))
+
+(deftest run-turn-records-error-on-failure
+  (with-tmp
+    (fn []
+      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+        (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
+        (session/set-phase! :brian (:id w) "auto" :running)
+        (write-run! "r1" (:id w) "auto" "sid-9")
+        (with-redefs [resume/home-present? (fn [_] true)
+                      agent/launch! (fn [_] (throw (ex-info "boom" {})))]
+          (#'resume/run-turn! :brian (:id w) "auto" (runs/read-run "r1") "apply"))
+        (let [auto (:autonomy (first (session/list-sessions :brian (:id w))))]
+          (is (= :resume-failed (-> auto :error :reason)) "failure recorded on the session")
+          (is (= "boom" (-> auto :error :message)))
+          (is (= :parked (:phase auto)) "still re-parks"))))))
+
+(deftest run-turn-rehydrate-failure-tagged
+  (with-tmp
+    (fn []
+      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+        (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
+        (session/set-phase! :brian (:id w) "auto" :running)
+        (write-run! "r1" (:id w) "auto" "sid-9")
+        (with-redefs [resume/home-present? (fn [_] false)
+                      runs/spawn-session-for-run! (fn [_] (throw (ex-info "no branch" {})))
+                      agent/launch! (fn [_] {:exit-code 0})]
+          (#'resume/run-turn! :brian (:id w) "auto" (runs/read-run "r1") "apply"))
+        (is (= :rehydrate-failed
+               (-> (first (session/list-sessions :brian (:id w))) :autonomy :error :reason))
+            "a re-provision failure is tagged :rehydrate-failed")))))
+
+(deftest run-turn-clears-error-on-success
+  (with-tmp
+    (fn []
+      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+        (session/create! :brian (:id w)
+                         {:name "auto" :weight :heavy
+                          :autonomy (assoc autonomy-parked :error {:reason :resume-failed})})
+        (session/set-phase! :brian (:id w) "auto" :running)
+        (write-run! "r1" (:id w) "auto" "sid-9")
+        (with-redefs [resume/home-present? (fn [_] true)
+                      agent/launch! (fn [_] {:exit-code 0})]
+          (#'resume/run-turn! :brian (:id w) "auto" (runs/read-run "r1") "apply"))
+        (is (nil? (-> (first (session/list-sessions :brian (:id w))) :autonomy :error))
+            "a clean turn clears the prior error")))))
