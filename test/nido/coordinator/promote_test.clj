@@ -95,3 +95,16 @@
     (fn [_]
       (let [w (ws/create! :brian {:stage :scratch :external-refs []})]
         (is (= :skip-not-promotable (:decision (promote/promote-workstream! :brian (:id w)))))))))
+
+(deftest promote!-enqueues-a-keyword-project-target
+  (with-tmp
+    (fn [_]
+      (tickets/open! :brian "BR-9" {:notion-page-id "PG9" :url "U9" :title "t"
+                                    :opened-by :triage-new :notion-last-edited-at "t"})
+      (tickets/complete! :brian "BR-9" :triaged :applied)
+      (let [res (promote/promote! "brian" "BR-9")]   ;; STRING project, as the web passes
+        (is (= :promote (:decision res)))
+        (let [[env] (queued-envelopes)]
+          (is (= :brian (get-in env [:target :project]))
+              "the enqueued envelope carries a KEYWORD project so the router resolves it")
+          (is (= :plan-bug (get-in env [:target :trigger]))))))))

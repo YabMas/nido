@@ -36,7 +36,7 @@
         (cstate/ensure-dirs!)
         (tickets/set-status! project br-id :planning)
         {:decision :promote
-         :queued   (queue/enqueue! {:target  {:project project :trigger :plan-bug}
+         :queued   (queue/enqueue! {:target  {:project (keyword (name project)) :trigger :plan-bug}
                                     :payload payload})}))))
 
 (defn- notion-br-id [w]
@@ -64,7 +64,7 @@
           (cstate/ensure-dirs!)
           (ws/advance-stage! project (:id w) :in-progress)
           {:decision :promote
-           :queued   (queue/enqueue! {:target  {:project project :trigger :plan-github-issue}
+           :queued   (queue/enqueue! {:target  {:project (keyword (name project)) :trigger :plan-github-issue}
                                       :payload payload})})))))
 
 (defn promote-workstream!
