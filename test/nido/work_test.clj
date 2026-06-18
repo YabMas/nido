@@ -4,6 +4,7 @@
    [clojure.test :refer [deftest is]]
    [nido.config]
    [nido.coordinator.promote]
+   [nido.coordinator.resume]
    [nido.coordinator.session :as session]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.tickets :as tickets]
@@ -259,3 +260,40 @@
         (let [gs (work/all-gates)]
           (is (= 1 (count gs)))
           (is (= "brian" (:project (first gs))) "project name threads through to each gate"))))))
+
+(deftest resolve-gate-promote-runs-the-promote-gesture
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :triaging :external-refs []})
+            calls (atom [])]
+        (with-redefs [nido.coordinator.promote/promote-workstream!
+                      (fn [p id] (swap! calls conj [p id]) {:decision :promote})]
+          (is (= {:decision :promote} (work/resolve-gate! :brian (:id w) :promote)))
+          (is (= [[:brian (:id w)]] @calls)))))))
+
+(deftest resolve-gate-skip-and-drop-settle-dropped
+  (with-tmp
+    (fn [_]
+      (let [a (workstream/create! :brian {:stage :triaging :external-refs []})
+            b (workstream/create! :brian {:stage :triaging :external-refs []})]
+        (work/resolve-gate! :brian (:id a) :skip)
+        (work/resolve-gate! :brian (:id b) :drop)
+        (is (= :dropped (:outcome (:closed (workstream/read-ws :brian (:id a))))))
+        (is (= :dropped (:outcome (:closed (workstream/read-ws :brian (:id b))))))))))
+
+(deftest resolve-gate-done-closes-done
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :triaging :external-refs []})]
+        (work/resolve-gate! :brian (:id w) :done)
+        (is (= :done (:outcome (:closed (workstream/read-ws :brian (:id w))))))))))
+
+(deftest resolve-gate-reply-delegates-to-resume
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :triaging :external-refs []})
+            calls (atom nil)]
+        (with-redefs [nido.coordinator.resume/resume!
+                      (fn [p id input] (reset! calls [p id input]) {:resumed "auto"})]
+          (is (= {:resumed "auto"} (work/resolve-gate! :brian (:id w) :reply "do it")))
+          (is (= [:brian (:id w) "do it"] @calls)))))))

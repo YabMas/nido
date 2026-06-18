@@ -13,6 +13,7 @@
    [clojure.string :as str]
    [nido.config :as config]
    [nido.coordinator.promote :as promote]
+   [nido.coordinator.resume :as resume]
    [nido.coordinator.scratch :as scratch]
    [nido.coordinator.session :as csession]
    [nido.coordinator.state :as cstate]
@@ -240,6 +241,22 @@
     :in-progress (promote/promote-workstream! project ws-id)
     :done        (do (cws/close! project ws-id :done) {:decision :done})
     (do (cws/advance-stage! project ws-id target) {:decision :advanced})))
+
+(defn resolve-gate!
+  "Apply a gate follow-action, dispatching on `action-id`:
+     :promote      -> set-stage! :in-progress (the promote gesture)
+     :skip / :drop -> close! :dropped (workstream settled; not pursued)
+     :done         -> set-stage! :done (close! :done)
+     :reply        -> resume! the parked agent with `input`
+   Returns the resolver's result map."
+  ([project ws-id action-id] (resolve-gate! project ws-id action-id nil))
+  ([project ws-id action-id input]
+   (case action-id
+     :promote      (set-stage! project ws-id :in-progress)
+     :done         (set-stage! project ws-id :done)
+     (:skip :drop) (do (cws/close! project ws-id :dropped) {:decision :dropped})
+     :reply        (resume/resume! project ws-id input)
+     (throw (ex-info "Unknown gate action" {:action-id action-id :ws-id ws-id})))))
 
 (defn new!
   "Birth a scratch workstream and bring its session up. Mirrors the proven add
