@@ -174,6 +174,15 @@
           (assoc row :project pname))
         (sort-by (juxt #(if (:live? %) 0 1) :project :name)))))
 
+(defn all-grouped
+  "[{:project :grouped} …] across registered projects (mirrors all-session-rows)."
+  []
+  (->> (project/list-projects)
+       (keep (fn [[pname _]]
+               (try {:project pname :grouped (work/grouped pname)}
+                    (catch Throwable _ nil))))
+       vec))
+
 ;; ---------------------------------------------------------------------------
 ;; Routing
 
@@ -299,6 +308,14 @@
       ;; GET /system — the old flat live-sessions board (relocated from /)
       ["system"]
       (html-response 200 (views/live-board-page (all-session-rows)))
+
+      ;; GET /board — spine board (reflect-only, stage-grouped across projects)
+      ["board"]
+      (html-response 200 (views/board-page (all-grouped)))
+
+      ;; GET /_fragment/board — SSE board refresh
+      ["_fragment" "board"]
+      (sse-response (sse-fragment (views/board-fragment (all-grouped))))
 
       ;; GET /_fragment/gates — SSE inbox refresh
       ["_fragment" "gates"]

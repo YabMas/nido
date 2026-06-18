@@ -312,6 +312,45 @@
     [:div.pane (h/raw (gate-pane sel))]]))
 
 ;; ---------------------------------------------------------------------------
+;; Spine board (reflect-only, stage-grouped view across all projects)
+
+(defn- spine-board-row [project {:keys [ws-id origin label needs-you]}]
+  [:tr
+   [:td (origin-badge origin)]
+   [:td [:a {:href (str "/ws/" project "/" ws-id)} label]]
+   [:td (when needs-you [:span.needs {:title "needs you"}])]])
+
+(defn- stage-sections
+  "Flatten a {:project :grouped} entry into [{:project :stage :rows} …] in spine
+   order, dropping empty stages. Pulled out of the hiccup form so hiccup2's
+   compiler never walks the literal stage/rows pair vector (under SCI that
+   misreads `[:triage …]` as an element tag)."
+  [{:keys [project grouped]}]
+  (->> [[:triage (concat (-> grouped :triage :in-flight) (-> grouped :triage :queued))]
+        [:ready (:ready grouped)]
+        [:in-progress (:in-progress grouped)]]
+       (keep (fn [[stage rows]]
+               (when (seq rows) {:project project :stage stage :rows rows})))))
+
+(defn board-fragment
+  "Stage-grouped reflect board across all projects. `groups` is a seq of
+   {:project :grouped} (grouped = work/grouped output)."
+  [groups]
+  (str
+   (h/html
+    [:div {:id "board"}
+     (for [{:keys [project stage rows]} (mapcat stage-sections groups)]
+       [:div [:h3 (name stage) " — " project]
+        [:table [:tbody (for [r rows] (spine-board-row project r))]]])])))
+
+(defn board-page [groups]
+  (layout "board"
+   [:h1 "nido — board"]
+   [:p.meta [:a {:href "/"} "← gates"] " · " [:a {:href "/system"} "system →"]]
+   [:div {:data-on-interval__duration.5s "@get('/_fragment/board')"}
+    (h/raw (board-fragment groups))]))
+
+;; ---------------------------------------------------------------------------
 ;; Pages
 
 (defn home-page

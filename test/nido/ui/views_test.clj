@@ -71,3 +71,20 @@
     (is (str/includes? html "gate-wrap"))
     (is (str/includes? html "/_fragment/gates") "polls the inbox fragment")
     (is (str/includes? html "BR-7"))))
+
+(def ^:private sample-grouped
+  {:triage {:in-flight [{:ws-id "w1" :origin :notion :stage :triage :label "BR-1 · a" :needs-you true}]
+            :queued []}
+   :ready [{:ws-id "w2" :origin :github :stage :ready :label "#2 · b" :needs-you true}]
+   :in-progress [{:ws-id "w3" :origin :scratch :stage :in-progress :label "spike" :needs-you false}]})
+
+(deftest board-fragment-groups-by-stage-with-badges
+  ;; board-fragment takes a seq of {:project :grouped} so it can thread the project
+  ;; into each row's /ws/<project>/<ws-id> link (grouped rows carry no :project).
+  (let [html (views/board-fragment [{:project "brian" :grouped sample-grouped}])]
+    (is (str/includes? html "triage"))
+    (is (str/includes? html "ready"))
+    (is (str/includes? html "in-progress"))
+    (is (str/includes? html "BR-1 · a"))
+    (is (str/includes? html "/ws/brian/w1") "rows link to workstream detail")
+    (is (str/includes? html ">N<"))))

@@ -93,3 +93,10 @@
         (server/handle-request {:request-method :post :uri "/gate/brian/ws-1/reply" :body body})
         (Thread/sleep 50)
         (is (= [["brian" "ws-1" :reply "do the fix"]] @calls))))))
+
+(deftest board-route-renders
+  (with-redefs [nido.work/grouped (fn [_] {:triage {:in-flight [] :queued []} :ready [] :in-progress []})
+                project/list-projects (fn [] {"brian" {:directory "/x"}})]
+    (let [resp (server/handle-request {:request-method :get :uri "/board"})]
+      (is (= 200 (:status resp)))
+      (is (str/includes? (:body resp) "board")))))
