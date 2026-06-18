@@ -1,6 +1,7 @@
 (ns nido.ui.server
   "HTTP server for the nido dashboard."
   (:require [babashka.fs :as fs]
+            [cheshire.core :as json]
             [clojure.string :as str]
             [nido.process :as proc]
             [nido.project :as project]
@@ -229,10 +230,42 @@
           (println "[nido ui] action failed:" err-msg)
           (set-app-state! instance-id :failed err-msg))))))
 
-(defn- handle-post [{:keys [uri]}]
+(defn- parse-json-body
+  "Read a Datastar JSON signal body into a map, or {} when absent/unparseable."
+  [body]
+  (try
+    (if body (json/parse-string (slurp body) true) {})
+    (catch Exception _ {})))
+
+(defn- gate-resolve!
+  "Run work/resolve-gate! on a background thread, tracking optimistic state per
+   (project,ws-id) so the inbox/pane reflect 'working…' until it settles. Mirrors
+   run-action!'s app-states pattern."
+  [project ws-id action-id input]
+  (let [k (str project "/" ws-id)]
+    (set-app-state! k (if (= :reply action-id) :resuming :resolving))
+    (future
+      (try
+        (work/resolve-gate! project ws-id action-id input)
+        (clear-app-state! k)
+        (catch Exception e
+          (set-app-state! k :failed (or (:reason (ex-data e)) (ex-message e))))))))
+
+(defn- handle-post [{:keys [uri body]}]
   (let [segs (parse-path uri)]
-    (if (and (>= (count segs) 4)
-             (= "sessions" (nth segs 1)))
+    (cond
+      ;; POST /gate/:project/:ws-id/:action — resolve a gate follow-action
+      (and (= 4 (count segs)) (= "gate" (first segs)))
+      (let [project   (nth segs 1)
+            ws-id     (nth segs 2)
+            action-id (keyword (nth segs 3))
+            input     (when (= :reply action-id) (:reply (parse-json-body body)))]
+        (gate-resolve! project ws-id action-id input)
+        (sse-response (sse-fragment (views/gate-inbox-fragment (work/all-gates) ws-id))))
+
+      ;; POST /:project/sessions/:name/:action — session lifecycle action
+      (and (>= (count segs) 4)
+           (= "sessions" (nth segs 1)))
       (let [project-name (first segs)
             session-name (nth segs 2)
             action (vec (drop 3 segs))
@@ -252,6 +285,8 @@
             (sse-response (sse-fragment
                            (views/sessions-table-fragment project-name rows))))
           {:status 204}))
+
+      :else
       (html-response 404 (views/not-found-page)))))
 
 (defn- handle-get [{:keys [uri]}]

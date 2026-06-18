@@ -75,3 +75,21 @@
     (let [resp (server/handle-request {:request-method :get :uri "/system"})]
       (is (= 200 (:status resp)))
       (is (str/includes? (:body resp) "live sessions")))))
+
+(deftest post-gate-mutation-calls-resolve-and-returns-sse
+  (let [calls (atom [])]
+    (with-redefs [nido.work/resolve-gate! (fn [p w a & [in]] (swap! calls conj [p w a in]) {:decision :dropped})
+                  nido.work/all-gates    (fn [] [])]
+      (let [resp (server/handle-request {:request-method :post :uri "/gate/brian/ws-1/skip"})]
+        (Thread/sleep 50)   ; resolve runs on a background future
+        (is (= [["brian" "ws-1" :skip nil]] @calls))
+        (is (str/includes? (get-in resp [:headers "Content-Type"]) "text/event-stream"))))))
+
+(deftest post-gate-reply-passes-input-from-body
+  (let [calls (atom [])]
+    (with-redefs [nido.work/resolve-gate! (fn [p w a & [in]] (swap! calls conj [p w a in]) {:resumed "auto"})
+                  nido.work/all-gates    (fn [] [])]
+      (let [body (java.io.ByteArrayInputStream. (.getBytes "{\"reply\":\"do the fix\"}"))]
+        (server/handle-request {:request-method :post :uri "/gate/brian/ws-1/reply" :body body})
+        (Thread/sleep 50)
+        (is (= [["brian" "ws-1" :reply "do the fix"]] @calls))))))
