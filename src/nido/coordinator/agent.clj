@@ -36,11 +36,11 @@
           (* n ms))))))
 
 (defn- build-cmd
-  "Assemble the claude command vector. When :claude-session-id is supplied,
-   pass `--session-id <uuid>` so claude records the transcript under a known
-   id (the resume shim then always resolves it). first-message is the trailing
-   positional argument."
-  [{:keys [claude-bin first-message system-prompt claude-session-id]}]
+  "Assemble the claude command vector. With :claude-session-id, the run is
+   addressed by id: :resume? true CONTINUES that transcript (--resume) — a
+   gate reply; otherwise it RECORDS under it (--session-id) — the first burst.
+   first-message is the trailing positional argument."
+  [{:keys [claude-bin first-message system-prompt claude-session-id resume?]}]
   (cond-> [claude-bin
            "--print"
            ;; Stream-json output requires --verbose per claude-code's
@@ -48,17 +48,22 @@
            "--verbose"
            "--output-format=stream-json"
            "--dangerously-skip-permissions"]
-    claude-session-id (into ["--session-id" claude-session-id])
-    system-prompt     (into ["--append-system-prompt" system-prompt])
-    :always           (conj first-message)))
+    ;; --resume is dormant until gate-reply turns start passing :resume? true;
+    ;; reactivates the moment a caller resumes a parked agent with new input.
+    (and claude-session-id resume?)       (into ["--resume" claude-session-id])
+    (and claude-session-id (not resume?)) (into ["--session-id" claude-session-id])
+    system-prompt                          (into ["--append-system-prompt" system-prompt])
+    :always                                (conj first-message)))
 
 (defn launch!
   "Spawn claude headlessly for a Run. Blocks until the agent exits or the
    wall-clock budget is exceeded.
 
    :claude-session-id (opt) — pre-generated session id; passed as --session-id
-   and returned verbatim so the caller can persist it BEFORE launch (surviving
-   interruption). When omitted, the id is parsed from the stream-json init event.
+   (record a new transcript) or --resume (continue the recorded one) per
+   :resume?, and returned verbatim so the caller can persist it BEFORE launch
+   (surviving interruption). When omitted, the id is parsed from the
+   stream-json init event.
 
    opts:
      :run-id        — run id (used to locate run-dir for agent.log path)
@@ -68,6 +73,9 @@
      :claude-bin    — path/name of the claude binary (override for tests)
      :env           — extra env vars to merge into the child's environment
      :budget        — string like \"30m\" / \"2h\". nil → no budget.
+     :resume?       — optional; nil/false records a new transcript under
+                      --session-id, true continues the recorded one via --resume
+                      (a gate reply). Requires :claude-session-id.
 
    Returns:
      {:exit-code <int> :claude-session-id <str-or-nil> :timed-out? <bool>
@@ -78,11 +86,12 @@
    the agent did NO work — e.g. claude rejected the launch with
    \"Unknown command: /<skill>\". Callers use this to distinguish a real
    completion from a no-op exit (which must not be treated as success)."
-  [{:keys [run-id cwd first-message system-prompt claude-bin env budget claude-session-id]
+  [{:keys [run-id cwd first-message system-prompt claude-bin env budget claude-session-id resume?]
     :or   {claude-bin "claude"}}]
   (let [log-path  (cstate/run-agent-log run-id)
         cmd       (build-cmd {:claude-bin claude-bin :first-message first-message
-                              :system-prompt system-prompt :claude-session-id claude-session-id})
+                              :system-prompt system-prompt :claude-session-id claude-session-id
+                              :resume? resume?})
         proc      (p/process cmd {:dir cwd
                                   :env (merge (into {} (System/getenv)) (or env {}))
                                   ;; Close stdin so claude doesn't wait for input

@@ -18,6 +18,20 @@
                                 :system-prompt nil :claude-session-id nil})]
     (is (not (some #{"--session-id"} cmd)) "omits --session-id when none given")))
 
+(deftest build-cmd-resume-uses-resume-flag
+  (is (= ["claude" "--print" "--verbose" "--output-format=stream-json"
+          "--dangerously-skip-permissions" "--resume" "sid-1" "hi"]
+         (#'agent/build-cmd {:claude-bin "claude" :first-message "hi"
+                             :claude-session-id "sid-1" :resume? true}))
+      "resume? routes the recorded id through --resume"))
+
+(deftest build-cmd-without-resume-uses-session-id
+  (is (= ["claude" "--print" "--verbose" "--output-format=stream-json"
+          "--dangerously-skip-permissions" "--session-id" "sid-1" "hi"]
+         (#'agent/build-cmd {:claude-bin "claude" :first-message "hi"
+                             :claude-session-id "sid-1"}))
+      "the original burst still records under --session-id"))
+
 (deftest launch!-returns-the-given-session-id
   (let [tmp (fs/create-temp-dir)]
     (try
