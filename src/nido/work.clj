@@ -23,6 +23,25 @@
    in-progress→done; it is not a stage of its own."
   [:intake :triage :ready :in-progress :done])
 
+(defn gate-actions
+  "Follow-actions for a gate, derived from its spine `stage` (and whether a
+   session is `parked?`). `:kind` is a render hint only — :mutation -> one-click
+   button, :reply -> textarea. resolve-gate! dispatches on `:id`."
+  [stage parked?]
+  (case stage
+    :triage      (if parked?
+                   [{:id :promote :label "Promote" :kind :mutation}
+                    {:id :skip    :label "Skip"    :kind :mutation}
+                    {:id :reply   :label "Reply"   :kind :reply}]
+                   [])
+    :ready       [{:id :promote :label "Promote" :kind :mutation}
+                  {:id :drop    :label "Drop"    :kind :mutation}]
+    :in-progress (if parked?
+                   [{:id :reply :label "Reply" :kind :reply}
+                    {:id :done  :label "Done"  :kind :mutation}]
+                   [])
+    []))
+
 (defn classify-origin
   "Origin of a workstream from its RAW record: :notion :github :slack :scratch.
    Delegates to the battle-tested source classifier (ref-less-but-autonomous

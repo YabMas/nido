@@ -188,3 +188,18 @@
     (fn [_]
       (let [w (workstream/create! :brian {:stage :triaging :external-refs []})]
         (is (nil? (work/open-target :brian (:id w))))))))
+
+(deftest gate-actions-are-stage-derived
+  (is (= [{:id :promote :label "Promote" :kind :mutation}
+          {:id :skip    :label "Skip"    :kind :mutation}
+          {:id :reply   :label "Reply"   :kind :reply}]
+         (work/gate-actions :triage true)))
+  (is (= [] (work/gate-actions :triage false)) "an unparked triage offers nothing")
+  (is (= [{:id :promote :label "Promote" :kind :mutation}
+          {:id :drop    :label "Drop"    :kind :mutation}]
+         (work/gate-actions :ready false)) "ready always decides, parked or not")
+  (is (= [{:id :reply :label "Reply" :kind :reply}
+          {:id :done  :label "Done"  :kind :mutation}]
+         (work/gate-actions :in-progress true)))
+  (is (= [] (work/gate-actions :intake true)))
+  (is (= [] (work/gate-actions :done true))))
