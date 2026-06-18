@@ -192,9 +192,8 @@
         (is (nil? (work/open-target :brian (:id w))))))))
 
 (deftest gate-actions-are-stage-derived
-  (is (= [{:id :promote :label "Promote" :kind :mutation}
-          {:id :skip    :label "Skip"    :kind :mutation}
-          {:id :reply   :label "Reply"   :kind :reply}]
+  (is (= [{:id :skip  :label "Skip"  :kind :mutation}
+          {:id :reply :label "Reply" :kind :reply}]
          (work/gate-actions :triage true)))
   (is (= [] (work/gate-actions :triage false)) "an unparked triage offers nothing")
   (is (= [{:id :promote :label "Promote" :kind :mutation}
@@ -223,7 +222,7 @@
           (is (= :notion (:origin g)))
           (is (= :triage (:stage g)))
           (is (= "auto" (:session g)) "the parked session a :reply would resume")
-          (is (= [:promote :skip :reply] (map :id (:actions g))))
+          (is (= [:skip :reply] (map :id (:actions g))))
           (is (= :triage (-> g :report :kind)))
           (is (= "Verdict" (-> g :report :title)))
           (is (= "# Verdict\n\nbug — reproduced." (-> g :report :markdown))))))))

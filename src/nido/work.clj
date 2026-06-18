@@ -35,9 +35,11 @@
   [stage parked?]
   (case stage
     :triage      (if parked?
-                   [{:id :promote :label "Promote" :kind :mutation}
-                    {:id :skip    :label "Skip"    :kind :mutation}
-                    {:id :reply   :label "Reply"   :kind :reply}]
+                   ;; no :promote here — a triage workstream isn't promotable until
+                   ;; its verdict is applied (via :reply), which advances it to :ready
+                   ;; where promote/drop are offered.
+                   [{:id :skip  :label "Skip"  :kind :mutation}
+                    {:id :reply :label "Reply" :kind :reply}]
                    [])
     :ready       [{:id :promote :label "Promote" :kind :mutation}
                   {:id :drop    :label "Drop"    :kind :mutation}]
