@@ -103,7 +103,8 @@
      :autonomy-level (if auto :autonomous :interactive)
      :parked?        (csession/parked? s)
      :status         (session-status s)
-     :brakes         (when auto (:limits auto))}))
+     :brakes         (when auto (:limits auto))
+     :error          (when auto (:error auto))}))
 
 (defn- ledger-summary
   "Light ledger facet for the detail view: its key (BR-#### / slack id), status,
@@ -185,15 +186,17 @@
    all-session-rows tags rows with the same string key) so a gate reads the same
    whether it came from `gates` (string or keyword arg) or `all-gates`."
   [project row]
-  (let [parked? (= :parked-at-gate (:engagement row))]
-    {:ws-id   (:ws-id row)
-     :project (name project)
-     :origin  (:origin row)
-     :stage   (:stage row)
-     :label   (:label row)
-     :report  (latest-report project (:ws-id row))
-     :actions (gate-actions (:stage row) parked?)
-     :session (some-> (parked-session project (:ws-id row)) :name)}))
+  (let [parked? (= :parked-at-gate (:engagement row))
+        psess   (parked-session project (:ws-id row))]
+    {:ws-id        (:ws-id row)
+     :project      (name project)
+     :origin       (:origin row)
+     :stage        (:stage row)
+     :label        (:label row)
+     :report       (latest-report project (:ws-id row))
+     :actions      (gate-actions (:stage row) parked?)
+     :session      (:name psess)
+     :resume-error (get-in psess [:autonomy :error])}))
 
 (defn gates
   "A project's gates: workstreams that want you now (needs-you), each hydrated

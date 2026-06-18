@@ -326,3 +326,29 @@
         (workstream/close! :brian (:id w) :done))
       (is (empty? (work/gates :brian))
           "a settled (closed) workstream is never a gate, even with a needs-you stage-override"))))
+
+(deftest gates-surface-the-parked-session-resume-error
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :triaging
+                                          :external-refs [{:adapter :notion :id "BR-2" :title "t"}]})]
+        (tickets/open! :brian "BR-2" {:title "t"})
+        (tickets/set-status! :brian "BR-2" :investigating)
+        (session/create! :brian (:id w)
+                         {:name "auto" :weight :heavy
+                          :autonomy (assoc autonomy-running :phase :parked
+                                           :error {:reason :resume-failed :message "boom"})})
+        (let [g (first (work/gates :brian))]
+          (is (= :resume-failed (-> g :resume-error :reason)))
+          (is (= "boom" (-> g :resume-error :message))))))))
+
+(deftest gates-resume-error-nil-when-clean
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :triaging
+                                          :external-refs [{:adapter :notion :id "BR-3" :title "t"}]})]
+        (tickets/open! :brian "BR-3" {:title "t"})
+        (tickets/set-status! :brian "BR-3" :investigating)
+        (session/create! :brian (:id w)
+                         {:name "auto" :weight :heavy :autonomy (assoc autonomy-running :phase :parked)})
+        (is (nil? (:resume-error (first (work/gates :brian)))))))))
