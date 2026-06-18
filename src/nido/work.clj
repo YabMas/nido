@@ -9,10 +9,13 @@
    Surfaces render + route; all model logic lives here. Ships as a projection over
    today's storage — no migration."
   (:require
+   [babashka.fs :as fs]
+   [clojure.string :as str]
    [nido.config :as config]
    [nido.coordinator.promote :as promote]
    [nido.coordinator.scratch :as scratch]
    [nido.coordinator.session :as csession]
+   [nido.coordinator.state :as cstate]
    [nido.coordinator.tickets :as tickets]
    [nido.coordinator.workstream :as cws]
    [nido.coordinator.workstreams-view :as wsv]
@@ -124,6 +127,66 @@
        :label    (:label row)
        :ledger   (ledger-summary project (:br-id row))
        :sessions (mapv session-facet sessions)})))
+
+(defn- parked-session
+  "The first parked autonomous session under a workstream, or nil — the session a
+   :reply resolves against."
+  [project ws-id]
+  (->> (csession/list-sessions project ws-id)
+       (filter csession/parked?)
+       first))
+
+(defn- first-heading
+  "The text of the first markdown heading in `md` (e.g. '# Verdict' -> \"Verdict\"),
+   or nil."
+  [md]
+  (some->> md
+           str/split-lines
+           (some #(second (re-matches #"#+\s+(.*)" %)))))
+
+(defn- latest-report
+  "The workstream's most recent ledger entry as a gate report
+   {:kind :at :title :markdown}, or nil when it has none. Origin-agnostic — reads
+   the workstream-level :entries (works for ref-less scratch too)."
+  [project ws-id]
+  (when-let [w (cws/read-ws project ws-id)]
+    (when-let [e (last (:entries w))]
+      (let [f  (str (fs/path (cstate/workstream-dir project ws-id) (:file e)))
+            md (when (fs/exists? f) (slurp f))]
+        {:kind     (:kind e)
+         :at       (:at e)
+         :title    (first-heading md)
+         :markdown md}))))
+
+(defn- ->gate
+  "Hydrate one needs-you spine row into a gate."
+  [project row]
+  (let [parked? (= :parked-at-gate (:engagement row))]
+    {:ws-id   (:ws-id row)
+     :project project
+     :origin  (:origin row)
+     :stage   (:stage row)
+     :label   (:label row)
+     :report  (latest-report project (:ws-id row))
+     :actions (gate-actions (:stage row) parked?)
+     :session (some-> (parked-session project (:ws-id row)) :name)}))
+
+(defn gates
+  "A project's gates: workstreams that want you now (needs-you), each hydrated
+   with its report + follow-actions. `live-names` threads into the engagement
+   projection (pass it so a downed one-off reads idle)."
+  ([project] (gates project nil))
+  ([project live-names]
+   (->> (list-workstreams project live-names)
+        (filter :needs-you)
+        (mapv #(->gate project %)))))
+
+(defn gate
+  "Full gate detail for one workstream, or nil when it is absent or not a gate."
+  [project ws-id]
+  (->> (gates project)
+       (filter #(= ws-id (:ws-id %)))
+       first))
 
 (def ^:private canonical-default-target
   "Fallback when a project hasn't configured a default for the action."

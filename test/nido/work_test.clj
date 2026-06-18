@@ -203,3 +203,44 @@
          (work/gate-actions :in-progress true)))
   (is (= [] (work/gate-actions :intake true)))
   (is (= [] (work/gate-actions :done true))))
+
+(deftest gates-hydrates-a-parked-triage-workstream
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :triaging
+                                          :external-refs [{:adapter :notion :id "BR-7" :title "t"}]})]
+        (tickets/open! :brian "BR-7" {:title "t"})
+        (tickets/set-status! :brian "BR-7" :investigating)
+        (workstream/append-entry! :brian (:id w) {:kind :triage}
+                                  "# Verdict\n\nbug — reproduced.")
+        (session/create! :brian (:id w)
+                         {:name "auto" :weight :heavy
+                          :autonomy (assoc autonomy-running :phase :parked)})
+        (let [g (first (work/gates :brian))]
+          (is (= (:id w) (:ws-id g)))
+          (is (= :notion (:origin g)))
+          (is (= :triage (:stage g)))
+          (is (= "auto" (:session g)) "the parked session a :reply would resume")
+          (is (= [:promote :skip :reply] (map :id (:actions g))))
+          (is (= :triage (-> g :report :kind)))
+          (is (= "Verdict" (-> g :report :title)))
+          (is (= "# Verdict\n\nbug — reproduced." (-> g :report :markdown))))))))
+
+(deftest gates-excludes-workstreams-that-do-not-need-you
+  (with-tmp
+    (fn [_]
+      ;; triaged + a non-parked session → stage :ready, needs-you TRUE (ready always)
+      (let [r (workstream/create! :brian {:stage :triaging
+                                          :external-refs [{:adapter :notion :id "BR-8" :title "t"}]})]
+        (tickets/open! :brian "BR-8" {:title "t"})
+        (tickets/set-status! :brian "BR-8" :triaged)
+        (session/create! :brian (:id r) {:name "s" :weight :light :autonomy nil}))
+      (let [g (first (work/gates :brian))]
+        (is (= :ready (:stage g)))
+        (is (= [:promote :drop] (map :id (:actions g))) "ready gate decides promote/drop")
+        (is (nil? (:session g)) "no parked session → nothing to reply to")))))
+
+(deftest gate-detail-nil-for-absent
+  (with-tmp
+    (fn [_]
+      (is (nil? (work/gate :brian "ws-nope"))))))
