@@ -19,6 +19,7 @@
    [nido.coordinator.tickets :as tickets]
    [nido.coordinator.workstream :as cws]
    [nido.coordinator.workstreams-view :as wsv]
+   [nido.project :as project]
    [nido.session.lifecycle :as lifecycle]))
 
 (def stages
@@ -159,11 +160,14 @@
          :markdown md}))))
 
 (defn- ->gate
-  "Hydrate one needs-you spine row into a gate."
+  "Hydrate one needs-you spine row into a gate. `:project` is canonicalized to a
+   STRING (the web routes on it, e.g. /gate/<project>/…; the dashboard's
+   all-session-rows tags rows with the same string key) so a gate reads the same
+   whether it came from `gates` (string or keyword arg) or `all-gates`."
   [project row]
   (let [parked? (= :parked-at-gate (:engagement row))]
     {:ws-id   (:ws-id row)
-     :project project
+     :project (name project)
      :origin  (:origin row)
      :stage   (:stage row)
      :label   (:label row)
@@ -187,6 +191,19 @@
   (->> (gates project)
        (filter #(= ws-id (:ws-id %)))
        first))
+
+(defn all-gates
+  "Gates across every registered project, needs-you/newest-first within each.
+   Mirrors the dashboard's cross-project aggregation (see ui.server/all-session-rows).
+   `->gate` canonicalizes each gate's :project to a string, so the raw
+   list-projects key threads straight through. A project that can't be read
+   contributes no gates rather than failing the board."
+  []
+  (->> (project/list-projects)
+       (mapcat (fn [[pname _entry]]
+                 (try (gates pname)
+                      (catch Throwable _ []))))
+       vec))
 
 (def ^:private canonical-default-target
   "Fallback when a project hasn't configured a default for the action."

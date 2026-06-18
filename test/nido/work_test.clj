@@ -8,6 +8,7 @@
    [nido.coordinator.state :as cstate]
    [nido.coordinator.tickets :as tickets]
    [nido.coordinator.workstream :as workstream]
+   [nido.project]
    [nido.session.lifecycle]
    [nido.work :as work]))
 
@@ -244,3 +245,17 @@
   (with-tmp
     (fn [_]
       (is (nil? (work/gate :brian "ws-nope"))))))
+
+(deftest all-gates-merges-across-projects
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :triaging :external-refs []})]
+        (workstream/append-entry! :brian (:id w) {:kind :triage} "# X\n\nrep.")
+        (session/create! :brian (:id w)
+                         {:name "auto" :weight :heavy
+                          :autonomy (assoc autonomy-running :phase :parked)}))
+      (with-redefs [nido.project/list-projects
+                    (constantly {"brian" {:directory "/tmp/brian"}})]
+        (let [gs (work/all-gates)]
+          (is (= 1 (count gs)))
+          (is (= "brian" (:project (first gs))) "project name threads through to each gate"))))))
