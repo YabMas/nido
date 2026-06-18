@@ -188,16 +188,18 @@
 (defn- jj!
   "Run a jj command in `dir`. Throws on non-zero exit unless :continue?.
 
-   `dir` is always the source repo's *default* workspace, which nido never
-   edits — every call here is a metadata op (bookmark list/create, workspace
-   add/forget). The global `--ignore-working-copy` flag skips jj's incidental
-   snapshot of that working copy, so a stale default workspace (routine once
-   concurrent session workspaces advance the shared op log) doesn't trip the
-   stale-working-copy guard and abort session creation."
-  [dir args & {:keys [continue?] :or {continue? false}}]
+   `dir` is the source repo's *default* workspace, which nido never edits. Metadata
+   ops (bookmark list/create, workspace forget) pass `--ignore-working-copy` so jj's
+   incidental snapshot of that default working copy — possibly stale once concurrent
+   session workspaces advance the shared op log — doesn't trip the stale-working-copy
+   guard and abort session creation. Pass `:ignore-wc? false` for a command that MUST
+   update a working copy (`jj workspace add`), since jj rejects the flag there."
+  [dir args & {:keys [continue? ignore-wc?] :or {continue? false ignore-wc? true}}]
   (let [opts (cond-> {:out :string :err :string :dir dir}
                continue? (assoc :continue true))
-        result (apply shell opts "jj" "--ignore-working-copy" args)]
+        argv (cond->> args
+               ignore-wc? (cons "--ignore-working-copy"))
+        result (apply shell opts "jj" argv)]
     (when (and (not continue?) (not (zero? (:exit result))))
       (throw (ex-info (str "jj " (str/join " " args) " failed")
                       {:exit (:exit result) :err (:err result)})))
@@ -255,7 +257,8 @@
   (jj! project-dir ["workspace" "add"
                     "--name" branch
                     "--revision" branch
-                    wt-path]))
+                    wt-path]
+       :ignore-wc? false))
 
 (defn- remove-jj-workspace!
   "Forget the jj workspace named `workspace-name`, then delete the

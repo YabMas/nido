@@ -217,3 +217,34 @@
       (#'lifecycle/jj! "/proj" ["bookmark" "list" "foo"])
       (is (= ["jj" "--ignore-working-copy" "bookmark" "list" "foo"] @captured)
           "--ignore-working-copy must precede the subcommand (jj global flag)"))))
+
+;; --ignore-working-copy globally disables jj's working-copy updates, which is
+;; right for metadata ops but fatal for `jj workspace add` — that command's whole
+;; job is to materialize the new workspace's working copy, so jj 0.41 rejects the
+;; flag there ("This command must be able to update the working copy"). :ignore-wc?
+;; (default true) lets the workspace-add call opt out so :full sessions can spawn.
+
+(deftest jj!-includes-ignore-working-copy-by-default
+  (let [captured (atom nil)]
+    (with-redefs [babashka.process/shell
+                  (fn [_opts & args]
+                    (reset! captured (vec args))
+                    {:exit 0 :out "" :err ""})]
+      (#'lifecycle/jj! "/proj" ["bookmark" "list" "foo"])
+      (is (= "jj" (first @captured)))
+      (is (some #{"--ignore-working-copy"} @captured)
+          "metadata ops keep --ignore-working-copy (stale-default-workspace guard)"))))
+
+(deftest jj!-omits-ignore-working-copy-when-ignore-wc-false
+  (let [captured (atom nil)]
+    (with-redefs [babashka.process/shell
+                  (fn [_opts & args]
+                    (reset! captured (vec args))
+                    {:exit 0 :out "" :err ""})]
+      (#'lifecycle/jj! "/proj"
+                       ["workspace" "add" "--name" "b" "--revision" "b" "/wt"]
+                       :ignore-wc? false)
+      (is (not (some #{"--ignore-working-copy"} @captured))
+          "workspace add must NOT get --ignore-working-copy (jj rejects it)")
+      (is (= ["jj" "workspace" "add" "--name" "b" "--revision" "b" "/wt"] @captured)
+          "the jj command is otherwise unchanged"))))
