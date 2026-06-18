@@ -577,7 +577,7 @@
   (layout
    "live sessions"
    [:h1 "nido — live sessions"]
-   [:p.meta [:a {:href "/projects"} "all projects →"]]
+   [:p.meta [:a {:href "/"} "← gates"] " · " [:a {:href "/board"} "board"] " · " [:a {:href "/projects"} "all projects →"]]
    [:div {:data-on-interval__duration.3s "@get('/_fragment/live')"}
     [:table
      [:thead

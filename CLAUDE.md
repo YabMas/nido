@@ -187,10 +187,14 @@ bb nido:coordinator:down        # graceful stop (SIGTERM); :force true → SIGKI
 
 **Web dashboard (bundled with the daemon):** the coordinator runs the dashboard
 in-process. With the daemon up it's always at `http://localhost:8800` — the home
-page is a flat, live-first board of every session across projects, each live
-session a clickable friendly-host link (`<session>.<project>.localhost`). Override
-with `bb nido:coordinator:up :dashboard-port <n>`; disable with `:no-dashboard true`.
-`bb nido:coordinator:status` shows a `Dashboard:` line (port + reachability).
+page (`/`) is now the cross-project **Gate Inbox**: every parked workstream that
+needs you, each with its report and one-click follow-actions (skip / promote /
+drop / done / reply). The stage-grouped spine **Board** is at `/board`; read-only
+workstream detail is at `/ws/<project>/<ws-id>`; the old flat live-sessions board
+(each live session a clickable friendly-host link `<session>.<project>.localhost`)
+moved to `/system`. Override the port with `bb nido:coordinator:up :dashboard-port <n>`;
+disable with `:no-dashboard true`. `bb nido:coordinator:status` shows a `Dashboard:`
+line (port + reachability).
 
 The standalone `bb nido:ui [:port 8800]` task still exists for UI iteration or when
 the daemon is down — but it and the daemon both bind 8800, so don't run both.

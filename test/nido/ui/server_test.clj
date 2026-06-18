@@ -108,3 +108,11 @@
     (let [resp (server/handle-request {:request-method :get :uri "/ws/brian/ws-1"})]
       (is (= 200 (:status resp)))
       (is (str/includes? (:body resp) "BR-7")))))
+
+(deftest dashboard-routes-smoke
+  (with-redefs [nido.work/all-gates (fn [] [])
+                server/all-grouped  (fn [] [])
+                server/all-session-rows (fn [] [])]
+    (doseq [uri ["/" "/board" "/system"]]
+      (is (= 200 (:status (server/handle-request {:request-method :get :uri uri})))
+          (str uri " serves 200")))))
