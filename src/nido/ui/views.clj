@@ -297,6 +297,20 @@
             "Send & resume ▸"]
            (when session [:span.meta {:style "margin-left:10px"} "resumes " session])]])]))))
 
+(defn gate-inbox-page
+  "Dashboard home: cross-project Gate Inbox (master-detail). `sel` is the open
+   gate map (or nil). The inbox column polls; the pane is server-rendered for the
+   selected gate (deep-linked via /gate/:project/:ws-id)."
+  [gates sel]
+  (layout
+   "gates"
+   [:h1 "nido — gates"]
+   [:p.meta [:a {:href "/board"} "board →"] " · " [:a {:href "/system"} "system →"]]
+   [:div.gate-wrap
+    [:div.inbox {:data-on-interval__duration.3s "@get('/_fragment/gates')"}
+     (h/raw (gate-inbox-fragment gates (:ws-id sel)))]
+    [:div.pane (h/raw (gate-pane sel))]]))
+
 ;; ---------------------------------------------------------------------------
 ;; Pages
 

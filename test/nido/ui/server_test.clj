@@ -2,6 +2,7 @@
   (:require [clojure.test :refer [deftest is]]
             [clojure.string :as str]
             [nido.ui.server :as server]
+            [nido.work]
             [nido.project :as project]))
 
 (deftest all-session-rows-aggregates-and-sorts-live-first
@@ -19,8 +20,10 @@
            (map (juxt :project :name :live?) rows)))))
 
 (deftest home-route-renders-board
+  ;; The flat live-sessions board relocated from / to /system (the gate inbox
+  ;; is now the home page); this test follows the board to its new route.
   (with-redefs [server/all-session-rows (fn [] [])]
-    (let [resp (server/handle-request {:request-method :get :uri "/"})]
+    (let [resp (server/handle-request {:request-method :get :uri "/system"})]
       (is (= 200 (:status resp)))
       (is (str/includes? (:body resp) "live sessions")))))
 
@@ -46,3 +49,29 @@
         projects {"good" {:directory "/g"} "broken" {:directory "/b"}}
         rows     (server/all-session-rows rows-fn projects)]
     (is (= [["good" "ok" true]] (map (juxt :project :name :live?) rows)))))
+
+(deftest home-route-renders-gate-inbox
+  (with-redefs [nido.work/all-gates (fn [] [])]
+    (let [resp (server/handle-request {:request-method :get :uri "/"})]
+      (is (= 200 (:status resp)))
+      (is (str/includes? (:body resp) "gate-wrap")))))
+
+(deftest gates-fragment-route-is-sse
+  (with-redefs [nido.work/all-gates (fn [] [])]
+    (let [resp (server/handle-request {:request-method :get :uri "/_fragment/gates"})]
+      (is (str/includes? (get-in resp [:headers "Content-Type"]) "text/event-stream")))))
+
+(deftest gate-pane-route-renders
+  (let [g {:ws-id "ws-1" :project "brian" :origin :notion :stage :triage
+           :label "BR-7" :report nil :actions [] :session nil}]
+    (with-redefs [nido.work/all-gates (fn [] [g])
+                  nido.work/gate (fn [_ _] g)]
+      (let [resp (server/handle-request {:request-method :get :uri "/gate/brian/ws-1"})]
+        (is (= 200 (:status resp)))
+        (is (str/includes? (:body resp) "BR-7"))))))
+
+(deftest system-route-still-serves-the-session-board
+  (with-redefs [server/all-session-rows (fn [] [])]
+    (let [resp (server/handle-request {:request-method :get :uri "/system"})]
+      (is (= 200 (:status resp)))
+      (is (str/includes? (:body resp) "live sessions")))))

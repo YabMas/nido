@@ -8,6 +8,7 @@
             [nido.session.state :as state]
             [nido.ui.discovery :as discovery]
             [nido.ui.views :as views]
+            [nido.work :as work]
             [org.httpkit.server :as http]))
 
 ;; ---------------------------------------------------------------------------
@@ -256,9 +257,17 @@
 (defn- handle-get [{:keys [uri]}]
   (let [segments (parse-path uri)]
     (case segments
-      ;; GET / — live-sessions board across all projects (dashboard home)
+      ;; GET / — cross-project Gate Inbox (dashboard home)
       []
+      (html-response 200 (views/gate-inbox-page (work/all-gates) nil))
+
+      ;; GET /system — the old flat live-sessions board (relocated from /)
+      ["system"]
       (html-response 200 (views/live-board-page (all-session-rows)))
+
+      ;; GET /_fragment/gates — SSE inbox refresh
+      ["_fragment" "gates"]
+      (sse-response (sse-fragment (views/gate-inbox-fragment (work/all-gates) nil)))
 
       ;; GET /projects — the original project grid
       ["projects"]
@@ -269,8 +278,16 @@
       (sse-response (sse-fragment (views/live-board-fragment (all-session-rows))))
 
       ;; Otherwise, dispatch on structure
-      (let [project-name (first segments)]
-        (if-let [ctx (discovery/project-context project-name)]
+      (cond
+        ;; GET /gate/:project/:ws-id — inbox with that gate selected
+        (and (= 3 (count segments)) (= "gate" (first segments)))
+        (let [project (nth segments 1)
+              ws-id (nth segments 2)]
+          (html-response 200 (views/gate-inbox-page (work/all-gates) (work/gate project ws-id))))
+
+        :else
+        (let [project-name (first segments)]
+          (if-let [ctx (discovery/project-context project-name)]
           (let [dir (:directory ctx)
                 rest-segs (vec (rest segments))]
             (cond
@@ -364,7 +381,7 @@
 
               :else
               (html-response 404 (views/not-found-page))))
-          (html-response 404 (views/not-found-page)))))))
+            (html-response 404 (views/not-found-page))))))))
 
 (defn handle-request [{:keys [request-method] :as req}]
   (case request-method

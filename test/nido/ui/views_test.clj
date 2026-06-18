@@ -65,3 +65,9 @@
 
 (deftest gate-pane-empty-when-nil
   (is (str/includes? (views/gate-pane nil) "Select a gate")))
+
+(deftest gate-inbox-page-has-master-detail-and-poll
+  (let [html (views/gate-inbox-page [sample-gate] sample-gate)]
+    (is (str/includes? html "gate-wrap"))
+    (is (str/includes? html "/_fragment/gates") "polls the inbox fragment")
+    (is (str/includes? html "BR-7"))))
