@@ -296,3 +296,23 @@
                       (fn [p id input] (reset! calls [p id input]) {:resumed "auto"})]
           (is (= {:resumed "auto"} (work/resolve-gate! :brian (:id w) :reply "do it")))
           (is (= [:brian (:id w) "do it"] @calls)))))))
+
+(deftest gates-report-falls-back-to-the-ticket-ledger
+  (with-tmp
+    (fn [_]
+      ;; a parked Notion triage gate whose report lives ONLY in the ticket ledger
+      ;; (the triage skill writes there, not the workstream ledger)
+      (let [w (workstream/create! :brian {:stage :triaging
+                                          :external-refs [{:adapter :notion :id "BR-9" :title "t"}]})]
+        (tickets/open! :brian "BR-9" {:title "t"})
+        (tickets/set-status! :brian "BR-9" :investigating)
+        (tickets/append-entry! :brian "BR-9" {:kind :triage} "# Verdict\n\nticket-ledger report.")
+        ;; deliberately NO workstream-level entry
+        (session/create! :brian (:id w)
+                         {:name "auto" :weight :heavy
+                          :autonomy (assoc autonomy-running :phase :parked)})
+        (let [g (first (work/gates :brian))]
+          (is (= :triage (-> g :report :kind)))
+          (is (= "Verdict" (-> g :report :title)))
+          (is (= "# Verdict\n\nticket-ledger report." (-> g :report :markdown))
+              "report read from the ticket ledger when the workstream ledger is empty"))))))

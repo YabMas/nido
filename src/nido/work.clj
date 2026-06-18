@@ -148,19 +148,36 @@
            str/split-lines
            (some #(second (re-matches #"#+\s+(.*)" %)))))
 
+(defn- entry->report
+  "Render a ledger entry {:kind :at :file} (`:file` relative to `base-dir`) as a gate
+   report {:kind :at :title :markdown}."
+  [base-dir entry]
+  (let [f  (str (fs/path base-dir (:file entry)))
+        md (when (fs/exists? f) (slurp f))]
+    {:kind     (:kind entry)
+     :at       (:at entry)
+     :title    (first-heading md)
+     :markdown md}))
+
+(defn- notion-br-id
+  "The Notion BR-#### id from a workstream's external-refs, or nil."
+  [w]
+  (some #(when (= :notion (:adapter %)) (:id %)) (:external-refs w)))
+
 (defn- latest-report
-  "The workstream's most recent ledger entry as a gate report
-   {:kind :at :title :markdown}, or nil when it has none. Origin-agnostic — reads
-   the workstream-level :entries (works for ref-less scratch too)."
+  "The workstream's most recent ledger entry as a gate report {:kind :at :title
+   :markdown}, or nil. Prefers the workstream-level ledger (origin-agnostic, works
+   for ref-less scratch); falls back to the TICKET ledger (where the triage skill
+   actually writes its report) when the workstream ledger is empty and the
+   workstream carries a Notion ref."
   [project ws-id]
   (when-let [w (cws/read-ws project ws-id)]
-    (when-let [e (last (:entries w))]
-      (let [f  (str (fs/path (cstate/workstream-dir project ws-id) (:file e)))
-            md (when (fs/exists? f) (slurp f))]
-        {:kind     (:kind e)
-         :at       (:at e)
-         :title    (first-heading md)
-         :markdown md}))))
+    (if-let [e (last (:entries w))]
+      (entry->report (cstate/workstream-dir project ws-id) e)
+      (when-let [br-id (notion-br-id w)]
+        (when-let [m (tickets/read-meta project br-id)]
+          (when-let [e (last (:entries m))]
+            (entry->report (tickets/ticket-dir project br-id) e)))))))
 
 (defn- ->gate
   "Hydrate one needs-you spine row into a gate. `:project` is canonicalized to a
