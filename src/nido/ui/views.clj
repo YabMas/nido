@@ -2,7 +2,8 @@
   "Hiccup view functions for the nido dashboard."
   (:require [clojure.string :as str]
             [hiccup2.core :as h]
-            [nido.process :as process]))
+            [nido.process :as process]
+            [nido.ui.markdown :as md]))
 
 ;; ---------------------------------------------------------------------------
 ;; Layout
@@ -97,7 +98,33 @@
         .tab { padding: 6px 14px; border: 1px solid #2a2a4a; border-bottom: none;
                border-radius: 4px 4px 0 0; color: #888; background: #16213e;
                font-size: 12px; text-decoration: none; }
-        .tab-active { color: #e0e0e0; background: #0f0f1e; border-color: #2a2a4a; }"]]
+        .tab-active { color: #e0e0e0; background: #0f0f1e; border-color: #2a2a4a; }
+        .badge { display:inline-flex; align-items:center; justify-content:center;
+                 width:18px; height:18px; border-radius:4px; font-size:11px; font-weight:bold; }
+        .b-notion{ background:#2a3a4a; color:#aee0ff; } .b-github{ background:#2a2a1a; color:#facc15; }
+        .b-slack{ background:#3a2a3a; color:#e0a0e0; } .b-scratch{ background:#252540; color:#9a9ac0; }
+        .gate-wrap { display:grid; grid-template-columns: 38% 62%; min-height:80vh; }
+        .inbox { border-right:1px solid #2a2a4a; overflow:auto; }
+        .gate-card { display:block; padding:10px 16px; border-bottom:1px solid #20203a; color:inherit; }
+        .gate-card:hover { background:#181830; text-decoration:none; }
+        .gate-card.sel { background:#16213e; border-left:3px solid #7eb8da; padding-left:13px; }
+        .gate-top { display:flex; align-items:center; gap:8px; }
+        .gate-top .lbl { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#e8e8e8; }
+        .needs { width:7px; height:7px; border-radius:50%; background:#facc15; box-shadow:0 0 6px #facc15; }
+        .gate-sub { display:flex; gap:8px; color:#666; font-size:11px; margin:3px 0 0 26px; }
+        .gate-prev { color:#7a7a98; font-size:11.5px; margin:5px 0 0 26px;
+                     white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .chip { padding:0 7px; border-radius:3px; font-size:10.5px; text-transform:uppercase; }
+        .c-triage{ background:#2a2a1a; color:#facc15; } .c-ready{ background:#1a3a2a; color:#4ade80; }
+        .c-in-progress{ background:#1a2a3a; color:#7eb8da; }
+        .pane { padding:18px 24px; overflow:auto; }
+        .md { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+              font-size:13.5px; line-height:1.7; color:#cdcde0; background:#0f0f1e;
+              border:1px solid #2a2a4a; border-radius:6px; padding:16px 18px; }
+        .md code { background:#1c1c33; padding:1px 5px; border-radius:3px; color:#aee0ff; }
+        .reply { margin-top:16px; border:1px solid #2a2a4a; border-radius:6px; background:#13132a; padding:12px 14px; }
+        .reply textarea { width:100%; min-height:62px; background:#0f0f1e; border:1px solid #2a2a4a;
+                          border-radius:4px; color:#e0e0e0; font:inherit; font-size:13px; padding:9px 11px; }"]]
      [:body body]])))
 
 ;; ---------------------------------------------------------------------------
@@ -203,6 +230,72 @@
             (when rule [:strong rule " — "])
             description]
            [:div.meta (str "From iteration " from-iteration)]])])])))
+
+;; ---------------------------------------------------------------------------
+;; Gate inbox (cross-project human-decision queue over nido.work)
+
+(defn origin-badge [origin]
+  (let [[ch cls] (case origin
+                   :notion ["N" "b-notion"] :github ["G" "b-github"]
+                   :slack ["S" "b-slack"]   ["·" "b-scratch"])]
+    [:span {:class (str "badge " cls)} ch]))
+
+(defn- chip [stage]
+  [:span {:class (str "chip c-" (name stage))} (name stage)])
+
+(defn- gate-card
+  "One inbox row; links to the gate pane. `sel?` highlights the open gate."
+  [{:keys [ws-id project origin stage label report session]} sel?]
+  [:a {:class (str "gate-card" (when sel? " sel"))
+       :href  (str "/gate/" project "/" ws-id)}
+   [:div.gate-top (origin-badge origin) [:span.lbl label] [:span.needs {:title "needs you"}]]
+   [:div.gate-sub [:span project] (chip stage)
+    [:span (if session (str "parked · " session) "decide")]]
+   [:div.gate-prev (or (some-> report :markdown
+                               (str/replace #"^#.*\n+" "")
+                               str/split-lines first)
+                       "—")]])
+
+(defn gate-inbox-fragment
+  "The inbox column body — initial render + SSE refresh. `sel` is the open ws-id."
+  [gates sel]
+  (str
+   (h/html
+    (if (seq gates)
+      [:div {:id "gate-inbox"}
+       (for [g gates] (gate-card g (= sel (:ws-id g))))]
+      [:div {:id "gate-inbox"} [:p.empty "No gates — nothing needs you right now."]]))))
+
+(defn gate-pane
+  "The detail pane: rendered report + follow-actions. nil -> placeholder."
+  [{:keys [ws-id project origin stage label report actions session] :as gate}]
+  (str
+   (h/html
+    (if-not gate
+      [:div {:id "gate-pane"} [:p.empty "Select a gate."]]
+      [:div {:id "gate-pane"}
+       [:div.breadcrumb project " / " (name stage)]
+       [:h1 (origin-badge origin) " " label]
+       (when report
+         [:div.meta (some-> report :kind name) " · " (:at report)])
+       ;; md/render already returns a [:div.md …]; embed it directly (no double wrap)
+       (md/render (:markdown report))
+       [:div.actions {:style "margin-top:16px"}
+        (for [{:keys [id label kind]} actions
+              :when (= kind :mutation)]
+          [:button.btn {:class (if (#{:skip :drop} id) "btn-danger" "btn-primary")
+                        "data-on:click" (str "@post('/gate/" project "/" ws-id "/" (name id) "')")}
+           label])]
+       (when (some #(= :reply (:kind %)) actions)
+         [:div.reply
+          [:div.meta {:style "text-transform:uppercase;font-size:11px"} "Reply & resume"]
+          [:textarea {"data-bind" "reply"
+                      :placeholder "Tell the agent what to do next…"}]
+          [:div {:style "margin-top:9px"}
+           [:button.btn.btn-primary
+            {"data-on:click" (str "@post('/gate/" project "/" ws-id "/reply')")}
+            "Send & resume ▸"]
+           (when session [:span.meta {:style "margin-left:10px"} "resumes " session])]])]))))
 
 ;; ---------------------------------------------------------------------------
 ;; Pages

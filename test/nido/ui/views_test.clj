@@ -33,3 +33,35 @@
     (is (str/includes? html "live sessions"))
     ;; auto-refresh against the board SSE fragment
     (is (str/includes? html "/_fragment/live"))))
+
+(def ^:private sample-gate
+  {:ws-id "ws-1" :project "brian" :origin :notion :stage :triage
+   :label "BR-7 · checkout off by a cent"
+   :report {:kind :triage :at "2026-06-18T00:00:00Z" :title "Verdict"
+            :markdown "# Verdict\n\nbug — reproduced."}
+   :actions [{:id :skip :label "Skip" :kind :mutation}
+             {:id :reply :label "Reply" :kind :reply}]
+   :session "auto"})
+
+(deftest gate-inbox-fragment-lists-cards
+  (let [html (views/gate-inbox-fragment [sample-gate] nil)]
+    (is (str/includes? html "id=\"gate-inbox\""))
+    (is (str/includes? html "BR-7"))
+    (is (str/includes? html ">N<") "origin badge")
+    (is (str/includes? html "brian"))
+    (is (str/includes? html "/gate/brian/ws-1") "card links to the gate pane")))
+
+(deftest gate-inbox-fragment-empty-state
+  (is (str/includes? (views/gate-inbox-fragment [] nil) "No gates")))
+
+(deftest gate-pane-renders-report-and-actions
+  (let [html (views/gate-pane sample-gate)]
+    (is (str/includes? html "Verdict"))
+    (is (str/includes? html "bug — reproduced."))
+    (is (str/includes? html "/gate/brian/ws-1/skip"))
+    (is (str/includes? html "/gate/brian/ws-1/reply"))
+    (is (str/includes? html "<textarea"))
+    (is (str/includes? html "data-bind=\"reply\"") "reply textarea is two-way bound to the reply signal")))
+
+(deftest gate-pane-empty-when-nil
+  (is (str/includes? (views/gate-pane nil) "Select a gate")))
