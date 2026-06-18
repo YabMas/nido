@@ -197,12 +197,14 @@
 
 (defn gates
   "A project's gates: workstreams that want you now (needs-you), each hydrated
-   with its report + follow-actions. `live-names` threads into the engagement
-   projection (pass it so a downed one-off reads idle)."
+   with its report + follow-actions. A SETTLED (closed) workstream is never a gate,
+   even if a stale stage-override still projects :needs-you. `live-names` threads
+   into the engagement projection (pass it so a downed one-off reads idle)."
   ([project] (gates project nil))
   ([project live-names]
    (->> (list-workstreams project live-names)
         (filter :needs-you)
+        (remove #(= :settled (:engagement %)))
         (mapv #(->gate project %)))))
 
 (defn gate

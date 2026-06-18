@@ -316,3 +316,13 @@
           (is (= "Verdict" (-> g :report :title)))
           (is (= "# Verdict\n\nticket-ledger report." (-> g :report :markdown))
               "report read from the ticket ledger when the workstream ledger is empty"))))))
+
+(deftest gates-excludes-settled-workstreams
+  (with-tmp
+    (fn [_]
+      ;; a CLOSED workstream with a stale :ready stage-override would otherwise
+      ;; project needs-you=true (ready always needs you) and leak into the inbox
+      (let [w (workstream/create! :brian {:stage :ready :external-refs []})]
+        (workstream/close! :brian (:id w) :done))
+      (is (empty? (work/gates :brian))
+          "a settled (closed) workstream is never a gate, even with a needs-you stage-override"))))
