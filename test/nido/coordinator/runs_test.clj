@@ -473,6 +473,58 @@
           (is (= 0 (:priority run)))))
       (finally (fs/delete-tree tmp)))))
 
+;; ---------------------------------------------------------------------------
+;; find-for-session
+;; ---------------------------------------------------------------------------
+
+(defn- write-run-for-find! [overrides]
+  (let [r (merge {:id "r1" :project :brian :trigger :triage-bug
+                  :source {:type :manual} :event-payload {} :skill :triage-bug
+                  :first-message "/triage-bug" :agent :claude :session-name "s"
+                  :workstream-id "ws-1" :claude-session-id "sid-1"
+                  :limits {:budget "30m"} :priority 0 :session-profile :full
+                  :uncapped? false :state :awaiting-review
+                  :state-history [{:at "2026-06-18T00:00:00Z" :state :queued}]
+                  :artifacts [] :error nil}
+                 overrides)]
+    (fs/create-dirs (cstate/run-dir (:id r)))
+    (runs/write-run! r)))
+
+(deftest find-for-session-returns-newest-matching
+  (with-tmp
+    (fn [_]
+      (write-run-for-find! {:id "r-old" :workstream-id "ws-1" :session-name "s"
+                            :claude-session-id "old"
+                            :state-history [{:at "2026-06-18T00:00:00Z" :state :queued}]})
+      (write-run-for-find! {:id "r-new" :workstream-id "ws-1" :session-name "s"
+                            :claude-session-id "new"
+                            :state-history [{:at "2026-06-18T01:00:00Z" :state :queued}]})
+      (write-run-for-find! {:id "r-other" :workstream-id "ws-1" :session-name "other"
+                            :claude-session-id "x"})
+      ;; Matches on ws-1/s but a different project — must be excluded by the :project clause.
+      (write-run-for-find! {:id "r-otherproj" :project :other :workstream-id "ws-1"
+                            :session-name "s" :claude-session-id "wrong-proj"})
+      ;; Matches on project/session but a different workstream — must be excluded by :workstream-id.
+      (write-run-for-find! {:id "r-otherws" :workstream-id "ws-2" :session-name "s"
+                            :claude-session-id "wrong-ws"})
+      (is (= "new" (:claude-session-id (runs/find-for-session :brian "ws-1" "s")))
+          "newest (ws-1, s) run in :brian wins; (ws-1, other), other-project, and ws-2 runs are all excluded"))))
+
+(deftest find-for-session-nil-when-none
+  (with-tmp
+    (fn [_]
+      (is (nil? (runs/find-for-session :brian "ws-missing" "s"))))))
+
+(deftest find-for-session-tolerates-string-project
+  (with-tmp
+    (fn [_]
+      ;; write-run-for-find! stores :project :brian (a keyword); the web/gate
+      ;; reply path looks up with the STRING "brian" — must still match.
+      (write-run-for-find! {:id "r1" :workstream-id "ws-1" :session-name "s"
+                            :claude-session-id "sid"})
+      (is (= "sid" (:claude-session-id (runs/find-for-session "brian" "ws-1" "s")))
+          "a string project (as the web passes) still matches a keyword-:project run"))))
+
 (deftest teardown-archives-coordinator-session-for-triage
   ;; Reclaiming a triage run's session must flip the coordinator session record
   ;; off :live, so engagement-state stops treating the dead session as live.

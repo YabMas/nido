@@ -111,6 +111,22 @@
        (filter #(contains? in-progress-states (:state %)))
        (reduce (fn [m r] (update m (:trigger r) (fnil inc 0))) {})))
 
+(defn find-for-session
+  "The newest Run owning (`ws-id`, `session-name`) in `project`, or nil. Lets the
+   resume path recover a parked session's resumable :claude-session-id + run-id
+   (the real id lives in run.edn, not on the session autonomy)."
+  [project ws-id session-name]
+  (->> (list-run-ids)
+       (keep read-run)
+       ;; `project` may arrive as a string (the web/gate facet stamps a gate's
+       ;; :project as a string for URLs); a Run's :project is always a keyword.
+       ;; Compare by name so a string lookup still matches a keyword-:project run.
+       (filter #(and (= (name (:project %)) (name project))
+                     (= (:workstream-id %) ws-id)
+                     (= (:session-name %) session-name)))
+       (sort-by #(-> % :state-history last :at))
+       last))
+
 (def allowed-transitions
   "Map of from-state → set of to-states.
    See spec §Runs / Lifecycle. Terminal states have no entries.
