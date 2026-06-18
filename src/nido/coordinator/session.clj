@@ -134,6 +134,17 @@
                 (update-in [:autonomy :phase-history] conj
                            {:at (clock/now-iso) :phase new-phase})))))
 
+(defn set-error!
+  "Set (nil clears) the last-resume error on an autonomous session's autonomy
+   facet. Throws if the session has no autonomy facet (a human session has none).
+   Returns the updated record."
+  [project ws-id session-name err]
+  (let [s (load! project ws-id session-name)]
+    (when-not (autonomous? s)
+      (throw (ex-info "Cannot set error on a human session"
+                      {:project project :ws-id ws-id :session session-name})))
+    (write! (assoc-in s [:autonomy :error] err))))
+
 (defn engagement-state
   "Pure projection of a workstream's engagement.
    :settled        — workstream closed

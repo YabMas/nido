@@ -290,3 +290,26 @@
       (let [w (ws/create! :brian {:stage :scratch :external-refs []})]
         (sess/create! :brian (:id w) {:name "refshot" :weight :light :autonomy nil})
         (is (= ["refshot"] (mapv :name (sess/list-sessions :brian (:id w)))))))))
+
+(deftest set-error-sets-and-clears-autonomy-error
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+        (sess/create! :brian (:id w)
+                      {:name "auto" :weight :heavy
+                       :autonomy {:skill :triage-bug :first-message "x" :agent :claude
+                                  :claude-session-id nil :trigger :triage-bug :limits {}
+                                  :priority 0 :uncapped? false :on-promote nil :phase :parked
+                                  :phase-history [] :error nil}})
+        (sess/set-error! :brian (:id w) "auto" {:reason :resume-failed :message "boom"})
+        (is (= :resume-failed (-> (first (sess/list-sessions :brian (:id w))) :autonomy :error :reason)))
+        (sess/set-error! :brian (:id w) "auto" nil)
+        (is (nil? (-> (first (sess/list-sessions :brian (:id w))) :autonomy :error)))))))
+
+(deftest set-error-throws-on-human-session
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+        (sess/create! :brian (:id w) {:name "me" :weight :light :autonomy nil})
+        (is (thrown? clojure.lang.ExceptionInfo
+                     (sess/set-error! :brian (:id w) "me" {:reason :x})))))))
