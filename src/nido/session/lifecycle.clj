@@ -186,11 +186,18 @@
 ;; ---------------------------------------------------------------------------
 
 (defn- jj!
-  "Run a jj command in `dir`. Throws on non-zero exit unless :continue?."
+  "Run a jj command in `dir`. Throws on non-zero exit unless :continue?.
+
+   `dir` is always the source repo's *default* workspace, which nido never
+   edits — every call here is a metadata op (bookmark list/create, workspace
+   add/forget). The global `--ignore-working-copy` flag skips jj's incidental
+   snapshot of that working copy, so a stale default workspace (routine once
+   concurrent session workspaces advance the shared op log) doesn't trip the
+   stale-working-copy guard and abort session creation."
   [dir args & {:keys [continue?] :or {continue? false}}]
   (let [opts (cond-> {:out :string :err :string :dir dir}
                continue? (assoc :continue true))
-        result (apply shell opts "jj" args)]
+        result (apply shell opts "jj" "--ignore-working-copy" args)]
     (when (and (not continue?) (not (zero? (:exit result))))
       (throw (ex-info (str "jj " (str/join " " args) " failed")
                       {:exit (:exit result) :err (:err result)})))

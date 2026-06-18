@@ -200,3 +200,20 @@
                                   {:exit 1 :err "The working copy is stale"})))]
     (is (thrown? clojure.lang.ExceptionInfo
                  (#'lifecycle/bookmark-exists? "/proj" "run-foo")))))
+
+;; jj! runs against the source repo's *default* workspace, which nido never
+;; edits — every call is a metadata op (bookmark list/create, workspace
+;; add/forget). Snapshotting that working copy is incidental, and it trips jj's
+;; stale-working-copy guard the moment concurrent session workspaces advance the
+;; shared op log. The global --ignore-working-copy flag skips the snapshot, so a
+;; stale default workspace never blocks session creation.
+
+(deftest jj!-passes-ignore-working-copy-as-a-global-flag
+  (let [captured (atom nil)]
+    (with-redefs [babashka.process/shell
+                  (fn [_opts & args]
+                    (reset! captured (vec args))
+                    {:exit 0 :out "" :err ""})]
+      (#'lifecycle/jj! "/proj" ["bookmark" "list" "foo"])
+      (is (= ["jj" "--ignore-working-copy" "bookmark" "list" "foo"] @captured)
+          "--ignore-working-copy must precede the subcommand (jj global flag)"))))
