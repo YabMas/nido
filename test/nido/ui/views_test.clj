@@ -104,3 +104,14 @@
     (is (str/includes? html "autonomous"))
     (is (str/includes? html "parked"))
     (is (str/includes? html "http://auto.brian.localhost:3142") "route-in link when a live url is known")))
+
+(deftest gate-resuming-fragment-targets-the-pane
+  (let [html (views/gate-resuming-fragment "brian" "ws-1")]
+    (is (str/includes? html "id=\"gate-pane\""))
+    (is (str/includes? html "Resuming"))))
+
+(deftest gate-card-shows-resume-error-badge
+  (let [g (assoc sample-gate :resume-error {:reason :resume-failed :message "exec failed"})
+        html (views/gate-inbox-fragment [g] nil)]
+    (is (str/includes? html "resume failed"))
+    (is (str/includes? html "exec failed"))))

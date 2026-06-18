@@ -94,6 +94,14 @@
         (Thread/sleep 50)
         (is (= [["brian" "ws-1" :reply "do the fix"]] @calls))))))
 
+(deftest post-gate-reply-returns-resuming-pane
+  (with-redefs [nido.work/resolve-gate! (fn [& _] {:resumed "auto"})]
+    (let [body (java.io.ByteArrayInputStream. (.getBytes "{\"reply\":\"apply\"}"))
+          resp (server/handle-request {:request-method :post :uri "/gate/brian/ws-1/reply" :body body})]
+      (Thread/sleep 50)
+      (is (str/includes? (:body resp) "Resuming"))
+      (is (str/includes? (:body resp) "gate-pane")))))
+
 (deftest board-route-renders
   (with-redefs [nido.work/grouped (fn [_] {:triage {:in-flight [] :queued []} :ready [] :in-progress []})
                 project/list-projects (fn [] {"brian" {:directory "/x"}})]

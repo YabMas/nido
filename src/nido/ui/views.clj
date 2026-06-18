@@ -114,6 +114,7 @@
         .gate-sub { display:flex; gap:8px; color:#666; font-size:11px; margin:3px 0 0 26px; }
         .gate-prev { color:#7a7a98; font-size:11.5px; margin:5px 0 0 26px;
                      white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .gate-err { color:#f87171; font-size:11px; margin:4px 0 0 26px; }
         .chip { padding:0 7px; border-radius:3px; font-size:10.5px; text-transform:uppercase; }
         .c-triage{ background:#2a2a1a; color:#facc15; } .c-ready{ background:#1a3a2a; color:#4ade80; }
         .c-in-progress{ background:#1a2a3a; color:#7eb8da; }
@@ -245,7 +246,7 @@
 
 (defn- gate-card
   "One inbox row; links to the gate pane. `sel?` highlights the open gate."
-  [{:keys [ws-id project origin stage label report session]} sel?]
+  [{:keys [ws-id project origin stage label report session resume-error]} sel?]
   [:a {:class (str "gate-card" (when sel? " sel"))
        :href  (str "/gate/" project "/" ws-id)}
    [:div.gate-top (origin-badge origin) [:span.lbl label] [:span.needs {:title "needs you"}]]
@@ -254,7 +255,10 @@
    [:div.gate-prev (or (some-> report :markdown
                                (str/replace #"^#.*\n+" "")
                                str/split-lines first)
-                       "—")]])
+                       "—")]
+   (when resume-error
+     [:div.gate-err "⚠ resume failed: " (or (:message resume-error)
+                                            (name (:reason resume-error)))])])
 
 (defn gate-inbox-fragment
   "The inbox column body — initial render + SSE refresh. `sel` is the open ws-id."
@@ -265,6 +269,20 @@
       [:div {:id "gate-inbox"}
        (for [g gates] (gate-card g (= sel (:ws-id g))))]
       [:div {:id "gate-inbox"} [:p.empty "No gates — nothing needs you right now."]]))))
+
+(defn gate-resuming-fragment
+  "Immediate pane feedback after a reply: the resume runs in the background
+   (re-hydrating the session if its runtime was reclaimed). Patches the pane."
+  [project ws-id]
+  (str
+   (h/html
+    [:div {:id "gate-pane"}
+     [:div.breadcrumb project " / gate"]
+     [:h1 "Resuming…"]
+     [:p.meta "ws " ws-id]
+     [:p "Re-hydrating the session if its runtime was reclaimed, then resuming the "
+      "conversation. Watch the inbox — this gate will advance, or re-appear with an "
+      "error, when the turn finishes."]])))
 
 (defn gate-pane
   "The detail pane: rendered report + follow-actions. nil -> placeholder."
