@@ -248,3 +248,46 @@
           "workspace add must NOT get --ignore-working-copy (jj rejects it)")
       (is (= ["jj" "workspace" "add" "--name" "b" "--revision" "b" "/wt"] @captured)
           "the jj command is otherwise unchanged"))))
+
+;; jj-worktree-poisoned? — a failed `jj workspace add` leaves the dir + `.jj/`
+;; but strands `@` on the all-zeros root commit with an empty working copy. The
+;; poisoned signal is `@-` (parent of the workspace's working copy) resolving to
+;; the root commit. CONSERVATIVE: only true on a definitive root-parent signal;
+;; any jj error or a real parent commit → false, so we never destroy a healthy
+;; worktree (uncommitted work auto-snapshots, leaving `@-` at a real bookmark).
+
+(deftest jj-worktree-poisoned?-true-when-parent-is-root-commit
+  (with-redefs [babashka.fs/exists? (fn [_] true)               ; .jj/ probe → jj-workspace?
+                babashka.process/shell
+                (fn [_opts & _args]
+                  {:exit 0 :out "0000000000000000000000000000000000000000\n" :err ""})]
+    (is (true? (#'lifecycle/jj-worktree-poisoned? "/wt"))
+        "an all-zeros @- (root commit) marks the worktree poisoned")))
+
+(deftest jj-worktree-poisoned?-false-when-parent-is-real-commit
+  (with-redefs [babashka.fs/exists? (fn [_] true)
+                babashka.process/shell
+                (fn [_opts & _args]
+                  {:exit 0 :out "b3140745aabb1c2d3e4f56789a0b1c2d3e4f5678\n" :err ""})]
+    (is (false? (#'lifecycle/jj-worktree-poisoned? "/wt"))
+        "a real @- commit (even with uncommitted work) is NOT poisoned")))
+
+(deftest jj-worktree-poisoned?-false-when-not-a-jj-workspace
+  (let [jj-called? (atom false)]
+    (with-redefs [babashka.fs/exists? (fn [_] false)            ; no .jj/ → not a jj workspace
+                  babashka.process/shell
+                  (fn [_opts & _args]
+                    (reset! jj-called? true)
+                    {:exit 0 :out "" :err ""})]
+      (is (false? (#'lifecycle/jj-worktree-poisoned? "/wt"))
+          "a non-jj dir is never poisoned")
+      (is (false? @jj-called?)
+          "must NOT invoke jj when the dir isn't a jj workspace"))))
+
+(deftest jj-worktree-poisoned?-false-on-jj-error
+  (with-redefs [babashka.fs/exists? (fn [_] true)
+                babashka.process/shell
+                (fn [_opts & _args]
+                  {:exit 1 :out "" :err "boom"})]
+    (is (false? (#'lifecycle/jj-worktree-poisoned? "/wt"))
+        "conservative: a jj error must never mark a worktree poisoned")))

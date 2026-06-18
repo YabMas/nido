@@ -216,6 +216,22 @@
   [wt-path]
   (fs/exists? (str (fs/path wt-path ".jj"))))
 
+(defn- jj-worktree-poisoned?
+  "True when `wt-path` is a jj workspace whose working copy was never
+   materialized — a failed `jj workspace add` leaves the dir + `.jj/` but
+   strands `@` on the root commit (all-zeros) with nothing checked out.
+   Such a worktree exists on disk yet can't host a session.
+
+   CONSERVATIVE: only true on a DEFINITIVE root-parent signal (jj succeeds
+   AND reports `@-` as the all-zeros commit). On any jj error or ambiguity
+   it returns false — we never destroy a worktree we can't positively prove
+   is empty, so a healthy worktree with uncommitted work is never at risk."
+  [wt-path]
+  (and (jj-workspace? wt-path)
+       (let [r (jj! wt-path ["log" "-r" "@-" "--no-graph" "-T" "commit_id"] :continue? true)]
+         (and (zero? (:exit r))
+              (boolean (re-matches #"0+" (str/trim (str (:out r)))))))))
+
 (defn- bookmark-exists?
   "True if a jj bookmark named `branch` exists in `project-dir`.
 
@@ -305,17 +321,24 @@
   (let [{:keys [project-name project-dir wt-path branch base]} (with-context name opts)
         profile-kw (or (:session-profile opts) :full)
         profile    (profiles/resolve-profile project-name profile-kw)]
-    (if (fs/exists? wt-path)
+    (cond
+      (and (fs/exists? wt-path) (jj-worktree-poisoned? wt-path))
+      (do
+        (core/log-step (str "Worktree at " wt-path " is poisoned (empty working copy, @ on the root commit) — recreating."))
+        (remove-jj-workspace! project-dir wt-path branch branch false) ; forget + rm dir; KEEP the bookmark (it's correctly placed)
+        (create-jj-workspace! project-dir wt-path branch base))
+
+      (fs/exists? wt-path)
       (core/log-step (str "Worktree already exists at " wt-path " — starting session."))
-      (cond
-        (= :symlink (-> profile :worktree :strategy))
-        (create-symlink-worktree! wt-path (-> profile :worktree :target))
 
-        (jj-source-repo? project-dir)
-        (create-jj-workspace! project-dir wt-path branch base)
+      (= :symlink (-> profile :worktree :strategy))
+      (create-symlink-worktree! wt-path (-> profile :worktree :target))
 
-        :else
-        (create-git-worktree! project-dir wt-path branch base)))
+      (jj-source-repo? project-dir)
+      (create-jj-workspace! project-dir wt-path branch base)
+
+      :else
+      (create-git-worktree! project-dir wt-path branch base))
     (engine/start-session! wt-path (assoc opts :session-name name :profile profile))))
 
 (defn down!
