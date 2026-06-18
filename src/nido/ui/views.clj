@@ -351,6 +351,35 @@
     (h/raw (board-fragment groups))]))
 
 ;; ---------------------------------------------------------------------------
+;; Workstream detail (read-only: reflect + route-in)
+
+(defn ws-detail-page
+  "Read-only workstream detail: origin · stage · ledger · sessions on the autonomy
+   axis, plus a route-in link when a live session url is known. Mutations live on
+   the gate inbox; this surface reflects + routes in (see spec)."
+  [{:keys [origin stage label ledger sessions]} live-url]
+  (layout
+   (str label " — workstream")
+   (breadcrumb [:a {:href "/"} "gates"] [:a {:href "/board"} "board"] label)
+   [:h1 (origin-badge origin) " " label]
+   [:p.meta (name stage)
+    (when live-url [:span " · " [:a {:href live-url :target "_blank"} "open session ↗"]])]
+   (when ledger
+     [:div.card [:strong "ledger "] (:key ledger) " · " (some-> ledger :status name)
+      " · " (:report-count ledger) " report(s)"])
+   [:h2 "Sessions"]
+   (if (seq sessions)
+     [:table
+      [:thead [:tr [:th "session"] [:th "axis"] [:th "status"] [:th "brakes"]]]
+      [:tbody
+       (for [{:keys [name autonomy-level parked? status brakes]} sessions]
+         [:tr [:td name]
+          [:td (clojure.core/name autonomy-level) (when parked? " · gate")]
+          [:td (clojure.core/name (or status :down))]
+          [:td.meta (when brakes (pr-str brakes))]])]]
+     [:p.empty "No sessions."])))
+
+;; ---------------------------------------------------------------------------
 ;; Pages
 
 (defn home-page

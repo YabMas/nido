@@ -174,6 +174,20 @@
           (assoc row :project pname))
         (sort-by (juxt #(if (:live? %) 0 1) :project :name)))))
 
+(defn workstream-live-url
+  "The friendly-host :url of the workstream's live entry session, or nil. Reuses
+   work/open-target (prefers the live session) + the registry the session board
+   reads. The registry keys entries by worktree path and stores the session under
+   :instance-id (= project, or \"project--session\"), never a bare session name —
+   so we derive the instance-id and match on that, returning nil when no entry
+   carries a :url (route-in simply hides)."
+  [project ws-id]
+  (when-let [{:keys [session]} (work/open-target project ws-id)]
+    (let [registry (state/read-registry)
+          instance-id (instance-id-for project session)]
+      (some (fn [[_wt entry]] (when (= instance-id (:instance-id entry)) (:url entry)))
+            registry))))
+
 (defn all-grouped
   "[{:project :grouped} …] across registered projects (mirrors all-session-rows)."
   []
@@ -336,6 +350,13 @@
         (let [project (nth segments 1)
               ws-id (nth segments 2)]
           (html-response 200 (views/gate-inbox-page (work/all-gates) (work/gate project ws-id))))
+
+        ;; GET /ws/:project/:ws-id — read-only workstream detail (reflect + route-in)
+        (and (= 3 (count segments)) (= "ws" (first segments)))
+        (let [project (nth segments 1), ws-id (nth segments 2)]
+          (if-let [w (work/workstream project ws-id)]
+            (html-response 200 (views/ws-detail-page w (workstream-live-url project ws-id)))
+            (html-response 404 (views/not-found-page))))
 
         :else
         (let [project-name (first segments)]

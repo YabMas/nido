@@ -88,3 +88,19 @@
     (is (str/includes? html "BR-1 · a"))
     (is (str/includes? html "/ws/brian/w1") "rows link to workstream detail")
     (is (str/includes? html ">N<"))))
+
+(def ^:private sample-ws
+  {:ws-id "ws-1" :project "brian" :origin :notion :stage :triage :label "BR-7 · t"
+   :ledger {:key "BR-7" :status :investigating :report-count 1}
+   :sessions [{:name "auto" :autonomy-level :autonomous :parked? true :status :parked :brakes {:budget "30m"}}
+              {:name "me"   :autonomy-level :interactive :parked? false :status :up :brakes nil}]})
+
+(deftest ws-detail-renders-ledger-and-sessions
+  (let [html (views/ws-detail-page sample-ws "http://auto.brian.localhost:3142")]
+    (is (str/includes? html "BR-7"))
+    (is (str/includes? html "investigating"))
+    (is (str/includes? html "auto"))
+    (is (str/includes? html "me"))
+    (is (str/includes? html "autonomous"))
+    (is (str/includes? html "parked"))
+    (is (str/includes? html "http://auto.brian.localhost:3142") "route-in link when a live url is known")))

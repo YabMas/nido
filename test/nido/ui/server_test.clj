@@ -100,3 +100,11 @@
     (let [resp (server/handle-request {:request-method :get :uri "/board"})]
       (is (= 200 (:status resp)))
       (is (str/includes? (:body resp) "board")))))
+
+(deftest ws-detail-route-renders
+  (with-redefs [nido.work/workstream (fn [_ _] {:ws-id "ws-1" :project "brian" :origin :notion
+                                                :stage :triage :label "BR-7" :ledger nil :sessions []})
+                server/workstream-live-url (fn [_ _] nil)]
+    (let [resp (server/handle-request {:request-method :get :uri "/ws/brian/ws-1"})]
+      (is (= 200 (:status resp)))
+      (is (str/includes? (:body resp) "BR-7")))))
