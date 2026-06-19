@@ -84,6 +84,37 @@
       (is (nil? (tickets/status :brian "BR-1")))
       (is (= :spawn (tickets/gate-decision :brian "BR-1"))))))
 
+(deftest dismiss-sets-dismissed-and-creates-record-when-absent
+  (with-tmp
+    (fn [_]
+      (tickets/dismiss! :brian "BR-9")
+      (is (= :dismissed (tickets/status :brian "BR-9")))
+      (is (= :skip-completed (tickets/gate-decision :brian "BR-9"))))))
+
+(deftest gate-decision-skips-in-progress-and-dismissed
+  (with-tmp
+    (fn [_]
+      (tickets/set-status! :brian "BR-1" :implementing)
+      (is (= :skip-active (tickets/gate-decision :brian "BR-1")))
+      (tickets/set-status! :brian "BR-2" :planning)
+      (is (= :skip-active (tickets/gate-decision :brian "BR-2")))
+      (tickets/set-status! :brian "BR-3" :dismissed)
+      (is (= :skip-completed (tickets/gate-decision :brian "BR-3"))))))
+
+(deftest promote-decision-skips-dismissed
+  (with-tmp
+    (fn [_]
+      (tickets/dismiss! :brian "BR-4")
+      (is (= :skip-completed (tickets/promote-decision :brian "BR-4"))))))
+
+(deftest on-run-terminal-leaves-dismissed-intact
+  (with-tmp
+    (fn [_]
+      (tickets/dismiss! :brian "BR-7")
+      (tickets/on-run-terminal!
+        {:skill :triage-bug :project :brian :event-payload {:id "BR-7"}} :failed)
+      (is (= :dismissed (tickets/status :brian "BR-7"))))))
+
 (deftest append-entry-writes-file-and-records-it
   (with-tmp
     (fn [_]
@@ -176,7 +207,7 @@
       (is (= :promote (tickets/promote-decision :brian "BR-1")))          ; the one yes
       (tickets/set-status! :brian "BR-1" :planning)
       (is (= :skip-active (tickets/promote-decision :brian "BR-1")))      ; already planning
-      (tickets/complete! :brian "BR-1" :skipped :leave-as-is)
+      (tickets/dismiss! :brian "BR-1")
       (is (= :skip-completed (tickets/promote-decision :brian "BR-1"))))))
 
 (deftest on-run-terminal-plan-bug-abnormal-exit-reverts-to-triaged

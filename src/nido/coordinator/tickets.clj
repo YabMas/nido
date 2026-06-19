@@ -61,7 +61,8 @@
   (write-meta! project br-id (assoc (read-meta project br-id) :status new-status)))
 
 (defn complete!
-  "Terminal completion: set status (:triaged | :skipped), disposition, triaged-at."
+  "Terminal completion of a triage verdict: set status :triaged, disposition,
+   triaged-at. (Off-radar tickets use dismiss!, not complete! — :skipped retired.)"
   [project br-id new-status disposition]
   (write-meta! project br-id
                (assoc (read-meta project br-id)
@@ -74,6 +75,16 @@
   [project br-id]
   (when-let [m (read-meta project br-id)]
     (write-meta! project br-id (dissoc m :status))))
+
+(defn dismiss!
+  "Take a ticket off the triage radar: set status :dismissed. Creates the record
+   if absent so a never-triaged ticket can be dismissed. The gate then skips it
+   (no auto-re-triage) and derive-stage projects it out of the triage queue.
+   No-op for a nil/blank br-id (inherits write-meta!'s chokepoint nil-safety)."
+  [project br-id]
+  (write-meta! project br-id
+               (assoc (or (read-meta project br-id) {:br-id br-id :entries []})
+                      :status :dismissed)))
 
 (defn append-entry!
   "Write a new immutable entry file under entries/ and record it in meta :entries.
@@ -94,13 +105,17 @@
 (defn gate-decision
   "Decide the coordinator pre-spawn action by reading the ticket's meta status
    from disk:
-     :skip-completed — already triaged/skipped
-     :skip-active    — a session already owns it (:investigating / :awaiting-input)
-     :spawn          — no record, or status cleared (re-triable)"
+     :skip-completed — terminally handled (:triaged | :dismissed)
+     :skip-active    — owned by a session or started elsewhere
+                       (:investigating | :awaiting-input | :planning | :implementing)
+     :spawn          — no record, or status cleared (re-triable)
+   Dismissed/in-progress tickets are skipped so reconcile-mode re-emits never
+   re-triage something already handled or started in a different state."
   [project br-id]
   (case (status project br-id)
-    (:triaged :skipped)              :skip-completed
-    (:investigating :awaiting-input) :skip-active
+    (:triaged :dismissed)            :skip-completed
+    (:investigating :awaiting-input
+     :planning :implementing)        :skip-active
     :spawn))
 
 (defn promote-decision
@@ -108,23 +123,23 @@
    meta status:
      :promote        — status :triaged (the only promotable state)
      :skip-active    — a plan Run already owns it (:planning)
-     :skip-completed — triage said don't bother (:skipped)
+     :skip-completed — dismissed (off-radar, nothing to promote)
      :skip-no-record — never triaged (no record)
      :skip-untriaged — mid-triage (:investigating / :awaiting-input) or any
                        other non-:triaged status"
   [project br-id]
   (case (status project br-id)
-    :triaged  :promote
-    :planning :skip-active
-    :skipped  :skip-completed
-    nil       :skip-no-record
+    :triaged   :promote
+    :planning  :skip-active
+    :dismissed :skip-completed
+    nil        :skip-no-record
     :skip-untriaged))
 
 (defn on-run-terminal!
   "Reconcile a ticket's meta when its triage/plan Run reaches a terminal or
    parked coordinator state. No-op for other skills and record-less tickets.
    - run ended :awaiting-review        → leave (session parked)
-   - meta already :triaged/:skipped    → leave (skill wrote the disposition)
+   - meta already :triaged/:dismissed  → leave (terminal disposition recorded)
    - plan Run, ticket already advanced past :planning (e.g. the promote burst
      drove it to :implementing) → leave: ownership handed off, the plan Run's
      termination is not a failure of the work in flight.
@@ -139,8 +154,8 @@
     (when (and (#{:triage-bug :plan-bug} skill) br-id (not (str/blank? br-id)))
       (when-let [m (read-meta project br-id)]
         (cond
-          (= :awaiting-review run-state)     nil
-          (#{:triaged :skipped} (:status m)) nil
+          (= :awaiting-review run-state)        nil
+          (#{:triaged :dismissed} (:status m))  nil
           (= :plan-bug skill)                (when (= :planning (:status m))
                                                (set-status! project br-id :triaged))
           :else                              (clear-status! project br-id))))))
