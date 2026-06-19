@@ -187,10 +187,11 @@
            (entry->report (tickets/ticket-dir project br-id) e))))
      (when-let [intake (:intake w)]
        (let [text (or (-> intake :payload :text) (-> intake :payload :title) "")]
-         {:kind     :slack-report
-          :at       (:created-at w)
-          :title    (first-heading text)
-          :markdown text})))))
+         (when (seq text)
+           {:kind     :slack-report
+            :at       (:created-at w)
+            :title    (first-heading text)
+            :markdown text}))))))
 
 (defn- ->gate
   "Hydrate one needs-you spine row into a gate. `:project` is canonicalized to a

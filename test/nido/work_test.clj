@@ -437,7 +437,9 @@
 (deftest gate-actions-inbox
   (is (= [{:id :promote :label "Promote" :kind :mutation}
           {:id :drop    :label "Dismiss" :kind :mutation}]
-         (work/gate-actions :inbox false))))
+         (work/gate-actions :inbox false)))
+  (is (= (work/gate-actions :inbox false) (work/gate-actions :inbox true))
+      "inbox actions ignore parked? (inbox rows are session-less)"))
 
 (deftest latest-report-falls-back-to-intake-text
   (with-tmp

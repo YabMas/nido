@@ -126,8 +126,9 @@
      {:ws-id         (:id ws)
       :project       project
       :br-id         br-id
-      ;; promote-id stays Notion-or-GitHub: a Slack workstream isn't promotable
-      ;; (promote-workstream! returns :skip-not-promotable), so it gets no promote-id.
+      ;; promote-id stays Notion-or-GitHub. A Slack inbox workstream IS promotable
+      ;; (promote → start-triage!), but its promote decisions (:triaging etc.) are
+      ;; reported br-independently, so it needs no promote-id.
       :promote-id    (or (:id (notion-ref ws))
                          (some #(when (= :github-issue (:adapter %)) (:id %)) (:external-refs ws)))
       :label         (label ws sessions)

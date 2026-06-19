@@ -254,4 +254,6 @@
                              :ready [] :in-progress [] :triage {:in-flight [] :queued []}})
                 nido.tui/live-session-names (constantly #{})]
     (let [titles (map :title (#'nido.tui/board-rows :brian :all))]
-      (is (some #(str/includes? % "Queue (1)") titles)))))
+      (is (some #(str/includes? % "Queue (1)") titles))
+      (is (str/includes? (first titles) "Queue")
+          "Queue band renders first (inbox-first spec requirement)"))))
