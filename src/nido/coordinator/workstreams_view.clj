@@ -20,7 +20,7 @@
   [ws]
   (some #(when (= :slack-message (:adapter %)) %) (:external-refs ws)))
 
-(defn- ledger-ref
+(defn ledger-ref
   "The external-ref whose :id keys the per-ticket ledger (`bb nido:ticket:*` :br):
    the :notion ref (BR-####) or the :slack-message ref (slack-<channel>-<ts>).
    Either is the key the triage skill writes its record under."

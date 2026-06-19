@@ -297,6 +297,31 @@
           (is (= "Verdict" (-> g :report :title)))
           (is (= "# Verdict\n\nbug — reproduced." (-> g :report :markdown))))))))
 
+(deftest gates-hydrates-a-slack-triage-report-from-the-ticket-ledger
+  ;; A Slack workstream's triage report is written to the TICKET ledger keyed by
+  ;; the slack-message id (not the workstream ledger). The gate must surface it.
+  (with-tmp
+    (fn [_]
+      (let [slack-id "slack-C1-1.0"
+            w (workstream/create! :brian {:stage :triaging
+                                          :external-refs [{:adapter :slack-message
+                                                           :id slack-id :title "msg"}]})]
+        (tickets/open! :brian slack-id {:title "msg"})
+        (tickets/set-status! :brian slack-id :awaiting-input)
+        (tickets/append-entry! :brian slack-id {:kind :triage}
+                               "# Verdict\n\nbug — slack report.")
+        (session/create! :brian (:id w)
+                         {:name "auto" :weight :heavy
+                          :autonomy (assoc autonomy-running :phase :parked)})
+        (let [g (first (work/gates :brian))]
+          (is (= (:id w) (:ws-id g)))
+          (is (= :slack (:origin g)))
+          (is (= :triage (:stage g)))
+          (is (= :triage (-> g :report :kind)))
+          (is (= "Verdict" (-> g :report :title)))
+          (is (= "# Verdict\n\nbug — slack report." (-> g :report :markdown))
+              "the parked slack triage gate shows its ticket-ledger report, not an empty pane"))))))
+
 (deftest gates-excludes-workstreams-that-do-not-need-you
   (with-tmp
     (fn [_]

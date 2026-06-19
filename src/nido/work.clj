@@ -174,14 +174,15 @@
    :markdown}, or nil. Prefers the workstream-level ledger (origin-agnostic, works
    for ref-less scratch); falls back to the TICKET ledger (where the triage skill
    writes its report) when the workstream ledger is empty and the workstream
-   carries a Notion ref; finally falls back to the stored intake text so a queued
-   :inbox Slack report shows its message body in the gate."
+   carries a ledger ref — Notion (BR-####) OR Slack (slack-<channel>-<ts>), since
+   the triage skill keys its record on either; finally falls back to the stored
+   intake text so an un-triaged :inbox Slack report still shows its message body."
   [project ws-id]
   (when-let [w (cws/read-ws project ws-id)]
     (or
      (when-let [e (last (:entries w))]
        (entry->report (cstate/workstream-dir project ws-id) e))
-     (when-let [br-id (notion-br-id w)]
+     (when-let [br-id (:id (wsv/ledger-ref w))]
        (when-let [m (tickets/read-meta project br-id)]
          (when-let [e (last (:entries m))]
            (entry->report (tickets/ticket-dir project br-id) e))))
