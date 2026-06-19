@@ -121,14 +121,23 @@
                                         :consecutive-failures 0
                                         :network-failures     0)
                                  (dissoc :breaker :breaker-opened-at))]
-            (when-let [prev (:last-rows prior-state)]
-              (let [additions (set/difference current-rows prev)]
-                (doseq [page pages
-                        :when (contains? additions (:page-id page))]
-                  (let [ev-priority (priority-from-page page priority-from)
-                        payload     (cond-> page
-                                      ev-priority (assoc :priority ev-priority))]
-                    (emit-fn payload)))))
+            ;; Reconcile mode (:reconcile? true) re-emits ALL current members
+            ;; every poll, so eligible/un-triaged tickets re-fire and failed
+            ;; triages retry — the coordinator pre-spawn gate drops the ones
+            ;; already triaged / dismissed / in-progress. Default mode keeps the
+            ;; diff-only "emit once when a page first appears" behaviour (first
+            ;; poll seeds and emits nothing).
+            (let [emit? (if (:reconcile? source-config)
+                          (constantly true)
+                          (let [adds (when-let [prev (:last-rows prior-state)]
+                                       (set/difference current-rows prev))]
+                            (fn [page] (contains? (or adds #{}) (:page-id page)))))]
+              (doseq [page pages
+                      :when (emit? page)]
+                (let [ev-priority (priority-from-page page priority-from)
+                      payload     (cond-> page
+                                    ev-priority (assoc :priority ev-priority))]
+                  (emit-fn payload))))
             new-state)
 
           ;; Connectivity failures are transient — never trip the breaker, just
@@ -196,6 +205,7 @@
              [:project keyword?]
              [:view    keyword?]
              [:poll    {:optional true} string?]
+             [:reconcile? {:optional true} boolean?]
              [:additional-filter {:optional true} [:map-of keyword? any?]]
              [:priority-from     {:optional true} [:map [:property string?]]]]
     :events [:map [:source [:= :notion-view]] [:page-id string?]]

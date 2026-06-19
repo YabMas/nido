@@ -132,6 +132,28 @@
             (is (= 1 (count @emitted)))
             (is (= "p1" (-> @emitted first :payload :page-id)))))))))
 
+(deftest reconcile-mode-re-emits-all-members-every-poll
+  ;; With :reconcile? true the source re-emits ALL current members each poll
+  ;; (no diff dependence), so eligible/un-triaged tickets re-fire and failed
+  ;; triages retry. The coordinator gate drops the already-handled ones.
+  (with-tmp
+    (fn [tmp]
+      (write-views! tmp default-views)
+      (let [emitted (atom [])
+            sc      {:type :notion-view :project :brian :view :open-bugs
+                     :poll "5m" :reconcile? true}]
+        (with-redefs [client/resolve-data-source-id (stub-resolve-ds)
+                      client/data-source-query
+                      (stub-query-result [(stub-page "p1") (stub-page "p2")])]
+          (let [handle (notion-src/start-instance!
+                         sc (fn [p] (swap! emitted conj p)) {:token "t"})]
+            ((:poll! handle))    ; reconcile mode emits even on the first poll
+            ((:poll! handle))    ; ...and again — no "emit once on appearance"
+            (is (= #{"p1" "p2"} (set (map #(-> % :payload :page-id) @emitted)))
+                "every current member emitted")
+            (is (= 4 (count @emitted))
+                "all members re-emitted each poll (2 polls × 2 members)")))))))
+
 (deftest breaker-opens-after-3-consecutive-failures
   (with-tmp
     (fn [tmp]
