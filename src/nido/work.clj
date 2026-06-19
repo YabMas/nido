@@ -38,10 +38,11 @@
     :triage      (if parked?
                    ;; no :promote here — a triage workstream isn't promotable until
                    ;; its verdict is applied (via :reply), which advances it to :ready
-                   ;; where promote/drop are offered.
-                   [{:id :skip  :label "Skip"  :kind :mutation}
-                    {:id :reply :label "Reply" :kind :reply}]
-                   [])
+                   ;; where promote/drop are offered. :dismiss takes it off the radar
+                   ;; (off-radar terminal state) and is available parked or not.
+                   [{:id :dismiss :label "Dismiss" :kind :mutation}
+                    {:id :reply   :label "Reply"   :kind :reply}]
+                   [{:id :dismiss :label "Dismiss" :kind :mutation}])
     :ready       [{:id :promote :label "Promote" :kind :mutation}
                   {:id :drop    :label "Drop"    :kind :mutation}]
     :in-progress (if parked?
@@ -267,20 +268,34 @@
     :done        (do (cws/close! project ws-id :done) {:decision :done})
     (do (cws/advance-stage! project ws-id target) {:decision :advanced})))
 
+(defn dismiss!
+  "Take a workstream off the triage radar: record a :dismissed disposition on its
+   ticket (so auto-re-triage skips it) and settle the workstream (:dropped, which
+   frees its trigger's in-flight slot and removes it from the board). A ref-less
+   workstream just closes. Returns {:decision :dismissed}."
+  [project ws-id]
+  (when-let [w (cws/read-ws project ws-id)]
+    (when-let [br (notion-br-id w)]
+      (tickets/dismiss! project br))
+    (cws/close! project ws-id :dropped))
+  {:decision :dismissed})
+
 (defn resolve-gate!
   "Apply a gate follow-action, dispatching on `action-id`:
      :promote      -> set-stage! :in-progress (the promote gesture)
-     :skip / :drop -> close! :dropped (workstream settled; not pursued)
+     :dismiss      -> off-radar: ticket :dismissed + settle :dropped (no re-triage)
+     :drop         -> close! :dropped (ready-stage workstream settled; not pursued)
      :done         -> set-stage! :done (close! :done)
      :reply        -> resume! the parked agent with `input`
    Returns the resolver's result map."
   ([project ws-id action-id] (resolve-gate! project ws-id action-id nil))
   ([project ws-id action-id input]
    (case action-id
-     :promote      (set-stage! project ws-id :in-progress)
-     :done         (set-stage! project ws-id :done)
-     (:skip :drop) (do (cws/close! project ws-id :dropped) {:decision :dropped})
-     :reply        (resume/resume! project ws-id input)
+     :promote (set-stage! project ws-id :in-progress)
+     :done    (set-stage! project ws-id :done)
+     :dismiss (dismiss! project ws-id)
+     :drop    (do (cws/close! project ws-id :dropped) {:decision :dropped})
+     :reply   (resume/resume! project ws-id input)
      (throw (ex-info "Unknown gate action" {:action-id action-id :ws-id ws-id})))))
 
 (defn new!

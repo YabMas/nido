@@ -260,10 +260,12 @@
         (is (zero? @spawned))))))
 
 (deftest gate-actions-are-stage-derived
-  (is (= [{:id :skip  :label "Skip"  :kind :mutation}
-          {:id :reply :label "Reply" :kind :reply}]
+  (is (= [{:id :dismiss :label "Dismiss" :kind :mutation}
+          {:id :reply   :label "Reply"   :kind :reply}]
          (work/gate-actions :triage true)))
-  (is (= [] (work/gate-actions :triage false)) "an unparked triage offers nothing")
+  (is (= [{:id :dismiss :label "Dismiss" :kind :mutation}]
+         (work/gate-actions :triage false))
+      "an unparked triage can still be dismissed off the radar")
   (is (= [{:id :promote :label "Promote" :kind :mutation}
           {:id :drop    :label "Drop"    :kind :mutation}]
          (work/gate-actions :ready false)) "ready always decides, parked or not")
@@ -290,7 +292,7 @@
           (is (= :notion (:origin g)))
           (is (= :triage (:stage g)))
           (is (= "auto" (:session g)) "the parked session a :reply would resume")
-          (is (= [:skip :reply] (map :id (:actions g))))
+          (is (= [:dismiss :reply] (map :id (:actions g))))
           (is (= :triage (-> g :report :kind)))
           (is (= "Verdict" (-> g :report :title)))
           (is (= "# Verdict\n\nbug — reproduced." (-> g :report :markdown))))))))
@@ -338,15 +340,26 @@
           (is (= {:decision :promote} (work/resolve-gate! :brian (:id w) :promote)))
           (is (= [[:brian (:id w)]] @calls)))))))
 
-(deftest resolve-gate-skip-and-drop-settle-dropped
+(deftest resolve-gate-dismiss-settles-dropped-and-marks-ticket
   (with-tmp
     (fn [_]
-      (let [a (workstream/create! :brian {:stage :triaging :external-refs []})
-            b (workstream/create! :brian {:stage :triaging :external-refs []})]
-        (work/resolve-gate! :brian (:id a) :skip)
-        (work/resolve-gate! :brian (:id b) :drop)
-        (is (= :dropped (:outcome (:closed (workstream/read-ws :brian (:id a))))))
-        (is (= :dropped (:outcome (:closed (workstream/read-ws :brian (:id b))))))))))
+      (let [w (workstream/create! :brian {:stage :triaging
+                                          :external-refs [{:adapter :notion :id "BR-42"}]})]
+        (is (= {:decision :dismissed} (work/resolve-gate! :brian (:id w) :dismiss)))
+        (is (= :dropped (:outcome (:closed (workstream/read-ws :brian (:id w))))))
+        (is (= :dismissed (tickets/status :brian "BR-42"))
+            "dismiss records the off-radar disposition so auto-re-triage skips it")))))
+
+(deftest dismiss-creates-ticket-record-when-absent-and-closes-ws
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :triaging
+                                          :external-refs [{:adapter :notion :id "BR-99"}]})]
+        ;; never-triaged ticket: no meta record yet
+        (is (nil? (tickets/status :brian "BR-99")))
+        (is (= {:decision :dismissed} (work/dismiss! :brian (:id w))))
+        (is (= :dismissed (tickets/status :brian "BR-99")))
+        (is (some? (:closed (workstream/read-ws :brian (:id w)))))))))
 
 (deftest resolve-gate-done-closes-done
   (with-tmp
