@@ -64,7 +64,13 @@
    :dashboard           {:enabled? true :port 8800}})
 
 (def ^:private anomaly-thresholds
-  {:spawn-window-ms 60000  :spawn-threshold 5
+  ;; spawn-threshold is a RUNAWAY rate brake, not a concurrency cap (that's
+  ;; :global-parallel-cap + per-trigger :max-in-flight). Reconcile-mode triage
+  ;; sources (triggers.edn :reconcile? true) re-emit their whole live backlog
+  ;; each poll, so a legitimate catch-up briefly spawns faster than the old
+  ;; diff-only trickle. 10/min still trips a true runaway (e.g. a self-firing
+  ;; misconfig) while tolerating a bounded reconcile catch-up.
+  {:spawn-window-ms 60000  :spawn-threshold 10
    :fail-window-ms  300000 :fail-threshold 3})
 
 (defonce ^:private !detector (atom (anomaly/empty-detector)))
