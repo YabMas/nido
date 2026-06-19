@@ -354,7 +354,8 @@
    compiler never walks the literal stage/rows pair vector (under SCI that
    misreads `[:triage …]` as an element tag)."
   [{:keys [project grouped]}]
-  (->> [[:triage (concat (-> grouped :triage :in-flight) (-> grouped :triage :queued))]
+  (->> [[:inbox (:inbox grouped)]
+        [:triage (concat (-> grouped :triage :in-flight) (-> grouped :triage :queued))]
         [:ready (:ready grouped)]
         [:in-progress (:in-progress grouped)]]
        (keep (fn [[stage rows]]

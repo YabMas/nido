@@ -194,8 +194,9 @@
   (let [g    (work/grouped project (live-session-names project))
         keep #(filter-origin origin %)
         rows (concat
-              (spine-group-rows "Ready to pick up" (keep (:ready g)))
-              (spine-group-rows "In progress"      (keep (:in-progress g)))
+              (spine-group-rows "Queue"             (keep (:inbox g)))
+              (spine-group-rows "Ready to pick up"  (keep (:ready g)))
+              (spine-group-rows "In progress"       (keep (:in-progress g)))
               (triage-spine-rows {:in-flight (keep (get-in g [:triage :in-flight]))
                                   :queued    (keep (get-in g [:triage :queued]))}))]
     (if (empty? rows)

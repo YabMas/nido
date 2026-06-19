@@ -1,6 +1,7 @@
 (ns nido.tui-test
   (:require
    [charm.message :as msg]
+   [clojure.string :as str]
    [clojure.test :refer [deftest is]]
    [nido.coordinator.scratch :as scratch]
    [nido.coordinator.triggers]
@@ -244,3 +245,13 @@
   (doseq [k ["f" "h" "c"]]
     (let [[s' _] (#'tui/update-board (board-state :all) (msg/key-press k))]
       (is (nil? (:modal s')) (str "board key " k " no longer opens a coordinator modal")))))
+
+(deftest board-rows-shows-queue-band
+  (with-redefs [nido.work/grouped
+                (constantly {:inbox [{:origin :slack :stage :inbox :needs-you true
+                                      :label "the app crashed" :engagement :idle
+                                      :last-activity "2026-06-02T00:00:00Z"}]
+                             :ready [] :in-progress [] :triage {:in-flight [] :queued []}})
+                nido.tui/live-session-names (constantly #{})]
+    (let [titles (map :title (#'nido.tui/board-rows :brian :all))]
+      (is (some #(str/includes? % "Queue (1)") titles)))))
