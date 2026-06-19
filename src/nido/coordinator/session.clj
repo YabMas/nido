@@ -169,16 +169,19 @@
   #{:triage :ready :in-progress :done})
 
 (defn- derive-stage
-  "Lifecycle stage from workstream :closed + local ticket status + sessions.
-   Falls back to engagement when there is no ticket status."
-  [closed ticket-status sessions]
+  "Lifecycle stage from workstream :closed + local ticket status.
+   A ticket with NO ledger entry (nil status) is :triage — it has not been
+   triaged yet, regardless of whether its run failed/archived. So a failed
+   triage stays in the queue instead of silently vanishing to :done. :dismissed
+   is the off-radar terminal state (human waved it off). (`sessions` is retained
+   in the signature for call-site compatibility; the projection no longer reads it.)"
+  [closed ticket-status _sessions]
   (cond
     (some? closed)                                              :done
-    (contains? #{:skipped :done} ticket-status)                 :done
+    (contains? #{:dismissed :done} ticket-status)               :done
     (contains? #{:planning :implementing} ticket-status)        :in-progress
     (= :triaged ticket-status)                                  :ready
-    (contains? #{:investigating :awaiting-input} ticket-status) :triage
-    (nil? ticket-status)                                        (if (some live? sessions) :triage :done)
+    ;; everything else — :investigating / :awaiting-input / nil (never triaged) — is triage
     :else                                                       :triage))
 
 (defn- stage-needs-you

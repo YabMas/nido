@@ -247,15 +247,17 @@
     ;; closed workstream → :done
     (is (= :done  (:stage (sess/stage-projection {:at "t" :outcome :done} :triaged [dead] :triaging))))
     ;; ticket status drives the ladder
-    (is (= :done        (:stage (sess/stage-projection nil :skipped [dead] :triaging))))
+    (is (= :done        (:stage (sess/stage-projection nil :dismissed [dead] :triaging))))  ; off-radar
     (is (= :in-progress (:stage (sess/stage-projection nil :planning [live] :triaging))))
     (is (= :in-progress (:stage (sess/stage-projection nil :implementing [live] :triaging))))
     (is (= :ready       (:stage (sess/stage-projection nil :triaged [dead] :triaging))))
     (is (= :triage      (:stage (sess/stage-projection nil :investigating [live] :triaging))))
     (is (= :triage      (:stage (sess/stage-projection nil :awaiting-input [parked] :triaging))))
-    ;; no ticket status → engagement fallback
+    ;; NO ledger entry (nil status) → :triage, regardless of run liveness. A failed
+    ;; triage (archived/dead session, no entry) must STAY in the queue, not vanish.
     (is (= :triage      (:stage (sess/stage-projection nil nil [live] :triaging))))
-    (is (= :done        (:stage (sess/stage-projection nil nil [dead] :triaging))))
+    (is (= :triage      (:stage (sess/stage-projection nil nil [dead] :triaging))))
+    (is (= :triage      (:stage (sess/stage-projection nil nil [] :triaging))))
     ;; manual override wins only when it names a lifecycle stage (:triaging default is ignored)
     (is (= :in-progress (:stage (sess/stage-projection nil :triaged [dead] :in-progress))))
     (is (= :ready       (:stage (sess/stage-projection nil :triaged [dead] :triaging))))))
