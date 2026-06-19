@@ -12,7 +12,7 @@
   "Map a ticket's status to the Run state a clean agent exit implies:
      :awaiting-input  → :awaiting-review   (triage parked for human review)
      :planning        → :awaiting-review   (plan Run owns the ticket; parked)
-     :triaged/:skipped → :done             (resolved in-session)
+     :triaged/:dismissed → :done           (resolved in-session)
      nil / anything else → :done           (cancelled/cleared → terminal)
    :investigating maps to :awaiting-review defensively (a clean exit that left
    the ticket :investigating shouldn't happen, but keeping it in the review
@@ -34,7 +34,7 @@
 
 (defn sweep-resolved!
   "Transition every :awaiting-review triage or plan run whose ticket is no
-   longer in review (resolved via apply/skip, or cleared via cancel) → :done,
+   longer in review (resolved via apply/dismiss, or cleared via cancel) → :done,
    freeing the trigger's in-flight budget AND tearing down the now-finished
    session — once the human has resolved the ticket the review surface is no
    longer needed. Returns the number transitioned."
