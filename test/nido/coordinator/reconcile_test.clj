@@ -155,3 +155,13 @@
       (is (= :queued          (:state (runs/read-run "q1"))) "queued backlog preserved")
       (is (= :awaiting-review (:state (runs/read-run "aw1"))) "parked-for-review preserved")
       (is (= :failed          (:state (runs/read-run "r1"))) "orphaned running forced terminal"))))
+
+(deftest reconcile-dismissed-ticket-forces-triage-run-done
+  ;; A dismissed ticket is terminally handled — its orphaned triage run
+  ;; reconciles to :done (mirrors the :triaged case), not :failed.
+  (with-tmp
+    (fn [_]
+      (tickets/dismiss! :brian "BR-5")
+      (mk-run "d1" :running {:id "BR-5"} :triage-bug)
+      (reconcile/reconcile!)
+      (is (= :done (:state (runs/read-run "d1")))))))

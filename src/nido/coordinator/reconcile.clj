@@ -50,8 +50,8 @@
         ts (when (and br (not (str/blank? br)))
              (tickets/status (:project run) br))]
     (case ts
-      (:triaged :skipped) {:state :done          :error nil}
-      :awaiting-input     {:state :awaiting-review :error nil}
+      (:triaged :dismissed) {:state :done           :error nil}
+      :awaiting-input       {:state :awaiting-review :error nil}
       ;; :investigating / cleared / absent — orphan mid-investigation runs;
       ;; a run already parked at :awaiting-review stays parked.
       (if (= :awaiting-review (:state run))
