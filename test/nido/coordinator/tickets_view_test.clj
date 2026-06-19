@@ -31,7 +31,7 @@
   (is (= :in-progress (tv/classify {:status :planning})))
   (is (= :in-progress (tv/classify {:status :implementing})))
   (is (= :in-progress (tv/classify {:status :awaiting-input})))
-  (is (= :skipped     (tv/classify {:status :skipped})))
+  (is (= :dismissed   (tv/classify {:status :dismissed})))
   (is (= :other       (tv/classify {:status nil}))))
 
 (deftest grouped-tickets-buckets-and-orders
@@ -39,12 +39,12 @@
         all [(mk "BR-1" :triaged "2026-06-04T10:00:00Z")
              (mk "BR-2" :triaged "2026-06-05T10:00:00Z")
              (mk "BR-3" :planning "2026-06-05T09:00:00Z")
-             (mk "BR-4" :skipped "2026-06-01T10:00:00Z")]
+             (mk "BR-4" :dismissed "2026-06-01T10:00:00Z")]
         g (tv/grouped-tickets all)]
     ;; ready group, newest activity first
     (is (= ["BR-2" "BR-1"] (mapv :br-id (:ready g))))
     (is (= ["BR-3"] (mapv :br-id (:in-progress g))))
-    (is (= ["BR-4"] (mapv :br-id (:skipped g))))))
+    (is (= ["BR-4"] (mapv :br-id (:dismissed g))))))
 
 (deftest format-row-shows-br-title-status
   (is (= "BR-4659   · firefox persistent loading animations  [triaged]"

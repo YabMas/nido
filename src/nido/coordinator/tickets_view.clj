@@ -33,13 +33,13 @@
   "Bucket a ticket by lifecycle stage:
    - :ready       — acked triage (:triaged), ready to promote to implementation
    - :in-progress — being worked (:investigating :awaiting-input :planning :implementing)
-   - :skipped     — triage said don't bother (:skipped)
+   - :dismissed   — taken off the radar (:dismissed)
    - :other       — anything else / no status"
   [{:keys [status]}]
   (cond
     (= :triaged status)                                                :ready
     (#{:investigating :awaiting-input :planning :implementing} status) :in-progress
-    (= :skipped status)                                                :skipped
+    (= :dismissed status)                                              :dismissed
     :else                                                              :other))
 
 (defn last-activity
@@ -49,13 +49,13 @@
 
 (defn grouped-tickets
   "Partition tickets into display groups, newest activity first.
-   :skipped is capped at 10; :other is dropped from the overview."
+   :dismissed is capped at 10; :other is dropped from the overview."
   [all]
   (let [by      (group-by classify all)
         newest  (fn [ms] (vec (sort-by last-activity #(compare %2 %1) ms)))]
     {:ready       (newest (:ready by []))
      :in-progress (newest (:in-progress by []))
-     :skipped     (vec (take 10 (newest (:skipped by []))))}))
+     :dismissed   (vec (take 10 (newest (:dismissed by []))))}))
 
 (def ^:private title-max 52)
 

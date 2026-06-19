@@ -35,12 +35,23 @@
     (println "status" (:br o) "->" (:status o))))
 
 (defn complete-cmd
-  "bb nido:ticket:complete :project <p> :br BR-#### :status <triaged|skipped> :disposition <kw>"
+  "bb nido:ticket:complete :project <p> :br BR-#### :status triaged :disposition <kw>
+   (Off-radar tickets use nido:ticket:dismiss — :skipped is retired.)"
   [& args]
   (let [[_ o] (task-args/split-args args)]
     (tickets/complete! (project-kw o) (str (:br o))
                        (keyword (:status o)) (some-> (:disposition o) keyword))
     (println "completed" (:br o) (:status o))))
+
+(defn dismiss-cmd
+  "bb nido:ticket:dismiss :project <p> :br BR-#### (or positional BR-####)
+   Take a ticket off the triage radar (status :dismissed). Skipped by
+   auto-re-triage; creates the record if the ticket was never triaged."
+  [& args]
+  (let [[pos o] (task-args/split-args args)
+        br      (str (or (:br o) (first pos)))]
+    (tickets/dismiss! (project-kw o) br)
+    (println "dismissed" br)))
 
 (defn append-cmd
   "bb nido:ticket:append :project <p> :br BR-#### :kind <kw> :session <s> :run-id <r> :file <path>
@@ -71,7 +82,7 @@
         g     (tickets-view/grouped-tickets all)]
     (doseq [[label k] [["Ready to implement" :ready]
                        ["In progress"        :in-progress]
-                       ["Skipped"            :skipped]]
+                       ["Dismissed"          :dismissed]]
             :let  [ts (get g k)]
             :when (seq ts)]
       (println (str "── " label " (" (count ts) ") ──"))

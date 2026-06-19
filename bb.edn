@@ -304,8 +304,12 @@
    :task (apply nido-ticket/status-cmd *command-line-args*)}
 
   nido:ticket:complete
-  {:doc "Terminal completion of a ticket (:triaged|:skipped + disposition)."
+  {:doc "Terminal completion of a triage verdict (:triaged + disposition)."
    :task (apply nido-ticket/complete-cmd *command-line-args*)}
+
+  nido:ticket:dismiss
+  {:doc "Take a ticket off the triage radar (:dismissed); skipped by auto-re-triage."
+   :task (apply nido-ticket/dismiss-cmd *command-line-args*)}
 
   nido:ticket:append
   {:doc "Append an entry file (body read from :file) to a ticket record."
@@ -320,7 +324,7 @@
    :task (apply nido-ticket/promote-cmd *command-line-args*)}
 
   nido:tickets:list
-  {:doc "List ticket records grouped by stage (Ready to implement / In progress / Skipped)."
+  {:doc "List ticket records grouped by stage (Ready to implement / In progress / Dismissed)."
    :task (apply nido-ticket/list-cmd *command-line-args*)}
 
   nido:transcribe-video
