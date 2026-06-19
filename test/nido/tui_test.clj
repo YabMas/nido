@@ -145,6 +145,15 @@
       (#'tui/update-board (board-state :all) (msg/key-press "d"))
       (is (= [["w1" :done]] @calls) "d → set-stage! :done"))))
 
+(deftest board-x-dismisses-selected-workstream
+  (let [calls (atom [])]
+    (with-redefs [nido.tui/selected-workstream (fn [_] {:ws-id "w1" :br-id "BR-1"})
+                  nido.work/dismiss! (fn [p id] (swap! calls conj [p id]) {:decision :dismissed})
+                  nido.tui/current-rows (constantly [])]
+      (let [[s' _] (#'tui/update-board (board-state :all) (msg/key-press "x"))]
+        (is (= [["brian" "w1"]] @calls) "x → work/dismiss!")
+        (is (re-find #"dismissed" (:status s')))))))
+
 (deftest board-n-opens-create-session
   (let [[s' _] (#'tui/update-board (board-state :all) (msg/key-press "n"))]
     (is (= :create-session (:modal s')) "n opens the new-workstream modal"))

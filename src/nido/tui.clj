@@ -815,6 +815,17 @@
          nil])
     [(assoc state :status "(no workstream selected)") nil]))
 
+(defn- dismiss-selected
+  "Take the highlighted workstream off the triage radar via work/dismiss! — it
+   leaves the queue and is skipped by auto-re-triage."
+  [state]
+  (if-let [ws (selected-workstream state)]
+    (do (work/dismiss! (:project state) (:ws-id ws))
+        [(-> state (refresh-list (current-rows state))
+             (assoc :status (str "dismissed " (or (:br-id ws) (:ws-id ws)) " — off radar")))
+         nil])
+    [(assoc state :status "(no workstream selected)") nil]))
+
 (declare open-stage-picker enter-system)
 
 (defn- open-stage-picker
@@ -861,6 +872,7 @@
     (msg/key-match? msg "p") (promote-selected state)
     (msg/key-match? msg "P") (open-stage-picker state)
     (msg/key-match? msg "d") (done-selected state)
+    (msg/key-match? msg "x") (dismiss-selected state)
     (msg/key-match? msg "s") [(enter-system state) nil]
     (or (msg/key-match? msg "tab") (msg/key-match? msg "right"))
     [(set-origin state (step-origin (:origin state) 1)) nil]
@@ -1146,7 +1158,7 @@
                   :stage-picker         "[↑↓] move  [↵] promote here  [esc] cancel"
                   (case (:screen state)
                     :projects   "[↵] open  [q]uit"
-                    :board      "[↵/o] open  [i]nspect  [n]ew  [p]romote  [P] promote to…  [d]one  [⇄ tab] origin  [s]ystem  [esc] back  [q]uit"
+                    :board      "[↵/o] open  [i]nspect  [n]ew  [p]romote  [P] promote to…  [d]one  [x] dismiss  [⇄ tab] origin  [s]ystem  [esc] back  [q]uit"
                     :workstream "[↵] open in chat  [esc] back  [q]uit"
                     :system     "[↵/e] enter  [w]orktree  [i]nfo  [u]p  [d]own  [x] destroy  •  [f]ire  [h]alt  [c]lear breaker  [esc] back  [q]uit"))))
 
