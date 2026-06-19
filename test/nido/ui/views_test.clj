@@ -39,7 +39,7 @@
    :label "BR-7 · checkout off by a cent"
    :report {:kind :triage :at "2026-06-18T00:00:00Z" :title "Verdict"
             :markdown "# Verdict\n\nbug — reproduced."}
-   :actions [{:id :skip :label "Skip" :kind :mutation}
+   :actions [{:id :dismiss :label "Dismiss" :kind :mutation}
              {:id :reply :label "Reply" :kind :reply}]
    :session "auto"})
 
@@ -58,7 +58,7 @@
   (let [html (views/gate-pane sample-gate)]
     (is (str/includes? html "Verdict"))
     (is (str/includes? html "bug — reproduced."))
-    (is (str/includes? html "/gate/brian/ws-1/skip"))
+    (is (str/includes? html "/gate/brian/ws-1/dismiss"))
     (is (str/includes? html "/gate/brian/ws-1/reply"))
     (is (str/includes? html "<textarea"))
     (is (str/includes? html "data-bind=\"reply\"") "reply textarea is two-way bound to the reply signal")))
@@ -111,7 +111,7 @@
     (is (str/includes? html "Resuming"))))
 
 (deftest gate-action-confirm-renders-per-action-message-and-follow-links
-  (doseq [[action needle] [[:promote "Promoting"] [:skip "Skipped"]
+  (doseq [[action needle] [[:promote "Promoting"] [:dismiss "Dismissed"]
                            [:drop "Dropped"] [:done "done"] [:reply "Resuming"]]]
     (let [html (views/gate-action-confirm-fragment action "brian" "ws-1")]
       (is (str/includes? html needle) (str action " message"))

@@ -278,7 +278,7 @@
   [action-id project ws-id]
   (let [msg (case action-id
               :promote "Promoting → in-progress… provisioning the work session."
-              :skip    "✓ Skipped — dropped, not pursued."
+              :dismiss "✓ Dismissed — off your radar, won't be re-triaged."
               :drop    "✓ Dropped — not pursued."
               :done    "✓ Marked done."
               :reply   "Resuming… re-hydrating the session if needed, then resuming the conversation."
@@ -311,7 +311,7 @@
        [:div.actions {:style "margin-top:16px"}
         (for [{:keys [id label kind]} actions
               :when (= kind :mutation)]
-          [:button.btn {:class (if (#{:skip :drop} id) "btn-danger" "btn-primary")
+          [:button.btn {:class (if (#{:dismiss :drop} id) "btn-danger" "btn-primary")
                         "data-on:click" (str "@post('/gate/" project "/" ws-id "/" (name id) "')")}
            label])]
        (when (some #(= :reply (:kind %)) actions)
