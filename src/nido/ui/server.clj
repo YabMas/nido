@@ -2,6 +2,7 @@
   "HTTP server for the nido dashboard."
   (:require [babashka.fs :as fs]
             [cheshire.core :as json]
+            [clojure.java.io :as io]
             [clojure.string :as str]
             [nido.process :as proc]
             [nido.project :as project]
@@ -34,6 +35,17 @@
              "Cache-Control" "no-cache"
              "Connection" "keep-alive"}
    :body body})
+
+(defn- icon-response
+  "Serve the nido icon (classpath resource) as the dashboard favicon.
+   favicon.png is a 256px copy of resources/nido-icon.png (sips -Z 256)."
+  []
+  (if-let [res (io/resource "favicon.png")]
+    {:status 200
+     :headers {"Content-Type" "image/png"
+               "Cache-Control" "public, max-age=86400"}
+     :body (io/input-stream res)}
+    {:status 404 :body ""}))
 
 ;; ---------------------------------------------------------------------------
 ;; Routing
@@ -315,6 +327,10 @@
 (defn- handle-get [{:keys [uri]}]
   (let [segments (parse-path uri)]
     (case segments
+      ;; GET /favicon.{png,ico} — the nido icon (browsers auto-request .ico)
+      ["favicon.png"] (icon-response)
+      ["favicon.ico"] (icon-response)
+
       ;; GET / — cross-project Gate Inbox (dashboard home)
       []
       (html-response 200 (views/gate-inbox-page (work/all-gates) nil))
