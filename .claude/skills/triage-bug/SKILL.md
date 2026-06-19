@@ -45,20 +45,22 @@ The **ticket key** is what goes in every `bb nido:ticket:*` call's `:br` argumen
   bb nido:ticket:open :project brian :br <slack-id> :url <url> :title "<title>" :opened-by triage-slack-bugs
   ```
 - **Step 4 (apply):** skip the optimistic concurrency check and ALL Notion writes (`API-patch-page`, `API-patch-block-children`, `API-delete-a-block`). The verdict is already captured in the nido record (Step 1.6) — just `bb nido:ticket:complete … :status triaged :disposition applied`. There is no Notion mutation, so write **no** `notion-mutations.log` entry — the nido record is the audit trail.
-- **Step 5 (skip):** skip the Notion Status/archive write — just `bb nido:ticket:complete … :status skipped :disposition <…>`. No `notion-mutations.log` entry.
+- **Step 5 (dismiss):** dismiss is nido-only for every source — just `bb nido:ticket:dismiss … :br <slack-id>`. No Notion write, no `notion-mutations.log` entry.
 
 Everything else is **identical** for both sources: the codebase investigation, the report format (§3 "Proposed Notion writes" is simply omitted for Slack — there are none), the HITL halt at `:awaiting-input`, the `bb nido:ticket:*` ledger writes, and the verb grammar. Wherever a step below says "fetch the page", "BR-####", or names a Notion-write MCP tool, a Slack run uses the payload brief, the slack `:id`, or skips the call, respectively.
 
 ## Lifecycle: ticket status
 
-Triage state lives in the nido ticket record, keyed by `BR-####`. Set the record's status via `bb nido:ticket:status`; this is recorded in the ticket's `meta.edn` and is the durable triage state the coordinator's pre-spawn gate reads. Terminal completion goes through `bb nido:ticket:complete`.
+**Two terminal outcomes, nothing in between.** A report is either *on the radar* — worth pursuing, so it gets a real triage verdict (`apply` → `:triaged`) — or it's *off the radar* (`dismiss` → `:dismissed`). There is no "skip" verdict any more: don't half-handle a ticket. If it's not worth triaging, dismiss it.
+
+Triage state lives in the nido ticket record, keyed by `BR-####`. Set the record's status via `bb nido:ticket:status`; this is recorded in the ticket's `meta.edn` and is the durable triage state the coordinator's pre-spawn gate reads. Terminal completion goes through `bb nido:ticket:complete` (triaged) or `bb nido:ticket:dismiss` (off-radar).
 
 | Status | Set by | Means |
 |---|---|---|
 | `:investigating` | `bb nido:ticket:open` (Step 1), and `redo:` | Reading the report (Notion page or Slack brief), walking codebase, drafting report |
 | `:awaiting-input` | `bb nido:ticket:status … :status awaiting-input` | Draft written + appended to the record. Awaiting human reply in chat. |
 | `:triaged` | `bb nido:ticket:complete … :status triaged` | Verdict applied — Notion properties written on `apply` (Notion run); ledger-only, no Notion (Slack run). Run done. |
-| `:skipped` | `bb nido:ticket:complete … :status skipped` | Skip disposition applied. Run done. |
+| `:dismissed` | `bb nido:ticket:dismiss …` | Off-radar (nido-only, no Notion write). Run done. |
 
 To set a non-terminal status mid-run:
 
@@ -75,7 +77,7 @@ bb nido:ticket:status :project brian :br <BR-####> :status awaiting-input
    bb nido:ticket:open :project brian :br <BR-####> :page <page-id> :url <url> :title "<title>" :opened-by <trigger-name> :edited <last_edited_time>
    ```
 
-   `open` creates/refreshes the record and sets status `:investigating`. The `:edited` value is stored as `:notion-last-edited-at` in `meta.edn` for future change-detection. (There is no dedup step here — nido's coordinator pre-spawn gate already reads this record and won't spawn a Run for a ticket that's already triaged/skipped or has a live session.)
+   `open` creates/refreshes the record and sets status `:investigating`. The `:edited` value is stored as `:notion-last-edited-at` in `meta.edn` for future change-detection. (There is no dedup step here — nido's coordinator pre-spawn gate already reads this record and won't spawn a Run for a ticket that's already triaged/dismissed or has a live session.)
 3. While you have the page response from step 2, capture `last_edited_time` — needed for optimistic concurrency at apply time. Also fetch the body blocks via `mcp__notionApi__API-get-block-children` (description text). **(Notion run only — a Slack run has no page; the description body is the payload `:text`, and there is no concurrency check.)**
 
 ### Pre-staged artifacts (videos)
@@ -158,9 +160,9 @@ enriched description is prepended as a callout block at the top of the page —
 the reporter's original body is preserved intact below it. Comments are never
 written. The full report still lives in the nido record.)
 
-## 4. If you want to skip instead
-**Recommended disposition:** Not Done | On Hold | leave-as-is | delete
-**Reason:** <one line>
+## 4. If you want to dismiss instead
+**Recommendation:** dismiss (take off the triage radar — nido-only, Notion untouched)
+**Reason:** <one line — why this isn't worth pursuing>
 
 ## 5. Investigation trail
 - Transcripts read (if any): list manifest entries the report drew from.
@@ -178,8 +180,7 @@ When the session resumes (the user replied), the latest user message contains th
 |---|---|
 | `apply` | Execute §3 verbatim |
 | `apply: <override>` | Apply with overrides, e.g. `apply: effort=L, title="..."` |
-| `skip` | Execute §4 with the recommended disposition |
-| `skip: <disposition>` | Override disposition (`skip: delete`, `skip: on-hold`, `skip: leave-as-is`, `skip: not-done`) |
+| `dismiss` | Execute §5 — take the ticket off the radar (nido-only) |
 | `redo: <correction>` | Re-run Step 1 + Step 2 with the correction in mind; new draft, re-halt at `:awaiting-input` |
 | `cancel` | Abort and exit. Leave Notion untouched and do NOT mark the record terminal — nido's run-termination hook clears the ticket status so it's re-triable |
 
@@ -258,34 +259,15 @@ If any apply write fails after a partial write (some properties landed but the p
 
 3. Do NOT call `bb nido:ticket:complete` — leave the record non-terminal so the ticket can be re-triaged.
 
-## Step 5 — Skip
+## Step 5 — Dismiss
 
-> **Slack run:** skip the Notion Status/archive write entirely. A Slack `skip` just records the disposition in the nido record (`bb nido:ticket:complete … :status skipped …` with the slack `:id` as `:br`); no `notion-mutations.log` entry. Ignore the Notion dispositions below.
-
-Dispositions (the Status / archive write is the only Notion mutation — no skip comment):
-
-- `Not Done` — `mcp__notionApi__API-patch-page` setting Status = `Not Done`. Record disposition: `not-done`.
-- `On Hold` — Status = `On Hold`. Record disposition: `on-hold`.
-- `leave-as-is` — no Status change. Record disposition: `leave-as-is`.
-- `delete` — `mcp__notionApi__API-delete-a-block` on the page-id (archives the page via `in_trash: true`). Record disposition: `deleted`.
-
-Audit log line:
-
-```
-<iso-timestamp> <run-id> page=<page-id> writes=status:<new-status>
-```
-
-Or for delete:
-
-```
-<iso-timestamp> <run-id> page=<page-id> writes=archived
-```
-
-On success, complete the record:
+Dismiss takes the ticket **off the triage radar** and is **nido-only for every source** — it writes **nothing** to Notion. The Notion ticket stays on the team's board untouched; it's simply no longer in nido's triage queue and auto-re-triage skips it. (If a ticket should also change state in Notion — e.g. marked *Not Done* or deleted as spam — that's a human action in Notion, not triage's job.)
 
 ```bash
-bb nido:ticket:complete :project brian :br <BR-####> :status skipped :disposition <not-done|on-hold|leave-as-is|deleted>
+bb nido:ticket:dismiss :project brian :br <BR-####>
 ```
+
+(For a Slack run, pass the slack `:id` as `:br`.) No `mcp__notionApi__*` call, no `notion-mutations.log` entry. The run is done.
 
 ## Step 6 — Redo
 
@@ -309,9 +291,9 @@ If the user replied `cancel`:
 
 Triage triggers deliberately do NOT use `:dry-run? true`. The coordinator's dry-run path (used by other triggers like `:smoke-notion`) short-circuits the Run BEFORE the session is spawned — the skill would never get to run, which is the opposite of what we want for validation.
 
-The real safety mechanism for triage is the HITL halt at `:awaiting-input` (Step 1.7 + Step 3): the agent ALWAYS pauses for a chat verdict before any Notion write. No Notion mutation happens until you respond with `apply`. If you say `cancel`, `skip`, or `redo`, the apply branch never runs.
+The real safety mechanism for triage is the HITL halt at `:awaiting-input` (Step 1.7 + Step 3): the agent ALWAYS pauses for a chat verdict before any Notion write. No Notion mutation happens until you respond with `apply`. If you say `cancel`, `dismiss`, or `redo`, the apply branch never runs (and `dismiss` is nido-only — it never touches Notion either).
 
-Treat this as a hard contract: never call a Notion-write MCP tool (`API-patch-page`, `API-patch-block-children`, `API-delete-a-block`) outside the explicit `apply` or `skip` branches in Step 4 / Step 5. On `apply`, the permitted writes are: the Type/Effort/Status/Title property patch, and the prepend (plus idempotency-delete) of **our own** enriched callout. Never overwrite the reporter's original body, and never write comments.
+Treat this as a hard contract: never call a Notion-write MCP tool (`API-patch-page`, `API-patch-block-children`, `API-delete-a-block`) outside the explicit `apply` branch in Step 4. `apply` is the ONLY Notion-write verb. On `apply`, the permitted writes are: the Type/Effort/Status/Title property patch, and the prepend (plus idempotency-delete) of **our own** enriched callout. Never overwrite the reporter's original body, and never write comments.
 
 ## Resume behaviour
 
