@@ -3,7 +3,9 @@
    [babashka.fs :as fs]
    [clojure.edn :as edn]
    [clojure.test :refer [deftest is]]
+   [nido.coordinator.intake :as intake]
    [nido.coordinator.promote :as promote]
+   [nido.coordinator.session :as session]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.tickets :as tickets]
    [nido.coordinator.workstream :as ws]
@@ -108,3 +110,48 @@
           (is (= :brian (get-in env [:target :project]))
               "the enqueued envelope carries a KEYWORD project so the router resolves it")
           (is (= :plan-bug (get-in env [:target :trigger]))))))))
+
+(defn- write-triggers! [project ts]
+  (let [p (cstate/triggers-path project)]
+    (fs/create-dirs (fs/parent p))
+    (spit p (pr-str {:triggers ts}))))
+
+(def ^:private slack-trigger
+  {:name :triage-slack-bugs :intake :queue :skill :triage-bug :agent :claude
+   :session-profile :lite
+   :source {:type :slack-channel :channel "C"}
+   :payload "Triage Slack bug: {{event/title}}\n\n{{event/text}}"
+   :limits {:budget "15m"}})
+
+(deftest promote-inbox-slack-starts-triage
+  (with-tmp
+    (fn [_]
+      (write-triggers! :brian [slack-trigger])
+      (let [w   (intake/enqueue-inbox!
+                  {:project :brian
+                   :trigger {:name :triage-slack-bugs}
+                   :payload {:adapter :slack-message :id "slack-C-1.0"
+                             :title "boom" :text "it broke"}})
+            res (promote/promote-workstream! :brian (:id w))
+            w'  (ws/read-ws :brian (:id w))]
+        (is (= :triaging (:decision res)))
+        ;; advanced off :inbox and a triage session now exists on the SAME ws
+        (is (= :triaging (:stage w')))
+        (is (= 1 (count (session/list-sessions :brian (:id w)))))
+        ;; re-promote: no longer in the queue
+        (is (= :skip-not-inbox
+               (:decision (promote/promote-workstream! :brian (:id w)))))))))
+
+(deftest promote-inbox-slack-missing-trigger
+  (with-tmp
+    (fn [_]
+      (write-triggers! :brian [])                       ; trigger gone from disk
+      (let [w (intake/enqueue-inbox!
+                {:project :brian
+                 :trigger {:name :triage-slack-bugs}
+                 :payload {:adapter :slack-message :id "slack-C-2.0" :text "x"}})]
+        (is (= :skip-no-trigger
+               (:decision (promote/promote-workstream! :brian (:id w)))))
+        ;; no session spawned, still in the queue
+        (is (= :inbox (:stage (ws/read-ws :brian (:id w)))))
+        (is (empty? (session/list-sessions :brian (:id w))))))))

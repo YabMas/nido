@@ -5,9 +5,12 @@
    the triage skill's in-chat `promote` command. See spec §The promote gesture."
   (:require
    [babashka.fs :as fs]
+   [nido.coordinator.clock :as clock]
    [nido.coordinator.queue :as queue]
+   [nido.coordinator.spawn :as spawn]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.tickets :as tickets]
+   [nido.coordinator.triggers :as triggers]
    [nido.coordinator.workstream :as ws]
    [nido.coordinator.workstreams-view :as wsv]
    [nido.github.client :as gh]))
@@ -67,14 +70,44 @@
            :queued   (queue/enqueue! {:target  {:project (keyword (name project)) :trigger :plan-github-issue}
                                       :payload payload})})))))
 
+(defn start-triage!
+  "Promote a queued :inbox workstream by running its deferred triage skill.
+   Reads the stored :intake {:trigger :payload}, loads that trigger, force-spawns
+   the triage session onto THIS workstream (deduped on its ref), and advances the
+   stage :inbox → :triaging. Returns:
+     {:decision :triaging}        — triage started
+     {:decision :skip-not-inbox}  — the workstream has left the queue
+     {:decision :skip-no-trigger} — its originating trigger is gone from triggers.edn"
+  [project ws-id]
+  (let [w (ws/read-ws project ws-id)]
+    (if (not= :inbox (:stage w))
+      {:decision :skip-not-inbox}
+      (let [{:keys [trigger payload]} (:intake w)
+            t (triggers/find-by-name (triggers/load-for-project project) trigger)]
+        (if (nil? t)
+          {:decision :skip-no-trigger}
+          (let [routed {:project         project
+                        :trigger         t
+                        :payload         payload
+                        :priority        (or (:priority t) 0)
+                        :session-profile (:session-profile t)
+                        :uncapped?       (boolean (:uncapped? t))}]
+            (cstate/ensure-dirs!)
+            (spawn/spawn-and-submit! routed {:fired-at (clock/now-iso)
+                                             :fired-by "promote"})
+            (ws/advance-stage! project ws-id :triaging)
+            {:decision :triaging}))))))
+
 (defn promote-workstream!
   "Promote a workstream by id, dispatching on its source. :notion → the existing
    triage-gated :plan-bug leg; :github → fetch the issue body + provision the
-   issue-impl leg; anything else (scratch, slack) isn't promotable. Returns {:decision}."
+   issue-impl leg; :slack at :inbox → run the deferred triage skill (start-triage!);
+   anything else isn't promotable. Returns {:decision}."
   [project ws-id]
   (if-let [w (ws/read-ws project ws-id)]
     (case (wsv/ws-source w)
       :notion (promote! project (notion-br-id w))
       :github (promote-github! project w)
+      :slack  (start-triage! project ws-id)
       {:decision :skip-not-promotable})
     {:decision :skip-not-promotable}))
