@@ -137,3 +137,19 @@
   (is (not (m/validate triggers/Trigger
                        {:name :plan-bug :source {:type :manual} :skill :plan-bug
                         :payload "x" :session-name-prefix 42}))))
+
+(deftest intake-queue-trigger-loads
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (let [p (cstate/triggers-path :brian)]
+          (fs/create-dirs (fs/parent p))
+          (spit p (pr-str {:triggers [{:name :triage-slack-bugs
+                                       :source {:type :slack-channel :channel "C"}
+                                       :skill :triage-bug
+                                       :payload "Triage {{event/title}}"
+                                       :intake :queue}]}))
+          (let [t (triggers/find-by-name (triggers/load-for-project :brian)
+                                         :triage-slack-bugs)]
+            (is (= :queue (:intake t))))))
+      (finally (fs/delete-tree tmp)))))

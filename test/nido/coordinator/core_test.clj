@@ -527,3 +527,27 @@
               "launched under the pre-generated session-id so the shim can --resume it")
           (is (= :awaiting-review (:state (runs/read-run "rplan")))
               "ticket still :planning (skill not really run) ⇒ parked ready-for-human"))))))
+
+(deftest queue-mode-trigger-parks-inbox-no-spawn
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (cstate/ensure-dirs!)
+        (let [trigger {:name :triage-slack-bugs :intake :queue :skill :triage-bug
+                       :source {:type :slack-channel :channel "C"}}
+              env     {:broadcast {:type :slack-channel
+                                   :source-config {:type :slack-channel :channel "C"}
+                                   :payload {:adapter :slack-message :id "slack-C-1.0"
+                                             :title "boom" :text "it broke"}}}
+              tbp     {:brian [trigger]}]
+          (#'nido.coordinator.core/process-envelope! env tbp)
+          (let [ids (ws/list-ids :brian)]
+            (is (= 1 (count ids)))
+            (let [w (ws/read-ws :brian (first ids))]
+              (is (= :inbox (:stage w)))
+              (is (= "it broke" (-> w :intake :payload :text)))
+              (is (empty? (session/list-sessions :brian (:id w))))))
+          ;; nothing was spawned as a run
+          (is (or (not (fs/exists? (cstate/runs-dir)))
+                  (empty? (filter fs/directory? (fs/list-dir (cstate/runs-dir))))))))
+      (finally (fs/delete-tree tmp)))))

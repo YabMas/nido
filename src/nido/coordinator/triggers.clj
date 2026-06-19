@@ -23,6 +23,7 @@
    [:priority-from  {:optional true} [:map [:property string?]]]
    [:session-profile {:optional true} keyword?]
    [:preprocess     {:optional true} [:vector keyword?]]
+   [:intake         {:optional true} [:enum :spawn :queue]]
    [:dry-run?       {:optional true} boolean?]
    [:enabled?       {:optional true} boolean?]
    [:uncapped?      {:optional true} boolean?]

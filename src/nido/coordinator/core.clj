@@ -31,6 +31,7 @@
    [nido.coordinator.executor :as executor]
    [nido.coordinator.github-merge :as github-merge]
    [nido.coordinator.github-issue-intake :as github-issue-intake]
+   [nido.coordinator.intake :as intake]
    [nido.github.config :as gh-config]
    [nido.coordinator.triggers :as triggers]
    [nido.core :as nido-core]
@@ -476,6 +477,14 @@
         (swap! !detector anomaly/record-spawn (clock/now-iso))
         (runs/transition! (:id run) :dry-run-would-fire))
 
+      ;; Queue-mode intake (spec §Intake → queue): a trigger with :intake :queue
+      ;; parks the report as a session-less :inbox workstream for a human to
+      ;; promote/dismiss, instead of auto-spawning. No run, no session, and no
+      ;; anomaly-detector bump (nothing was spawned). Placed before the triage
+      ;; gate so queue mode never consults ticket state.
+      (= :queue (-> routed :trigger :intake))
+      (intake/enqueue-inbox! routed)
+
       ;; Triage pre-spawn gate (spec §Coordinator pre-spawn gate): a triage
       ;; event whose ticket is already completed, or already owned by a live
       ;; session, is dropped without creating a Run. BR-#### rides in the
@@ -491,12 +500,10 @@
                          br " (" (name decision) ")"))))
 
       :else
-      (let [run (spawn/spawn-records! routed
-                                      {:fired-at (clock/now-iso)
-                                       :fired-by (System/getenv "USER")})]
-        (swap! !detector anomaly/record-spawn (clock/now-iso))
-        (executor/submit! (:id run) (:priority run) (:uncapped? run)
-                          (:trigger run) (-> routed :trigger :max-in-flight))))))
+      (do
+        (spawn/spawn-and-submit! routed {:fired-at (clock/now-iso)
+                                         :fired-by (System/getenv "USER")})
+        (swap! !detector anomaly/record-spawn (clock/now-iso))))))
 
 (defn tick!
   "One iteration of the main loop. Public for testability."

@@ -7,6 +7,7 @@
   (:require
    [clojure.string :as str]
    [nido.coordinator.clock :as clock]
+   [nido.coordinator.executor :as executor]
    [nido.coordinator.runs :as runs]
    [nido.coordinator.session :as session]
    [nido.coordinator.workstream :as ws]))
@@ -93,3 +94,13 @@
         (when (and minted? (empty? (session/list-sessions project (:id w))))
           (ws/delete! project (:id w)))
         (throw t)))))
+
+(defn spawn-and-submit!
+  "Spawn the records for a routed fire and submit the run to the executor.
+   Shared by the coordinator's live spawn branch and promote's inbox→triage
+   start. Returns the created run."
+  [routed meta]
+  (let [run (spawn-records! routed meta)]
+    (executor/submit! (:id run) (:priority run) (:uncapped? run)
+                      (:trigger run) (-> routed :trigger :max-in-flight))
+    run))
