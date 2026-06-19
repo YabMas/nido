@@ -5,12 +5,14 @@
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is use-fixtures]]
    [nido.coordinator.agent :as agent]
+   [nido.coordinator.clock :as clock]
    [nido.coordinator.core :as core]
    [nido.coordinator.executor :as executor]
    [nido.coordinator.github-merge :as github-merge]
    [nido.github.config :as gh-config]
    [nido.coordinator.anomaly :as anomaly]
    [nido.coordinator.breakers :as breakers]
+   [nido.coordinator.intake :as intake]
    [nido.coordinator.notify :as notify]
    [nido.coordinator.runs :as runs]
    [nido.coordinator.session :as session]
@@ -550,4 +552,25 @@
           ;; nothing was spawned as a run
           (is (or (not (fs/exists? (cstate/runs-dir)))
                   (empty? (filter fs/directory? (fs/list-dir (cstate/runs-dir))))))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest maybe-expire-inbox-closes-old-entries
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (cstate/ensure-dirs!)
+        (with-redefs [clock/now-iso (constantly "2026-06-01T00:00:00Z")]
+          (intake/enqueue-inbox!
+            {:project :brian
+             :trigger {:name :triage-slack-bugs}
+             :payload {:adapter :slack-message :id "slack-C-1.0" :text "x"}}))
+        ;; reset the throttle clock so the sweep fires, then sweep 10 days later
+        (reset! @#'nido.coordinator.core/!last-inbox-sweep-ms 0)
+        (with-redefs-fn {#'nido.coordinator.core/registered-projects (constantly [:brian])}
+          (fn []
+            (#'nido.coordinator.core/maybe-expire-inbox!
+              (+ (.toEpochMilli (java.time.Instant/parse "2026-06-01T00:00:00Z"))
+                 (* 10 24 60 60 1000)))))
+        (is (= :dropped (-> (ws/find-by-ref :brian :slack-message "slack-C-1.0")
+                            :closed :outcome))))
       (finally (fs/delete-tree tmp)))))

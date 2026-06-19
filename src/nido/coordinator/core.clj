@@ -52,6 +52,11 @@
    ;; entry is written, so a young orphan may actually be a live boot in flight.
    :reclaim-interval-ms (* 60 60 1000)   ; hourly
    :reclaim-min-age-ms  (* 60 60 1000)   ; only orphans idle ≥ 1h
+   ;; Queue hygiene: drop un-promoted Slack inbox entries after 3 days. Swept at
+   ;; most once per :inbox-sweep-interval-ms (and on the first tick after start,
+   ;; since the throttle clock starts at 0).
+   :inbox-expiry-ms         (* 3 24 60 60 1000)  ; 3 days
+   :inbox-sweep-interval-ms (* 30 60 1000)        ; sweep at most every 30 min
    :system-prompt       "You are running inside a nido auto-triggered session. The user is not present yet. Write artifacts under <session-home>/artifacts/ with stable filenames. Update <session-home>/_run-status.edn at phase transitions with {:phase :awaiting-input | :working | :complete | :error :note <str>}."
    ;; Pre-orientation burst for a promoted ticket (the /continue-ticket leg).
    ;; Unlike triage, the human WILL own this exact session — they'll resume this
@@ -81,6 +86,10 @@
 ;; Last wall-clock ms an auto-reclaim sweep ran. Starts at 0 so the first tick
 ;; after a daemon (re)start sweeps immediately, then throttles to the interval.
 (defonce ^:private !last-reclaim-ms (atom 0))
+
+;; Last wall-clock ms an inbox-expiry sweep ran. Starts at 0 so the first tick
+;; after a (re)start sweeps immediately, then throttles to the interval.
+(defonce ^:private !last-inbox-sweep-ms (atom 0))
 
 ;; Per-project last GitHub-merge poll wall-clock ms. Starts empty so the first
 ;; tick after (re)start polls each configured project immediately, then throttles
@@ -138,6 +147,25 @@
   []
   (->> (registered-projects)
        (into {} (map (fn [p] [p (triggers/load-for-project p)])))))
+
+(defn- maybe-expire-inbox!
+  "Throttled queue hygiene: at most once per :inbox-sweep-interval-ms, close
+   (:dropped) any still-open :inbox workstream older than :inbox-expiry-ms across
+   all registered projects. Never throws into the tick loop."
+  [now-ms]
+  (when (>= (- now-ms @!last-inbox-sweep-ms) (:inbox-sweep-interval-ms defaults))
+    (reset! !last-inbox-sweep-ms now-ms)
+    (try
+      (doseq [project (registered-projects)]
+        (let [expired (intake/expire-stale! project (:inbox-expiry-ms defaults) now-ms)]
+          (when (seq expired)
+            (println (str "nido coordinator: expired " (count expired)
+                          " stale inbox entry(ies) in " (name project) ": "
+                          (str/join ", " expired))))))
+      (catch Throwable t
+        (binding [*err* *err*]
+          (.println ^java.io.PrintWriter *err*
+                    (str "WARN: inbox expiry threw — " (ex-message t))))))))
 
 (defn- parse-duration-ms [s]
   ;; Minimal duration parser: "30s" "5m" "1h"
@@ -543,6 +571,7 @@
             (swap! !source-instances assoc-in [hash :last-polled-ms] now-ms))
           ;; Periodic disk hygiene (throttled to :reclaim-interval-ms).
           (maybe-reclaim! now-ms)
+          (maybe-expire-inbox! now-ms)
           (maybe-poll-github-merges! now-ms)
           (maybe-poll-github-issues! now-ms))
         ;; After draining + polling, check anomaly thresholds.

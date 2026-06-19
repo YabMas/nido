@@ -19,3 +19,24 @@
                     {:stage         :inbox
                      :external-refs (if ref [ref] [])
                      :intake        {:trigger (:name trigger) :payload payload}}))))
+
+(defn- iso-age-ms
+  "Milliseconds between ISO-8601 instant `iso` and `now-ms` (epoch millis).
+   A nil/blank :created-at reads as age 0 (never expires)."
+  [iso now-ms]
+  (if iso
+    (- now-ms (.toEpochMilli (java.time.Instant/parse iso)))
+    0))
+
+(defn expire-stale!
+  "Close (:dropped) every still-open :inbox workstream in `project` whose
+   :created-at is older than `max-age-ms`. Promoted workstreams have left :inbox
+   and closed ones are skipped. `now-ms` is epoch millis (injected for tests).
+   Returns the vector of expired ws-ids."
+  [project max-age-ms now-ms]
+  (->> (ws/list-ids project)
+       (keep #(ws/read-ws project %))
+       (filter (fn [w] (and (= :inbox (:stage w))
+                            (nil? (:closed w))
+                            (>= (iso-age-ms (:created-at w) now-ms) max-age-ms))))
+       (mapv (fn [w] (ws/close! project (:id w) :dropped) (:id w)))))

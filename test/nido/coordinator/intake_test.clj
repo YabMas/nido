@@ -2,6 +2,7 @@
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
+   [nido.coordinator.clock :as clock]
    [nido.coordinator.intake :as intake]
    [nido.coordinator.session :as session]
    [nido.coordinator.state :as cstate]
@@ -37,3 +38,27 @@
             b (intake/enqueue-inbox! routed)]
         (is (= (:id a) (:id b)))
         (is (= 1 (count (ws/list-ids :brian))))))))
+
+(defn- iso->ms [iso] (.toEpochMilli (java.time.Instant/parse iso)))
+
+(deftest expire-stale-closes-only-old-open-inbox
+  (with-tmp
+    (fn [_]
+      (let [t0 "2026-06-01T00:00:00Z"
+            three-days (* 3 24 60 60 1000)]
+        (with-redefs [clock/now-iso (constantly t0)]
+          ;; old inbox entry — should expire
+          (intake/enqueue-inbox! (assoc-in routed [:payload :id] "slack-C-1.0"))
+          ;; promoted-away entry — advanced off :inbox, should NOT expire
+          (let [p (intake/enqueue-inbox! (assoc-in routed [:payload :id] "slack-C-2.0"))]
+            (ws/advance-stage! :brian (:id p) :triaging)))
+        ;; fresh inbox entry created 3 days later — younger than 3 days, should NOT expire
+        (with-redefs [clock/now-iso (constantly "2026-06-04T00:00:00Z")]
+          (intake/enqueue-inbox! (assoc-in routed [:payload :id] "slack-C-3.0")))
+        (let [now-ms  (+ (iso->ms t0) three-days 1000)     ; t0 + 3 days + 1s
+              expired (intake/expire-stale! :brian three-days now-ms)]
+          (is (= 1 (count expired)))
+          (is (= :dropped (-> (ws/find-by-ref :brian :slack-message "slack-C-1.0")
+                              :closed :outcome)))
+          (is (nil? (:closed (ws/find-by-ref :brian :slack-message "slack-C-2.0"))))
+          (is (nil? (:closed (ws/find-by-ref :brian :slack-message "slack-C-3.0")))))))))
