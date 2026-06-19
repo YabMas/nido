@@ -525,6 +525,55 @@
       (is (= "sid" (:claude-session-id (runs/find-for-session "brian" "ws-1" "s")))
           "a string project (as the web passes) still matches a keyword-:project run"))))
 
+(deftest home-present?-follows-the-session-home-symlink
+  (with-tmp
+    (fn [_]
+      (mk-run "r-home" :triage-bug :awaiting-review)
+      (let [link (cstate/run-session-home-link "r-home")]
+        (is (not (runs/home-present? (runs/read-run "r-home")))
+            "no symlink yet → home reads absent")
+        (fs/create-sym-link link (str (fs/path (cstate/run-dir "r-home") "gone")))
+        (is (not (runs/home-present? (runs/read-run "r-home")))
+            "dangling (reclaimed) symlink reads absent")
+        (fs/delete link)
+        (let [target (fs/create-dirs (fs/path (cstate/run-dir "r-home") "real-home"))]
+          (fs/create-sym-link link (str target))
+          (is (runs/home-present? (runs/read-run "r-home"))
+              "symlink to a live dir reads present"))))))
+
+(deftest ensure-session-home!-noop-when-present
+  (with-tmp
+    (fn [_]
+      (mk-run "r1" :triage-bug :awaiting-review)
+      (let [spawned (atom 0)]
+        (with-redefs [runs/home-present? (constantly true)
+                      runs/spawn-session-for-run! (fn [_] (swap! spawned inc))]
+          (is (false? (runs/ensure-session-home! (runs/read-run "r1")))
+              "present home → returns false, did not re-provision"))
+        (is (zero? @spawned))))))
+
+(deftest ensure-session-home!-reprovisions-when-reclaimed
+  (with-tmp
+    (fn [_]
+      (mk-run "r1" :triage-bug :awaiting-review)
+      (let [spawned (atom 0)]
+        (with-redefs [runs/home-present? (constantly false)
+                      runs/spawn-session-for-run! (fn [_] (swap! spawned inc))]
+          (is (true? (runs/ensure-session-home! (runs/read-run "r1")))
+              "reclaimed home → returns true after re-provisioning"))
+        (is (= 1 @spawned) "re-provisioned exactly once")))))
+
+(deftest ensure-session-home!-tags-failure
+  (with-tmp
+    (fn [_]
+      (mk-run "r1" :triage-bug :awaiting-review)
+      (with-redefs [runs/home-present? (constantly false)
+                    runs/spawn-session-for-run! (fn [_] (throw (ex-info "no branch" {})))]
+        (is (= :rehydrate-failed
+               (try (runs/ensure-session-home! (runs/read-run "r1")) nil
+                    (catch clojure.lang.ExceptionInfo e (:reason (ex-data e)))))
+            "a re-provision failure is tagged :rehydrate-failed")))))
+
 (deftest teardown-archives-coordinator-session-for-triage
   ;; Reclaiming a triage run's session must flip the coordinator session record
   ;; off :live, so engagement-state stops treating the dead session as live.

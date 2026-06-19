@@ -43,7 +43,7 @@
                          {:name "auto" :weight :heavy :autonomy autonomy-parked})
         (session/set-phase! :brian (:id w) "auto" :running)
         (write-run! "r1" (:id w) "auto" "sid-9")
-        (with-redefs [resume/home-present? (fn [_] true)
+        (with-redefs [runs/home-present? (fn [_] true)
                       agent/launch! (fn [opts] (reset! calls opts) {:exit-code 0 :num-turns 1})]
           (#'resume/run-turn! :brian (:id w) "auto" (runs/read-run "r1") "do the fix"))
         (is (= "sid-9" (:claude-session-id @calls)))
@@ -61,7 +61,7 @@
         (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
         (session/set-phase! :brian (:id w) "auto" :running)
         (write-run! "r1" (:id w) "auto" "sid-9")
-        (with-redefs [resume/home-present? (fn [_] true)
+        (with-redefs [runs/home-present? (fn [_] true)
                       agent/launch! (fn [_] (throw (ex-info "boom" {})))]
           (#'resume/run-turn! :brian (:id w) "auto" (runs/read-run "r1") "x"))
         (is (= :parked (get-in (first (session/list-sessions :brian (:id w))) [:autonomy :phase]))
@@ -118,7 +118,7 @@
         (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
         (session/set-phase! :brian (:id w) "auto" :running)
         (write-run! "r1" (:id w) "auto" "sid-9")
-        (with-redefs [resume/home-present? (fn [_] true)
+        (with-redefs [runs/home-present? (fn [_] true)
                       runs/spawn-session-for-run! (fn [_] (swap! spawned inc))
                       agent/launch! (fn [opts] (reset! launched opts) {:exit-code 0 :num-turns 1})]
           (#'resume/run-turn! :brian (:id w) "auto" (runs/read-run "r1") "apply"))
@@ -134,7 +134,7 @@
         (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
         (session/set-phase! :brian (:id w) "auto" :running)
         (write-run! "r1" (:id w) "auto" "sid-9")
-        (with-redefs [resume/home-present? (fn [_] false)
+        (with-redefs [runs/home-present? (fn [_] false)
                       runs/spawn-session-for-run! (fn [_] (swap! spawned inc))
                       agent/launch! (fn [opts] (reset! launched opts) {:exit-code 0})]
           (#'resume/run-turn! :brian (:id w) "auto" (runs/read-run "r1") "apply"))
@@ -149,7 +149,7 @@
         (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
         (session/set-phase! :brian (:id w) "auto" :running)
         (write-run! "r1" (:id w) "auto" "sid-9")
-        (with-redefs [resume/home-present? (fn [_] true)
+        (with-redefs [runs/home-present? (fn [_] true)
                       agent/launch! (fn [_] (throw (ex-info "boom" {})))]
           (#'resume/run-turn! :brian (:id w) "auto" (runs/read-run "r1") "apply"))
         (let [auto (:autonomy (first (session/list-sessions :brian (:id w))))]
@@ -164,7 +164,7 @@
         (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
         (session/set-phase! :brian (:id w) "auto" :running)
         (write-run! "r1" (:id w) "auto" "sid-9")
-        (with-redefs [resume/home-present? (fn [_] false)
+        (with-redefs [runs/home-present? (fn [_] false)
                       runs/spawn-session-for-run! (fn [_] (throw (ex-info "no branch" {})))
                       agent/launch! (fn [_] {:exit-code 0})]
           (#'resume/run-turn! :brian (:id w) "auto" (runs/read-run "r1") "apply"))
@@ -181,7 +181,7 @@
                           :autonomy (assoc autonomy-parked :error {:reason :resume-failed})})
         (session/set-phase! :brian (:id w) "auto" :running)
         (write-run! "r1" (:id w) "auto" "sid-9")
-        (with-redefs [resume/home-present? (fn [_] true)
+        (with-redefs [runs/home-present? (fn [_] true)
                       agent/launch! (fn [_] {:exit-code 0})]
           (#'resume/run-turn! :brian (:id w) "auto" (runs/read-run "r1") "apply"))
         (is (nil? (-> (first (session/list-sessions :brian (:id w))) :autonomy :error))

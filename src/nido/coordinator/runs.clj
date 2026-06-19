@@ -277,6 +277,29 @@
     (fs/create-sym-link link-path session-home)
     result))
 
+(defn home-present?
+  "Does `run`'s session-home runtime still exist? The home is ephemeral — the
+   reclaimer can delete it while the run, transcript and claude-session-id
+   survive on disk. `fs/exists?` follows the symlink, so a dangling/reclaimed
+   home (or one never spawned) reads absent."
+  [run]
+  (fs/exists? (cstate/run-session-home-link (:id run))))
+
+(defn ensure-session-home!
+  "Re-provision `run`'s session-home if it was reclaimed, so a caller can land
+   in it again. The transcript survives keyed by the home path, so spawning at
+   the same path re-anchors it (`spawn-session-for-run!` is idempotent). Returns
+   true if it re-provisioned, false if the home was already present. A
+   re-provision failure is re-thrown tagged `:rehydrate-failed`. Shared by the
+   headless resume turn and the interactive TUI open."
+  [run]
+  (if (home-present? run)
+    false
+    (do (try (spawn-session-for-run! run)
+             (catch Throwable t
+               (throw (ex-info "Re-hydration failed" {:reason :rehydrate-failed} t))))
+        true)))
+
 (defn teardown-session-for-run!
   "Reclaim the session a Run spawned, once the Run reaches a resolved-terminal
    state (:done / :failed / :halted). Stops PG + JVM + app, removes the registry
