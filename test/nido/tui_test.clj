@@ -107,10 +107,27 @@
 
 (deftest board-open-routes-through-open-target
   (with-redefs [nido.work/open-target (fn [_ _] {:project :brian :session "live"})
+                nido.work/reclaimed? (fn [_ _ _] false)
                 nido.tui/selected-workstream (fn [_] {:ws-id "w1"})
                 nido.tui/enter-session (fn [s _ sn _] [(assoc s ::opened sn) nil])]
     (let [[s' _] (#'tui/update-board (board-state :all) (msg/key-press "o"))]
       (is (= "live" (::opened s')) "open resolves the session via work/open-target"))))
+
+(deftest board-open-rehydrates-a-reclaimed-session
+  (with-redefs [nido.work/open-target (fn [_ _] {:project :brian :session "run-x"})
+                nido.work/reclaimed? (fn [_ _ _] true)
+                nido.tui/selected-workstream (fn [_] {:ws-id "w1"})]
+    (let [[s' _] (#'tui/update-board (board-state :all) (msg/key-press "o"))]
+      (is (= :rehydrate (-> s' :busy :verb))
+          "a reclaimed home opens via an async re-hydrate spinner, not a hard error")
+      (is (= "run-x" (-> s' :busy :subject))))))
+
+(deftest rehydrated-message-enters-the-session
+  (with-redefs [nido.tui/enter-session (fn [s _ sn _] [(assoc s ::opened sn) nil])]
+    (let [state (assoc (board-state :all) :busy {:verb :rehydrate :subject "run-x"})
+          [s' _] (#'tui/update-fn state {:type :nido.tui/rehydrated :project :brian :session "run-x"})]
+      (is (= "run-x" (::opened s')) "::rehydrated chains into enter-session once the home is back")
+      (is (nil? (:busy s')) "and clears the busy spinner"))))
 
 (deftest board-promote-uses-default-target
   (with-redefs [nido.tui/selected-workstream (fn [_] {:ws-id "w1" :promote-id "BR-1"})

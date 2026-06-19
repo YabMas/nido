@@ -14,6 +14,7 @@
    [nido.config :as config]
    [nido.coordinator.promote :as promote]
    [nido.coordinator.resume :as resume]
+   [nido.coordinator.runs :as runs]
    [nido.coordinator.scratch :as scratch]
    [nido.coordinator.session :as csession]
    [nido.coordinator.state :as cstate]
@@ -305,3 +306,25 @@
         pick       (or (first (filter #(live-names (:name %)) rows))
                        (first rows))]
     (when pick {:project project :session (:name pick)})))
+
+(defn reclaimed?
+  "True iff `session` under `ws-id` is owned by a Run whose ephemeral
+   session-home was reclaimed — i.e. it CAN be re-hydrated but isn't landable
+   right now. Cheap (a run lookup + a symlink stat); the interactive open path
+   uses it to decide whether to re-provision before landing. False for a session
+   with no owning Run (nothing to re-hydrate from) or whose home is present."
+  [project ws-id session]
+  (boolean
+   (when-let [run (runs/find-for-session project ws-id session)]
+     (not (runs/home-present? run)))))
+
+(defn ensure-open!
+  "Make `session` under `ws-id` landable, re-provisioning its session-home when
+   the Run that owns it had the home reclaimed. Returns true if it re-hydrated,
+   false if nothing was needed (home present, or no owning Run). SLOW when it
+   re-provisions (brings the session back up) — callers run it off the render
+   thread. Throws (tagged `:rehydrate-failed`) if re-provisioning fails."
+  [project ws-id session]
+  (boolean
+   (when-let [run (runs/find-for-session project ws-id session)]
+     (runs/ensure-session-home! run))))

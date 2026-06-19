@@ -5,6 +5,7 @@
    [nido.config]
    [nido.coordinator.promote]
    [nido.coordinator.resume]
+   [nido.coordinator.runs :as runs]
    [nido.coordinator.session :as session]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.tickets :as tickets]
@@ -190,6 +191,73 @@
     (fn [_]
       (let [w (workstream/create! :brian {:stage :triaging :external-refs []})]
         (is (nil? (work/open-target :brian (:id w))))))))
+
+(def ^:private parked-autonomy
+  {:skill :triage-bug :first-message "x" :agent :claude :claude-session-id "sid"
+   :trigger :triage-bug :limits {} :priority 0 :uncapped? false :on-promote nil
+   :phase :parked :phase-history [{:at "t" :phase :parked}] :error nil})
+
+(defn- write-run! [id ws-id sname sid]
+  (fs/create-dirs (cstate/run-dir id))
+  (runs/write-run! {:id id :project :brian :trigger :triage-bug :source {:type :manual}
+                    :event-payload {} :skill :triage-bug :first-message "/triage-bug"
+                    :agent :claude :session-name sname :workstream-id ws-id
+                    :claude-session-id sid :limits {:budget "30m"} :priority 0
+                    :session-profile :lite :uncapped? false :state :awaiting-review
+                    :state-history [{:at "2026-06-18T00:00:00Z" :state :queued}]
+                    :artifacts [] :error nil}))
+
+(deftest reclaimed?-true-when-run-home-absent
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :triaging :external-refs []})]
+        (session/create! :brian (:id w) {:name "run-x" :weight :light :autonomy parked-autonomy})
+        (write-run! "r1" (:id w) "run-x" "sid")
+        (with-redefs [runs/home-present? (constantly false)]
+          (is (true? (work/reclaimed? :brian (:id w) "run-x"))
+              "a run-owned session whose home was reclaimed is reclaimed?"))))))
+
+(deftest reclaimed?-false-when-home-present
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :triaging :external-refs []})]
+        (session/create! :brian (:id w) {:name "run-x" :weight :light :autonomy parked-autonomy})
+        (write-run! "r1" (:id w) "run-x" "sid")
+        (with-redefs [runs/home-present? (constantly true)]
+          (is (false? (work/reclaimed? :brian (:id w) "run-x"))))))))
+
+(deftest reclaimed?-false-when-no-run
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :triaging :external-refs []})]
+        (session/create! :brian (:id w) {:name "manual" :weight :light :autonomy nil})
+        (is (false? (work/reclaimed? :brian (:id w) "manual"))
+            "a session with no owning run can't be re-hydrated → not reclaimed?")))))
+
+(deftest ensure-open!-rehydrates-reclaimed-run-session
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :triaging :external-refs []})
+            spawned (atom 0)]
+        (session/create! :brian (:id w) {:name "run-x" :weight :light :autonomy parked-autonomy})
+        (write-run! "r1" (:id w) "run-x" "sid")
+        (with-redefs [runs/home-present? (constantly false)
+                      runs/spawn-session-for-run! (fn [_] (swap! spawned inc))]
+          (is (true? (work/ensure-open! :brian (:id w) "run-x"))
+              "re-provisions and reports it re-hydrated"))
+        (is (= 1 @spawned))))))
+
+(deftest ensure-open!-noop-when-home-present
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :triaging :external-refs []})
+            spawned (atom 0)]
+        (session/create! :brian (:id w) {:name "run-x" :weight :light :autonomy parked-autonomy})
+        (write-run! "r1" (:id w) "run-x" "sid")
+        (with-redefs [runs/home-present? (constantly true)
+                      runs/spawn-session-for-run! (fn [_] (swap! spawned inc))]
+          (is (false? (work/ensure-open! :brian (:id w) "run-x"))))
+        (is (zero? @spawned))))))
 
 (deftest gate-actions-are-stage-derived
   (is (= [{:id :skip  :label "Skip"  :kind :mutation}
