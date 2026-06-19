@@ -164,11 +164,6 @@
      :title    (first-heading md)
      :markdown md}))
 
-(defn- notion-br-id
-  "The Notion BR-#### id from a workstream's external-refs, or nil."
-  [w]
-  (some #(when (= :notion (:adapter %)) (:id %)) (:external-refs w)))
-
 (defn- latest-report
   "The workstream's most recent ledger entry as a gate report {:kind :at :title
    :markdown}, or nil. Prefers the workstream-level ledger (origin-agnostic, works
@@ -287,7 +282,7 @@
    workstream just closes. Returns {:decision :dismissed}."
   [project ws-id]
   (when-let [w (cws/read-ws project ws-id)]
-    (when-let [br (notion-br-id w)]
+    (when-let [br (:id (wsv/ledger-ref w))]
       (tickets/dismiss! project br))
     (cws/close! project ws-id :dropped))
   {:decision :dismissed})

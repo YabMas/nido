@@ -386,6 +386,21 @@
         (is (= :dismissed (tickets/status :brian "BR-99")))
         (is (some? (:closed (workstream/read-ws :brian (:id w)))))))))
 
+(deftest dismiss-marks-slack-ticket-via-ledger-key
+  ;; A Slack workstream's ticket is keyed on its slack-message id, not a Notion
+  ;; BR-####. dismiss! must stamp :dismissed there too (same ledger key the
+  ;; triage report lives under) so the off-radar disposition isn't lost.
+  (with-tmp
+    (fn [_]
+      (let [slack-id "slack-C1-2.0"
+            w (workstream/create! :brian {:stage :triaging
+                                          :external-refs [{:adapter :slack-message
+                                                           :id slack-id :title "msg"}]})]
+        (is (= {:decision :dismissed} (work/dismiss! :brian (:id w))))
+        (is (= :dismissed (tickets/status :brian slack-id))
+            "dismiss stamps the slack-keyed ticket, not just notion ones")
+        (is (some? (:closed (workstream/read-ws :brian (:id w)))))))))
+
 (deftest resolve-gate-done-closes-done
   (with-tmp
     (fn [_]
