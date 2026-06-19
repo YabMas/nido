@@ -20,6 +20,12 @@
    [:url     {:optional true} [:maybe string?]]
    [:title   {:optional true} [:maybe string?]]])
 
+(def IntakePayload
+  "What a queue-mode intake stores so promote can rebuild the triage fire."
+  [:map {:closed true}
+   [:trigger keyword?]
+   [:payload [:map-of keyword? any?]]])
+
 (def Workstream
   [:map {:closed true}
    [:id            string?]
@@ -31,7 +37,8 @@
                             [:at      string?]
                             [:outcome [:enum :done :dropped]]]]]
    [:created-at    string?]
-   [:entries       [:vector [:map-of keyword? any?]]]])
+   [:entries       [:vector [:map-of keyword? any?]]]
+   [:intake        {:optional true} [:maybe IntakePayload]]])
 
 (defn validate [w]
   (if (m/validate Workstream w)
@@ -61,17 +68,19 @@
 
 (defn create!
   "Mint an id and persist a fresh workstream at the given stage. `base` may
-   carry :external-refs (default []) and must carry :stage."
-  [project {:keys [stage external-refs]}]
+   carry :external-refs (default []), :intake {:trigger <kw> :payload <map>}
+   (default absent), and must carry :stage."
+  [project {:keys [stage external-refs intake]}]
   (let [now (clock/now-iso)
-        w   {:id            (mint-id)
-             :project       project
-             :external-refs (vec (or external-refs []))
-             :stage         stage
-             :stage-history [{:at now :stage stage}]
-             :closed        nil
-             :created-at    now
-             :entries       []}]
+        w   (cond-> {:id            (mint-id)
+                     :project       project
+                     :external-refs (vec (or external-refs []))
+                     :stage         stage
+                     :stage-history [{:at now :stage stage}]
+                     :closed        nil
+                     :created-at    now
+                     :entries       []}
+              intake (assoc :intake intake))]
     (write! w)))
 
 (defn advance-stage!

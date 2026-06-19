@@ -165,3 +165,31 @@
           (ws/close! :brian (:id w) :dropped)
           (is (= :settled (ws/engagement :brian (:id w))))))
       (finally (fs/delete-tree tmp)))))
+
+(defn- with-tmp [f]
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (f tmp))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest create-persists-intake
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian
+                {:stage :inbox
+                 :external-refs [{:adapter :slack-message :id "slack-C-1.0"}]
+                 :intake {:trigger :triage-slack-bugs
+                          :payload {:id "slack-C-1.0" :text "it broke"}}})]
+        (is (= :inbox (:stage w)))
+        (is (= :triage-slack-bugs (-> w :intake :trigger)))
+        (is (= "it broke" (-> w :intake :payload :text)))
+        ;; round-trips through validation on read
+        (is (= w (ws/read-ws :brian (:id w))))))))
+
+(deftest create-without-intake-is-valid
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :triaging})]
+        (is (nil? (:intake w)))
+        (is (= w (ws/read-ws :brian (:id w))))))))
