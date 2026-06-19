@@ -433,3 +433,20 @@
         (session/create! :brian (:id w)
                          {:name "auto" :weight :heavy :autonomy (assoc autonomy-running :phase :parked)})
         (is (nil? (:resume-error (first (work/gates :brian)))))))))
+
+(deftest gate-actions-inbox
+  (is (= [{:id :promote :label "Promote" :kind :mutation}
+          {:id :drop    :label "Dismiss" :kind :mutation}]
+         (work/gate-actions :inbox false))))
+
+(deftest latest-report-falls-back-to-intake-text
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian
+                {:stage :inbox
+                 :external-refs [{:adapter :slack-message :id "slack-C-1.0"}]
+                 :intake {:trigger :triage-slack-bugs
+                          :payload {:id "slack-C-1.0" :text "the app crashed on save"}}})
+            r (#'nido.work/latest-report :brian (:id w))]
+        (is (= :slack-report (:kind r)))
+        (is (= "the app crashed on save" (:markdown r)))))))

@@ -331,3 +331,22 @@
   ;; scratch / ref-less workstream (no promote id):
   (is (re-find #"nothing to promote" (wsv/promote-result-message nil :skip-not-promotable))))
 
+(deftest grouped-by-stage-buckets-inbox
+  (let [rows [{:stage :inbox :needs-you true :last-activity "2026-06-02T00:00:00Z"}
+              {:stage :inbox :needs-you true :last-activity "2026-06-03T00:00:00Z"}
+              {:stage :ready :needs-you true :last-activity "2026-06-01T00:00:00Z"}]
+        g    (wsv/grouped-by-stage rows)]
+    (is (= 2 (count (:inbox g))))
+    ;; newest-first within the inbox band
+    (is (= "2026-06-03T00:00:00Z" (-> g :inbox first :last-activity)))))
+
+(deftest promote-result-message-inbox-decisions
+  (is (= "started triage" (wsv/promote-result-message nil :triaging)))
+  (is (= "already picked up — not in the queue anymore"
+         (wsv/promote-result-message nil :skip-not-inbox)))
+  (is (= "can't start triage — its trigger is gone from triggers.edn"
+         (wsv/promote-result-message nil :skip-no-trigger)))
+  ;; existing behavior preserved
+  (is (= "nothing to promote on this workstream"
+         (wsv/promote-result-message nil :skip-not-promotable))))
+

@@ -182,12 +182,13 @@
 
 (defn grouped-by-stage
   "Partition rows by lifecycle stage for the overview. :done is intentionally
-   omitted — done is done, not shown. Ready/in-progress: needs-you first, then
-   newest. Triage is returned as {:in-flight [...] :queued [...]} — see
+   omitted — done is done, not shown. :inbox/ready/in-progress: needs-you first,
+   then newest. Triage is returned as {:in-flight [...] :queued [...]} — see
    triage-split — each ordered highest-severity-first."
   [rows]
   (let [by (group-by :stage rows)]
-    {:ready       (by-needs-then-newest (:ready by []))
+    {:inbox       (by-needs-then-newest (:inbox by []))
+     :ready       (by-needs-then-newest (:ready by []))
      :in-progress (by-needs-then-newest (:in-progress by []))
      :triage      (triage-split (:triage by []))}))
 
@@ -251,20 +252,26 @@
 (defn promote-result-message
   "Status-line string for a `promote/promote-workstream!` decision on `br`.
    `br` is the Notion BR-#### id, GitHub issue ref (e.g. \"o/r#42\"), or nil
-   for a scratch/ref-less workstream. `:promote` confirms the planning leg
-   started; every refusal reads as why it wasn't promotable."
+   for a scratch/slack/ref-less workstream. Inbox→triage decisions
+   (:triaging / :skip-not-inbox / :skip-no-trigger) are reported regardless of
+   `br`; `:promote` confirms the planning leg; every other refusal reads as why
+   it wasn't promotable."
   [br decision]
-  (if (nil? br)
-    "nothing to promote on this workstream"
-    (case decision
-      :promote             (str "promoted " br " → in progress")
-      :skip-active         (str br " already promoted")
-      :skip-completed      (str br " was skipped in triage — nothing to promote")
-      :skip-no-record      (str br " has no triage record yet")
-      :skip-untriaged      (str br " isn't triaged yet — not ready to pick up")
-      :gh-error            (str "couldn't reach GitHub for " br " — try again")
-      :skip-not-promotable (str "nothing to promote on " br)
-      (str "refused " br " — " (name decision)))))
+  (case decision
+    :triaging        "started triage"
+    :skip-not-inbox  "already picked up — not in the queue anymore"
+    :skip-no-trigger "can't start triage — its trigger is gone from triggers.edn"
+    (if (nil? br)
+      "nothing to promote on this workstream"
+      (case decision
+        :promote             (str "promoted " br " → in progress")
+        :skip-active         (str br " already promoted")
+        :skip-completed      (str br " was skipped in triage — nothing to promote")
+        :skip-no-record      (str br " has no triage record yet")
+        :skip-untriaged      (str br " isn't triaged yet — not ready to pick up")
+        :gh-error            (str "couldn't reach GitHub for " br " — try again")
+        :skip-not-promotable (str "nothing to promote on " br)
+        (str "refused " br " — " (name decision))))))
 
 (defn format-session-row
   "Display string for a session row: `<name>  ·  <phase|human>  ·  <weight>  ·  <substrate>`."

@@ -35,6 +35,8 @@
    button, :reply -> textarea. resolve-gate! dispatches on `:id`."
   [stage parked?]
   (case stage
+    :inbox       [{:id :promote :label "Promote" :kind :mutation}
+                  {:id :drop    :label "Dismiss" :kind :mutation}]
     :triage      (if parked?
                    ;; no :promote here — a triage workstream isn't promotable until
                    ;; its verdict is applied (via :reply), which advances it to :ready
@@ -171,16 +173,24 @@
   "The workstream's most recent ledger entry as a gate report {:kind :at :title
    :markdown}, or nil. Prefers the workstream-level ledger (origin-agnostic, works
    for ref-less scratch); falls back to the TICKET ledger (where the triage skill
-   actually writes its report) when the workstream ledger is empty and the
-   workstream carries a Notion ref."
+   writes its report) when the workstream ledger is empty and the workstream
+   carries a Notion ref; finally falls back to the stored intake text so a queued
+   :inbox Slack report shows its message body in the gate."
   [project ws-id]
   (when-let [w (cws/read-ws project ws-id)]
-    (if-let [e (last (:entries w))]
-      (entry->report (cstate/workstream-dir project ws-id) e)
-      (when-let [br-id (notion-br-id w)]
-        (when-let [m (tickets/read-meta project br-id)]
-          (when-let [e (last (:entries m))]
-            (entry->report (tickets/ticket-dir project br-id) e)))))))
+    (or
+     (when-let [e (last (:entries w))]
+       (entry->report (cstate/workstream-dir project ws-id) e))
+     (when-let [br-id (notion-br-id w)]
+       (when-let [m (tickets/read-meta project br-id)]
+         (when-let [e (last (:entries m))]
+           (entry->report (tickets/ticket-dir project br-id) e))))
+     (when-let [intake (:intake w)]
+       (let [text (or (-> intake :payload :text) (-> intake :payload :title) "")]
+         {:kind     :slack-report
+          :at       (:created-at w)
+          :title    (first-heading text)
+          :markdown text})))))
 
 (defn- ->gate
   "Hydrate one needs-you spine row into a gate. `:project` is canonicalized to a
