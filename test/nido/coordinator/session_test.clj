@@ -315,3 +315,16 @@
         (sess/create! :brian (:id w) {:name "me" :weight :light :autonomy nil})
         (is (thrown? clojure.lang.ExceptionInfo
                      (sess/set-error! :brian (:id w) "me" {:reason :x})))))))
+
+(deftest inbox-stage-projection-open
+  ;; A stored :inbox stage is honored as an override and always needs-you.
+  (is (= {:stage :inbox :needs-you true}
+         (sess/stage-projection nil nil [] :inbox))))
+
+(deftest inbox-stage-projection-closed
+  ;; A CLOSED inbox workstream falls through to :done (no longer needs-you),
+  ;; even though :inbox is a lifecycle stage — the override is only honored
+  ;; while the workstream is open.
+  (is (= {:stage :done :needs-you false}
+         (sess/stage-projection {:at "2026-06-01T00:00:00Z" :outcome :dropped}
+                                nil [] :inbox))))
