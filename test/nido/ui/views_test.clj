@@ -27,11 +27,26 @@
 (def ^:private sample-gate
   {:ws-id "ws-1" :project "brian" :origin :notion :stage :triage
    :label "BR-7 · checkout off by a cent"
-   :report {:kind :triage :at "2026-06-18T00:00:00Z" :title "Verdict"
+   :report {:format :markdown :kind :triage :at "2026-06-18T00:00:00Z" :title "Verdict"
             :markdown "# Verdict\n\nbug — reproduced."}
-   :actions [{:id :dismiss :label "Dismiss" :kind :mutation}
-             {:id :reply :label "Reply" :kind :reply}]
+   :actions [{:id :apply   :label "Apply"   :kind :resume :input "apply" :style :primary}
+             {:id :dismiss :label "Dismiss" :kind :mutation              :style :danger}
+             {:id :reply   :label "Reply"   :kind :resume                :style :default}]
    :session "auto"})
+
+(def ^:private triage-gate
+  (assoc sample-gate
+         :report {:format :triage-report :at "2026-06-18T00:00:00Z"
+                  :ticket-key "BR-7" :determination :bug
+                  :title "Checkout off by a cent" :summary "Rounding on each line."
+                  :confidence {:level :high :reason "repro"}
+                  :directions [{:label "A" :shape "round once" :effort :M
+                                :confidence {:level :medium :reason "money math"}}]
+                  :notion-writes {:type "bug" :effort :M
+                                  :status-transition ["Needs verification" "Not started"]
+                                  :title "Checkout off by a cent"
+                                  :description-prepend "Rounding bug."}
+                  :trail [{:ref "src/order.clj:88" :note "per-line round"}]}))
 
 (deftest needs-fragment-lists-cards
   (let [html (views/needs-fragment [sample-gate] nil)]
@@ -43,15 +58,27 @@
 (deftest needs-fragment-empty-state-is-calm
   (is (str/includes? (views/needs-fragment [] nil) "Nothing needs you")))
 
-(deftest gate-pane-renders-report-and-actions     ; keep; assert no breadcrumb
+(deftest gate-pane-renders-markdown-report-and-actions
   (let [html (views/gate-pane sample-gate)]
     (is (str/includes? html "Verdict"))
-    (is (str/includes? html "/gate/brian/ws-1/dismiss"))
-    (is (str/includes? html "data-bind=\"reply\""))
-    (is (not (str/includes? html "class=\"breadcrumb\"")))
     (is (str/includes? html "bug — reproduced."))
+    (is (str/includes? html "/gate/brian/ws-1/apply"))     ; one-click Apply button
+    (is (str/includes? html "/gate/brian/ws-1/dismiss"))
+    (is (str/includes? html "data-bind=\"reply\""))         ; free-text reply still present
     (is (str/includes? html "/gate/brian/ws-1/reply"))
-    (is (str/includes? html "<textarea"))))
+    (is (str/includes? html "<textarea"))
+    (is (not (str/includes? html "class=\"breadcrumb\"")))))
+
+(deftest gate-pane-curates-a-triage-report
+  (let [html (views/gate-pane triage-gate)]
+    (is (str/includes? html "<h2>Checkout off by a cent</h2>"))   ; §1 enriched title (heading, not the §3 li)
+    (is (str/includes? html "Rounding on each line."))       ; §1 summary
+    (is (str/includes? html "round once"))                   ; §2 direction
+    (is (str/includes? html "Needs verification"))           ; §3 notion-writes
+    (is (str/includes? html "<details"))                     ; §5 collapsed
+    (is (str/includes? html "src/order.clj:88"))
+    (is (str/includes? html "/gate/brian/ws-1/apply"))
+    (is (not (str/includes? html "dismiss instead")))))
 
 (deftest gate-pane-empty-is-calm
   (is (str/includes? (views/gate-pane nil) "Nothing needs you")))
@@ -86,7 +113,7 @@
     (is (str/includes? html ">N<"))))
 
 (deftest workstream-pane-shows-ledger-report-and-sessions
-  (let [ws (assoc sample-ws :report {:kind :triage :at "t" :title "Verdict"
+  (let [ws (assoc sample-ws :report {:format :markdown :kind :triage :at "t" :title "Verdict"
                                      :markdown "# Verdict\n\nbug — reproduced."})
         html (views/workstream-pane ws "http://auto.brian.localhost:3142")]
     (is (str/includes? html "BR-7"))
@@ -111,7 +138,7 @@
     (is (str/includes? html "Resuming"))))
 
 (deftest gate-action-confirm-renders-per-action-message-and-follow-links
-  (doseq [[action needle] [[:promote "Promoting"] [:dismiss "Dismissed"]
+  (doseq [[action needle] [[:promote "Promoting"] [:apply "Applying"] [:dismiss "Dismissed"]
                            [:drop "Dropped"] [:done "done"] [:reply "Resuming"]]]
     (let [html (views/gate-action-confirm-fragment action "brian" "ws-1")]
       (is (str/includes? html needle) (str action " message"))

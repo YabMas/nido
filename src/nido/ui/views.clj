@@ -2,6 +2,7 @@
   "Hiccup view functions for the nido dashboard."
   (:require [clojure.string :as str]
             [hiccup2.core :as h]
+            [nido.coordinator.report :as report]
             [nido.process :as process]
             [nido.ui.markdown :as md]))
 
@@ -70,6 +71,12 @@
         .chip { padding:0 7px; border-radius:3px; font-size:10.5px; text-transform:uppercase; }
         .c-triage{ background:#2a2a1a; color:#facc15; } .c-ready{ background:#1a3a2a; color:#4ade80; }
         .c-in-progress{ background:#1a2a3a; color:#7eb8da; }
+        .c-conf-high{ background:#1a3a2a; color:#4ade80; } .c-conf-medium{ background:#2a2a1a; color:#facc15; }
+        .c-conf-low{ background:#3a1a1a; color:#f87171; }
+        .c-det-bug{ background:#3a2a1a; color:#fbbf24; } .c-det-not-a-bug{ background:#22223a; color:#9a9ac0; }
+        .c-det-needs-info{ background:#1a2a3a; color:#7eb8da; }
+        .report-meta { margin:0 0 10px; display:flex; gap:6px; flex-wrap:wrap; }
+        details.trail { margin-top:14px; } details.trail summary { cursor:pointer; color:#888; font-size:12px; }
         .pane { padding:18px 24px; overflow:auto; }
         .md { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
               font-size:13.5px; line-height:1.7; color:#cdcde0; background:#0f0f1e;
@@ -207,6 +214,7 @@
   [action-id project ws-id]
   (let [msg (case action-id
               :promote "Promoting → in-progress… provisioning the work session."
+              :apply   "Applying… resuming the agent to write the verdict."
               :dismiss "✓ Dismissed — off your radar, won't be re-triaged."
               :drop    "✓ Dropped — not pursued."
               :done    "✓ Marked done."
@@ -222,6 +230,79 @@
         " · "
         [:a {:href "/workstreams"} "workstreams →"]]]))))
 
+(defn- style-class [style]
+  (case style :primary "btn btn-primary" :danger "btn btn-danger" "btn"))
+
+(defn- action-button [project ws-id {:keys [id label style]}]
+  [:button {:class (style-class style)
+            "data-on:click" (str "@post('/gate/" project "/" ws-id "/" (name id) "')")}
+   label])
+
+(defn action-bar
+  "Render an action set: one-click buttons (mutations + preset-input resumes) in a row,
+   plus a free-text reply textarea when a resume action without :input is present.
+   `session` (optional) labels the resume target. The single renderer behind every gate."
+  [project ws-id actions session]
+  (let [buttons   (filter #(or (= :mutation (:kind %)) (:input %)) actions)
+        free-text (some #(and (= :resume (:kind %)) (not (:input %))) actions)]
+    (list
+     (when (seq buttons)
+       (into [:div.actions {:style "margin-top:16px"}]
+             (for [a buttons] (action-button project ws-id a))))
+     (when free-text
+       [:div.reply
+        [:div.meta {:style "text-transform:uppercase;font-size:11px"} "Reply & resume"]
+        [:textarea {"data-bind" "reply" :placeholder "Tell the agent what to do next…"}]
+        [:div {:style "margin-top:9px"}
+         [:button.btn.btn-primary
+          {"data-on:click" (str "@post('/gate/" project "/" ws-id "/reply')")}
+          "Send & resume ▸"]
+         (when session [:span.meta {:style "margin-left:10px"} "resumes " session])]]))))
+
+(defn- conf-chip [{:keys [level]}]
+  [:span {:class (str "chip c-conf-" (name level))} (name level)])
+
+(defn- triage-report-card
+  "Curated render of a typed triage report: determination + confidence chips, summary,
+   directions, an On-apply block, and a collapsed investigation trail (§5)."
+  [{:keys [title determination summary confidence directions notion-writes trail]}]
+  [:div.md
+   (when title [:h2 title])
+   [:div.report-meta
+    [:span {:class (str "chip c-det-" (name determination))} (name determination)]
+    (conf-chip confidence)
+    [:span.meta (:reason confidence)]]
+   (md/render summary)
+   [:h3 "Solution directions"]
+   (into [:ul]
+         (for [{:keys [label shape effort confidence]} directions]
+           [:li [:strong label] " · " (name effort) " · " (name (:level confidence))
+            " — " shape]))
+   (when notion-writes
+     [:div
+      [:h3 "On apply →"]
+      (into [:ul]
+            (concat
+             [[:li "Type: " (or (:type notion-writes) "unchanged")]
+              [:li "Effort: " (name (:effort notion-writes))]]
+             (when-let [[from to] (:status-transition notion-writes)]
+               [[:li "Status: " [:code from] " → " [:code to]]])
+             [[:li "Title: " (:title notion-writes)]]))])
+   (when (seq trail)
+     [:details.trail
+      [:summary "Investigation trail (" (count trail) ")"]
+      (into [:ul]
+            (for [{:keys [ref note]} trail]
+              [:li [:code ref] " — " note]))])])
+
+(defn- report-body
+  "Dispatch a gate report on :format — typed triage reports get the curated card,
+   markdown reports render through md/render."
+  [report]
+  (case (:format report)
+    :triage-report (triage-report-card report)
+    (md/render (:markdown report))))
+
 (defn gate-pane
   "The detail pane: rendered report + follow-actions. nil -> calm placeholder."
   [{:keys [ws-id project origin label report actions session] :as gate}]
@@ -231,22 +312,9 @@
       [:div {:id "gate-pane"} [:p.empty "Nothing needs you right now."]]
       [:div {:id "gate-pane"}
        [:h1 (origin-badge origin) " " label]
-       (when report [:div.meta (some-> report :kind name) " · " (:at report)])
-       (md/render (:markdown report))
-       [:div.actions {:style "margin-top:16px"}
-        (for [{:keys [id label kind]} actions :when (= kind :mutation)]
-          [:button.btn {:class (if (#{:dismiss :drop} id) "btn-danger" "btn-primary")
-                        "data-on:click" (str "@post('/gate/" project "/" ws-id "/" (name id) "')")}
-           label])]
-       (when (some #(= :reply (:kind %)) actions)
-         [:div.reply
-          [:div.meta {:style "text-transform:uppercase;font-size:11px"} "Reply & resume"]
-          [:textarea {"data-bind" "reply" :placeholder "Tell the agent what to do next…"}]
-          [:div {:style "margin-top:9px"}
-           [:button.btn.btn-primary
-            {"data-on:click" (str "@post('/gate/" project "/" ws-id "/reply')")}
-            "Send & resume ▸"]
-           (when session [:span.meta {:style "margin-left:10px"} "resumes " session])]])]))))
+       (when report [:div.meta (some-> report :format name) " · " (:at report)])
+       (report-body report)
+       (action-bar project ws-id actions session)]))))
 
 (defn needs-page
   "Home: the needs-you master-detail inside the shell. `ctx` is the rail context."
@@ -304,7 +372,7 @@
        (when ledger
          [:div.card [:strong "ledger "] (:key ledger) " · " (some-> ledger :status name)
           " · " (:report-count ledger) " report(s)"])
-       (when (:markdown report) (md/render (:markdown report)))
+       (when report (md/render (report/report->markdown report)))
        [:h2 "Sessions"]
        (if (seq sessions)
          [:table
