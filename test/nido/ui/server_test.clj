@@ -88,6 +88,16 @@
         (is (= [["brian" "ws-1" :skip nil]] @calls))
         (is (str/includes? (get-in resp [:headers "Content-Type"]) "text/event-stream"))))))
 
+(deftest post-gate-apply-resolves-with-no-body
+  (let [calls (atom [])]
+    (with-redefs [nido.work/resolve-gate! (fn [p w a & [in]] (swap! calls conj [p w a in]) {:resumed "auto"})
+                  nido.work/all-gates    (fn [] [])]
+      (let [resp (server/handle-request {:request-method :post :uri "/gate/brian/ws-1/apply"})]
+        (Thread/sleep 50)   ; resolve runs on a background future
+        (is (= 200 (:status resp)))
+        (is (= [["brian" "ws-1" :apply nil]] @calls)
+            "apply posts with no input — resolve-gate! supplies the canned verb")))))
+
 (deftest post-gate-reply-passes-input-from-body
   (let [calls (atom [])]
     (with-redefs [nido.work/resolve-gate! (fn [p w a & [in]] (swap! calls conj [p w a in]) {:resumed "auto"})
