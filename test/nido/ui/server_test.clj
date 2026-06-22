@@ -28,11 +28,6 @@
       (is (= 200 (:status resp)))
       (is (str/includes? (:body resp) "id=\"system\"")))))
 
-(deftest projects-route-renders-grid
-  (with-redefs [project/list-projects (fn [] {"brian" {:directory "/x"}})]
-    (let [resp (server/handle-request {:request-method :get :uri "/projects"})]
-      (is (= 200 (:status resp)))
-      (is (str/includes? (:body resp) "brian")))))
 
 (deftest system-fragment-route-is-sse-and-patches-rail
   (with-redefs [server/all-session-rows (fn [] [])
@@ -165,3 +160,23 @@
   (is (= "all" (#'server/parse-scope nil)))
   (is (= "all" (#'server/parse-scope "")))
   (is (= "brian" (#'server/parse-scope "scope=brian"))))
+
+(deftest removed-routes-404
+  (with-redefs [nido.work/all-gates (fn [] [])
+                server/all-session-rows (fn [] [])
+                server/all-grouped (fn [] [])
+                project/list-projects (fn [] {"brian" {:directory "/x"}})
+                nido.ui.server/read-rail-daemon (fn [] {:state :up})]
+    (doseq [uri ["/projects" "/board" "/ws/brian/ws-1"
+                 "/brian/sessions" "/brian/vsdd" "/_fragment/board" "/_fragment/live"]]
+      (is (= 404 (:status (server/handle-request {:request-method :get :uri uri})))
+          (str uri " is gone")))))
+
+(deftest live-routes-still-200
+  (with-redefs [nido.work/all-gates (fn [] [])
+                server/all-session-rows (fn [] [])
+                server/all-grouped (fn [] [])
+                project/list-projects (fn [] {"brian" {:directory "/x"}})
+                nido.ui.server/read-rail-daemon (fn [] {:state :up})]
+    (doseq [uri ["/" "/workstreams" "/system"]]
+      (is (= 200 (:status (server/handle-request {:request-method :get :uri uri})))))))

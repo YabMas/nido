@@ -8,7 +8,6 @@
             [nido.project :as project]
             [nido.session.lifecycle :as lifecycle]
             [nido.session.state :as state]
-            [nido.ui.discovery :as discovery]
             [nido.ui.health :as health]
             [nido.ui.views :as views]
             [nido.work :as work]
@@ -55,46 +54,6 @@
   "Parse a URI path into segments, ignoring empty strings."
   [uri]
   (vec (remove str/blank? (str/split uri #"/"))))
-
-;; ---------------------------------------------------------------------------
-;; Session helpers
-
-(defn- read-log-tail
-  "Read the last n lines (bytes-capped) of a log file. Returns \"\" if the
-   file doesn't exist or is unreadable. Caps the read at 256 KB regardless
-   of line count to stay cheap."
-  [path n]
-  (try
-    (if-not (fs/exists? path)
-      ""
-      (let [size (fs/size path)
-            cap (* 256 1024)
-            offset (max 0 (- size cap))
-            content (if (zero? offset)
-                      (slurp path)
-                      (with-open [is (java.io.FileInputStream. (str path))]
-                        (.skip is offset)
-                        (let [bs (byte-array (- size offset))]
-                          (.read is bs)
-                          (String. bs "UTF-8"))))
-            lines (str/split-lines content)
-            tail (if (> (count lines) n) (drop (- (count lines) n) lines) lines)]
-        (str/join "\n" tail)))
-    (catch Exception e
-      (str "[nido ui] could not read log: " (ex-message e)))))
-
-(defn- session-log-path
-  "Resolve the on-disk log path for a session + service. service is
-   \"repl\" or \"pg\"."
-  [project-name session-name service]
-  (let [instance-id (if (= project-name session-name)
-                      project-name
-                      (str project-name "--" session-name))
-        fname (case service
-                "repl" "repl.log"
-                "pg"   "pg.log"
-                (str service ".log"))]
-    (str (fs/path (state/log-dir instance-id) fname))))
 
 ;; ---------------------------------------------------------------------------
 ;; In-flight action tracking
@@ -404,10 +363,6 @@
       (let [gates (scope-filter scope (work/all-gates))]
         (needs-fragment-response gates nil))
 
-      ;; GET /projects — the original project grid
-      ["projects"]
-      (html-response 200 (views/home-page (project/list-projects)))
-
       ;; GET /_fragment/system — SSE system surface refresh (patches #system + rail)
       ["_fragment" "system"]
       (system-fragment-response scope)
@@ -429,91 +384,7 @@
                                                      (workstream-live-url project ws-id))))
 
         :else
-        (let [project-name (first segments)]
-          (if-let [ctx (discovery/project-context project-name)]
-          (let [dir (:directory ctx)
-                rest-segs (vec (rest segments))]
-            (cond
-              ;; GET /:project/sessions/:name/logs/:service — full page
-              (and (= 4 (count rest-segs))
-                   (= "sessions" (first rest-segs))
-                   (= "logs" (nth rest-segs 2)))
-              (let [session-name (second rest-segs)
-                    service (nth rest-segs 3)
-                    log-path (session-log-path project-name session-name service)
-                    content (read-log-tail log-path 200)]
-                (html-response 200 (views/session-log-page
-                                    project-name session-name service content)))
-
-              ;; GET /:project/sessions/:name/logs/:service/_fragment — SSE tail
-              (and (= 5 (count rest-segs))
-                   (= "sessions" (first rest-segs))
-                   (= "logs" (nth rest-segs 2))
-                   (= "_fragment" (nth rest-segs 4)))
-              (let [session-name (second rest-segs)
-                    service (nth rest-segs 3)
-                    log-path (session-log-path project-name session-name service)
-                    content (read-log-tail log-path 200)]
-                (sse-response (sse-fragment (views/log-tail-fragment content))))
-
-              ;; GET /:project/vsdd/ — runs list
-              (= rest-segs ["vsdd"])
-              (let [runs (discovery/list-vsdd-runs dir)
-                    has-in-progress? (some #(= :in-progress (get-in % [:manifest :status])) runs)]
-                (html-response 200 (views/vsdd-runs-page project-name runs has-in-progress?)))
-
-              ;; GET /:project/vsdd/_fragment/runs — SSE fragment for runs table
-              (= rest-segs ["vsdd" "_fragment" "runs"])
-              (let [runs (discovery/list-vsdd-runs dir)]
-                (sse-response (sse-fragment (views/vsdd-runs-table-fragment project-name runs))))
-
-              ;; GET /:project/vsdd/:run-id/_fragment/detail — SSE fragment
-              (and (= 4 (count rest-segs))
-                   (= "vsdd" (first rest-segs))
-                   (= "_fragment" (nth rest-segs 2))
-                   (= "detail" (nth rest-segs 3)))
-              (let [run-id (second rest-segs)]
-                (if-let [manifest (discovery/load-vsdd-run dir run-id)]
-                  (sse-response (sse-fragment (views/vsdd-run-detail-fragment project-name run-id manifest)))
-                  (html-response 404 (views/not-found-page))))
-
-              ;; GET /:project/vsdd/:run-id — run detail page
-              (and (= 2 (count rest-segs))
-                   (= "vsdd" (first rest-segs)))
-              (let [run-id (second rest-segs)]
-                (if-let [manifest (discovery/load-vsdd-run dir run-id)]
-                  (html-response 200 (views/vsdd-run-detail-page project-name run-id manifest))
-                  (html-response 404 (views/not-found-page))))
-
-              ;; GET /:project/vsdd/:run-id/report/:module-slug/:iteration — critic report
-              (and (= 5 (count rest-segs))
-                   (= "vsdd" (first rest-segs))
-                   (= "report" (nth rest-segs 2)))
-              (let [run-id (second rest-segs)
-                    module-slug (nth rest-segs 3)
-                    iteration (parse-long (nth rest-segs 4))
-                    report (when iteration
-                             (discovery/load-critic-report dir run-id module-slug iteration))]
-                (if report
-                  (html-response 200 (views/vsdd-report-page project-name run-id module-slug iteration report))
-                  (html-response 404 (views/not-found-page))))
-
-              ;; GET /:project/vsdd/:run-id/impl-report/:module-slug/:iteration — implementer report
-              (and (= 5 (count rest-segs))
-                   (= "vsdd" (first rest-segs))
-                   (= "impl-report" (nth rest-segs 2)))
-              (let [run-id (second rest-segs)
-                    module-slug (nth rest-segs 3)
-                    iteration (parse-long (nth rest-segs 4))
-                    report (when iteration
-                             (discovery/load-impl-report dir run-id module-slug iteration))]
-                (if report
-                  (html-response 200 (views/vsdd-impl-report-page project-name run-id module-slug iteration report))
-                  (html-response 404 (views/not-found-page))))
-
-              :else
-              (html-response 404 (views/not-found-page))))
-            (html-response 404 (views/not-found-page))))))))
+        (html-response 404 (views/not-found-page))))))
 
 (defn handle-request [{:keys [request-method] :as req}]
   (case request-method
