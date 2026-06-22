@@ -10,17 +10,17 @@
    today's storage — no migration."
   (:require
    [babashka.fs :as fs]
-   [clojure.edn :as edn]
    [clojure.string :as str]
    [nido.config :as config]
    [nido.coordinator.promote :as promote]
+   [nido.coordinator.report :as report]
    [nido.coordinator.resume :as resume]
    [nido.coordinator.runs :as runs]
    [nido.coordinator.scratch :as scratch]
    [nido.coordinator.session :as csession]
    [nido.coordinator.state :as cstate]
-   [nido.coordinator.report :as report]
    [nido.coordinator.tickets :as tickets]
+   [nido.io :as io]
    [nido.coordinator.workstream :as cws]
    [nido.coordinator.workstreams-view :as wsv]
    [nido.project :as project]
@@ -131,19 +131,22 @@
            (some #(second (re-matches #"#+\s+(.*)" %)))))
 
 (defn- entry->report
-  "Render a ledger entry {:kind :at :file} (`:file` relative to `base-dir`) as a gate
-   report {:kind :at :title :markdown}. `.edn` entries (typed TriageReport) are
-   rendered to markdown via report/report->markdown; others are treated as raw markdown."
+  "Render a ledger entry as a `:format`-tagged gate report. An `.edn` file is a
+   typed triage report (read + validated → :format :triage-report, :at stamped from
+   the entry); any other file is markdown (:format :markdown). A triage `.edn` that
+   fails to read/validate degrades to a :markdown payload of its raw text rather than
+   blanking the pane."
   [base-dir entry]
-  (let [f    (str (fs/path base-dir (:file entry)))
-        raw  (when (fs/exists? f) (slurp f))
-        md   (if (str/ends-with? (str (:file entry)) ".edn")
-               (report/report->markdown (edn/read-string (or raw "{}")))
-               raw)]
-    {:kind     (:kind entry)
-     :at       (:at entry)
-     :title    (first-heading md)
-     :markdown md}))
+  (let [f (str (fs/path base-dir (:file entry)))]
+    (or (when (str/ends-with? (str (:file entry)) ".edn")
+          (try (-> (io/read-edn f) report/validate (assoc :at (:at entry)))
+               (catch Throwable _ nil)))
+        (let [md (when (fs/exists? f) (slurp f))]
+          {:format   :markdown
+           :kind     (:kind entry)
+           :at       (:at entry)
+           :title    (first-heading md)
+           :markdown md}))))
 
 (defn latest-report
   "The workstream's most recent ledger entry as a gate report {:kind :at :title
@@ -165,7 +168,8 @@
      (when-let [intake (:intake w)]
        (let [text (or (-> intake :payload :text) (-> intake :payload :title) "")]
          (when (seq text)
-           {:kind     :slack-report
+           {:format   :markdown
+            :kind     :slack-report
             :at       (:created-at w)
             :title    (first-heading text)
             :markdown text}))))))

@@ -293,7 +293,7 @@
           (is (= :triage (:stage g)))
           (is (= "auto" (:session g)) "the parked session a :reply would resume")
           (is (= [:dismiss :reply] (map :id (:actions g))))
-          (is (= :triage (-> g :report :kind)))
+          (is (= :markdown (-> g :report :format)))
           (is (= "Verdict" (-> g :report :title)))
           (is (= "# Verdict\n\nbug — reproduced." (-> g :report :markdown))))))))
 
@@ -324,10 +324,9 @@
           (is (= (:id w) (:ws-id g)))
           (is (= :slack (:origin g)))
           (is (= :triage (:stage g)))
-          (is (= :triage (-> g :report :kind)))
-          (is (= "Triage: Verdict" (-> g :report :title)))
-          (is (clojure.string/includes? (-> g :report :markdown) "bug — slack report.")
-              "the parked slack triage gate shows its ticket-ledger report, not an empty pane"))))))
+          (is (= :triage-report (-> g :report :format)))
+          (is (= "Verdict" (-> g :report :title)))
+          (is (= :bug (-> g :report :determination))))))))
 
 (deftest gates-excludes-workstreams-that-do-not-need-you
   (with-tmp
@@ -447,10 +446,8 @@
                          {:name "auto" :weight :heavy
                           :autonomy (assoc autonomy-running :phase :parked)})
         (let [g (first (work/gates :brian))]
-          (is (= :triage (-> g :report :kind)))
-          (is (= "Triage: Verdict" (-> g :report :title)))
-          (is (clojure.string/includes? (-> g :report :markdown) "ticket-ledger report.")
-              "report read from the ticket ledger when the workstream ledger is empty"))))))
+          (is (= :triage-report (-> g :report :format)))
+          (is (= "Verdict" (-> g :report :title))))))))
 
 (deftest gates-excludes-settled-workstreams
   (with-tmp
