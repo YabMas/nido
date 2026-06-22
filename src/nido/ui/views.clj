@@ -342,15 +342,14 @@
      [:div.gate-err "⚠ resume failed: " (or (:message resume-error)
                                             (name (:reason resume-error)))])])
 
-(defn gate-inbox-fragment
-  "The inbox column body — initial render + SSE refresh. `sel` is the open ws-id."
+(defn needs-fragment
+  "The needs-you queue column — initial render + SSE refresh. `sel` is the open ws-id."
   [gates sel]
   (str
    (h/html
     (if (seq gates)
-      [:div {:id "gate-inbox"}
-       (for [g gates] (gate-card g (= sel (:ws-id g))))]
-      [:div {:id "gate-inbox"} [:p.empty "No gates — nothing needs you right now."]]))))
+      [:div {:id "needs"} (for [g gates] (gate-card g (= sel (:ws-id g))))]
+      [:div {:id "needs"} [:p.empty "Nothing needs you right now."]]))))
 
 (defn gate-action-confirm-fragment
   "Pane confirmation after a gate action: the per-action outcome + follow-links to
@@ -367,57 +366,47 @@
     (str
      (h/html
       [:div {:id "gate-pane"}
-       [:div.breadcrumb project " / gate"]
        [:h1 msg]
        [:p.meta "ws " ws-id]
        [:p "Follow it: "
-        [:a {:href (str "/ws/" project "/" ws-id)} "open workstream →"]
+        [:a {:href (str "/workstreams/" project "/" ws-id)} "open workstream →"]
         " · "
-        [:a {:href "/board"} "board →"]]]))))
+        [:a {:href "/workstreams"} "workstreams →"]]]))))
 
 (defn gate-pane
-  "The detail pane: rendered report + follow-actions. nil -> placeholder."
+  "The detail pane: rendered report + follow-actions. nil -> calm placeholder."
   [{:keys [ws-id project origin stage label report actions session] :as gate}]
   (str
    (h/html
     (if-not gate
-      [:div {:id "gate-pane"} [:p.empty "Select a gate."]]
+      [:div {:id "gate-pane"} [:p.empty "Nothing needs you right now."]]
       [:div {:id "gate-pane"}
-       [:div.breadcrumb project " / " (name stage)]
        [:h1 (origin-badge origin) " " label]
-       (when report
-         [:div.meta (some-> report :kind name) " · " (:at report)])
-       ;; md/render already returns a [:div.md …]; embed it directly (no double wrap)
+       (when report [:div.meta (some-> report :kind name) " · " (:at report)])
        (md/render (:markdown report))
        [:div.actions {:style "margin-top:16px"}
-        (for [{:keys [id label kind]} actions
-              :when (= kind :mutation)]
+        (for [{:keys [id label kind]} actions :when (= kind :mutation)]
           [:button.btn {:class (if (#{:dismiss :drop} id) "btn-danger" "btn-primary")
                         "data-on:click" (str "@post('/gate/" project "/" ws-id "/" (name id) "')")}
            label])]
        (when (some #(= :reply (:kind %)) actions)
          [:div.reply
           [:div.meta {:style "text-transform:uppercase;font-size:11px"} "Reply & resume"]
-          [:textarea {"data-bind" "reply"
-                      :placeholder "Tell the agent what to do next…"}]
+          [:textarea {"data-bind" "reply" :placeholder "Tell the agent what to do next…"}]
           [:div {:style "margin-top:9px"}
            [:button.btn.btn-primary
             {"data-on:click" (str "@post('/gate/" project "/" ws-id "/reply')")}
             "Send & resume ▸"]
            (when session [:span.meta {:style "margin-left:10px"} "resumes " session])]])]))))
 
-(defn gate-inbox-page
-  "Dashboard home: cross-project Gate Inbox (master-detail). `sel` is the open
-   gate map (or nil). The inbox column polls; the pane is server-rendered for the
-   selected gate (deep-linked via /gate/:project/:ws-id)."
-  [gates sel]
-  (layout
-   "gates"
-   [:h1 "nido — gates"]
-   [:p.meta [:a {:href "/board"} "board →"] " · " [:a {:href "/system"} "system →"]]
+(defn needs-page
+  "Home: the needs-you master-detail inside the shell. `ctx` is the rail context."
+  [ctx gates sel]
+  (shell
+   (assoc ctx :active :needs :title "Needs you")
    [:div.gate-wrap
-    [:div.inbox {:data-on-interval__duration.3s "@get('/_fragment/gates')"}
-     (h/raw (gate-inbox-fragment gates (:ws-id sel)))]
+    [:div.inbox {:data-on-interval__duration.3s "@get('/_fragment/needs')"}
+     (h/raw (needs-fragment gates (:ws-id sel)))]
     [:div.pane (h/raw (gate-pane sel))]]))
 
 ;; ---------------------------------------------------------------------------

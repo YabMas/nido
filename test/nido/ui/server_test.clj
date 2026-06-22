@@ -50,22 +50,25 @@
         rows     (server/all-session-rows rows-fn projects)]
     (is (= [["good" "ok" true]] (map (juxt :project :name :live?) rows)))))
 
-(deftest home-route-renders-gate-inbox
-  (with-redefs [nido.work/all-gates (fn [] [])]
+(deftest home-route-renders-needs-page
+  (with-redefs [nido.work/all-gates (fn [] [])
+                nido.ui.server/read-rail-daemon (fn [] {:state :up})]
     (let [resp (server/handle-request {:request-method :get :uri "/"})]
       (is (= 200 (:status resp)))
-      (is (str/includes? (:body resp) "gate-wrap")))))
+      (is (str/includes? (:body resp) "Needs you")))))
 
-(deftest gates-fragment-route-is-sse
-  (with-redefs [nido.work/all-gates (fn [] [])]
-    (let [resp (server/handle-request {:request-method :get :uri "/_fragment/gates"})]
-      (is (str/includes? (get-in resp [:headers "Content-Type"]) "text/event-stream")))))
+(deftest needs-fragment-route-is-sse-and-patches-rail
+  (with-redefs [nido.work/all-gates (fn [] [])
+                nido.ui.server/read-rail-daemon (fn [] {:state :up})]
+    (let [resp (server/handle-request {:request-method :get :uri "/_fragment/needs"})]
+      (is (str/includes? (get-in resp [:headers "Content-Type"]) "text/event-stream"))
+      (is (str/includes? (:body resp) "rail-needs-count")))))   ; rail patched too
 
-(deftest gate-pane-route-renders
+(deftest gate-pane-route-renders                ; keep, unchanged URI /gate/...
   (let [g {:ws-id "ws-1" :project "brian" :origin :notion :stage :triage
            :label "BR-7" :report nil :actions [] :session nil}]
-    (with-redefs [nido.work/all-gates (fn [] [g])
-                  nido.work/gate (fn [_ _] g)]
+    (with-redefs [nido.work/all-gates (fn [] [g]) nido.work/gate (fn [_ _] g)
+                  nido.ui.server/read-rail-daemon (fn [] {:state :up})]
       (let [resp (server/handle-request {:request-method :get :uri "/gate/brian/ws-1"})]
         (is (= 200 (:status resp)))
         (is (str/includes? (:body resp) "BR-7"))))))
@@ -120,7 +123,8 @@
 (deftest dashboard-routes-smoke
   (with-redefs [nido.work/all-gates (fn [] [])
                 server/all-grouped  (fn [] [])
-                server/all-session-rows (fn [] [])]
+                server/all-session-rows (fn [] [])
+                nido.ui.server/read-rail-daemon (fn [] {:state :up})]
     (doseq [uri ["/" "/board" "/system"]]
       (is (= 200 (:status (server/handle-request {:request-method :get :uri uri})))
           (str uri " serves 200")))))
@@ -131,5 +135,5 @@
       (Thread/sleep 50)
       (is (str/includes? (:body resp) "gate-pane"))
       (is (str/includes? (:body resp) "Promoting"))
-      (is (str/includes? (:body resp) "/ws/brian/ws-1"))
-      (is (str/includes? (:body resp) "/board")))))
+      (is (str/includes? (:body resp) "/workstreams/brian/ws-1"))
+      (is (str/includes? (:body resp) "/workstreams")))))

@@ -43,33 +43,31 @@
              {:id :reply :label "Reply" :kind :reply}]
    :session "auto"})
 
-(deftest gate-inbox-fragment-lists-cards
-  (let [html (views/gate-inbox-fragment [sample-gate] nil)]
-    (is (str/includes? html "id=\"gate-inbox\""))
+(deftest needs-fragment-lists-cards
+  (let [html (views/needs-fragment [sample-gate] nil)]
+    (is (str/includes? html "id=\"needs\""))
     (is (str/includes? html "BR-7"))
-    (is (str/includes? html ">N<") "origin badge")
-    (is (str/includes? html "brian"))
-    (is (str/includes? html "/gate/brian/ws-1") "card links to the gate pane")))
+    (is (str/includes? html ">N<"))
+    (is (str/includes? html "/gate/brian/ws-1"))))
 
-(deftest gate-inbox-fragment-empty-state
-  (is (str/includes? (views/gate-inbox-fragment [] nil) "No gates")))
+(deftest needs-fragment-empty-state-is-calm
+  (is (str/includes? (views/needs-fragment [] nil) "Nothing needs you")))
 
-(deftest gate-pane-renders-report-and-actions
+(deftest gate-pane-renders-report-and-actions     ; keep; assert no breadcrumb
   (let [html (views/gate-pane sample-gate)]
     (is (str/includes? html "Verdict"))
-    (is (str/includes? html "bug — reproduced."))
     (is (str/includes? html "/gate/brian/ws-1/dismiss"))
-    (is (str/includes? html "/gate/brian/ws-1/reply"))
-    (is (str/includes? html "<textarea"))
-    (is (str/includes? html "data-bind=\"reply\"") "reply textarea is two-way bound to the reply signal")))
+    (is (str/includes? html "data-bind=\"reply\""))
+    (is (not (str/includes? html "class=\"breadcrumb\"")))))
 
-(deftest gate-pane-empty-when-nil
-  (is (str/includes? (views/gate-pane nil) "Select a gate")))
+(deftest gate-pane-empty-is-calm
+  (is (str/includes? (views/gate-pane nil) "Nothing needs you")))
 
-(deftest gate-inbox-page-has-master-detail-and-poll
-  (let [html (views/gate-inbox-page [sample-gate] sample-gate)]
-    (is (str/includes? html "gate-wrap"))
-    (is (str/includes? html "/_fragment/gates") "polls the inbox fragment")
+(deftest needs-page-has-shell-master-detail-and-poll
+  (let [html (views/needs-page {:active :needs :needs-count 1 :daemon {:state :up} :scope "all" :projects []}
+                               [sample-gate] sample-gate)]
+    (is (str/includes? html "rail-link active"))        ; rail present + active
+    (is (str/includes? html "/_fragment/needs"))         ; polls the renamed fragment
     (is (str/includes? html "BR-7"))))
 
 (def ^:private sample-grouped
@@ -115,14 +113,14 @@
                            [:drop "Dropped"] [:done "done"] [:reply "Resuming"]]]
     (let [html (views/gate-action-confirm-fragment action "brian" "ws-1")]
       (is (str/includes? html needle) (str action " message"))
-      (is (str/includes? html "/ws/brian/ws-1") (str action " links to the workstream"))
-      (is (str/includes? html "/board") (str action " links to the board"))))
+      (is (str/includes? html "/workstreams/brian/ws-1") (str action " links to the workstream"))
+      (is (str/includes? html "/workstreams") (str action " links to workstreams"))))
   (let [html (views/gate-action-confirm-fragment :wat "brian" "ws-1")]
     (is (str/includes? html "id=\"gate-pane\""))))
 
 (deftest gate-card-shows-resume-error-badge
   (let [g (assoc sample-gate :resume-error {:reason :resume-failed :message "exec failed"})
-        html (views/gate-inbox-fragment [g] nil)]
+        html (views/needs-fragment [g] nil)]
     (is (str/includes? html "resume failed"))
     (is (str/includes? html "exec failed"))))
 

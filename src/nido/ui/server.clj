@@ -9,6 +9,7 @@
             [nido.session.lifecycle :as lifecycle]
             [nido.session.state :as state]
             [nido.ui.discovery :as discovery]
+            [nido.ui.health :as health]
             [nido.ui.views :as views]
             [nido.work :as work]
             [org.httpkit.server :as http]))
@@ -210,6 +211,27 @@
        vec))
 
 ;; ---------------------------------------------------------------------------
+;; Rail seam + context
+
+(defn read-rail-daemon "Seam over health for stubbing in tests." [] (health/read-daemon-health))
+
+(defn- rail-context
+  "Render context for the shell rail on any page."
+  [active]
+  {:active      active
+   :needs-count (count (work/all-gates))
+   :daemon      (read-rail-daemon)
+   :scope       "all"
+   :projects    (mapv (comp name key) (project/list-projects))})
+
+(defn- needs-fragment-response [gates sel-id]
+  (sse-response
+   (sse-fragment
+    (str (views/needs-fragment gates sel-id)
+         (views/rail-status-fragment {:needs-count (count gates)
+                                      :daemon (read-rail-daemon)})))))
+
+;; ---------------------------------------------------------------------------
 ;; Routing
 
 (defn- pending-state-for-action [action]
@@ -331,9 +353,10 @@
       ["favicon.png"] (icon-response)
       ["favicon.ico"] (icon-response)
 
-      ;; GET / — cross-project Gate Inbox (dashboard home)
+      ;; GET / — Needs you (home)
       []
-      (html-response 200 (views/gate-inbox-page (work/all-gates) nil))
+      (let [gates (work/all-gates)]
+        (html-response 200 (views/needs-page (rail-context :needs) gates nil)))
 
       ;; GET /system — the old flat live-sessions board (relocated from /)
       ["system"]
@@ -347,9 +370,9 @@
       ["_fragment" "board"]
       (sse-response (sse-fragment (views/board-fragment (all-grouped))))
 
-      ;; GET /_fragment/gates — SSE inbox refresh
-      ["_fragment" "gates"]
-      (sse-response (sse-fragment (views/gate-inbox-fragment (work/all-gates) nil)))
+      ;; GET /_fragment/needs — queue + rail
+      ["_fragment" "needs"]
+      (let [gates (work/all-gates)] (needs-fragment-response gates nil))
 
       ;; GET /projects — the original project grid
       ["projects"]
@@ -361,11 +384,11 @@
 
       ;; Otherwise, dispatch on structure
       (cond
-        ;; GET /gate/:project/:ws-id — inbox with that gate selected
+        ;; GET /gate/:project/:ws-id — needs page, gate selected
         (and (= 3 (count segments)) (= "gate" (first segments)))
-        (let [project (nth segments 1)
-              ws-id (nth segments 2)]
-          (html-response 200 (views/gate-inbox-page (work/all-gates) (work/gate project ws-id))))
+        (let [project (nth segments 1) ws-id (nth segments 2)
+              gates (work/all-gates)]
+          (html-response 200 (views/needs-page (rail-context :needs) gates (work/gate project ws-id))))
 
         ;; GET /ws/:project/:ws-id — read-only workstream detail (reflect + route-in)
         (and (= 3 (count segments)) (= "ws" (first segments)))
