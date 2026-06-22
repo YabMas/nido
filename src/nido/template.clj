@@ -63,6 +63,35 @@
   (let [existing (or (state/read-template-meta project-name) {})]
     (state/write-template-meta! project-name (merge existing patch))))
 
+(defn- with-template-rollback
+  "Protect the template from a failed refresh. APFS-clone the (stopped) template
+   at `data-dir` to a `<data-dir>.refresh-bak` snapshot, run `thunk`, and on
+   success discard the snapshot. On ANY throw, restore `data-dir` from the
+   snapshot and rethrow — so a failed fetch or a half-completed restore can
+   never leave the template destroyed.
+
+   The protective snapshot is taken BEFORE `thunk` runs anything destructive,
+   so if it can't be made (uninitialized template, cross-volume PGDATA),
+   `clone-pgdata!` throws here and `thunk` never runs — the template is left
+   untouched. The caller must have already stopped the cluster (cloning a
+   running cluster is refused)."
+  [data-dir thunk]
+  (let [backup-dir (str data-dir ".refresh-bak")]
+    (when (fs/exists? backup-dir)
+      (fs/delete-tree backup-dir))            ; clear a stale snapshot from a prior crash
+    (pg/clone-pgdata! data-dir backup-dir)
+    (try
+      (let [result (thunk)]
+        (fs/delete-tree backup-dir)
+        result)
+      (catch Throwable t
+        (core/log-step
+         (str "Refresh failed — restoring template from pre-refresh snapshot at " data-dir))
+        (ensure-stopped! data-dir)            ; can't swap a running cluster's dir
+        (fs/delete-tree data-dir)
+        (fs/move backup-dir data-dir)
+        (throw t)))))
+
 ;; ---------------------------------------------------------------------------
 ;; init
 ;; ---------------------------------------------------------------------------
@@ -140,23 +169,29 @@
       (throw (ex-info "No :refresh-steps declared in :templates :pg"
                       {:project-name project-name})))
     (ensure-stopped! data-dir)
-    (pg/pg-ctl-start! bin-dir data-dir port log-path)
-    (pg/wait-for-tcp! port)
-    (try
-      ;; pg_restore --clean cannot CASCADE; FKs from a previous refresh block
-      ;; per-object DROPs. Reset the DB to init-clean state so every refresh
-      ;; starts from a known empty target.
-      (pg/dropdb! bin-dir port db-user db-name)
-      (pg/setup-fresh-database! {:bin-dir bin-dir :pg-port port
-                                 :db-user db-user :db-name db-name
-                                 :schema schema :extensions extensions
-                                 :baseline nil
-                                 :project-dir project-dir})
-      (let [ctx (template-context project-name project-dir template-cfg port data-dir bin-dir)]
-        (doseq [step refresh-steps]
-          (commands/run-command! project-commands step ctx)))
-      (finally
-        (pg/pg-ctl-stop! data-dir)))
+    ;; Snapshot the known-good template before the destructive dropdb!. If any
+    ;; step throws (a failed staging fetch, a half-completed restore), the
+    ;; snapshot is rolled back over data-dir so the template is never left
+    ;; destroyed. Only on a clean run do we discard the snapshot and stamp meta.
+    (with-template-rollback data-dir
+      (fn []
+        (pg/pg-ctl-start! bin-dir data-dir port log-path)
+        (pg/wait-for-tcp! port)
+        (try
+          ;; pg_restore --clean cannot CASCADE; FKs from a previous refresh block
+          ;; per-object DROPs. Reset the DB to init-clean state so every refresh
+          ;; starts from a known empty target.
+          (pg/dropdb! bin-dir port db-user db-name)
+          (pg/setup-fresh-database! {:bin-dir bin-dir :pg-port port
+                                     :db-user db-user :db-name db-name
+                                     :schema schema :extensions extensions
+                                     :baseline nil
+                                     :project-dir project-dir})
+          (let [ctx (template-context project-name project-dir template-cfg port data-dir bin-dir)]
+            (doseq [step refresh-steps]
+              (commands/run-command! project-commands step ctx)))
+          (finally
+            (pg/pg-ctl-stop! data-dir)))))
     (update-meta! project-name {:last-refresh-at (core/now-iso)})
     (core/log-step (str "Template refreshed for " project-name))))
 
