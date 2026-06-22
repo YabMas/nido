@@ -223,7 +223,7 @@
 
 (defn gate-pane
   "The detail pane: rendered report + follow-actions. nil -> calm placeholder."
-  [{:keys [ws-id project origin stage label report actions session] :as gate}]
+  [{:keys [ws-id project origin label report actions session] :as gate}]
   (str
    (h/html
     (if-not gate

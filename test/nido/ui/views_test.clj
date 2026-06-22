@@ -48,7 +48,10 @@
     (is (str/includes? html "Verdict"))
     (is (str/includes? html "/gate/brian/ws-1/dismiss"))
     (is (str/includes? html "data-bind=\"reply\""))
-    (is (not (str/includes? html "class=\"breadcrumb\"")))))
+    (is (not (str/includes? html "class=\"breadcrumb\"")))
+    (is (str/includes? html "bug — reproduced."))
+    (is (str/includes? html "/gate/brian/ws-1/reply"))
+    (is (str/includes? html "<textarea"))))
 
 (deftest gate-pane-empty-is-calm
   (is (str/includes? (views/gate-pane nil) "Nothing needs you")))
