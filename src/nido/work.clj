@@ -347,6 +347,20 @@
                        (first rows))]
     (when pick {:project project :session (:name pick)})))
 
+(defn dev-target
+  "The workstream's DEV ENVIRONMENT: the most-recently-created :heavy
+   (services-bearing) session — i.e. the latest-stage impl env. :light/triage
+   sessions are read-only symlink worktrees with no JVM/REPL/app, so they are
+   excluded. Returns {:project :session} (mirrors open-target) or nil when no
+   heavy session exists yet. Resolved by STAGE/weight, not liveness — a stale
+   live earlier-stage session can never masquerade as the work to test."
+  [project ws-id]
+  (when-let [s (->> (csession/list-sessions project ws-id)
+                    (filter #(= :heavy (:weight %)))
+                    (sort-by :created-at)
+                    last)]
+    {:project project :session (:name s)}))
+
 (defn reclaimed?
   "True iff `session` under `ws-id` is owned by a Run whose ephemeral
    session-home was reclaimed — i.e. it CAN be re-hydrated but isn't landable
