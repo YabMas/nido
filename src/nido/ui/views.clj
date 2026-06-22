@@ -62,7 +62,8 @@
         .gate-top { display:flex; align-items:center; gap:8px; }
         .gate-top .lbl { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#e8e8e8; }
         .needs { width:7px; height:7px; border-radius:50%; background:#facc15; box-shadow:0 0 6px #facc15; }
-        .gate-sub { display:flex; gap:8px; color:#666; font-size:11px; margin:3px 0 0 26px; }
+        .gate-sub { display:flex; align-items:center; gap:8px; color:#666; font-size:11px; margin:3px 0 0 26px; }
+        .gate-sub span:last-child { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
         .gate-prev { color:#7a7a98; font-size:11.5px; margin:5px 0 0 26px;
                      white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
         .gate-err { color:#f87171; font-size:11px; margin:4px 0 0 26px; }
