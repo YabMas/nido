@@ -477,6 +477,88 @@
     [:div.pane (h/raw (workstream-pane sel-ws live-url))]]))
 
 ;; ---------------------------------------------------------------------------
+;; System (cross-project ops) — replaces the live board + per-project sessions list.
+
+(defn- system-row
+  "One cross-project table row: pending-state badges (app-state-*), heap-max, RSS,
+   error messages, and transient/failed state logic. Action URLs use the
+   /system/:project/:name/:action path."
+  [{:keys [project name entry live? pending-state repl-rss pg-rss heap-max]}]
+  (let [url (:url entry)
+        pg-port (:pg-port entry)
+        repl-port (:nrepl-port entry)
+        app-port (:app-port entry)
+        pending-kw  (cond
+                      (map? pending-state)     (:state pending-state)
+                      (keyword? pending-state) pending-state)
+        pending-err (when (map? pending-state) (:error-msg pending-state))
+        state (cond
+                live?        :running
+                pending-kw   pending-kw
+                (not entry)  :dormant
+                :else        :idle)
+        state-class (str "app-state app-state-" (clojure.core/name state))
+        action-base (str "/system/" project "/" name)
+        transient?  (#{:starting :stopping :restarting} state)
+        failed?     (= state :failed)
+        pg-rss-str  (process/human-bytes pg-rss)
+        jvm-rss-str (process/human-bytes repl-rss)]
+    [:tr
+     [:td [:a {:href (str "/" project "/sessions/" name "/logs/repl")} [:strong name]]]
+     [:td.mono project]
+     [:td [:span {:class state-class :title (or pending-err "")} (clojure.core/name state)]
+      (when (and failed? pending-err)
+        [:div.error-msg
+         [:a {:href (str "/" project "/sessions/" name "/logs/eval")} pending-err]])]
+     [:td (if (and live? url)
+            [:a {:href url :target "_blank"} url]
+            [:span.meta "—"])]
+     [:td.mono (or pg-port "—")
+      (when pg-rss [:div.meta pg-rss-str])]
+     [:td.mono (or repl-port "—")
+      (when repl-rss [:div.meta jvm-rss-str])
+      (when heap-max [:div.meta (str "max " heap-max)])]
+     [:td.mono (or app-port "—")]
+     [:td [:div.actions
+           (cond
+             transient? [:span.meta "working…"]
+             failed?
+             [:button.btn.btn-primary {"data-on:click" (str "@post('" action-base "/restart')")} "retry"]
+             (= state :dormant)
+             [:button.btn.btn-primary {"data-on:click" (str "@post('" action-base "/start')")} "start"])
+           (when (and entry (not transient?))
+             [:button.btn {"data-on:click" (str "@post('" action-base "/restart')")} "restart"])
+           (when (and entry (not transient?))
+             [:button.btn {"data-on:click" (str "@post('" action-base "/stop')")} "stop"])]]]))
+
+(defn system-fragment
+  "Daemon banner + cross-project session table. `daemon` is the health map.
+   Renders pending-state badges, heap-max, RSS, and error messages per row.
+   Action URLs use the /system/:project/:name/:action path."
+  [rows {:keys [state heartbeat-at] :as _daemon}]
+  (str
+   (h/html
+    [:div {:id "system"}
+     [:div.card
+      [:span {:class (str "dot dot-" (clojure.core/name (or state :down)))}]
+      "daemon " (clojure.core/name (or state :down))
+      (when heartbeat-at [:span.meta " · heartbeat " heartbeat-at])]
+     (if (seq rows)
+       [:table
+        [:thead [:tr [:th "session"] [:th "project"] [:th "state"] [:th "dev url"]
+                 [:th "pg"] [:th "repl"] [:th "app"] [:th "actions"]]]
+        [:tbody (for [r rows] (system-row r))]]
+       [:p.empty "No sessions."])])))
+
+(defn system-page
+  "System surface: daemon health banner + cross-project session table in the shell."
+  [ctx rows daemon]
+  (shell
+   (assoc ctx :active :system :title "System")
+   [:div {:data-on-interval__duration.3s "@get('/_fragment/system')"}
+    (h/raw (system-fragment rows daemon))]))
+
+;; ---------------------------------------------------------------------------
 ;; Pages
 
 (defn home-page
@@ -495,82 +577,6 @@
           [:a {:href (str "/" name "/sessions")} "sessions"]
           [:a {:href (str "/" name "/vsdd/")} "vsdd runs"]]])]
      [:p.empty "No projects registered."])))
-
-;; ---------------------------------------------------------------------------
-;; Sessions view
-
-(defn- session-row
-  "One table row for a session. pending-state is either a plain keyword
-   (for transient or terminal states the port check alone can't express)
-   or a map `{:state :failed :error-msg \"...\"}`. Either way it's layered
-   on top of the TCP-derived state so actions in flight and terminal
-   failures show through."
-  [project-name {:keys [name entry live? pending-state
-                        repl-rss pg-rss heap-max]}]
-  (let [app-port (:app-port entry)
-        pg-port (:pg-port entry)
-        repl-port (:nrepl-port entry)
-        url (:url entry)
-        pending-kw (cond
-                     (map? pending-state)     (:state pending-state)
-                     (keyword? pending-state) pending-state)
-        pending-err (when (map? pending-state) (:error-msg pending-state))
-        state (cond
-                live?      :running
-                pending-kw pending-kw
-                (not entry) :dormant
-                :else      :idle)
-        state-class (str "app-state app-state-" (clojure.core/name state))
-        action-base (str "/" project-name "/sessions/" name)
-        transient? (#{:starting :stopping :restarting} state)
-        failed?    (= state :failed)
-        pg-rss-str (process/human-bytes pg-rss)
-        jvm-rss-str (process/human-bytes repl-rss)]
-    [:tr
-     [:td [:a {:href (str "/" project-name "/sessions/" name "/logs/repl")}
-           [:strong name]]]
-     [:td (if url
-            [:a {:href url :target "_blank"} url]
-            [:span.meta "—"])]
-     [:td.mono (or pg-port "—")
-      (when pg-rss [:div.meta pg-rss-str])]
-     [:td.mono (or repl-port "—")
-      (when repl-rss [:div.meta jvm-rss-str])
-      (when heap-max [:div.meta (str "max " heap-max)])]
-     [:td.mono (or app-port "—")]
-     [:td [:span {:class state-class
-                  :title (or pending-err "")} (clojure.core/name state)]
-      (when (and failed? pending-err)
-        [:div.error-msg
-         [:a {:href (str "/" project-name "/sessions/" name "/logs/eval")}
-          pending-err]])]
-     [:td [:div.actions
-           (cond
-             transient? [:span.meta "working…"]
-             failed?
-             [:button.btn.btn-primary {"data-on:click" (str "@post('" action-base "/restart')")}
-              "retry"]
-             (= state :dormant)
-             [:button.btn.btn-primary {"data-on:click" (str "@post('" action-base "/start')")}
-              "start"])
-           (when (and entry (not transient?))
-             [:button.btn {"data-on:click" (str "@post('" action-base "/restart')")} "restart"])
-           (when (and entry (not transient?))
-             [:button.btn {"data-on:click" (str "@post('" action-base "/stop')")} "stop"])]]]))
-
-(defn sessions-table-fragment
-  "Just the table body — used for initial render and SSE refresh. Each row
-   carries its own :pending-state (sourced from the server-side app-states
-   atom) so transient and terminal states persist across polling cycles."
-  [project-name rows]
-  (str
-   (h/html
-    (if (seq rows)
-      [:tbody {:id "sessions-body"}
-       (for [row rows]
-         (session-row project-name row))]
-      [:tbody {:id "sessions-body"}
-       [:tr [:td {:colspan "7"} [:span.empty "No sessions yet — run `bb nido:session:up <name>`."]]]]))))
 
 (defn log-tail-fragment
   "Just the log content div — for SSE refresh."
@@ -606,80 +612,6 @@
      [:div {:data-on-interval__duration.2s (str "@get('" fragment-url "')")}
       (h/raw (log-tail-fragment content))])))
 
-(defn sessions-page
-  "Sessions list for a project."
-  [project-name worktrees-dir rows]
-  (layout
-   (str project-name " — sessions")
-   (breadcrumb [:a {:href "/"} "nido"]
-               project-name
-               "sessions"
-               [:a {:href (str "/" project-name "/vsdd/")} "vsdd"])
-   [:h1 (str project-name " — Sessions")]
-   [:p.meta "Worktrees under " [:span.mono worktrees-dir]]
-   [:div {:data-on-interval__duration.3s (str "@get('/" project-name "/sessions/_fragment/list')")}
-    [:table
-     [:thead
-      [:tr [:th "session"] [:th "url"] [:th "pg"] [:th "repl"] [:th "app"] [:th "app-state"] [:th "actions"]]]
-     (h/raw (sessions-table-fragment project-name rows))]]))
-
-;; ---------------------------------------------------------------------------
-;; Live-sessions board (dashboard home)
-
-(defn- board-row
-  "One board row: project · session · status · dev URL. Live sessions get the
-   clickable friendly-host link (`:url` in the registry entry — the per-session
-   friendly host, opened in a new tab → own cookie jar). Down sessions get a
-   real start button that POSTs the existing lifecycle action; the board's 3s
-   poll then reflects the `starting…` state (set in the server's app-states
-   atom) and finally the live URL. pending-state mirrors session-row so an
-   in-flight start/stop shows through between polls."
-  [{:keys [project name live? entry pending-state]}]
-  (let [url         (:url entry)
-        pending-kw  (cond
-                      (map? pending-state)     (:state pending-state)
-                      (keyword? pending-state) pending-state)
-        action-base (str "/" project "/sessions/" name)]
-    [:tr
-     [:td.mono project]
-     [:td [:a {:href (str action-base "/logs/repl")} [:strong name]]]
-     [:td (cond
-            live?                                  [:span {:style "color:#4ade80"} "● up"]
-            (#{:starting :restarting} pending-kw)  [:span.meta "… starting"]
-            (= :stopping pending-kw)               [:span.meta "… stopping"]
-            :else                                  [:span.meta "○ down"])]
-     [:td (cond
-            (and live? url)                        [:a {:href url :target "_blank"} url]
-            live?                                  [:span.meta "—"]
-            (#{:starting :restarting} pending-kw)  [:span.meta "working…"]
-            :else
-            [:button.btn.btn-primary
-             {"data-on:click" (str "@post('" action-base "/start')")}
-             "start"])]]))
-
-(defn live-board-fragment
-  "Just the board tbody — initial render + SSE refresh."
-  [rows]
-  (str
-   (h/html
-    (if (seq rows)
-      [:tbody {:id "board-body"}
-       (for [row rows] (board-row row))]
-      [:tbody {:id "board-body"}
-       [:tr [:td {:colspan "4"} [:span.empty "No sessions yet — run `bb nido:session:up <name>`."]]]]))))
-
-(defn live-board-page
-  "Dashboard home: a flat, live-first board of every session across projects."
-  [rows]
-  (layout
-   "live sessions"
-   [:h1 "nido — live sessions"]
-   [:p.meta [:a {:href "/"} "← gates"] " · " [:a {:href "/workstreams"} "workstreams"] " · " [:a {:href "/projects"} "all projects →"]]
-   [:div {:data-on-interval__duration.3s "@get('/_fragment/live')"}
-    [:table
-     [:thead
-      [:tr [:th "project"] [:th "session"] [:th "status"] [:th "dev url"]]]
-     (h/raw (live-board-fragment rows))]]))
 
 (defn vsdd-runs-page
   "VSDD runs list for a project."

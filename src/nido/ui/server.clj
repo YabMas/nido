@@ -238,6 +238,13 @@
          (views/rail-status-fragment {:needs-count (count (work/all-gates))
                                        :daemon (read-rail-daemon)})))))
 
+(defn- system-fragment-response []
+  (sse-response
+   (sse-fragment
+    (str (views/system-fragment (all-session-rows) (read-rail-daemon))
+         (views/rail-status-fragment {:needs-count (count (work/all-gates))
+                                       :daemon (read-rail-daemon)})))))
+
 ;; ---------------------------------------------------------------------------
 ;; Routing
 
@@ -327,10 +334,10 @@
         (gate-resolve! project ws-id action-id input)
         (sse-response (sse-fragment (views/gate-action-confirm-fragment action-id project ws-id))))
 
-      ;; POST /:project/sessions/:name/:action — session lifecycle action
+      ;; POST /system/:project/:name/:action — session lifecycle action (renamed path)
       (and (>= (count segs) 4)
-           (= "sessions" (nth segs 1)))
-      (let [project-name (first segs)
+           (= "system" (first segs)))
+      (let [project-name (nth segs 1)
             session-name (nth segs 2)
             action (vec (drop 3 segs))
             instance-id (instance-id-for project-name session-name)
@@ -342,13 +349,9 @@
         ;; Kick off the potentially slow lifecycle op on a background
         ;; thread. It'll clear or replace the app-state when it finishes.
         (future (run-action! project-name session-name action))
-        ;; Respond with the current sessions fragment (which now includes
-        ;; the just-set pending state) so the UI sees instant feedback.
-        (if-let [ctx (discovery/project-context project-name)]
-          (let [rows (session-rows project-name (:directory ctx))]
-            (sse-response (sse-fragment
-                           (views/sessions-table-fragment project-name rows))))
-          {:status 204}))
+        ;; Respond with the system fragment (patches #system + rail)
+        ;; so the UI sees instant feedback.
+        (system-fragment-response))
 
       :else
       (html-response 404 (views/not-found-page)))))
@@ -365,9 +368,9 @@
       (let [gates (work/all-gates)]
         (html-response 200 (views/needs-page (rail-context :needs) gates nil)))
 
-      ;; GET /system — the old flat live-sessions board (relocated from /)
+      ;; GET /system — cross-project session board with daemon health banner
       ["system"]
-      (html-response 200 (views/live-board-page (all-session-rows)))
+      (html-response 200 (views/system-page (rail-context :system) (all-session-rows) (read-rail-daemon)))
 
       ;; GET /workstreams — overview (no selection)
       ["workstreams"]
@@ -385,9 +388,9 @@
       ["projects"]
       (html-response 200 (views/home-page (project/list-projects)))
 
-      ;; GET /_fragment/live — SSE board tbody
-      ["_fragment" "live"]
-      (sse-response (sse-fragment (views/live-board-fragment (all-session-rows))))
+      ;; GET /_fragment/system — SSE system surface refresh (patches #system + rail)
+      ["_fragment" "system"]
+      (system-fragment-response)
 
       ;; Otherwise, dispatch on structure
       (cond
@@ -411,17 +414,6 @@
           (let [dir (:directory ctx)
                 rest-segs (vec (rest segments))]
             (cond
-              ;; GET /:project/sessions — session list
-              (= rest-segs ["sessions"])
-              (let [rows (session-rows project-name dir)
-                    wts-dir (lifecycle/worktrees-dir project-name dir)]
-                (html-response 200 (views/sessions-page project-name wts-dir rows)))
-
-              ;; GET /:project/sessions/_fragment/list — SSE table body
-              (= rest-segs ["sessions" "_fragment" "list"])
-              (let [rows (session-rows project-name dir)]
-                (sse-response (sse-fragment (views/sessions-table-fragment project-name rows))))
-
               ;; GET /:project/sessions/:name/logs/:service — full page
               (and (= 4 (count rest-segs))
                    (= "sessions" (first rest-segs))

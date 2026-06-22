@@ -2,6 +2,7 @@
   (:require [clojure.test :refer [deftest is]]
             [clojure.string :as str]
             [nido.ui.server :as server]
+            [nido.session.lifecycle :as lifecycle]
             [nido.work]
             [nido.project :as project]))
 
@@ -19,13 +20,13 @@
     (is (= [["brian" "b-up" true] ["foo" "f-up" true] ["brian" "b-down" false]]
            (map (juxt :project :name :live?) rows)))))
 
-(deftest home-route-renders-board
-  ;; The flat live-sessions board relocated from / to /system (the gate inbox
-  ;; is now the home page); this test follows the board to its new route.
-  (with-redefs [server/all-session-rows (fn [] [])]
+(deftest system-route-renders-on-shell
+  (with-redefs [server/all-session-rows (fn [] [])
+                nido.work/all-gates (fn [] [])
+                nido.ui.server/read-rail-daemon (fn [] {:state :up})]
     (let [resp (server/handle-request {:request-method :get :uri "/system"})]
       (is (= 200 (:status resp)))
-      (is (str/includes? (:body resp) "live sessions")))))
+      (is (str/includes? (:body resp) "id=\"system\"")))))
 
 (deftest projects-route-renders-grid
   (with-redefs [project/list-projects (fn [] {"brian" {:directory "/x"}})]
@@ -33,11 +34,13 @@
       (is (= 200 (:status resp)))
       (is (str/includes? (:body resp) "brian")))))
 
-(deftest live-fragment-route-is-sse
-  (with-redefs [server/all-session-rows (fn [] [])]
-    (let [resp (server/handle-request {:request-method :get :uri "/_fragment/live"})]
-      (is (= 200 (:status resp)))
-      (is (str/includes? (get-in resp [:headers "Content-Type"]) "text/event-stream")))))
+(deftest system-fragment-route-is-sse-and-patches-rail
+  (with-redefs [server/all-session-rows (fn [] [])
+                nido.work/all-gates (fn [] [])
+                nido.ui.server/read-rail-daemon (fn [] {:state :up})]
+    (let [resp (server/handle-request {:request-method :get :uri "/_fragment/system"})]
+      (is (str/includes? (get-in resp [:headers "Content-Type"]) "text/event-stream"))
+      (is (str/includes? (:body resp) "rail-needs-count")))))
 
 (deftest all-session-rows-skips-unreadable-projects
   ;; A project with no session.edn makes the real session-rows throw
@@ -73,11 +76,13 @@
         (is (= 200 (:status resp)))
         (is (str/includes? (:body resp) "BR-7"))))))
 
-(deftest system-route-still-serves-the-session-board
-  (with-redefs [server/all-session-rows (fn [] [])]
-    (let [resp (server/handle-request {:request-method :get :uri "/system"})]
-      (is (= 200 (:status resp)))
-      (is (str/includes? (:body resp) "live sessions")))))
+(deftest post-system-lifecycle-renamed-path
+  (with-redefs [server/all-session-rows (fn [] [])
+                lifecycle/up! (fn [& _] nil)
+                nido.ui.server/read-rail-daemon (fn [] {:state :up})]
+    (let [resp (server/handle-request {:request-method :post :uri "/system/brian/doc-room/start"})]
+      (Thread/sleep 30)
+      (is (str/includes? (get-in resp [:headers "Content-Type"]) "text/event-stream")))))
 
 (deftest post-gate-mutation-calls-resolve-and-returns-sse
   (let [calls (atom [])]
