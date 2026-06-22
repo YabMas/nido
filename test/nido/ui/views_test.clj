@@ -76,32 +76,41 @@
    :ready [{:ws-id "w2" :origin :github :stage :ready :label "#2 · b" :needs-you true}]
    :in-progress [{:ws-id "w3" :origin :scratch :stage :in-progress :label "spike" :needs-you false}]})
 
-(deftest board-fragment-groups-by-stage-with-badges
-  ;; board-fragment takes a seq of {:project :grouped} so it can thread the project
-  ;; into each row's /ws/<project>/<ws-id> link (grouped rows carry no :project).
-  (let [html (views/board-fragment [{:project "brian" :grouped sample-grouped}])]
-    (is (str/includes? html "triage"))
-    (is (str/includes? html "ready"))
-    (is (str/includes? html "in-progress"))
-    (is (str/includes? html "BR-1 · a"))
-    (is (str/includes? html "/ws/brian/w1") "rows link to workstream detail")
-    (is (str/includes? html ">N<"))))
-
 (def ^:private sample-ws
   {:ws-id "ws-1" :project "brian" :origin :notion :stage :triage :label "BR-7 · t"
    :ledger {:key "BR-7" :status :investigating :report-count 1}
    :sessions [{:name "auto" :autonomy-level :autonomous :parked? true :status :parked :brakes {:budget "30m"}}
               {:name "me"   :autonomy-level :interactive :parked? false :status :up :brakes nil}]})
 
-(deftest ws-detail-renders-ledger-and-sessions
-  (let [html (views/ws-detail-page sample-ws "http://auto.brian.localhost:3142")]
+(deftest workstreams-fragment-groups-and-links
+  (let [html (views/workstreams-fragment [{:project "brian" :grouped sample-grouped}] nil)]
+    (is (str/includes? html "id=\"workstreams\""))
+    (is (str/includes? html "triage"))
+    (is (str/includes? html "ready"))
+    (is (str/includes? html "in-progress"))
+    (is (str/includes? html "BR-1 · a"))
+    (is (str/includes? html "/workstreams/brian/w1"))   ; rows link to the ledger pane
+    (is (str/includes? html ">N<"))))
+
+(deftest workstream-pane-shows-ledger-report-and-sessions
+  (let [ws (assoc sample-ws :report {:kind :triage :at "t" :title "Verdict"
+                                     :markdown "# Verdict\n\nbug — reproduced."})
+        html (views/workstream-pane ws "http://auto.brian.localhost:3142")]
     (is (str/includes? html "BR-7"))
-    (is (str/includes? html "investigating"))
-    (is (str/includes? html "auto"))
-    (is (str/includes? html "me"))
-    (is (str/includes? html "autonomous"))
-    (is (str/includes? html "parked"))
-    (is (str/includes? html "http://auto.brian.localhost:3142") "route-in link when a live url is known")))
+    (is (str/includes? html "investigating"))            ; ledger summary status
+    (is (str/includes? html "bug — reproduced."))        ; report markdown
+    (is (str/includes? html "auto"))                     ; session listed
+    (is (str/includes? html "http://auto.brian.localhost:3142"))))   ; route-in
+
+(deftest workstream-pane-empty-when-nil
+  (is (str/includes? (views/workstream-pane nil nil) "Select a workstream")))
+
+(deftest workstreams-page-has-shell-and-poll
+  (let [html (views/workstreams-page {:active :workstreams :needs-count 0 :daemon {:state :up}
+                                      :scope "all" :projects []}
+                                     [{:project "brian" :grouped sample-grouped}] nil nil)]
+    (is (str/includes? html "rail-link active"))
+    (is (str/includes? html "/_fragment/workstreams"))))
 
 (deftest gate-action-confirm-reply-targets-the-pane
   (let [html (views/gate-action-confirm-fragment :reply "brian" "ws-1")]

@@ -105,18 +105,25 @@
       (is (str/includes? (:body resp) "Resuming"))
       (is (str/includes? (:body resp) "gate-pane")))))
 
-(deftest board-route-renders
-  (with-redefs [nido.work/grouped (fn [_] {:triage {:in-flight [] :queued []} :ready [] :in-progress []})
-                project/list-projects (fn [] {"brian" {:directory "/x"}})]
-    (let [resp (server/handle-request {:request-method :get :uri "/board"})]
+(deftest workstreams-route-renders
+  (with-redefs [nido.work/grouped (fn [_] {:triage {:in-flight [] :queued []} :ready [] :in-progress [] :inbox []})
+                project/list-projects (fn [] {"brian" {:directory "/x"}})
+                nido.work/all-gates (fn [] [])
+                nido.ui.server/read-rail-daemon (fn [] {:state :up})]
+    (let [resp (server/handle-request {:request-method :get :uri "/workstreams"})]
       (is (= 200 (:status resp)))
-      (is (str/includes? (:body resp) "board")))))
+      (is (str/includes? (:body resp) "Workstreams")))))
 
-(deftest ws-detail-route-renders
-  (with-redefs [nido.work/workstream (fn [_ _] {:ws-id "ws-1" :project "brian" :origin :notion
-                                                :stage :triage :label "BR-7" :ledger nil :sessions []})
-                server/workstream-live-url (fn [_ _] nil)]
-    (let [resp (server/handle-request {:request-method :get :uri "/ws/brian/ws-1"})]
+(deftest workstream-pane-route-renders
+  (with-redefs [nido.work/grouped (fn [_] {:triage {:in-flight [] :queued []} :ready [] :in-progress [] :inbox []})
+                project/list-projects (fn [] {"brian" {:directory "/x"}})
+                nido.work/all-gates (fn [] [])
+                nido.work/workstream (fn [_ _] {:ws-id "ws-1" :project "brian" :origin :notion
+                                                :stage :triage :label "BR-7" :ledger nil
+                                                :report {:markdown "# V\n\nbody"} :sessions []})
+                nido.ui.server/workstream-live-url (fn [_ _] nil)
+                nido.ui.server/read-rail-daemon (fn [] {:state :up})]
+    (let [resp (server/handle-request {:request-method :get :uri "/workstreams/brian/ws-1"})]
       (is (= 200 (:status resp)))
       (is (str/includes? (:body resp) "BR-7")))))
 
@@ -125,7 +132,7 @@
                 server/all-grouped  (fn [] [])
                 server/all-session-rows (fn [] [])
                 nido.ui.server/read-rail-daemon (fn [] {:state :up})]
-    (doseq [uri ["/" "/board" "/system"]]
+    (doseq [uri ["/" "/workstreams" "/system"]]
       (is (= 200 (:status (server/handle-request {:request-method :get :uri uri})))
           (str uri " serves 200")))))
 

@@ -410,73 +410,71 @@
     [:div.pane (h/raw (gate-pane sel))]]))
 
 ;; ---------------------------------------------------------------------------
-;; Spine board (reflect-only, stage-grouped view across all projects)
+;; Workstreams (overview + ledger) — replaces the board + ws-detail.
 
-(defn- spine-board-row [project {:keys [ws-id origin label needs-you]}]
-  [:tr
-   [:td (origin-badge origin)]
-   [:td [:a {:href (str "/ws/" project "/" ws-id)} label]]
-   [:td (when needs-you [:span.needs {:title "needs you"}])]])
-
-(defn- stage-sections
-  "Flatten a {:project :grouped} entry into [{:project :stage :rows} …] in spine
-   order, dropping empty stages. Pulled out of the hiccup form so hiccup2's
-   compiler never walks the literal stage/rows pair vector (under SCI that
-   misreads `[:triage …]` as an element tag)."
+(defn- ws-stage-sections
+  "Flatten one {:project :grouped} into [{:project :stage :rows}] in spine order,
+   dropping empty stages. Kept as a plain fn (not inline hiccup) for the same
+   SCI reason the old stage-sections was."
   [{:keys [project grouped]}]
   (->> [[:inbox (:inbox grouped)]
         [:triage (concat (-> grouped :triage :in-flight) (-> grouped :triage :queued))]
         [:ready (:ready grouped)]
         [:in-progress (:in-progress grouped)]]
-       (keep (fn [[stage rows]]
-               (when (seq rows) {:project project :stage stage :rows rows})))))
+       (keep (fn [[stage rows]] (when (seq rows) {:project project :stage stage :rows rows})))))
 
-(defn board-fragment
-  "Stage-grouped reflect board across all projects. `groups` is a seq of
-   {:project :grouped} (grouped = work/grouped output)."
-  [groups]
+(defn- ws-list-row [project sel {:keys [ws-id origin label needs-you]}]
+  [:a {:class (str "gate-card" (when (= sel ws-id) " sel"))
+       :href  (str "/workstreams/" project "/" ws-id)}
+   [:div.gate-top (origin-badge origin) [:span.lbl label]
+    (when needs-you [:span.needs {:title "needs you"}])]
+   [:div.gate-sub [:span project]]])
+
+(defn workstreams-fragment
+  "Stage-grouped selectable list across projects. `groups` = [{:project :grouped}]."
+  [groups sel]
   (str
    (h/html
-    [:div {:id "board"}
-     (for [{:keys [project stage rows]} (mapcat stage-sections groups)]
-       [:div [:h3 (name stage) " — " project]
-        [:table [:tbody (for [r rows] (spine-board-row project r))]]])])))
+    [:div {:id "workstreams"}
+     (for [{:keys [project stage rows]} (mapcat ws-stage-sections groups)]
+       [:div [:h3 (name stage)]
+        (for [r rows] (ws-list-row project sel r))])])))
 
-(defn board-page [groups]
-  (layout "board"
-   [:h1 "nido — board"]
-   [:p.meta [:a {:href "/"} "← gates"] " · " [:a {:href "/system"} "system →"]]
-   [:div {:data-on-interval__duration.5s "@get('/_fragment/board')"}
-    (h/raw (board-fragment groups))]))
+(defn workstream-pane
+  "Read-only ledger pane: header · ledger summary · report markdown · sessions · route-in."
+  [{:keys [origin stage label ledger report sessions]} live-url]
+  (str
+   (h/html
+    (if-not label
+      [:div {:id "ws-pane"} [:p.empty "Select a workstream."]]
+      [:div {:id "ws-pane"}
+       [:h1 (origin-badge origin) " " label]
+       [:p.meta (name stage)
+        (when live-url [:span " · " [:a {:href live-url :target "_blank"} "open session ↗"]])]
+       (when ledger
+         [:div.card [:strong "ledger "] (:key ledger) " · " (some-> ledger :status name)
+          " · " (:report-count ledger) " report(s)"])
+       (when (:markdown report) (md/render (:markdown report)))
+       [:h2 "Sessions"]
+       (if (seq sessions)
+         [:table
+          [:thead [:tr [:th "session"] [:th "axis"] [:th "status"] [:th "brakes"]]]
+          [:tbody
+           (for [{:keys [name autonomy-level parked? status brakes]} sessions]
+             [:tr [:td name]
+              [:td (clojure.core/name autonomy-level) (when parked? " · gate")]
+              [:td (clojure.core/name (or status :down))]
+              [:td.meta (when brakes (pr-str brakes))]])]]
+         [:p.empty "No sessions."])]))))
 
-;; ---------------------------------------------------------------------------
-;; Workstream detail (read-only: reflect + route-in)
-
-(defn ws-detail-page
-  "Read-only workstream detail: origin · stage · ledger · sessions on the autonomy
-   axis, plus a route-in link when a live session url is known. Mutations live on
-   the gate inbox; this surface reflects + routes in (see spec)."
-  [{:keys [origin stage label ledger sessions]} live-url]
-  (layout
-   (str label " — workstream")
-   (breadcrumb [:a {:href "/"} "gates"] [:a {:href "/board"} "board"] label)
-   [:h1 (origin-badge origin) " " label]
-   [:p.meta (name stage)
-    (when live-url [:span " · " [:a {:href live-url :target "_blank"} "open session ↗"]])]
-   (when ledger
-     [:div.card [:strong "ledger "] (:key ledger) " · " (some-> ledger :status name)
-      " · " (:report-count ledger) " report(s)"])
-   [:h2 "Sessions"]
-   (if (seq sessions)
-     [:table
-      [:thead [:tr [:th "session"] [:th "axis"] [:th "status"] [:th "brakes"]]]
-      [:tbody
-       (for [{:keys [name autonomy-level parked? status brakes]} sessions]
-         [:tr [:td name]
-          [:td (clojure.core/name autonomy-level) (when parked? " · gate")]
-          [:td (clojure.core/name (or status :down))]
-          [:td.meta (when brakes (pr-str brakes))]])]]
-     [:p.empty "No sessions."])))
+(defn workstreams-page
+  [ctx groups sel-ws live-url]
+  (shell
+   (assoc ctx :active :workstreams :title "Workstreams")
+   [:div.gate-wrap
+    [:div.inbox {:data-on-interval__duration.5s "@get('/_fragment/workstreams')"}
+     (h/raw (workstreams-fragment groups (:ws-id sel-ws)))]
+    [:div.pane (h/raw (workstream-pane sel-ws live-url))]]))
 
 ;; ---------------------------------------------------------------------------
 ;; Pages
@@ -676,7 +674,7 @@
   (layout
    "live sessions"
    [:h1 "nido — live sessions"]
-   [:p.meta [:a {:href "/"} "← gates"] " · " [:a {:href "/board"} "board"] " · " [:a {:href "/projects"} "all projects →"]]
+   [:p.meta [:a {:href "/"} "← gates"] " · " [:a {:href "/workstreams"} "workstreams"] " · " [:a {:href "/projects"} "all projects →"]]
    [:div {:data-on-interval__duration.3s "@get('/_fragment/live')"}
     [:table
      [:thead

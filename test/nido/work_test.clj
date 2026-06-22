@@ -489,6 +489,14 @@
                  :external-refs [{:adapter :slack-message :id "slack-C-1.0"}]
                  :intake {:trigger :triage-slack-bugs
                           :payload {:id "slack-C-1.0" :text "the app crashed on save"}}})
-            r (#'nido.work/latest-report :brian (:id w))]
+            r (work/latest-report :brian (:id w))]
         (is (= :slack-report (:kind r)))
         (is (= "the app crashed on save" (:markdown r)))))))
+
+(deftest workstream-includes-its-report
+  (with-redefs [nido.coordinator.workstream/read-ws (fn [_ _] {:id "x"})
+                work/latest-report (fn [_ _] {:kind :triage :at "t" :title "V" :markdown "# V"})
+                ;; minimal stubs so workstream's other projections don't throw:
+                nido.coordinator.session/list-sessions (fn [_ _] [])
+                nido.coordinator.workstreams-view/workstream-row (fn [_ w] {:stage :triage :label "BR-7" :source :notion})]
+    (is (= "# V" (-> (work/workstream "brian" "ws-1") :report :markdown)))))

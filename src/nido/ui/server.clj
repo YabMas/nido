@@ -231,6 +231,13 @@
          (views/rail-status-fragment {:needs-count (count gates)
                                       :daemon (read-rail-daemon)})))))
 
+(defn- workstreams-fragment-response [groups]
+  (sse-response
+   (sse-fragment
+    (str (views/workstreams-fragment groups nil)
+         (views/rail-status-fragment {:needs-count (count (work/all-gates))
+                                       :daemon (read-rail-daemon)})))))
+
 ;; ---------------------------------------------------------------------------
 ;; Routing
 
@@ -362,13 +369,13 @@
       ["system"]
       (html-response 200 (views/live-board-page (all-session-rows)))
 
-      ;; GET /board — spine board (reflect-only, stage-grouped across projects)
-      ["board"]
-      (html-response 200 (views/board-page (all-grouped)))
+      ;; GET /workstreams — overview (no selection)
+      ["workstreams"]
+      (html-response 200 (views/workstreams-page (rail-context :workstreams) (all-grouped) nil nil))
 
-      ;; GET /_fragment/board — SSE board refresh
-      ["_fragment" "board"]
-      (sse-response (sse-fragment (views/board-fragment (all-grouped))))
+      ;; GET /_fragment/workstreams — SSE workstreams refresh
+      ["_fragment" "workstreams"]
+      (workstreams-fragment-response (all-grouped))
 
       ;; GET /_fragment/needs — queue + rail
       ["_fragment" "needs"]
@@ -390,12 +397,13 @@
               gates (work/all-gates)]
           (html-response 200 (views/needs-page (rail-context :needs) gates (work/gate project ws-id))))
 
-        ;; GET /ws/:project/:ws-id — read-only workstream detail (reflect + route-in)
-        (and (= 3 (count segments)) (= "ws" (first segments)))
-        (let [project (nth segments 1), ws-id (nth segments 2)]
-          (if-let [w (work/workstream project ws-id)]
-            (html-response 200 (views/ws-detail-page w (workstream-live-url project ws-id)))
-            (html-response 404 (views/not-found-page))))
+        ;; GET /workstreams/:project/:ws-id — overview + ledger pane
+        (and (= 3 (count segments)) (= "workstreams" (first segments)))
+        (let [project (nth segments 1) ws-id (nth segments 2)]
+          (html-response 200 (views/workstreams-page (rail-context :workstreams)
+                                                     (all-grouped)
+                                                     (work/workstream project ws-id)
+                                                     (workstream-live-url project ws-id))))
 
         :else
         (let [project-name (first segments)]

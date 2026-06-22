@@ -120,31 +120,6 @@
        :status       (:status m)
        :report-count (count (:entries m))})))
 
-(defn workstream
-  "Full detail for one workstream: origin, spine stage, label, a light ledger
-   facet, and its sessions on the autonomy axis. nil when absent. Reads the
-   workstream record once and projects it via wsv/workstream-row (no
-   full-project scan), keeping w/row consistent."
-  [project ws-id]
-  (when-let [w (cws/read-ws project ws-id)]
-    (let [sessions (csession/list-sessions project ws-id)
-          row      (to-spine (wsv/workstream-row project w))]
-      {:ws-id    ws-id
-       :project  project
-       :origin   (classify-origin w)
-       :stage    (:stage row)
-       :label    (:label row)
-       :ledger   (ledger-summary project (:br-id row))
-       :sessions (mapv session-facet sessions)})))
-
-(defn- parked-session
-  "The first parked autonomous session under a workstream, or nil — the session a
-   :reply resolves against."
-  [project ws-id]
-  (->> (csession/list-sessions project ws-id)
-       (filter csession/parked?)
-       first))
-
 (defn- first-heading
   "The text of the first markdown heading in `md` (e.g. '# Verdict' -> \"Verdict\"),
    or nil."
@@ -164,7 +139,7 @@
      :title    (first-heading md)
      :markdown md}))
 
-(defn- latest-report
+(defn latest-report
   "The workstream's most recent ledger entry as a gate report {:kind :at :title
    :markdown}, or nil. Prefers the workstream-level ledger (origin-agnostic, works
    for ref-less scratch); falls back to the TICKET ledger (where the triage skill
@@ -188,6 +163,32 @@
             :at       (:created-at w)
             :title    (first-heading text)
             :markdown text}))))))
+
+(defn workstream
+  "Full detail for one workstream: origin, spine stage, label, a light ledger
+   facet, and its sessions on the autonomy axis. nil when absent. Reads the
+   workstream record once and projects it via wsv/workstream-row (no
+   full-project scan), keeping w/row consistent."
+  [project ws-id]
+  (when-let [w (cws/read-ws project ws-id)]
+    (let [sessions (csession/list-sessions project ws-id)
+          row      (to-spine (wsv/workstream-row project w))]
+      {:ws-id    ws-id
+       :project  project
+       :origin   (classify-origin w)
+       :stage    (:stage row)
+       :label    (:label row)
+       :ledger   (ledger-summary project (:br-id row))
+       :report   (latest-report project ws-id)
+       :sessions (mapv session-facet sessions)})))
+
+(defn- parked-session
+  "The first parked autonomous session under a workstream, or nil — the session a
+   :reply resolves against."
+  [project ws-id]
+  (->> (csession/list-sessions project ws-id)
+       (filter csession/parked?)
+       first))
 
 (defn- ->gate
   "Hydrate one needs-you spine row into a gate. `:project` is canonicalized to a
