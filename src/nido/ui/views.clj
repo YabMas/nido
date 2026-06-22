@@ -402,12 +402,13 @@
 (defn needs-page
   "Home: the needs-you master-detail inside the shell. `ctx` is the rail context."
   [ctx gates sel]
-  (shell
-   (assoc ctx :active :needs :title "Needs you")
-   [:div.gate-wrap
-    [:div.inbox {:data-on-interval__duration.3s "@get('/_fragment/needs')"}
-     (h/raw (needs-fragment gates (:ws-id sel)))]
-    [:div.pane (h/raw (gate-pane sel))]]))
+  (let [q (if (= "all" (:scope ctx)) "" (str "?scope=" (:scope ctx)))]
+    (shell
+     (assoc ctx :active :needs :title "Needs you")
+     [:div.gate-wrap
+      [:div.inbox {:data-on-interval__duration.3s (str "@get('/_fragment/needs" q "')")}
+       (h/raw (needs-fragment gates (:ws-id sel)))]
+      [:div.pane (h/raw (gate-pane sel))]])))
 
 ;; ---------------------------------------------------------------------------
 ;; Workstreams (overview + ledger) — replaces the board + ws-detail.
@@ -469,12 +470,13 @@
 
 (defn workstreams-page
   [ctx groups sel-ws live-url]
-  (shell
-   (assoc ctx :active :workstreams :title "Workstreams")
-   [:div.gate-wrap
-    [:div.inbox {:data-on-interval__duration.5s "@get('/_fragment/workstreams')"}
-     (h/raw (workstreams-fragment groups (:ws-id sel-ws)))]
-    [:div.pane (h/raw (workstream-pane sel-ws live-url))]]))
+  (let [q (if (= "all" (:scope ctx)) "" (str "?scope=" (:scope ctx)))]
+    (shell
+     (assoc ctx :active :workstreams :title "Workstreams")
+     [:div.gate-wrap
+      [:div.inbox {:data-on-interval__duration.5s (str "@get('/_fragment/workstreams" q "')")}
+       (h/raw (workstreams-fragment groups (:ws-id sel-ws)))]
+      [:div.pane (h/raw (workstream-pane sel-ws live-url))]])))
 
 ;; ---------------------------------------------------------------------------
 ;; System (cross-project ops) — replaces the live board + per-project sessions list.
@@ -553,10 +555,11 @@
 (defn system-page
   "System surface: daemon health banner + cross-project session table in the shell."
   [ctx rows daemon]
-  (shell
-   (assoc ctx :active :system :title "System")
-   [:div {:data-on-interval__duration.3s "@get('/_fragment/system')"}
-    (h/raw (system-fragment rows daemon))]))
+  (let [q (if (= "all" (:scope ctx)) "" (str "?scope=" (:scope ctx)))]
+    (shell
+     (assoc ctx :active :system :title "System")
+     [:div {:data-on-interval__duration.3s (str "@get('/_fragment/system" q "')")}
+      (h/raw (system-fragment rows daemon))])))
 
 ;; ---------------------------------------------------------------------------
 ;; Pages

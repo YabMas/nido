@@ -149,3 +149,19 @@
       (is (str/includes? (:body resp) "Promoting"))
       (is (str/includes? (:body resp) "/workstreams/brian/ws-1"))
       (is (str/includes? (:body resp) "/workstreams")))))
+
+(deftest scope-filters-needs-to-one-project
+  (with-redefs [nido.work/all-gates (fn [] [{:ws-id "a" :project "brian" :origin :notion :stage :triage
+                                             :label "BR-1" :report nil :actions [] :session nil}
+                                            {:ws-id "b" :project "foo" :origin :notion :stage :triage
+                                             :label "FOO-1" :report nil :actions [] :session nil}])
+                nido.ui.server/read-rail-daemon (fn [] {:state :up})
+                project/list-projects (fn [] {"brian" {:directory "/x"} "foo" {:directory "/y"}})]
+    (let [resp (server/handle-request {:request-method :get :uri "/" :query-string "scope=brian"})]
+      (is (str/includes? (:body resp) "BR-1"))
+      (is (not (str/includes? (:body resp) "FOO-1"))))))
+
+(deftest parse-scope-defaults-to-all
+  (is (= "all" (#'server/parse-scope nil)))
+  (is (= "all" (#'server/parse-scope "")))
+  (is (= "brian" (#'server/parse-scope "scope=brian"))))

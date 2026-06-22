@@ -215,13 +215,27 @@
 
 (defn read-rail-daemon "Seam over health for stubbing in tests." [] (health/read-daemon-health))
 
+(defn- parse-scope
+  "Read scope from the query string; \"all\" when absent."
+  [query-string]
+  (or (when query-string
+        (some->> (str/split query-string #"&")
+                 (map #(str/split % #"=" 2))
+                 (some (fn [[k v]] (when (= k "scope") v)))))
+      "all"))
+
+(defn- scope-filter
+  "Keep only rows whose :project matches `scope` (no-op when \"all\")."
+  [scope rows]
+  (if (= "all" scope) rows (filterv #(= scope (:project %)) rows)))
+
 (defn- rail-context
   "Render context for the shell rail on any page."
-  [active]
+  [active scope]
   {:active      active
-   :needs-count (count (work/all-gates))
+   :scope       scope
+   :needs-count (count (scope-filter scope (work/all-gates)))
    :daemon      (read-rail-daemon)
-   :scope       "all"
    :projects    (mapv (comp name key) (project/list-projects))})
 
 (defn- needs-fragment-response [gates sel-id]
@@ -231,18 +245,18 @@
          (views/rail-status-fragment {:needs-count (count gates)
                                       :daemon (read-rail-daemon)})))))
 
-(defn- workstreams-fragment-response [groups]
+(defn- workstreams-fragment-response [groups scope]
   (sse-response
    (sse-fragment
     (str (views/workstreams-fragment groups nil)
-         (views/rail-status-fragment {:needs-count (count (work/all-gates))
+         (views/rail-status-fragment {:needs-count (count (scope-filter scope (work/all-gates)))
                                        :daemon (read-rail-daemon)})))))
 
-(defn- system-fragment-response []
+(defn- system-fragment-response [scope]
   (sse-response
    (sse-fragment
-    (str (views/system-fragment (all-session-rows) (read-rail-daemon))
-         (views/rail-status-fragment {:needs-count (count (work/all-gates))
+    (str (views/system-fragment (scope-filter scope (all-session-rows)) (read-rail-daemon))
+         (views/rail-status-fragment {:needs-count (count (scope-filter scope (work/all-gates)))
                                        :daemon (read-rail-daemon)})))))
 
 ;; ---------------------------------------------------------------------------
@@ -350,14 +364,16 @@
         ;; thread. It'll clear or replace the app-state when it finishes.
         (future (run-action! project-name session-name action))
         ;; Respond with the system fragment (patches #system + rail)
-        ;; so the UI sees instant feedback.
-        (system-fragment-response))
+        ;; so the UI sees instant feedback. POSTs have no query-string scope;
+        ;; default to "all" so the feedback shows the full system surface.
+        (system-fragment-response "all"))
 
       :else
       (html-response 404 (views/not-found-page)))))
 
-(defn- handle-get [{:keys [uri]}]
-  (let [segments (parse-path uri)]
+(defn- handle-get [{:keys [uri query-string]}]
+  (let [segments (parse-path uri)
+        scope    (parse-scope query-string)]
     (case segments
       ;; GET /favicon.{png,ico} — the nido icon (browsers auto-request .ico)
       ["favicon.png"] (icon-response)
@@ -365,24 +381,28 @@
 
       ;; GET / — Needs you (home)
       []
-      (let [gates (work/all-gates)]
-        (html-response 200 (views/needs-page (rail-context :needs) gates nil)))
+      (let [gates (scope-filter scope (work/all-gates))]
+        (html-response 200 (views/needs-page (rail-context :needs scope) gates nil)))
 
       ;; GET /system — cross-project session board with daemon health banner
       ["system"]
-      (html-response 200 (views/system-page (rail-context :system) (all-session-rows) (read-rail-daemon)))
+      (html-response 200 (views/system-page (rail-context :system scope)
+                                            (scope-filter scope (all-session-rows))
+                                            (read-rail-daemon)))
 
       ;; GET /workstreams — overview (no selection)
       ["workstreams"]
-      (html-response 200 (views/workstreams-page (rail-context :workstreams) (all-grouped) nil nil))
+      (html-response 200 (views/workstreams-page (rail-context :workstreams scope)
+                                                 (scope-filter scope (all-grouped)) nil nil))
 
       ;; GET /_fragment/workstreams — SSE workstreams refresh
       ["_fragment" "workstreams"]
-      (workstreams-fragment-response (all-grouped))
+      (workstreams-fragment-response (scope-filter scope (all-grouped)) scope)
 
       ;; GET /_fragment/needs — queue + rail
       ["_fragment" "needs"]
-      (let [gates (work/all-gates)] (needs-fragment-response gates nil))
+      (let [gates (scope-filter scope (work/all-gates))]
+        (needs-fragment-response gates nil))
 
       ;; GET /projects — the original project grid
       ["projects"]
@@ -390,21 +410,21 @@
 
       ;; GET /_fragment/system — SSE system surface refresh (patches #system + rail)
       ["_fragment" "system"]
-      (system-fragment-response)
+      (system-fragment-response scope)
 
       ;; Otherwise, dispatch on structure
       (cond
         ;; GET /gate/:project/:ws-id — needs page, gate selected
         (and (= 3 (count segments)) (= "gate" (first segments)))
         (let [project (nth segments 1) ws-id (nth segments 2)
-              gates (work/all-gates)]
-          (html-response 200 (views/needs-page (rail-context :needs) gates (work/gate project ws-id))))
+              gates (scope-filter scope (work/all-gates))]
+          (html-response 200 (views/needs-page (rail-context :needs scope) gates (work/gate project ws-id))))
 
         ;; GET /workstreams/:project/:ws-id — overview + ledger pane
         (and (= 3 (count segments)) (= "workstreams" (first segments)))
         (let [project (nth segments 1) ws-id (nth segments 2)]
-          (html-response 200 (views/workstreams-page (rail-context :workstreams)
-                                                     (all-grouped)
+          (html-response 200 (views/workstreams-page (rail-context :workstreams scope)
+                                                     (scope-filter scope (all-grouped))
                                                      (work/workstream project ws-id)
                                                      (workstream-live-url project ws-id))))
 
