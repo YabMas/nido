@@ -33,25 +33,28 @@
 
 (defn gate-actions
   "Follow-actions for a gate, derived from its spine `stage` (and whether a
-   session is `parked?`). `:kind` is a render hint only — :mutation -> one-click
-   button, :reply -> textarea. resolve-gate! dispatches on `:id`."
+   session is `parked?`). Each is a descriptor {:id :label :kind :style (:input)}:
+     :kind :mutation -> one-click button, resolved nido-side (resolve-gate! on :id).
+     :kind :resume   -> resume the parked agent. With :input it renders a one-click
+                        button carrying that canned input (e.g. Apply -> \"apply\");
+                        without :input it renders the free-text reply textarea.
+   :style is a render hint (:primary | :danger | :default)."
   [stage parked?]
   (case stage
-    :inbox       [{:id :promote :label "Promote" :kind :mutation}
-                  {:id :drop    :label "Dismiss" :kind :mutation}]
+    :inbox       [{:id :promote :label "Promote" :kind :mutation :style :primary}
+                  {:id :drop    :label "Dismiss" :kind :mutation :style :danger}]
     :triage      (if parked?
-                   ;; no :promote here — a triage workstream isn't promotable until
-                   ;; its verdict is applied (via :reply), which advances it to :ready
-                   ;; where promote/drop are offered. :dismiss takes it off the radar
-                   ;; (off-radar terminal state) and is available parked or not.
-                   [{:id :dismiss :label "Dismiss" :kind :mutation}
-                    {:id :reply   :label "Reply"   :kind :reply}]
-                   [{:id :dismiss :label "Dismiss" :kind :mutation}])
-    :ready       [{:id :promote :label "Promote" :kind :mutation}
-                  {:id :drop    :label "Drop"    :kind :mutation}]
+                   ;; Apply (resume \"apply\") and Reply (free-text overrides/redo) both
+                   ;; resume the agent; Dismiss takes it off the radar nido-side.
+                   [{:id :apply   :label "Apply"   :kind :resume :input "apply" :style :primary}
+                    {:id :dismiss :label "Dismiss" :kind :mutation              :style :danger}
+                    {:id :reply   :label "Reply"   :kind :resume                :style :default}]
+                   [{:id :dismiss :label "Dismiss" :kind :mutation :style :danger}])
+    :ready       [{:id :promote :label "Promote" :kind :mutation :style :primary}
+                  {:id :drop    :label "Drop"    :kind :mutation :style :danger}]
     :in-progress (if parked?
-                   [{:id :reply :label "Reply" :kind :reply}
-                    {:id :done  :label "Done"  :kind :mutation}]
+                   [{:id :reply :label "Reply" :kind :resume :style :default}
+                    {:id :done  :label "Done"  :kind :mutation :style :primary}]
                    [])
     []))
 
@@ -304,6 +307,7 @@
      :dismiss      -> off-radar: ticket :dismissed + settle :dropped (no re-triage)
      :drop         -> close! :dropped (ready-stage workstream settled; not pursued)
      :done         -> set-stage! :done (close! :done)
+     :apply        -> resume! the parked agent with \"apply\" (canned one-click input)
      :reply        -> resume! the parked agent with `input`
    Returns the resolver's result map."
   ([project ws-id action-id] (resolve-gate! project ws-id action-id nil))
@@ -313,6 +317,7 @@
      :done    (set-stage! project ws-id :done)
      :dismiss (dismiss! project ws-id)
      :drop    (do (cws/close! project ws-id :dropped) {:decision :dropped})
+     :apply   (resume/resume! project ws-id "apply")
      :reply   (resume/resume! project ws-id input)
      (throw (ex-info "Unknown gate action" {:action-id action-id :ws-id ws-id})))))
 

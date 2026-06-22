@@ -260,17 +260,19 @@
         (is (zero? @spawned))))))
 
 (deftest gate-actions-are-stage-derived
-  (is (= [{:id :dismiss :label "Dismiss" :kind :mutation}
-          {:id :reply   :label "Reply"   :kind :reply}]
-         (work/gate-actions :triage true)))
-  (is (= [{:id :dismiss :label "Dismiss" :kind :mutation}]
+  (is (= [{:id :apply   :label "Apply"   :kind :resume :input "apply" :style :primary}
+          {:id :dismiss :label "Dismiss" :kind :mutation              :style :danger}
+          {:id :reply   :label "Reply"   :kind :resume                :style :default}]
+         (work/gate-actions :triage true))
+      "a parked triage offers one-click Apply, Dismiss, and free-text Reply")
+  (is (= [{:id :dismiss :label "Dismiss" :kind :mutation :style :danger}]
          (work/gate-actions :triage false))
       "an unparked triage can still be dismissed off the radar")
-  (is (= [{:id :promote :label "Promote" :kind :mutation}
-          {:id :drop    :label "Drop"    :kind :mutation}]
-         (work/gate-actions :ready false)) "ready always decides, parked or not")
-  (is (= [{:id :reply :label "Reply" :kind :reply}
-          {:id :done  :label "Done"  :kind :mutation}]
+  (is (= [{:id :promote :label "Promote" :kind :mutation :style :primary}
+          {:id :drop    :label "Drop"    :kind :mutation :style :danger}]
+         (work/gate-actions :ready false)))
+  (is (= [{:id :reply :label "Reply" :kind :resume :style :default}
+          {:id :done  :label "Done"  :kind :mutation :style :primary}]
          (work/gate-actions :in-progress true)))
   (is (= [] (work/gate-actions :intake true)))
   (is (= [] (work/gate-actions :done true))))
@@ -292,7 +294,7 @@
           (is (= :notion (:origin g)))
           (is (= :triage (:stage g)))
           (is (= "auto" (:session g)) "the parked session a :reply would resume")
-          (is (= [:dismiss :reply] (map :id (:actions g))))
+          (is (= [:apply :dismiss :reply] (map :id (:actions g))))
           (is (= :markdown (-> g :report :format)))
           (is (= "Verdict" (-> g :report :title)))
           (is (= "# Verdict\n\nbug — reproduced." (-> g :report :markdown))))))))
@@ -424,6 +426,17 @@
           (is (= {:resumed "auto"} (work/resolve-gate! :brian (:id w) :reply "do it")))
           (is (= [:brian (:id w) "do it"] @calls)))))))
 
+(deftest resolve-gate-apply-resumes-with-the-apply-verb
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :triaging :external-refs []})
+            calls (atom nil)]
+        (with-redefs [nido.coordinator.resume/resume!
+                      (fn [p id input] (reset! calls [p id input]) {:resumed "auto"})]
+          (is (= {:resumed "auto"} (work/resolve-gate! :brian (:id w) :apply)))
+          (is (= [:brian (:id w) "apply"] @calls)
+              "the Apply button resumes the parked agent with the canned \"apply\" input"))))))
+
 (def ^:private notion-edn-report
   "Valid TriageReport EDN for notion triage ledger tests."
   (pr-str {:format :triage-report :ticket-key "BR-9" :determination :bug
@@ -486,11 +499,11 @@
         (is (nil? (:resume-error (first (work/gates :brian)))))))))
 
 (deftest gate-actions-inbox
-  (is (= [{:id :promote :label "Promote" :kind :mutation}
-          {:id :drop    :label "Dismiss" :kind :mutation}]
+  (is (= [{:id :promote :label "Promote" :kind :mutation :style :primary}
+          {:id :drop    :label "Dismiss" :kind :mutation :style :danger}]
          (work/gate-actions :inbox false)))
   (is (= (work/gate-actions :inbox false) (work/gate-actions :inbox true))
-      "inbox actions ignore parked? (inbox rows are session-less)"))
+      "inbox actions don't depend on parked state"))
 
 (deftest latest-report-falls-back-to-intake-text
   (with-tmp
