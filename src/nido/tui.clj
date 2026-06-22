@@ -172,37 +172,48 @@
   [origin rows]
   (if (= :all origin) rows (filterv #(= origin (:origin %)) rows)))
 
-(defn- spine-group-rows
-  "Header + badged rows for a stage band; nil when empty (so callers `concat`)."
-  [label rows]
-  (when (seq rows)
-    (cons (group-header (str label " (" (count rows) ")"))
-          (mapv badged-item-row rows))))
+(def ^:private default-collapsed-bands
+  "Bands the board folds on entry — the intake queues. They can be long and
+   floody (a Slack backlog especially); you open them on demand to walk + promote.
+   Engaged-work bands (in flight / ready / in progress) start expanded. `space`
+   toggles any band — this is only the initial state."
+  #{:inbox :triage-queued})
 
-(defn- triage-spine-rows
-  "Triage rendered as in-flight (expanded) + a queued count line."
-  [{:keys [in-flight queued]}]
-  (concat
-   (spine-group-rows "Triage · in flight" in-flight)
-   (when (seq queued)
-     [(group-header (str "Triage · queued (" (count queued) ")"))])))
+(defn- band-header
+  "A foldable section divider carrying its band key (so the `space` toggle knows
+   which band to flip) and a ▾/▸ fold marker. Non-actionable (no :ws-id)."
+  [band-key collapsed? label n]
+  (assoc (group-header (str (if collapsed? "▸" "▾") " " label " (" n ")"))
+         :data {::band band-key}))
+
+(defn- band-rows
+  "Header + (when expanded) badged item rows for a stage band; nil when the band
+   is empty so callers can `concat`. A collapsed band renders just its header."
+  [band-key label rows collapsed?]
+  (when (seq rows)
+    (cons (band-header band-key collapsed? label (count rows))
+          (when-not collapsed? (mapv badged-item-row rows)))))
 
 (defn- board-rows
-  "Rows for the spine board: work/grouped, filtered by `origin`, as Ready /
-   In progress / Triage bands with origin badges. Empty-state sentinel when none."
-  [project origin]
-  (let [g    (work/grouped project (live-session-names project))
-        keep #(filter-origin origin %)
-        rows (concat
-              (spine-group-rows "Queue"             (keep (:inbox g)))
-              (spine-group-rows "Ready to pick up"  (keep (:ready g)))
-              (spine-group-rows "In progress"       (keep (:in-progress g)))
-              (triage-spine-rows {:in-flight (keep (get-in g [:triage :in-flight]))
-                                  :queued    (keep (get-in g [:triage :queued]))}))]
-    (if (empty? rows)
-      [{:title "No workstreams here. [n] new · [s] system · [f via system] fire"
-        :description "" :data ::empty}]
-      (vec (strip-leading-blank rows)))))
+  "Rows for the spine board: work/grouped, filtered by `origin`, as foldable
+   Queue / Ready / In progress / Triage bands with origin badges. `collapsed` is
+   the set of folded band keys (defaults to the intake queues). Empty-state
+   sentinel when nothing matches."
+  ([project origin] (board-rows project origin default-collapsed-bands))
+  ([project origin collapsed]
+   (let [g    (work/grouped project (live-session-names project))
+         keep #(filter-origin origin %)
+         band (fn [k label rows] (band-rows k label (keep rows) (contains? collapsed k)))
+         rows (concat
+               (band :inbox            "Queue"              (:inbox g))
+               (band :ready            "Ready to pick up"   (:ready g))
+               (band :in-progress      "In progress"        (:in-progress g))
+               (band :triage-in-flight "Triage · in flight" (get-in g [:triage :in-flight]))
+               (band :triage-queued    "Triage · queued"    (get-in g [:triage :queued])))]
+     (if (empty? rows)
+       [{:title "No workstreams here. [n] new · [s] system · [f via system] fire"
+         :description "" :data ::empty}]
+       (vec (strip-leading-blank rows))))))
 
 (defn- format-detail-session
   "Display string for a session on the autonomy axis."
@@ -288,7 +299,8 @@
    On :system, shows the session-plumbing rows for the active project."
   [state]
   (case (:screen state)
-    :board      (board-rows (:project state) (:origin state))
+    :board      (board-rows (:project state) (:origin state)
+                            (or (:collapsed state) default-collapsed-bands))
     :workstream (detail-rows (:project state) (:ws-id state))
     :system     (session-rows (:project state))
     :projects   (project-rows)))
@@ -332,6 +344,12 @@
   [state]
   (let [d (selected-data state)]
     (when (and (map? d) (:ws-id d)) d)))
+
+(defn- selected-band
+  "The band key of the highlighted header row, or nil when the cursor isn't on a
+   foldable band header."
+  [state]
+  (::band (selected-data state)))
 
 ;; ---------------------------------------------------------------------------
 ;; Elm: init / update / view
@@ -862,9 +880,21 @@
   (let [s (assoc state :screen :system :status nil)]
     (rebuild-list s (session-rows (:project state)))))
 
+(defn- toggle-band
+  "Fold/unfold the band under the cursor, persisting the set on `state` so the
+   live-refresh tick keeps it. No-op when the cursor isn't on a band header."
+  [state]
+  (if-let [band (selected-band state)]
+    (let [collapsed  (or (:collapsed state) default-collapsed-bands)
+          collapsed' (if (contains? collapsed band) (disj collapsed band) (conj collapsed band))
+          state'     (assoc state :collapsed collapsed')]
+      [(refresh-list state' (current-rows state')) nil])
+    [state nil]))
+
 (defn- update-board [state msg]
   (cond
     (msg/key-match? msg "escape") [(enter-projects state) nil]
+    (msg/key-match? msg " ") (toggle-band state)
     (or (msg/key-match? msg "enter") (msg/key-match? msg "o")) (open-selected state)
     (msg/key-match? msg "i")
     (if-let [ws (selected-workstream state)]
@@ -1159,7 +1189,7 @@
                   :stage-picker         "[↑↓] move  [↵] promote here  [esc] cancel"
                   (case (:screen state)
                     :projects   "[↵] open  [q]uit"
-                    :board      "[↵/o] open  [i]nspect  [n]ew  [p]romote  [P] promote to…  [d]one  [x] dismiss  [⇄ tab] origin  [s]ystem  [esc] back  [q]uit"
+                    :board      "[↵/o] open  [i]nspect  [n]ew  [p]romote  [P] promote to…  [d]one  [x] dismiss  [space] fold  [⇄ tab] origin  [s]ystem  [esc] back  [q]uit"
                     :workstream "[↵] open in chat  [esc] back  [q]uit"
                     :system     "[↵/e] enter  [w]orktree  [i]nfo  [u]p  [d]own  [x] destroy  •  [f]ire  [h]alt  [c]lear breaker  [esc] back  [q]uit"))))
 

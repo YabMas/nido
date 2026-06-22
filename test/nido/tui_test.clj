@@ -103,6 +103,46 @@
           ids (keep #(get-in % [:data :ws-id]) scratch-only)]
       (is (= ["p1"] (vec ids)) "origin filter keeps only scratch rows"))))
 
+(deftest board-folds-intake-queues-by-default
+  ;; The intake queues — Queue (inbox/Slack) and Triage·queued — start collapsed:
+  ;; header + count only, no selectable item rows. Engaged work stays expanded.
+  (with-redefs [nido.work/grouped
+                (fn [_ _]
+                  {:inbox  [{:ws-id "s1" :origin :slack :label "can you link it"
+                             :needs-you true :engagement :idle}]
+                   :triage {:in-flight [{:ws-id "f1" :origin :slack :label "teacher report"
+                                         :needs-you true :engagement :parked}]
+                            :queued    [{:ws-id "q1" :origin :notion :label "BR-1 · a"
+                                         :needs-you true :engagement :idle}
+                                        {:ws-id "q2" :origin :notion :label "BR-2 · b"
+                                         :needs-you true :engagement :idle}]}})
+                nido.tui/live-session-names (constantly #{})]
+    (let [rows   (#'tui/board-rows "brian" :all)
+          ids    (set (keep #(get-in % [:data :ws-id]) rows))
+          titles (map :title rows)]
+      (is (not (contains? ids "s1")) "inbox item hidden while Queue is folded")
+      (is (not (contains? ids "q1")) "queued item hidden while Triage·queued is folded")
+      (is (contains? ids "f1") "in-flight item stays visible (expanded)")
+      (is (some #(re-find #"▸ Queue \(1\)" %) titles) "folded Queue shows ▸ + count")
+      (is (some #(re-find #"▸ Triage · queued \(2\)" %) titles) "folded queued shows ▸ + count")
+      (is (some #(re-find #"▾ Triage · in flight \(1\)" %) titles) "expanded band shows ▾")
+      (is (some #(= {:nido.tui/band :triage-queued} (:data %)) rows)
+          "the queued header carries its band key so the fold toggle can flip it"))))
+
+(deftest board-rows-expands-a-band-when-not-collapsed
+  ;; With nothing in the collapsed set, Triage·queued renders its items as real,
+  ;; selectable workstream rows — the path that makes them promotable.
+  (with-redefs [nido.work/grouped
+                (fn [_ _]
+                  {:triage {:in-flight []
+                            :queued [{:ws-id "q1" :origin :notion :label "BR-1 · a"
+                                      :needs-you true :engagement :idle}]}})
+                nido.tui/live-session-names (constantly #{})]
+    (let [rows (#'tui/board-rows "brian" :all #{})
+          ids  (keep #(get-in % [:data :ws-id]) rows)]
+      (is (= ["q1"] (vec ids)) "an expanded Triage·queued renders its item as a selectable row")
+      (is (some #(re-find #"▾ Triage · queued \(1\)" (:title %)) rows) "and marks the band expanded"))))
+
 (defn- board-state [origin]
   {:screen :board :origin origin :project "brian" :list (#'tui/list-component [])})
 
@@ -166,6 +206,28 @@
   (with-redefs [nido.tui/current-rows (constantly [])]
     (let [[s' _] (#'tui/update-board (board-state :all) (msg/key-press "tab"))]
       (is (= :notion (:origin s'))))))
+
+(deftest space-toggles-the-band-under-the-cursor
+  ;; Cursor on a folded Triage·queued header → space unfolds it (drops it from the
+  ;; collapsed set); space again re-folds. A no-op when the cursor isn't on a band.
+  (with-redefs [nido.tui/selected-data (fn [_] {:nido.tui/band :triage-queued})
+                nido.tui/current-rows (constantly [])]
+    (let [state  (assoc (board-state :all) :collapsed #{:inbox :triage-queued})
+          [s1 _] (#'tui/update-board state (msg/key-press " "))]
+      (is (= #{:inbox} (:collapsed s1)) "space unfolds the band under the cursor")
+      (let [[s2 _] (#'tui/update-board s1 (msg/key-press " "))]
+        (is (= #{:inbox :triage-queued} (:collapsed s2)) "space again re-folds it")))))
+
+(deftest space-on-a-non-band-row-is-a-noop
+  (with-redefs [nido.tui/selected-data (fn [_] {:ws-id "w1"})
+                nido.tui/current-rows (constantly [])]
+    (let [state  (assoc (board-state :all) :collapsed #{:triage-queued})
+          [s' _] (#'tui/update-board state (msg/key-press " "))]
+      (is (= #{:triage-queued} (:collapsed s')) "space leaves the fold set untouched on a workstream row"))))
+
+(deftest board-footer-surfaces-the-fold-toggle
+  (is (re-find #"fold" (#'tui/footer {:screen :board :origin :all}))
+      "board footer documents the [space] fold toggle"))
 
 (deftest detail-rows-render-sessions-on-the-autonomy-axis
   (with-redefs [nido.work/workstream
