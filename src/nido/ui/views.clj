@@ -91,7 +91,11 @@
      .content { padding:20px 28px; overflow:auto; }
      .rail { background:#13132a; border-right:1px solid #2a2a4a; padding:18px 14px;
              display:flex; flex-direction:column; gap:3px; }
-     .rail-brand { font-weight:bold; color:#fff; font-size:15px; margin-bottom:14px; }
+     .rail-brand { display:block; margin-bottom:16px; line-height:0; }
+     .rail-brand:hover { text-decoration:none; }
+     .rail-logo { display:block; width:84px; height:84px; border-radius:50%;
+                  margin:0 auto; transition:filter .15s ease; }
+     .rail-brand:hover .rail-logo { filter:brightness(1.12); }
      .rail-link { display:flex; align-items:center; gap:8px; padding:7px 10px; border-radius:5px;
                   color:#aaa; border-left:3px solid transparent; }
      .rail-link:hover { background:#181830; text-decoration:none; }
@@ -133,7 +137,8 @@
                 [:span label]
                 (when (= id :needs) (rail-needs-badge needs-count))])]
     [:nav.rail
-     [:a.rail-brand {:href "/"} "nido"]
+     [:a.rail-brand {:href "/" :title "nido"}
+      [:img.rail-logo {:src "/nido-logo.png" :alt "nido" :width 84 :height 84}]]
      (dest :needs "/" "Needs you")
      (dest :workstreams "/workstreams" "Workstreams")
      (dest :system "/system" "System")

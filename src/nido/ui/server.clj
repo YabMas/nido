@@ -36,11 +36,13 @@
              "Connection" "keep-alive"}
    :body body})
 
-(defn- icon-response
-  "Serve the nido icon (classpath resource) as the dashboard favicon.
-   favicon.png is a 256px copy of resources/nido-icon.png (sips -Z 256)."
-  []
-  (if-let [res (io/resource "favicon.png")]
+(defn- png-resource-response
+  "Serve a classpath PNG resource. Both circular crops of resources/nido-icon.png
+   are cut by `clojure -M scripts/gen-favicon.clj`: `favicon.png` is zoomed hard
+   to fill the disc at tab size; `nido-logo.png` is looser (keeps the gold ring)
+   for the larger rail home-button mark."
+  [resource-name]
+  (if-let [res (io/resource resource-name)]
     {:status 200
      :headers {"Content-Type" "image/png"
                "Cache-Control" "public, max-age=86400"}
@@ -377,8 +379,10 @@
         facets*  (select-keys facets (valid-facet-keys scope source))]
     (case segments
       ;; GET /favicon.{png,ico} — the nido icon (browsers auto-request .ico)
-      ["favicon.png"] (icon-response)
-      ["favicon.ico"] (icon-response)
+      ["favicon.png"] (png-resource-response "favicon.png")
+      ["favicon.ico"] (png-resource-response "favicon.png")
+      ;; GET /nido-logo.png — looser circular mark for the rail home button
+      ["nido-logo.png"] (png-resource-response "nido-logo.png")
 
       ;; GET / — Needs you (home)
       []
