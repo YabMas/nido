@@ -6,8 +6,11 @@
    docs/superpowers/specs/2026-06-04-triage-record-store-design.md."
   (:require
    [babashka.fs :as fs]
+   [clojure.edn :as edn]
+   [clojure.pprint :as pprint]
    [clojure.string :as str]
    [nido.coordinator.clock :as clock]
+   [nido.coordinator.report :as report]
    [nido.coordinator.state :as cstate]
    [nido.io :as io]))
 
@@ -88,19 +91,34 @@
 
 (defn append-entry!
   "Write a new immutable entry file under entries/ and record it in meta :entries.
-   `entry` = {:kind <kw> :session <str> :run-id <str>}. Returns the file path."
+   `entry` = {:kind <kw> :session <str> :run-id <str>}. A :triage entry's `content`
+   is a typed report (EDN): it is parsed + validated against report/TriageReport and
+   stored as NNNN-triage.edn — an invalid report throws (rejected at the source).
+   Every other kind stores `content` verbatim as NNNN-<kind>.md. Returns the file path."
   [project br-id entry content]
   (when-not (blank-br? br-id)
     (let [m       (read-meta project br-id)
           seq-n   (inc (count (:entries m)))
-          fname   (format "%04d-%s.md" seq-n (name (:kind entry)))
+          triage? (= :triage (:kind entry))
+          report  (when triage? (report/validate (edn/read-string content)))
+          ext     (if triage? "edn" "md")
+          payload (if triage? (with-out-str (pprint/pprint report)) content)
+          fname   (format "%04d-%s.%s" seq-n (name (:kind entry)) ext)
           rel     (str "entries/" fname)
           abs     (str (fs/path (ticket-dir project br-id) rel))]
-      (io/write-text! abs content)
+      (io/write-text! abs payload)
       (write-meta! project br-id
                    (update m :entries (fnil conj [])
                            (assoc entry :seq seq-n :at (clock/now-iso) :file rel)))
       abs)))
+
+(defn latest-triage-report
+  "The latest ticket entry parsed as a TriageReport map, or nil when the latest
+   entry isn't an `.edn` (e.g. a legacy markdown report or a non-triage entry)."
+  [project br-id]
+  (when-let [e (last (:entries (read-meta project br-id)))]
+    (when (str/ends-with? (str (:file e)) ".edn")
+      (io/read-edn (str (fs/path (ticket-dir project br-id) (:file e)))))))
 
 (defn gate-decision
   "Decide the coordinator pre-spawn action by reading the ticket's meta status

@@ -3,6 +3,7 @@
   (:require
    [clojure.pprint :as pprint]
    [nido.coordinator.promote :as promote]
+   [nido.coordinator.report :as report]
    [nido.coordinator.tickets :as tickets]
    [nido.coordinator.tickets-view :as tickets-view]
    [nido.task-args :as task-args]))
@@ -55,15 +56,30 @@
 
 (defn append-cmd
   "bb nido:ticket:append :project <p> :br BR-#### :kind <kw> :session <s> :run-id <r> :file <path>
-   Reads entry body from :file."
+   Reads entry body from :file. A :triage body must be valid TriageReport EDN —
+   a malformed report is rejected (non-zero exit + explain) so the skill retries."
   [& args]
-  (let [[_ o] (task-args/split-args args)
-        path  (tickets/append-entry! (project-kw o) (str (:br o))
-                                     {:kind (keyword (:kind o))
-                                      :session (str (:session o))
-                                      :run-id (str (:run-id o))}
-                                     (slurp (str (:file o))))]
-    (println "appended" path)))
+  (let [[_ o] (task-args/split-args args)]
+    (try
+      (let [path (tickets/append-entry! (project-kw o) (str (:br o))
+                                        {:kind (keyword (:kind o))
+                                         :session (str (:session o))
+                                         :run-id (str (:run-id o))}
+                                        (slurp (str (:file o))))]
+        (println "appended" path))
+      (catch Exception e
+        (binding [*out* *err*]
+          (println "append rejected:" (ex-message e))
+          (when-let [ex (:explain (ex-data e))] (println (pr-str ex))))
+        (System/exit 1)))))
+
+(defn report-cmd
+  "bb nido:ticket:report :project <p> :br <key> — print the latest triage report as
+   markdown (the skill prints this into chat and reads :notion-writes from it)."
+  [& args]
+  (let [[_ o] (task-args/split-args args)]
+    (println (report/report->markdown
+              (tickets/latest-triage-report (project-kw o) (str (:br o)))))))
 
 (defn show-cmd
   "bb nido:ticket:show :project <p> :br BR-#### — pretty-print meta.edn."

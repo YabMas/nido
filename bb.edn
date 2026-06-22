@@ -315,6 +315,10 @@
   {:doc "Append an entry file (body read from :file) to a ticket record."
    :task (apply nido-ticket/append-cmd *command-line-args*)}
 
+  nido:ticket:report
+  {:doc "Print the latest triage report (markdown) for a ticket record."
+   :task (apply nido-ticket/report-cmd *command-line-args*)}
+
   nido:ticket:show
   {:doc "Pretty-print a ticket's meta.edn."
    :task (apply nido-ticket/show-cmd *command-line-args*)}

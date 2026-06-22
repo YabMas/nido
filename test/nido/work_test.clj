@@ -297,6 +297,13 @@
           (is (= "Verdict" (-> g :report :title)))
           (is (= "# Verdict\n\nbug — reproduced." (-> g :report :markdown))))))))
 
+(def ^:private slack-edn-report
+  "Valid TriageReport EDN for slack triage ledger tests."
+  (pr-str {:format :triage-report :ticket-key "slack-C1-1.0" :determination :bug
+           :title "Verdict" :summary "bug — slack report."
+           :confidence {:level :high :reason "r"}
+           :directions [] :notion-writes nil :trail []}))
+
 (deftest gates-hydrates-a-slack-triage-report-from-the-ticket-ledger
   ;; A Slack workstream's triage report is written to the TICKET ledger keyed by
   ;; the slack-message id (not the workstream ledger). The gate must surface it.
@@ -309,7 +316,7 @@
         (tickets/open! :brian slack-id {:title "msg"})
         (tickets/set-status! :brian slack-id :awaiting-input)
         (tickets/append-entry! :brian slack-id {:kind :triage}
-                               "# Verdict\n\nbug — slack report.")
+                               slack-edn-report)
         (session/create! :brian (:id w)
                          {:name "auto" :weight :heavy
                           :autonomy (assoc autonomy-running :phase :parked)})
@@ -318,8 +325,8 @@
           (is (= :slack (:origin g)))
           (is (= :triage (:stage g)))
           (is (= :triage (-> g :report :kind)))
-          (is (= "Verdict" (-> g :report :title)))
-          (is (= "# Verdict\n\nbug — slack report." (-> g :report :markdown))
+          (is (= "Triage: Verdict" (-> g :report :title)))
+          (is (clojure.string/includes? (-> g :report :markdown) "bug — slack report.")
               "the parked slack triage gate shows its ticket-ledger report, not an empty pane"))))))
 
 (deftest gates-excludes-workstreams-that-do-not-need-you
@@ -418,6 +425,13 @@
           (is (= {:resumed "auto"} (work/resolve-gate! :brian (:id w) :reply "do it")))
           (is (= [:brian (:id w) "do it"] @calls)))))))
 
+(def ^:private notion-edn-report
+  "Valid TriageReport EDN for notion triage ledger tests."
+  (pr-str {:format :triage-report :ticket-key "BR-9" :determination :bug
+           :title "Verdict" :summary "ticket-ledger report."
+           :confidence {:level :high :reason "r"}
+           :directions [] :notion-writes nil :trail []}))
+
 (deftest gates-report-falls-back-to-the-ticket-ledger
   (with-tmp
     (fn [_]
@@ -427,15 +441,15 @@
                                           :external-refs [{:adapter :notion :id "BR-9" :title "t"}]})]
         (tickets/open! :brian "BR-9" {:title "t"})
         (tickets/set-status! :brian "BR-9" :investigating)
-        (tickets/append-entry! :brian "BR-9" {:kind :triage} "# Verdict\n\nticket-ledger report.")
+        (tickets/append-entry! :brian "BR-9" {:kind :triage} notion-edn-report)
         ;; deliberately NO workstream-level entry
         (session/create! :brian (:id w)
                          {:name "auto" :weight :heavy
                           :autonomy (assoc autonomy-running :phase :parked)})
         (let [g (first (work/gates :brian))]
           (is (= :triage (-> g :report :kind)))
-          (is (= "Verdict" (-> g :report :title)))
-          (is (= "# Verdict\n\nticket-ledger report." (-> g :report :markdown))
+          (is (= "Triage: Verdict" (-> g :report :title)))
+          (is (clojure.string/includes? (-> g :report :markdown) "ticket-ledger report.")
               "report read from the ticket ledger when the workstream ledger is empty"))))))
 
 (deftest gates-excludes-settled-workstreams

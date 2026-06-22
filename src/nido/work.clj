@@ -10,6 +10,7 @@
    today's storage — no migration."
   (:require
    [babashka.fs :as fs]
+   [clojure.edn :as edn]
    [clojure.string :as str]
    [nido.config :as config]
    [nido.coordinator.promote :as promote]
@@ -18,6 +19,7 @@
    [nido.coordinator.scratch :as scratch]
    [nido.coordinator.session :as csession]
    [nido.coordinator.state :as cstate]
+   [nido.coordinator.report :as report]
    [nido.coordinator.tickets :as tickets]
    [nido.coordinator.workstream :as cws]
    [nido.coordinator.workstreams-view :as wsv]
@@ -130,10 +132,14 @@
 
 (defn- entry->report
   "Render a ledger entry {:kind :at :file} (`:file` relative to `base-dir`) as a gate
-   report {:kind :at :title :markdown}."
+   report {:kind :at :title :markdown}. `.edn` entries (typed TriageReport) are
+   rendered to markdown via report/report->markdown; others are treated as raw markdown."
   [base-dir entry]
-  (let [f  (str (fs/path base-dir (:file entry)))
-        md (when (fs/exists? f) (slurp f))]
+  (let [f    (str (fs/path base-dir (:file entry)))
+        raw  (when (fs/exists? f) (slurp f))
+        md   (if (str/ends-with? (str (:file entry)) ".edn")
+               (report/report->markdown (edn/read-string (or raw "{}")))
+               raw)]
     {:kind     (:kind entry)
      :at       (:at entry)
      :title    (first-heading md)
