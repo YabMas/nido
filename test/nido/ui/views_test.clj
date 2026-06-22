@@ -125,3 +125,29 @@
         html (views/gate-inbox-fragment [g] nil)]
     (is (str/includes? html "resume failed"))
     (is (str/includes? html "exec failed"))))
+
+(deftest shell-renders-rail-with-active-and-badge
+  (let [html (views/shell {:active :workstreams :title "Workstreams"
+                           :needs-count 3 :daemon {:state :up} :scope "all" :projects []}
+                          [:p "body-here"])]
+    ;; all three destinations always present (no per-page drift)
+    (is (str/includes? html "Needs you"))
+    (is (str/includes? html "Workstreams"))
+    (is (str/includes? html "System"))
+    ;; active highlight on the current destination
+    (is (str/includes? html "rail-link active"))
+    ;; live needs badge + count
+    (is (str/includes? html "id=\"rail-needs-count\""))
+    (is (str/includes? html ">3<"))
+    ;; daemon dot
+    (is (str/includes? html "id=\"rail-health\""))
+    (is (str/includes? html "dot-up"))
+    ;; the page body lands in the content area
+    (is (str/includes? html "body-here"))))
+
+(deftest rail-status-fragment-has-both-live-bits
+  (let [html (views/rail-status-fragment {:needs-count 2 :daemon {:state :halted}})]
+    (is (str/includes? html "id=\"rail-needs-count\""))
+    (is (str/includes? html ">2<"))
+    (is (str/includes? html "id=\"rail-health\""))
+    (is (str/includes? html "dot-halted"))))

@@ -8,18 +8,9 @@
 ;; ---------------------------------------------------------------------------
 ;; Layout
 
-(defn- layout [title & body]
+(def ^:private shell-css
   (str
-   (h/html
-    [:html {:lang "en"}
-     [:head
-      [:meta {:charset "utf-8"}]
-      [:meta {:name "viewport" :content "width=device-width, initial-scale=1"}]
-      [:link {:rel "icon" :type "image/png" :href "/favicon.png"}]
-      [:title title " — nido"]
-      [:script {:type "module" :src "https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.1/bundles/datastar.js"}]
-      [:style
-       "*, *::before, *::after { box-sizing: border-box; }
+   "*, *::before, *::after { box-sizing: border-box; }
         body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
                font-size: 14px; line-height: 1.6; color: #e0e0e0;
                background: #1a1a2e; margin: 0; padding: 20px 40px; }
@@ -126,8 +117,98 @@
         .md code { background:#1c1c33; padding:1px 5px; border-radius:3px; color:#aee0ff; }
         .reply { margin-top:16px; border:1px solid #2a2a4a; border-radius:6px; background:#13132a; padding:12px 14px; }
         .reply textarea { width:100%; min-height:62px; background:#0f0f1e; border:1px solid #2a2a4a;
-                          border-radius:4px; color:#e0e0e0; font:inherit; font-size:13px; padding:9px 11px; }"]]
+                          border-radius:4px; color:#e0e0e0; font:inherit; font-size:13px; padding:9px 11px; }"
+   ;; rail + content-area chrome
+   " body { margin:0; padding:0; display:grid; grid-template-columns:180px 1fr; min-height:100vh; }
+     .content { padding:20px 28px; overflow:auto; }
+     .rail { background:#13132a; border-right:1px solid #2a2a4a; padding:18px 14px;
+             display:flex; flex-direction:column; gap:3px; }
+     .rail-brand { font-weight:bold; color:#fff; font-size:15px; margin-bottom:14px; }
+     .rail-link { display:flex; align-items:center; gap:8px; padding:7px 10px; border-radius:5px;
+                  color:#aaa; border-left:3px solid transparent; }
+     .rail-link:hover { background:#181830; text-decoration:none; }
+     .rail-link.active { background:#16213e; color:#fff; border-left-color:#7eb8da; }
+     .rail-badge { margin-left:auto; background:#2a4a6a; color:#aee0ff; border-radius:9px;
+                   padding:0 7px; font-size:11px; min-width:18px; text-align:center; }
+     .rail-badge.zero { background:#222240; color:#666; }
+     .rail-scope { margin-top:16px; padding-top:14px; border-top:1px solid #2a2a4a; font-size:12px; }
+     .rail-scope a { display:block; padding:3px 6px; color:#9a9ac0; }
+     .rail-scope a.active { color:#fff; }
+     .rail-health { margin-top:auto; padding-top:14px; font-size:12px; color:#888; }
+     .dot { width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:6px; }
+     .dot-up { background:#4ade80; box-shadow:0 0 6px #4ade80; }
+     .dot-halted { background:#f87171; box-shadow:0 0 6px #f87171; }
+     .dot-breaker { background:#fb923c; }
+     .dot-down { background:#555; }"))
+
+(defn- layout [title & body]
+  (str
+   (h/html
+    [:html {:lang "en"}
+     [:head
+      [:meta {:charset "utf-8"}]
+      [:meta {:name "viewport" :content "width=device-width, initial-scale=1"}]
+      [:link {:rel "icon" :type "image/png" :href "/favicon.png"}]
+      [:title title " — nido"]
+      [:script {:type "module" :src "https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.1/bundles/datastar.js"}]
+      [:style shell-css]]
      [:body body]])))
+
+;; ---------------------------------------------------------------------------
+;; Shell (persistent rail + content area) — replaces per-page headers.
+
+(defn- rail-needs-badge [n]
+  [:span {:id "rail-needs-count" :class (str "rail-badge" (when (zero? (or n 0)) " zero"))} n])
+
+(defn- rail-health [{:keys [state]}]
+  (let [s (name (or state :down))]
+    [:div {:id "rail-health" :class "rail-health"}
+     [:span {:class (str "dot dot-" s)}] s]))
+
+(defn- rail
+  "The persistent navigation rail. Identical on every surface except the active
+   highlight + the two live elements (badge, health dot)."
+  [{:keys [active needs-count daemon scope projects]}]
+  (let [dest (fn [id href label]
+               [:a {:class (str "rail-link" (when (= id active) " active")) :href href}
+                [:span label]
+                (when (= id :needs) (rail-needs-badge needs-count))])]
+    [:nav.rail
+     [:a.rail-brand {:href "/"} "nido"]
+     (dest :needs "/" "Needs you")
+     (dest :workstreams "/workstreams" "Workstreams")
+     (dest :system "/system" "System")
+     [:div.rail-scope
+      [:div.meta "Scope"]
+      ;; Static for now; the scope task wires these to real project filters.
+      [:a {:class (when (= scope "all") "active") :href "/"} "All projects"]
+      (for [p projects]
+        [:a {:class (when (= scope p) "active") :href (str "/?scope=" p)} p])]
+     (rail-health daemon)]))
+
+(defn rail-status-fragment
+  "The two live rail elements, for SSE patching alongside a surface fragment."
+  [{:keys [needs-count daemon]}]
+  (str (h/html (rail-needs-badge needs-count))
+       (h/html (rail-health daemon))))
+
+(defn shell
+  "Page chrome: persistent rail + content area. Replaces `layout`. `ctx` carries
+   {:active :title :needs-count :daemon :scope :projects}; `content` is hiccup."
+  [{:keys [title] :as ctx} & content]
+  (str
+   (h/html
+    [:html {:lang "en"}
+     [:head
+      [:meta {:charset "utf-8"}]
+      [:meta {:name "viewport" :content "width=device-width, initial-scale=1"}]
+      [:link {:rel "icon" :type "image/png" :href "/favicon.png"}]
+      [:title (or title "nido") " — nido"]
+      [:script {:type "module" :src "https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.1/bundles/datastar.js"}]
+      [:style shell-css]]
+     [:body
+      (rail ctx)
+      (into [:main.content] content)]])))
 
 ;; ---------------------------------------------------------------------------
 ;; Components
