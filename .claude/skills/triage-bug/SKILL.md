@@ -7,7 +7,7 @@ description: Triage a bug-report ticket (Notion ticket or Slack-channel message)
 
 > **Harness-side skill, owned by nido.** It lives at `nido/.claude/skills/triage-bug/` and is injected as a native harness skill into every spawned session's composed `.claude/skills/` (see `nido.session.launcher/compose-claude-dir!`), so claude resolves `/triage-bug` independent of the target project's checked-out branch. (Previously it lived in brian's `.claude/`, which coupled it to whatever branch was checked out — when that branch changed, the skill silently disappeared and triage runs no-op'd.)
 >
-> **Triage state + the full report live in the nido ticket record**, not in Notion. Each ticket gets a per-ticket record at `~/.nido/projects/brian/tickets/BR-####/` (`meta.edn` + `report.md` + `entries/`), managed via `bb nido:ticket:*`. On `apply` Notion receives the human-confirmed structured properties (Type/Effort/Status), the **enriched title**, and an **enriched-description callout prepended above the reporter's original body** (the original is preserved intact, never overwritten). Comments are never written, and there is no longer a `🤖 Triaged` Notion comment.
+> **Triage state + the full report live in the nido ticket record**, not in Notion. Each ticket gets a per-ticket record at `~/.nido/projects/brian/tickets/BR-####/` (`meta.edn` + `entries/*.edn`), managed via `bb nido:ticket:*`. On `apply` Notion receives the human-confirmed structured properties (Type/Effort/Status), the **enriched title**, and an **enriched-description callout prepended above the reporter's original body** (the original is preserved intact, never overwritten). Comments are never written, and there is no longer a `🤖 Triaged` Notion comment.
 
 ## When this fires
 
@@ -115,62 +115,46 @@ video.
    - Is this actually a bug? (vs feature request, vs duplicate, vs noise — `:determination`)
    - If a bug: what part of the system is affected? what's the likely root cause?
    - What are 1–3 candidate solution directions? T-shirt effort per direction.
-6. Write the report (template in Step 2 below) to a temp file, then append it to the nido record as a `triage` entry:
+6. Compose the report EDN (schema in Step 2 below) to a temp `.edn` file, then append it to the nido record as a `triage` entry:
 
    ```bash
-   bb nido:ticket:append :project brian :br <BR-####> :kind triage :session <session-id> :run-id <run-id> :file <temp-file>
+   bb nido:ticket:append :project brian :br <BR-####> :kind triage :session <session-id> :run-id <run-id> :file <temp.edn>
    ```
 
    (Derive `<session-id>` from the cwd / session name and `<run-id>` from the `./run-link/` symlink — it points at `~/.nido/coordinator/runs/<run-id>/`.)
 
-   The record's `report.md` is the human entry point; the appended entry is the immutable copy. Also print the report verbatim into chat (Step 2).
+   The append **validates** the EDN against nido's `TriageReport` schema and **rejects** a malformed report (non-zero exit + an explain dump) — fix and retry until it's accepted. Also print it into chat via `bb nido:ticket:report` (Step 2).
 7. Set status `:awaiting-input` (`bb nido:ticket:status :project brian :br <BR-####> :status awaiting-input`) and exit. The user will `nido enter` the session, read the report in chat, and reply.
 
-## Step 2 — Report format
+## Step 2 — Report schema (EDN)
 
-Write this body to a temp file (then append it via `bb nido:ticket:append`, per Step 1.6):
+Compose the report as an EDN map and write it to a temp `.edn` file, then append it
+via `bb nido:ticket:append … :kind triage :file <temp.edn>` (Step 1.6). The append
+**validates** it against nido's `TriageReport` schema and **rejects** a malformed
+report (non-zero exit + an explain dump) — fix and retry until it's accepted.
 
-```markdown
-# Triage: <ticket-key> — <original title>
-<!-- ticket-key = BR-#### for a Notion run, the slack :id for a Slack run -->
-
-**Source view:** new-reports | bugs | slack-bugs
-**Determination:** bug | not-a-bug | needs-info
-
-## 1. Enriched title + description
-**Enriched title:** <concise, no `BR-####` prefix, no trailing punctuation. ALWAYS propose one; keep it identical to the original when the original is already good. On `apply` this is written to the Notion title property (Notion run); for a Slack run it lives only in the nido record — no Notion write.>
-
-<2–6 sentences of enriched description. What the report is actually about, self-contained — assumes the reader hasn't seen the original. On `apply` this is prepended as a callout above the reporter's original Notion body (Notion run); for a Slack run it lives only in the nido record.>
-
-**Confidence in this analysis:** high | medium | low — <one-line reason>
-
-## 2. Solution directions
-- **Direction A** — <shape, 1 sentence>. Effort: M. Confidence: medium — <reason>
-- **Direction B** — <shape>. Effort: L. Confidence: low — <reason>
-
-## 3. Proposed Notion writes (on `apply`)   <!-- Notion run only — OMIT this whole section for a Slack run; there are no Notion writes -->
-- Type: <unchanged | "bug">
-- Effort: M
-- Status: `Needs verification` → `Not started`     (for triage-new only)
-- Title: <enriched title from §1, or "unchanged" when identical to original>
-- Description: prepend enriched callout (§1) above the original body
-
-(Type / Effort / Status are property writes. Title is a property write. The
-enriched description is prepended as a callout block at the top of the page —
-the reporter's original body is preserved intact below it. Comments are never
-written. The full report still lives in the nido record.)
-
-## 4. If you want to dismiss instead
-**Recommendation:** dismiss (take off the triage radar — nido-only, Notion untouched)
-**Reason:** <one line — why this isn't worth pursuing>
-
-## 5. Investigation trail
-- Transcripts read (if any): list manifest entries the report drew from.
-- <file:line — what I learned>
-- <file:line — what I learned>
+```clojure
+{:format        :triage-report
+ :ticket-key    "BR-####"            ; the slack :id for a Slack run
+ :determination :bug                 ; :bug | :not-a-bug | :needs-info
+ :title         "concise enriched title, no BR-#### prefix, no trailing punctuation"
+ :summary       "2–6 sentences, self-contained — assumes the reader hasn't seen the original."
+ :confidence    {:level :high        ; :high | :medium | :low
+                 :reason "one line"}
+ :directions    [{:label "A" :shape "1 sentence" :effort :M    ; :XS :S :M :L :XL
+                  :confidence {:level :medium :reason "one line"}}]
+ :notion-writes {:type "bug"          ; nil for a Slack run (no Notion writes)
+                 :effort :M
+                 :status-transition ["Needs verification" "Not started"]  ; omit/nil if no transition
+                 :title "enriched title (= :title above, or unchanged when identical to original)"
+                 :description-prepend "the enriched callout body prepended above the reporter's original"}
+ :trail         [{:ref "file:line or transcript ref" :note "what I learned"}]}
 ```
 
-Print the report verbatim into your chat output (in addition to appending it to the record per Step 1.6) so the user sees it as soon as they `nido enter` the session.
+Notes:
+- `:notion-writes` is **nil for Slack runs** — there are no Notion writes.
+- There is **no dismiss-recommendation field**. If the report isn't worth pursuing, say so in chat and `dismiss` — don't encode it in the report.
+- After appending, print the report into chat with `bb nido:ticket:report :project brian :br <key>` (renders the stored report as markdown) so the user sees it on `nido enter`.
 
 ## Step 3 — Confirmation (chat, liberal parsing)
 
@@ -205,6 +189,12 @@ If they say no, treat as redo or cancel.
 Wait for re-confirmation in chat before proceeding.
 
 ### If concurrency check passes (or user reconfirms):
+
+**Read the verdict from the record, not your memory.** Run
+`bb nido:ticket:report :project brian :br <BR-####>` (or read the stored EDN via
+`bb nido:ticket:show`); the `:notion-writes` map is the canonical apply payload. Write
+exactly those Type / Effort / Status / Title values and that `:description-prepend`
+callout — do not re-derive them.
 
 1. **Property update** — `mcp__notionApi__API-patch-page` with the page-id and these properties:
    - **Type** (select) — must be one of `bug`, `feature`, `improvement`, `research`, `chore`
@@ -303,6 +293,6 @@ When the session is resumed after `:awaiting-input` (via `claude --resume`), the
 2. The full history of your own investigation + the report you wrote
 3. The user's reply at the end
 
-If you need to confirm the ticket's status or re-read what you proposed, run `bb nido:ticket:show :project brian :br <BR-####>` (and read the record's `report.md` under `~/.nido/projects/brian/tickets/BR-####/`).
+If you need to confirm the ticket's status or re-read what you proposed, run `bb nido:ticket:show :project brian :br <BR-####>` (or print the report with `bb nido:ticket:report :project brian :br <BR-####>`).
 
 Then parse the user's reply (Step 3 grammar) and execute the matching branch.
