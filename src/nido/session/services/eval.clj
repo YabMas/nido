@@ -108,17 +108,22 @@
       :else nil)))
 
 (defn- first-meaningful-line
-  "Pick the most useful line of eval output to surface as an error msg."
+  "Pick the most useful single line of eval output to surface as an error msg.
+   Prefers a line carrying a recognised failure signature — kept in sync with
+   `nrepl-eval-error?` so anything that *trips* detection can also be *named* —
+   and otherwise falls back to the last non-blank line, so a detected failure is
+   never surfaced as an empty/opaque message. Returns nil only for no output."
   [s]
   (let [lines (->> (str/split-lines (or s ""))
                    (map str/trim)
                    (remove str/blank?))
-        match (first (filter (fn [l]
-                               (some #(str/includes? l %)
-                                     ["Execution error" ":cause"
-                                      "DATABASE STARTUP FAILED"
-                                      "could not start"]))
-                             lines))]
+        signature? (fn [l]
+                     (some #(str/includes? l %)
+                           ["Execution error" "Syntax error" ":cause"
+                            "FATAL ERROR" "DATABASE STARTUP FAILED"
+                            "could not start"]))
+        match (or (first (filter signature? lines))
+                  (last lines))]
     (when match
       (cond-> match (> (count match) 240) (subs 0 240)))))
 
@@ -142,22 +147,30 @@
                            " (exit=" (:exit result) ")")
                       out err)
     (when-not (zero? (:exit result))
-      (throw (ex-info "nREPL evaluation failed (shell non-zero exit)"
-                      {:port nrepl-port
-                       :exit (:exit result)
-                       :error err
-                       :output out
-                       :error-msg (or (first-meaningful-line err)
-                                      (first-meaningful-line out)
-                                      err)})))
+      (let [detail (or (first-meaningful-line err) (first-meaningful-line out))]
+        (throw (ex-info (str "nREPL evaluation failed (shell exit " (:exit result) ")"
+                             (when detail (str " — " detail)))
+                        {:port nrepl-port
+                         :exit (:exit result)
+                         :error err
+                         :output out
+                         :error-msg (or detail err)}))))
     (when (nrepl-eval-error? out)
       (let [project-name (some-> instance-id (str/split #"--") first)
-            divergence   (flyway-divergence-message out project-name)]
-        (throw (ex-info (or divergence
-                            "nREPL evaluation threw (eval returned exception)")
+            divergence   (flyway-divergence-message out project-name)
+            detail       (first-meaningful-line out)
+            ;; Self-describing message: a recognised divergence gives the exact
+            ;; remedy; otherwise weave the actual cause into the message itself
+            ;; (the TUI failure panel renders only ex-message), never the opaque
+            ;; "eval returned exception" alone. Bare generic only when there is
+            ;; genuinely no output to quote.
+            msg          (or divergence
+                             (when detail (str "nREPL evaluation threw — " detail))
+                             "nREPL evaluation threw (eval returned exception)")]
+        (throw (ex-info msg
                         {:port nrepl-port
                          :output out
-                         :error-msg (or divergence (first-meaningful-line out))}))))
+                         :error-msg (or divergence detail)}))))
     out))
 
 (defn- wait-for-app-port! [host app-port timeout-ms]

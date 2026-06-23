@@ -72,12 +72,58 @@
           "project is derived from the instance-id prefix")
       (is (str/includes? (str (:error-msg (ex-data ex))) "nido:shared:pg:reset")))))
 
-(deftest eval-on-repl!-keeps-generic-message-for-non-flyway-eval-errors
+;; Hardening: a non-flyway eval failure must STILL be diagnosable. The cause
+;; belongs in the THROWN message (which every surface renders), not just buried
+;; in :error-msg ex-data — the TUI's failure panel only shows ex-message, so an
+;; opaque "nREPL evaluation threw (eval returned exception)" left the user with
+;; nothing actionable. It must, of course, not mis-suggest a cluster reset.
+
+(deftest eval-on-repl!-surfaces-the-cause-for-non-flyway-eval-errors
   (with-redefs [babashka.process/shell
                 (fn [_opts & _args] {:exit 0 :out "Execution error (NullPointerException)." :err ""})]
     (let [ex (try (#'eval/eval-on-repl! "brian--feat-x" 12345 1000 "(start)")
                   nil
                   (catch clojure.lang.ExceptionInfo e e))]
       (is ex "a non-flyway eval error still throws")
+      (is (str/includes? (ex-message ex) "Execution error (NullPointerException)")
+          "the actual cause is in the THROWN message, not an opaque 'eval returned exception'")
       (is (not (str/includes? (ex-message ex) "shared:pg:reset"))
-          "unrelated eval errors must NOT mis-suggest a cluster reset"))))
+          "unrelated eval errors must NOT mis-suggest a cluster reset")
+      (is (str/includes? (str (:error-msg (ex-data ex))) "NullPointerException")
+          ":error-msg still carries the cause for surfaces that read ex-data"))))
+
+;; The non-zero-shell-exit path (clj-nrepl-eval itself failed, e.g. connection
+;; refused) must also be self-describing rather than a bare "(shell non-zero
+;; exit)" — same reason: the TUI renders only ex-message.
+
+(deftest eval-on-repl!-surfaces-the-cause-on-shell-failure
+  (with-redefs [babashka.process/shell
+                (fn [_opts & _args]
+                  {:exit 1 :out "" :err "Connection refused to nREPL on port 12345"})]
+    (let [ex (try (#'eval/eval-on-repl! "brian--feat-x" 12345 1000 "(start)")
+                  nil
+                  (catch clojure.lang.ExceptionInfo e e))]
+      (is ex "a shell failure throws")
+      (is (str/includes? (ex-message ex) "Connection refused")
+          "the stderr cause is woven into the thrown message"))))
+
+;; first-meaningful-line — the cause-extractor underneath the self-describing
+;; message. It must (a) recognise the same signatures nrepl-eval-error? trips on
+;; ("Syntax error" / "FATAL ERROR" were missing from its keyword set), and (b)
+;; never return nil when there is *any* output, so the message is never empty.
+
+(deftest first-meaningful-line-recognises-syntax-and-fatal-errors
+  (is (str/includes? (#'eval/first-meaningful-line
+                      "noise\nSyntax error compiling at (foo.clj:3:1).\nmore noise")
+                     "Syntax error"))
+  (is (str/includes? (#'eval/first-meaningful-line
+                      "boot...\nFATAL ERROR: the sky is falling\n...")
+                     "FATAL ERROR")))
+
+(deftest first-meaningful-line-falls-back-to-last-line-when-no-keyword-matches
+  (is (= "the only clue we have"
+         (#'eval/first-meaningful-line "blah blah\n\n  the only clue we have  \n\n"))
+      "with no recognised signature, surface the last non-blank line, not nil")
+  (is (nil? (#'eval/first-meaningful-line "   \n\n  "))
+      "truly-empty output yields nil — nothing to surface")
+  (is (nil? (#'eval/first-meaningful-line nil))))
