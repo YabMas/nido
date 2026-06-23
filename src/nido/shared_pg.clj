@@ -64,6 +64,25 @@
                       {:project-name project-name
                        :hint "Run `bb nido:template:pg:stop :project <name>`."})))))
 
+(defn- pick-shared-port
+  "Port to (re)start the shared cluster on. Prefers the project's STABLE
+   deterministic port so a restart/reset never strands sessions pinned to it.
+
+   After `down!` stops our own postmaster (pg-ctl -w waits for full shutdown),
+   the deterministic port can linger in TIME_WAIT from the just-closed client
+   connections — and the more sessions were attached, the longer it lingers. A
+   bind-probe (`find-available-port`, which binds with SO_REUSEADDR off) reads
+   that as busy and skips ahead, bumping the cluster to a new port and breaking
+   every session pinned to the old one. But nothing is LISTENING there, and
+   PostgreSQL (SO_REUSEADDR) rebinds a TIME_WAIT port fine — so we only avoid
+   the preferred port when something is *actively listening* there (a genuine
+   conflict), and otherwise keep it stable."
+  [project-name]
+  (let [pref (resolve-shared-port project-name)]
+    (if (proc/tcp-open? pref)
+      (proc/find-available-port pref 200)
+      pref)))
+
 (defn- start-existing!
   "Start (or adopt) the already-seeded shared cluster; return its live port."
   [project-name]
@@ -81,7 +100,7 @@
       (let [_     (when (= :stale (:status existing))
                     (core/log-step "Removing stale shared postmaster.pid")
                     (fs/delete-if-exists (:pid-file existing)))
-            port  (proc/find-available-port (resolve-shared-port project-name) 200)]
+            port  (pick-shared-port project-name)]
         (pg/pg-ctl-start! bin-dir data-dir port log-path pg/socket-base-dir)
         (pg/wait-for-tcp! port)
         (state/write-shared-meta! project-name

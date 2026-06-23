@@ -3,6 +3,7 @@
    [babashka.fs :as fs]
    [babashka.process]
    [clojure.test :refer [deftest is]]
+   [nido.process :as proc]
    [nido.session.services.postgresql :as pg]
    [nido.session.state :as state]
    [nido.shared-pg :as shared]))
@@ -49,3 +50,26 @@
       (shared/down! "proj")
       (is (true? @stop-called)))
     (fs/delete-tree tmp)))
+
+;; pick-shared-port — the shared cluster must keep its STABLE deterministic port
+;; across restart/reset so it never strands sessions pinned to it. After down!
+;; stops our own postmaster (pg-ctl -w waits for full shutdown), the port can
+;; linger in TIME_WAIT from the closed client connections; a bind-probe
+;; (find-available-port) reads that as busy and skips ahead — the bug that
+;; bumped the cluster 6145→6146 and stranded ~10 live sessions. Nothing is
+;; LISTENING there and PostgreSQL (SO_REUSEADDR) can rebind it, so we keep the
+;; port and only scan when a real listener actually occupies it.
+
+(deftest pick-shared-port-keeps-the-stable-port-when-nothing-is-listening
+  (with-redefs [shared/resolve-shared-port (constantly 6145)
+                proc/tcp-open? (fn [_] false)                 ; free or merely TIME_WAIT
+                proc/find-available-port (fn [& _] (throw (ex-info "must not scan past the stable port" {})))]
+    (is (= 6145 (#'shared/pick-shared-port "brian"))
+        "a TIME_WAIT-but-not-listening preferred port stays stable (PG rebinds it)")))
+
+(deftest pick-shared-port-scans-only-when-a-real-listener-occupies-it
+  (with-redefs [shared/resolve-shared-port (constantly 6145)
+                proc/tcp-open? (fn [p] (= p 6145))            ; a real server is listening on 6145
+                proc/find-available-port (fn [pref _] (+ pref 1))]
+    (is (= 6146 (#'shared/pick-shared-port "brian"))
+        "only an actively-listening preferred port forces a scan to an alternative")))
