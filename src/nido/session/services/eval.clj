@@ -60,6 +60,53 @@
           ["Execution error" "Syntax error" ":cause" "FATAL ERROR"
            "DATABASE STARTUP FAILED" "could not start [#'"])))
 
+(def ^:private flyway-checksum-mismatch-re
+  #"(?i)checksum mismatch for migration version (\d+)")
+
+(def ^:private flyway-unresolved-applied-re
+  #"(?i)applied migration not resolved locally:\s*(\d+)")
+
+(defn- flyway-divergence-message
+  "If `out` carries a Flyway 'shared-cluster diverged' signature, return an
+   actionable remediation; else nil. These are the two most common second-order
+   session-start failures on the shared Postgres cluster — opposite directions,
+   opposite fixes — and surfacing them beats dumping the raw stack trace as an
+   opaque \"nREPL evaluation threw\". `project-name` (may be nil) is woven into
+   the suggested command when known.
+
+   - checksum mismatch on version N — the shared cluster recorded a DIFFERENT
+     migration under N than this branch's file (an earlier session applied its
+     own VN). If this branch tracks main, realign the cluster:
+     `bb nido:shared:pg:reset`.
+   - applied migration not resolved locally: N — the shared cluster is AHEAD of
+     this branch (a newer migration was applied to it that this branch lacks).
+     This branch is stale; resetting the cluster would only re-break the
+     up-to-date sessions. Run this one on a private clone
+     (`bb nido:session:isolate`) or rebase the branch on main."
+  [out project-name]
+  (let [s    (or out "")
+        proj (when project-name (str " :project " project-name))]
+    (cond
+      (re-find flyway-checksum-mismatch-re s)
+      (let [version (second (re-find flyway-checksum-mismatch-re s))]
+        (str "Database migration failed — Flyway checksum mismatch on migration version "
+             version ". The shared Postgres cluster recorded a different V" version
+             " than this branch's migration file. If this branch tracks main, realign the "
+             "cluster with `bb nido:shared:pg:reset" proj
+             "` (re-clones it from the template — shared dev data is reset). "
+             "Full Flyway error is in the session eval log."))
+
+      (re-find flyway-unresolved-applied-re s)
+      (let [version (second (re-find flyway-unresolved-applied-re s))]
+        (str "Database migration failed — the shared Postgres cluster has migrations applied "
+             "(from V" version ") that this branch doesn't have, so Flyway rejects the boot. "
+             "This branch is behind the shared cluster. Run it on a private clone with "
+             "`bb nido:session:isolate" proj " <session>` (its own DB seeded from the template), "
+             "or rebase the branch on main to pick up the missing migrations. "
+             "Full Flyway error is in the session eval log."))
+
+      :else nil)))
+
 (defn- first-meaningful-line
   "Pick the most useful line of eval output to surface as an error msg."
   [s]
@@ -104,10 +151,13 @@
                                       (first-meaningful-line out)
                                       err)})))
     (when (nrepl-eval-error? out)
-      (throw (ex-info "nREPL evaluation threw (eval returned exception)"
-                      {:port nrepl-port
-                       :output out
-                       :error-msg (first-meaningful-line out)})))
+      (let [project-name (some-> instance-id (str/split #"--") first)
+            divergence   (flyway-divergence-message out project-name)]
+        (throw (ex-info (or divergence
+                            "nREPL evaluation threw (eval returned exception)")
+                        {:port nrepl-port
+                         :output out
+                         :error-msg (or divergence (first-meaningful-line out))}))))
     out))
 
 (defn- wait-for-app-port! [host app-port timeout-ms]
