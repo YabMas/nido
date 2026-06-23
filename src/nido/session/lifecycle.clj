@@ -255,6 +255,52 @@
     (str branch "@origin")
     ref))
 
+(defn- workspace-stale?
+  "True when a non-zero jj result is the stale-working-copy failure: the
+   invoking (default) workspace lags the shared op log. jj's message is
+   `The working copy is stale (not updated since operation …). … Run
+   `jj workspace update-stale` to update it.` This is the one jj failure
+   nido can mechanically self-heal — every other non-zero exit propagates."
+  [result]
+  (and (not (zero? (:exit result)))
+       (str/includes? (str (:err result)) "working copy is stale")))
+
+(defn- jj-workspace-add!
+  "Materialize the new session workspace at `wt-path` on bookmark `branch`,
+   self-healing the harness's most common session-creation abort.
+
+   `jj workspace add` is the only nido jj call that can't take the global
+   --ignore-working-copy shield (jj rejects it — the command's whole job is
+   to update a working copy). So it snapshots the source repo's *default*
+   workspace first, and when that workspace lags the shared op log — routine
+   once a concurrent session advances it — jj aborts with the stale-working-
+   copy error. The fix is mechanical and is the very command the error
+   prescribes: `jj workspace update-stale` fast-forwards the default
+   workspace to the latest op (it leaves untracked files alone). So on a
+   stale failure we run it and retry the add exactly ONCE.
+
+   The stale check fires at jj's pre-op snapshot, before the destination is
+   created, so the retry starts from a clean slate. Any other failure — or a
+   second stale failure after update-stale — throws, so we never loop."
+  [project-dir wt-path branch]
+  (core/log-step (str "jj workspace add " wt-path
+                      " --name " branch " --revision " branch))
+  (let [add-args ["workspace" "add" "--name" branch "--revision" branch wt-path]
+        r (jj! project-dir add-args :continue? true :ignore-wc? false)]
+    (cond
+      (zero? (:exit r)) r
+
+      (workspace-stale? r)
+      (do
+        (core/log-step (str "default workspace is stale — running "
+                            "`jj workspace update-stale` and retrying the add"))
+        (jj! project-dir ["workspace" "update-stale"] :ignore-wc? false)
+        (jj! project-dir add-args :ignore-wc? false))
+
+      :else
+      (throw (ex-info "jj workspace add failed"
+                      {:exit (:exit r) :err (:err r)})))))
+
 (defn- create-jj-workspace!
   "Create a jj workspace at wt-path tracking bookmark `branch`. If the
    bookmark doesn't exist yet, fetch `base` (when it's a remote ref) and
@@ -268,13 +314,7 @@
     (let [jj-base (git-ref->jj-revset base)]
       (core/log-step (str "jj bookmark create " branch " -r " jj-base))
       (jj! project-dir ["bookmark" "create" branch "-r" jj-base])))
-  (core/log-step (str "jj workspace add " wt-path
-                      " --name " branch " --revision " branch))
-  (jj! project-dir ["workspace" "add"
-                    "--name" branch
-                    "--revision" branch
-                    wt-path]
-       :ignore-wc? false))
+  (jj-workspace-add! project-dir wt-path branch))
 
 (defn- remove-jj-workspace!
   "Forget the jj workspace named `workspace-name`, then delete the

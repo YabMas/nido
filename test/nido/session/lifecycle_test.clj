@@ -291,3 +291,105 @@
                   {:exit 1 :out "" :err "boom"})]
     (is (false? (#'lifecycle/jj-worktree-poisoned? "/wt"))
         "conservative: a jj error must never mark a worktree poisoned")))
+
+;; workspace-stale? — `jj workspace add` is the one nido jj call that can't take
+;; --ignore-working-copy, so it snapshots the (shared) default workspace and
+;; aborts with "The working copy is stale (not updated since operation …)" when
+;; that workspace lags the op log. The predicate recognises exactly that failure
+;; so create-jj-workspace! can self-heal it (vs every other failure, which throws).
+
+(deftest workspace-stale?-true-on-stale-working-copy-error
+  (is (true? (#'lifecycle/workspace-stale?
+              {:exit 1 :out ""
+               :err "Error: The working copy is stale (not updated since operation 01d4e90ca96d).\nHint: Run `jj workspace update-stale` to update it."}))))
+
+(deftest workspace-stale?-false-on-success
+  (is (false? (#'lifecycle/workspace-stale? {:exit 0 :out "" :err ""}))
+      "a successful add is never 'stale' even if stderr were noisy"))
+
+(deftest workspace-stale?-false-on-unrelated-failure
+  (is (false? (#'lifecycle/workspace-stale?
+               {:exit 1 :out "" :err "Error: Destination path already exists."}))
+      "only the stale-working-copy failure is self-healable; other errors propagate"))
+
+;; jj-workspace-add! — materialize the new session workspace, self-healing the
+;; stale-default-workspace failure (the harness's most common session-creation
+;; abort) by running the `jj workspace update-stale` the error itself prescribes
+;; and retrying the add ONCE. Any other failure, or a second stale failure, throws.
+
+(defn- scripted-jj!
+  "A jj! stand-in that faithfully mimics jj!'s contract — returns the scripted
+   result map, but throws on a non-zero exit unless :continue? was passed (just
+   as the real jj! does). `script` maps a subcommand vector (first 2 args) to a
+   0-arg thunk returning {:exit :out :err}; each subcommand's thunk is called
+   fresh per invocation so it can vary across retries via a closed-over counter.
+   Records every subcommand (first 2 tokens) into `calls`."
+  [script calls]
+  (fn [_dir args & {:keys [continue?]}]
+    (let [key (vec (take 2 args))
+          _   (swap! calls conj key)
+          r   ((get script key (fn [] {:exit 0 :out "" :err ""})))]
+      (if (and (not continue?) (not (zero? (:exit r))))
+        (throw (ex-info (str "jj " (str/join " " args) " failed")
+                        {:exit (:exit r) :err (:err r)}))
+        r))))
+
+(deftest jj-workspace-add!-succeeds-without-recovery-when-not-stale
+  (let [calls (atom [])]
+    (with-redefs [nido.session.lifecycle/jj!
+                  (scripted-jj! {["workspace" "add"] (constantly {:exit 0 :out "" :err ""})}
+                                calls)]
+      (#'lifecycle/jj-workspace-add! "/proj" "/wt" "feat/x")
+      (is (= [["workspace" "add"]] @calls)
+          "a clean add neither runs update-stale nor retries"))))
+
+(deftest jj-workspace-add!-recovers-from-stale-default-workspace
+  (let [calls (atom [])
+        adds  (atom 0)]
+    (with-redefs [nido.session.lifecycle/jj!
+                  (scripted-jj!
+                   {["workspace" "add"]
+                    (fn [] (if (= 1 (swap! adds inc))
+                             {:exit 1 :out ""
+                              :err "Error: The working copy is stale (not updated since operation 01d4e90ca96d)."}
+                             {:exit 0 :out "" :err ""}))
+                    ["workspace" "update-stale"]
+                    (constantly {:exit 0 :out "Working copy now at: ..." :err ""})}
+                   calls)]
+      (#'lifecycle/jj-workspace-add! "/proj" "/wt" "feat/x")
+      (is (= [["workspace" "add"]            ; first try → stale
+              ["workspace" "update-stale"]   ; self-heal the default workspace
+              ["workspace" "add"]]           ; retry → succeeds
+             @calls)
+          "stale add triggers update-stale, then exactly one retry"))))
+
+(deftest jj-workspace-add!-propagates-non-stale-failures-without-recovery
+  (let [calls (atom [])]
+    (with-redefs [nido.session.lifecycle/jj!
+                  (scripted-jj!
+                   {["workspace" "add"]
+                    (constantly {:exit 1 :out "" :err "Error: Destination path already exists."})}
+                   calls)]
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (#'lifecycle/jj-workspace-add! "/proj" "/wt" "feat/x")))
+      (is (= [["workspace" "add"]] @calls)
+          "a non-stale failure must NOT run update-stale or retry"))))
+
+(deftest jj-workspace-add!-throws-when-retry-after-update-stale-still-fails
+  (let [calls (atom [])]
+    (with-redefs [nido.session.lifecycle/jj!
+                  (scripted-jj!
+                   {["workspace" "add"]
+                    (constantly {:exit 1 :out ""
+                                 :err "Error: The working copy is stale (not updated since operation deadbeef)."})
+                    ["workspace" "update-stale"]
+                    (constantly {:exit 0 :out "" :err ""})}
+                   calls)]
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (#'lifecycle/jj-workspace-add! "/proj" "/wt" "feat/x"))
+          "if the add is still stale after update-stale, surface the failure")
+      (is (= [["workspace" "add"]
+              ["workspace" "update-stale"]
+              ["workspace" "add"]]
+             @calls)
+          "recovery is attempted exactly once — no infinite retry loop"))))
