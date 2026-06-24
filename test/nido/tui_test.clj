@@ -352,3 +352,42 @@
                                  (keep :data) (filter map?) (keep :ws-id) count))]
           (is (= 2 (n-ws {:app-domain :all})) "both visible, no constraint")
           (is (= 1 (n-ws {:app-domain "Teacher"})) "only Teacher with the Teacher selector"))))))
+
+(deftest facet-strip-hidden-on-non-facet-origin
+  ;; facet-strip should render nothing on non-facet-bearing origins (:slack,
+  ;; :github, :scratch) even when dimensions are configured.
+  (with-redefs [nido.work/facet-dimensions (constantly [:app-domain])]
+    (is (str/blank? (#'tui/facet-strip :brian :slack {:app-domain :all}))
+        "facet-strip returns blank on :slack origin")
+    (is (str/blank? (#'tui/facet-strip :brian :github {:app-domain :all}))
+        "facet-strip returns blank on :github origin")
+    (is (str/blank? (#'tui/facet-strip :brian :scratch {:app-domain :all}))
+        "facet-strip returns blank on :scratch origin")
+    (is (not (str/blank? (#'tui/facet-strip :brian :notion {:app-domain :all})))
+        "facet-strip renders on :notion origin")
+    (is (not (str/blank? (#'tui/facet-strip :brian :all {:app-domain :all})))
+        "facet-strip renders on :all origin")))
+
+(deftest board-rows-ignores-facets-on-non-facet-origin
+  ;; A non-empty facet-filter (e.g. {:app-domain "Teacher"}) must NOT filter rows
+  ;; on :slack/:github/:scratch origins — those workstreams have no facets and
+  ;; would disappear otherwise.
+  (with-tmp
+    (fn []
+      (with-redefs [tui/live-session-names (constantly #{})]
+        ;; Slack workstream: no facets
+        (workstream/create! :brian {:stage :triaging
+                                    :external-refs [{:adapter :slack-message :id "slack-C-1.0"}]})
+        ;; Notion workstream: has facets
+        (workstream/create! :brian {:stage :triaging
+                                    :external-refs [{:adapter :notion :id "BR-1"}]
+                                    :facets {:app-domain ["Teacher"]}})
+        (let [count-ws (fn [origin ff]
+                         (->> (#'tui/board-rows :brian origin #{} ff)
+                              (keep :data) (filter map?) (keep :ws-id) count))]
+          ;; :slack origin: facet filter is ignored → Slack ws still shows
+          (is (= 1 (count-ws :slack {:app-domain "Teacher"}))
+              "Slack workstream still shows on :slack origin even with Teacher facet filter active")
+          ;; :notion origin: facet filter IS applied → only the Teacher ws shows
+          (is (= 1 (count-ws :notion {:app-domain "Teacher"}))
+              "Notion workstream shows on :notion origin with matching Teacher facet filter"))))))

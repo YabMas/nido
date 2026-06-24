@@ -71,6 +71,11 @@
    {:id :slack   :label "Slack"}
    {:id :scratch :label "Scratch"}])
 
+;; Facets are Notion-only classifiers. The selectors only appear and apply on
+;; these origins. On :slack / :github / :scratch the facet-filter STATE is kept
+;; but silently ignored, so tabbing Notion→Slack→Notion preserves the selection.
+(def ^:private facet-bearing-origins #{:all :notion})
+
 (defn- step-origin [id delta]
   (let [ids (mapv :id origin-filters)
         i   (.indexOf ids id)]
@@ -215,7 +220,9 @@
   ([project origin collapsed facet-filter]
    (let [g    (work/grouped project (live-session-names project))
          keep #(->> (filter-origin origin %)
-                    (filterv (fn [r] (work/facet-match? facet-filter r))))
+                    (filterv (fn [r]
+                               (or (not (contains? facet-bearing-origins origin))
+                                   (work/facet-match? facet-filter r)))))
          band (fn [k label rows] (band-rows k label (keep rows) (contains? collapsed k)))
          rows (concat
                (band :inbox            "Queue"              (:inbox g))
@@ -1183,16 +1190,19 @@
 (defn- facet-strip
   "One-line composable facet selectors under the origin strip. One segment per
    configured dimension: `Domain: [All]` etc., active value bracketed + bright.
-   Empty string when the project has no facet dimensions."
-  [project facet-filter]
+   Empty string when the project has no facet dimensions, or when `origin` is
+   not a facet-bearing origin (i.e. not :all or :notion)."
+  [project origin facet-filter]
   (let [dims (work/facet-dimensions project)]
-    (if (empty? dims)
+    (if (or (empty? dims) (not (contains? facet-bearing-origins origin)))
       ""
       (->> dims
            (map (fn [k]
                   (let [label (-> (name k) (str/replace "-" " "))
                         val   (get facet-filter k :all)
-                        shown (if (= val :all) "All" (str val))]
+                        shown (cond (= val :all) "All"
+                                    (keyword? val) (str/capitalize (name val))
+                                    :else (str val))]
                     (str (style/render inactive-tab-style (str label ": "))
                          (style/render active-tab-style (str "[" shown "]"))))))
            (str/join "   ")))))
@@ -1393,7 +1403,7 @@
     (str (header state) "\n"
          (when (= :board (:screen state))
            (str (origin-strip (:origin state)) "\n"
-                (let [fs (facet-strip (:project state) (or (:facet-filter state) {}))]
+                (let [fs (facet-strip (:project state) (:origin state) (or (:facet-filter state) {}))]
                   (if (str/blank? fs) "" (str fs "\n")))))
          (when (= :system (:screen state))
            (str (status-bar) "\n"))
