@@ -38,7 +38,8 @@
                             [:outcome [:enum :done :dropped]]]]]
    [:created-at    string?]
    [:entries       [:vector [:map-of keyword? any?]]]
-   [:intake        {:optional true} [:maybe IntakePayload]]])
+   [:intake        {:optional true} [:maybe IntakePayload]]
+   [:facets        {:optional true} [:map-of keyword? any?]]])
 
 (defn validate [w]
   (if (m/validate Workstream w)
@@ -69,8 +70,8 @@
 (defn create!
   "Mint an id and persist a fresh workstream at the given stage. `base` may
    carry :external-refs (default []), :intake {:trigger <kw> :payload <map>}
-   (default absent), and must carry :stage."
-  [project {:keys [stage external-refs intake]}]
+   (default absent), :facets <map> (default absent), and must carry :stage."
+  [project {:keys [stage external-refs intake facets]}]
   (let [now (clock/now-iso)
         w   (cond-> {:id            (mint-id)
                      :project       project
@@ -80,7 +81,8 @@
                      :closed        nil
                      :created-at    now
                      :entries       []}
-              intake (assoc :intake intake))]
+              intake (assoc :intake intake)
+              (seq facets) (assoc :facets facets))]
     (write! w)))
 
 (defn advance-stage!
@@ -95,6 +97,16 @@
       (write! (-> w
                   (assoc :stage new-stage)
                   (update :stage-history conj {:at (clock/now-iso) :stage new-stage}))))))
+
+(defn set-facets!
+  "Overwrite a workstream's :facets map. Throws if the workstream is absent.
+   Returns the updated record. An empty map removes the key."
+  [project ws-id facets]
+  (let [w (read-ws project ws-id)]
+    (when-not w
+      (throw (ex-info "Cannot set facets on absent workstream"
+                      {:project project :ws-id ws-id})))
+    (write! (if (seq facets) (assoc w :facets facets) (dissoc w :facets)))))
 
 (defn close!
   "Settle a workstream terminally. `outcome` is :done or :dropped. Idempotent

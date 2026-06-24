@@ -193,3 +193,45 @@
       (let [w (ws/create! :brian {:stage :triaging})]
         (is (nil? (:intake w)))
         (is (= w (ws/read-ws :brian (:id w))))))))
+
+(deftest schema-accepts-facets
+  (is (m/validate ws/Workstream (assoc example-ws :facets {:app-domain ["Teacher"] :type "bug"}))))
+
+(deftest schema-omits-facets-ok
+  (is (m/validate ws/Workstream example-ws)))
+
+(deftest create-threads-facets
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (let [w (ws/create! :brian {:stage :triaging :external-refs []
+                                    :facets {:type "bug"}})]
+          (is (= {:type "bug"} (:facets (ws/read-ws :brian (:id w)))))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest set-facets-updates-existing
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+          (ws/set-facets! :brian (:id w) {:app-domain ["Teacher"]})
+          (is (= {:app-domain ["Teacher"]} (:facets (ws/read-ws :brian (:id w)))))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest set-facets-throws-on-absent
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (is (thrown? clojure.lang.ExceptionInfo
+                     (ws/set-facets! :brian "ws-nonexistent" {:type "bug"}))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest set-facets-empty-map-removes-key
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (let [w (ws/create! :brian {:stage :triaging :external-refs []
+                                    :facets {:type "bug"}})]
+          (ws/set-facets! :brian (:id w) {})
+          (is (nil? (:facets (ws/read-ws :brian (:id w)))))))
+      (finally (fs/delete-tree tmp)))))
