@@ -178,3 +178,42 @@
     (is (str/includes? html ">2<"))
     (is (str/includes? html "id=\"rail-health\""))
     (is (str/includes? html "dot-halted"))))
+
+(deftest workstreams-filter-bar-renders-source-chips-with-counts
+  (let [html (views/workstreams-page
+              {:active :workstreams :scope "all" :projects [] :needs-count 0 :daemon {:state :up}
+               :source :notion :facets {} :facet-dims [:app-domain :type]
+               :source-counts {:notion 3 :slack 1}}
+              [] nil nil)]
+    (is (str/includes? html "Notion"))
+    (is (str/includes? html "(3)") "per-source count shown")
+    (is (str/includes? html "App Domain") "facet row for the Notion source")
+    (is (str/includes? html "Type"))
+    ;; the interval @get must carry the active source so SSE refresh preserves it
+    (is (str/includes? html "source=notion"))))
+
+(deftest workstreams-filter-bar-hides-facets-for-facetless-source
+  (let [html (views/workstreams-page
+              {:active :workstreams :scope "all" :projects [] :needs-count 0 :daemon {:state :up}
+               :source :slack :facets {} :facet-dims []
+               :source-counts {:notion 3 :slack 1}}
+              [] nil nil)]
+    (is (not (str/includes? html "App Domain")) "no facet rows for a facet-less source")
+    (is (str/includes? html "source=slack"))))
+
+(deftest workstreams-filter-bar-renders-facet-values-from-rows
+  ;; facet value chips are derived from the displayed rows: distinct present
+  ;; App Domain values + :unclassified for the row that lacks the facet.
+  (let [groups [{:project :brian
+                 :grouped {:inbox [{:origin :notion :facets {:app-domain ["Teacher"]}}
+                                   {:origin :notion :facets {:app-domain ["Student"]}}
+                                   {:origin :notion :facets {}}]
+                           :triage {:in-flight [] :queued []} :ready [] :in-progress []}}]
+        html (views/workstreams-page
+              {:active :workstreams :scope "all" :projects [] :needs-count 0 :daemon {:state :up}
+               :source :notion :facets {} :facet-dims [:app-domain]
+               :source-counts {:notion 3}}
+              groups nil nil)]
+    (is (str/includes? html "Teacher")     "present value chip")
+    (is (str/includes? html "Student")     "second present value chip")
+    (is (str/includes? html "Unclassified") ":unclassified chip for the facet-less row")))

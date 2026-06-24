@@ -4,7 +4,8 @@
             [hiccup2.core :as h]
             [nido.coordinator.report :as report]
             [nido.process :as process]
-            [nido.ui.markdown :as md]))
+            [nido.ui.markdown :as md]
+            [nido.work :as work]))
 
 ;; ---------------------------------------------------------------------------
 ;; Layout
@@ -106,7 +107,11 @@
      .dot-up { background:#4ade80; box-shadow:0 0 6px #4ade80; }
      .dot-halted { background:#f87171; box-shadow:0 0 6px #f87171; }
      .dot-breaker { background:#fb923c; }
-     .dot-down { background:#555; }"))
+     .dot-down { background:#555; }
+     .filters { padding:10px 0 6px; display:flex; flex-direction:column; gap:4px; grid-column:1/-1; }
+     .filter-row { display:flex; align-items:center; gap:6px; flex-wrap:wrap; padding:2px 0; }
+     .filter-label { color:#888; font-size:11px; text-transform:uppercase; min-width:72px; }
+     .chip.active { background:#2a4a6a; color:#aee0ff; border:1px solid #3a5a7a; }"))
 
 ;; ---------------------------------------------------------------------------
 ;; Shell (persistent rail + content area) — replaces per-page headers.
@@ -385,12 +390,59 @@
               [:td.meta (when brakes (pr-str brakes))]])]]
          [:p.empty "No sessions."])]))))
 
+(defn- filter-query
+  "Query string (leading ?) for the active scope + source + facet selections.
+   `overrides` lets a chip compute its own target (e.g. {:source :notion})."
+  [{:keys [scope source facets]} & [overrides]]
+  (let [src   (get overrides :source source)
+        facs  (merge facets (:facets overrides))
+        pairs (cond-> []
+                (and scope (not= "all" scope)) (conj (str "scope=" scope))
+                (and src (not= :all src))       (conj (str "source=" (name src)))
+                :always (into (for [[k v] facs :when (not= :all v)]
+                                (str (name k) "=" v))))]
+    (if (seq pairs) (str "?" (str/join "&" pairs)) "")))
+
+(defn- chip-link [label active? href]
+  [:a {:class (str "chip" (when active? " active")) :href href} label])
+
+(defn- source-row [{:keys [source source-counts] :as ctx}]
+  (let [opts (cons {:id :all :label "All"}
+                   (for [o [:notion :github :slack :scratch]]
+                     {:id o :label (str/capitalize (name o))}))]
+    [:div.filter-row
+     [:span.filter-label "Source"]
+     (for [{:keys [id label]} opts
+           :let [n (when (not= id :all) (get source-counts id 0))]]
+       (chip-link (if n (str label " (" n ")") label)
+                  (= id source)
+                  (str "/workstreams" (filter-query ctx {:source id}))))]))
+
+(defn- facet-rows [{:keys [facet-dims facets] :as ctx} groups]
+  (for [k facet-dims
+        :let [present (->> groups (mapcat (fn [g] (work/grouped-rows (:grouped g))))
+                           (mapcat (fn [r] (let [v (get-in r [:facets k])]
+                                             (cond (nil? v) nil (coll? v) v :else [v]))))
+                           distinct)
+              vals (concat present (when (some (fn [g]
+                                                 (some #(empty? (or (get-in % [:facets k]) []))
+                                                       (work/grouped-rows (:grouped g)))) groups)
+                                     [:unclassified]))
+              sel  (get facets k :all)]]
+    [:div.filter-row
+     [:span.filter-label (->> (str/split (name k) #"-") (map str/capitalize) (str/join " "))]
+     (chip-link "All" (= :all sel) (str "/workstreams" (filter-query ctx {:facets {k :all}})))
+     (for [v vals
+           :let [lbl (if (keyword? v) (str/capitalize (name v)) (str v))]]
+       (chip-link lbl (= v sel) (str "/workstreams" (filter-query ctx {:facets {k v}}))))]))
+
 (defn workstreams-page
   [ctx groups sel-ws live-url]
-  (let [q (if (= "all" (:scope ctx)) "" (str "?scope=" (:scope ctx)))]
+  (let [q (filter-query ctx)]
     (shell
      (assoc ctx :active :workstreams :title "Workstreams")
      [:div.gate-wrap
+      [:div.filters (source-row ctx) (facet-rows ctx groups)]
       [:div.inbox {:data-on-interval__duration.5s (str "@get('/_fragment/workstreams" q "')")}
        (h/raw (workstreams-fragment groups (:ws-id sel-ws)))]
       [:div.pane (h/raw (workstream-pane sel-ws live-url))]])))
