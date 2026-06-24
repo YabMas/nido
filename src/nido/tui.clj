@@ -76,6 +76,19 @@
         i   (.indexOf ids id)]
     (nth ids (mod (+ (max i 0) delta) (count ids)))))
 
+(defn- step-facet
+  "Cycle a single facet selector: :all → each present value → back to :all.
+   `values` is the ordered value list (may include the :unclassified sentinel)."
+  [current values delta]
+  (let [opts (vec (cons :all values))
+        i    (.indexOf opts current)]
+    (nth opts (mod (+ (max i 0) delta) (count opts)))))
+
+(defn- default-facet-filter
+  "All dimensions set to :all for `project` (empty when no facets configured)."
+  [project]
+  (into {} (map (fn [k] [k :all])) (work/facet-dimensions project)))
+
 ;; ---------------------------------------------------------------------------
 ;; Data → list rows
 ;; ---------------------------------------------------------------------------
@@ -195,14 +208,14 @@
           (when-not collapsed? (mapv badged-item-row rows)))))
 
 (defn- board-rows
-  "Rows for the spine board: work/grouped, filtered by `origin`, as foldable
-   Queue / Ready / In progress / Triage bands with origin badges. `collapsed` is
-   the set of folded band keys (defaults to the intake queues). Empty-state
-   sentinel when nothing matches."
-  ([project origin] (board-rows project origin default-collapsed-bands))
-  ([project origin collapsed]
+  "Rows for the spine board: work/grouped, filtered by `origin` and `facet-filter`,
+   as foldable bands with origin badges."
+  ([project origin] (board-rows project origin default-collapsed-bands {}))
+  ([project origin collapsed] (board-rows project origin collapsed {}))
+  ([project origin collapsed facet-filter]
    (let [g    (work/grouped project (live-session-names project))
-         keep #(filter-origin origin %)
+         keep #(->> (filter-origin origin %)
+                    (filterv (fn [r] (work/facet-match? facet-filter r))))
          band (fn [k label rows] (band-rows k label (keep rows) (contains? collapsed k)))
          rows (concat
                (band :inbox            "Queue"              (:inbox g))
@@ -300,7 +313,8 @@
   [state]
   (case (:screen state)
     :board      (board-rows (:project state) (:origin state)
-                            (or (:collapsed state) default-collapsed-bands))
+                            (or (:collapsed state) default-collapsed-bands)
+                            (or (:facet-filter state) {}))
     :workstream (detail-rows (:project state) (:ws-id state))
     :system     (session-rows (:project state))
     :projects   (project-rows)))
@@ -317,7 +331,8 @@
 (defn- enter-board
   "Drill from the projects list into a project's board, on the :all origin."
   [state project-name]
-  (let [s (assoc state :screen :board :project project-name :origin :all :status nil)]
+  (let [s (assoc state :screen :board :project project-name :origin :all :status nil
+                 :facet-filter (default-facet-filter project-name))]
     (rebuild-list s (current-rows s))))
 
 (defn- enter-workstream
@@ -334,6 +349,23 @@
   (let [s (assoc state :screen :board :origin origin :status nil)]
     (-> s (rebuild-list (current-rows s))
         (dissoc :modal :modal-target :modal-input :ws-id :ws-label))))
+
+(defn- set-facet
+  "Set one facet dimension's selection and rebuild the board list."
+  [state facet-key value]
+  (let [s (assoc-in state [:facet-filter facet-key] value)]
+    (rebuild-list s (current-rows s))))
+
+(defn- cycle-facet
+  "Cycle the Nth configured facet dimension (0-based) by `delta`. No-op when the
+   project has fewer than N+1 dimensions."
+  [state n delta]
+  (let [dims (work/facet-dimensions (:project state))]
+    (if-let [k (get dims n)]
+      [(set-facet state k (step-facet (get-in state [:facet-filter k] :all)
+                                      (work/facet-values (:project state) k)
+                                      delta)) nil]
+      [state nil])))
 
 (defn- selected-data [state]
   (some-> (item-list/selected-item (:list state)) :data))
@@ -909,6 +941,10 @@
     [(set-origin state (step-origin (:origin state) 1)) nil]
     (or (msg/key-match? msg "shift+tab") (msg/key-match? msg "left"))
     [(set-origin state (step-origin (:origin state) -1)) nil]
+    (msg/key-match? msg "[") (cycle-facet state 0 -1)
+    (msg/key-match? msg "]") (cycle-facet state 0 1)
+    (msg/key-match? msg "{") (cycle-facet state 1 -1)
+    (msg/key-match? msg "}") (cycle-facet state 1 1)
     :else (let [[lst cmd] (item-list/list-update (:list state) msg)]
             [(assoc state :list lst) cmd])))
 
@@ -1144,6 +1180,23 @@
                 (style/render inactive-tab-style (str " " label " ")))))
        (str/join "  ")))
 
+(defn- facet-strip
+  "One-line composable facet selectors under the origin strip. One segment per
+   configured dimension: `Domain: [All]` etc., active value bracketed + bright.
+   Empty string when the project has no facet dimensions."
+  [project facet-filter]
+  (let [dims (work/facet-dimensions project)]
+    (if (empty? dims)
+      ""
+      (->> dims
+           (map (fn [k]
+                  (let [label (-> (name k) (str/replace "-" " "))
+                        val   (get facet-filter k :all)
+                        shown (if (= val :all) "All" (str val))]
+                    (str (style/render inactive-tab-style (str label ": "))
+                         (style/render active-tab-style (str "[" shown "]"))))))
+           (str/join "   ")))))
+
 (defn- header [state]
   (style/render title-style
                 (case (:modal state)
@@ -1189,7 +1242,7 @@
                   :stage-picker         "[↑↓] move  [↵] promote here  [esc] cancel"
                   (case (:screen state)
                     :projects   "[↵] open  [q]uit"
-                    :board      "[↵/o] open  [i]nspect  [n]ew  [p]romote  [P] promote to…  [d]one  [x] dismiss  [space] fold  [⇄ tab] origin  [s]ystem  [esc] back  [q]uit"
+                    :board      "[↵/o] open  [i]nspect  [n]ew  [p]romote  [P] promote to…  [d]one  [x] dismiss  [space] fold  [⇄ tab] origin  [ [ ] ] domain  [ { } ] type  [s]ystem  [esc] back  [q]uit"
                     :workstream "[↵] open in chat  [esc] back  [q]uit"
                     :system     "[↵/e] enter  [w]orktree  [i]nfo  [u]p  [d]own  [x] destroy  •  [f]ire  [h]alt  [c]lear breaker  [esc] back  [q]uit"))))
 
@@ -1339,7 +1392,9 @@
     :else
     (str (header state) "\n"
          (when (= :board (:screen state))
-           (str (origin-strip (:origin state)) "\n"))
+           (str (origin-strip (:origin state)) "\n"
+                (let [fs (facet-strip (:project state) (or (:facet-filter state) {}))]
+                  (if (str/blank? fs) "" (str fs "\n")))))
          (when (= :system (:screen state))
            (str (status-bar) "\n"))
          "\n"

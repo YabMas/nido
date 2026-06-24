@@ -1,10 +1,13 @@
 (ns nido.tui-test
   (:require
+   [babashka.fs :as fs]
    [charm.message :as msg]
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
    [nido.coordinator.scratch :as scratch]
+   [nido.coordinator.state :as cstate]
    [nido.coordinator.triggers]
+   [nido.coordinator.workstream :as workstream]
    [nido.project :as project]
    [nido.session.lifecycle :as lifecycle]
    [nido.tui :as tui]
@@ -319,3 +322,33 @@
       (is (some #(str/includes? % "Queue (1)") titles))
       (is (str/includes? (first titles) "Queue")
           "Queue band renders first (inbox-first spec requirement)"))))
+
+;; ---------------------------------------------------------------------------
+;; Task 8: composable facet sub-queue selectors
+;; ---------------------------------------------------------------------------
+
+(defn- with-tmp [f]
+  (let [tmp (fs/create-temp-dir)]
+    (try (with-redefs [cstate/nido-root (constantly (str tmp))] (cstate/ensure-dirs!) (f))
+         (finally (fs/delete-tree tmp)))))
+
+(deftest step-facet-cycles-all-then-present-values
+  ;; pure helper: given the value list, stepping wraps through :all + values
+  (is (= "Teacher" (#'tui/step-facet :all ["Teacher" "Student"] 1)))
+  (is (= "Student" (#'tui/step-facet "Teacher" ["Teacher" "Student"] 1)))
+  (is (= :all (#'tui/step-facet "Student" ["Teacher" "Student"] 1)) "wraps to :all"))
+
+(deftest board-rows-filter-by-facet
+  (with-tmp
+    (fn []
+      ;; redef live-session-names (private) so the board doesn't hit lifecycle;
+      ;; pass an EMPTY collapsed set so no band is folded out of the row list.
+      (with-redefs [tui/live-session-names (constantly #{})]
+        (workstream/create! :brian {:stage :triaging :external-refs [{:adapter :notion :id "BR-1"}]
+                                    :facets {:app-domain ["Teacher"]}})
+        (workstream/create! :brian {:stage :triaging :external-refs [{:adapter :notion :id "BR-2"}]
+                                    :facets {:app-domain ["Student"]}})
+        (let [n-ws (fn [ff] (->> (#'tui/board-rows :brian :all #{} ff)
+                                 (keep :data) (filter map?) (keep :ws-id) count))]
+          (is (= 2 (n-ws {:app-domain :all})) "both visible, no constraint")
+          (is (= 1 (n-ws {:app-domain "Teacher"})) "only Teacher with the Teacher selector"))))))
