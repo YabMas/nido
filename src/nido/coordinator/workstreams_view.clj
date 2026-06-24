@@ -138,7 +138,8 @@
       :engagement    (session/engagement-state (:closed ws) eng-sessions)
       :priority      (max-priority sessions)
       :session-count (count sessions)
-      :last-activity (last-activity ws sessions)})))
+      :last-activity (last-activity ws sessions)
+      :facets        (:facets ws)})))
 
 (defn workstream-rows
   "All workstream rows for a project, read from disk. `live-names` (optional) is

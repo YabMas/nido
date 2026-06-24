@@ -23,6 +23,8 @@
    [nido.io :as io]
    [nido.coordinator.workstream :as cws]
    [nido.coordinator.workstreams-view :as wsv]
+   [nido.notion.client :as notion]
+   [nido.notion.views :as views]
    [nido.project :as project]
    [nido.session.lifecycle :as lifecycle]))
 
@@ -366,3 +368,41 @@
   (boolean
    (when-let [run (runs/find-for-session project ws-id session)]
      (runs/ensure-session-home! run))))
+
+(defn facet-dimensions
+  "Ordered facet keys (kebab keywords) configured for `project`, e.g.
+   [:app-domain :type]; [] when none are configured."
+  [project]
+  (mapv notion/normalise-property-name (views/facet-properties project)))
+
+(defn- facet-row-values
+  "The value(s) a row carries for facet `k`, as a seq (vector facets expand to
+   their elements; a scalar yields a 1-seq; absent/empty yields nil)."
+  [k row]
+  (let [v (get-in row [:facets k])]
+    (cond (nil? v) nil
+          (coll? v) (seq v)
+          :else [v])))
+
+(defn facet-values
+  "Ordered distinct values present for facet `k` across the project's non-done
+   workstreams, with :unclassified appended when any such row lacks a value."
+  [project k]
+  (let [rows (remove #(= :done (:stage %)) (list-workstreams project))
+        present (->> rows (mapcat #(facet-row-values k %)) distinct vec)
+        any-missing? (some #(nil? (facet-row-values k %)) rows)]
+    (cond-> present any-missing? (conj :unclassified))))
+
+(defn facet-match?
+  "True when `row` satisfies every active selection in `facet-filter`. A value of
+   :all (or absent) does not constrain. :unclassified matches a row missing that
+   facet. A scalar/vector facet matches by =/contains?."
+  [facet-filter row]
+  (every?
+   (fn [[k v]]
+     (or (= v :all)
+         (let [vals (facet-row-values k row)]
+           (if (= v :unclassified)
+             (nil? vals)
+             (boolean (some #(= v %) vals))))))
+   facet-filter))

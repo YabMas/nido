@@ -10,6 +10,7 @@
    [nido.coordinator.state :as cstate]
    [nido.coordinator.tickets :as tickets]
    [nido.coordinator.workstream :as workstream]
+   [nido.notion.views :as views]
    [nido.project]
    [nido.session.lifecycle]
    [nido.work :as work]))
@@ -524,3 +525,40 @@
                 nido.coordinator.session/list-sessions (fn [_ _] [])
                 nido.coordinator.workstreams-view/workstream-row (fn [_ w] {:stage :triage :label "BR-7" :source :notion})]
     (is (= "# V" (-> (work/workstream "brian" "ws-1") :report :markdown)))))
+
+(deftest list-workstreams-rows-carry-facets
+  (with-tmp
+    (fn [_]
+      (workstream/create! :brian {:stage :triaging
+                                  :external-refs [{:adapter :notion :id "BR-1"}]
+                                  :facets {:app-domain ["Teacher"] :type "bug"}})
+      (let [row (first (work/list-workstreams :brian))]
+        (is (= {:app-domain ["Teacher"] :type "bug"} (:facets row)))))))
+
+(deftest facet-dimensions-from-config
+  (with-tmp
+    (fn [_]
+      (with-redefs [views/facet-properties (constantly ["App Domain" "Type"])]
+        (is (= [:app-domain :type] (work/facet-dimensions :brian)))))))
+
+(deftest facet-values-distinct-plus-unclassified
+  (with-tmp
+    (fn [_]
+      (workstream/create! :brian {:stage :triaging :external-refs [{:adapter :notion :id "BR-1"}]
+                                  :facets {:app-domain ["Teacher"]}})
+      (workstream/create! :brian {:stage :triaging :external-refs [{:adapter :notion :id "BR-2"}]
+                                  :facets {:app-domain ["Student" "Teacher"]}})
+      (workstream/create! :brian {:stage :triaging :external-refs [{:adapter :notion :id "BR-3"}]})
+      (let [vals (work/facet-values :brian :app-domain)]
+        (is (= #{"Teacher" "Student"} (set (remove #{:unclassified} vals)))
+            "both present domain values, order-independent")
+        (is (= :unclassified (last vals)) ":unclassified is appended last")))))
+
+(deftest facet-match-composes-and-handles-vectors
+  (let [row {:facets {:app-domain ["Teacher"] :type "bug"}}]
+    (is (work/facet-match? {:app-domain :all :type :all} row) "all passes")
+    (is (work/facet-match? {:app-domain "Teacher" :type "bug"} row))
+    (is (not (work/facet-match? {:app-domain "Student"} row)))
+    (is (work/facet-match? {:app-domain "Teacher"} row) "vector membership"))
+  (is (work/facet-match? {:app-domain :unclassified} {:facets {}}) "unclassified matches missing")
+  (is (not (work/facet-match? {:app-domain :unclassified} {:facets {:app-domain ["Teacher"]}}))))
