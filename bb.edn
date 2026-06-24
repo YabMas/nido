@@ -27,6 +27,7 @@
              [tasks.nido-notion-views :as nido-notion-views]
              [tasks.nido-coordinator-source :as nido-coordinator-source]
              [tasks.nido-ticket :as nido-ticket]
+             [tasks.nido-facets :as nido-facets]
              [tasks.nido-migrate :as nido-migrate]
              [tasks.nido-transcribe :as nido-transcribe]
              [tasks.nido-notion-preprocess :as nido-notion-preprocess]
@@ -330,6 +331,10 @@
   nido:tickets:list
   {:doc "List ticket records grouped by stage (Ready to implement / In progress / Dismissed)."
    :task (apply nido-ticket/list-cmd *command-line-args*)}
+
+  nido:facets:refresh
+  {:doc "Re-read Notion and rewrite workstream classification facets (:project <p> [:ws <id>])."
+   :task (apply nido-facets/refresh-cmd *command-line-args*)}
 
   nido:transcribe-video
   {:doc "Transcribe a video URL → VTT: <url> :out <path> [:model :small] [:timeout 5m]"
