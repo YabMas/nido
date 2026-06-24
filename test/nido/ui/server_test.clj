@@ -197,6 +197,12 @@
   (is (= {:source :all :facets {}} (#'server/parse-filters nil)))
   (is (= {:source :all :facets {}} (#'server/parse-filters "scope=brian"))))
 
+(deftest parse-filters-decodes-and-coerces-unclassified
+  (is (= {:source :notion :facets {:app-domain :unclassified}}
+         (#'server/parse-filters "source=notion&app-domain=unclassified")))
+  (is (= {:source :all :facets {:app-domain "Onboarding Flow"}}
+         (#'server/parse-filters "app-domain=Onboarding%20Flow"))))
+
 (deftest apply-filters-narrows-each-grouped-by-source-and-facet
   (let [groups [{:project :brian
                  :grouped {:inbox [{:origin :notion :facets {:app-domain ["Teacher"]}}

@@ -217,3 +217,14 @@
     (is (str/includes? html "Teacher")     "present value chip")
     (is (str/includes? html "Student")     "second present value chip")
     (is (str/includes? html "Unclassified") ":unclassified chip for the facet-less row")))
+
+(deftest filter-query-encodes-facet-values
+  ;; :unclassified emits as "unclassified" (no colon); spaces are encoded.
+  (let [q (#'views/filter-query {:scope "all" :source :notion
+                                 :facets {:app-domain :unclassified}})]
+    (is (str/includes? q "app-domain=unclassified"))
+    (is (not (str/includes? q ":unclassified"))))
+  (let [q (#'views/filter-query {:scope "all" :source :notion
+                                 :facets {:app-domain "Onboarding Flow"}})]
+    (is (not (str/includes? q "Onboarding Flow")) "raw space not in the query")
+    (is (or (str/includes? q "Onboarding%20Flow") (str/includes? q "Onboarding+Flow")))))

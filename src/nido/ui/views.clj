@@ -390,6 +390,9 @@
               [:td.meta (when brakes (pr-str brakes))]])]]
          [:p.empty "No sessions."])]))))
 
+(defn- enc-val [v]
+  (java.net.URLEncoder/encode (if (keyword? v) (name v) (str v)) "UTF-8"))
+
 (defn- filter-query
   "Query string (leading ?) for the active scope + source + facet selections.
    `overrides` lets a chip compute its own target (e.g. {:source :notion})."
@@ -400,7 +403,7 @@
                 (and scope (not= "all" scope)) (conj (str "scope=" scope))
                 (and src (not= :all src))       (conj (str "source=" (name src)))
                 :always (into (for [[k v] facs :when (not= :all v)]
-                                (str (name k) "=" v))))]
+                                (str (name k) "=" (enc-val v)))))]
     (if (seq pairs) (str "?" (str/join "&" pairs)) "")))
 
 (defn- chip-link [label active? href]

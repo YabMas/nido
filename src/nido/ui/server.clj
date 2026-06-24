@@ -199,7 +199,8 @@
         source (some (fn [[k v]] (when (= k "source") (keyword v))) pairs)
         facets (into {} (for [[k v] pairs
                               :when (not (#{"scope" "source"} k))]
-                          [(keyword k) v]))]
+                          (let [dv (java.net.URLDecoder/decode v "UTF-8")]
+                            [(keyword k) (if (= dv "unclassified") :unclassified dv)])))]
     {:source (or source :all) :facets facets}))
 
 (defn- valid-facet-keys
