@@ -244,6 +244,17 @@ bb nido:runs:list / bb nido:runs:show <id>
 
 Or in the TUI: the spine board lists workstreams by stage — `↵`/`o` opens a workstream's session, `i` inspects its sessions (autonomous runs show on the autonomy axis), `n` starts a new one-off, `p`/`P` promote (default / pick-a-stage), `d` marks done, `tab` cycles the origin filter, and `s` opens the system surface.
 
+### Classification-facet sub-queues
+
+The TUI board can slice an origin (Notion) into composable sub-queues by durable
+ticket classifiers. Add `:facets ["App Domain" "Type"]` to a project's
+`~/.nido/projects/<project>/notion-views.edn`; the board then shows two
+AND-composed selectors (`[`/`]` cycle App Domain, `{`/`}` cycle Type). Facets are
+stored on each workstream — stamped at creation, refreshed when a triage verdict
+is applied (`nido:ticket:complete`), and re-syncable on demand with
+`bb nido:facets:refresh :project <p> [:ws <id>]`. They are a pure organizational
+lens; the stage spine is unchanged.
+
 **Safety brakes (Stage 2):** per-Run wall-clock budget (`:limits.budget`, default 30m, SIGTERM→SIGKILL), per-trigger circuit breaker (`:limits.max-failures`, default 3), daemon-wide anomaly auto-halt, kill switch (`bb nido:halt` + `bb nido:coordinator:resume`). On the TUI **system surface** (`s`): `h` halts, `c` clears a breaker, `f` fires a trigger.
 
 **Startup reconciliation (Stage 3):** when the daemon starts, any non-terminal Run on disk is forced to a terminal state from observable evidence (artifacts, `_run-status.edn`, agent.log). Crashed/orphaned Runs get marked `:failed :reason :orphaned-from-restart` so the dashboard stays honest.
