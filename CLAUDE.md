@@ -189,10 +189,10 @@ bb nido:coordinator:down        # graceful stop (SIGTERM); :force true → SIGKI
 in-process. With the daemon up it's always at `http://localhost:8800` — the home
 page (`/`) is now the cross-project **Gate Inbox**: every parked workstream that
 needs you, each with its report and one-click follow-actions (skip / promote /
-drop / done / reply). The stage-grouped spine **Board** is at `/board`; read-only
-workstream detail is at `/ws/<project>/<ws-id>`; the old flat live-sessions board
+drop / done / reply). The stage-grouped **Workstreams** overview is at `/workstreams`; read-only
+workstream detail is at `/workstreams/<project>/<ws-id>`; the old flat live-sessions board
 (each live session a clickable friendly-host link `<session>.<project>.localhost`)
-moved to `/system`. Override the port with `bb nido:coordinator:up :dashboard-port <n>`;
+moved to `/system`. The Workstreams overview (`/workstreams`) filters by **scope** (project), **source** (All/Notion/GitHub/Slack/Scratch, with per-source counts) and **context-dependent facets** (App Domain / Type for the Notion source) — the cockpit's overview surface. The TUI stays a lean session launcher. Override the port with `bb nido:coordinator:up :dashboard-port <n>`;
 disable with `:no-dashboard true`. `bb nido:coordinator:status` shows a `Dashboard:`
 line (port + reachability).
 
