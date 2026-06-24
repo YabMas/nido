@@ -5,7 +5,8 @@
    [nido.coordinator.session :as session]
    [nido.coordinator.spawn :as spawn]
    [nido.coordinator.state :as cstate]
-   [nido.coordinator.workstream :as ws]))
+   [nido.coordinator.workstream :as ws]
+   [nido.notion.views :as views]))
 
 (defn- with-tmp [f]
   (let [tmp (fs/create-temp-dir)]
@@ -116,3 +117,12 @@
         (is (some? ws-id))
         (is (= "slack-C1-9.0"
                (-> (ws/find-by-ref :brian :slack-message "slack-C1-9.0") :external-refs first :id)))))))
+
+(deftest ensure-workstream-stamps-facets-from-payload
+  (with-tmp
+    (fn [_]
+      (with-redefs [views/facet-properties (constantly ["App Domain" "Type"])]
+        (let [payload {:adapter :notion :id "BR-1" :page-id "p"
+                       :app-domain ["Teacher"] :type "bug"}
+              w (spawn/ensure-workstream! :brian payload :triaging)]
+          (is (= {:app-domain ["Teacher"] :type "bug"} (:facets w))))))))

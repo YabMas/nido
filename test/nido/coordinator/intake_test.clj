@@ -6,7 +6,8 @@
    [nido.coordinator.intake :as intake]
    [nido.coordinator.session :as session]
    [nido.coordinator.state :as cstate]
-   [nido.coordinator.workstream :as ws]))
+   [nido.coordinator.workstream :as ws]
+   [nido.notion.views :as views]))
 
 (defn- with-tmp [f]
   (let [tmp (fs/create-temp-dir)]
@@ -40,6 +41,13 @@
         (is (= 1 (count (ws/list-ids :brian))))))))
 
 (defn- iso->ms [iso] (.toEpochMilli (java.time.Instant/parse iso)))
+
+(deftest enqueue-stamps-no-facets-for-slack
+  (with-tmp
+    (fn [_]
+      (with-redefs [views/facet-properties (constantly ["App Domain" "Type"])]
+        (let [w (intake/enqueue-inbox! routed)]
+          (is (nil? (:facets w)) "Slack payload has no configured facet props"))))))
 
 (deftest expire-stale-closes-only-old-open-inbox
   (with-tmp

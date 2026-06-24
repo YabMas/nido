@@ -3,8 +3,10 @@
    workstream (no session), and expire stale inbox entries. See spec
    docs/superpowers/specs/2026-06-19-slack-human-gated-queue-design.md."
   (:require
+   [nido.coordinator.facets :as facets]
    [nido.coordinator.spawn :as spawn]
-   [nido.coordinator.workstream :as ws]))
+   [nido.coordinator.workstream :as ws]
+   [nido.notion.views :as views]))
 
 (defn enqueue-inbox!
   "Create a session-less :inbox workstream for a queue-mode fire, deduped on the
@@ -18,6 +20,7 @@
         (ws/create! project
                     {:stage         :inbox
                      :external-refs (if ref [ref] [])
+                     :facets        (facets/select-facets (views/facet-properties project) payload)
                      :intake        {:trigger (:name trigger) :payload payload}}))))
 
 (defn- iso-age-ms

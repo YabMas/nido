@@ -8,9 +8,11 @@
    [clojure.string :as str]
    [nido.coordinator.clock :as clock]
    [nido.coordinator.executor :as executor]
+   [nido.coordinator.facets :as facets]
    [nido.coordinator.runs :as runs]
    [nido.coordinator.session :as session]
-   [nido.coordinator.workstream :as ws]))
+   [nido.coordinator.workstream :as ws]
+   [nido.notion.views :as views]))
 
 (defn external-ref
   "External ref derived from an event payload, or nil when the payload carries
@@ -28,17 +30,19 @@
 
 (defn ensure-workstream!
   "Find-or-create the workstream for this fire. With a derivable Notion ref,
-   dedups via find-by-ref; otherwise mints a fresh ref-less workstream.
+   dedups via find-by-ref; otherwise mints a fresh ref-less workstream. New
+   workstreams are stamped with :facets read from the payload (the configured
+   durable classifiers); a deduped pre-existing workstream is left untouched
+   (its facets are owned by the triage-completion / bulk refresh paths).
 
    The find-then-create is not atomic, but the coordinator processes envelopes
-   single-threaded within a tick (tick! drains the queue via a sequential
-   doseq, and process-envelope! routes sequentially), so two fires for the same
-   ref can't race here."
+   single-threaded within a tick, so two fires for the same ref can't race here."
   [project payload stage]
-  (if-let [ref (external-ref payload)]
-    (or (ws/find-by-ref project (:adapter ref) (:id ref))
-        (ws/create! project {:stage stage :external-refs [ref]}))
-    (ws/create! project {:stage stage :external-refs []})))
+  (let [facets (facets/select-facets (views/facet-properties project) payload)]
+    (if-let [ref (external-ref payload)]
+      (or (ws/find-by-ref project (:adapter ref) (:id ref))
+          (ws/create! project {:stage stage :external-refs [ref] :facets facets}))
+      (ws/create! project {:stage stage :external-refs [] :facets facets}))))
 
 (defn- weight-of [session-profile]
   (if (= :lite session-profile) :light :heavy))
