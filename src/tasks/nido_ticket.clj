@@ -2,6 +2,7 @@
   "bb task entry points for the per-ticket triage record (the skill's interface)."
   (:require
    [clojure.pprint :as pprint]
+   [nido.coordinator.facets :as facets]
    [nido.coordinator.promote :as promote]
    [nido.coordinator.report :as report]
    [nido.coordinator.tickets :as tickets]
@@ -37,12 +38,17 @@
 
 (defn complete-cmd
   "bb nido:ticket:complete :project <p> :br BR-#### :status triaged :disposition <kw>
-   (Off-radar tickets use nido:ticket:dismiss — :skipped is retired.)"
+   (Off-radar tickets use nido:ticket:dismiss — :skipped is retired.)
+   Refreshes the workstream's classification facets from Notion right after the
+   verdict lands — triage is where a ticket gets its right Type / App Domain."
   [& args]
-  (let [[_ o] (task-args/split-args args)]
-    (tickets/complete! (project-kw o) (str (:br o))
+  (let [[_ o] (task-args/split-args args)
+        project (project-kw o)
+        br      (str (:br o))]
+    (tickets/complete! project br
                        (keyword (:status o)) (some-> (:disposition o) keyword))
-    (println "completed" (:br o) (:status o))))
+    (facets/refresh-for-ticket! project br)
+    (println "completed" br (:status o))))
 
 (defn dismiss-cmd
   "bb nido:ticket:dismiss :project <p> :br BR-#### (or positional BR-####)
