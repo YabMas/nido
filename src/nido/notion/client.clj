@@ -202,7 +202,7 @@
   [page-id property-name status-name token]
   (update-page-properties! page-id {property-name {:status {:name status-name}}} token))
 
-(defn- normalise-property-name
+(defn normalise-property-name
   "\"Ticket ID\" → :ticket-id"
   [s]
   (-> (str s)

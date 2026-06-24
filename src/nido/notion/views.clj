@@ -37,3 +37,12 @@
           {:database database :filter (:filter v)})
         (throw (ex-info (str "Unknown Notion view " view-kw " for project " project)
                         {:project project :view view-kw :known (keys views)})))))
+
+(defn facet-properties
+  "The project's configured facet property display-names (the registry's
+   :facets), or [] when the registry or key is absent. Unlike load-registry,
+   this never throws — facets are an optional organizational layer."
+  [project]
+  (try
+    (vec (:facets (load-registry project)))
+    (catch Exception _ [])))

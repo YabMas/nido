@@ -2,9 +2,9 @@
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
+   [nido.coordinator.state :as cstate]
    [nido.io :as io]
-   [nido.notion.views :as views]
-   [nido.coordinator.state :as cstate]))
+   [nido.notion.views :as views]))
 
 (defn- with-tmp [f]
   (let [tmp (fs/create-temp-dir)]
@@ -42,3 +42,28 @@
     (fn [_]
       (is (thrown? clojure.lang.ExceptionInfo
                    (views/resolve-view :brian :new-reports))))))
+
+(defn- with-registry [project edn f]
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (let [path (str (fs/path (str tmp) "projects" (name project) "notion-views.edn"))]
+          (fs/create-dirs (fs/parent path))
+          (io/write-edn! path edn))
+        (f))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest facet-properties-reads-config
+  (with-registry :brian {:database "d" :facets ["App Domain" "Type"] :views {}}
+    (fn [] (is (= ["App Domain" "Type"] (views/facet-properties :brian))))))
+
+(deftest facet-properties-defaults-empty-without-key
+  (with-registry :brian {:database "d" :views {}}
+    (fn [] (is (= [] (views/facet-properties :brian))))))
+
+(deftest facet-properties-empty-when-registry-absent
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (is (= [] (views/facet-properties :brian))))
+      (finally (fs/delete-tree tmp)))))
