@@ -190,3 +190,43 @@
                 nido.ui.server/read-rail-daemon (fn [] {:state :up})]
     (doseq [uri ["/" "/workstreams" "/system"]]
       (is (= 200 (:status (server/handle-request {:request-method :get :uri uri})))))))
+
+(deftest parse-filters-reads-source-and-facets
+  (is (= {:source :notion :facets {:app-domain "Teacher"}}
+         (#'server/parse-filters "scope=brian&source=notion&app-domain=Teacher")))
+  (is (= {:source :all :facets {}} (#'server/parse-filters nil)))
+  (is (= {:source :all :facets {}} (#'server/parse-filters "scope=brian"))))
+
+(deftest apply-filters-narrows-each-grouped-by-source-and-facet
+  (let [groups [{:project :brian
+                 :grouped {:inbox [{:origin :notion :facets {:app-domain ["Teacher"]}}
+                                   {:origin :notion :facets {:app-domain ["Student"]}}
+                                   {:origin :slack}]
+                           :triage {:in-flight [] :queued []} :ready [] :in-progress []}}]
+        out (#'server/apply-filters :notion {:app-domain "Teacher"} groups)]
+    (is (= [{:origin :notion :facets {:app-domain ["Teacher"]}}]
+           (get-in (first out) [:grouped :inbox])))))
+
+(deftest source-counts-tallies-by-origin
+  (let [groups [{:project :brian
+                 :grouped {:inbox [{:origin :notion} {:origin :slack}]
+                           :triage {:in-flight [{:origin :notion}] :queued []}
+                           :ready [] :in-progress [{:origin :scratch}]}}]]
+    (is (= {:notion 2 :slack 1 :scratch 1} (#'server/source-counts groups)))))
+
+(deftest workstreams-route-honors-source-filter
+  (with-redefs [server/all-grouped
+                (fn [] [{:project :brian
+                         :grouped {:inbox [{:origin :notion :stage :inbox :label "N-one"
+                                            :last-activity "t" :engagement :idle}
+                                           {:origin :slack :stage :inbox :label "S-one"
+                                            :last-activity "t" :engagement :idle}]
+                                   :triage {:in-flight [] :queued []} :ready [] :in-progress []}}])
+                nido.work/all-gates (fn [] [])
+                project/list-projects (fn [] {"brian" {:directory "/x"}})
+                nido.ui.server/read-rail-daemon (fn [] {:state :up})]
+    (let [resp (server/handle-request {:request-method :get :uri "/workstreams"
+                                       :query-string "source=notion"})]
+      (is (= 200 (:status resp)))
+      (is (str/includes? (:body resp) "N-one"))
+      (is (not (str/includes? (:body resp) "S-one")) "slack row filtered out by source=notion"))))

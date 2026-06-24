@@ -188,6 +188,45 @@
   [scope rows]
   (if (= "all" scope) rows (filterv #(= scope (:project %)) rows)))
 
+(defn- parse-filters
+  "Read source + facet params from the query string. :source defaults to :all;
+   :facets is a map of kebab-keyword → value for every non-scope/source param."
+  [query-string]
+  (let [pairs (when query-string
+                (->> (str/split query-string #"&")
+                     (map #(str/split % #"=" 2))
+                     (filter #(= 2 (count %)))))
+        source (some (fn [[k v]] (when (= k "source") (keyword v))) pairs)
+        facets (into {} (for [[k v] pairs
+                              :when (not (#{"scope" "source"} k))]
+                          [(keyword k) v]))]
+    {:source (or source :all) :facets facets}))
+
+(defn- valid-facet-keys
+  "Kebab facet keys valid for `source` across the in-scope projects."
+  [scope source]
+  (->> (project/list-projects)
+       (filter (fn [[pname _]] (or (= "all" scope) (= scope (name pname)))))
+       (mapcat (fn [[pname _]] (work/facet-dimensions pname source)))
+       set))
+
+(defn- apply-filters
+  "Narrow each {:project :grouped} entry's rows by source ∧ facets."
+  [source facets groups]
+  (mapv (fn [g]
+          (update g :grouped
+                  #(work/filter-grouped
+                    % (fn [row] (and (work/source-match? source row)
+                                     (work/facet-match? facets row))))))
+        groups))
+
+(defn- source-counts
+  "Tally rows by :origin across all grouped entries."
+  [groups]
+  (->> groups
+       (mapcat (fn [g] (work/grouped-rows (:grouped g))))
+       (reduce (fn [m row] (update m (:origin row) (fnil inc 0))) {})))
+
 (defn- rail-context
   "Render context for the shell rail on any page."
   [active scope]
@@ -332,7 +371,9 @@
 
 (defn- handle-get [{:keys [uri query-string]}]
   (let [segments (parse-path uri)
-        scope    (parse-scope query-string)]
+        scope    (parse-scope query-string)
+        {:keys [source facets]} (parse-filters query-string)
+        facets*  (select-keys facets (valid-facet-keys scope source))]
     (case segments
       ;; GET /favicon.{png,ico} — the nido icon (browsers auto-request .ico)
       ["favicon.png"] (icon-response)
@@ -351,12 +392,18 @@
 
       ;; GET /workstreams — overview (no selection)
       ["workstreams"]
-      (html-response 200 (views/workstreams-page (rail-context :workstreams scope)
-                                                 (scope-filter scope (all-grouped)) nil nil))
+      (let [scoped (scope-filter scope (all-grouped))]
+        (html-response 200 (views/workstreams-page
+                            (assoc (rail-context :workstreams scope)
+                                   :source source :facets facets*
+                                   :facet-dims (vec (valid-facet-keys scope source))
+                                   :source-counts (source-counts scoped))
+                            (apply-filters source facets* scoped) nil nil)))
 
       ;; GET /_fragment/workstreams — SSE workstreams refresh
       ["_fragment" "workstreams"]
-      (workstreams-fragment-response (scope-filter scope (all-grouped)) scope)
+      (let [scoped (scope-filter scope (all-grouped))]
+        (workstreams-fragment-response (apply-filters source facets* scoped) scope))
 
       ;; GET /_fragment/needs — queue + rail
       ["_fragment" "needs"]
