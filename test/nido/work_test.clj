@@ -562,3 +562,32 @@
     (is (work/facet-match? {:app-domain "Teacher"} row) "vector membership"))
   (is (work/facet-match? {:app-domain :unclassified} {:facets {}}) "unclassified matches missing")
   (is (not (work/facet-match? {:app-domain :unclassified} {:facets {:app-domain ["Teacher"]}}))))
+
+(deftest facet-dimensions-is-source-aware
+  (with-redefs [views/facet-properties (constantly ["App Domain" "Type"])]
+    (is (= [:app-domain :type] (work/facet-dimensions :brian :notion)))
+    (is (= [:app-domain :type] (work/facet-dimensions :brian :all)))
+    (is (= [] (work/facet-dimensions :brian :slack)))
+    (is (= [] (work/facet-dimensions :brian :github)))
+    (is (= [:app-domain :type] (work/facet-dimensions :brian)) "1-arity = project-wide (:all)")))
+
+(deftest source-match-honours-all-and-origin
+  (is (work/source-match? :all {:origin :slack}))
+  (is (work/source-match? :notion {:origin :notion}))
+  (is (not (work/source-match? :notion {:origin :slack}))))
+
+(deftest grouped-rows-flattens-all-bands
+  (let [g {:inbox [{:id 1}] :triage {:in-flight [{:id 2}] :queued [{:id 3}]}
+           :ready [{:id 4}] :in-progress [{:id 5}]}]
+    (is (= #{1 2 3 4 5} (set (map :id (work/grouped-rows g)))))))
+
+(deftest filter-grouped-keeps-shape-drops-nonmatching
+  (let [g {:inbox [{:origin :notion} {:origin :slack}]
+           :triage {:in-flight [{:origin :notion}] :queued [{:origin :slack}]}
+           :ready [{:origin :slack}] :in-progress [{:origin :notion}]}
+        f (work/filter-grouped g #(= :notion (:origin %)))]
+    (is (= [{:origin :notion}] (:inbox f)))
+    (is (= [{:origin :notion}] (get-in f [:triage :in-flight])))
+    (is (= [] (get-in f [:triage :queued])))
+    (is (= [] (:ready f)))
+    (is (= [{:origin :notion}] (:in-progress f)))))

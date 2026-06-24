@@ -370,10 +370,39 @@
      (runs/ensure-session-home! run))))
 
 (defn facet-dimensions
-  "Ordered facet keys (kebab keywords) configured for `project`, e.g.
-   [:app-domain :type]; [] when none are configured."
-  [project]
-  (mapv notion/normalise-property-name (views/facet-properties project)))
+  "Ordered facet keys (kebab keywords) for `source` in `project`. :notion and :all
+   resolve to the configured Notion dimensions (today the only configured source);
+   other sources have none yet. 1-arity = project-wide (:all)."
+  ([project] (facet-dimensions project :all))
+  ([project source]
+   (if (contains? #{:all :notion} source)
+     (mapv notion/normalise-property-name (views/facet-properties project))
+     [])))
+
+(defn source-match?
+  "True when `row`'s origin matches `source` (:all matches everything)."
+  [source row]
+  (or (= source :all) (= source (:origin row))))
+
+(defn grouped-rows
+  "Flat seq of every workstream row in a `work/grouped` map (all bands)."
+  [grouped]
+  (concat (:inbox grouped)
+          (get-in grouped [:triage :in-flight])
+          (get-in grouped [:triage :queued])
+          (:ready grouped)
+          (:in-progress grouped)))
+
+(defn filter-grouped
+  "Keep only rows satisfying `pred`, preserving the grouped shape."
+  [grouped pred]
+  (-> grouped
+      (update :inbox #(filterv pred %))
+      (update :ready #(filterv pred %))
+      (update :in-progress #(filterv pred %))
+      (update :triage (fn [t] (-> t
+                                  (update :in-flight #(filterv pred %))
+                                  (update :queued #(filterv pred %)))))))
 
 (defn- facet-row-values
   "The value(s) a row carries for facet `k`, as a seq (vector facets expand to
