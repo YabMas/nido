@@ -3,6 +3,8 @@
             [clojure.string :as str]
             [nido.ui.server :as server]
             [nido.session.lifecycle :as lifecycle]
+            [nido.session.state]
+            [nido.process]
             [nido.work]
             [nido.project :as project]))
 
@@ -131,7 +133,7 @@
                 nido.work/workstream (fn [_ _] {:ws-id "ws-1" :project "brian" :origin :notion
                                                 :stage :triage :label "BR-7" :ledger nil
                                                 :report {:markdown "# V\n\nbody"} :sessions []})
-                nido.ui.server/workstream-live-url (fn [_ _] nil)
+                nido.ui.server/dev-env-state (fn [_ _] {:state :none})
                 nido.ui.server/read-rail-daemon (fn [] {:state :up})]
     (let [resp (server/handle-request {:request-method :get :uri "/workstreams/brian/ws-1"})]
       (is (= 200 (:status resp)))
@@ -219,6 +221,22 @@
                            :triage {:in-flight [{:origin :notion}] :queued []}
                            :ready [] :in-progress [{:origin :scratch}]}}]]
     (is (= {:notion 2 :slack 1 :scratch 1} (#'server/source-counts groups)))))
+
+(deftest dev-env-state-running-down-and-none
+  (with-redefs [nido.work/dev-target (fn [_ _] {:project "brian" :session "impl-BR-7"})
+                nido.session.state/read-registry
+                (fn [] {"/wt" {:instance-id "brian--impl-BR-7" :app-port 3142
+                               :url "http://impl.brian.localhost:3142"}})
+                nido.process/tcp-open? (fn [_] true)]
+    (is (= {:state :running :url "http://impl.brian.localhost:3142"}
+           (server/dev-env-state "brian" "ws-1"))))
+  (with-redefs [nido.work/dev-target (fn [_ _] {:project "brian" :session "impl-down"})
+                nido.session.state/read-registry
+                (fn [] {"/wt" {:instance-id "brian--impl-down" :app-port 3142}})
+                nido.process/tcp-open? (fn [_] false)]
+    (is (= :down (:state (server/dev-env-state "brian" "ws-1")))))
+  (with-redefs [nido.work/dev-target (fn [_ _] nil)]
+    (is (= {:state :none} (server/dev-env-state "brian" "ws-1")))))
 
 (deftest workstreams-route-honors-source-filter
   (with-redefs [server/all-grouped

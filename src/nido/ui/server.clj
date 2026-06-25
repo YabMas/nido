@@ -148,19 +148,26 @@
           (assoc row :project pname))
         (sort-by (juxt #(if (:live? %) 0 1) :project :name)))))
 
-(defn workstream-live-url
-  "The friendly-host :url of the workstream's live entry session, or nil. Reuses
-   work/open-target (prefers the live session) + the registry the session board
-   reads. The registry keys entries by worktree path and stores the session under
-   :instance-id (= project, or \"project--session\"), never a bare session name —
-   so we derive the instance-id and match on that, returning nil when no entry
-   carries a :url (route-in simply hides)."
+(defn dev-env-state
+  "Resolve a workstream's DEV ENVIRONMENT (its latest heavy session, via
+   work/dev-target) into a UI state map {:state :url :error-msg}. Reads the
+   registry + a TCP probe + the optimistic app-states atom, keyed by instance-id
+   so the pane and /system agree. {:state :none} when no dev env exists yet."
   [project ws-id]
-  (when-let [{:keys [session]} (work/open-target project ws-id)]
-    (let [registry (state/read-registry)
-          instance-id (instance-id-for project session)]
-      (some (fn [[_wt entry]] (when (= instance-id (:instance-id entry)) (:url entry)))
-            registry))))
+  (if-let [{:keys [session]} (work/dev-target project ws-id)]
+    (let [registry    (state/read-registry)
+          instance-id (instance-id-for project session)
+          entry       (some (fn [[_ e]] (when (= instance-id (:instance-id e)) e)) registry)
+          port        (:app-port entry)
+          live?       (and (pos-int? port) (proc/tcp-open? port))
+          pending     (current-app-state instance-id)
+          pending-kw  (cond (map? pending)     (:state pending)
+                            (keyword? pending) pending)]
+      (cond
+        live?      {:state :running :url (:url entry)}
+        pending-kw {:state pending-kw :error-msg (when (map? pending) (:error-msg pending))}
+        :else      {:state :down}))
+    {:state :none}))
 
 (defn all-grouped
   "[{:project :grouped} …] across registered projects (mirrors all-session-rows)."
@@ -433,7 +440,7 @@
           (html-response 200 (views/workstreams-page (rail-context :workstreams scope)
                                                      (scope-filter scope (all-grouped))
                                                      (work/workstream project ws-id)
-                                                     (workstream-live-url project ws-id))))
+                                                     (dev-env-state project ws-id))))
 
         :else
         (html-response 404 (views/not-found-page))))))
