@@ -308,7 +308,8 @@
             "restart"
             (do (lifecycle/restart! session {:project project})
                 (clear-app-state! instance-id))
-            (clear-app-state! instance-id))
+            (do (println "[nido ui] unknown dev action:" action)
+                (clear-app-state! instance-id)))
           (catch Exception e
             (set-app-state! instance-id :failed
                             (or (:error-msg (ex-data e)) (ex-message e)))))))))

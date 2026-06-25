@@ -139,7 +139,15 @@
 
 (deftest workstream-pane-dev-env-none-is-calm
   (let [html (views/workstream-pane sample-ws {:state :none})]
-    (is (str/includes? html "No dev environment yet"))))
+    (is (str/includes? html "No dev environment yet"))
+    (is (not (str/includes? html "/dev/start")))
+    (is (not (str/includes? html "/dev/restart")))))
+
+(deftest workstream-pane-dev-env-failed-shows-retry-and-error
+  (let [html (views/workstream-pane sample-ws {:state :failed :error-msg "boom: port never opened"})]
+    (is (str/includes? html "retry"))
+    (is (str/includes? html "boom: port never opened"))
+    (is (str/includes? html "/workstreams/brian/ws-1/dev/start"))))   ; retry POSTs to start
 
 (deftest workstream-pane-empty-when-nil
   (is (str/includes? (views/workstream-pane nil nil) "Select a workstream")))
