@@ -764,16 +764,33 @@
 
 (defn- session-home-coords-from-cwd
   "If cwd is a session-home (~/.nido/sessions/<project>/<session>/),
-   return [project session]. Otherwise nil."
-  []
-  (let [cwd  (abs-path (System/getProperty "user.dir"))
-        root (abs-path (state/sessions-root))]
-    (when (and (str/starts-with? cwd (str root "/"))
-               (not= cwd root))
-      (let [rel   (subs cwd (inc (count root)))
-            parts (str/split rel #"/")]
-        (when (>= (count parts) 2)
-          [(first parts) (second parts)])))))
+   return [project session]. Otherwise nil. The session name may itself
+   contain slashes (feat/x), so it's everything after the first segment
+   (the project) — not merely the second path segment."
+  ([] (session-home-coords-from-cwd (System/getProperty "user.dir")))
+  ([cwd]
+   (let [cwd  (abs-path cwd)
+         root (abs-path (state/sessions-root))]
+     (when (and (str/starts-with? cwd (str root "/"))
+                (not= cwd root))
+       (let [rel   (subs cwd (inc (count root)))
+             slash (str/index-of rel "/")]
+         (when slash
+           [(subs rel 0 slash) (subs rel (inc slash))]))))))
+
+(defn worktree-from-cwd
+  "Resolve the worktree path for a cwd anywhere in a session's footprint —
+   inside the worktree (registry → session-from-cwd) OR at the session-home
+   (~/.nido/sessions/<p>/<s>/, which is not itself a jj workspace). This is the
+   home-aware union that lets cwd-based verbs (e.g. review:loop) reach the code
+   regardless of where in the session the agent stands. Returns the worktree
+   path string, or nil when cwd belongs to no known session."
+  ([] (worktree-from-cwd (System/getProperty "user.dir")))
+  ([cwd]
+   (or (:worktree (session-from-cwd cwd))
+       (when-let [[project session] (session-home-coords-from-cwd cwd)]
+         (when-let [{:keys [directory]} (get (config/read-projects) project)]
+           (worktree-path project directory session))))))
 
 (defn- resolve-link-coords
   "Resolve [project-name session-name instance-id worktree] for a link

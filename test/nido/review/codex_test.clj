@@ -59,3 +59,14 @@
                   codex/run-codex! (fn [_] {:exit 1})]
       (is (thrown? clojure.lang.ExceptionInfo
                    (codex/review! {:cwd "/w" :base "main" :run-id "r1"}))))))
+
+(deftest review!-fails-loud-on-jj-diff-error
+  ;; A non-zero `jj diff` (e.g. cwd isn't a jj workspace, or a bad base) must
+  ;; NOT read as a clean diff — that would silently pass review for code that
+  ;; was never looked at. Fail loud as :review-failed instead.
+  (with-redefs [jj/jj! (fn [& _]
+                         {:exit 1 :out "" :err "Error: There is no jj repo in \".\""})]
+    (let [reason (try (codex/review! {:cwd "/not-a-repo" :base "main" :run-id "r1"})
+                      nil
+                      (catch clojure.lang.ExceptionInfo e (:reason (ex-data e))))]
+      (is (= :review-failed reason)))))

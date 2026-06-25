@@ -47,7 +47,15 @@
 (defn review!
   "Git-free codex review of the branch diff (base..@). See ns doc."
   [{:keys [cwd base run-id]}]
-  (let [diff (:out (jj/jj! cwd "diff" "--git" "--from" base "--to" "@"))]
+  (let [{:keys [exit out err]} (jj/jj! cwd "diff" "--git" "--from" base "--to" "@")
+        _    (when-not (zero? exit)
+               ;; A failed diff (cwd not a jj workspace, bad base, …) must not
+               ;; be mistaken for an empty diff — that would silently report a
+               ;; clean review of code nothing ever looked at.
+               (throw (ex-info "jj diff failed — cwd is not a reviewable workspace"
+                               {:reason :review-failed :exit exit
+                                :cwd cwd :base base :err err})))
+        diff out]
     (if (str/blank? diff)
       {:status :clean :findings []}
       (let [dir         (cstate/run-dir run-id)
