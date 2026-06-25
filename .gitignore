@@ -4,6 +4,7 @@
 /.lsp
 /.DS_Store
 /.claude/*.lock
+/.nrepl-port
 
 # superpowers brainstorm scratch (visual companion, plans/specs handled separately)
 .superpowers/
