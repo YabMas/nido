@@ -120,3 +120,15 @@
   (is (= "Stripe test key from ops" (report/report-title valid-blocker)))
   (is (nil? (report/report-title valid-report)) "triage falls through to (:title) at the call site")
   (is (nil? (report/report-title valid-pr))      "pr-opened falls through to (:title) at the call site"))
+
+(deftest entry-payload-validates-typed-and-passes-markdown
+  (let [[ext payload] (report/entry-payload :implementation-plan (pr-str valid-plan))]
+    (is (= "edn" ext))
+    (is (str/includes? payload ":implementation-plan"))
+    (is (str/includes? payload "Round once on the order total")))
+  (let [[ext payload] (report/entry-payload :note "# free\nform")]
+    (is (= "md" ext))
+    (is (= "# free\nform" payload))))
+
+(deftest entry-payload-rejects-malformed-typed
+  (is (thrown? clojure.lang.ExceptionInfo (report/entry-payload :blocker "not-an-edn-map"))))

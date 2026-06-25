@@ -3,6 +3,8 @@
    ledger boundary, plus a format-agnostic markdown renderer. See spec
    docs/superpowers/specs/2026-06-22-typed-triage-report-and-action-primitive-design.md."
   (:require
+   [clojure.edn :as edn]
+   [clojure.pprint :as pprint]
    [clojure.string :as str]
    [malli.core :as m]))
 
@@ -112,6 +114,17 @@
   "Backward-compatible triage validator — delegates to (validate-event :triage report)."
   [report]
   (validate-event :triage report))
+
+(defn entry-payload
+  "For a ledger append: given an entry `kind` and raw `content` string, return
+   [ext payload]. A registered (typed) kind parses `content` as EDN, validates it
+   (throws ex-info with :explain on mismatch), and returns [\"edn\" <pprinted report>].
+   Any other kind returns [\"md\" content] verbatim."
+  [kind content]
+  (if (event-schemas kind)
+    (let [report (validate-event kind (edn/read-string content))]
+      ["edn" (with-out-str (pprint/pprint report))])
+    ["md" content]))
 
 (defn- triage->markdown [{:keys [title determination summary confidence
                                  directions notion-writes trail]}]

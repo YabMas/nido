@@ -8,6 +8,7 @@
    [clojure.string :as str]
    [malli.core :as m]
    [nido.coordinator.clock :as clock]
+   [nido.coordinator.report :as report]
    [nido.coordinator.session :as session]
    [nido.coordinator.state :as cstate]
    [nido.io :as io]))
@@ -123,10 +124,11 @@
   (let [w     (or (read-ws project ws-id)
                   (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))
         seq-n (inc (count (:entries w)))
-        fname (format "%04d-%s.md" seq-n (name (:kind entry)))
+        [ext payload] (report/entry-payload (:kind entry) content)
+        fname (format "%04d-%s.%s" seq-n (name (:kind entry)) ext)
         rel   (str "entries/" fname)
         abs   (str (fs/path (cstate/workstream-dir project ws-id) rel))]
-    (io/write-text! abs content)
+    (io/write-text! abs payload)
     (write! (update w :entries (fnil conj [])
                     (assoc entry :seq seq-n :at (clock/now-iso) :file rel)))
     abs))

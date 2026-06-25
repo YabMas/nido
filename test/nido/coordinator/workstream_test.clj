@@ -105,16 +105,16 @@
                     clock/now-iso (constantly "2026-06-05T12:00:00Z")]
         (ws/write! example-ws)
         (let [path (ws/append-entry! :brian (:id example-ws)
-                                     {:kind :triage :session "sx"}
+                                     {:kind :note :session "sx"}
                                      "# Triage report\nbody")
               w    (ws/read-ws :brian (:id example-ws))
               e    (last (:entries w))]
-          (is (str/ends-with? path "entries/0001-triage.md"))
+          (is (str/ends-with? path "entries/0001-note.md"))
           (is (= "# Triage report\nbody" (slurp path)))
           (is (= 1 (:seq e)))
-          (is (= :triage (:kind e)))
+          (is (= :note (:kind e)))
           (is (= "sx" (:session e)))
-          (is (= "entries/0001-triage.md" (:file e)))
+          (is (= "entries/0001-note.md" (:file e)))
           (is (= "2026-06-05T12:00:00Z" (:at e)))))
       (finally (fs/delete-tree tmp)))))
 
@@ -124,7 +124,7 @@
       (with-redefs [cstate/nido-root (constantly (str tmp))
                     clock/now-iso (constantly "2026-06-05T12:00:00Z")]
         (ws/write! example-ws)
-        (ws/append-entry! :brian (:id example-ws) {:kind :triage} "a")
+        (ws/append-entry! :brian (:id example-ws) {:kind :note} "a")
         (let [p2 (ws/append-entry! :brian (:id example-ws) {:kind :plan} "b")]
           (is (str/ends-with? p2 "entries/0002-plan.md"))
           (is (= 2 (count (:entries (ws/read-ws :brian (:id example-ws))))))))
@@ -234,4 +234,28 @@
                                     :facets {:type "bug"}})]
           (ws/set-facets! :brian (:id w) {})
           (is (nil? (:facets (ws/read-ws :brian (:id w)))))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest append-entry-validates-and-stores-typed-event
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))
+                    clock/now-iso (constantly "2026-06-05T12:00:00Z")]
+        (ws/write! example-ws)
+        (let [path (ws/append-entry! :brian (:id example-ws) {:kind :implementation-plan}
+                                     (pr-str {:format :implementation-plan :summary "x"
+                                              :direction "Round once" :effort :S}))]
+          (is (str/ends-with? path "entries/0001-implementation-plan.edn"))
+          (is (str/includes? (slurp path) ":implementation-plan"))
+          (is (str/includes? (slurp path) "Round once"))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest append-entry-rejects-malformed-typed-event
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))
+                    clock/now-iso (constantly "2026-06-05T12:00:00Z")]
+        (ws/write! example-ws)
+        (is (thrown? clojure.lang.ExceptionInfo
+                     (ws/append-entry! :brian (:id example-ws) {:kind :blocker} "not a map"))))
       (finally (fs/delete-tree tmp)))))

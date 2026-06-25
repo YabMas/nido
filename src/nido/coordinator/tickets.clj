@@ -6,8 +6,6 @@
    docs/superpowers/specs/2026-06-04-triage-record-store-design.md."
   (:require
    [babashka.fs :as fs]
-   [clojure.edn :as edn]
-   [clojure.pprint :as pprint]
    [clojure.string :as str]
    [nido.coordinator.clock :as clock]
    [nido.coordinator.report :as report]
@@ -99,10 +97,7 @@
   (when-not (blank-br? br-id)
     (let [m       (read-meta project br-id)
           seq-n   (inc (count (:entries m)))
-          triage? (= :triage (:kind entry))
-          report  (when triage? (report/validate (edn/read-string content)))
-          ext     (if triage? "edn" "md")
-          payload (if triage? (with-out-str (pprint/pprint report)) content)
+          [ext payload] (report/entry-payload (:kind entry) content)
           fname   (format "%04d-%s.%s" seq-n (name (:kind entry)) ext)
           rel     (str "entries/" fname)
           abs     (str (fs/path (ticket-dir project br-id) rel))]
