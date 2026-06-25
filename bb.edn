@@ -200,6 +200,15 @@
   {:doc "Start the nido terminal UI (charm.clj) — projects → sessions CRUD"
    :task (apply nido-tui/run *command-line-args*)}
 
+  nido:nrepl
+  {:doc "Dev nREPL for this worktree: bind an ephemeral port, write .nrepl-port, block. Auto-started by nido-managed nido sessions; also runnable manually."
+   :task (let [start! (requiring-resolve 'babashka.nrepl.server/start-server!)
+               server (start! {:host "127.0.0.1" :port 0})
+               port   (.getLocalPort (:socket server))]
+           (spit ".nrepl-port" (str port))
+           (println (str "nREPL on 127.0.0.1:" port " (.nrepl-port written)"))
+           (deref (:future server)))}
+
   nido:vsdd:run
   {:doc "Run VSDD loop: :project-dir <path> :module-path <path>"
    :task (apply nido-vsdd/run *command-line-args*)}
