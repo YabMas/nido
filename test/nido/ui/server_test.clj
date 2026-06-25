@@ -254,3 +254,27 @@
       (is (= 200 (:status resp)))
       (is (str/includes? (:body resp) "N-one"))
       (is (not (str/includes? (:body resp) "S-one")) "slack row filtered out by source=notion"))))
+
+(deftest fragment-workstream-route-is-sse-and-renders-dev-env
+  (with-redefs [nido.work/workstream
+                (fn [_ _] {:project "brian" :ws-id "ws-1" :origin :notion
+                           :stage :triage :label "BR-7 · t" :ledger nil :report nil :sessions []})
+                nido.ui.server/dev-env-state (fn [_ _] {:state :running :url "http://impl.brian.localhost:3142"})]
+    (let [resp (server/handle-request {:request-method :get :uri "/_fragment/workstream/brian/ws-1"})]
+      (is (= 200 (:status resp)))
+      (is (str/includes? (get-in resp [:headers "Content-Type"]) "text/event-stream"))
+      (is (str/includes? (:body resp) "ws-pane"))
+      (is (str/includes? (:body resp) "Open app")))))
+
+(deftest post-dev-start-dispatches-and-returns-pane-sse
+  (with-redefs [nido.work/dev-target (fn [_ _] {:project "brian" :session "impl-BR-7"})
+                nido.work/ensure-open! (fn [_ _ _] false)
+                nido.session.lifecycle/up! (fn [_ _] nil)
+                nido.work/workstream
+                (fn [_ _] {:project "brian" :ws-id "ws-1" :origin :notion
+                           :stage :triage :label "BR-7 · t" :ledger nil :report nil :sessions []})
+                nido.ui.server/dev-env-state (fn [_ _] {:state :starting})]
+    (let [resp (server/handle-request {:request-method :post :uri "/workstreams/brian/ws-1/dev/start"})]
+      (is (= 200 (:status resp)))
+      (is (str/includes? (get-in resp [:headers "Content-Type"]) "text/event-stream"))
+      (is (str/includes? (:body resp) "ws-pane")))))

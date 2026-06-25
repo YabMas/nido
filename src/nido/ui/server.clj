@@ -284,6 +284,44 @@
   (some-> (state/read-session instance-id)
           (get-in [:service-states :app :app-port])))
 
+(defn- dev-action!
+  "Run a DEV-ENVIRONMENT lifecycle action for a workstream's dev-target on a
+   background thread, tracking optimistic state in app-states (keyed by
+   instance-id, so the pane and /system agree). `start` re-hydrates a reclaimed
+   session-home via work/ensure-open! before lifecycle/up!. Mirrors run-action!."
+  [project ws-id action]
+  (when-let [{:keys [session]} (work/dev-target project ws-id)]
+    (let [instance-id (instance-id-for project session)
+          pending     (case action "start" :starting "restart" :restarting nil)]
+      (when pending (set-app-state! instance-id pending))
+      (future
+        (try
+          (case action
+            "start"
+            (do (work/ensure-open! project ws-id session)
+                (lifecycle/up! session {:project project})
+                (let [port (app-port-for-instance instance-id)]
+                  (if (and (pos-int? port) (proc/tcp-open? port))
+                    (clear-app-state! instance-id)
+                    (set-app-state! instance-id :failed
+                                    "App did not open its port within the timeout — see eval log"))))
+            "restart"
+            (do (lifecycle/restart! session {:project project})
+                (clear-app-state! instance-id))
+            (clear-app-state! instance-id))
+          (catch Exception e
+            (set-app-state! instance-id :failed
+                            (or (:error-msg (ex-data e)) (ex-message e)))))))))
+
+(defn- ws-pane-fragment-response
+  "SSE that patches #ws-pane with a freshly-rendered workstream pane (ws detail +
+   dev-env state)."
+  [project ws-id]
+  (sse-response
+   (sse-fragment
+    (views/workstream-pane (work/workstream project ws-id)
+                           (dev-env-state project ws-id)))))
+
 (defn- run-action!
   "Run the lifecycle action matching `action` and update the app-states
    atom so both the POST response and subsequent polling fragments reflect
@@ -355,6 +393,12 @@
             input     (when (= :reply action-id) (:reply (parse-json-body body)))]
         (gate-resolve! project ws-id action-id input)
         (sse-response (sse-fragment (views/gate-action-confirm-fragment action-id project ws-id))))
+
+      ;; POST /workstreams/:project/:ws-id/dev/:action — dev-environment lifecycle
+      (and (= 5 (count segs)) (= "workstreams" (first segs)) (= "dev" (nth segs 3)))
+      (let [project (nth segs 1) ws-id (nth segs 2) action (nth segs 4)]
+        (dev-action! project ws-id action)
+        (ws-pane-fragment-response project ws-id))
 
       ;; POST /system/:project/:name/:action — session lifecycle action (renamed path)
       (and (>= (count segs) 4)
@@ -441,6 +485,11 @@
                                                      (scope-filter scope (all-grouped))
                                                      (work/workstream project ws-id)
                                                      (dev-env-state project ws-id))))
+
+        ;; GET /_fragment/workstream/:project/:ws-id — SSE pane refresh (patches #ws-pane)
+        (and (= 4 (count segments)) (= "_fragment" (first segments)) (= "workstream" (nth segments 1)))
+        (let [project (nth segments 2) ws-id (nth segments 3)]
+          (ws-pane-fragment-response project ws-id))
 
         :else
         (html-response 404 (views/not-found-page))))))
