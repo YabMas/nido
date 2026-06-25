@@ -130,9 +130,9 @@
   (with-redefs [nido.work/grouped (fn [_] {:triage {:in-flight [] :queued []} :ready [] :in-progress [] :inbox []})
                 project/list-projects (fn [] {"brian" {:directory "/x"}})
                 nido.work/all-gates (fn [] [])
-                nido.work/workstream (fn [_ _] {:ws-id "ws-1" :project "brian" :origin :notion
-                                                :stage :triage :label "BR-7" :ledger nil
-                                                :report {:markdown "# V\n\nbody"} :sessions []})
+                nido.work/workstream (fn [_ _ & _] {:ws-id "ws-1" :project "brian" :origin :notion
+                                                  :stage :triage :label "BR-7" :ledger nil
+                                                  :report {:markdown "# V\n\nbody"} :sessions []})
                 nido.ui.server/dev-env-state (fn [_ _] {:state :none})
                 nido.ui.server/read-rail-daemon (fn [] {:state :up})]
     (let [resp (server/handle-request {:request-method :get :uri "/workstreams/brian/ws-1"})]
@@ -257,8 +257,8 @@
 
 (deftest fragment-workstream-route-is-sse-and-renders-dev-env
   (with-redefs [nido.work/workstream
-                (fn [_ _] {:project "brian" :ws-id "ws-1" :origin :notion
-                           :stage :triage :label "BR-7 · t" :ledger nil :report nil :sessions []})
+                (fn [_ _ & _] {:project "brian" :ws-id "ws-1" :origin :notion
+                               :stage :triage :label "BR-7 · t" :ledger nil :report nil :sessions []})
                 nido.ui.server/dev-env-state (fn [_ _] {:state :running :url "http://impl.brian.localhost:3142"})]
     (let [resp (server/handle-request {:request-method :get :uri "/_fragment/workstream/brian/ws-1"})]
       (is (= 200 (:status resp)))
@@ -271,10 +271,35 @@
                 nido.work/ensure-open! (fn [_ _ _] false)
                 nido.session.lifecycle/up! (fn [_ _] nil)
                 nido.work/workstream
-                (fn [_ _] {:project "brian" :ws-id "ws-1" :origin :notion
-                           :stage :triage :label "BR-7 · t" :ledger nil :report nil :sessions []})
+                (fn [_ _ & _] {:project "brian" :ws-id "ws-1" :origin :notion
+                               :stage :triage :label "BR-7 · t" :ledger nil :report nil :sessions []})
                 nido.ui.server/dev-env-state (fn [_ _] {:state :starting})]
     (let [resp (server/handle-request {:request-method :post :uri "/workstreams/brian/ws-1/dev/start"})]
       (is (= 200 (:status resp)))
       (is (str/includes? (get-in resp [:headers "Content-Type"]) "text/event-stream"))
       (is (str/includes? (:body resp) "ws-pane")))))
+
+(deftest workstream-route-honours-entry-param
+  (with-redefs [nido.work/grouped (fn [_] {:triage {:in-flight [] :queued []}
+                                           :ready [] :in-progress [] :inbox []})
+                project/list-projects (fn [] {"brian" {:directory "/x"}})
+                nido.work/all-gates (fn [] [])
+                nido.work/workstream
+                (fn [_ _ sel] {:ws-id "ws-1" :project "brian" :origin :notion
+                               :stage :triage :label "BR-7" :ledger nil
+                               :selected-seq sel :entries nil
+                               :report {:markdown (str "# V\n\nsel=" (pr-str sel))} :sessions []})
+                nido.ui.server/dev-env-state (fn [_ _] {:state :none})
+                nido.ui.server/read-rail-daemon (fn [] {:state :up})]
+    (let [resp (server/handle-request {:request-method :get
+                                       :uri "/workstreams/brian/ws-1"
+                                       :query-string "entry=2"})]
+      (is (= 200 (:status resp)))
+      (is (str/includes? (:body resp) "sel=2") "entry param threaded to work/workstream"))
+    (let [resp (server/handle-request {:request-method :get
+                                       :uri "/_fragment/workstream/brian/ws-1"
+                                       :query-string "entry=5"})]
+      (is (str/includes? (:body resp) "sel=5") "fragment route honours entry too"))
+    (let [resp (server/handle-request {:request-method :get
+                                       :uri "/workstreams/brian/ws-1"})]
+      (is (str/includes? (:body resp) "sel=nil") "absent entry → nil → latest"))))

@@ -183,6 +183,12 @@
 
 (defn read-rail-daemon "Seam over health for stubbing in tests." [] (health/read-daemon-health))
 
+(defn- parse-entry
+  "Read the `entry` query param as a long seq, or nil (→ latest) when absent/garbage."
+  [query-string]
+  (when query-string
+    (some-> (re-find #"(?:^|&)entry=(\d+)" query-string) second parse-long)))
+
 (defn- parse-scope
   "Read scope from the query string; \"all\" when absent."
   [query-string]
@@ -316,12 +322,13 @@
 
 (defn- ws-pane-fragment-response
   "SSE that patches #ws-pane with a freshly-rendered workstream pane (ws detail +
-   dev-env state)."
-  [project ws-id]
-  (sse-response
-   (sse-fragment
-    (views/workstream-pane (work/workstream project ws-id)
-                           (dev-env-state project ws-id)))))
+   dev-env state). `entry` selects which ledger entry's report to show (nil → latest)."
+  ([project ws-id] (ws-pane-fragment-response project ws-id nil))
+  ([project ws-id entry]
+   (sse-response
+    (sse-fragment
+     (views/workstream-pane (work/workstream project ws-id entry)
+                            (dev-env-state project ws-id))))))
 
 (defn- run-action!
   "Run the lifecycle action matching `action` and update the app-states
@@ -484,13 +491,13 @@
         (let [project (nth segments 1) ws-id (nth segments 2)]
           (html-response 200 (views/workstreams-page (rail-context :workstreams scope)
                                                      (scope-filter scope (all-grouped))
-                                                     (work/workstream project ws-id)
+                                                     (work/workstream project ws-id (parse-entry query-string))
                                                      (dev-env-state project ws-id))))
 
         ;; GET /_fragment/workstream/:project/:ws-id — SSE pane refresh (patches #ws-pane)
         (and (= 4 (count segments)) (= "_fragment" (first segments)) (= "workstream" (nth segments 1)))
         (let [project (nth segments 2) ws-id (nth segments 3)]
-          (ws-pane-fragment-response project ws-id))
+          (ws-pane-fragment-response project ws-id (parse-entry query-string)))
 
         :else
         (html-response 404 (views/not-found-page))))))
