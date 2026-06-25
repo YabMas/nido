@@ -159,7 +159,7 @@
           instance-id (instance-id-for project session)
           entry       (some (fn [[_ e]] (when (= instance-id (:instance-id e)) e)) registry)
           port        (:app-port entry)
-          live?       (and (pos-int? port) (proc/tcp-open? port))
+          live?       (when entry (and (pos-int? port) (proc/tcp-open? port)))
           pending     (current-app-state instance-id)
           pending-kw  (cond (map? pending)     (:state pending)
                             (keyword? pending) pending)]
