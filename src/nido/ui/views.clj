@@ -2,7 +2,6 @@
   "Hiccup view functions for the nido dashboard."
   (:require [clojure.string :as str]
             [hiccup2.core :as h]
-            [nido.coordinator.report :as report]
             [nido.process :as process]
             [nido.ui.markdown :as md]
             [nido.work :as work]))
@@ -79,6 +78,15 @@
         .report-meta { margin:0 0 10px; display:flex; gap:6px; flex-wrap:wrap; }
         details.trail { margin-top:14px; } details.trail summary { cursor:pointer; color:#888; font-size:12px; }
         .pane { padding:18px 24px; overflow:auto; }
+        .ledger-index { margin:14px 0 8px; border:1px solid #20203a; border-radius:6px; overflow:hidden; }
+        .ledger-row { display:flex; gap:10px; align-items:baseline; padding:7px 12px;
+                      border-bottom:1px solid #1a1a30; color:#cdcde0; cursor:pointer; }
+        .ledger-row:last-child { border-bottom:none; }
+        .ledger-row:hover { background:#16162c; }
+        .ledger-row.sel { background:#1a2238; }
+        .ledger-row .lk { font-size:11px; text-transform:uppercase; color:#8a8ab0; min-width:54px; }
+        .ledger-row .meta { min-width:78px; }
+        .ledger-row .lt { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#e8e8e8; }
         .md { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
               font-size:13.5px; line-height:1.7; color:#cdcde0; background:#0f0f1e;
               border:1px solid #2a2a4a; border-radius:6px; padding:16px 18px; }
@@ -393,26 +401,44 @@
        ;; :down / nil — has a dev env but it's not up
        [:button.btn.btn-primary {"data-on:click" start-url} "start"])]))
 
+(defn- ledger-browser
+  "The entry index (only when >1 entry) above the selected entry's report. Rows
+   @get the pane fragment with ?entry=<seq>, patching #ws-pane. `entries` is the
+   newest-first index; `report` is the already-selected report."
+  [project ws-id entries selected-seq report]
+  [:div
+   (when (and (seq entries) (> (count entries) 1))
+     (into [:div.ledger-index]
+           (for [{:keys [seq kind at title]} entries]
+             [:a {:class (str "ledger-row" (when (= seq selected-seq) " sel"))
+                  "data-on:click"
+                  (str "@get('/_fragment/workstream/" project "/" ws-id "?entry=" seq "')")}
+              [:span.lk (clojure.core/name kind)]
+              [:span.meta (when at (let [s (str at)] (subs s 0 (min 10 (count s)))))]
+              [:span.lt title]])))
+   (when report (report-body report))])
+
 (defn workstream-pane
   "Read-only ledger pane: header · stage · DEV ENVIRONMENT card · ledger summary ·
    report · LLM sessions table. `dev-env` is the server-computed dev-environment
    state (the view does no IO). Polls its own fragment so transient dev-env states
    (starting…) self-advance."
-  [{:keys [project ws-id origin stage label ledger report sessions]} dev-env]
+  [{:keys [project ws-id origin stage label ledger report entries selected-seq sessions]} dev-env]
   (str
    (h/html
     (if-not label
       [:div {:id "ws-pane"} [:p.empty "Select a workstream."]]
       [:div {:id "ws-pane"
              :data-on-interval__duration.3s
-             (str "@get('/_fragment/workstream/" project "/" ws-id "')")}
+             (str "@get('/_fragment/workstream/" project "/" ws-id
+                  (when selected-seq (str "?entry=" selected-seq)) "')")}
        [:h1 (origin-badge origin) " " label]
        [:p.meta (name stage)]
        (dev-env-block project ws-id dev-env)
        (when ledger
          [:div.card [:strong "ledger "] (:key ledger) " · " (some-> ledger :status name)
           " · " (:report-count ledger) " report(s)"])
-       (when report (md/render (report/report->markdown report)))
+       (ledger-browser project ws-id entries selected-seq report)
        [:h2 "Sessions"]
        (if (seq sessions)
          [:table

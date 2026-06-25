@@ -255,3 +255,27 @@
                                  :facets {:app-domain "Onboarding Flow"}})]
     (is (not (str/includes? q "Onboarding Flow")) "raw space not in the query")
     (is (or (str/includes? q "Onboarding%20Flow") (str/includes? q "Onboarding+Flow")))))
+
+(deftest workstream-pane-shows-ledger-index-and-selected-report
+  (let [ws   (assoc sample-ws
+                    :selected-seq 2
+                    :entries [{:seq 2 :kind :impl   :at "2026-06-19T00:00:00Z" :title "Draft PR"}
+                              {:seq 1 :kind :triage :at "2026-06-18T00:00:00Z" :title "Verdict"}]
+                    :report {:format :markdown :kind :impl :at "t" :title "Draft PR"
+                             :markdown "# Draft PR\n\nopened it."})
+        html (views/workstream-pane ws {:state :none})]
+    (is (str/includes? html "ledger-index"))
+    (is (str/includes? html "Draft PR"))                      ; row + report title
+    (is (str/includes? html "Verdict"))                       ; other row
+    (is (str/includes? html "?entry=1"))                      ; click target for the unselected row
+    (is (str/includes? html "ledger-row sel"))                ; seq 2 highlighted
+    (is (str/includes? html "opened it."))))                  ; selected report body rendered
+
+(deftest workstream-pane-poll-url-carries-selected-entry
+  (let [ws   (assoc sample-ws
+                    :selected-seq 2
+                    :entries [{:seq 2 :kind :impl :at "t" :title "a"}
+                              {:seq 1 :kind :triage :at "t" :title "b"}])
+        html (views/workstream-pane ws {:state :none})]
+    (is (str/includes? html "/_fragment/workstream/brian/ws-1?entry=2")
+        "self-poll re-requests the same selected entry so it survives the refresh")))
