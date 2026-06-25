@@ -368,17 +368,47 @@
        [:div [:h3 (name stage)]
         (for [r rows] (ws-list-row project sel r))])])))
 
+(defn- dev-env-block
+  "The workstream-level DEV ENVIRONMENT card: open the running app to test the
+   work, or bring its dev environment up/restart. Distinct from the LLM 'Sessions'
+   table below it. `dev-env` = {:state :running|:down|:starting|:restarting|:failed|:none
+   :url <string?> :error-msg <string?>}. Actions POST to /workstreams/:p/:w/dev/:action;
+   the server resolves the latest-stage (heavy) session at action time."
+  [project ws-id {:keys [state url error-msg]}]
+  (let [start-url   (str "@post('/workstreams/" project "/" ws-id "/dev/start')")
+        restart-url (str "@post('/workstreams/" project "/" ws-id "/dev/restart')")]
+    [:div.card
+     [:div.meta {:style "text-transform:uppercase;font-size:11px"} "Dev environment"]
+     (case state
+       :none [:p.empty "No dev environment yet."]
+       :running
+       [:div.actions
+        [:a.btn.btn-primary {:href url :target "_blank"} "Open app ↗"]
+        [:button.btn {"data-on:click" restart-url} "restart"]]
+       (:starting :restarting) [:span.meta "working…"]
+       :failed
+       [:div
+        [:button.btn.btn-primary {"data-on:click" start-url} "retry"]
+        (when error-msg [:div.error-msg error-msg])]
+       ;; :down / nil — has a dev env but it's not up
+       [:button.btn.btn-primary {"data-on:click" start-url} "start"])]))
+
 (defn workstream-pane
-  "Read-only ledger pane: header · ledger summary · report markdown · sessions · route-in."
-  [{:keys [origin stage label ledger report sessions]} live-url]
+  "Read-only ledger pane: header · stage · DEV ENVIRONMENT card · ledger summary ·
+   report · LLM sessions table. `dev-env` is the server-computed dev-environment
+   state (the view does no IO). Polls its own fragment so transient dev-env states
+   (starting…) self-advance."
+  [{:keys [project ws-id origin stage label ledger report sessions]} dev-env]
   (str
    (h/html
     (if-not label
       [:div {:id "ws-pane"} [:p.empty "Select a workstream."]]
-      [:div {:id "ws-pane"}
+      [:div {:id "ws-pane"
+             :data-on-interval__duration.3s
+             (str "@get('/_fragment/workstream/" project "/" ws-id "')")}
        [:h1 (origin-badge origin) " " label]
-       [:p.meta (name stage)
-        (when live-url [:span " · " [:a {:href live-url :target "_blank"} "open session ↗"]])]
+       [:p.meta (name stage)]
+       (dev-env-block project ws-id dev-env)
        (when ledger
          [:div.card [:strong "ledger "] (:key ledger) " · " (some-> ledger :status name)
           " · " (:report-count ledger) " report(s)"])
@@ -445,7 +475,7 @@
        (chip-link lbl (= v sel) (str "/workstreams" (filter-query ctx {:facets {k v}}))))]))
 
 (defn workstreams-page
-  [ctx groups sel-ws live-url]
+  [ctx groups sel-ws dev-env]
   (let [q (filter-query ctx)]
     (shell
      (assoc ctx :active :workstreams :title "Workstreams")
@@ -453,7 +483,7 @@
       [:div.filters (source-row ctx) (facet-rows ctx groups)]
       [:div.inbox {:data-on-interval__duration.5s (str "@get('/_fragment/workstreams" q "')")}
        (h/raw (workstreams-fragment groups (:ws-id sel-ws)))]
-      [:div.pane (h/raw (workstream-pane sel-ws live-url))]])))
+      [:div.pane (h/raw (workstream-pane sel-ws dev-env))]])))
 
 ;; ---------------------------------------------------------------------------
 ;; System (cross-project ops) — replaces the live board + per-project sessions list.

@@ -113,14 +113,33 @@
     (is (str/includes? html ">N<"))))
 
 (deftest workstream-pane-shows-ledger-report-and-sessions
-  (let [ws (assoc sample-ws :report {:format :markdown :kind :triage :at "t" :title "Verdict"
-                                     :markdown "# Verdict\n\nbug — reproduced."})
-        html (views/workstream-pane ws "http://auto.brian.localhost:3142")]
+  (let [ws   (assoc sample-ws :report {:format :markdown :kind :triage :at "t" :title "Verdict"
+                                       :markdown "# Verdict\n\nbug — reproduced."})
+        html (views/workstream-pane ws {:state :running :url "http://auto.brian.localhost:3142"})]
     (is (str/includes? html "BR-7"))
     (is (str/includes? html "investigating"))            ; ledger summary status
     (is (str/includes? html "bug — reproduced."))        ; report markdown
-    (is (str/includes? html "auto"))                     ; session listed
-    (is (str/includes? html "http://auto.brian.localhost:3142"))))   ; route-in
+    (is (str/includes? html "auto"))                     ; LLM session still listed
+    (is (str/includes? html "http://auto.brian.localhost:3142")))) ; now the Open-app link
+
+(deftest workstream-pane-dev-env-running-shows-open-and-restart
+  (let [html (views/workstream-pane sample-ws {:state :running :url "http://impl.brian.localhost:3142"})]
+    (is (str/includes? html "Dev environment"))
+    (is (str/includes? html "Open app"))
+    (is (str/includes? html "http://impl.brian.localhost:3142"))
+    (is (str/includes? html "/workstreams/brian/ws-1/dev/restart"))
+    (is (str/includes? html "id=\"ws-pane\""))
+    (is (str/includes? html "/_fragment/workstream/brian/ws-1"))   ; pane interval poll
+    (is (str/includes? html "auto"))))                             ; LLM sessions table intact
+
+(deftest workstream-pane-dev-env-down-shows-start
+  (let [html (views/workstream-pane sample-ws {:state :down})]
+    (is (str/includes? html "/workstreams/brian/ws-1/dev/start"))
+    (is (not (str/includes? html "Open app")))))
+
+(deftest workstream-pane-dev-env-none-is-calm
+  (let [html (views/workstream-pane sample-ws {:state :none})]
+    (is (str/includes? html "No dev environment yet"))))
 
 (deftest workstream-pane-empty-when-nil
   (is (str/includes? (views/workstream-pane nil nil) "Select a workstream")))
