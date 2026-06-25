@@ -58,3 +58,44 @@
     (is (str/includes? md "- Title:"))
     (is (not (re-find #"- Effort:[^\n]*\n\n- Title:" md))
         "no spurious blank line between Effort and Title")))
+
+(def ^:private valid-plan
+  {:format :implementation-plan :summary "Round on the total."
+   :direction "Round once on the order total" :effort :M
+   :steps ["add a render test" "fix the calc"]})
+
+(def ^:private valid-completed
+  {:format :implementation-completed :summary "Shipped the fix."
+   :artifacts [{:kind :pr :ref "org/repo#42" :url "https://github.com/org/repo/pull/42"}]
+   :open ["mark PR ready"]})
+
+(def ^:private valid-blocker
+  {:format :blocker :summary "Waiting on a Stripe test key." :needs "Stripe test key from ops"})
+
+(def ^:private valid-pr
+  {:format :pr-opened :url "https://github.com/org/repo/pull/42" :title "Fix rounding"})
+
+(deftest validate-event-accepts-each-typed-event
+  (is (= valid-plan      (report/validate-event :implementation-plan valid-plan)))
+  (is (= valid-completed (report/validate-event :implementation-completed valid-completed)))
+  (is (= valid-blocker   (report/validate-event :blocker valid-blocker)))
+  (is (= valid-pr        (report/validate-event :pr-opened valid-pr))))
+
+(deftest validate-event-rejects-wrong-format-tag
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event :blocker (assoc valid-blocker :format :implementation-plan)))))
+
+(deftest validate-event-rejects-extra-key
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event :implementation-plan (assoc valid-plan :extra 1)))))
+
+(deftest validate-event-rejects-unknown-kind
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event :nope valid-plan))))
+
+(deftest triage-accepts-squirrel-and-defer-note
+  (is (report/validate
+       (-> valid-report
+           (assoc :defer-note "Direction depends on whether we refactor the totals pipeline.")
+           (assoc-in [:directions 0 :effort] :squirrel)
+           (assoc-in [:notion-writes :effort] :squirrel)))))

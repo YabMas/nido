@@ -11,18 +11,27 @@
    [:level  [:enum :high :medium :low]]
    [:reason string?]])
 
+(def Effort
+  "Concrete T-shirt size."
+  [:enum :XS :S :M :L :XL])
+
+(def TriageEffort
+  "Triage may decline to size when the implementation direction is ambiguous —
+   :squirrel is the joker that defers sizing to the implementation-plan event."
+  [:enum :XS :S :M :L :XL :squirrel])
+
 (def Direction
   [:map {:closed true}
    [:label      string?]
    [:shape      string?]
-   [:effort     [:enum :XS :S :M :L :XL]]
+   [:effort     TriageEffort]
    [:confidence Confidence]])
 
 (def NotionWrites
   "Nil/omitted for Slack runs (no Notion writes)."
   [:map {:closed true}
    [:type               [:maybe string?]]
-   [:effort             [:enum :XS :S :M :L :XL]]
+   [:effort             TriageEffort]
    [:status-transition  {:optional true} [:maybe [:tuple string? string?]]]
    [:title              string?]
    [:description-prepend string?]])
@@ -39,18 +48,70 @@
    [:confidence    Confidence]       ; §1
    [:directions    [:vector Direction]]   ; §2
    [:notion-writes [:maybe NotionWrites]] ; §3 — nil for slack
+   [:defer-note    {:optional true} string?]   ; why the plan was deferred (paired with :squirrel)
    [:trail         [:vector [:map {:closed true}
                              [:ref  string?]
                              [:note string?]]]]]) ; §5 log-only
 
+(def ImplementationPlan
+  "A high-level implementation plan — authored by triage (obvious) or the impl
+   session (deferred); resolves a triage :squirrel into a concrete direction + effort."
+  [:map {:closed true}
+   [:format    [:= :implementation-plan]]
+   [:summary   string?]
+   [:direction string?]
+   [:effort    Effort]
+   [:steps     {:optional true} [:vector string?]]])
+
+(def ImplementationCompleted
+  [:map {:closed true}
+   [:format    [:= :implementation-completed]]
+   [:summary   string?]
+   [:artifacts [:vector [:map {:closed true}
+                         [:kind [:enum :commit :pr :branch]]
+                         [:ref  string?]
+                         [:url  {:optional true} string?]]]]
+   [:open      {:optional true} [:vector string?]]])
+
+(def Blocker
+  [:map {:closed true}
+   [:format  [:= :blocker]]
+   [:summary string?]
+   [:needs   string?]])
+
+(def PrOpened
+  [:map {:closed true}
+   [:format  [:= :pr-opened]]
+   [:url     string?]
+   [:title   string?]
+   [:summary {:optional true} string?]])
+
+(def event-schemas
+  "Entry :kind → its Malli schema. Drives ledger-boundary validation + rendering.
+   A :kind absent here is stored as verbatim markdown (legacy / freeform)."
+  {:triage                   TriageReport
+   :implementation-plan      ImplementationPlan
+   :implementation-completed ImplementationCompleted
+   :blocker                  Blocker
+   :pr-opened                PrOpened})
+
+(defn validate-event
+  "Validate `report` (parsed EDN) against the schema registered for entry `kind`.
+   Returns the report on success; throws ex-info carrying a malli :explain on mismatch
+   (the bb task prints it so the emitting skill can fix + retry). Throws for an
+   unregistered kind."
+  [kind report]
+  (let [schema (or (event-schemas kind)
+                   (throw (ex-info "No schema for entry kind" {:kind kind})))]
+    (if (m/validate schema report)
+      report
+      (throw (ex-info "Invalid event report"
+                      {:explain (m/explain schema report) :report report :kind kind})))))
+
 (defn validate
-  "Return `report` if it conforms to TriageReport; else throw ex-info carrying a
-   malli explain under :explain (the bb task prints it so the skill can fix + retry)."
+  "Backward-compatible triage validator — delegates to (validate-event :triage report)."
   [report]
-  (if (m/validate TriageReport report)
-    report
-    (throw (ex-info "Invalid triage report"
-                    {:explain (m/explain TriageReport report) :report report}))))
+  (validate-event :triage report))
 
 (defn- triage->markdown [{:keys [title determination summary confidence
                                  directions notion-writes trail]}]
