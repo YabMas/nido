@@ -279,3 +279,21 @@
         html (views/workstream-pane ws {:state :none})]
     (is (str/includes? html "/_fragment/workstream/brian/ws-1?entry=2")
         "self-poll re-requests the same selected entry so it survives the refresh")))
+
+(deftest workstream-pane-renders-implementation-plan-card
+  (let [ws   (assoc sample-ws :report {:format :implementation-plan :summary "Round on the total."
+                                       :direction "Round once on the order total" :effort :M
+                                       :steps ["add a render test" "fix the calc"]})
+        html (views/workstream-pane ws {:state :none})]
+    (is (str/includes? html "Implementation plan"))
+    (is (str/includes? html "Round once on the order total"))
+    (is (str/includes? html "Steps"))
+    (is (str/includes? html "fix the calc"))))
+
+(deftest workstream-pane-renders-blocker-completed-pr-cards
+  (let [pane (fn [report] (views/workstream-pane (assoc sample-ws :report report) {:state :none}))]
+    (is (str/includes? (pane {:format :blocker :summary "Waiting." :needs "Stripe key"}) "Blocker"))
+    (is (str/includes? (pane {:format :blocker :summary "Waiting." :needs "Stripe key"}) "Stripe key"))
+    (is (str/includes? (pane {:format :implementation-completed :summary "Done."
+                              :artifacts [{:kind :pr :ref "o/r#1"}]}) "Artifacts"))
+    (is (str/includes? (pane {:format :pr-opened :url "http://x/1" :title "Fix it"}) "Fix it"))))

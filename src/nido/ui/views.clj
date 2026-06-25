@@ -313,12 +313,49 @@
             (for [{:keys [ref note]} trail]
               [:li [:code ref] " — " note]))])])
 
+(defn- plan-card [{:keys [summary direction effort steps]}]
+  [:div.md
+   [:h2 "Implementation plan"]
+   [:div.report-meta [:span.meta "Direction: " direction " · Effort: " (name effort)]]
+   (md/render summary)
+   (when (seq steps)
+     [:div [:h3 "Steps"] (into [:ul] (for [s steps] [:li s]))])])
+
+(defn- completed-card [{:keys [summary artifacts open]}]
+  [:div.md
+   [:h2 "Implementation completed"]
+   (md/render summary)
+   [:h3 "Artifacts"]
+   (into [:ul]
+         (for [{:keys [kind ref url]} artifacts]
+           [:li [:strong (name kind)] " " [:code ref]
+            (when url [:span " — " [:a {:href url :target "_blank"} url]])]))
+   (when (seq open)
+     [:div [:h3 "Still open"] (into [:ul] (for [o open] [:li o]))])])
+
+(defn- blocker-card [{:keys [summary needs]}]
+  [:div.md
+   [:h2 "Blocker"]
+   (md/render summary)
+   [:h3 "Needs"]
+   [:p needs]])
+
+(defn- pr-opened-card [{:keys [url title summary]}]
+  [:div.md
+   [:h2 "PR opened"]
+   [:p [:strong title] " — " [:a {:href url :target "_blank"} url]]
+   (when summary (md/render summary))])
+
 (defn- report-body
-  "Dispatch a gate report on :format — typed triage reports get the curated card,
+  "Dispatch a gate/ledger report on :format — each typed event gets its curated card,
    markdown reports render through md/render."
   [report]
   (case (:format report)
-    :triage-report (triage-report-card report)
+    :triage-report            (triage-report-card report)
+    :implementation-plan      (plan-card report)
+    :implementation-completed (completed-card report)
+    :blocker                  (blocker-card report)
+    :pr-opened                (pr-opened-card report)
     (md/render (:markdown report))))
 
 (defn gate-pane

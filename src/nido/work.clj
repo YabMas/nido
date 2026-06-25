@@ -137,14 +137,15 @@
 
 (defn- entry->report
   "Render a ledger entry as a `:format`-tagged gate report. An `.edn` file is a
-   typed triage report (read + validated → :format :triage-report, :at stamped from
-   the entry); any other file is markdown (:format :markdown). A triage `.edn` that
-   fails to read/validate degrades to a :markdown payload of its raw text rather than
-   blanking the pane."
+   typed event — read + validated against the schema for its `:kind`
+   (report/validate-event), :at stamped from the entry; any other file is markdown
+   (:format :markdown). A typed `.edn` that fails to read/validate degrades to a
+   :markdown payload of its raw text rather than blanking the pane."
   [base-dir entry]
   (let [f (str (fs/path base-dir (:file entry)))]
     (or (when (str/ends-with? (str (:file entry)) ".edn")
-          (try (-> (io/read-edn f) report/validate (assoc :at (:at entry)))
+          (try (-> (report/validate-event (:kind entry) (io/read-edn f))
+                   (assoc :at (:at entry)))
                (catch Throwable _ nil)))
         (let [md (when (fs/exists? f) (slurp f))]
           {:format   :markdown
@@ -169,7 +170,8 @@
     {:seq   (:seq entry)
      :kind  (:kind entry)
      :at    (:at entry)
-     :title (or (not-empty (:title r))
+     :title (or (report/report-title r)
+                (not-empty (:title r))
                 (first-line (:markdown r))
                 (name (:kind entry)))}))
 

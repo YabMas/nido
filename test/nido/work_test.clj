@@ -286,7 +286,7 @@
                                           :external-refs [{:adapter :notion :id "BR-7" :title "t"}]})]
         (tickets/open! :brian "BR-7" {:title "t"})
         (tickets/set-status! :brian "BR-7" :investigating)
-        (workstream/append-entry! :brian (:id w) {:kind :triage}
+        (workstream/append-entry! :brian (:id w) {:kind :impl}
                                   "# Verdict\n\nbug — reproduced.")
         (session/create! :brian (:id w)
                          {:name "auto" :weight :heavy
@@ -355,7 +355,7 @@
   (with-tmp
     (fn [_]
       (let [w (workstream/create! :brian {:stage :triaging :external-refs []})]
-        (workstream/append-entry! :brian (:id w) {:kind :triage} "# X\n\nrep.")
+        (workstream/append-entry! :brian (:id w) {:kind :impl} "# X\n\nrep.")
         (session/create! :brian (:id w)
                          {:name "auto" :weight :heavy
                           :autonomy (assoc autonomy-running :phase :parked)}))
@@ -655,13 +655,13 @@
   (with-tmp
     (fn [_]
       (let [id (:id (workstream/create! :brian {:stage :scratch :external-refs []}))]
-        (workstream/append-entry! :brian id {:kind :triage} "# One\n\nfirst")
+        (workstream/append-entry! :brian id {:kind :impl} "# One\n\nfirst")
         (workstream/append-entry! :brian id {:kind :impl} "# Two\n\nsecond")
         (workstream/append-entry! :brian id {:kind :impl} "# Three\n\nthird")
         (let [d (work/workstream :brian id)]
           (is (= [3 2 1] (mapv :seq (:entries d))) "index is newest-first")
           (is (= ["Three" "Two" "One"] (mapv :title (:entries d))) "titles from headings")
-          (is (= [:impl :impl :triage] (mapv :kind (:entries d))) "kinds carried")
+          (is (= [:impl :impl :impl] (mapv :kind (:entries d))) "kinds carried")
           (is (= 3 (:selected-seq d)) "defaults to the latest entry")
           (is (str/includes? (:markdown (:report d)) "third") "report is the selected entry"))))))
 
@@ -669,7 +669,7 @@
   (with-tmp
     (fn [_]
       (let [id (:id (workstream/create! :brian {:stage :scratch :external-refs []}))]
-        (workstream/append-entry! :brian id {:kind :triage} "# One\n\nfirst")
+        (workstream/append-entry! :brian id {:kind :impl} "# One\n\nfirst")
         (workstream/append-entry! :brian id {:kind :impl} "# Two\n\nsecond")
         (let [picked (work/workstream :brian id 1)]
           (is (= 1 (:selected-seq picked)))
@@ -682,7 +682,7 @@
   (with-tmp
     (fn [_]
       (let [id (:id (workstream/create! :brian {:stage :scratch :external-refs []}))]
-        (workstream/append-entry! :brian id {:kind :triage} "# Solo\n\nonly")
+        (workstream/append-entry! :brian id {:kind :impl} "# Solo\n\nonly")
         (let [d (work/workstream :brian id)]
           (is (nil? (seq (:entries d))) "a single-entry ledger has no index list")
           (is (str/includes? (:markdown (:report d)) "only")))))))
@@ -696,3 +696,15 @@
         (is (= ["Has heading" "just prose no heading"]
                (mapv :title (:entries (work/workstream :brian id))))
             "no markdown heading → first non-blank line")))))
+
+(deftest workstream-index-title-uses-event-fields
+  (with-tmp
+    (fn [_]
+      (let [id (:id (workstream/create! :brian {:stage :scratch :external-refs []}))]
+        (workstream/append-entry! :brian id {:kind :implementation-plan}
+          (pr-str {:format :implementation-plan :summary "x" :direction "First direction" :effort :S}))
+        (workstream/append-entry! :brian id {:kind :blocker}
+          (pr-str {:format :blocker :summary "y" :needs "Second needs"}))
+        (let [d (work/workstream :brian id)]
+          (is (= ["Second needs" "First direction"] (mapv :title (:entries d)))
+              "index titles come from each event's fields via report/report-title"))))))
