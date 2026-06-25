@@ -650,3 +650,49 @@
       (let [w (workstream/create! :brian {:stage :scratch :external-refs []})]
         (is (= [] (:entries (#'work/active-ledger :brian (:id w))))
             "no entries anywhere → empty vector")))))
+
+(deftest workstream-browses-entries-newest-first
+  (with-tmp
+    (fn [_]
+      (let [id (:id (workstream/create! :brian {:stage :scratch :external-refs []}))]
+        (workstream/append-entry! :brian id {:kind :triage} "# One\n\nfirst")
+        (workstream/append-entry! :brian id {:kind :impl} "# Two\n\nsecond")
+        (workstream/append-entry! :brian id {:kind :impl} "# Three\n\nthird")
+        (let [d (work/workstream :brian id)]
+          (is (= [3 2 1] (mapv :seq (:entries d))) "index is newest-first")
+          (is (= ["Three" "Two" "One"] (mapv :title (:entries d))) "titles from headings")
+          (is (= [:impl :impl :triage] (mapv :kind (:entries d))) "kinds carried")
+          (is (= 3 (:selected-seq d)) "defaults to the latest entry")
+          (is (str/includes? (:markdown (:report d)) "third") "report is the selected entry"))))))
+
+(deftest workstream-selects-requested-entry
+  (with-tmp
+    (fn [_]
+      (let [id (:id (workstream/create! :brian {:stage :scratch :external-refs []}))]
+        (workstream/append-entry! :brian id {:kind :triage} "# One\n\nfirst")
+        (workstream/append-entry! :brian id {:kind :impl} "# Two\n\nsecond")
+        (let [picked (work/workstream :brian id 1)]
+          (is (= 1 (:selected-seq picked)))
+          (is (str/includes? (:markdown (:report picked)) "first")))
+        (let [oob (work/workstream :brian id 99)]
+          (is (= 2 (:selected-seq oob)) "out-of-range seq → latest")
+          (is (str/includes? (:markdown (:report oob)) "second")))))))
+
+(deftest workstream-single-entry-has-no-index
+  (with-tmp
+    (fn [_]
+      (let [id (:id (workstream/create! :brian {:stage :scratch :external-refs []}))]
+        (workstream/append-entry! :brian id {:kind :triage} "# Solo\n\nonly")
+        (let [d (work/workstream :brian id)]
+          (is (nil? (seq (:entries d))) "a single-entry ledger has no index list")
+          (is (str/includes? (:markdown (:report d)) "only")))))))
+
+(deftest workstream-index-title-falls-back-to-first-line
+  (with-tmp
+    (fn [_]
+      (let [id (:id (workstream/create! :brian {:stage :scratch :external-refs []}))]
+        (workstream/append-entry! :brian id {:kind :impl} "just prose no heading")
+        (workstream/append-entry! :brian id {:kind :impl} "# Has heading\n\nx")
+        (is (= ["Has heading" "just prose no heading"]
+               (mapv :title (:entries (work/workstream :brian id))))
+            "no markdown heading → first non-blank line")))))
