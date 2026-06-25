@@ -1,6 +1,7 @@
 (ns nido.work-test
   (:require
    [babashka.fs :as fs]
+   [clojure.string :as str]
    [clojure.test :refer [deftest is]]
    [nido.config]
    [nido.coordinator.promote]
@@ -621,3 +622,31 @@
         (mk "impl-new" "2026-01-02T00:00:00Z")
         (is (= {:project :brian :session "impl-new"} (work/dev-target :brian (:id w)))
             "latest-created heavy session wins")))))
+
+(deftest latest-report-prefers-workstream-entries
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :scratch :external-refs []})]
+        (workstream/append-entry! :brian (:id w) {:kind :impl} "# First\n\none")
+        (workstream/append-entry! :brian (:id w) {:kind :impl} "# Second\n\ntwo")
+        (let [r (work/latest-report :brian (:id w))]
+          (is (= :markdown (:format r)))
+          (is (str/includes? (:markdown r) "Second") "returns the LATEST workstream entry"))))))
+
+(deftest latest-report-falls-back-to-ticket-ledger
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :triaging
+                                          :external-refs [{:adapter :notion :id "BR-9"}]})]
+        (tickets/open! :brian "BR-9" {:title "t"})
+        (tickets/append-entry! :brian "BR-9" {:kind :impl} "# Impl\n\ndid it")
+        (let [r (work/latest-report :brian (:id w))]
+          (is (str/includes? (:markdown r) "did it")
+              "no workstream entries → reads the ticket ledger"))))))
+
+(deftest active-ledger-empty-when-no-entries
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :scratch :external-refs []})]
+        (is (= [] (:entries (#'work/active-ledger :brian (:id w))))
+            "no entries anywhere → empty vector")))))

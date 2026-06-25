@@ -153,31 +153,48 @@
            :title    (first-heading md)
            :markdown md}))))
 
-(defn latest-report
-  "The workstream's most recent ledger entry as a gate report {:kind :at :title
-   :markdown}, or nil. Prefers the workstream-level ledger (origin-agnostic, works
-   for ref-less scratch); falls back to the TICKET ledger (where the triage skill
-   writes its report) when the workstream ledger is empty and the workstream
-   carries a ledger ref — Notion (BR-####) OR Slack (slack-<channel>-<ts>), since
-   the triage skill keys its record on either; finally falls back to the stored
-   intake text so an un-triaged :inbox Slack report still shows its message body."
+(defn- active-ledger
+  "Resolve which ledger the workstream pane browses, plus its on-disk base dir.
+   Precedence: the workstream's own :entries; else the ticket ledger's :entries
+   (Notion BR-#### or Slack id — wsv/ledger-ref); else empty. :entries are stored
+   oldest-first. {:base-dir <string|nil> :entries <vector>}."
+  [project ws-id]
+  (if-let [w (cws/read-ws project ws-id)]
+    (cond
+      (seq (:entries w))
+      {:base-dir (cstate/workstream-dir project ws-id) :entries (vec (:entries w))}
+
+      :else
+      (if-let [br-id (:id (wsv/ledger-ref w))]
+        {:base-dir (tickets/ticket-dir project br-id)
+         :entries  (vec (:entries (tickets/read-meta project br-id)))}
+        {:base-dir nil :entries []}))
+    {:base-dir nil :entries []}))
+
+(defn- intake-fallback
+  "Synthetic markdown report from a workstream's stored intake text (un-triaged
+   Slack inbox), or nil. The last-resort report when no ledger entry exists."
   [project ws-id]
   (when-let [w (cws/read-ws project ws-id)]
-    (or
-     (when-let [e (last (:entries w))]
-       (entry->report (cstate/workstream-dir project ws-id) e))
-     (when-let [br-id (:id (wsv/ledger-ref w))]
-       (when-let [m (tickets/read-meta project br-id)]
-         (when-let [e (last (:entries m))]
-           (entry->report (tickets/ticket-dir project br-id) e))))
-     (when-let [intake (:intake w)]
-       (let [text (or (-> intake :payload :text) (-> intake :payload :title) "")]
-         (when (seq text)
-           {:format   :markdown
-            :kind     :slack-report
-            :at       (:created-at w)
-            :title    (first-heading text)
-            :markdown text}))))))
+    (when-let [intake (:intake w)]
+      (let [text (or (-> intake :payload :text) (-> intake :payload :title) "")]
+        (when (seq text)
+          {:format   :markdown
+           :kind     :slack-report
+           :at       (:created-at w)
+           :title    (first-heading text)
+           :markdown text})))))
+
+(defn latest-report
+  "The workstream's most recent ledger entry as a `:format`-tagged gate report,
+   or nil. Resolves the active ledger (workstream entries → ticket ledger), reads
+   its latest entry, and finally falls back to stored intake text so an un-triaged
+   :inbox Slack report still shows its message body."
+  [project ws-id]
+  (let [{:keys [base-dir entries]} (active-ledger project ws-id)]
+    (if (seq entries)
+      (entry->report base-dir (last entries))
+      (intake-fallback project ws-id))))
 
 (defn workstream
   "Full detail for one workstream: origin, spine stage, label, a light ledger
