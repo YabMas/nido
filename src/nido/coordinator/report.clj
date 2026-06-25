@@ -140,11 +140,54 @@
     (for [{:keys [ref note]} trail]
       (str "- `" ref "` — " note)))))
 
+(defn- first-line
+  "First non-blank, trimmed line of `s`, or nil."
+  [s]
+  (some->> (some-> s str/split-lines) (map str/trim) (some not-empty)))
+
+(defn- plan->markdown [{:keys [summary direction effort steps]}]
+  (str/join "\n"
+    (concat
+     ["# Implementation plan"
+      (str "**Direction:** " direction "  ·  **Effort:** " (name effort))
+      "" summary]
+     (when (seq steps) (concat ["" "## Steps"] (for [s steps] (str "- " s)))))))
+
+(defn- completed->markdown [{:keys [summary artifacts open]}]
+  (str/join "\n"
+    (concat
+     ["# Implementation completed" "" summary "" "## Artifacts"]
+     (for [{:keys [kind ref url]} artifacts]
+       (str "- " (name kind) " `" ref "`" (when url (str " — " url))))
+     (when (seq open) (concat ["" "## Still open"] (for [o open] (str "- " o)))))))
+
+(defn- blocker->markdown [{:keys [summary needs]}]
+  (str/join "\n" ["# Blocker" "" summary "" "## Needs" needs]))
+
+(defn- pr-opened->markdown [{:keys [url title summary]}]
+  (str/join "\n"
+    (remove nil? ["# PR opened" (str "**" title "** — " url) (when summary (str "\n" summary))])))
+
 (defn report->markdown
-  "Render a `:format`-tagged report payload to markdown. :markdown → its :markdown;
-   :triage-report → full markdown (§5 last); nil/other → \"\"."
+  "Render a `:format`-tagged report payload to markdown. Each event type → its own
+   headed markdown; :markdown → its body; nil/unknown → \"\"."
   [report]
   (case (:format report)
-    :markdown      (or (:markdown report) "")
-    :triage-report (triage->markdown report)
+    :markdown                 (or (:markdown report) "")
+    :triage-report            (triage->markdown report)
+    :implementation-plan      (plan->markdown report)
+    :implementation-completed (completed->markdown report)
+    :blocker                  (blocker->markdown report)
+    :pr-opened                (pr-opened->markdown report)
     ""))
+
+(defn report-title
+  "Index title for the typed events that carry no top-level :title — plan / completed
+   / blocker. nil otherwise (triage, pr-opened and markdown carry a usable :title that
+   the caller falls back to)."
+  [report]
+  (case (:format report)
+    :implementation-plan      (:direction report)
+    :implementation-completed (first-line (:summary report))
+    :blocker                  (or (:needs report) (first-line (:summary report)))
+    nil))

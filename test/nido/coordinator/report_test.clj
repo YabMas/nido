@@ -99,3 +99,24 @@
            (assoc :defer-note "Direction depends on whether we refactor the totals pipeline.")
            (assoc-in [:directions 0 :effort] :squirrel)
            (assoc-in [:notion-writes :effort] :squirrel)))))
+
+(deftest report->markdown-implementation-plan-has-headings
+  (let [md (report/report->markdown valid-plan)]
+    (is (str/includes? md "Implementation plan"))
+    (is (str/includes? md "Round once on the order total"))
+    (is (str/includes? md "Steps"))
+    (is (str/includes? md "fix the calc"))))
+
+(deftest report->markdown-completed-blocker-pr
+  (is (str/includes? (report/report->markdown valid-completed) "Artifacts"))
+  (is (str/includes? (report/report->markdown valid-completed) "org/repo#42"))
+  (is (str/includes? (report/report->markdown valid-blocker) "Needs"))
+  (is (str/includes? (report/report->markdown valid-blocker) "Stripe test key from ops"))
+  (is (str/includes? (report/report->markdown valid-pr) "Fix rounding")))
+
+(deftest report-title-per-event
+  (is (= "Round once on the order total" (report/report-title valid-plan)))
+  (is (= "Shipped the fix." (report/report-title valid-completed)))
+  (is (= "Stripe test key from ops" (report/report-title valid-blocker)))
+  (is (nil? (report/report-title valid-report)) "triage falls through to (:title) at the call site")
+  (is (nil? (report/report-title valid-pr))      "pr-opened falls through to (:title) at the call site"))
