@@ -350,6 +350,23 @@
      :base base
      :instance-id instance-id}))
 
+(defn- effective-profile
+  "The resolved session profile: an explicit pre-resolved :profile in opts wins;
+   otherwise resolve the :session-profile keyword (default :full) for the project.
+   Lets a 'start' reuse a session's persisted profile instead of re-defaulting to
+   :full (which would start ALL services on a :lite session)."
+  [project-name opts]
+  (or (:profile opts)
+      (profiles/resolve-profile project-name (or (:session-profile opts) :full))))
+
+(defn session-coords
+  "Resolve {:wt-path :instance-id} for a named session. The instance-id is the
+   canonical one (engine/resolve-instance-id over the worktree path), so it
+   matches the registry + lifecycle state even for slash-namespaced names."
+  [name opts]
+  (let [{:keys [wt-path instance-id]} (with-context name opts)]
+    {:wt-path wt-path :instance-id instance-id}))
+
 (defn up!
   "Bring the named session up: create its worktree if missing, then start
    PG + JVM + app. Idempotent — running on an existing live session is a
@@ -359,8 +376,7 @@
    workspace add`; plain git → `git worktree add`."
   [name opts]
   (let [{:keys [project-name project-dir wt-path branch base]} (with-context name opts)
-        profile-kw (or (:session-profile opts) :full)
-        profile    (profiles/resolve-profile project-name profile-kw)]
+        profile (effective-profile project-name opts)]
     (cond
       (and (fs/exists? wt-path) (jj-worktree-poisoned? wt-path))
       (do

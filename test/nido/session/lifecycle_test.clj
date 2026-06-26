@@ -5,8 +5,9 @@
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
    [nido.core]
-   [nido.session.engine]
+   [nido.session.engine :as engine]
    [nido.session.lifecycle :as lifecycle]
+   [nido.session.profiles :as profiles]
    [nido.session.state]))
 
 (deftest symlink-worktree-creates-symlink-to-target
@@ -393,3 +394,20 @@
               ["workspace" "add"]]
              @calls)
           "recovery is attempted exactly once — no infinite retry loop"))))
+
+(deftest effective-profile-prefers-explicit-resolved-profile
+  (with-redefs [profiles/resolve-profile (fn [_ kw] {:from-kw kw})]
+    ;; explicit pre-resolved :profile wins outright
+    (is (= {:services []} (#'lifecycle/effective-profile "brian" {:profile {:services []}})))
+    ;; no :profile → resolve the keyword (default :full)
+    (is (= {:from-kw :full} (#'lifecycle/effective-profile "brian" {})))
+    (is (= {:from-kw :lite} (#'lifecycle/effective-profile "brian" {:session-profile :lite})))))
+
+(deftest session-coords-resolves-wt-path-and-canonical-instance-id
+  (with-redefs [lifecycle/resolve-project (fn [_] ["brian" {:directory "/Code/brian"}])
+                lifecycle/worktrees-dir   (fn [_ _] "/Code/brian/.worktrees")
+                engine/resolve-instance-id
+                (fn [wt] (str "brian--" (last (clojure.string/split wt #"/"))))]
+    (is (= {:wt-path "/Code/brian/.worktrees/feat/screen-capture"
+            :instance-id "brian--screen-capture"}
+           (lifecycle/session-coords "feat/screen-capture" {:project "brian"})))))
