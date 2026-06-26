@@ -5,7 +5,8 @@
    context; the engine owns flow."
   (:require
    [cheshire.core :as json]
-   [clojure.string :as str]))
+   [clojure.string :as str]
+   [nido.review.codex :as codex]))
 
 (def ^:private fenced-json-re #"(?s)```json\s*(\{.*?\})\s*```")
 
@@ -23,3 +24,14 @@
         (catch Exception e
           {:decision :indeterminate :reason (str "unparseable: " (ex-message e))}))
       {:decision :indeterminate :reason "no json decision block"})))
+
+(def review-stage
+  {:name :review
+   :run  (fn [ctx]
+           (let [{:keys [cwd base run-id]} (:config ctx)
+                 res (codex/review! {:cwd cwd :base base :run-id run-id})]
+             (if (= :clean (:status res))
+               (assoc ctx :findings [] :control :stop :status :clean)
+               (assoc ctx
+                      :findings (:findings res)
+                      :overall-correctness (:overall-correctness res)))))})
