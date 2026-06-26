@@ -167,18 +167,27 @@
       :else      {:state :down})))
 
 (defn session-dev-state
-  "Derived dev-resource state for one session of `project`. Resolves the
-   worktree path + canonical instance-id via lifecycle/session-coords (so
-   slash-namespaced names resolve correctly), then derives via dev-state-for."
-  [project session]
-  (let [{:keys [wt-path instance-id]} (lifecycle/session-coords session {:project project})]
-    (dev-state-for wt-path instance-id (state/read-registry) proc/tcp-open? current-app-state)))
+  "Derived dev-resource state for one session of `project`. The 2-arity reads
+   the live registry; the 3-arity reuses a pre-read registry so batch callers
+   (a whole workstream's sessions) read the registry once, not per session.
+   Resolves worktree path + canonical instance-id via lifecycle/session-coords
+   (so slash-namespaced names resolve correctly), then derives via dev-state-for."
+  ([project session] (session-dev-state project session (state/read-registry)))
+  ([project session registry]
+   (let [{:keys [wt-path instance-id]} (lifecycle/session-coords session {:project project})]
+     (dev-state-for wt-path instance-id registry proc/tcp-open? current-app-state))))
 
 (defn- ws-session-dev-states
-  "Map of session-name → derived dev-resource state for a workstream's sessions."
+  "Map of session-name → derived dev-resource state for a workstream's sessions.
+   Reads the registry once (not once per session) so a pane poll is O(1) registry
+   IO + one probe per session."
   [project ws]
-  (into {} (for [s (:sessions ws)]
-             [(:name s) (session-dev-state project (:name s))])))
+  (let [sessions (:sessions ws)]
+    (if (empty? sessions)
+      {}
+      (let [registry (state/read-registry)]
+        (into {} (for [{:keys [name]} sessions]
+                   [name (session-dev-state project name registry)]))))))
 
 (defn all-grouped
   "[{:project :grouped} …] across registered projects (mirrors all-session-rows)."

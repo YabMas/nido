@@ -250,6 +250,16 @@
     (is (= {:state :running :url "http://x.localhost:3142"}
            (server/session-dev-state "brian" "feat/x")))))
 
+(deftest session-dev-state-3-arity-uses-passed-registry
+  (with-redefs [nido.session.lifecycle/session-coords
+                (fn [_ _] {:wt-path "/wt" :instance-id "brian--x"})
+                nido.session.state/read-registry
+                (fn [] (throw (ex-info "should not read registry in 3-arity" {})))
+                nido.process/tcp-open? (fn [_] true)]
+    (is (= {:state :running :url "http://x.localhost:3142"}
+           (server/session-dev-state "brian" "feat/x"
+                                     {"/wt" {:app-port 3142 :url "http://x.localhost:3142"}})))))
+
 (deftest workstreams-route-honors-source-filter
   (with-redefs [server/all-grouped
                 (fn [] [{:project :brian
@@ -273,8 +283,9 @@
                                :stage :triage :label "BR-7 · t" :ledger nil :report nil
                                :sessions [{:name "me" :autonomy-level :interactive
                                            :parked? false :status :up :brakes nil}]})
+                nido.session.state/read-registry (fn [] {})
                 nido.ui.server/session-dev-state
-                (fn [_ _] {:state :running :url "http://me.brian.localhost:3142"})]
+                (fn [_ _ & _] {:state :running :url "http://me.brian.localhost:3142"})]
     (let [resp (server/handle-request {:request-method :get :uri "/_fragment/workstream/brian/ws-1"})]
       (is (= 200 (:status resp)))
       (is (str/includes? (get-in resp [:headers "Content-Type"]) "text/event-stream"))
