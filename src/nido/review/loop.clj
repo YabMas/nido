@@ -63,7 +63,13 @@
     (loop [iter 1, history [], prev-findings nil]
       (let [ctx0 {:config (assoc config :max-iters max-iters)
                   :iter iter :history history :control :continue}
-            ctx  (run-pipeline ctx0 pipeline sink)]
+            ctx  (try
+                   (run-pipeline ctx0 pipeline sink)
+                   (catch clojure.lang.ExceptionInfo e
+                     (if (= :review-failed (:reason (ex-data e)))
+                       (let [c (assoc ctx0 :status :review-failed :error (ex-message e))]
+                         (sink c) c)
+                       (throw e))))]
         (cond
           ;; a stage set a terminal status or terminal control
           (:status ctx) ctx

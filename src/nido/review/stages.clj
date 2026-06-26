@@ -76,24 +76,26 @@
 
 (defn- select-findings
   [findings idxs]
-  (if (seq idxs) (mapv #(nth findings %) idxs) findings))
+  (if (seq idxs) (into [] (keep #(nth findings % nil)) idxs) findings))
 
 (def fix-stage
   {:name :fix
    :run  (fn [ctx]
-           (let [{:keys [cwd run-id budget]} (:config ctx)
-                 to-fix (select-findings (:findings ctx)
-                                         (-> ctx :judge :fix-findings))
-                 {:keys [num-turns]}
-                 (agent/launch! {:run-id run-id :cwd cwd
-                                 :first-message (prompts/fix-prompt {:findings to-fix})
-                                 :budget budget})]
-             (if (or (zero? (or num-turns 0)) (not (working-copy-dirty? cwd)))
-               (assoc ctx :control :stop :status :fix-noop)
-               (let [msg (str "review-loop: iter " (:iter ctx) " fixes")
-                     _   (jj/jj! cwd "commit" "-m" msg)
-                     cid (:out (jj/jj! cwd "log" "-r" "@-" "-T" "commit_id" "--no-graph"))]
-                 (update ctx :history (fnil conj [])
-                         {:iter (:iter ctx) :commit cid
-                          :findings (:findings ctx) :judge (:judge ctx)})))))})
+           (if (:dry-run? (:config ctx))
+             (assoc ctx :control :stop :status :dry-run)
+             (let [{:keys [cwd run-id budget]} (:config ctx)
+                   to-fix (select-findings (:findings ctx)
+                                           (-> ctx :judge :fix-findings))
+                   {:keys [num-turns]}
+                   (agent/launch! {:run-id run-id :cwd cwd
+                                   :first-message (prompts/fix-prompt {:findings to-fix})
+                                   :budget budget})]
+               (if (or (zero? (or num-turns 0)) (not (working-copy-dirty? cwd)))
+                 (assoc ctx :control :stop :status :fix-noop)
+                 (let [msg (str "review-loop: iter " (:iter ctx) " fixes")
+                       _   (jj/jj! cwd "commit" "-m" msg)
+                       cid (:out (jj/jj! cwd "log" "-r" "@-" "-T" "commit_id" "--no-graph"))]
+                   (update ctx :history (fnil conj [])
+                           {:iter (:iter ctx) :commit cid
+                            :findings (:findings ctx) :judge (:judge ctx)}))))))})
 

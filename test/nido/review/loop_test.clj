@@ -50,3 +50,10 @@
               (stage :fix    (fn [c] c))]
         out (rloop/run-loop {:run-id "r1" :max-iters 5 :pipeline pipe :sink (fn [_])})]
     (is (= :clean (:status out)))))
+
+(deftest review-failed-is-terminal
+  (let [pipe [(stage :review (fn [_] (throw (ex-info "codex review failed" {:reason :review-failed}))))
+              (stage :judge (fn [c] c))
+              (stage :fix (fn [c] c))]
+        out (rloop/run-loop {:run-id "r1" :max-iters 3 :pipeline pipe :sink (fn [_])})]
+    (is (= :review-failed (:status out)))))

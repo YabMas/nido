@@ -89,3 +89,24 @@
                 :findings [{:title "x"}] :judge {:fix-findings nil}})]
       (is (= :stop (:control ctx)))
       (is (= :fix-noop (:status ctx))))))
+
+(deftest fix-stage-dry-run-skips-fix
+  (let [launched (atom false)]
+    (with-redefs [agent/launch! (fn [_] (reset! launched true) {:num-turns 5 :result-error? false :result-text "x"})
+                  stages/working-copy-dirty? (fn [_] true)
+                  jj/jj! (fn [& _] {:exit 0 :out "" :err ""})]
+      (let [ctx ((:run stages/fix-stage)
+                 {:config {:cwd "/w" :run-id "r1" :dry-run? true} :iter 1
+                  :findings [{:title "x"}] :judge {:fix-findings nil}})]
+        (is (= :stop (:control ctx)))
+        (is (= :dry-run (:status ctx)))
+        (is (false? @launched))))))
+
+(deftest fix-stage-tolerates-out-of-range-judge-indices
+  (with-redefs [agent/launch! (fn [_] {:num-turns 3 :result-error? false :result-text "done"})
+                stages/working-copy-dirty? (fn [_] true)
+                jj/jj! (fn [_ & _] {:exit 0 :out "" :err ""})]
+    (let [ctx ((:run stages/fix-stage)
+               {:config {:cwd "/w" :run-id "r1"} :iter 1
+                :findings [{:title "only"}] :judge {:fix-findings [0 99]}})]
+      (is (= 1 (count (:history ctx)))))))
