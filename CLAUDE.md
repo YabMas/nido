@@ -20,18 +20,27 @@ How "land in the session" works depends on the terminal:
 - **Warp** — enter opens a **new tab in the current window** at the session-home (`<kbd>w</kbd>` targets the worktree instead) and **leaves the TUI running**, so you orchestrate from one persistent nido tab and spin off a tab per session. Warp's URI scheme (`warp://action/new_tab?path=…`) can't run a command or set a title, so the tab lands at a bare shell; name it with the precmd hook below.
 - **Every other terminal** — enter falls back to the `cd`-handoff: the TUI writes `~/.nido/.last-cd`, quits, and a tiny shell function `cd`s the parent shell there (bb is a child process and can't change its parent's cwd itself).
 
-### Shell wrapper (non-Warp cd-handoff)
+### Shell wrapper (TUI launcher + verb dispatch + cd-handoff)
 
 ```zsh
 nido() {
   local f=~/.nido/.last-cd
   rm -f "$f"
-  (cd ~/Code/nido && command bb nido:tui "$@")
+  if (( $# == 0 )) || [[ "$1" == tui ]]; then
+    (cd ~/Code/nido && command bb nido:tui "${@:2}")
+  else
+    # Dispatch `nido <verb> [args]` to nido's tasks from the CURRENT cwd,
+    # so tasks resolve the session via session-from-cwd. --config points bb
+    # at nido's bb.edn regardless of the project's own bb.edn in the worktree.
+    command bb --config ~/Code/nido/bb.edn "nido:$1" "${@:2}"
+  fi
   [[ -s "$f" ]] && { cd "$(cat "$f")" && rm -f "$f"; }
 }
 ```
 
-Launch the TUI as `nido` rather than `bb nido:tui`. (In Warp the wrapper is harmless — enter spawns a tab and never writes `.last-cd`, so the trailing `cd` is simply skipped.)
+Launch the TUI as `nido` (or `nido tui`) rather than `bb nido:tui`. (In Warp the wrapper is harmless — enter spawns a tab and never writes `.last-cd`, so the trailing `cd` is simply skipped.)
+
+`nido <verb> [args]` runs `bb nido:<verb>` from your current directory — so `nido session:status`, `nido session:link:add …`, `nido review:loop …` all work from inside a project worktree, with no `cd` to the session home. `--config` makes `bb` load nido's `bb.edn` even though the worktree carries the project's own; the task then resolves which session you're in via `session-from-cwd`.
 
 ### Tab naming (Warp)
 
