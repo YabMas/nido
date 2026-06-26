@@ -222,21 +222,33 @@
                            :ready [] :in-progress [{:origin :scratch}]}}]]
     (is (= {:notion 2 :slack 1 :scratch 1} (#'server/source-counts groups)))))
 
-(deftest dev-env-state-running-down-and-none
-  (with-redefs [nido.work/dev-target (fn [_ _] {:project "brian" :session "impl-BR-7"})
+(deftest dev-state-for-derives-from-registry-probe-and-pending
+  (let [reg {"/wt" {:app-port 3142 :url "http://x.localhost:3142"}}]
+    ;; running: live port wins
+    (is (= {:state :running :url "http://x.localhost:3142"}
+           (server/dev-state-for "/wt" "brian--x" reg (fn [_] true) (fn [_] nil))))
+    ;; down: port closed, no pending
+    (is (= {:state :down}
+           (server/dev-state-for "/wt" "brian--x" reg (fn [_] false) (fn [_] nil))))
+    ;; down: no registry entry at all
+    (is (= {:state :down}
+           (server/dev-state-for "/missing" "brian--x" reg (fn [_] true) (fn [_] nil))))
+    ;; starting: pending keyword shows when not live
+    (is (= {:state :starting :error-msg nil}
+           (server/dev-state-for "/wt" "brian--x" reg (fn [_] false) (fn [_] :starting))))
+    ;; failed: pending map carries the error message
+    (is (= {:state :failed :error-msg "boom"}
+           (server/dev-state-for "/wt" "brian--x" reg (fn [_] false)
+                                 (fn [_] {:state :failed :error-msg "boom"}))))))
+
+(deftest session-dev-state-wires-coords-registry-and-probe
+  (with-redefs [nido.session.lifecycle/session-coords
+                (fn [_ _] {:wt-path "/wt" :instance-id "brian--x"})
                 nido.session.state/read-registry
-                (fn [] {"/wt" {:instance-id "brian--impl-BR-7" :app-port 3142
-                               :url "http://impl.brian.localhost:3142"}})
+                (fn [] {"/wt" {:app-port 3142 :url "http://x.localhost:3142"}})
                 nido.process/tcp-open? (fn [_] true)]
-    (is (= {:state :running :url "http://impl.brian.localhost:3142"}
-           (server/dev-env-state "brian" "ws-1"))))
-  (with-redefs [nido.work/dev-target (fn [_ _] {:project "brian" :session "impl-down"})
-                nido.session.state/read-registry
-                (fn [] {"/wt" {:instance-id "brian--impl-down" :app-port 3142}})
-                nido.process/tcp-open? (fn [_] false)]
-    (is (= :down (:state (server/dev-env-state "brian" "ws-1")))))
-  (with-redefs [nido.work/dev-target (fn [_ _] nil)]
-    (is (= {:state :none} (server/dev-env-state "brian" "ws-1")))))
+    (is (= {:state :running :url "http://x.localhost:3142"}
+           (server/session-dev-state "brian" "feat/x")))))
 
 (deftest workstreams-route-honors-source-filter
   (with-redefs [server/all-grouped

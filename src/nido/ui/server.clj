@@ -169,6 +169,31 @@
         :else      {:state :down}))
     {:state :none}))
 
+(defn dev-state-for
+  "Pure derivation of a session's dev-resource state from real state: the
+   registry entry (looked up by worktree path), a TCP probe of its app port,
+   and the optimistic app-states. Returns {:state … :url :error-msg}.
+   No :none — every session can host resources; :down just means 'not up'."
+  [wt-path instance-id registry probe app-state-fn]
+  (let [entry      (get registry wt-path)
+        port       (:app-port entry)
+        live?      (and (pos-int? port) (probe port))
+        pending    (app-state-fn instance-id)
+        pending-kw (cond (map? pending)     (:state pending)
+                         (keyword? pending) pending)]
+    (cond
+      live?      {:state :running :url (:url entry)}
+      pending-kw {:state pending-kw :error-msg (when (map? pending) (:error-msg pending))}
+      :else      {:state :down})))
+
+(defn session-dev-state
+  "Derived dev-resource state for one session of `project`. Resolves the
+   worktree path + canonical instance-id via lifecycle/session-coords (so
+   slash-namespaced names resolve correctly), then derives via dev-state-for."
+  [project session]
+  (let [{:keys [wt-path instance-id]} (lifecycle/session-coords session {:project project})]
+    (dev-state-for wt-path instance-id (state/read-registry) proc/tcp-open? current-app-state)))
+
 (defn all-grouped
   "[{:project :grouped} …] across registered projects (mirrors all-session-rows)."
   []
