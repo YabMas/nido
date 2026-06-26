@@ -126,6 +126,16 @@
        :args    ["-y" "@modelcontextprotocol/server-postgres" url]
        :env     {}}}}))
 
+(defn write-session-mcp!
+  "Render the postgres MCP config and write it to the instance-state dir as a
+   launch input. Returns the path, or nil when the session has no postgres."
+  [instance-id pg-svc pg-port]
+  (when (and pg-svc pg-port)
+    (let [path (state/session-mcp-path instance-id)]
+      (fs/create-dirs (fs/parent path))
+      (io/write-json! path (mcp-config pg-svc pg-port))
+      path)))
+
 (defn- render-link-line
   "One bullet for a link: '- <url>' or '- <url> — <title>'."
   [{:keys [url title]}]
@@ -404,6 +414,8 @@
         (let [path (mcp-path project-name session-name)]
           (io/write-json! path mcp-doc)
           (core/log-step (str "Wrote " path))))
+      (when-let [svc-mcp-path (write-session-mcp! (get-in ctx [:session :instance-id]) pg-svc pg-port)]
+        (core/log-step (str "Wrote " svc-mcp-path)))
       (let [path (claude-md-path project-name session-name)]
         (io/write-text! path ctx-doc)
         (core/log-step (str "Wrote " path)))

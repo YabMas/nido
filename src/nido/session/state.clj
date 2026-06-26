@@ -24,6 +24,13 @@
   [instance-id]
   (str (fs/path (state-dir) instance-id)))
 
+(defn session-mcp-path
+  "Path to a session's rendered postgres MCP config (a launch input passed via
+   claude's --mcp-config). Lives under the durable instance-state dir, not the
+   ephemeral session home."
+  [instance-id]
+  (str (fs/path (instance-state-dir instance-id) "mcp.json")))
+
 (defn session-state-file
   "Session state file: ~/.nido/state/<instance-id>/session.edn"
   [instance-id]

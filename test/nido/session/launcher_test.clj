@@ -1,10 +1,12 @@
 (ns nido.session.launcher-test
   (:require
    [babashka.fs :as fs]
+   [cheshire.core :as json]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
    [nido.core :as core]
-   [nido.session.launcher :as launcher]))
+   [nido.session.launcher :as launcher]
+   [nido.session.state :as state]))
 
 (def ^:private base-ctx
   {:session-name "doc-room"
@@ -222,3 +224,20 @@
     (testing "no workstream line for human/non-run sessions"
       (is (not (str/includes? doc "workstream:"))
           "no workstream line should appear when workstream-id is nil"))))
+
+(deftest write-session-mcp-writes-to-state-dir
+  (let [tmp (str (fs/create-temp-dir))]
+    (with-redefs [state/instance-state-dir (fn [_id] tmp)]
+      (let [path (launcher/write-session-mcp!
+                  "proj--sess"
+                  {:db-name "d" :db-user "u" :db-password "p"} 5599)]
+        (is (= (state/session-mcp-path "proj--sess") path))
+        (is (fs/exists? path))
+        (let [cfg (json/parse-string (slurp path) keyword)
+              conn (-> cfg :mcpServers :postgres :args last)]
+          (is (re-find #"localhost:5599/d" conn)))))))
+
+(deftest write-session-mcp-noop-without-pg
+  (with-redefs [state/instance-state-dir (fn [_id] "/never")]
+    (is (nil? (launcher/write-session-mcp! "x--y" nil nil)))
+    (is (nil? (launcher/write-session-mcp! "x--y" {:db-name "d"} nil)))))
