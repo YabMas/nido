@@ -375,9 +375,12 @@
                           (when-let [p (get-in final-ctx [:pg :port])]
                             {:pg-port p}))]
       (state/upsert-registry! project-dir registry-entry))
-    (try (agent-guidance/write! final-ctx)
+    ;; The session briefing is now injected at launch (--append-system-prompt),
+    ;; so the worktree stays pure project code: remove any prior nido-managed
+    ;; CLAUDE.md instead of writing one. (Session-home dissolution, step 2.)
+    (try (agent-guidance/remove! project-dir)
          (catch Exception e
-           (core/log-step (str "warning: failed to write agent CLAUDE.md: "
+           (core/log-step (str "warning: failed to remove agent CLAUDE.md: "
                                (ex-message e)))))
     ;; Persist the resolved profile so destroy! / reset! can read it back
     ;; without re-resolving (robust against registry edits between up and
