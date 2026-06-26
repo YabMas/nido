@@ -2,6 +2,7 @@
   (:require [clojure.test :refer [deftest is]]
             [clojure.string :as str]
             [nido.ui.server :as server]
+            [nido.session.engine]
             [nido.session.lifecycle :as lifecycle]
             [nido.session.state]
             [nido.process]
@@ -281,17 +282,41 @@
       (is (str/includes? (:body resp) "Open app"))
       (is (str/includes? (:body resp) "/sessions/me/dev/stop")))))
 
-(deftest post-dev-start-dispatches-and-returns-pane-sse
-  (with-redefs [nido.work/dev-target (fn [_ _] {:project "brian" :session "impl-BR-7"})
-                nido.work/ensure-open! (fn [_ _ _] false)
-                nido.session.lifecycle/up! (fn [_ _] nil)
-                nido.work/workstream
-                (fn [_ _ & _] {:project "brian" :ws-id "ws-1" :origin :notion
-                               :stage :triage :label "BR-7 · t" :ledger nil :report nil :sessions []})]
-    (let [resp (server/handle-request {:request-method :post :uri "/workstreams/brian/ws-1/dev/start"})]
-      (is (= 200 (:status resp)))
-      (is (str/includes? (get-in resp [:headers "Content-Type"]) "text/event-stream"))
-      (is (str/includes? (:body resp) "ws-pane")))))
+(deftest post-session-dev-start-dispatches-and-returns-pane-sse
+  (let [calls (atom [])]
+    (with-redefs [nido.session.lifecycle/session-coords
+                  (fn [s _] {:wt-path (str "/wt/" s) :instance-id (str "brian--" s)})
+                  nido.session.engine/read-profile-for-session (fn [_] {:services []})
+                  nido.work/ensure-open! (fn [& _] false)
+                  nido.session.lifecycle/up! (fn [s opts] (swap! calls conj [:up s (:profile opts)]))
+                  nido.process/tcp-open? (fn [_] true)
+                  nido.ui.server/app-port-for-instance (fn [_] 4096)
+                  nido.work/workstream
+                  (fn [_ _ & _] {:project "brian" :ws-id "ws-1" :origin :notion
+                                 :stage :triage :label "BR-7 · t" :ledger nil :report nil :sessions []})]
+      (let [resp (server/handle-request
+                  {:request-method :post :uri "/workstreams/brian/ws-1/sessions/feat%2Fx/dev/start"})]
+        (Thread/sleep 50)
+        (is (= 200 (:status resp)))
+        (is (str/includes? (get-in resp [:headers "Content-Type"]) "text/event-stream"))
+        (is (str/includes? (:body resp) "ws-pane"))
+        ;; decoded session name + reused persisted profile threaded into up!
+        (is (= [[:up "feat/x" {:services []}]] @calls))))))
+
+(deftest post-session-dev-stop-calls-down
+  (let [calls (atom [])]
+    (with-redefs [nido.session.lifecycle/session-coords
+                  (fn [s _] {:wt-path (str "/wt/" s) :instance-id (str "brian--" s)})
+                  nido.session.engine/read-profile-for-session (fn [_] nil)
+                  nido.session.lifecycle/down! (fn [s _] (swap! calls conj [:down s]))
+                  nido.work/workstream
+                  (fn [_ _ & _] {:project "brian" :ws-id "ws-1" :origin :notion
+                                 :stage :triage :label "BR-7 · t" :ledger nil :report nil :sessions []})]
+      (let [resp (server/handle-request
+                  {:request-method :post :uri "/workstreams/brian/ws-1/sessions/me/dev/stop"})]
+        (Thread/sleep 50)
+        (is (= 200 (:status resp)))
+        (is (= [[:down "me"]] @calls))))))
 
 (deftest workstream-route-honours-entry-param
   (with-redefs [nido.work/grouped (fn [_] {:triage {:in-flight [] :queued []}
