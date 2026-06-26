@@ -133,7 +133,6 @@
                 nido.work/workstream (fn [_ _ & _] {:ws-id "ws-1" :project "brian" :origin :notion
                                                   :stage :triage :label "BR-7" :ledger nil
                                                   :report {:markdown "# V\n\nbody"} :sessions []})
-                nido.ui.server/dev-env-state (fn [_ _] {:state :none})
                 nido.ui.server/read-rail-daemon (fn [] {:state :up})]
     (let [resp (server/handle-request {:request-method :get :uri "/workstreams/brian/ws-1"})]
       (is (= 200 (:status resp)))
@@ -267,16 +266,20 @@
       (is (str/includes? (:body resp) "N-one"))
       (is (not (str/includes? (:body resp) "S-one")) "slack row filtered out by source=notion"))))
 
-(deftest fragment-workstream-route-is-sse-and-renders-dev-env
+(deftest fragment-workstream-route-is-sse-and-renders-per-session-dev-env
   (with-redefs [nido.work/workstream
                 (fn [_ _ & _] {:project "brian" :ws-id "ws-1" :origin :notion
-                               :stage :triage :label "BR-7 · t" :ledger nil :report nil :sessions []})
-                nido.ui.server/dev-env-state (fn [_ _] {:state :running :url "http://impl.brian.localhost:3142"})]
+                               :stage :triage :label "BR-7 · t" :ledger nil :report nil
+                               :sessions [{:name "me" :autonomy-level :interactive
+                                           :parked? false :status :up :brakes nil}]})
+                nido.ui.server/session-dev-state
+                (fn [_ _] {:state :running :url "http://me.brian.localhost:3142"})]
     (let [resp (server/handle-request {:request-method :get :uri "/_fragment/workstream/brian/ws-1"})]
       (is (= 200 (:status resp)))
       (is (str/includes? (get-in resp [:headers "Content-Type"]) "text/event-stream"))
       (is (str/includes? (:body resp) "ws-pane"))
-      (is (str/includes? (:body resp) "Open app")))))
+      (is (str/includes? (:body resp) "Open app"))
+      (is (str/includes? (:body resp) "/sessions/me/dev/stop")))))
 
 (deftest post-dev-start-dispatches-and-returns-pane-sse
   (with-redefs [nido.work/dev-target (fn [_ _] {:project "brian" :session "impl-BR-7"})
@@ -284,8 +287,7 @@
                 nido.session.lifecycle/up! (fn [_ _] nil)
                 nido.work/workstream
                 (fn [_ _ & _] {:project "brian" :ws-id "ws-1" :origin :notion
-                               :stage :triage :label "BR-7 · t" :ledger nil :report nil :sessions []})
-                nido.ui.server/dev-env-state (fn [_ _] {:state :starting})]
+                               :stage :triage :label "BR-7 · t" :ledger nil :report nil :sessions []})]
     (let [resp (server/handle-request {:request-method :post :uri "/workstreams/brian/ws-1/dev/start"})]
       (is (= 200 (:status resp)))
       (is (str/includes? (get-in resp [:headers "Content-Type"]) "text/event-stream"))
@@ -301,7 +303,6 @@
                                :stage :triage :label "BR-7" :ledger nil
                                :selected-seq sel :entries nil
                                :report {:markdown (str "# V\n\nsel=" (pr-str sel))} :sessions []})
-                nido.ui.server/dev-env-state (fn [_ _] {:state :none})
                 nido.ui.server/read-rail-daemon (fn [] {:state :up})]
     (let [resp (server/handle-request {:request-method :get
                                        :uri "/workstreams/brian/ws-1"

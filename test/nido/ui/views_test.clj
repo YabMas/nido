@@ -115,39 +115,37 @@
 (deftest workstream-pane-shows-ledger-report-and-sessions
   (let [ws   (assoc sample-ws :report {:format :markdown :kind :triage :at "t" :title "Verdict"
                                        :markdown "# Verdict\n\nbug — reproduced."})
-        html (views/workstream-pane ws {:state :running :url "http://auto.brian.localhost:3142"})]
+        html (views/workstream-pane ws {"auto" {:state :running :url "http://auto.brian.localhost:3142"}})]
     (is (str/includes? html "BR-7"))
     (is (str/includes? html "investigating"))            ; ledger summary status
     (is (str/includes? html "bug — reproduced."))        ; report markdown
-    (is (str/includes? html "auto"))                     ; LLM session still listed
-    (is (str/includes? html "http://auto.brian.localhost:3142")))) ; now the Open-app link
+    (is (str/includes? html "auto"))                     ; session listed
+    (is (str/includes? html "http://auto.brian.localhost:3142")))) ; per-row Open-app link
 
-(deftest workstream-pane-dev-env-running-shows-open-and-restart
-  (let [html (views/workstream-pane sample-ws {:state :running :url "http://impl.brian.localhost:3142"})]
-    (is (str/includes? html "Dev environment"))
+(deftest workstream-pane-session-running-shows-open-and-stop
+  (let [html (views/workstream-pane sample-ws {"me" {:state :running :url "http://me.brian.localhost:3142"}})]
+    (is (str/includes? html "dev env"))                  ; new table column header
     (is (str/includes? html "Open app"))
-    (is (str/includes? html "http://impl.brian.localhost:3142"))
-    (is (str/includes? html "/workstreams/brian/ws-1/dev/restart"))
+    (is (str/includes? html "http://me.brian.localhost:3142"))
+    (is (str/includes? html "/workstreams/brian/ws-1/sessions/me/dev/stop"))
     (is (str/includes? html "id=\"ws-pane\""))
     (is (str/includes? html "/_fragment/workstream/brian/ws-1"))   ; pane interval poll
-    (is (str/includes? html "auto"))))                             ; LLM sessions table intact
+    (is (str/includes? html "auto"))))                             ; other session row intact
 
-(deftest workstream-pane-dev-env-down-shows-start
-  (let [html (views/workstream-pane sample-ws {:state :down})]
-    (is (str/includes? html "/workstreams/brian/ws-1/dev/start"))
-    (is (not (str/includes? html "Open app")))))
+(deftest workstream-pane-session-down-shows-start
+  (let [html (views/workstream-pane sample-ws {"me" {:state :down}})]
+    (is (str/includes? html "/workstreams/brian/ws-1/sessions/me/dev/start"))))
 
-(deftest workstream-pane-dev-env-none-is-calm
-  (let [html (views/workstream-pane sample-ws {:state :none})]
-    (is (str/includes? html "No dev environment yet"))
-    (is (not (str/includes? html "/dev/start")))
-    (is (not (str/includes? html "/dev/restart")))))
-
-(deftest workstream-pane-dev-env-failed-shows-retry-and-error
-  (let [html (views/workstream-pane sample-ws {:state :failed :error-msg "boom: port never opened"})]
+(deftest workstream-pane-session-failed-shows-retry-and-error
+  (let [html (views/workstream-pane sample-ws {"me" {:state :failed :error-msg "boom: port never opened"}})]
     (is (str/includes? html "retry"))
     (is (str/includes? html "boom: port never opened"))
-    (is (str/includes? html "/workstreams/brian/ws-1/dev/start"))))   ; retry POSTs to start
+    (is (str/includes? html "/workstreams/brian/ws-1/sessions/me/dev/start"))))   ; retry POSTs to start
+
+(deftest workstream-pane-no-dev-env-card
+  ;; the standalone weight-gated card is gone
+  (let [html (views/workstream-pane sample-ws {})]
+    (is (not (str/includes? html "No dev environment yet")))))
 
 (deftest workstream-pane-empty-when-nil
   (is (str/includes? (views/workstream-pane nil nil) "Select a workstream")))
@@ -263,7 +261,7 @@
                               {:seq 1 :kind :triage :at "2026-06-18T00:00:00Z" :title "Verdict"}]
                     :report {:format :markdown :kind :impl :at "t" :title "Draft PR"
                              :markdown "# Draft PR\n\nopened it."})
-        html (views/workstream-pane ws {:state :none})]
+        html (views/workstream-pane ws {})]
     (is (str/includes? html "ledger-index"))
     (is (str/includes? html "Draft PR"))                      ; row + report title
     (is (str/includes? html "Verdict"))                       ; other row
@@ -276,7 +274,7 @@
                     :selected-seq 2
                     :entries [{:seq 2 :kind :impl :at "t" :title "a"}
                               {:seq 1 :kind :triage :at "t" :title "b"}])
-        html (views/workstream-pane ws {:state :none})]
+        html (views/workstream-pane ws {})]
     (is (str/includes? html "/_fragment/workstream/brian/ws-1?entry=2")
         "self-poll re-requests the same selected entry so it survives the refresh")))
 
@@ -284,14 +282,14 @@
   (let [ws   (assoc sample-ws :report {:format :implementation-plan :summary "Round on the total."
                                        :direction "Round once on the order total" :effort :M
                                        :steps ["add a render test" "fix the calc"]})
-        html (views/workstream-pane ws {:state :none})]
+        html (views/workstream-pane ws {})]
     (is (str/includes? html "Implementation plan"))
     (is (str/includes? html "Round once on the order total"))
     (is (str/includes? html "Steps"))
     (is (str/includes? html "fix the calc"))))
 
 (deftest workstream-pane-renders-blocker-completed-pr-cards
-  (let [pane (fn [report] (views/workstream-pane (assoc sample-ws :report report) {:state :none}))]
+  (let [pane (fn [report] (views/workstream-pane (assoc sample-ws :report report) {}))]
     (is (str/includes? (pane {:format :blocker :summary "Waiting." :needs "Stripe key"}) "Blocker"))
     (is (str/includes? (pane {:format :blocker :summary "Waiting." :needs "Stripe key"}) "Stripe key"))
     (is (str/includes? (pane {:format :implementation-completed :summary "Done."

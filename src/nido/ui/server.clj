@@ -148,27 +148,6 @@
           (assoc row :project pname))
         (sort-by (juxt #(if (:live? %) 0 1) :project :name)))))
 
-(defn dev-env-state
-  "Resolve a workstream's DEV ENVIRONMENT (its latest heavy session, via
-   work/dev-target) into a UI state map {:state :url :error-msg}. Reads the
-   registry + a TCP probe + the optimistic app-states atom, keyed by instance-id
-   so the pane and /system agree. {:state :none} when no dev env exists yet."
-  [project ws-id]
-  (if-let [{:keys [session]} (work/dev-target project ws-id)]
-    (let [registry    (state/read-registry)
-          instance-id (instance-id-for project session)
-          entry       (some (fn [[_ e]] (when (= instance-id (:instance-id e)) e)) registry)
-          port        (:app-port entry)
-          live?       (when entry (and (pos-int? port) (proc/tcp-open? port)))
-          pending     (current-app-state instance-id)
-          pending-kw  (cond (map? pending)     (:state pending)
-                            (keyword? pending) pending)]
-      (cond
-        live?      {:state :running :url (:url entry)}
-        pending-kw {:state pending-kw :error-msg (when (map? pending) (:error-msg pending))}
-        :else      {:state :down}))
-    {:state :none}))
-
 (defn dev-state-for
   "Pure derivation of a session's dev-resource state from real state: the
    registry entry (looked up by worktree path), a TCP probe of its app port,
@@ -193,6 +172,12 @@
   [project session]
   (let [{:keys [wt-path instance-id]} (lifecycle/session-coords session {:project project})]
     (dev-state-for wt-path instance-id (state/read-registry) proc/tcp-open? current-app-state)))
+
+(defn- ws-session-dev-states
+  "Map of session-name → derived dev-resource state for a workstream's sessions."
+  [project ws]
+  (into {} (for [s (:sessions ws)]
+             [(:name s) (session-dev-state project (:name s))])))
 
 (defn all-grouped
   "[{:project :grouped} …] across registered projects (mirrors all-session-rows)."
@@ -347,13 +332,13 @@
 
 (defn- ws-pane-fragment-response
   "SSE that patches #ws-pane with a freshly-rendered workstream pane (ws detail +
-   dev-env state). `entry` selects which ledger entry's report to show (nil → latest)."
+   per-session dev-env state). `entry` selects which ledger entry's report to show."
   ([project ws-id] (ws-pane-fragment-response project ws-id nil))
   ([project ws-id entry]
-   (sse-response
-    (sse-fragment
-     (views/workstream-pane (work/workstream project ws-id entry)
-                            (dev-env-state project ws-id))))))
+   (let [ws (work/workstream project ws-id entry)]
+     (sse-response
+      (sse-fragment
+       (views/workstream-pane ws (ws-session-dev-states project ws)))))))
 
 (defn- run-action!
   "Run the lifecycle action matching `action` and update the app-states
@@ -513,11 +498,12 @@
 
         ;; GET /workstreams/:project/:ws-id — overview + ledger pane
         (and (= 3 (count segments)) (= "workstreams" (first segments)))
-        (let [project (nth segments 1) ws-id (nth segments 2)]
+        (let [project (nth segments 1) ws-id (nth segments 2)
+              ws (work/workstream project ws-id (parse-entry query-string))]
           (html-response 200 (views/workstreams-page (rail-context :workstreams scope)
                                                      (scope-filter scope (all-grouped))
-                                                     (work/workstream project ws-id (parse-entry query-string))
-                                                     (dev-env-state project ws-id))))
+                                                     ws
+                                                     (ws-session-dev-states project ws))))
 
         ;; GET /_fragment/workstream/:project/:ws-id — SSE pane refresh (patches #ws-pane)
         (and (= 4 (count segments)) (= "_fragment" (first segments)) (= "workstream" (nth segments 1)))
