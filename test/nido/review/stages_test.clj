@@ -4,7 +4,8 @@
    [clojure.test :refer [deftest is]]
    [nido.coordinator.agent :as agent]
    [nido.review.codex :as codex]
-   [nido.review.stages :as stages]))
+   [nido.review.stages :as stages]
+   [nido.vsdd.jj :as jj]))
 
 (deftest parse-judge-decision-reads-fenced-json
   (let [txt (str "Here is my call.\n\n```json\n"
@@ -54,3 +55,26 @@
                {:config {:cwd "/w" :run-id "r1"} :iter 1 :findings []})]
       (is (= :stop (:control ctx)))
       (is (= :judge-indeterminate (:status ctx))))))
+
+(deftest fix-stage-commits-when-changed
+  (let [commits (atom [])]
+    (with-redefs [agent/launch! (fn [_] {:num-turns 4 :result-error? false :result-text "done"})
+                  stages/working-copy-dirty? (fn [_] true)
+                  jj/jj! (fn [_dir & args] (swap! commits conj (vec args))
+                           {:exit 0 :out "" :err ""})]
+      (let [ctx ((:run stages/fix-stage)
+                 {:config {:cwd "/w" :run-id "r1"} :iter 2
+                  :findings [{:title "x"}] :judge {:fix-findings nil}})]
+        (is (= 1 (count (:history ctx))))
+        (is (some #(= "commit" (first %)) @commits))
+        (is (nil? (:control ctx)))))))
+
+(deftest fix-stage-noop-stops
+  (with-redefs [agent/launch! (fn [_] {:num-turns 0 :result-error? false :result-text ""})
+                stages/working-copy-dirty? (fn [_] false)
+                jj/jj! (fn [& _] {:exit 0 :out "" :err ""})]
+    (let [ctx ((:run stages/fix-stage)
+               {:config {:cwd "/w" :run-id "r1"} :iter 2
+                :findings [{:title "x"}] :judge {:fix-findings nil}})]
+      (is (= :stop (:control ctx)))
+      (is (= :fix-noop (:status ctx))))))

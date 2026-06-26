@@ -8,6 +8,19 @@
   "codex review-guidelines prompt (lifted from codex's review template)."
   (slurp (io/resource "review/review_prompt.md")))
 
+(defn fix-prompt
+  "Instruction to fix the given findings. Do NOT commit — the engine commits."
+  [{:keys [findings]}]
+  (str
+   "Fix the following code-review findings in this working directory. Make the\n"
+   "MINIMAL change that resolves each. Do NOT commit — the orchestrator commits.\n\n"
+   (->> findings
+        (map (fn [f]
+               (str "- [P" (:priority f) "] " (:title f) "\n"
+                    "  file: " (:file f) ":" (:line-start f) "-" (:line-end f) "\n"
+                    "  " (:body f))))
+        (clojure.string/join "\n\n"))))
+
 (defn judge-prompt
   "Build the judge prompt. findings: normalized findings this round.
    history: prior rounds digest. design-doc: path string or nil."

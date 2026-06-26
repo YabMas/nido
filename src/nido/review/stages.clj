@@ -9,7 +9,8 @@
    [clojure.string :as str]
    [nido.coordinator.agent :as agent]
    [nido.review.codex :as codex]
-   [nido.review.prompts :as prompts]))
+   [nido.review.prompts :as prompts]
+   [nido.vsdd.jj :as jj]))
 
 (def ^:private fenced-json-re #"(?s)```json\s*(\{.*?\})\s*```")
 
@@ -67,4 +68,32 @@
                (assoc ctx :judge decision :control :stop
                       :status :judge-indeterminate)
                (assoc ctx :judge decision :control (:decision decision)))))})
+
+(defn working-copy-dirty?
+  "True when jj reports working-copy changes in cwd."
+  [cwd]
+  (not (str/blank? (:out (jj/jj! cwd "diff" "--git")))))
+
+(defn- select-findings
+  [findings idxs]
+  (if (seq idxs) (mapv #(nth findings %) idxs) findings))
+
+(def fix-stage
+  {:name :fix
+   :run  (fn [ctx]
+           (let [{:keys [cwd run-id budget]} (:config ctx)
+                 to-fix (select-findings (:findings ctx)
+                                         (-> ctx :judge :fix-findings))
+                 {:keys [num-turns]}
+                 (agent/launch! {:run-id run-id :cwd cwd
+                                 :first-message (prompts/fix-prompt {:findings to-fix})
+                                 :budget budget})]
+             (if (or (zero? (or num-turns 0)) (not (working-copy-dirty? cwd)))
+               (assoc ctx :control :stop :status :fix-noop)
+               (let [msg (str "review-loop: iter " (:iter ctx) " fixes")
+                     _   (jj/jj! cwd "commit" "-m" msg)
+                     cid (:out (jj/jj! cwd "log" "-r" "@-" "-T" "commit_id" "--no-graph"))]
+                 (update ctx :history (fnil conj [])
+                         {:iter (:iter ctx) :commit cid
+                          :findings (:findings ctx) :judge (:judge ctx)})))))})
 
