@@ -118,8 +118,14 @@
    (let [cwd*     (str (canonical cwd) "/")
          projects (config/read-projects)
          match    (->> (state/read-registry)
-                       (filter (fn [[wt _]]
-                                 (str/starts-with? cwd* (str (canonical wt) "/"))))
+                       ;; Only entries for a registered project are resolvable
+                       ;; nido sessions; skip foreign/legacy entries (e.g. a
+                       ;; codex worktree with :project-name nil) so cwd inside
+                       ;; one resolves to nil rather than crashing in
+                       ;; worktrees-dir / load-session-edn.
+                       (filter (fn [[wt entry]]
+                                 (and (get projects (:project-name entry))
+                                      (str/starts-with? cwd* (str (canonical wt) "/")))))
                        (sort-by (fn [[wt _]] (count (canonical wt))))
                        last)]
      (when match

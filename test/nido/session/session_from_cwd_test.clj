@@ -54,6 +54,21 @@
       ;; a sibling that only shares a path prefix segment must NOT match
       (is (nil? (lifecycle/session-from-cwd "/Code/brian/.worktrees/fix/orderingX"))))))
 
+(deftest skips-entries-whose-project-is-not-registered
+  ;; Foreign/legacy registry entries — a codex worktree with :project-name nil,
+  ;; or a project no longer in config — must not be matched: cwd inside one
+  ;; resolves to nil (graceful), never crashing in worktrees-dir/load-session-edn.
+  (with-redefs [state/read-registry
+                (fn [] {"/Codex/worktrees/6aa4/brian-next"
+                        {:project-name nil :instance-id nil}
+                        "/Code/ghost/.worktrees/x"
+                        {:project-name "ghost" :instance-id "ghost--x"}})
+                config/read-projects (fn [] {"brian" {:directory "/Code/brian"}})
+                lifecycle/worktrees-dir (fn [_p _d] "/never")
+                lifecycle/canonical (fn [p] (str p))]
+    (is (nil? (lifecycle/session-from-cwd "/Codex/worktrees/6aa4/brian-next/src")))
+    (is (nil? (lifecycle/session-from-cwd "/Code/ghost/.worktrees/x/src")))))
+
 ;; resolve-link-coords now consults session-from-cwd as a resolution source.
 ;; It recomputes worktree/instance-id from the resolved project+session
 ;; (always correct, incl. when explicit :project/<session> differ from cwd),
