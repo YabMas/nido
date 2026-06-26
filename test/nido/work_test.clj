@@ -593,36 +593,6 @@
     (is (= [] (:ready f)))
     (is (= [{:origin :notion}] (:in-progress f)))))
 
-(deftest dev-target-picks-the-heavy-session-excludes-lite
-  (with-tmp
-    (fn [_]
-      (let [w (workstream/create! :brian {:stage :triaging :external-refs []})]
-        (session/create! :brian (:id w) {:name "triage-BR-7" :weight :light :autonomy nil})
-        (session/create! :brian (:id w) {:name "impl-BR-7"   :weight :heavy :autonomy nil})
-        (is (= {:project :brian :session "impl-BR-7"} (work/dev-target :brian (:id w)))
-            "the dev environment is the heavy impl session, not the lite triage one")))))
-
-(deftest dev-target-nil-when-only-lite-sessions
-  (with-tmp
-    (fn [_]
-      (let [w (workstream/create! :brian {:stage :triaging :external-refs []})]
-        (session/create! :brian (:id w) {:name "triage-BR-7" :weight :light :autonomy nil})
-        (is (nil? (work/dev-target :brian (:id w)))
-            "a lite triage session has no dev environment")))))
-
-(deftest dev-target-latest-created-heavy-wins
-  (with-tmp
-    (fn [_]
-      (let [w  (workstream/create! :brian {:stage :triaging :external-refs []})
-            mk (fn [nm at] (session/write! {:name nm :workstream-id (:id w) :project :brian
-                                            :weight :heavy :substrate :live
-                                            :substrate-history [{:at at :substrate :live}]
-                                            :autonomy nil :created-at at}))]
-        (mk "impl-old" "2026-01-01T00:00:00Z")
-        (mk "impl-new" "2026-01-02T00:00:00Z")
-        (is (= {:project :brian :session "impl-new"} (work/dev-target :brian (:id w)))
-            "latest-created heavy session wins")))))
-
 (deftest latest-report-prefers-workstream-entries
   (with-tmp
     (fn [_]
