@@ -6,11 +6,14 @@
    [babashka.fs :as fs]
    [clojure.string :as str]
    [malli.core :as m]
+   [nido.config :as config]
    [nido.coordinator.clock :as clock]
    [nido.coordinator.session :as session]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.triggers :as triggers]
    [nido.io :as io]
+   [nido.session.engine :as engine]
+   [nido.session.launcher :as launcher]
    [nido.session.lifecycle :as session-lifecycle]
    [nido.session.state :as session-state]))
 
@@ -354,3 +357,26 @@
                     (str "nido coordinator: teardown home-cleanup failed for "
                          session-name " — " (ex-message e))))))
     nil)))
+
+(defn launch-context
+  "Resolve the worktree cwd + injected launch context for a run's headless agent.
+   The agent boots in the worktree (not the session-home); briefing/MCP/skills are
+   passed as flags, and artifact/status paths are the absolute run-dir paths the
+   coordinator actually reads (no session-home dependency). mcp-config is nil for
+   a session with no postgres (or before its mcp.json is written)."
+  [run]
+  (let [{:keys [project session-name id]} run
+        pname       (name project)
+        project-dir (:directory (get (config/read-projects) pname))
+        worktree    (session-lifecycle/worktree-path pname project-dir session-name)
+        instance-id (engine/resolve-instance-id worktree)
+        mcp         (let [p (session-state/session-mcp-path instance-id)]
+                      (when (fs/exists? p) p))]
+    {:cwd        worktree
+     :briefing   (launcher/session-briefing pname session-name instance-id)
+     :mcp-config mcp
+     :add-dirs   (launcher/nido-add-dirs)
+     :run-paths  (str "Write run artifacts under " (cstate/run-artifacts-dir id)
+                      " with stable filenames. Update " (cstate/run-status-path id)
+                      " at phase transitions with {:phase :awaiting-input | :working "
+                      "| :complete | :error :note <str>}.") }))

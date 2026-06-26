@@ -54,6 +54,11 @@
                         (fs/create-dirs wt)
                         (fs/create-sym-link link home)
                         {}))
+                    ;; stub launch-context — avoids real I/O (jj/git) that would
+                    ;; add latency; cwd is ignored since agent/launch! is also stubbed.
+                    runs/launch-context
+                    (fn [_run] {:cwd tmp-str :briefing "" :mcp-config nil
+                                :add-dirs [] :run-paths ""})
                     ;; stub the agent launcher — write a status file and a fake log line,
                     ;; return a successful result with a known claude-session-id.
                     agent/launch!
@@ -100,6 +105,11 @@
       (with-redefs [cstate/nido-root            (constantly (str tmp))
                     project/list-projects       (constantly {"brian" {:directory "/tmp"}})
                     runs/spawn-session-for-run! no-session
+                    ;; stub launch-context — avoids real I/O (jj/git) that would
+                    ;; add latency and break the timing in tick-until-terminal!
+                    runs/launch-context         (fn [_run] {:cwd (str tmp) :briefing ""
+                                                            :mcp-config nil :add-dirs []
+                                                            :run-paths ""})
                     agent/launch!               fail-launch]
         (fs/create-dirs (fs/parent (cstate/triggers-path :brian)))
         (io/write-edn! (cstate/triggers-path :brian)

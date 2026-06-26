@@ -134,3 +134,14 @@
                         :env           {"FAKE_CLAUDE_SESSION_ID" "s"}})]
           (is (false? (:timed-out? result)))))
       (finally (fs/delete-tree tmp)))))
+
+(deftest build-cmd-includes-mcp-and-add-dirs-when-given
+  (let [cmd (#'agent/build-cmd {:claude-bin "claude" :first-message "hi"
+                                :mcp-config "/s/mcp.json" :add-dirs ["/opt/nido"]})]
+    (is (= ["--mcp-config" "/s/mcp.json"]
+           (->> cmd (drop-while #(not= % "--mcp-config")) (take 2))))
+    (is (= ["--add-dir" "/opt/nido"]
+           (->> cmd (drop-while #(not= % "--add-dir")) (take 2))))
+    (is (= "hi" (last cmd))))                      ; positional stays last
+  (let [cmd (#'agent/build-cmd {:claude-bin "claude" :first-message "hi"})]
+    (is (not (some #{"--mcp-config" "--add-dir"} cmd)))))

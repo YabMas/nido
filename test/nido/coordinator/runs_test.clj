@@ -3,12 +3,16 @@
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
    [malli.core :as m]
+   [nido.config]
    [nido.coordinator.clock :as clock]
    [nido.coordinator.runs :as runs]
    [nido.coordinator.session :as session]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.workstream :as workstream]
-   [nido.session.lifecycle]))
+   [nido.session.engine]
+   [nido.session.launcher]
+   [nido.session.lifecycle]
+   [nido.session.state]))
 
 (def example-run
   {:id              "2026-05-13-brian-investigate-bug-a1b2c3"
@@ -594,3 +598,18 @@
           (is (= :archived (:substrate (session/read-session :brian (:id w) "run-triage-1")))
               "triage teardown archives the coordinator session")))
       (finally (fs/delete-tree tmp)))))
+
+(deftest launch-context-resolves-worktree-and-injection
+  (with-redefs [nido.config/read-projects (fn [] {"brian" {:directory "/Code/brian"}})
+                nido.session.lifecycle/worktree-path (fn [_p _d s] (str "/wt/" s))
+                nido.session.engine/resolve-instance-id (fn [_] "brian--x")
+                nido.session.launcher/session-briefing (fn [_p _s _i] "BRIEF")
+                nido.session.launcher/nido-add-dirs (fn [] ["/opt/nido"])
+                nido.session.state/session-mcp-path (fn [_] "/does/not/exist.json")]
+    (let [lc (runs/launch-context {:project "brian" :session-name "fix/x" :id "r1"})]
+      (is (= "/wt/fix/x" (:cwd lc)))
+      (is (= "BRIEF" (:briefing lc)))
+      (is (nil? (:mcp-config lc)))                 ; file absent → nil
+      (is (= ["/opt/nido"] (:add-dirs lc)))
+      (is (re-find #"_run-status.edn" (:run-paths lc)))
+      (is (re-find #"artifacts" (:run-paths lc))))))

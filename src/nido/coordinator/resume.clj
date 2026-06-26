@@ -9,8 +9,7 @@
    [nido.coordinator.agent :as agent]
    [nido.coordinator.clock :as clock]
    [nido.coordinator.runs :as runs]
-   [nido.coordinator.session :as session]
-   [nido.coordinator.state :as cstate]))
+   [nido.coordinator.session :as session]))
 
 (defn- parked-session
   "The (first) parked autonomous session under a workstream, or nil."
@@ -29,12 +28,15 @@
   [project ws-id session-name run input]
   (try
     (runs/ensure-session-home! run)
-    (agent/launch! {:run-id            (:id run)
-                    :cwd               (cstate/run-session-home-link (:id run))
-                    :first-message     input
-                    :claude-session-id (:claude-session-id run)
-                    :resume?           true
-                    :budget            (-> run :limits :budget)})
+    (let [lc (runs/launch-context run)]
+      (agent/launch! {:run-id            (:id run)
+                      :cwd               (:cwd lc)
+                      :first-message     input
+                      :claude-session-id (:claude-session-id run)
+                      :resume?           true
+                      :mcp-config        (:mcp-config lc)
+                      :add-dirs          (:add-dirs lc)
+                      :budget            (-> run :limits :budget)}))
     (session/set-error! project ws-id session-name nil)
     (catch Throwable t
       (binding [*err* *err*]

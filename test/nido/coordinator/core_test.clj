@@ -39,6 +39,11 @@
                                         :claude-session-id "sess-x"
                                         :timed-out?        false})
                     runs/spawn-session-for-run! (fn [_] nil)
+                    ;; stub launch-context so run-blocking! doesn't call real I/O
+                    ;; (jj/git, config reads) — cwd unused since agent/launch! is stubbed
+                    runs/launch-context (fn [_] {:cwd (str tmp) :briefing ""
+                                                 :mcp-config nil :add-dirs []
+                                                 :run-paths ""})
                     runs/teardown-session-for-run! (fn [_] nil)]
         (cstate/ensure-dirs!)
         (let [trigger  {:name    :t

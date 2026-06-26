@@ -57,7 +57,7 @@
    ;; since the throttle clock starts at 0).
    :inbox-expiry-ms         (* 3 24 60 60 1000)  ; 3 days
    :inbox-sweep-interval-ms (* 30 60 1000)        ; sweep at most every 30 min
-   :system-prompt       "You are running inside a nido auto-triggered session. The user is not present yet. Write artifacts under <session-home>/artifacts/ with stable filenames. Update <session-home>/_run-status.edn at phase transitions with {:phase :awaiting-input | :working | :complete | :error :note <str>}."
+   :system-prompt       "You are running inside a nido auto-triggered session. The user is not present yet."
    ;; Pre-orientation burst for a promoted ticket (the /continue-ticket leg).
    ;; Unlike triage, the human WILL own this exact session — they'll resume this
    ;; conversation — so this prompt is about parking cleanly for them, not about
@@ -363,9 +363,12 @@
         ;; terminal and the resolution sweep only handles :awaiting-review).
         ;; Catch and fall through to the :failed terminal path below.
         ;;
-        ;; Claude is launched with the SESSION-HOME as cwd (not the worktree):
-        ;; it registers its transcript by cwd under ~/.claude/projects/, which is
-        ;; what makes `claude --resume` work from the session home.
+        ;; Claude is launched with the WORKTREE as cwd (session-home dissolution
+        ;; step 2): nido context — briefing, postgres MCP, harness skills — is
+        ;; injected via flags (--append-system-prompt / --mcp-config / --add-dir)
+        ;; rather than read from the home. claude registers its transcript by cwd,
+        ;; so new runs key to the worktree; a session parked before this change
+        ;; carries a home-keyed transcript and must be re-opened in the terminal.
         ;; Pre-spawn gate: if the skill can't resolve in the target checkout
         ;; (a :lite session symlinked to a branch that no longer carries it),
         ;; fail fast WITHOUT building a session — no doomed spawn, and the
@@ -387,15 +390,20 @@
                          ;; Notion leg → /continue-ticket (NOT the run's "/plan-bug …"
                          ;; first-message; see note above). GitHub leg → the issue body
                          ;; itself as the brief (no ledger to continue from).
-                         (let [github? (= :plan-github-issue (:skill run))]
+                         (let [github? (= :plan-github-issue (:skill run))
+                               lc      (runs/launch-context run)
+                               base-sp (if github?
+                                         (:plan-issue-system-prompt defaults)
+                                         (:plan-system-prompt defaults))]
                            (agent/launch! {:run-id            run-id
-                                           :cwd               (cstate/run-session-home-link run-id)
+                                           :cwd               (:cwd lc)
                                            :first-message     (if github?
                                                                 (issue-impl-brief (:event-payload run))
                                                                 "/continue-ticket")
-                                           :system-prompt     (if github?
-                                                                (:plan-issue-system-prompt defaults)
-                                                                (:plan-system-prompt defaults))
+                                           :system-prompt     (str base-sp "\n\n" (:briefing lc)
+                                                                   "\n\n" (:run-paths lc))
+                                           :mcp-config        (:mcp-config lc)
+                                           :add-dirs          (:add-dirs lc)
                                            :budget            (-> run :limits :budget)
                                            :claude-session-id session-id}))
                          (catch Throwable t
@@ -407,12 +415,16 @@
                        :else
                        (try
                          (runs/spawn-session-for-run! run)
-                         (agent/launch! {:run-id            run-id
-                                         :cwd               (cstate/run-session-home-link run-id)
-                                         :first-message     (:first-message run)
-                                         :system-prompt     (:system-prompt defaults)
-                                         :budget            (-> run :limits :budget)
-                                         :claude-session-id session-id})
+                         (let [lc (runs/launch-context run)]
+                           (agent/launch! {:run-id            run-id
+                                           :cwd               (:cwd lc)
+                                           :first-message     (:first-message run)
+                                           :system-prompt     (str (:system-prompt defaults) "\n\n"
+                                                                   (:briefing lc) "\n\n" (:run-paths lc))
+                                           :mcp-config        (:mcp-config lc)
+                                           :add-dirs          (:add-dirs lc)
+                                           :budget            (-> run :limits :budget)
+                                           :claude-session-id session-id}))
                          (catch Throwable t
                            {:spawn-error true :detail (.getMessage t)})))
         next-state (cond

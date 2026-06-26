@@ -40,7 +40,8 @@
    addressed by id: :resume? true CONTINUES that transcript (--resume) — a
    gate reply; otherwise it RECORDS under it (--session-id) — the first burst.
    first-message is the trailing positional argument."
-  [{:keys [claude-bin first-message system-prompt claude-session-id resume?]}]
+  [{:keys [claude-bin first-message system-prompt claude-session-id resume?
+           mcp-config add-dirs]}]
   (cond-> [claude-bin
            "--print"
            ;; Stream-json output requires --verbose per claude-code's
@@ -53,6 +54,8 @@
     (and claude-session-id resume?)       (into ["--resume" claude-session-id])
     (and claude-session-id (not resume?)) (into ["--session-id" claude-session-id])
     system-prompt                          (into ["--append-system-prompt" system-prompt])
+    mcp-config                             (into ["--mcp-config" mcp-config])
+    (seq add-dirs)                         (into (mapcat (fn [d] ["--add-dir" d]) add-dirs))
     :always                                (conj first-message)))
 
 (defn launch!
@@ -86,12 +89,13 @@
    the agent did NO work — e.g. claude rejected the launch with
    \"Unknown command: /<skill>\". Callers use this to distinguish a real
    completion from a no-op exit (which must not be treated as success)."
-  [{:keys [run-id cwd first-message system-prompt claude-bin env budget claude-session-id resume?]
+  [{:keys [run-id cwd first-message system-prompt claude-bin env budget claude-session-id resume?
+          mcp-config add-dirs]
     :or   {claude-bin "claude"}}]
   (let [log-path  (cstate/run-agent-log run-id)
         cmd       (build-cmd {:claude-bin claude-bin :first-message first-message
                               :system-prompt system-prompt :claude-session-id claude-session-id
-                              :resume? resume?})
+                              :resume? resume? :mcp-config mcp-config :add-dirs add-dirs})
         proc      (p/process cmd {:dir cwd
                                   :env (merge (into {} (System/getenv)) (or env {}))
                                   ;; Close stdin so claude doesn't wait for input
