@@ -67,7 +67,18 @@
                   :findings [{:title "x"}] :judge {:fix-findings nil}})]
         (is (= 1 (count (:history ctx))))
         (is (some #(= "commit" (first %)) @commits))
+        (is (some #(= ["commit" "-m" "review-loop: iter 2 fixes"] %) @commits))
         (is (nil? (:control ctx)))))))
+
+(deftest fix-stage-noop-when-not-dirty
+  (with-redefs [agent/launch! (fn [_] {:num-turns 3 :result-error? false :result-text "done"})
+                stages/working-copy-dirty? (fn [_] false)
+                jj/jj! (fn [& _] {:exit 0 :out "" :err ""})]
+    (let [ctx ((:run stages/fix-stage)
+               {:config {:cwd "/w" :run-id "r1"} :iter 2
+                :findings [{:title "x"}] :judge {:fix-findings nil}})]
+      (is (= :stop (:control ctx)))
+      (is (= :fix-noop (:status ctx))))))
 
 (deftest fix-stage-noop-stops
   (with-redefs [agent/launch! (fn [_] {:num-turns 0 :result-error? false :result-text ""})
