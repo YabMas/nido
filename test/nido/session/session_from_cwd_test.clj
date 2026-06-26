@@ -2,6 +2,7 @@
   (:require
    [clojure.test :refer [deftest is]]
    [nido.config :as config]
+   [nido.session.engine :as engine]
    [nido.session.lifecycle :as lifecycle]
    [nido.session.state :as state]))
 
@@ -52,3 +53,20 @@
       (is (nil? (lifecycle/session-from-cwd "/tmp/elsewhere")))
       ;; a sibling that only shares a path prefix segment must NOT match
       (is (nil? (lifecycle/session-from-cwd "/Code/brian/.worktrees/fix/orderingX"))))))
+
+;; resolve-link-coords now consults session-from-cwd as a resolution source.
+;; It recomputes worktree/instance-id from the resolved project+session
+;; (always correct, incl. when explicit :project/<session> differ from cwd),
+;; so we stub worktree-path + resolve-instance-id to known values.
+(deftest link-coords-resolve-from-worktree-cwd
+  (with-redefs [lifecycle/session-from-cwd
+                (fn [& _] {:project "brian" :session "fix/ordering"})
+                lifecycle/session-home-coords-from-cwd (fn [] nil)
+                config/read-projects (fn [] {"brian" {:directory "/Code/brian"}})
+                lifecycle/worktree-path
+                (fn [_p _d s] (str "/Code/brian/.worktrees/" s))
+                engine/resolve-instance-id (fn [_] "brian--ordering")]
+    ;; resolve-link-coords is private; exercise via the var.
+    (is (= ["brian" "fix/ordering" "brian--ordering"
+            "/Code/brian/.worktrees/fix/ordering"]
+           (#'lifecycle/resolve-link-coords {} nil)))))

@@ -771,20 +771,21 @@
 
 (defn- resolve-link-coords
   "Resolve [project-name session-name instance-id worktree] for a link
-   command. Order:
+   command. Order of project/session resolution:
      1. explicit :project + positional <session>
-     2. cwd is a session-home → derive both
-   Throws with a useful hint if neither works."
+     2. cwd inside a worktree (registry) → session-from-cwd
+     3. cwd is a session-home → legacy derivation
+   Throws with a useful hint if none work."
   [opts session-arg]
   (let [explicit-project (some-> (:project opts) name)
-        cwd-coords       (session-home-coords-from-cwd)
-        project-name     (or explicit-project (first cwd-coords))
-        session-name     (or session-arg (second cwd-coords))]
+        from-cwd         (session-from-cwd)
+        home-coords      (session-home-coords-from-cwd)
+        project-name     (or explicit-project (:project from-cwd) (first home-coords))
+        session-name     (or session-arg (:session from-cwd) (second home-coords))]
     (when-not (and project-name session-name)
       (throw (ex-info "Could not resolve project + session for link command"
                       {:hint (str "Pass :project <p> <session> explicitly, "
-                                  "or cd into the session home "
-                                  "(~/.nido/sessions/<project>/<session>/) first.")
+                                  "or cd into the worktree (or session home) first.")
                        :project project-name :session session-name})))
     (let [projects (config/read-projects)]
       (when-not (contains? projects project-name)
