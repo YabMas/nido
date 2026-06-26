@@ -101,6 +101,38 @@
   [project-name project-dir name]
   (str (fs/path (worktrees-dir project-name project-dir) name)))
 
+(defn canonical
+  "Absolute, symlink-resolved path string. Falls back to abs-path when the
+   path doesn't exist on disk (e.g. in tests / not-yet-created dirs)."
+  [p]
+  (try (str (fs/canonicalize p))
+       (catch Exception _ (abs-path p))))
+
+(defn session-from-cwd
+  "Resolve which session a cwd belongs to via the worktree-keyed registry
+   (longest-prefix wins), deriving the session name by relativizing the
+   matched worktree path against the project's worktrees-dir. Home-independent.
+   Returns {:project :session :worktree :instance-id} or nil."
+  ([] (session-from-cwd (System/getProperty "user.dir")))
+  ([cwd]
+   (let [cwd*     (str (canonical cwd) "/")
+         projects (config/read-projects)
+         match    (->> (state/read-registry)
+                       (filter (fn [[wt _]]
+                                 (str/starts-with? cwd* (str (canonical wt) "/"))))
+                       (sort-by (fn [[wt _]] (count (canonical wt))))
+                       last)]
+     (when match
+       (let [[wt entry] match
+             project (:project-name entry)
+             pdir    (:directory (get projects project))
+             base    (worktrees-dir project pdir)
+             session (str (fs/relativize (canonical base) (canonical wt)))]
+         {:project     project
+          :session     session
+          :worktree    wt
+          :instance-id (:instance-id entry)})))))
+
 ;; ---------------------------------------------------------------------------
 ;; Git worktree primitives
 ;; ---------------------------------------------------------------------------
