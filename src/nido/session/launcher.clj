@@ -166,15 +166,14 @@
        "or any other context-worth URL during this session — or when you\n"
        "yourself create one (open a PR, file an issue, etc.) — persist it\n"
        "immediately so future sessions inherit it. **Do not ask permission**;\n"
-       "adding relevant links is mandatory, not a suggestion. Run from this\n"
-       "session-home cwd:\n"
+       "adding relevant links is mandatory, not a suggestion. Run:\n"
        "\n"
-       "    bb nido:session:link:add :type <kw> :url <url> [:title \"...\"]\n"
+       "    nido session:link:add :type <kw> :url <url> [:title \"...\"]\n"
        "\n"
        "Types: `:notion-ticket` `:pr` `:gh-issue` `:slack-thread` `:other`.\n"
-       "Project + session are auto-resolved from cwd. To remove:\n"
-       "`bb nido:session:link:remove :url <url>`. To inspect:\n"
-       "`bb nido:session:link:list`. Existing entries are listed under\n"
+       "Project + session resolve from the worktree. To remove:\n"
+       "`nido session:link:remove :url <url>`. To inspect:\n"
+       "`nido session:link:list`. Existing entries are listed under\n"
        "\"Relevant links\" above (when any).\n"))
 
 (defn- render-edit-location
@@ -185,11 +184,9 @@
   [vcs-mode source-dir]
   (case vcs-mode
     :jj-workspace
-    (str "You are working through the nido orchestrator. Source-code edits land in\n"
-         "the worktree below — NOT in nido's source tree. Use absolute paths when\n"
-         "reading/writing files there, or `cd worktree` from this session home.\n"
-         "This worktree is a jj workspace; `jj st` / `jj log` / `jj git push` work\n"
-         "in place.\n")
+    (str "You are working through the nido orchestrator. You are in the session's\n"
+         "worktree; source-code edits land here, NOT in nido's source tree. This\n"
+         "worktree is a jj workspace; `jj st` / `jj log` / `jj git push` work in place.\n")
 
     :jj-source-git-worktree
     (str "You are working through the nido orchestrator. This session was created\n"
@@ -204,9 +201,8 @@
          "`bb nido:session:up` once the source has been jj-colocated.\n")
 
     :plain-git
-    (str "You are working through the nido orchestrator. Source-code edits land in\n"
-         "the worktree below — NOT in nido's source tree. Use absolute paths when\n"
-         "reading/writing files there, or `cd worktree` from this session home.\n")))
+    (str "You are working through the nido orchestrator. You are in the session's\n"
+         "worktree; source-code edits land here, NOT in nido's source tree.\n")))
 
 (defn read-project-briefing
   "Return the project-specific briefing markdown for <project-name>, or
@@ -258,8 +254,17 @@
      "\n"
      (if services-active?
        "## Services are already running\n\nThe REPL, app server, and database for this worktree are managed by\nnido. Don't run project-local scripts that spin up a REPL/app/DB —\nconnect to what's already live. The postgres MCP is preconfigured to\nthis session's DB.\n\n"
-       "## Lite session\n\nThis is a lite session with no background services. The worktree is a\nread-only symlink to the project source directory. To inspect the code,\nuse absolute paths or `cd worktree` from this session home.\n\n")
+       "## Lite session\n\nThis is a lite session with no background services. The worktree is a\nread-only symlink to the project source directory.\n\n")
      (when-not (str/blank? project-briefing) (str project-briefing "\n"))
+     "## Lifecycle\n"
+     "\n"
+     "Manage this session with nido (the session name is shown above):\n"
+     "\n"
+     "- `nido session:status <name>` — inspect\n"
+     "- `nido session:down <name>` then `:up` — restart services in this worktree\n"
+     "- `nido session:reset <name>` — nuclear recovery (drops PGDATA, re-clones template)\n"
+     "- `nido session:destroy <name>` — stop and remove the worktree\n"
+     "\n"
      (render-links-section links)
      add-link-instructions)))
 
@@ -442,6 +447,31 @@
           (catch Exception e
             (core/log-step (str "warning: run-shim: " (ex-message e)))))))))
 
+(defn session-briefing
+  "Render the session briefing string from persisted state + links. Reusable as a
+   launch input (claude --append-system-prompt). Source of truth for the home CLAUDE.md."
+  [project-name session-name instance-id]
+  (let [home         (state/session-home-dir project-name session-name)
+        session      (some-> instance-id state/read-session)
+        ctx          (:context session)
+        worktree     (get-in ctx [:session :project-dir])
+        profile      (read-profile-for-session instance-id)
+        link-entries (links/read-links instance-id)
+        ws-ctx       (run-workstream-context :session-home home)]
+    (render-context
+     (merge {:session-name     session-name
+             :project-name     project-name
+             :worktree         worktree
+             :source-dir       (project-source-dir project-name)
+             :app-port         (get-in ctx [:app :port])
+             :app-url          (get-in ctx [:app :url])
+             :nrepl-port       (get-in ctx [:repl :port])
+             :pg-port          (get-in ctx [:pg :port])
+             :profile          profile
+             :links            link-entries
+             :project-briefing (read-project-briefing project-name)}
+            ws-ctx))))
+
 (defn rerender-briefing!
   "Re-render only the session-home CLAUDE.md briefing — used after a
    link mutation so the next session start sees the new entries.
@@ -450,28 +480,12 @@
    session-home dir is missing — links land on disk regardless and the
    next `up` will rebuild the briefing fresh."
   [project-name session-name instance-id]
-  (let [home     (state/session-home-dir project-name session-name)
-        session  (some-> instance-id state/read-session)
-        ctx      (:context session)
-        worktree (get-in ctx [:session :project-dir])]
+  (let [home    (state/session-home-dir project-name session-name)
+        session (some-> instance-id state/read-session)
+        ctx     (:context session)]
     (when (and ctx (fs/exists? home))
-      (let [profile      (read-profile-for-session instance-id)
-            link-entries (links/read-links instance-id)
-            ws-ctx       (run-workstream-context :session-home home)
-            doc          (render-context
-                          (merge {:session-name     session-name
-                                  :project-name     project-name
-                                  :worktree         worktree
-                                  :source-dir       (project-source-dir project-name)
-                                  :app-port         (get-in ctx [:app :port])
-                                  :app-url          (get-in ctx [:app :url])
-                                  :nrepl-port       (get-in ctx [:repl :port])
-                                  :pg-port          (get-in ctx [:pg :port])
-                                  :profile          profile
-                                  :links            link-entries
-                                  :project-briefing (read-project-briefing project-name)}
-                                 ws-ctx))]
-        (io/write-text! (claude-md-path project-name session-name) doc)))))
+      (io/write-text! (claude-md-path project-name session-name)
+                      (session-briefing project-name session-name instance-id)))))
 
 (defn remove-artifacts!
   "Remove the session home. Called from stop-session!. No-op if the session

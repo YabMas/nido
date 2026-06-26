@@ -6,6 +6,7 @@
    [clojure.test :refer [deftest is testing]]
    [nido.core :as core]
    [nido.session.launcher :as launcher]
+   [nido.session.links :as links]
    [nido.session.state :as state]))
 
 (def ^:private base-ctx
@@ -241,3 +242,32 @@
   (with-redefs [state/instance-state-dir (fn [_id] "/never")]
     (is (nil? (launcher/write-session-mcp! "x--y" nil nil)))
     (is (nil? (launcher/write-session-mcp! "x--y" {:db-name "d"} nil)))))
+
+;; ---------------------------------------------------------------------------
+;; Worktree-native briefing prose + session-briefing extraction
+;; ---------------------------------------------------------------------------
+
+(deftest briefing-prose-is-worktree-native
+  (let [s (#'launcher/render-context
+           {:project-name "brian" :session-name "fix/x"
+            :worktree "/wt" :source-dir "/wt"
+            :nrepl-port 5000 :app-port 6000 :pg-port 5599
+            :profile {:services :all} :links [] :project-briefing nil})]
+    (is (re-find #"Services are already running" s))   ; services note kept
+    (is (re-find #"session:status" s))                 ; lifecycle folded in
+    (is (not (re-find #"session.home" s)))             ; matches "session home" & "session-home"
+    (is (not (re-find #"cd worktree" s)))))
+
+(deftest session-briefing-returns-rendered-string
+  ;; session-briefing wires persisted state -> render-context. Stub the reads
+  ;; it actually uses, matched to the real session.edn structure that
+  ;; rerender-briefing! reads: {:context {:session {:project-dir …}
+  ;;                                      :repl {:port …} :app {:port …}
+  ;;                                      :pg {:port …}}}.
+  (with-redefs [state/read-session        (fn [_id] {:context {:session {:project-dir "/wt"}
+                                                               :repl {:port 5000}
+                                                               :app  {:port 6000}
+                                                               :pg   {:port 5599}}})
+                links/read-links          (fn [_id] [])
+                launcher/read-project-briefing (fn [_] nil)]
+    (is (string? (launcher/session-briefing "brian" "fix/x" "brian--x")))))
