@@ -4,9 +4,12 @@
    plus the judge-decision parser. Stages only transform the iteration
    context; the engine owns flow."
   (:require
+   [babashka.fs :as fs]
    [cheshire.core :as json]
    [clojure.string :as str]
-   [nido.review.codex :as codex]))
+   [nido.coordinator.agent :as agent]
+   [nido.review.codex :as codex]
+   [nido.review.prompts :as prompts]))
 
 (def ^:private fenced-json-re #"(?s)```json\s*(\{.*?\})\s*```")
 
@@ -35,3 +38,33 @@
                (assoc ctx
                       :findings (:findings res)
                       :overall-correctness (:overall-correctness res)))))})
+
+(defn discover-design-doc
+  "Newest docs/superpowers/specs/*-design.md under cwd, or nil."
+  [cwd]
+  (let [dir (fs/path cwd "docs" "superpowers" "specs")]
+    (when (fs/exists? dir)
+      (some->> (fs/glob dir "*-design.md")
+               seq
+               (sort-by #(str (fs/file-name %)))
+               last
+               str))))
+
+(def judge-stage
+  {:name :judge
+   :run  (fn [ctx]
+           (let [{:keys [cwd run-id budget]} (:config ctx)
+                 prompt (prompts/judge-prompt
+                         {:findings (:findings ctx)
+                          :history (mapv #(dissoc % :findings) (:history ctx))
+                          :design-doc (discover-design-doc cwd)})
+                 {:keys [num-turns result-error? result-text]}
+                 (agent/launch! {:run-id run-id :cwd cwd
+                                 :first-message prompt :budget budget})
+                 decision (parse-judge-decision result-text)]
+             (if (or (zero? (or num-turns 0)) result-error?
+                     (= :indeterminate (:decision decision)))
+               (assoc ctx :judge decision :control :stop
+                      :status :judge-indeterminate)
+               (assoc ctx :judge decision :control (:decision decision)))))})
+

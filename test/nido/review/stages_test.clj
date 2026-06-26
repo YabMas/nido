@@ -2,6 +2,7 @@
 (ns nido.review.stages-test
   (:require
    [clojure.test :refer [deftest is]]
+   [nido.coordinator.agent :as agent]
    [nido.review.codex :as codex]
    [nido.review.stages :as stages]))
 
@@ -36,3 +37,20 @@
                {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 1})]
       (is (= :stop (:control ctx)))
       (is (= :clean (:status ctx))))))
+
+(deftest judge-stage-continue
+  (with-redefs [agent/launch! (fn [_] {:num-turns 3 :result-error? false
+                                       :result-text "```json\n{\"decision\":\"continue\",\"reason\":\"r\",\"fix_findings\":[0]}\n```"})
+                stages/discover-design-doc (fn [_] nil)]
+    (let [ctx ((:run stages/judge-stage)
+               {:config {:cwd "/w" :run-id "r1"} :iter 1 :findings [{:title "x"}]})]
+      (is (= :continue (:control ctx)))
+      (is (= [0] (-> ctx :judge :fix-findings))))))
+
+(deftest judge-stage-noop-is-indeterminate
+  (with-redefs [agent/launch! (fn [_] {:num-turns 0 :result-error? false :result-text ""})
+                stages/discover-design-doc (fn [_] nil)]
+    (let [ctx ((:run stages/judge-stage)
+               {:config {:cwd "/w" :run-id "r1"} :iter 1 :findings []})]
+      (is (= :stop (:control ctx)))
+      (is (= :judge-indeterminate (:status ctx))))))
