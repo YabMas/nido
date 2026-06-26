@@ -33,6 +33,7 @@
              [tasks.nido-notion-preprocess :as nido-notion-preprocess]
              [tasks.nido-workstream :as nido-workstream]
              [tasks.nido-review :as nido-review]
+             [tasks.nido-work :as nido-work]
              [tasks.nido-shared-pg :as nido-shared-pg]
              [tasks.nido-scratch :as nido-scratch])
 
@@ -405,5 +406,9 @@
   nido:review:loop
   {:doc "Run the codex review loop on the session's branch diff. [:base main] [:max-iters 5] [:cwd <dir>] [:dry-run? false]"
    :task (apply nido-review/loop-cmd *command-line-args*)}
+
+  nido:work
+  {:doc "Boot an interactive claude in the current worktree with nido context injected (briefing/MCP/skills)."
+   :task (apply nido-work/work *command-line-args*)}
 
   }}
