@@ -32,6 +32,7 @@
              [tasks.nido-transcribe :as nido-transcribe]
              [tasks.nido-notion-preprocess :as nido-notion-preprocess]
              [tasks.nido-workstream :as nido-workstream]
+             [tasks.nido-review :as nido-review]
              [tasks.nido-shared-pg :as nido-shared-pg]
              [tasks.nido-scratch :as nido-scratch])
 
@@ -400,5 +401,9 @@
   nido:workstream:ref:add
   {:doc "Add an external ref to a workstream. :project <p> (:ws-id <id> | :ref <BR-####>) :adapter <kw> :id <str> [:url <str> :title <str>]"
    :task (apply nido-workstream/ref-add *command-line-args*)}
+
+  nido:review:loop
+  {:doc "Run the codex review loop on the session's branch diff. [:base main] [:max-iters 5] [:cwd <dir>] [:dry-run? false]"
+   :task (apply nido-review/loop-cmd *command-line-args*)}
 
   }}
