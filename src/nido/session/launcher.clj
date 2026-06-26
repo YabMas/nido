@@ -281,6 +281,13 @@
       (fs/delete link))
     (fs/create-sym-link link worktree)))
 
+(defn nido-add-dirs
+  "Directories to pass to claude's --add-dir so nido's harness skills resolve
+   when the agent boots in the worktree. The nido source dir's .claude/skills
+   carries the harness skills (see nido-native-skill-dirs)."
+  []
+  [(str (core/nido-source-dir))])
+
 (defn- nido-native-skill-dirs
   "Absolute paths of nido's *native* (real, non-symlink) skill dirs under
    `nido/.claude/skills` — the harness skills to inject into every session-home

@@ -271,3 +271,7 @@
                 links/read-links          (fn [_id] [])
                 launcher/read-project-briefing (fn [_] nil)]
     (is (string? (launcher/session-briefing "brian" "fix/x" "brian--x")))))
+
+(deftest nido-add-dirs-returns-source-dir
+  (with-redefs [nido.core/nido-source-dir (fn [] "/opt/nido")]
+    (is (= ["/opt/nido"] (launcher/nido-add-dirs)))))
