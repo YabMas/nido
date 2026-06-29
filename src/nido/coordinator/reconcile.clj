@@ -8,6 +8,7 @@
    [clojure.string :as str]
    [nido.coordinator.clock :as clock]
    [nido.coordinator.runs :as runs]
+   [nido.coordinator.session :as session]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.status-file :as status-file]
    [nido.coordinator.tickets :as tickets]))
@@ -65,19 +66,22 @@
   (when-let [run (runs/read-run run-id)]
     (when (and (contains? non-terminal-states (:state run))
                (not= :queued (:state run)))
+      ;; Back-fill the resumable id onto the session regardless of state change,
+      ;; so a still-parked session becomes self-sufficient on restart.
+      (when-let [ws-id (:workstream-id run)]
+        (when (:claude-session-id run)
+          (try (session/set-claude-session-id! (:project run) ws-id
+                                               (:session-name run) (:claude-session-id run))
+               (catch Exception _ nil))))      ; best-effort; human/missing session
       (let [{:keys [state error]} (if (= :triage-bug (:skill run))
                                     (triage-reconciled-state run)
                                     (derive-terminal-state run-id))]
-        (when (not= state (:state run))                  ; no-op if state unchanged (e.g. parked → parked)
+        (when (not= state (:state run))
           (let [history-entry {:at (clock/now-iso) :state state}
-                updated       (-> run
-                                  (assoc :state state
-                                         :error error)
+                updated       (-> run (assoc :state state :error error)
                                   (update :state-history conj history-entry))]
             (runs/write-run! updated)
             (runs/mirror-run-phase! updated)
-            ;; Keep the ticket record honest: an orphaned triage Run clears
-            ;; a stale :investigating so the ticket is re-triable next poll.
             (tickets/on-run-terminal! updated state)))))))
 
 (defn reconcile!

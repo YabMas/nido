@@ -4,8 +4,10 @@
    [clojure.test :refer [deftest is]]
    [nido.coordinator.reconcile :as reconcile]
    [nido.coordinator.runs :as runs]
+   [nido.coordinator.session :as session]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.tickets :as tickets]
+   [nido.coordinator.workstream :as ws]
    [nido.io :as io]))
 
 (def base-run
@@ -165,3 +167,34 @@
       (mk-run "d1" :running {:id "BR-5"} :triage-bug)
       (reconcile/reconcile!)
       (is (= :done (:state (runs/read-run "d1")))))))
+
+(def ^:private autonomy-running
+  {:skill :triage-bug :first-message "x" :agent :claude :claude-session-id nil
+   :trigger :triage-bug :limits {} :priority 0 :uncapped? false :on-promote nil
+   :phase :running :phase-history [{:at "2026-06-01T00:00:00Z" :phase :running}]
+   :error nil})
+
+(defn- write-run-with-sid!
+  "Write a run with a given session-id, workstream-id, session-name, and state."
+  [id ws-id sname sid state]
+  (fs/create-dirs (cstate/run-dir id))
+  (runs/write-run! {:id id :project :brian :trigger :triage-bug
+                    :source {:type :manual} :event-payload {} :skill :triage-bug
+                    :first-message "/triage-bug" :agent :claude :session-name sname
+                    :workstream-id ws-id :claude-session-id sid
+                    :limits {} :priority 0 :session-profile :full
+                    :uncapped? false :state state
+                    :state-history [{:at "2026-06-01T00:00:00Z" :state state}]
+                    :artifacts [] :error nil}))
+
+(deftest reconcile-backfills-claude-session-id
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+        (session/create! :brian (:id w)
+                         {:name "auto" :weight :heavy
+                          :autonomy (assoc autonomy-running :claude-session-id nil)})
+        (write-run-with-sid! "r1" (:id w) "auto" "sid-x" :running)
+        (reconcile/reconcile!)
+        (is (= "sid-x" (get-in (first (session/list-sessions :brian (:id w)))
+                               [:autonomy :claude-session-id])))))))
