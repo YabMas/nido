@@ -37,6 +37,18 @@
    {:title "Project commands"
     :tasks [["nido:run" ":project <p> <session> <command-ref> — run an adopted command in the worktree"]]}
 
+   {:title "Workstreams / coordination"
+    :tasks [["nido:tui"                "Terminal UI — stage board + system surface"]
+            ["nido:coordinator:up"     "Start the background daemon + dashboard (:8800)"]
+            ["nido:coordinator:status" "Daemon heartbeat + halt/breaker/sources"]
+            ["nido:halt"               "Panic button — pause autonomous spawns"]
+            ["nido:trigger:fire"       ":project <p> <trigger> :<k> <v> — fire a trigger"]
+            ["nido:tickets:list"       "Triage records grouped by stage"]
+            ["nido:ticket:promote"     ":project <p> :br BR-#### — gate → planning leg"]
+            ["nido:runs:list"          "List autonomous runs (legacy inspection)"]
+            ["nido:facets:refresh"     "Re-sync workstream classification facets"]
+            ["nido:shared:pg:status"   "Shared Postgres cluster status"]]}
+
    {:title "UI"
     :tasks [["nido:ui" "[:port 8800] — start the nido dashboard"]]}
 
@@ -74,4 +86,4 @@
     (doseq [ex examples]
       (println (str "  " ex)))
     (println)
-    (println "More: see CLAUDE.md for session lifecycle, PG topology, and JVM tuning.")))
+    (println "More: see CLAUDE.md for session lifecycle, PG topology, JVM tuning, and the coordination layer.")))
