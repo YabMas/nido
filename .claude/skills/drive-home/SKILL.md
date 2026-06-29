@@ -265,6 +265,26 @@ branch.
 queue defines the strategy. It enables auto-merge if checks are pending, or adds
 the PR to the queue if they've passed.
 
+### 5d. Record completion on the ticket ledger
+
+Append a typed `:implementation-completed` event so the workstream's report
+timeline closes the loop (CI green, squashed, on the merge queue). The `BR-####`
+is the `:event-payload :id` in `./run-link/run.edn` (run from the session home;
+`cd ..` out of the worktree if needed):
+
+```bash
+cat > /tmp/impl-completed.edn <<'EDN'
+{:format    :implementation-completed
+ :summary   "<one-line: what shipped; CI green; on the merge queue>"
+ :artifacts [{:kind :pr :ref "<owner>/<repo>#<number>" :url "<pr-url>"}]}
+EDN
+bb nido:ticket:append :project <project> :br <BR-####> :kind implementation-completed \
+  :file /tmp/impl-completed.edn
+```
+
+(Validated against `ImplementationCompleted`; `:artifacts []` :kind is one of
+`:commit :pr :branch`.)
+
 Report: the PR URL, what was rebased/auto-fixed, that the branch was squashed to
 one commit and the description regenerated, and that it's on the merge queue. The
 coordinator's `github-merge` poller closes the workstream and nudges Notion when
@@ -295,6 +315,21 @@ On a semantic conflict (§3) or a judgement CI failure (§4), drive-home leaves 
 worktree exactly as it is, reports **what** blocks and **how to resume** (resolve
 conflict X / fix test Y, then re-run `/drive-home`), and stops. It makes no
 `ready`/`merge` calls on a halted journey.
+
+When it halts on a semantic conflict (§3) or a judgement CI failure (§4), also
+record a typed `:blocker` event so the parked workstream shows what blocks it:
+
+```bash
+cat > /tmp/blocker.edn <<'EDN'
+{:format  :blocker
+ :summary "<what blocks: the semantic conflict / the non-mechanical CI failure>"
+ :needs   "<what the human must do: resolve conflict X / fix test Y, then re-run /drive-home>"}
+EDN
+bb nido:ticket:append :project <project> :br <BR-####> :kind blocker :file /tmp/blocker.edn
+```
+
+This records the halt; it does not change the halt behaviour — drive-home still
+stops and makes no `ready`/`merge` calls.
 
 ## Common mistakes
 
