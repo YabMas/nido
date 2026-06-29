@@ -181,7 +181,10 @@
   (get origin-badges origin "?"))
 
 (defn- badged-item-row
-  "One workstream row for the spine board: origin badge + the wsv display string."
+  "One workstream row for the spine board: origin badge + the wsv display string.
+   wsv/format-row and wsv/promote-result-message (below) are display-only helpers
+   intentionally NOT re-exported through the nido.work facade — they are pure
+   presentation formatters with no model logic."
   [r]
   {:title       (str (origin-badge (:origin r)) "  " (wsv/format-row r))
    :description (or (:last-activity r) "")
@@ -531,19 +534,33 @@
 ;; `:after` is the scratch-workstream hook (fn [project-str session-name]) run
 ;; after a successful lifecycle call, so the TUI's up/add/destroy stay in sync
 ;; with the loose-workstream model the bb task layer maintains (spec line 82):
-;; up/add birth the loose workstream (idempotent — no-ops when the session
-;; already belongs to one), destroy reaps it (spares ref-carrying workstreams).
+;; up births the loose workstream (idempotent — no-ops when the session already
+;; belongs to one), destroy reaps it (spares ref-carrying workstreams).
+;; `:add` uses create-workstream! which delegates to work/new! (already bundles
+;; lifecycle/up! + scratch/birth!) — no :after needed for that verb.
 (defn- birth-scratch!   [p sn] (scratch/birth! (keyword p) sn))
 (defn- reap-scratch!    [p sn] (scratch/reap!  (keyword p) sn))
 
+(defn- create-workstream!
+  "Birth a scratch workstream and bring its session up. Delegates to
+   work/new! which already composes lifecycle/up! + scratch/birth!."
+  [p sn]
+  (work/new! p sn))
+
+(defn- create-workstream-action!
+  "Adapter from action-defs calling convention [sn {:project p}] to
+   create-workstream! [p sn]."
+  [sn {:keys [project]}]
+  (create-workstream! project sn))
+
 (def ^:private action-defs
-  {:up      {:fn #'lifecycle/up!    :after birth-scratch! :gerund "Starting"   :past "Started"   :failed "start"}
-   :down    {:fn #'lifecycle/down!                        :gerund "Stopping"   :past "Stopped"   :failed "stop"}
-   :destroy {:fn #'destroy-session! :after reap-scratch!  :gerund "Destroying" :past "Destroyed" :failed "destroy"}
-   :add     {:fn #'lifecycle/up!    :after birth-scratch! :gerund "Creating"   :past "Created"   :failed "create"}
+  {:up      {:fn #'lifecycle/up!              :after birth-scratch! :gerund "Starting"   :past "Started"   :failed "start"}
+   :down    {:fn #'lifecycle/down!                                  :gerund "Stopping"   :past "Stopped"   :failed "stop"}
+   :destroy {:fn #'destroy-session!           :after reap-scratch!  :gerund "Destroying" :past "Destroyed" :failed "destroy"}
+   :add     {:fn #'create-workstream-action!                        :gerund "Creating"   :past "Created"   :failed "create"}
    ;; :rehydrate has no :fn — it runs work/ensure-open! via rehydrate-and-enter,
    ;; not run-session-action!. The labels feed the spinner + failure panel.
-   :rehydrate {                                            :gerund "Re-hydrating" :past "Re-hydrated" :failed "re-hydrate"}})
+   :rehydrate {                                                      :gerund "Re-hydrating" :past "Re-hydrated" :failed "re-hydrate"}})
 
 (defn- run-session-action!
   "Run `verb`'s lifecycle fn for session `sn` in project `p`, then its `:after`

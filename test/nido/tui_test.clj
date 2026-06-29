@@ -429,3 +429,13 @@
                   (fn [p w s a] (swap! calls conj [p w s a]) (future nil))]
       (#'nido.tui/dev-start! "brian" "ws-1" "impl-br-1")
       (is (= [["brian" "ws-1" "impl-br-1" "start"]] @calls)))))
+
+;; ---------------------------------------------------------------------------
+;; Task 4.5: TUI new verb routes through work/new! (de-leak)
+;; ---------------------------------------------------------------------------
+
+(deftest new-verb-routes-through-work-new
+  (let [calls (atom [])]
+    (with-redefs [nido.work/new! (fn [p s] (swap! calls conj [p s]) "ws-9")]
+      (#'nido.tui/create-workstream! "brian" "scratch-foo")
+      (is (= [["brian" "scratch-foo"]] @calls)))))
