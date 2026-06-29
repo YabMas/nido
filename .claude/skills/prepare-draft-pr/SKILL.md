@@ -95,6 +95,6 @@ poller needs to react when the PR later merges.
 
 ## Done
 
-Report the PR URL and confirm the session link + workstream ref were written.
+Report the PR URL and confirm the session link, workstream ref, and the :pr-opened ticket-ledger entry were written.
 When this PR merges, the coordinator's GitHub poller will close the workstream
 and move the Notion ticket to Code Review automatically.

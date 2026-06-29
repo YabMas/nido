@@ -76,12 +76,14 @@
       (let [{:keys [state error]} (if (= :triage-bug (:skill run))
                                     (triage-reconciled-state run)
                                     (derive-terminal-state run-id))]
+        ;; no-op if state unchanged (e.g. parked → parked)
         (when (not= state (:state run))
           (let [history-entry {:at (clock/now-iso) :state state}
                 updated       (-> run (assoc :state state :error error)
                                   (update :state-history conj history-entry))]
             (runs/write-run! updated)
             (runs/mirror-run-phase! updated)
+            ;; Keep the ticket record honest: an orphaned triage Run clears a stale :investigating.
             (tickets/on-run-terminal! updated state)))))))
 
 (defn reconcile!

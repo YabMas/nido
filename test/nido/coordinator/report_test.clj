@@ -1,7 +1,7 @@
 (ns nido.coordinator.report-test
   (:require [clojure.test :refer [deftest is]]
             [clojure.string :as str]
-            [clojure.edn :refer [read-string]]
+            [clojure.edn :as edn]
             [nido.coordinator.report :as report]))
 
 (def ^:private valid-report
@@ -141,7 +141,7 @@
                      :summary "Draft PR for BR-4659."})
         [ext payload] (report/entry-payload :pr-opened edn)]
     (is (= "edn" ext))
-    (is (= :pr-opened (:format (read-string payload))))))
+    (is (= :pr-opened (:format (edn/read-string payload))))))
 
 (deftest entry-payload-accepts-implementation-plan
   (let [edn (pr-str {:format :implementation-plan
