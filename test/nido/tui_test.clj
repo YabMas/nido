@@ -235,7 +235,7 @@
 
 (deftest detail-rows-render-sessions-on-the-autonomy-axis
   (with-redefs [nido.work/workstream
-                (fn [_ _]
+                (fn [_ _ & _]
                   {:ws-id "w1" :origin :notion :stage :triage :label "BR-1 · a"
                    :ledger {:key "BR-1" :status :investigating :report-count 1}
                    :sessions [{:name "auto" :autonomy-level :autonomous :parked? true
@@ -439,3 +439,58 @@
     (with-redefs [nido.work/new! (fn [p s] (swap! calls conj [p s]) "ws-9")]
       (#'nido.tui/create-workstream! "brian" "scratch-foo")
       (is (= [["brian" "scratch-foo"]] @calls)))))
+
+;; ---------------------------------------------------------------------------
+;; Item 1: TUI ledger-entry navigation — report follows the cursor
+;; ---------------------------------------------------------------------------
+
+(deftest detail-rows-renders-selected-entry-report
+  ;; 3-arity detail-rows passes selected-seq to work/workstream and renders
+  ;; the corresponding report body; the cursor-row entry is marked with ▶.
+  (let [ws-calls (atom [])]
+    (with-redefs [nido.work/workstream
+                  (fn [_ _ sel]
+                    (swap! ws-calls conj sel)
+                    {:ledger nil
+                     :entries [{:seq 9 :kind :triage :at "t9" :title "Triage v2"}
+                               {:seq 5 :kind :triage :at "t5" :title "Triage v1"}]
+                     :selected-seq sel
+                     :report {:format :markdown
+                              :markdown (str (if (= sel 5) "FIVE" "NINE") " report")}
+                     :sessions []})]
+      (let [rows   (#'nido.tui/detail-rows "brian" "ws-1" 5)
+            titles (map :title rows)]
+        (is (= [5] @ws-calls)
+            "work/workstream was called with selected-seq 5")
+        (is (some #(str/includes? % "FIVE") titles)
+            "report body renders the text for the selected entry (seq 5)")
+        (is (some #(and (= {:nido.tui/entry-seq 5} (:data %))
+                        (str/starts-with? (:title %) "▶"))
+                  rows)
+            "entry row with seq 5 is marked with ▶")))))
+
+(deftest workstream-cursor-on-entry-selects-it
+  ;; When the cursor moves onto an entry row, update-workstream records
+  ;; that entry's seq in :selected-entry-seq.
+  (with-redefs [nido.work/workstream
+                (fn [_ _ & _]
+                  {:ledger nil
+                   :entries [{:seq 7 :kind :triage :at "t7" :title "Entry 7"}]
+                   :selected-seq 7
+                   :report {:format :markdown :markdown "Report for 7"}
+                   :sessions []})]
+    (let [;; item 0: non-entry row; item 1: entry row with seq 7
+          items [{:title "report line" :description "" :data :nido.tui/report-body}
+                 {:title "entry 7"    :description "" :data {:nido.tui/entry-seq 7}}]
+          ;; list-component starts with cursor at 0 (non-entry row)
+          lst   (#'tui/list-component items)
+          state {:screen           :workstream
+                 :project          "brian"
+                 :ws-id            "ws-1"
+                 :ws-label         "ws-1"
+                 :selected-entry-seq nil
+                 :list             lst}
+          ;; "down" moves cursor from item 0 to item 1 (the entry row)
+          [s' _] (#'tui/update-workstream state (msg/key-press "down"))]
+      (is (= 7 (:selected-entry-seq s'))
+          "navigating onto an entry row updates :selected-entry-seq to that entry's seq"))))

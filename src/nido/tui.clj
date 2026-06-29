@@ -268,9 +268,12 @@
 (defn- detail-rows
   "Read-only detail rows for one workstream: a ledger line (when present), the
    entry index (when >1 entry exists), the selected report body (first 12 lines),
-   and sessions on the autonomy axis. Reads nido.work/workstream (string project ok)."
-  [project ws-id]
-  (let [ws                               (work/workstream project ws-id)
+   and sessions on the autonomy axis. Reads nido.work/workstream (string project ok).
+   `selected-seq` (nil = latest) chooses which entry's report body renders, so the
+   detail cursor can browse the ledger."
+  ([project ws-id] (detail-rows project ws-id nil))
+  ([project ws-id selected-seq]
+   (let [ws                               (work/workstream project ws-id selected-seq)
         {:keys [ledger entries selected-seq report sessions]} ws
         ledger-row (when ledger
                      [{:title (str "ledger: " (:key ledger) " · "
@@ -278,10 +281,10 @@
                                    (:report-count ledger) " report(s)")
                        :description "" :data ::ledger}])
         entry-rows (when (seq entries)
-                     (mapv (fn [{:keys [seq kind at title]}]
-                             {:title (str (if (= seq selected-seq) "▶ " "  ")
+                     (mapv (fn [{eseq :seq :keys [kind at title]}]
+                             {:title (str (if (= eseq selected-seq) "▶ " "  ")
                                           title " · " (clojure.core/name kind) " · " at)
-                              :description "" :data {::entry-seq seq}})
+                              :description "" :data {::entry-seq eseq}})
                            entries))
         report-rows (when report
                       (let [md   (report/report->markdown report)
@@ -303,7 +306,7 @@
                 {:title (format-detail-session s (get dev-states (:name s)))
                  :description "" :data s})
               sessions)
-        [{:title "No sessions in this workstream yet." :description "" :data ::empty}])))))
+        [{:title "No sessions in this workstream yet." :description "" :data ::empty}]))))))
 
 ;; ---------------------------------------------------------------------------
 ;; charm list component
@@ -365,7 +368,7 @@
     :board      (board-rows (:project state) (:origin state)
                             (or (:collapsed state) default-collapsed-bands)
                             (or (:facet-filter state) {}))
-    :workstream (detail-rows (:project state) (:ws-id state))
+    :workstream (detail-rows (:project state) (:ws-id state) (:selected-entry-seq state))
     :system     (session-rows (:project state))
     :projects   (project-rows)))
 
@@ -389,7 +392,8 @@
   "Drill from the workstreams list into one workstream's session detail."
   [state ws-id label]
   (-> state
-      (assoc :screen :workstream :ws-id ws-id :ws-label label :status nil)
+      (assoc :screen :workstream :ws-id ws-id :ws-label label :status nil
+             :selected-entry-seq nil)
       (rebuild-list (detail-rows (:project state) ws-id))))
 
 (defn- set-origin
@@ -961,7 +965,7 @@
   (cond
     (:resumed result)  (str "resumed: " (:resumed result))
     (:decision result) (str "decision: " (name (:decision result)))
-    :else              (str "resolved")))
+    :else              "resolved"))
 
 ;; ---------------------------------------------------------------------------
 ;; Dev-environment controls — wrap dev/dev-action! for the workstream detail view
@@ -1124,8 +1128,15 @@
       (fn [s _ ws-id sname]
         (dev-restart! (:project s) ws-id sname)
         [(assoc s :status (str "restarting " sname "…")) nil]))
-    :else (let [[lst cmd] (item-list/list-update (:list state) msg)]
-            [(assoc state :list lst) cmd])))
+    :else
+    (let [[lst cmd] (item-list/list-update (:list state) msg)
+          d         (some-> (item-list/selected-item lst) :data)
+          entry-seq (when (map? d) (::entry-seq d))
+          s'        (assoc state :list lst)]
+      (if (and entry-seq (not= entry-seq (:selected-entry-seq state)))
+        (let [s2 (assoc s' :selected-entry-seq entry-seq)]
+          [(refresh-list s2 (current-rows s2)) cmd])
+        [s' cmd]))))
 
 (defn- update-system [state msg]
   (cond
