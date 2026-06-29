@@ -1,9 +1,9 @@
 (ns nido.coordinator.spawn
   "Live-path spawn orchestration: turn a routed fire request into a workstream
-   (found-or-created, deduped on external ref) + an authoritative autonomous
-   session, then the legacy run that the execution machinery drives. The run
-   carries :workstream-id back to its session (strangler boundary — see
-   docs/superpowers/specs/2026-06-08-live-path-cutover-design.md)."
+   (found-or-created, deduped on external ref) + the authoritative autonomous
+   session (self-sufficient for resume identity), then the execution-driver/
+   substrate run. The run carries :workstream-id back to its session (strangler
+   boundary — see docs/superpowers/specs/2026-06-08-live-path-cutover-design.md)."
   (:require
    [clojure.string :as str]
    [nido.coordinator.clock :as clock]

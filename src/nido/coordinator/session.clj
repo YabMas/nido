@@ -1,7 +1,11 @@
 (ns nido.coordinator.session
-  "A work-episode against a workstream. Carries substrate state (live/archived)
-   and weight (light/heavy), plus an OPTIONAL autonomy facet — the old Run,
-   demoted to a field. nil autonomy ⇒ a human session.
+  "A work-episode against a workstream. Carries substrate state (live/archived),
+   weight (light/heavy), and an OPTIONAL autonomy facet — the autonomous-session
+   record. The session is the authoritative work + HITL record: it is
+   self-sufficient for resume identity (:autonomy carries :claude-session-id +
+   :limits). run.edn remains the execution-driver/substrate record that drives the
+   FSM; reconcile! is the authoritative repair that re-syncs phase + id from it on
+   startup. nil autonomy ⇒ a human session.
    See spec docs/superpowers/specs/2026-06-05-workstream-session-model-design.md."
   (:require
    [babashka.fs :as fs]

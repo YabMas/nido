@@ -22,9 +22,10 @@
   #{:queued :preprocessing :running :awaiting-review :done :failed :halted :dry-run-would-fire})
 
 (def state->phase
-  "Run state → session autonomy phase. The single source of truth for mirroring
-   a run onto its authoritative session (used by transition!/reconcile and by
-   the migrate one-shot). :awaiting-review parks (human gate)."
+  "Run state → session autonomy phase. Maps the execution-driver/substrate state
+   onto the authoritative session's phase. Used by reconcile! (the authoritative
+   repair that re-syncs on startup) and by mirror-run-phase! (best-effort mirroring
+   at transition time). :awaiting-review parks (human gate)."
   {:queued             :queued
    :preprocessing      :preprocessing
    :running            :running
@@ -115,9 +116,9 @@
        (reduce (fn [m r] (update m (:trigger r) (fnil inc 0))) {})))
 
 (defn find-for-session
-  "The newest Run owning (`ws-id`, `session-name`) in `project`, or nil. Lets the
-   resume path recover a parked session's resumable :claude-session-id + run-id
-   (the real id lives in run.edn, not on the session autonomy)."
+  "The newest Run owning (`ws-id`, `session-name`) in `project`, or nil. Fallback
+   for resume identity: :claude-session-id lives on the session's autonomy facet
+   (the authoritative source); run.edn is the execution-driver/substrate record."
   [project ws-id session-name]
   (->> (list-run-ids)
        (keep read-run)
@@ -168,10 +169,11 @@
       updated)))
 
 (defn mirror-run-phase!
-  "Best-effort mirror of a run's state onto its authoritative session's autonomy
-   phase. No-op when the run has no :workstream-id (legacy / dry-run / test runs).
-   Never throws — a missing or human session is logged to stderr and swallowed so
-   it can't re-fail a transition or reconcile pass."
+  "Best-effort mirror of the execution-driver/substrate state onto the authoritative
+   session's autonomy phase (reconcile! is the authoritative repair). No-op when the
+   run has no :workstream-id (legacy / dry-run / test runs). Never throws — a
+   missing or human session is logged to stderr and swallowed so it can't re-fail a
+   transition."
   [run]
   (when-let [ws-id (:workstream-id run)]
     (when-let [phase (state->phase (:state run))]
