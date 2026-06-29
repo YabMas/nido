@@ -30,6 +30,21 @@
     (is (= [] findings))
     (is (= "correct" overall-correctness))))
 
+(deftest codex-argv-feeds-prompt-via-stdin-not-argv
+  ;; A large diff lives in the prompt; passing it as a CLI argument overflows
+  ;; ARG_MAX (E2BIG / "Argument list too long"). It must go through stdin, with
+  ;; "-" as the positional prompt so codex reads instructions from stdin.
+  (let [[opts & args] (codex/codex-argv {:cwd "/w" :schema-path "/s.json"
+                                         :out-path "/o.json"
+                                         :prompt "REVIEW INSTRUCTIONS\n\n<huge diff>"})]
+    (is (= "REVIEW INSTRUCTIONS\n\n<huge diff>" (:in opts))
+        "prompt fed via stdin")
+    (is (not-any? #(= "REVIEW INSTRUCTIONS\n\n<huge diff>" %) args)
+        "prompt is NOT an argv element")
+    (is (= "-" (last args))
+        "positional prompt is '-' (read from stdin)")
+    (is (= "/w" (:dir opts)))))
+
 (deftest review!-empty-diff-is-clean
   (with-redefs [jj/jj! (fn [& _] {:exit 0 :out "" :err ""})]
     (is (= {:status :clean :findings []}

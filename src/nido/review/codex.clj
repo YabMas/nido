@@ -33,15 +33,23 @@
     {:findings            (mapv normalize-finding (:findings m))
      :overall-correctness (:overall_correctness m)}))
 
+(defn codex-argv
+  "The `codex exec` invocation as [opts & args] for p/shell. Pure, so it's
+   unit-testable. The prompt (review instructions + the whole diff) is fed via
+   stdin with \"-\" as the positional prompt — passing a large diff as a CLI
+   argument overflows ARG_MAX (E2BIG / \"Argument list too long\")."
+  [{:keys [cwd schema-path out-path prompt]}]
+  [{:dir cwd :continue true :in prompt :out :inherit :err :inherit}
+   "codex" "exec" "--skip-git-repo-check"
+   "--output-schema" schema-path
+   "-o" out-path
+   "-"])
+
 (defn run-codex!
   "Run `codex exec` with output-schema. Seam for tests. Returns {:exit <int>}.
    Writes the final JSON response to :out-path."
-  [{:keys [cwd schema-path out-path prompt]}]
-  (let [res (p/shell {:dir cwd :continue true :out :inherit :err :inherit}
-                     "codex" "exec" "--skip-git-repo-check"
-                     "--output-schema" schema-path
-                     "-o" out-path
-                     prompt)]
+  [opts]
+  (let [res (apply p/shell (codex-argv opts))]
     {:exit (:exit res)}))
 
 (defn review!
