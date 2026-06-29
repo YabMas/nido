@@ -141,19 +141,22 @@ report (non-zero exit + an explain dump) — fix and retry until it's accepted.
  :summary       "2–6 sentences, self-contained — assumes the reader hasn't seen the original."
  :confidence    {:level :high        ; :high | :medium | :low
                  :reason "one line"}
- :directions    [{:label "A" :shape "1 sentence" :effort :M    ; :XS :S :M :L :XL
+ :directions    [{:label "A" :shape "1 sentence"
+                  :effort :M    ; :XS :S :M :L :XL — or :squirrel to defer sizing
                   :confidence {:level :medium :reason "one line"}}]
  :notion-writes {:type "bug"          ; nil for a Slack run (no Notion writes)
-                 :effort :M
+                 :effort :M     ; :XS :S :M :L :XL :squirrel ; nil for a Slack run
                  :status-transition ["Needs verification" "Not started"]  ; omit/nil if no transition
                  :title "enriched title (= :title above, or unchanged when identical to original)"
                  :description-prepend "the enriched callout body prepended above the reporter's original"}
+ :defer-note    "why sizing was deferred — REQUIRED when any effort is :squirrel, else omit"
  :trail         [{:ref "file:line or transcript ref" :note "what I learned"}]}
 ```
 
 Notes:
 - `:notion-writes` is **nil for Slack runs** — there are no Notion writes.
 - There is **no dismiss-recommendation field**. If the report isn't worth pursuing, say so in chat and `dismiss` — don't encode it in the report.
+- **`:squirrel` is the joker** — use it for `:effort` when the implementation direction is genuinely ambiguous and sizing should defer to the implementation-plan stage. When you use it, set `:defer-note` explaining why; `/continue-ticket` resolves it into a concrete effort later.
 - After appending, print the report into chat with `bb nido:ticket:report :project brian :br <key>` (renders the stored report as markdown) so the user sees it on `nido enter`.
 
 ## Step 3 — Confirmation (chat, liberal parsing)
