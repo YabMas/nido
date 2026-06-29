@@ -4,6 +4,7 @@
    [clojure.test :refer [deftest is]]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.workstream :as ws]
+   [nido.work]
    [tasks.nido-workstream :as task]))
 
 (defn- with-tmp [f]
@@ -12,15 +13,23 @@
            (cstate/ensure-dirs!) (f tmp))
          (finally (fs/delete-tree tmp)))))
 
+(deftest stage-advance-routes-through-set-stage
+  (let [calls (atom [])]
+    (with-redefs [nido.work/set-stage! (fn [p w t] (swap! calls conj [p w t]) {:decision :advanced})]
+      (#'tasks.nido-workstream/stage-advance*
+        {:project "brian" :ws-id "ws-1" :stage "in-progress"})
+      (is (= [[:brian "ws-1" :in-progress]] @calls)
+          "delegates to work/set-stage! so :in-progress provisions the planning leg"))))
+
 (deftest entry-add-stage-advance-close
   (with-tmp
     (fn [_]
       (let [w (ws/create! :brian {:stage :triaging
                                   :external-refs [{:adapter :notion :id "BR-3"}]})]
-        (task/entry-add* {:project "brian" :ref "BR-3" :kind "triage" :content "found a bug"})
+        (task/entry-add* {:project "brian" :ref "BR-3" :kind "note" :content "found a bug"})
         (let [w2 (ws/read-ws :brian (:id w))]
           (is (= 1 (count (:entries w2))))
-          (is (= :triage (-> w2 :entries first :kind))))
+          (is (= :note (-> w2 :entries first :kind))))
         (task/stage-advance* {:project "brian" :ref "BR-3" :stage "investigating"})
         (is (= :investigating (:stage (ws/read-ws :brian (:id w)))))
         (task/close* {:project "brian" :ref "BR-3" :outcome "done"})

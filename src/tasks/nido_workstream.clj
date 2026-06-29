@@ -4,7 +4,8 @@
    external ref (BR-####). Used by the triage skill's dual-write and by humans."
   (:require
    [nido.coordinator.workstream :as ws]
-   [nido.task-args :as task-args]))
+   [nido.task-args :as task-args]
+   [nido.work :as work]))
 
 (defn- resolve-ws-id
   "Workstream id from opts: explicit :ws-id, or :ref resolved via find-by-ref
@@ -21,7 +22,7 @@
                     {:kind (keyword (or kind "note"))} (or content "")))
 
 (defn stage-advance* [{:keys [project stage] :as opts}]
-  (ws/advance-stage! (keyword project) (resolve-ws-id opts) (keyword stage)))
+  (work/set-stage! (keyword project) (resolve-ws-id opts) (keyword stage)))
 
 (defn close* [{:keys [project outcome] :as opts}]
   (ws/close! (keyword project) (resolve-ws-id opts) (keyword (or outcome "done"))))
