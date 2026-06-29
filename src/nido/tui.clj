@@ -902,6 +902,52 @@
          nil])
     [(assoc state :status "(no workstream selected)") nil]))
 
+;; ---------------------------------------------------------------------------
+;; Gate Apply/Reply — parked workstream helpers
+;; ---------------------------------------------------------------------------
+
+(defn- apply-gate!
+  "Call work/resolve-gate! :apply for project + ws-id. Returns the result map."
+  [project ws-id]
+  (work/resolve-gate! project ws-id :apply))
+
+(defn- reply-gate!
+  "Call work/resolve-gate! :reply for project + ws-id with `text`. Returns the result map."
+  [project ws-id text]
+  (work/resolve-gate! project ws-id :reply text))
+
+(defn- gate-result-status
+  "One-line status string for a gate resolution result map."
+  [result]
+  (cond
+    (:resumed result)  (str "resumed: " (:resumed result))
+    (:decision result) (str "decision: " (name (:decision result)))
+    :else              (str "resolved")))
+
+(defn- open-reply-input
+  "Open the text-input modal to collect the reply text for the current parked workstream."
+  [state]
+  [(assoc state
+          :modal :reply-input
+          :modal-input (text-input/text-input :prompt "reply: "))
+   nil])
+
+(defn- update-reply-input [state msg]
+  (cond
+    (msg/key-match? msg "escape")
+    [(close-modal state) nil]
+
+    (msg/key-match? msg "enter")
+    (let [text (str/trim (text-input/value (:modal-input state)))]
+      (if (seq text)
+        (let [result (reply-gate! (:project state) (:ws-id state) text)]
+          [(-> state close-modal (assoc :status (gate-result-status result))) nil])
+        [(close-modal state) nil]))
+
+    :else
+    (let [[ti cmd] (text-input/text-input-update (:modal-input state) msg)]
+      [(assoc state :modal-input ti) cmd])))
+
 (declare open-stage-picker enter-system)
 
 (defn- open-stage-picker
@@ -976,7 +1022,8 @@
 (defn- update-workstream
   "Workstream detail screen. ↵ routes into the highlighted session's home (same
    handoff the Sessions view uses → lands you in the chat). esc returns to the
-   board at the active origin."
+   board at the active origin. [a] Apply / [r] Reply are gated to parked
+   workstreams only (work/gate returns non-nil)."
   [state msg]
   (cond
     (msg/key-match? msg "escape") [(set-origin state (:origin state)) nil]
@@ -984,6 +1031,15 @@
     (if-let [sname (some-> (selected-data state) :name)]
       (enter-session state (:project state) sname :home)
       [state nil])
+    (msg/key-match? msg "a")
+    (if (work/gate (:project state) (:ws-id state))
+      (let [result (apply-gate! (:project state) (:ws-id state))]
+        [(assoc state :status (gate-result-status result)) nil])
+      [(assoc state :status "(not a parked workstream — a/r unavailable)") nil])
+    (msg/key-match? msg "r")
+    (if (work/gate (:project state) (:ws-id state))
+      (open-reply-input state)
+      [(assoc state :status "(not a parked workstream — a/r unavailable)") nil])
     :else (let [[lst cmd] (item-list/list-update (:list state) msg)]
             [(assoc state :list lst) cmd])))
 
@@ -1138,6 +1194,9 @@
     (= :stage-picker (:modal state))
     (update-stage-picker state msg)
 
+    (= :reply-input (:modal state))
+    (update-reply-input state msg)
+
     ;; No modal: route to the active screen's handler. Origin cycling (Tab/←→) is
     ;; owned by update-board, alongside the other board keys.
     :else
@@ -1248,6 +1307,7 @@
                   :halt-resume-confirm  "nido — resume coordinator?"
                   :clear-breaker        "nido — clear breaker"
                   :stage-picker         "nido — promote to…"
+                  :reply-input          (str "nido — " (:project state) " · " (:ws-label state) " · reply")
                   (case (:screen state)
                     :projects   "nido — projects"
                     :board      (str "nido — " (:project state) " · " (name (:origin state)))
@@ -1268,10 +1328,11 @@
                   :halt-resume-confirm  "[y] resume  [n/esc] cancel"
                   :clear-breaker        "[↑↓] move  [↵] clear  [esc] cancel"
                   :stage-picker         "[↑↓] move  [↵] promote here  [esc] cancel"
+                  :reply-input          "[↵] send  [esc] cancel"
                   (case (:screen state)
                     :projects   "[↵] open  [q]uit"
                     :board      "[↵/o] open  [i]nspect  [n]ew  [p]romote  [P] promote to…  [d]one  [x] dismiss  [space] fold  [⇄ tab] origin  [ [ ] ] domain  [ { } ] type  [s]ystem  [esc] back  [q]uit"
-                    :workstream "[↵] open in chat  [esc] back  [q]uit"
+                    :workstream "[↵] open in chat  [a] apply  [r] reply  [esc] back  [q]uit"
                     :system     "[↵/e] enter  [w]orktree  [i]nfo  [u]p  [d]own  [x] destroy  •  [f]ire  [h]alt  [c]lear breaker  [esc] back  [q]uit"))))
 
 (defn- info-row [label value]
@@ -1397,7 +1458,10 @@
     (item-list/list-view (:picker (:modal-target state)))
 
     :stage-picker
-    (item-list/list-view (:picker (:modal-target state)))))
+    (item-list/list-view (:picker (:modal-target state)))
+
+    :reply-input
+    (text-input/text-input-view (:modal-input state))))
 
 (defn- busy-label [verb]
   (str (get-in action-defs [verb :gerund] "Working on") " "))

@@ -382,6 +382,18 @@
     (is (not (str/blank? (#'tui/facet-strip :brian :all {:app-domain :all})))
         "facet-strip renders on :all origin")))
 
+;; ---------------------------------------------------------------------------
+;; Task 4.3: gate Apply/Reply for parked workstreams
+;; ---------------------------------------------------------------------------
+
+(deftest apply-key-resolves-gate
+  (let [calls (atom [])]
+    (with-redefs [nido.work/resolve-gate! (fn [p w a & more]
+                                            (swap! calls conj (into [p w a] more))
+                                            {:resumed "auto"})]
+      (#'nido.tui/apply-gate! "brian" "ws-1")
+      (is (= [["brian" "ws-1" :apply]] @calls)))))
+
 (deftest board-rows-ignores-facets-on-non-facet-origin
   ;; A non-empty facet-filter (e.g. {:app-domain "Teacher"}) must NOT filter rows
   ;; on :slack/:github/:scratch origins — those workstreams have no facets and
