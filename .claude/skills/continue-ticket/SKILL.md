@@ -54,12 +54,25 @@ Advance the ticket to the stage you're starting. This also tells nido's coordina
 bb nido:ticket:status :project brian :br <BR-####> :status implementing
 ```
 
-Optionally record the handoff so the ledger reads triage → impl (derive `<session>`/`<run-id>` from the cwd and the `./run-link/` symlink target):
+Then record the implementation plan as a typed ledger event — this resolves any
+triage `:squirrel` (deferred sizing) into a concrete direction + effort, and is
+what the report browser shows for the impl stage. Write the EDN to a temp file:
 
 ```bash
-bb nido:ticket:append :project brian :br <BR-####> :kind impl \
-  :session <session> :run-id <run-id> :file <a short kickoff note>
+cat > /tmp/impl-plan.edn <<'EDN'
+{:format    :implementation-plan
+ :summary   "<2-4 sentences: the plan you're about to execute>"
+ :direction "<the chosen solution direction, concretely>"
+ :effort    :M           ; concrete :XS :S :M :L :XL — resolve a triage :squirrel here
+ :steps     ["<step 1>" "<step 2>"]}   ; optional
+EDN
+bb nido:ticket:append :project brian :br <BR-####> :kind implementation-plan \
+  :session <session> :run-id <run-id> :file /tmp/impl-plan.edn
 ```
+
+The append validates against nido's `ImplementationPlan` schema and rejects a
+malformed report (non-zero exit + explain) — fix and retry. Derive
+`<session>`/`<run-id>` from the cwd and the `./run-link/` symlink target.
 
 ## Step 4 — Do the work (the harness owns the *how*)
 
@@ -69,3 +82,16 @@ Session reminders:
 - **Edit in `./worktree`**, not in nido's tree. The REPL / app / DB are nido-managed — connect to the running services, don't start your own.
 - **Don't touch Notion** — nido already set the ticket's Notion status when this session was provisioned; the triage stage owns the Notion contract, not this one.
 - If what you find contradicts the prior stage's findings (the bug doesn't reproduce, the root cause is elsewhere), say so plainly and reorient with the user rather than forcing the earlier hypothesis.
+
+  When you reorient, record it as a typed `:blocker` event so the parked
+  workstream's ledger shows *why* it stalled:
+
+  ```bash
+  cat > /tmp/blocker.edn <<'EDN'
+  {:format  :blocker
+   :summary "<what you found that contradicts the prior stage>"
+   :needs   "<the decision you need from the user before proceeding>"}
+  EDN
+  bb nido:ticket:append :project brian :br <BR-####> :kind blocker \
+    :session <session> :run-id <run-id> :file /tmp/blocker.edn
+  ```
