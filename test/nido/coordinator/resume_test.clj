@@ -45,7 +45,8 @@
         (write-run! "r1" (:id w) "auto" "sid-9")
         (with-redefs [runs/home-present? (fn [_] true)
                       agent/launch! (fn [opts] (reset! calls opts) {:exit-code 0 :num-turns 1})]
-          (#'resume/run-turn! :brian (:id w) "auto" (runs/read-run "r1") "do the fix"))
+          (let [s (first (session/list-sessions :brian (:id w)))]
+            (#'resume/run-turn! :brian (:id w) "auto" s (runs/read-run "r1") "do the fix")))
         (is (= "sid-9" (:claude-session-id @calls)))
         (is (true? (:resume? @calls)) "continues the recorded conversation")
         (is (= "do the fix" (:first-message @calls)))
@@ -63,7 +64,8 @@
         (write-run! "r1" (:id w) "auto" "sid-9")
         (with-redefs [runs/home-present? (fn [_] true)
                       agent/launch! (fn [_] (throw (ex-info "boom" {})))]
-          (#'resume/run-turn! :brian (:id w) "auto" (runs/read-run "r1") "x"))
+          (let [s (first (session/list-sessions :brian (:id w)))]
+            (#'resume/run-turn! :brian (:id w) "auto" s (runs/read-run "r1") "x")))
         (is (= :parked (get-in (first (session/list-sessions :brian (:id w))) [:autonomy :phase]))
             "re-parks even when the launch throws")))))
 
@@ -121,7 +123,8 @@
         (with-redefs [runs/home-present? (fn [_] true)
                       runs/spawn-session-for-run! (fn [_] (swap! spawned inc))
                       agent/launch! (fn [opts] (reset! launched opts) {:exit-code 0 :num-turns 1})]
-          (#'resume/run-turn! :brian (:id w) "auto" (runs/read-run "r1") "apply"))
+          (let [s (first (session/list-sessions :brian (:id w)))]
+            (#'resume/run-turn! :brian (:id w) "auto" s (runs/read-run "r1") "apply")))
         (is (zero? @spawned) "home present → no re-provision")
         (is (= "sid-9" (:claude-session-id @launched)) "launches --resume")
         (is (= :parked (get-in (first (session/list-sessions :brian (:id w))) [:autonomy :phase])))))))
@@ -137,7 +140,8 @@
         (with-redefs [runs/home-present? (fn [_] false)
                       runs/spawn-session-for-run! (fn [_] (swap! spawned inc))
                       agent/launch! (fn [opts] (reset! launched opts) {:exit-code 0})]
-          (#'resume/run-turn! :brian (:id w) "auto" (runs/read-run "r1") "apply"))
+          (let [s (first (session/list-sessions :brian (:id w)))]
+            (#'resume/run-turn! :brian (:id w) "auto" s (runs/read-run "r1") "apply")))
         (is (= 1 @spawned) "home absent → re-provision once")
         (is (some? @launched) "then launches --resume")
         (is (= :parked (get-in (first (session/list-sessions :brian (:id w))) [:autonomy :phase])))))))
@@ -151,7 +155,8 @@
         (write-run! "r1" (:id w) "auto" "sid-9")
         (with-redefs [runs/home-present? (fn [_] true)
                       agent/launch! (fn [_] (throw (ex-info "boom" {})))]
-          (#'resume/run-turn! :brian (:id w) "auto" (runs/read-run "r1") "apply"))
+          (let [s (first (session/list-sessions :brian (:id w)))]
+            (#'resume/run-turn! :brian (:id w) "auto" s (runs/read-run "r1") "apply")))
         (let [auto (:autonomy (first (session/list-sessions :brian (:id w))))]
           (is (= :resume-failed (-> auto :error :reason)) "failure recorded on the session")
           (is (= "boom" (-> auto :error :message)))
@@ -167,7 +172,8 @@
         (with-redefs [runs/home-present? (fn [_] false)
                       runs/spawn-session-for-run! (fn [_] (throw (ex-info "no branch" {})))
                       agent/launch! (fn [_] {:exit-code 0})]
-          (#'resume/run-turn! :brian (:id w) "auto" (runs/read-run "r1") "apply"))
+          (let [s (first (session/list-sessions :brian (:id w)))]
+            (#'resume/run-turn! :brian (:id w) "auto" s (runs/read-run "r1") "apply")))
         (is (= :rehydrate-failed
                (-> (first (session/list-sessions :brian (:id w))) :autonomy :error :reason))
             "a re-provision failure is tagged :rehydrate-failed")))))
@@ -183,6 +189,46 @@
         (write-run! "r1" (:id w) "auto" "sid-9")
         (with-redefs [runs/home-present? (fn [_] true)
                       agent/launch! (fn [_] {:exit-code 0})]
-          (#'resume/run-turn! :brian (:id w) "auto" (runs/read-run "r1") "apply"))
+          (let [s (first (session/list-sessions :brian (:id w)))]
+            (#'resume/run-turn! :brian (:id w) "auto" s (runs/read-run "r1") "apply")))
         (is (nil? (-> (first (session/list-sessions :brian (:id w))) :autonomy :error))
             "a clean turn clears the prior error")))))
+
+;; ---- NEW tests for session-first identity (Task 3.4) ----
+
+(deftest run-turn-uses-session-id-when-no-run
+  ;; Happy path: session carries the claude-session-id; run is nil (e.g. coordinator
+  ;; session spawned before a run.edn was ever written, or the run was cleaned up).
+  ;; Asserts the id came from the SESSION, not a run — the core claim of Task 3.4.
+  (with-tmp
+    (fn []
+      (let [w     (ws/create! :brian {:stage :triaging :external-refs []})
+            calls (atom nil)]
+        (session/create! :brian (:id w)
+                         {:name "auto" :weight :heavy
+                          :autonomy (assoc autonomy-parked :claude-session-id "sid-on-session")})
+        (session/set-phase! :brian (:id w) "auto" :running)
+        (with-redefs [agent/launch! (fn [opts] (reset! calls opts) {:exit-code 0})]
+          (let [s (first (session/list-sessions :brian (:id w)))]
+            ;; nil run — no run.edn on disk for this session
+            (#'resume/run-turn! :brian (:id w) "auto" s nil "do the fix")))
+        (is (= "sid-on-session" (:claude-session-id @calls))
+            "id came from the session, not a run")
+        (is (true? (:resume? @calls)) "continues the recorded conversation")
+        (is (= "do the fix" (:first-message @calls)))
+        (is (= "30m" (:budget @calls)) "budget from session :limits")
+        (is (= :parked (get-in (first (session/list-sessions :brian (:id w)))
+                               [:autonomy :phase]))
+            "re-parks after the turn")))))
+
+(deftest resume-errors-when-id-absent-from-both
+  ;; Neither the session NOR the run carries a claude-session-id → :no-claude-session.
+  (with-tmp
+    (fn []
+      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+        (session/create! :brian (:id w)
+                         {:name "auto" :weight :heavy
+                          :autonomy (assoc autonomy-parked :claude-session-id nil)})
+        (with-redefs [runs/find-for-session (fn [& _] nil)]
+          (is (thrown-with-msg? clojure.lang.ExceptionInfo #"No resumable conversation"
+                (resume/resume! :brian (:id w) "apply"))))))))

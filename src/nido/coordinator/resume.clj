@@ -24,19 +24,26 @@
    home path, so re-provision at the same path re-anchors it). Then launches one
    bounded `claude --resume` turn, records the outcome on the session (`:error`
    cleared on success / set on failure, logged to *err* for operators), and
-   re-parks for re-review regardless."
-  [project ws-id session-name run input]
+   re-parks for re-review regardless.
+
+   `s` is the parked session map; `run` is the run record (may be nil for sessions
+   not backed by a run.edn). Identity (`:claude-session-id`, `:budget`) is resolved
+   from `s` first, with `run` as the fallback. The run is used only for the
+   execution substrate (`ensure-session-home!` / `launch-context`), guarded for nil."
+  [project ws-id session-name s run input]
   (try
-    (runs/ensure-session-home! run)
-    (let [lc (runs/launch-context run)]
+    (when run (runs/ensure-session-home! run))
+    (let [lc (if run (runs/launch-context run) {})]
       (agent/launch! {:run-id            (:id run)
                       :cwd               (:cwd lc)
                       :first-message     input
-                      :claude-session-id (:claude-session-id run)
+                      :claude-session-id (or (get-in s [:autonomy :claude-session-id])
+                                             (:claude-session-id run))
                       :resume?           true
                       :mcp-config        (:mcp-config lc)
                       :add-dirs          (:add-dirs lc)
-                      :budget            (-> run :limits :budget)}))
+                      :budget            (or (get-in s [:autonomy :limits :budget])
+                                             (-> run :limits :budget))}))
     (session/set-error! project ws-id session-name nil)
     (catch Throwable t
       (binding [*err* *err*]
@@ -54,14 +61,22 @@
   "Re-engage a parked session under `ws-id` with `input`. Flips the session to
    :running synchronously, then runs one resume turn on a background thread.
    Returns {:resumed <session-name>}; throws ex-info (with :reason) when there is
-   no parked session (:not-parked) or no recoverable conversation (:no-claude-session)."
+   no parked session (:not-parked) or no recoverable conversation (:no-claude-session).
+
+   The claude-session-id and limits are resolved from the parked session first
+   (`:autonomy :claude-session-id` / `:autonomy :limits`), with the run.edn as a
+   fallback for legacy parked sessions. The run is used only for the execution
+   substrate (ensure-session-home! / launch-context). Throws :no-claude-session
+   only when BOTH the session and the run lack an id."
   [project ws-id input]
   (let [s (parked-session project ws-id)]
     (when-not s
       (throw (ex-info "No parked session to resume"
                       {:reason :not-parked :project project :ws-id ws-id})))
-    (let [run (runs/find-for-session project ws-id (:name s))]
-      (when-not (and run (:claude-session-id run))
+    (let [run (runs/find-for-session project ws-id (:name s))
+          sid (or (get-in s [:autonomy :claude-session-id])
+                  (:claude-session-id run))]
+      (when-not sid
         (session/set-error! project ws-id (:name s)
                             {:at      (clock/now-iso)
                              :reason  :no-claude-session
@@ -69,5 +84,5 @@
         (throw (ex-info "No resumable conversation — open the session in the terminal"
                         {:reason :no-claude-session :project project :ws-id ws-id})))
       (session/set-phase! project ws-id (:name s) :running)
-      (future (run-turn! project ws-id (:name s) run input))
+      (future (run-turn! project ws-id (:name s) s run input))
       {:resumed (:name s)})))
