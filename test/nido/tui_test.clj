@@ -9,6 +9,7 @@
    [nido.coordinator.triggers]
    [nido.coordinator.workstream :as workstream]
    [nido.project :as project]
+   [nido.session.dev]
    [nido.session.lifecycle :as lifecycle]
    [nido.tui :as tui]
    [nido.work]))
@@ -417,3 +418,14 @@
           ;; :notion origin: facet filter IS applied → only the Teacher ws shows
           (is (= 1 (count-ws :notion {:app-domain "Teacher"}))
               "Notion workstream shows on :notion origin with matching Teacher facet filter"))))))
+
+;; ---------------------------------------------------------------------------
+;; Task 4.4: per-session dev-environment controls in the workstream detail view
+;; ---------------------------------------------------------------------------
+
+(deftest dev-start-key-runs-dev-action
+  (let [calls (atom [])]
+    (with-redefs [nido.session.dev/dev-action!
+                  (fn [p w s a] (swap! calls conj [p w s a]) (future nil))]
+      (#'nido.tui/dev-start! "brian" "ws-1" "impl-br-1")
+      (is (= [["brian" "ws-1" "impl-br-1" "start"]] @calls)))))

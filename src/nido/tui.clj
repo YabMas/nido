@@ -35,6 +35,7 @@
    [nido.coordinator.triggers :as triggers]
    [nido.project :as project]
    [nido.work :as work]
+   [nido.session.dev :as dev]
    [nido.session.engine :as engine]
    [nido.session.lifecycle :as lifecycle]
    [nido.session.links :as links]
@@ -237,21 +238,37 @@
        (vec (strip-leading-blank rows))))))
 
 (defn- format-detail-session
-  "Display string for a session on the autonomy axis."
-  [{:keys [name autonomy-level status parked? brakes]}]
-  (format "%s%s  ·  %s  ·  %s%s"
-          (if parked? "⏸ " "  ")
-          name
-          (clojure.core/name (or autonomy-level :?))
-          (clojure.core/name (or status :?))
-          (if brakes (str "  ·  " (clojure.core/name (ffirst brakes)) " " (val (first brakes))) "")))
+  "Display string for a session on the autonomy axis. `dev-state` is the
+   optional map from `dev/session-dev-state` — {:state :running/:down/…
+   :url :error-msg?}. When present, appends the dev-env state to the row."
+  ([session] (format-detail-session session nil))
+  ([{:keys [name autonomy-level status parked? brakes]} dev-state]
+   (let [dev-str (when dev-state
+                   (let [ds (:state dev-state)
+                         label (case ds
+                                 :running  "▶ running"
+                                 :starting "⟳ starting"
+                                 :stopping "⟳ stopping"
+                                 :restarting "⟳ restarting"
+                                 :failed   "✗ failed"
+                                 :down     "○ down"
+                                 (str (clojure.core/name ds)))]
+                     (str "  ·  dev:" label)))]
+     (format "%s%s  ·  %s  ·  %s%s%s"
+             (if parked? "⏸ " "  ")
+             name
+             (clojure.core/name (or autonomy-level :?))
+             (clojure.core/name (or status :?))
+             (if brakes (str "  ·  " (clojure.core/name (ffirst brakes)) " " (val (first brakes))) "")
+             (or dev-str "")))))
 
 (defn- detail-rows
   "Read-only detail rows for one workstream: a ledger line (when present), the
    entry index (when >1 entry exists), the selected report body (first 12 lines),
    and sessions on the autonomy axis. Reads nido.work/workstream (string project ok)."
   [project ws-id]
-  (let [{:keys [ledger entries selected-seq report sessions]} (work/workstream project ws-id)
+  (let [ws                               (work/workstream project ws-id)
+        {:keys [ledger entries selected-seq report sessions]} ws
         ledger-row (when ledger
                      [{:title (str "ledger: " (:key ledger) " · "
                                    (clojure.core/name (or (:status ledger) :?)) " · "
@@ -270,14 +287,19 @@
                                        (take 12))]
                         (when (seq lines)
                           (mapv (fn [line] {:title line :description "" :data ::report-body})
-                                lines))))]
+                                lines))))
+        dev-states  (when (seq sessions)
+                      (dev/ws-session-dev-states project ws))]
     (vec
      (concat
       ledger-row
       entry-rows
       report-rows
       (if (seq sessions)
-        (mapv (fn [s] {:title (format-detail-session s) :description "" :data s}) sessions)
+        (mapv (fn [s]
+                {:title (format-detail-session s (get dev-states (:name s)))
+                 :description "" :data s})
+              sessions)
         [{:title "No sessions in this workstream yet." :description "" :data ::empty}])))))
 
 ;; ---------------------------------------------------------------------------
@@ -924,6 +946,25 @@
     (:decision result) (str "decision: " (name (:decision result)))
     :else              (str "resolved")))
 
+;; ---------------------------------------------------------------------------
+;; Dev-environment controls — wrap dev/dev-action! for the workstream detail view
+;; ---------------------------------------------------------------------------
+
+(defn- dev-start!
+  "Start the dev environment for `session` in `project`/`ws-id` (background future)."
+  [project ws-id session]
+  (dev/dev-action! project ws-id session "start"))
+
+(defn- dev-stop!
+  "Stop the dev environment for `session` in `project`/`ws-id` (background future)."
+  [project ws-id session]
+  (dev/dev-action! project ws-id session "stop"))
+
+(defn- dev-restart!
+  "Restart the dev environment for `session` in `project`/`ws-id` (background future)."
+  [project ws-id session]
+  (dev/dev-action! project ws-id session "restart"))
+
 (defn- open-reply-input
   "Open the text-input modal to collect the reply text for the current parked workstream."
   [state]
@@ -1019,11 +1060,20 @@
     :else (let [[lst cmd] (item-list/list-update (:list state) msg)]
             [(assoc state :list lst) cmd])))
 
+(defn- with-selected-session-detail
+  "Like with-selected-session but for the workstream detail screen.
+   Resolves the session name from the highlighted detail row's :name field."
+  [state f]
+  (if-let [sname (some-> (selected-data state) :name)]
+    (f state (:project state) (:ws-id state) sname)
+    [(assoc state :status "(no session selected)") nil]))
+
 (defn- update-workstream
   "Workstream detail screen. ↵ routes into the highlighted session's home (same
    handoff the Sessions view uses → lands you in the chat). esc returns to the
    board at the active origin. [a] Apply / [r] Reply are gated to parked
-   workstreams only (work/gate returns non-nil)."
+   workstreams only (work/gate returns non-nil). [S]/[X]/[R] start/stop/restart
+   the dev environment for the selected session (background futures)."
   [state msg]
   (cond
     (msg/key-match? msg "escape") [(set-origin state (:origin state)) nil]
@@ -1040,6 +1090,23 @@
     (if (work/gate (:project state) (:ws-id state))
       (open-reply-input state)
       [(assoc state :status "(not a parked workstream — a/r unavailable)") nil])
+    ;; Dev-environment controls for the selected session (uppercase keys to
+    ;; avoid collision with `a`/`r` Apply/Reply and `enter`/`o`/`esc`).
+    (msg/key-match? msg "S")
+    (with-selected-session-detail state
+      (fn [s _ ws-id sname]
+        (dev-start! (:project s) ws-id sname)
+        [(assoc s :status (str "starting " sname "…")) nil]))
+    (msg/key-match? msg "X")
+    (with-selected-session-detail state
+      (fn [s _ ws-id sname]
+        (dev-stop! (:project s) ws-id sname)
+        [(assoc s :status (str "stopping " sname "…")) nil]))
+    (msg/key-match? msg "R")
+    (with-selected-session-detail state
+      (fn [s _ ws-id sname]
+        (dev-restart! (:project s) ws-id sname)
+        [(assoc s :status (str "restarting " sname "…")) nil]))
     :else (let [[lst cmd] (item-list/list-update (:list state) msg)]
             [(assoc state :list lst) cmd])))
 
@@ -1332,7 +1399,7 @@
                   (case (:screen state)
                     :projects   "[↵] open  [q]uit"
                     :board      "[↵/o] open  [i]nspect  [n]ew  [p]romote  [P] promote to…  [d]one  [x] dismiss  [space] fold  [⇄ tab] origin  [ [ ] ] domain  [ { } ] type  [s]ystem  [esc] back  [q]uit"
-                    :workstream "[↵] open in chat  [a] apply  [r] reply  [esc] back  [q]uit"
+                    :workstream "[↵] open in chat  [a] apply  [r] reply  [S] dev-start  [X] dev-stop  [R] dev-restart  [esc] back  [q]uit"
                     :system     "[↵/e] enter  [w]orktree  [i]nfo  [u]p  [d]own  [x] destroy  •  [f]ire  [h]alt  [c]lear breaker  [esc] back  [q]uit"))))
 
 (defn- info-row [label value]
