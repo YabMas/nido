@@ -30,6 +30,34 @@
 
 (use-fixtures :each reset-executor!)
 
+;; ---------------------------------------------------------------------------
+;; Shared test helpers for Task 3.2
+;; ---------------------------------------------------------------------------
+
+(defn- with-tmp [f]
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (cstate/ensure-dirs!)
+        (f))
+      (finally (fs/delete-tree tmp)))))
+
+(def ^:private autonomy-parked
+  {:skill :triage-bug :first-message "x" :agent :claude :claude-session-id nil
+   :trigger :triage-bug :limits {:budget "30m"} :priority 4 :uncapped? false
+   :on-promote nil :phase :parked
+   :phase-history [{:at "2026-06-18T00:00:00Z" :phase :parked}] :error nil})
+
+(defn- run-fixture [id ws-id sname sid]
+  {:id id :project :brian :trigger :triage-bug
+   :source {:type :manual} :event-payload {} :skill :triage-bug
+   :first-message "/triage-bug" :agent :claude :session-name sname
+   :workstream-id ws-id :claude-session-id sid
+   :limits {:budget "30m"} :priority 0 :session-profile :full
+   :uncapped? false :state :awaiting-review
+   :state-history [{:at "2026-06-18T00:00:00Z" :state :queued}]
+   :artifacts [] :error nil})
+
 (deftest envelope-drives-run-to-terminal-via-executor
   (let [tmp (fs/create-temp-dir)]
     (try
@@ -579,3 +607,20 @@
         (is (= :dropped (-> (ws/find-by-ref :brian :slack-message "slack-C-1.0")
                             :closed :outcome))))
       (finally (fs/delete-tree tmp)))))
+
+;; ---------------------------------------------------------------------------
+;; Task 3.2: persist-claude-session-id! mirrors id onto run AND session
+;; ---------------------------------------------------------------------------
+
+(deftest mirror-claude-session-id-onto-session
+  (with-tmp
+    (fn []
+      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+        (session/create! :brian (:id w)
+                         {:name "auto" :weight :heavy
+                          :autonomy (assoc autonomy-parked :phase :running)})
+        (runs/write-run! (run-fixture "r1" (:id w) "auto" nil))   ; id nil at first
+        (#'core/persist-claude-session-id! (runs/read-run "r1") "sid-77")
+        (is (= "sid-77" (:claude-session-id (runs/read-run "r1"))))
+        (is (= "sid-77" (get-in (first (session/list-sessions :brian (:id w)))
+                                [:autonomy :claude-session-id])))))))

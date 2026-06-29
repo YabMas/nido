@@ -330,6 +330,24 @@
   (str "Implement this GitHub issue, then open a draft PR when the work is ready.\n\n"
        "# " title "\n" url "\n\n" body))
 
+(defn- persist-claude-session-id!
+  "Persist the captured claude conversation id onto run.edn AND mirror it onto
+   the run's authoritative session, so resume can read it off either record.
+   The session mirror is best-effort: a human session (no autonomy facet) or a
+   missing session will throw from set-claude-session-id!, which is caught and
+   logged to stderr — it never re-fails the run."
+  [run session-id]
+  (let [r (assoc run :claude-session-id session-id)]
+    (runs/write-run! r)
+    (when-let [ws-id (:workstream-id r)]
+      (try (session/set-claude-session-id! (:project r) ws-id (:session-name r) session-id)
+           (catch Exception e
+             (binding [*err* *err*]
+               (.println ^java.io.PrintWriter *err*
+                         (str "nido coordinator: claude-session-id mirror failed for "
+                              (:session-name r) " — " (ex-message e)))))))
+    r))
+
 (defn- run-blocking!
   "Drive a single :queued Run to terminal/awaiting-review state.
    Called inside an executor-spawned future (one per slot). The name
@@ -354,8 +372,7 @@
         ;; (`:plan-bug` is the internal trigger id; the command is /continue-ticket.)
         provision-only? (#{:plan-bug :plan-github-issue} (:skill (runs/read-run run-id)))
         session-id   (str (java.util.UUID/randomUUID))
-        run          (let [r (assoc (runs/read-run run-id) :claude-session-id session-id)]
-                       (runs/write-run! r) r)
+        run          (persist-claude-session-id! (runs/read-run run-id) session-id)
         ;; Spawn the session + launch claude. If EITHER throws (e.g. session
         ;; build / worktree creation fails), don't let it escape — that would
         ;; leave the Run stuck :running forever (a zombie that permanently
