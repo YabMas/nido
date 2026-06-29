@@ -56,23 +56,45 @@
   (let [res (apply p/shell (codex-argv opts))]
     {:exit (:exit res)}))
 
-(defn review!
-  "Git-free codex review of the branch change (base..@). See ns doc.
+(defn merge-base
+  "Resolve the merge base (fork point) of @ and `base` to a single commit id.
+   This — not the tip of `base` — is the correct comparison point for a branch
+   review: `jj diff --from <tip-of-base> --to @` is a 2-way tree diff, so any
+   work `base` gained since the branch forked shows up as spurious deletions
+   (e.g. 180 files instead of the PR's actual 29). Diffing from the fork point
+   matches what the PR's \"Files changed\" shows. Throws :review-failed if jj
+   can't resolve it (not a workspace, unrelated histories, …)."
+  [cwd base]
+  (let [{:keys [exit out err]}
+        (jj/jj! cwd "log" "--no-graph"
+                "-r" (str "heads(::@ & ::" base ")")
+                "-T" "commit_id ++ \"\\n\"")
+        rev (->> (str/split-lines (str out)) (remove str/blank?) first)]
+    (when (or (not (zero? exit)) (str/blank? rev))
+      (throw (ex-info "jj could not resolve a merge base — cwd is not a reviewable workspace"
+                      {:reason :review-failed :exit exit :cwd cwd :base base :err err})))
+    rev))
 
-   The prompt carries a changed-file MANIFEST (`jj diff --name-only`), not the
-   inlined diff: the full concatenated diff overflows codex's 1 MiB input limit.
-   Codex pulls each file's diff itself (`jj --ignore-working-copy diff …`) and
-   explores the worktree for context — which it must, since a flat patch can't
-   answer \"is this deleted symbol still referenced?\"."
+(defn review!
+  "Git-free codex review of the branch change (merge-base(@,base)..@). See ns doc.
+
+   Diffs from the MERGE BASE of @ and `base`, not the tip of `base` (see
+   `merge-base`). The prompt carries a changed-file MANIFEST (`jj diff
+   --name-only`), not the inlined diff: the full concatenated diff overflows
+   codex's 1 MiB input limit. Codex pulls each file's diff itself (`jj
+   --ignore-working-copy diff …`) and explores the worktree for context — which
+   it must, since a flat patch can't answer \"is this deleted symbol still
+   referenced?\"."
   [{:keys [cwd base run-id]}]
-  (let [{:keys [exit out err]} (jj/jj! cwd "diff" "--name-only" "--from" base "--to" "@")
+  (let [base-rev (merge-base cwd base)
+        {:keys [exit out err]} (jj/jj! cwd "diff" "--name-only" "--from" base-rev "--to" "@")
         _        (when-not (zero? exit)
                    ;; A failed diff (cwd not a jj workspace, bad base, …) must not
                    ;; be mistaken for an empty diff — that would silently report a
                    ;; clean review of code nothing ever looked at.
                    (throw (ex-info "jj diff failed — cwd is not a reviewable workspace"
                                    {:reason :review-failed :exit exit
-                                    :cwd cwd :base base :err err})))
+                                    :cwd cwd :base base :base-rev base-rev :err err})))
         manifest out]
     (if (str/blank? manifest)
       {:status :clean :findings []}
@@ -81,7 +103,8 @@
             schema-path (str (fs/path dir "findings_schema.json"))
             out-path    (str (fs/path dir "review-out.json"))
             prompt      (str prompts/review-prompt
-                             "\n\nBase branch: " base "  (head: @)\n"
+                             "\n\nBase revision (use this exact value as <base> in the"
+                             " commands above): " base-rev "  (head: @)\n"
                              "Changed files:\n" (str/trim manifest))]
         (spit schema-path (slurp (io/resource "review/findings_schema.json")))
         (let [{:keys [exit]} (run-codex! {:cwd cwd :schema-path schema-path
@@ -91,4 +114,4 @@
             (throw (ex-info "codex review failed"
                             {:reason :review-failed :exit exit :cwd cwd})))
           (assoc (parse-output (slurp out-path))
-                 :status nil :manifest manifest))))))
+                 :status nil :manifest manifest :base-rev base-rev))))))

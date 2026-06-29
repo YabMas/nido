@@ -68,7 +68,10 @@
     (is (= "/w" (:dir opts)))))
 
 (deftest review!-empty-diff-is-clean
-  (with-redefs [jj/jj! (fn [& _] {:exit 0 :out "" :err ""})]
+  (with-redefs [jj/jj! (fn [_dir & args]
+                         (if (= "diff" (first args))
+                           {:exit 0 :out "" :err ""}            ; empty manifest
+                           {:exit 0 :out "BASEREV\n" :err ""}))] ; merge-base
     (is (= {:status :clean :findings []}
            (codex/review! {:cwd "/w" :base "main" :run-id "r1"})))))
 
@@ -77,7 +80,7 @@
     (with-redefs [jj/jj!         (fn [_dir & args]
                                    (if (= "diff" (first args))
                                      {:exit 0 :out "diff --git a/x b/x\n+bug" :err ""}
-                                     {:exit 0 :out "" :err ""}))
+                                     {:exit 0 :out "BASEREV\n" :err ""}))  ; merge-base
                   cstate/run-dir (fn [_] tmp)
                   codex/run-codex! (fn [_opts]
                                      (spit (str (fs/path tmp "review-out.json"))
@@ -126,9 +129,12 @@
   (let [tmp      (str (fs/create-temp-dir))
         captured (atom nil)]
     (with-redefs [jj/jj!           (fn [_dir & args]
-                                     (is (some #{"--name-only"} args)
-                                         "manifest is built with --name-only")
-                                     {:exit 0 :out "src/a.clj\nsrc/b.clj" :err ""})
+                                     (if (= "diff" (first args))
+                                       (do (is (some #{"--name-only"} args)
+                                               "manifest is built with --name-only")
+                                           {:exit 0 :out "src/a.clj\nsrc/b.clj" :err ""})
+                                       ;; merge-base resolution
+                                       {:exit 0 :out "BASEREV\n" :err ""}))
                   cstate/run-dir   (fn [_] tmp)
                   codex/run-codex! (fn [opts]
                                      (reset! captured (:prompt opts))
@@ -137,5 +143,34 @@
                                      {:exit 0})]
       (codex/review! {:cwd "/w" :base "main" :run-id "r1"})
       (is (re-find #"src/a\.clj" @captured) "changed files appear in the prompt")
-      (is (re-find #"src/b\.clj" @captured))
-      (is (re-find #"main" @captured) "base ref appears in the prompt"))))
+      (is (re-find #"src/b\.clj" @captured)))))
+
+(deftest review!-diffs-from-merge-base-not-tip-of-base
+  ;; `jj diff --from main --to @` is a 2-way tree diff: when main has advanced
+  ;; since the branch forked, all of main's parallel work shows up as spurious
+  ;; deletions (180 files instead of the PR's 29). Review must diff from the
+  ;; MERGE BASE (fork point) of @ and the base — matching the PR's "Files
+  ;; changed" — and tell codex to explore against that same revision.
+  (let [tmp       (str (fs/create-temp-dir))
+        diff-from (atom nil)
+        captured  (atom nil)]
+    (with-redefs [jj/jj!           (fn [_dir & args]
+                                     (cond
+                                       (= "log" (first args))    ; merge-base resolution
+                                       {:exit 0 :out "MERGEBASE123\n" :err ""}
+                                       (= "diff" (first args))
+                                       (do (reset! diff-from
+                                                   (second (drop-while #(not= "--from" %) args)))
+                                           {:exit 0 :out "src/a.clj" :err ""})
+                                       :else {:exit 0 :out "" :err ""}))
+                  cstate/run-dir   (fn [_] tmp)
+                  codex/run-codex! (fn [opts]
+                                     (reset! captured (:prompt opts))
+                                     (spit (str (fs/path tmp "review-out.json"))
+                                           sample-output)
+                                     {:exit 0})]
+      (codex/review! {:cwd "/w" :base "main" :run-id "r1"})
+      (is (= "MERGEBASE123" @diff-from)
+          "manifest diffs from the resolved merge base, not the raw base bookmark")
+      (is (re-find #"MERGEBASE123" @captured)
+          "codex prompt points codex at the merge base for its exploration"))))
