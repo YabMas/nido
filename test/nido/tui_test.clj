@@ -249,6 +249,20 @@
       (is (some #(re-find #"me" %) titles))
       (is (some #(= "auto" (-> % :data :name)) rows) "session rows carry :name for open"))))
 
+(deftest detail-rows-shows-entry-index-and-report
+  (with-redefs [nido.work/workstream
+                (fn [_ _ & _]
+                  {:ledger {:key "BR-1" :status :triaged :report-count 2}
+                   :entries [{:seq 2 :kind :implementation-plan :at "t2" :title "Null-check"}
+                             {:seq 1 :kind :triage :at "t1" :title "Firefox modal"}]
+                   :selected-seq 2
+                   :report {:format :implementation-plan :summary "do X" :direction "Null-check" :effort :S}
+                   :sessions []})]
+    (let [rows (#'nido.tui/detail-rows "brian" "ws-1")
+          titles (map :title rows)]
+      (is (some #(re-find #"Null-check" %) titles) "entry index present")
+      (is (some #(re-find #"do X|Implementation plan" %) titles) "report body rendered"))))
+
 (deftest workstream-detail-transitions
   ;; esc → board (set-origin → current-rows); stub current-rows for hermeticity.
   (with-redefs [nido.tui/current-rows (constantly [])]

@@ -28,6 +28,7 @@
    [nido.coordinator.breakers :as breakers]
    [nido.coordinator.halt :as halt]
    [nido.coordinator.queue :as queue]
+   [nido.coordinator.report :as report]
    [nido.coordinator.runs-view :as runs-view]
    [nido.coordinator.scratch :as scratch]
    [nido.coordinator.workstreams-view :as wsv]
@@ -246,18 +247,35 @@
           (if brakes (str "  ·  " (clojure.core/name (ffirst brakes)) " " (val (first brakes))) "")))
 
 (defn- detail-rows
-  "Read-only detail rows for one workstream: a ledger line (when present) plus its
-   sessions on the autonomy axis. Reads nido.work/workstream (string project ok)."
+  "Read-only detail rows for one workstream: a ledger line (when present), the
+   entry index (when >1 entry exists), the selected report body (first 12 lines),
+   and sessions on the autonomy axis. Reads nido.work/workstream (string project ok)."
   [project ws-id]
-  (let [{:keys [ledger sessions]} (work/workstream project ws-id)
+  (let [{:keys [ledger entries selected-seq report sessions]} (work/workstream project ws-id)
         ledger-row (when ledger
                      [{:title (str "ledger: " (:key ledger) " · "
                                    (clojure.core/name (or (:status ledger) :?)) " · "
                                    (:report-count ledger) " report(s)")
-                       :description "" :data ::ledger}])]
+                       :description "" :data ::ledger}])
+        entry-rows (when (seq entries)
+                     (mapv (fn [{:keys [seq kind at title]}]
+                             {:title (str (if (= seq selected-seq) "▶ " "  ")
+                                          title " · " (clojure.core/name kind) " · " at)
+                              :description "" :data {::entry-seq seq}})
+                           entries))
+        report-rows (when report
+                      (let [md   (report/report->markdown report)
+                            lines (->> (str/split-lines md)
+                                       (remove str/blank?)
+                                       (take 12))]
+                        (when (seq lines)
+                          (mapv (fn [line] {:title line :description "" :data ::report-body})
+                                lines))))]
     (vec
      (concat
       ledger-row
+      entry-rows
+      report-rows
       (if (seq sessions)
         (mapv (fn [s] {:title (format-detail-session s) :description "" :data s}) sessions)
         [{:title "No sessions in this workstream yet." :description "" :data ::empty}])))))
