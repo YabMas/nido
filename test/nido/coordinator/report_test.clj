@@ -1,6 +1,7 @@
 (ns nido.coordinator.report-test
   (:require [clojure.test :refer [deftest is]]
             [clojure.string :as str]
+            [clojure.edn :refer [read-string]]
             [nido.coordinator.report :as report]))
 
 (def ^:private valid-report
@@ -132,3 +133,36 @@
 
 (deftest entry-payload-rejects-malformed-typed
   (is (thrown? clojure.lang.ExceptionInfo (report/entry-payload :blocker "not-an-edn-map"))))
+
+(deftest entry-payload-accepts-pr-opened
+  (let [edn (pr-str {:format :pr-opened
+                     :url "https://github.com/brian-study/brian/pull/412"
+                     :title "fix(ui): firefox modal close"
+                     :summary "Draft PR for BR-4659."})
+        [ext payload] (report/entry-payload :pr-opened edn)]
+    (is (= "edn" ext))
+    (is (= :pr-opened (:format (read-string payload))))))
+
+(deftest entry-payload-accepts-implementation-plan
+  (let [edn (pr-str {:format :implementation-plan
+                     :summary "Guard the close handler against a nil node."
+                     :direction "Null-check in close-modal!"
+                     :effort :S
+                     :steps ["repro test" "guard" "regression test"]})
+        [ext _] (report/entry-payload :implementation-plan edn)]
+    (is (= "edn" ext))))
+
+(deftest entry-payload-accepts-implementation-completed
+  (let [edn (pr-str {:format :implementation-completed
+                     :summary "Fixed; CI green; on the merge queue."
+                     :artifacts [{:kind :pr :ref "brian-study/brian#412"
+                                  :url "https://github.com/brian-study/brian/pull/412"}]})
+        [ext _] (report/entry-payload :implementation-completed edn)]
+    (is (= "edn" ext))))
+
+(deftest entry-payload-accepts-blocker
+  (let [edn (pr-str {:format :blocker
+                     :summary "Root cause is in the statechart, not the UI."
+                     :needs "Confirm whether to widen scope or re-triage."})
+        [ext _] (report/entry-payload :blocker edn)]
+    (is (= "edn" ext))))
