@@ -5,7 +5,29 @@
    [nido.vsdd.jj :as jj]
    [nido.coordinator.state :as cstate]
    [babashka.fs :as fs]
+   [cheshire.core :as json]
    [clojure.java.io :as io]))
+
+(deftest findings-schema-is-strict-output-compatible
+  ;; Codex/gpt strict structured-output mode requires every property of every
+  ;; object node to also appear in that node's "required" list. A missing key
+  ;; makes the model reject the request with 400 invalid_json_schema, so the
+  ;; review turn never even starts — fatal for the whole loop.
+  (let [schema     (json/parse-string
+                    (slurp (io/resource "review/findings_schema.json")) true)
+        violations (atom [])]
+    (letfn [(walk [node path]
+              (when (map? node)
+                (when-let [props (:properties node)]
+                  (let [req     (set (map keyword (:required node)))
+                        missing (remove req (keys props))]
+                    (when (seq missing)
+                      (swap! violations conj {:path path :missing (vec missing)}))))
+                (doseq [[k v] node]
+                  (walk v (conj path k)))))]
+      (walk schema []))
+    (is (= [] @violations)
+        "every object property must be listed in \"required\" (strict mode)")))
 
 (def sample-output
   (str "{\"findings\":[{\"title\":\"[P1] Remove the extra accumulation\","

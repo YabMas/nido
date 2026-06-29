@@ -8,7 +8,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["title", "body", "confidence_score", "code_location"],
+        "required": ["title", "body", "confidence_score", "priority", "code_location"],
         "properties": {
           "title": {"type": "string"},
           "body": {"type": "string"},
