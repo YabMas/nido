@@ -328,3 +328,19 @@
   (is (= {:stage :done :needs-you false}
          (sess/stage-projection {:at "2026-06-01T00:00:00Z" :outcome :dropped}
                                 nil [] :inbox))))
+
+(deftest set-claude-session-id-writes-onto-autonomy
+  (with-tmp
+    (fn [_]
+      (sess/write! (assoc autonomous-session :workstream-id "ws-1"))
+      (sess/set-claude-session-id! :brian "ws-1" "run-triage-x" "sid-42")
+      (is (= "sid-42"
+             (get-in (sess/read-session :brian "ws-1" "run-triage-x")
+                     [:autonomy :claude-session-id]))))))
+
+(deftest set-claude-session-id-throws-on-human-session
+  (with-tmp
+    (fn [_]
+      (sess/write! human-session)
+      (is (thrown? Exception
+            (sess/set-claude-session-id! :brian "ws-1" "explore-firefox" "x"))))))

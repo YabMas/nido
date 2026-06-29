@@ -145,6 +145,17 @@
                       {:project project :ws-id ws-id :session session-name})))
     (write! (assoc-in s [:autonomy :error] err))))
 
+(defn set-claude-session-id!
+  "Persist the resumable claude conversation id onto an autonomous session's
+   autonomy facet (the run captures it mid-burst; mirroring it here makes the
+   session self-sufficient for resume). Throws on a human session. Idempotent."
+  [project ws-id session-name id]
+  (let [s (load! project ws-id session-name)]
+    (when-not (autonomous? s)
+      (throw (ex-info "Cannot set claude-session-id on a human session"
+                      {:project project :ws-id ws-id :session session-name})))
+    (write! (assoc-in s [:autonomy :claude-session-id] id))))
+
 (defn engagement-state
   "Pure projection of a workstream's engagement.
    :settled        — workstream closed
