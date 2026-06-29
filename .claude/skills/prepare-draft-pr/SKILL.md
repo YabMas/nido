@@ -67,7 +67,28 @@ poller needs to react when the PR later merges.
      :adapter github :id "<owner>/<repo>#<number>" :url "<pr-url>" :title "<pr-title>"
    ```
 
-6. **Optional — record the PR on the Notion ticket.** If you have the ticket's
+6. **Record the PR on the ticket ledger** as a typed `:pr-opened` event so the
+   workstream's report timeline shows the PR (the report browser reads this). The
+   ledger key is the `BR-####` — read it from the run record
+   (`:event-payload :id` in `./run-link/run.edn`). Write the EDN to a temp file
+   and append it:
+
+   ```bash
+   cat > /tmp/pr-opened.edn <<'EDN'
+   {:format  :pr-opened
+    :url     "<pr-url>"
+    :title   "<pr-title>"
+    :summary "<one-line: what this PR does, refs BR-####>"}
+   EDN
+   bb nido:ticket:append :project <project> :br <BR-####> :kind pr-opened \
+     :file /tmp/pr-opened.edn
+   ```
+
+   The append validates against nido's `PrOpened` schema and rejects a malformed
+   report (non-zero exit + an explain dump) — fix and retry. For a Slack-sourced
+   workstream with no `BR-####`, use the slack `:id` as `:br`.
+
+7. **Optional — record the PR on the Notion ticket.** If you have the ticket's
    Notion page-id (from the `:notion` external-ref on the workstream, visible in
    the session briefing/CLAUDE.md), set its `GitHub PR` property to the PR URL via
    the notionApi MCP `API-patch-page` tool (property `GitHub PR`, type `url`).
