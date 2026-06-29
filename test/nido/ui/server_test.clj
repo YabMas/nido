@@ -2,6 +2,7 @@
   (:require [clojure.test :refer [deftest is]]
             [clojure.string :as str]
             [nido.ui.server :as server]
+            [nido.session.dev :as dev]
             [nido.session.engine]
             [nido.session.lifecycle :as lifecycle]
             [nido.session.state]
@@ -226,20 +227,20 @@
   (let [reg {"/wt" {:app-port 3142 :url "http://x.localhost:3142"}}]
     ;; running: live port wins
     (is (= {:state :running :url "http://x.localhost:3142"}
-           (server/dev-state-for "/wt" "brian--x" reg (fn [_] true) (fn [_] nil))))
+           (dev/dev-state-for "/wt" "brian--x" reg (fn [_] true) (fn [_] nil))))
     ;; down: port closed, no pending
     (is (= {:state :down}
-           (server/dev-state-for "/wt" "brian--x" reg (fn [_] false) (fn [_] nil))))
+           (dev/dev-state-for "/wt" "brian--x" reg (fn [_] false) (fn [_] nil))))
     ;; down: no registry entry at all
     (is (= {:state :down}
-           (server/dev-state-for "/missing" "brian--x" reg (fn [_] true) (fn [_] nil))))
+           (dev/dev-state-for "/missing" "brian--x" reg (fn [_] true) (fn [_] nil))))
     ;; starting: pending keyword shows when not live
     (is (= {:state :starting :error-msg nil}
-           (server/dev-state-for "/wt" "brian--x" reg (fn [_] false) (fn [_] :starting))))
+           (dev/dev-state-for "/wt" "brian--x" reg (fn [_] false) (fn [_] :starting))))
     ;; failed: pending map carries the error message
     (is (= {:state :failed :error-msg "boom"}
-           (server/dev-state-for "/wt" "brian--x" reg (fn [_] false)
-                                 (fn [_] {:state :failed :error-msg "boom"}))))))
+           (dev/dev-state-for "/wt" "brian--x" reg (fn [_] false)
+                              (fn [_] {:state :failed :error-msg "boom"}))))))
 
 (deftest session-dev-state-wires-coords-registry-and-probe
   (with-redefs [nido.session.lifecycle/session-coords
@@ -248,7 +249,7 @@
                 (fn [] {"/wt" {:app-port 3142 :url "http://x.localhost:3142"}})
                 nido.process/tcp-open? (fn [_] true)]
     (is (= {:state :running :url "http://x.localhost:3142"}
-           (server/session-dev-state "brian" "feat/x")))))
+           (dev/session-dev-state "brian" "feat/x")))))
 
 (deftest session-dev-state-3-arity-uses-passed-registry
   (with-redefs [nido.session.lifecycle/session-coords
@@ -257,8 +258,8 @@
                 (fn [] (throw (ex-info "should not read registry in 3-arity" {})))
                 nido.process/tcp-open? (fn [_] true)]
     (is (= {:state :running :url "http://x.localhost:3142"}
-           (server/session-dev-state "brian" "feat/x"
-                                     {"/wt" {:app-port 3142 :url "http://x.localhost:3142"}})))))
+           (dev/session-dev-state "brian" "feat/x"
+                                  {"/wt" {:app-port 3142 :url "http://x.localhost:3142"}})))))
 
 (deftest workstreams-route-honors-source-filter
   (with-redefs [server/all-grouped
@@ -284,7 +285,7 @@
                                :sessions [{:name "me" :autonomy-level :interactive
                                            :parked? false :status :up :brakes nil}]})
                 nido.session.state/read-registry (fn [] {})
-                nido.ui.server/session-dev-state
+                nido.session.dev/session-dev-state
                 (fn [_ _ & _] {:state :running :url "http://me.brian.localhost:3142"})]
     (let [resp (server/handle-request {:request-method :get :uri "/_fragment/workstream/brian/ws-1"})]
       (is (= 200 (:status resp)))
@@ -301,7 +302,7 @@
                   nido.work/ensure-open! (fn [& _] false)
                   nido.session.lifecycle/up! (fn [s opts] (swap! calls conj [:up s (:profile opts)]))
                   nido.process/tcp-open? (fn [_] true)
-                  nido.ui.server/app-port-for-instance (fn [_] 4096)
+                  nido.session.dev/app-port-for-instance (fn [_] 4096)
                   nido.work/workstream
                   (fn [_ _ & _] {:project "brian" :ws-id "ws-1" :origin :notion
                                  :stage :triage :label "BR-7 · t" :ledger nil :report nil :sessions []})]

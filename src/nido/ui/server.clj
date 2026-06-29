@@ -6,7 +6,7 @@
             [clojure.string :as str]
             [nido.process :as proc]
             [nido.project :as project]
-            [nido.session.engine :as engine]
+            [nido.session.dev :as dev]
             [nido.session.lifecycle :as lifecycle]
             [nido.session.state :as state]
             [nido.ui.health :as health]
@@ -58,35 +58,6 @@
   [uri]
   (vec (remove str/blank? (str/split uri #"/"))))
 
-;; ---------------------------------------------------------------------------
-;; In-flight action tracking
-;;
-;; The atom records transient/sticky app states (:starting, :stopping, :failed)
-;; that the TCP probe alone can't express. Both POST responses and polling
-;; fragment refreshes read from here, so a clicked button gets instant
-;; feedback AND the feedback persists across the 3s polling cycle until the
-;; future completes.
-;; ---------------------------------------------------------------------------
-
-(defonce ^:private app-states (atom {}))
-
-(defn- set-app-state!
-  "Store the current state for an instance. The atom value is a map
-   `{:state :starting|:stopping|:restarting|:failed
-     :error-msg <string?>}` so a :failed state can carry the actual
-   error message to display in the UI."
-  ([instance-id state] (set-app-state! instance-id state nil))
-  ([instance-id state error-msg]
-   (swap! app-states assoc instance-id
-          (cond-> {:state state}
-            error-msg (assoc :error-msg error-msg)))))
-
-(defn- clear-app-state! [instance-id]
-  (swap! app-states dissoc instance-id))
-
-(defn- current-app-state [instance-id]
-  (get @app-states instance-id))
-
 (defn- instance-id-for [project-name session-name]
   (if (= project-name session-name)
     project-name
@@ -111,7 +82,7 @@
                         port (:app-port entry)
                         live? (and (pos-int? port) (proc/tcp-open? port))
                         instance-id (instance-id-for project-name name)
-                        pending (current-app-state instance-id)
+                        pending (dev/current-app-state instance-id)
                         ;; RSS is only meaningful while the session is alive.
                         repl-rss (when (and live? (:repl-pid entry))
                                    (proc/rss-bytes (:repl-pid entry)))
@@ -148,46 +119,6 @@
                                  [])]
           (assoc row :project pname))
         (sort-by (juxt #(if (:live? %) 0 1) :project :name)))))
-
-(defn dev-state-for
-  "Pure derivation of a session's dev-resource state from real state: the
-   registry entry (looked up by worktree path), a TCP probe of its app port,
-   and the optimistic app-states. Returns {:state … :url :error-msg}.
-   No :none — every session can host resources; :down just means 'not up'."
-  [wt-path instance-id registry probe app-state-fn]
-  (let [entry      (get registry wt-path)
-        port       (:app-port entry)
-        live?      (and (pos-int? port) (probe port))
-        pending    (app-state-fn instance-id)
-        pending-kw (cond (map? pending)     (:state pending)
-                         (keyword? pending) pending)]
-    (cond
-      live?      {:state :running :url (:url entry)}
-      pending-kw {:state pending-kw :error-msg (when (map? pending) (:error-msg pending))}
-      :else      {:state :down})))
-
-(defn session-dev-state
-  "Derived dev-resource state for one session of `project`. The 2-arity reads
-   the live registry; the 3-arity reuses a pre-read registry so batch callers
-   (a whole workstream's sessions) read the registry once, not per session.
-   Resolves worktree path + canonical instance-id via lifecycle/session-coords
-   (so slash-namespaced names resolve correctly), then derives via dev-state-for."
-  ([project session] (session-dev-state project session (state/read-registry)))
-  ([project session registry]
-   (let [{:keys [wt-path instance-id]} (lifecycle/session-coords session {:project project})]
-     (dev-state-for wt-path instance-id registry proc/tcp-open? current-app-state))))
-
-(defn- ws-session-dev-states
-  "Map of session-name → derived dev-resource state for a workstream's sessions.
-   Reads the registry once (not once per session) so a pane poll is O(1) registry
-   IO + one probe per session."
-  [project ws]
-  (let [sessions (:sessions ws)]
-    (if (empty? sessions)
-      {}
-      (let [registry (state/read-registry)]
-        (into {} (for [{:keys [name]} sessions]
-                   [name (session-dev-state project name registry)]))))))
 
 (defn all-grouped
   "[{:project :grouped} …] across registered projects (mirrors all-session-rows)."
@@ -296,55 +227,6 @@
 ;; ---------------------------------------------------------------------------
 ;; Routing
 
-(defn- pending-state-for-action [action]
-  (case action
-    ["start"]   :starting
-    ["stop"]    :stopping
-    ["restart"] :restarting
-    nil))
-
-(defn- app-port-for-instance
-  "Look up the app port stored in the session state file for this instance,
-   so we can probe TCP after a lifecycle action completes."
-  [instance-id]
-  (some-> (state/read-session instance-id)
-          (get-in [:service-states :app :app-port])))
-
-(defn- dev-action!
-  "Run a DEV-ENVIRONMENT lifecycle action for one session on a background
-   thread, tracking optimistic state in app-states (keyed by the canonical
-   instance-id). `start` re-hydrates a reclaimed session-home via
-   work/ensure-open! before up!, and reuses the session's persisted profile
-   (so a :lite session doesn't get all services). `stop` brings it down."
-  [project ws-id session action]
-  (let [{:keys [wt-path instance-id]} (lifecycle/session-coords session {:project project})
-        profile (engine/read-profile-for-session wt-path)
-        opts    (cond-> {:project project} profile (assoc :profile profile))
-        pending (case action "start" :starting "stop" :stopping "restart" :restarting nil)]
-    (when pending (set-app-state! instance-id pending))
-    (future
-      (try
-        (case action
-          "start"
-          (do (work/ensure-open! project ws-id session)
-              (lifecycle/up! session opts)
-              (let [port (app-port-for-instance instance-id)]
-                (if (and (pos-int? port) (proc/tcp-open? port))
-                  (clear-app-state! instance-id)
-                  (set-app-state! instance-id :failed
-                                  "App did not open its port within the timeout — see eval log"))))
-          "stop"
-          (do (lifecycle/down! session opts)
-              (clear-app-state! instance-id))
-          "restart"
-          (do (lifecycle/restart! session opts)
-              (clear-app-state! instance-id))
-          (do (println "[nido ui] unknown dev action:" action)
-              (clear-app-state! instance-id)))
-        (catch Exception e
-          (set-app-state! instance-id :failed
-                          (or (:error-msg (ex-data e)) (ex-message e))))))))
-
 (defn- ws-pane-fragment-response
   "SSE that patches #ws-pane with a freshly-rendered workstream pane (ws detail +
    per-session dev-env state). `entry` selects which ledger entry's report to show."
@@ -353,7 +235,7 @@
    (let [ws (work/workstream project ws-id entry)]
      (sse-response
       (sse-fragment
-       (views/workstream-pane ws (ws-session-dev-states project ws)))))))
+       (views/workstream-pane ws (dev/ws-session-dev-states project ws)))))))
 
 (defn- run-action!
   "Run the lifecycle action matching `action` and update the app-states
@@ -372,27 +254,27 @@
             ;; success. If it didn't throw but the port isn't up, the
             ;; boot timed out silently — surface :failed without a
             ;; specific message.
-            (let [port (app-port-for-instance instance-id)]
+            (let [port (dev/app-port-for-instance instance-id)]
               (if (and (pos-int? port) (proc/tcp-open? port))
-                (clear-app-state! instance-id)
-                (set-app-state! instance-id :failed
-                                "App did not open its port within the timeout — see eval log"))))
+                (dev/clear-app-state! instance-id)
+                (dev/set-app-state! instance-id :failed
+                                    "App did not open its port within the timeout — see eval log"))))
 
         ["stop"]
         (do (lifecycle/down! session-name opts)
-            (clear-app-state! instance-id))
+            (dev/clear-app-state! instance-id))
 
         ["restart"]
         (do (lifecycle/restart! session-name opts)
-            (clear-app-state! instance-id))
+            (dev/clear-app-state! instance-id))
 
         (do (println "[nido ui] unknown action:" action)
-            (clear-app-state! instance-id)))
+            (dev/clear-app-state! instance-id)))
       (catch Exception e
         (let [err-msg (or (:error-msg (ex-data e))
                           (ex-message e))]
           (println "[nido ui] action failed:" err-msg)
-          (set-app-state! instance-id :failed err-msg))))))
+          (dev/set-app-state! instance-id :failed err-msg))))))
 
 (defn- parse-json-body
   "Read a Datastar JSON signal body into a map, or {} when absent/unparseable."
@@ -407,13 +289,13 @@
    run-action!'s app-states pattern."
   [project ws-id action-id input]
   (let [k (str project "/" ws-id)]
-    (set-app-state! k (if (#{:reply :apply} action-id) :resuming :resolving))
+    (dev/set-app-state! k (if (#{:reply :apply} action-id) :resuming :resolving))
     (future
       (try
         (work/resolve-gate! project ws-id action-id input)
-        (clear-app-state! k)
+        (dev/clear-app-state! k)
         (catch Exception e
-          (set-app-state! k :failed (or (:reason (ex-data e)) (ex-message e))))))))
+          (dev/set-app-state! k :failed (or (:reason (ex-data e)) (ex-message e))))))))
 
 (defn- handle-post [{:keys [uri body]}]
   (let [segs (parse-path uri)]
@@ -433,7 +315,7 @@
       (let [project (nth segs 1) ws-id (nth segs 2)
             session (java.net.URLDecoder/decode (nth segs 4) "UTF-8")
             action  (nth segs 6)]
-        (dev-action! project ws-id session action)
+        (dev/dev-action! project ws-id session action)
         (ws-pane-fragment-response project ws-id))
 
       ;; POST /system/:project/:name/:action — session lifecycle action (renamed path)
@@ -443,11 +325,11 @@
             session-name (nth segs 2)
             action (vec (drop 3 segs))
             instance-id (instance-id-for project-name session-name)
-            pending (pending-state-for-action action)]
+            pending (dev/pending-state-for-action action)]
         ;; Mark the optimistic state NOW so the response *and* the next
         ;; polling cycle both show it.
         (when pending
-          (set-app-state! instance-id pending))
+          (dev/set-app-state! instance-id pending))
         ;; Kick off the potentially slow lifecycle op on a background
         ;; thread. It'll clear or replace the app-state when it finishes.
         (future (run-action! project-name session-name action))
@@ -521,7 +403,7 @@
           (html-response 200 (views/workstreams-page (rail-context :workstreams scope)
                                                      (scope-filter scope (all-grouped))
                                                      ws
-                                                     (ws-session-dev-states project ws))))
+                                                     (dev/ws-session-dev-states project ws))))
 
         ;; GET /_fragment/workstream/:project/:ws-id — SSE pane refresh (patches #ws-pane)
         (and (= 4 (count segments)) (= "_fragment" (first segments)) (= "workstream" (nth segments 1)))
