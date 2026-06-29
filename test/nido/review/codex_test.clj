@@ -107,3 +107,35 @@
                       nil
                       (catch clojure.lang.ExceptionInfo e (:reason (ex-data e))))]
       (is (= :review-failed reason)))))
+
+(deftest codex-argv-restricts-review-to-read-only-sandbox
+  ;; Review only explores (jj diff / file show / grep / read) — it must never
+  ;; mutate the worktree (the separate fix stage does that). So codex exec runs
+  ;; under a read-only sandbox, which also lets it run `jj --ignore-working-copy`
+  ;; reads without tripping the working-copy lock write.
+  (let [[_opts & args] (codex/codex-argv {:cwd "/w" :schema-path "/s.json"
+                                          :out-path "/o.json" :prompt "p"})]
+    (is (some #{"read-only"} args)
+        "codex exec runs under a read-only sandbox during review")))
+
+(deftest review!-explores-via-manifest-not-inlined-diff
+  ;; The whole concatenated diff overflows codex's 1 MiB input limit. Instead the
+  ;; prompt carries only the CHANGED-FILE MANIFEST (`jj diff --name-only`) plus
+  ;; the base ref, and codex pulls per-file diffs itself. Assert the manifest is
+  ;; built name-only and the changed files reach the prompt.
+  (let [tmp      (str (fs/create-temp-dir))
+        captured (atom nil)]
+    (with-redefs [jj/jj!           (fn [_dir & args]
+                                     (is (some #{"--name-only"} args)
+                                         "manifest is built with --name-only")
+                                     {:exit 0 :out "src/a.clj\nsrc/b.clj" :err ""})
+                  cstate/run-dir   (fn [_] tmp)
+                  codex/run-codex! (fn [opts]
+                                     (reset! captured (:prompt opts))
+                                     (spit (str (fs/path tmp "review-out.json"))
+                                           sample-output)
+                                     {:exit 0})]
+      (codex/review! {:cwd "/w" :base "main" :run-id "r1"})
+      (is (re-find #"src/a\.clj" @captured) "changed files appear in the prompt")
+      (is (re-find #"src/b\.clj" @captured))
+      (is (re-find #"main" @captured) "base ref appears in the prompt"))))
