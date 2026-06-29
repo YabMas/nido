@@ -2,7 +2,13 @@
   "One-shot, idempotent, reversible migration from the legacy run.edn / ticket
    meta.edn records to the workstream / session model. Pure transforms here;
    the disk-scanning driver is run-once! below (added in a later task).
-   See spec docs/superpowers/specs/2026-06-05-workstream-session-model-design.md."
+   See spec docs/superpowers/specs/2026-06-05-workstream-session-model-design.md.
+
+   FROZEN — pre-cutover. The project adopted the strangler dual-write
+   (see 2026-06-08-live-path-cutover-design.md), NOT migrate-and-cut-over.
+   run-once! archives the tickets/ tree the live model still reads, so running
+   it degrades the spine. The nido:migrate task refuses without an explicit
+   override. Kept (with tests) as a REPL-only escape hatch."
   (:require
    [babashka.fs :as fs]
    [clojure.string :as str]
