@@ -25,7 +25,7 @@
       (finally (fs/delete-tree tmp)))))
 
 (deftest stages-is-the-canonical-spine
-  (is (= [:intake :triage :ready :in-progress :done] work/stages)))
+  (is (= [:intake :triage :ready :in-progress :shipping :done] work/stages)))
 
 (deftest classify-origin-delegates-to-source-classifier
   (is (= :scratch (work/classify-origin {:stage :scratch :external-refs []})))

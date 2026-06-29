@@ -344,3 +344,18 @@
       (sess/write! human-session)
       (is (thrown? Exception
             (sess/set-claude-session-id! :brian "ws-1" "explore-firefox" "x"))))))
+
+(deftest shipping-stage-is-honored-as-override
+  ;; An OPEN workstream whose stored :stage is :shipping projects :shipping
+  ;; (not the derived :in-progress), because :shipping is in lifecycle-stages.
+  (is (= :shipping
+         (:stage (sess/stage-projection nil :implementing [] :shipping))))
+  ;; closed always wins → :done
+  (is (= :done
+         (:stage (sess/stage-projection {:outcome :done} :implementing [] :shipping)))))
+
+(deftest shipping-needs-you-only-when-parked
+  (let [parked  {:substrate :live :autonomy {:phase :parked}}
+        running {:substrate :live :autonomy {:phase :running}}]
+    (is (true?  (:needs-you (sess/stage-projection nil nil [parked] :shipping))))
+    (is (false? (:needs-you (sess/stage-projection nil nil [running] :shipping))))))

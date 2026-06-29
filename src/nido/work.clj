@@ -30,8 +30,8 @@
 
 (def stages
   "The canonical spine, in order. A PR merge is the event that advances
-   in-progress→done; it is not a stage of its own."
-  [:intake :triage :ready :in-progress :done])
+   :shipping → :done; :shipping is the merge-pipeline stage entered by `nido ship`."
+  [:intake :triage :ready :in-progress :shipping :done])
 
 (defn gate-actions
   "Follow-actions for a gate, derived from its spine `stage` (and whether a

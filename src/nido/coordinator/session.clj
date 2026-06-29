@@ -182,8 +182,10 @@
    as a manual override ONLY when it is one of these AND the workstream is open
    (see stage-projection) — the default :triaging that create! writes is
    intentionally absent, so it never overrides the projection. :inbox is the
-   pre-triage queue stage (session-less, awaiting a human promote/dismiss)."
-  #{:inbox :triage :ready :in-progress :done})
+   pre-triage queue stage (session-less, awaiting a human promote/dismiss).
+   :shipping is the merge-pipeline stage (set explicitly by the ship handler,
+   never derived) — honored as a stored override on an open workstream."
+  #{:inbox :triage :ready :in-progress :shipping :done})
 
 (defn- derive-stage
   "Lifecycle stage from workstream :closed + local ticket status.
@@ -203,12 +205,12 @@
 
 (defn- stage-needs-you
   "Does this stage want the human right now? :inbox always (decide promote/dismiss);
-   :ready always (decide promote/drop); :triage/:in-progress only when a session is
+   :ready always (decide promote/drop); :triage/:in-progress/:shipping only when a session is
    parked at the gate; never for :done."
   [stage sessions]
   (case stage
-    (:inbox :ready)        true
-    (:triage :in-progress) (boolean (some parked? sessions))
+    (:inbox :ready)                   true
+    (:triage :in-progress :shipping)  (boolean (some parked? sessions))
     false))
 
 (defn stage-projection
