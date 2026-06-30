@@ -58,6 +58,13 @@
                    [{:id :reply :label "Reply" :kind :resume :style :default}
                     {:id :done  :label "Done"  :kind :mutation :style :primary}]
                    [])
+    :shipping    (if parked?
+                   ;; Blocked in the merge lane: Reply resumes the agent with a
+                   ;; note; Drop takes it off the queue (back to :in-progress).
+                   ;; The usual path is to fix in the worktree and `nido ship` again.
+                   [{:id :reply :label "Reply" :kind :resume                :style :default}
+                    {:id :drop  :label "Drop"  :kind :mutation              :style :danger}]
+                   [])
     []))
 
 (defn classify-origin

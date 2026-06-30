@@ -127,3 +127,12 @@
         (let [s (session/read-session :brian (:id w) "impl-br-10")]
           (is (= :parked (get-in s [:autonomy :phase])))   ; mirrored from :awaiting-review
           (is (some?     (get-in s [:autonomy :error]))))))))
+
+(deftest merge-lane-summary-counts-by-run-state
+  (sut/create-merge-run! :brian "w1" "s1")                       ; :queued
+  (let [r2 (sut/create-merge-run! :brian "w2" "s2")]
+    (runs/transition! (:id r2) :running))                        ; :driving
+  (let [r3 (sut/create-merge-run! :brian "w3" "s3")]
+    (runs/transition! (:id r3) :running)
+    (runs/transition! (:id r3) :awaiting-review))                ; :blocked
+  (is (= {:driving 1 :queued 1 :blocked 1} (sut/merge-lane-summary))))

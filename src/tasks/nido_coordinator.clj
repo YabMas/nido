@@ -11,6 +11,7 @@
    [nido.coordinator.halt :as halt]
    [nido.coordinator.heartbeat :as heartbeat]
    [nido.coordinator.pid :as pid]
+   [nido.coordinator.ship :as ship]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.launchctl :as lc]
    [nido.coordinator.sources.state :as sst]
@@ -52,6 +53,8 @@
         (println "Coordinator:" (some-> (:status s) name))
         (println "Heartbeat:  " (:heartbeat-at s))
         (println "Slots:      " (:slots-in-use s))
+        (let [{:keys [driving queued blocked]} (ship/merge-lane-summary)]
+          (println (format "Merge lane:  %d driving · %d queued · %d blocked" driving queued blocked)))
         (when-let [dport (:dashboard-port s)]
           (println (core/dashboard-status-line dport (proc/tcp-open? dport)))))
       (println "Coordinator: no status.edn (never started or already cleaned up)"))

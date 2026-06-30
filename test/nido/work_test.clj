@@ -572,6 +572,10 @@
     (is (= [] (work/facet-dimensions :brian :github)))
     (is (= [:app-domain :type] (work/facet-dimensions :brian)) "1-arity = project-wide (:all)")))
 
+(deftest shipping-gate-actions
+  (is (= #{:reply :drop} (set (map :id (work/gate-actions :shipping true)))))
+  (is (= [] (work/gate-actions :shipping false))))
+
 (deftest source-match-honours-all-and-origin
   (is (work/source-match? :all {:origin :slack}))
   (is (work/source-match? :notion {:origin :notion}))

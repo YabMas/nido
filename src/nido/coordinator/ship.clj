@@ -100,6 +100,21 @@
           (executor/submit! (:id run) (:priority run) true :merge 1)
           run)))))
 
+(defn merge-lane-summary
+  "Counts for the coordinator status line: {:driving n :queued n :blocked n}
+   over all :merge Runs (running/preprocessing, queued, awaiting-review)."
+  []
+  (->> (runs/list-run-ids)
+       (keep runs/read-run)
+       (filter #(= :merge (:trigger %)))
+       (reduce (fn [m r]
+                 (case (:state r)
+                   (:running :preprocessing) (update m :driving inc)
+                   :queued                   (update m :queued inc)
+                   :awaiting-review          (update m :blocked inc)
+                   m))
+               {:driving 0 :queued 0 :blocked 0})))
+
 (defn- agent-no-op?
   "Exit 0 with zero turns = the agent did nothing (e.g. \"Unknown command\")."
   [{:keys [exit-code num-turns]}]
