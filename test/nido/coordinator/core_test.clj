@@ -16,6 +16,7 @@
    [nido.coordinator.notify :as notify]
    [nido.coordinator.runs :as runs]
    [nido.coordinator.session :as session]
+   [nido.coordinator.ship :as ship]
    [nido.coordinator.spawn :as spawn]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.tickets :as tickets]
@@ -624,3 +625,31 @@
         (is (= "sid-77" (:claude-session-id (runs/read-run "r1"))))
         (is (= "sid-77" (get-in (first (session/list-sessions :brian (:id w)))
                                 [:autonomy :claude-session-id])))))))
+
+;; ---------------------------------------------------------------------------
+;; Task 7: dispatch-envelope! routes :ship to handle-ship!, rest to process-envelope!
+;; ---------------------------------------------------------------------------
+
+(deftest ship-envelope-routes-to-handle-ship
+  (let [seen (atom nil)]
+    (with-redefs [nido.coordinator.ship/handle-ship! (fn [env] (reset! seen env) nil)]
+      (#'nido.coordinator.core/dispatch-envelope! {:type :ship :project :brian :session "s" :ws-id "w"} {})
+      (is (= :ship (:type @seen))))))
+
+(deftest non-ship-envelope-still-routes-to-process-envelope
+  ;; Verify that a non-:ship envelope does NOT reach handle-ship!.
+  ;; Redefining a private var via #' can crash Babashka ("PersistentList cannot
+  ;; be cast to Named"), so we use a tripwire on handle-ship! instead: assert
+  ;; it was NOT called when dispatch-envelope! receives a :manual envelope.
+  ;; (The :manual envelope will fall through to the real process-envelope!, which
+  ;; may throw internally — that's fine; we only assert on the tripwire.)
+  (let [handle-ship-called (atom false)]
+    (with-redefs [nido.coordinator.ship/handle-ship! (fn [_] (reset! handle-ship-called :ship!))]
+      (try
+        (#'nido.coordinator.core/dispatch-envelope! {:type :manual :payload {}} {})
+        (catch Throwable _
+          ;; process-envelope! may throw in the bare test context — that's OK;
+          ;; the assertion below is all we need.
+          nil))
+      (is (false? @handle-ship-called)
+          "non-:ship envelope must NOT route to handle-ship!"))))

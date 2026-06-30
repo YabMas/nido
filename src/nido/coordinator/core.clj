@@ -32,6 +32,7 @@
    [nido.coordinator.github-merge :as github-merge]
    [nido.coordinator.github-issue-intake :as github-issue-intake]
    [nido.coordinator.intake :as intake]
+   [nido.coordinator.ship :as ship]
    [nido.github.config :as gh-config]
    [nido.coordinator.triggers :as triggers]
    [nido.core :as nido-core]
@@ -562,6 +563,14 @@
                                          :fired-by (System/getenv "USER")})
         (swap! !detector anomaly/record-spawn (clock/now-iso))))))
 
+(defn- dispatch-envelope!
+  "Route one drained envelope. A :ship envelope (from `nido ship`) goes to the
+   merge-lane handler; everything else is a source event for trigger-matching."
+  [env triggers-by-project]
+  (if (= :ship (:type env))
+    (ship/handle-ship! env)
+    (process-envelope! env triggers-by-project)))
+
 (defn tick!
   "One iteration of the main loop. Public for testability."
   []
@@ -579,13 +588,22 @@
         ;; Drain queue first — this consumes envelopes emitted on the PREVIOUS
         ;; tick by source polls. Keeps each tick's unit of work small.
         (doseq [env (queue/drain!)]
-          (process-envelope! env triggers-by-project))
+          (dispatch-envelope! env triggers-by-project))
         ;; Reap finished executor futures and promote waiting Runs into
-        ;; free slots. run-blocking! is the body executed per slot.
+        ;; free slots. on-spawn dispatches :merge Runs to drive-home-blocking!
+        ;; and everything else to run-blocking!.
         (review/sweep-resolved!)
-        (executor/tick! run-blocking!
-                        (reduce (fn [m p] (merge-with + m (session/gating-count-by-trigger p)))
-                                {} (registered-projects)))
+        (let [on-spawn (fn [rid]
+                         (if (= :merge (:trigger (runs/read-run rid)))
+                           (ship/drive-home-blocking! rid)
+                           (run-blocking! rid)))
+              ;; :merge Runs reuse an existing session whose autonomy :trigger is
+              ;; NOT :merge, so session-based gating can't see them — count :merge
+              ;; from Run state instead (no double-count: no session carries :merge).
+              in-flight (-> (reduce (fn [m p] (merge-with + m (session/gating-count-by-trigger p)))
+                                    {} (registered-projects))
+                            (assoc :merge (get (runs/in-progress-count-by-trigger) :merge 0)))]
+          (executor/tick! on-spawn in-flight))
         ;; Then poll due sources. Their emissions land in the queue and
         ;; will be picked up next tick.
         (let [now-ms (System/currentTimeMillis)]
