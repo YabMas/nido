@@ -73,9 +73,18 @@
           (try (session/set-claude-session-id! (:project run) ws-id
                                                (:session-name run) (:claude-session-id run))
                (catch Exception _ nil))))      ; best-effort; human/missing session
-      (let [{:keys [state error]} (if (= :triage-bug (:skill run))
-                                    (triage-reconciled-state run)
-                                    (derive-terminal-state run-id))]
+      (let [{:keys [state error]}
+            (cond
+              (= :merge (:trigger run))
+              ;; A half-driven merge: re-provisioning isn't safe to auto-resume,
+              ;; so park it as blocked (gate inbox) rather than failing it.
+              (if (= :awaiting-review (:state run))
+                {:state :awaiting-review :error nil}            ; already parked
+                {:state :awaiting-review
+                 :error {:reason :orphaned-from-restart}})
+
+              (= :triage-bug (:skill run)) (triage-reconciled-state run)
+              :else                        (derive-terminal-state run-id))]
         ;; no-op if state unchanged (e.g. parked → parked)
         (when (not= state (:state run))
           (let [history-entry {:at (clock/now-iso) :state state}

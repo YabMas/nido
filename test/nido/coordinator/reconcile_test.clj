@@ -198,3 +198,36 @@
         (reconcile/reconcile!)
         (is (= "sid-x" (get-in (first (session/list-sessions :brian (:id w)))
                                [:autonomy :claude-session-id])))))))
+
+(deftest orphaned-merge-run-reconciles-to-awaiting-review
+  ;; A :running :merge run with no status file / no result line in agent.log
+  ;; must park as :awaiting-review (gate inbox), not silently fail.
+  ;; The session's autonomy phase must also mirror to :parked (no WARN).
+  (with-tmp
+    (fn [_]
+      (let [id "merge-r1"
+            w  (ws/create! :brian {:stage :implementing :external-refs []})
+            _  (session/create! :brian (:id w)
+                                {:name "impl-x" :weight :heavy
+                                 :autonomy (assoc autonomy-running
+                                                  :trigger :merge
+                                                  :skill :drive-home
+                                                  :first-message "/drive-home")})]
+        (seed-run! {:id id :project :brian :trigger :merge :skill :drive-home
+                    :source {:type :manual} :event-payload {}
+                    :first-message "/drive-home" :agent :claude
+                    :session-name "impl-x" :workstream-id (:id w)
+                    :claude-session-id nil :limits {} :priority 0
+                    :session-profile :full :uncapped? false
+                    :state :running
+                    :state-history [{:at "T" :state :running}]
+                    :artifacts [] :error nil})
+        (reconcile/reconcile!)
+        (let [r (runs/read-run id)
+              s (session/read-session :brian (:id w) "impl-x")]
+          (is (= :awaiting-review (:state r))
+              "orphaned merge run should park as :awaiting-review, not :failed")
+          (is (= :orphaned-from-restart (-> r :error :reason))
+              "error reason should be :orphaned-from-restart")
+          (is (= :parked (get-in s [:autonomy :phase]))
+              "session autonomy phase must mirror to :parked"))))))
