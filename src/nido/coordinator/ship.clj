@@ -7,6 +7,7 @@
   (:require
    [babashka.fs :as fs]
    [clojure.string :as str]
+   [nido.coordinator.agent :as agent]
    [nido.coordinator.clock :as clock]
    [nido.coordinator.executor :as executor]
    [nido.coordinator.runs :as runs]
@@ -14,7 +15,8 @@
    [nido.coordinator.state :as cstate]
    [nido.coordinator.tickets :as tickets]
    [nido.coordinator.status-file :as status-file]
-   [nido.coordinator.workstream :as ws])
+   [nido.coordinator.workstream :as ws]
+   [nido.session.state :as session-state])
   (:import [java.util UUID]))
 
 (def merge-budget
@@ -124,3 +126,51 @@
       (case (:phase (status-file/read-status run-id))
         :complete :awaiting-merge
         :blocked))))
+
+(defn drive-home-blocking!
+  "Executor on-spawn body for a :merge Run. Runs /drive-home headless in the
+   EXISTING session-home (cwd = session-home, where bb nido:run + composed
+   .claude/skills resolve), then classifies the outcome:
+     :awaiting-merge → :done   (PR on GitHub's queue; lane slot freed)
+     :blocked        → :awaiting-review (session parked + :error; gate inbox)
+   Never tears down the session — the human owns it."
+  [run-id]
+  (runs/transition! run-id :running)                     ; mirrors session phase → :running
+  (let [run0 (runs/read-run run-id)
+        sid  (str (UUID/randomUUID))
+        run  (runs/write-run! (assoc run0 :claude-session-id sid))   ; persist before launch; not mirrored to session
+        project      (:project run)
+        ws-id        (:workstream-id run)
+        session-name (:session-name run)
+        br           (some-> run :event-payload :id)
+        home         (session-state/session-home-dir (name project) session-name)
+        result (if-not (fs/exists? home)
+                 {:spawn-error true :detail (str "session-home absent: " home)}
+                 (try
+                   (let [lc (runs/launch-context run)]
+                     (agent/launch! {:run-id            run-id
+                                     :cwd               home          ; session-home, NOT worktree
+                                     :first-message     "/drive-home"
+                                     :system-prompt     (str (:briefing lc) "\n\n" (:run-paths lc))
+                                     :mcp-config        (:mcp-config lc)
+                                     :add-dirs          (:add-dirs lc)
+                                     :budget            (-> run :limits :budget)
+                                     :claude-session-id sid}))
+                   (catch Throwable t {:spawn-error true :detail (.getMessage t)})))
+        outcome (classify-outcome project br run-id result)]
+    (case outcome
+      :awaiting-merge
+      (runs/transition! run-id :done)                    ; mirrors session phase → :done
+
+      :blocked
+      (do
+        (runs/transition! run-id :awaiting-review)       ; mirrors session phase → :parked
+        (let [note (cond
+                     (:spawn-error result) (str "drive-home could not start: " (:detail result))
+                     (:timed-out? result)  (str "drive-home exceeded its " (-> run :limits :budget) " budget")
+                     :else                 "drive-home halted — fix the blocker in the worktree, then `nido ship` again")]
+          (try
+            (session/set-error! project ws-id session-name
+                                {:at (clock/now-iso) :reason :ship-blocked :message note})
+            (catch Throwable _ nil)))))                  ; best-effort (human/non-autonomous session)
+    outcome))

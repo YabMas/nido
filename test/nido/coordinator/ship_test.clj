@@ -2,13 +2,16 @@
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is use-fixtures]]
+   [nido.coordinator.agent :as agent]
    [nido.coordinator.executor :as ex]
    [nido.coordinator.runs :as runs]
+   [nido.coordinator.session :as session]
    [nido.coordinator.ship :as sut]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.tickets :as tickets]
    [nido.coordinator.status-file :as status-file]
-   [nido.coordinator.workstream :as ws]))
+   [nido.coordinator.workstream :as ws]
+   [nido.session.state]))
 
 ;; Redirect ~/.nido to a temp dir for the duration of each test, and reset
 ;; the executor — same pattern as spawn_test.clj (with-tmp) +
@@ -85,3 +88,42 @@
   (with-redefs [tickets/read-meta   (fn [_ _] nil)
                 status-file/read-status (fn [_] nil)]
     (is (= :blocked (sut/classify-outcome :brian nil "r1" {:exit-code 0 :num-turns 3})))))
+
+(deftest drive-home-success-marks-done-no-teardown
+  (let [torn (atom false)
+        w (ws/create! :brian {:stage :shipping :external-refs [{:adapter :notion :id "BR-9"}]})]
+    ;; existing autonomous session under the ws (so phase mirroring works)
+    (session/create! :brian (:id w)
+                     {:name "impl-br-9" :weight :heavy
+                      :autonomy {:skill :plan-bug :first-message "x" :agent :claude
+                                 :claude-session-id nil :trigger :plan-bug :limits {}
+                                 :priority 0 :uncapped? false :on-promote nil
+                                 :phase :parked :phase-history [] :error nil}})
+    (let [run (sut/create-merge-run! :brian (:id w) "impl-br-9")]
+      (with-redefs [runs/launch-context     (fn [_] {:mcp-config nil :add-dirs [] :briefing "" :run-paths ""})
+                    nido.session.state/session-home-dir (fn [_ _] "/tmp")  ; exists
+                    agent/launch!           (fn [_] {:exit-code 0 :num-turns 4})
+                    sut/classify-outcome    (fn [& _] :awaiting-merge)
+                    runs/teardown-session-for-run! (fn [_] (reset! torn true))]
+        (sut/drive-home-blocking! (:id run))
+        (is (= :done (:state (runs/read-run (:id run)))))
+        (is (false? @torn))))))
+
+(deftest drive-home-blocker-parks-with-error
+  (let [w (ws/create! :brian {:stage :shipping :external-refs [{:adapter :notion :id "BR-10"}]})]
+    (session/create! :brian (:id w)
+                     {:name "impl-br-10" :weight :heavy
+                      :autonomy {:skill :plan-bug :first-message "x" :agent :claude
+                                 :claude-session-id nil :trigger :plan-bug :limits {}
+                                 :priority 0 :uncapped? false :on-promote nil
+                                 :phase :running :phase-history [] :error nil}})
+    (let [run (sut/create-merge-run! :brian (:id w) "impl-br-10")]
+      (with-redefs [runs/launch-context  (fn [_] {:mcp-config nil :add-dirs [] :briefing "" :run-paths ""})
+                    nido.session.state/session-home-dir (fn [_ _] "/tmp")
+                    agent/launch!        (fn [_] {:exit-code 0 :num-turns 4})
+                    sut/classify-outcome (fn [& _] :blocked)]
+        (sut/drive-home-blocking! (:id run))
+        (is (= :awaiting-review (:state (runs/read-run (:id run)))))
+        (let [s (session/read-session :brian (:id w) "impl-br-10")]
+          (is (= :parked (get-in s [:autonomy :phase])))   ; mirrored from :awaiting-review
+          (is (some?     (get-in s [:autonomy :error]))))))))
