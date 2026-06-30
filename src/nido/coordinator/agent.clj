@@ -56,7 +56,12 @@
     system-prompt                          (into ["--append-system-prompt" system-prompt])
     mcp-config                             (into ["--mcp-config" mcp-config])
     (seq add-dirs)                         (into (mapcat (fn [d] ["--add-dir" d]) add-dirs))
-    :always                                (conj first-message)))
+    ;; `--` terminates option parsing so the trailing prompt positional is never
+    ;; swallowed by a preceding variadic flag. claude 2.x made --add-dir
+    ;; (<directories...>) and --mcp-config (<configs...>) variadic; without the
+    ;; terminator they consume first-message as another dir/config, leaving claude
+    ;; with no prompt → "Input must be provided … when using --print" (exit 1).
+    :always                                (into ["--" first-message])))
 
 (defn launch!
   "Spawn claude headlessly for a Run. Blocks until the agent exits or the

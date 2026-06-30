@@ -20,17 +20,30 @@
 
 (deftest build-cmd-resume-uses-resume-flag
   (is (= ["claude" "--print" "--verbose" "--output-format=stream-json"
-          "--dangerously-skip-permissions" "--resume" "sid-1" "hi"]
+          "--dangerously-skip-permissions" "--resume" "sid-1" "--" "hi"]
          (#'agent/build-cmd {:claude-bin "claude" :first-message "hi"
                              :claude-session-id "sid-1" :resume? true}))
       "resume? routes the recorded id through --resume"))
 
 (deftest build-cmd-without-resume-uses-session-id
   (is (= ["claude" "--print" "--verbose" "--output-format=stream-json"
-          "--dangerously-skip-permissions" "--session-id" "sid-1" "hi"]
+          "--dangerously-skip-permissions" "--session-id" "sid-1" "--" "hi"]
          (#'agent/build-cmd {:claude-bin "claude" :first-message "hi"
                              :claude-session-id "sid-1"}))
       "the original burst still records under --session-id"))
+
+(deftest build-cmd-guards-prompt-with-option-terminator
+  ;; claude 2.x made --add-dir/--mcp-config variadic (<directories...>/<configs...>),
+  ;; so a trailing prompt positional gets swallowed as another dir/config unless a
+  ;; `--` terminates option parsing first. Regression test for the spawn fail-burst.
+  (let [cmd (#'agent/build-cmd {:claude-bin "claude" :first-message "/triage-bug BR-1"
+                                :mcp-config "/m.json" :add-dirs ["/a" "/b"]})]
+    (is (= "/triage-bug BR-1" (last cmd)) "prompt is the final token")
+    (is (= "--" (last (butlast cmd)))
+        "`--` immediately precedes the prompt so no variadic flag can swallow it")
+    (is (= ["--add-dir" "/a" "--add-dir" "/b" "--" "/triage-bug BR-1"]
+           (take-last 6 cmd))
+        "the option terminator sits between the variadic flags and the prompt")))
 
 (deftest launch!-returns-the-given-session-id
   (let [tmp (fs/create-temp-dir)]
