@@ -369,3 +369,12 @@
         (sess/create! :brian (:id ws2) {:name "impl-br-2" :weight :heavy :autonomy nil})
         (is (= (:id ws2) (sess/workstream-id-for :brian "impl-br-2")))
         (is (nil? (sess/workstream-id-for :brian "nope")))))))
+
+(deftest ship-substate-from-session-phase
+  (let [phase #(do {:substrate :live :autonomy {:phase %}})]
+    (is (= :queued         (sess/ship-substate [(phase :queued)])))
+    (is (= :driving        (sess/ship-substate [(phase :running)])))
+    (is (= :driving        (sess/ship-substate [(phase :preprocessing)])))
+    (is (= :blocked        (sess/ship-substate [(phase :parked)])))
+    (is (= :awaiting-merge (sess/ship-substate [(phase :done)])))
+    (is (nil?              (sess/ship-substate [{:substrate :live :autonomy nil}])))))

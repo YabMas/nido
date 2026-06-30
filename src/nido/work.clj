@@ -454,7 +454,8 @@
           (get-in grouped [:triage :in-flight])
           (get-in grouped [:triage :queued])
           (:ready grouped)
-          (:in-progress grouped)))
+          (:in-progress grouped)
+          (:shipping grouped)))
 
 (defn filter-grouped
   "Keep only rows satisfying `pred`, preserving the grouped shape."
@@ -463,6 +464,7 @@
       (update :inbox #(filterv pred %))
       (update :ready #(filterv pred %))
       (update :in-progress #(filterv pred %))
+      (update :shipping #(filterv pred %))
       (update :triage (fn [t] (-> t
                                   (update :in-flight #(filterv pred %))
                                   (update :queued #(filterv pred %)))))))

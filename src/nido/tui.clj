@@ -180,13 +180,25 @@
 (defn- origin-badge [origin]
   (get origin-badges origin "?"))
 
+(defn- ship-substate-str
+  "Short terminal label for a :shipping sub-state. nil → \"queued\"."
+  [sub]
+  (case sub
+    :blocked        "⚠ blocked"
+    :driving        "driving"
+    :awaiting-merge "awaiting merge"
+    "queued"))
+
 (defn- badged-item-row
   "One workstream row for the spine board: origin badge + the wsv display string.
    wsv/format-row and wsv/promote-result-message (below) are display-only helpers
    intentionally NOT re-exported through the nido.work facade — they are pure
-   presentation formatters with no model logic."
+   presentation formatters with no model logic.
+   For :shipping rows, the merge-lane sub-state is appended after the standard label."
   [r]
-  {:title       (str (origin-badge (:origin r)) "  " (wsv/format-row r))
+  {:title       (str (origin-badge (:origin r)) "  " (wsv/format-row r)
+                     (when (= :shipping (:stage r))
+                       (str "  [" (ship-substate-str (:ship-substate r)) "]")))
    :description (or (:last-activity r) "")
    :data        r})
 
@@ -233,6 +245,7 @@
                (band :inbox            "Queue"              (:inbox g))
                (band :ready            "Ready to pick up"   (:ready g))
                (band :in-progress      "In progress"        (:in-progress g))
+               (band :shipping         "Shipping"           (:shipping g))
                (band :triage-in-flight "Triage · in flight" (get-in g [:triage :in-flight]))
                (band :triage-queued    "Triage · queued"    (get-in g [:triage :queued])))]
      (if (empty? rows)

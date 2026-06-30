@@ -295,3 +295,25 @@
     (is (str/includes? (pane {:format :implementation-completed :summary "Done."
                               :artifacts [{:kind :pr :ref "o/r#1"}]}) "Artifacts"))
     (is (str/includes? (pane {:format :pr-opened :url "http://x/1" :title "Fix it"}) "Fix it"))))
+
+;; ---------------------------------------------------------------------------
+;; Shipping badge — :blocked is loud in the board fragment
+;; ---------------------------------------------------------------------------
+
+(deftest workstreams-fragment-shipping-row-blocked-shows-loud-badge
+  ;; A :shipping row with :ship-substate :blocked must render "⚠ blocked" in
+  ;; the board fragment. This covers the loud-blocked requirement and confirms
+  ;; the CSS class is emitted (descendant selector safe — no > combinators).
+  (let [ship-row {:ws-id "ws-ship" :origin :notion :label "BR-99 · Checkout"
+                  :needs-you true :stage :shipping :ship-substate :blocked}
+        html (views/workstreams-fragment
+              [{:project "brian"
+                :grouped {:shipping [ship-row]
+                          :triage {:in-flight [] :queued []}
+                          :inbox [] :ready [] :in-progress []}}]
+              nil)]
+    (is (str/includes? html "⚠ blocked")   "blocked sub-state renders the loud badge")
+    (is (str/includes? html "ship-blocked") "loud CSS class is emitted")
+    (is (str/includes? html "ship-badge")   "ship-badge wrapper class present")
+    (is (str/includes? html "shipping")     "shipping section header is present")
+    (is (str/includes? html "/workstreams/brian/ws-ship") "row links to the workstream")))

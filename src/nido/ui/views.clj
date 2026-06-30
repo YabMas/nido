@@ -123,7 +123,12 @@
      .filters { padding:10px 0 6px; display:flex; flex-direction:column; gap:4px; grid-column:1/-1; }
      .filter-row { display:flex; align-items:center; gap:6px; flex-wrap:wrap; padding:2px 0; }
      .filter-label { color:#888; font-size:11px; text-transform:uppercase; min-width:72px; }
-     .chip.active { background:#2a4a6a; color:#aee0ff; border:1px solid #3a5a7a; }"))
+     .chip.active { background:#2a4a6a; color:#aee0ff; border:1px solid #3a5a7a; }
+     .ship-badge { font-size:.8em; padding:0 .4em; border-radius:.3em; }
+     .ship-blocked { background:#b00020; color:#fff; font-weight:600; }
+     .ship-driving { background:#1d4ed8; color:#fff; }
+     .ship-awaiting-merge { background:#555; color:#fff; }
+     .ship-queued { background:#777; color:#fff; }"))
 
 ;; ---------------------------------------------------------------------------
 ;; Shell (persistent rail + content area) — replaces per-page headers.
@@ -393,14 +398,22 @@
   (->> [[:inbox (:inbox grouped)]
         [:triage (concat (-> grouped :triage :in-flight) (-> grouped :triage :queued))]
         [:ready (:ready grouped)]
-        [:in-progress (:in-progress grouped)]]
+        [:in-progress (:in-progress grouped)]
+        [:shipping (:shipping grouped)]]
        (keep (fn [[stage rows]] (when (seq rows) {:project project :stage stage :rows rows})))))
 
-(defn- ws-list-row [project sel {:keys [ws-id origin label needs-you]}]
+(defn- ws-list-row [project sel {:keys [ws-id origin label needs-you stage ship-substate]}]
   [:a {:class (str "gate-card" (when (= sel ws-id) " sel"))
        :href  (str "/workstreams/" project "/" ws-id)}
    [:div.gate-top (origin-badge origin) [:span.lbl label]
-    (when needs-you [:span.needs {:title "needs you"}])]
+    (when needs-you [:span.needs {:title "needs you"}])
+    (when (= :shipping stage)
+      [:span {:class (str "ship-badge ship-" (name (or ship-substate :queued)))}
+       (case ship-substate
+         :blocked        "⚠ blocked"
+         :driving        "driving"
+         :awaiting-merge "awaiting merge"
+         "queued")])]
    [:div.gate-sub [:span project]]])
 
 (defn workstreams-fragment

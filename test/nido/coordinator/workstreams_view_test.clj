@@ -350,3 +350,36 @@
   (is (= "nothing to promote on this workstream"
          (wsv/promote-result-message nil :skip-not-promotable))))
 
+;; ---------------------------------------------------------------------------
+;; workstream-row :ship-substate — populated only for :shipping workstreams
+;; ---------------------------------------------------------------------------
+
+(def ^:private autonomy-parked
+  (assoc autonomy-running :phase :parked
+         :phase-history [{:at "2026-06-01T00:00:00Z" :phase :parked}]))
+
+(deftest workstream-row-shipping-with-parked-session-has-blocked-substate
+  (with-tmp
+    (fn [_]
+      (let [w (make-ws! :brian {:stage :shipping})]
+        (make-session! :brian (:id w) "ship-auto" {:autonomy autonomy-parked})
+        (let [row (wsv/workstream-row :brian (workstream/read-ws :brian (:id w)))]
+          (is (= :shipping (:stage row)) "stage is projected from the stored :shipping override")
+          (is (= :blocked (:ship-substate row)) "parked autonomous session → :blocked"))))))
+
+(deftest workstream-row-non-shipping-has-nil-substate
+  (with-tmp
+    (fn [_]
+      (let [w (make-ws! :brian {:stage :implementing})]
+        (make-session! :brian (:id w) "run-a" {:autonomy autonomy-running})
+        (let [row (wsv/workstream-row :brian (workstream/read-ws :brian (:id w)))]
+          (is (nil? (:ship-substate row)) ":ship-substate is nil for non-shipping workstreams"))))))
+
+(deftest grouped-by-stage-includes-shipping-band
+  (let [rows [{:ws-id "s1" :stage :shipping :needs-you true  :last-activity "2026-06-05T00:00:00Z"}
+              {:ws-id "s2" :stage :shipping :needs-you false :last-activity "2026-06-04T00:00:00Z"}
+              {:ws-id "r1" :stage :ready    :needs-you true  :last-activity "2026-06-01T00:00:00Z"}]
+        g (wsv/grouped-by-stage rows)]
+    (is (= ["s1" "s2"] (map :ws-id (:shipping g))) "shipping rows collected; needs-you first")
+    (is (= ["r1"] (map :ws-id (:ready g))))))
+

@@ -139,7 +139,9 @@
       :priority      (max-priority sessions)
       :session-count (count sessions)
       :last-activity (last-activity ws sessions)
-      :facets        (:facets ws)})))
+      :facets        (:facets ws)
+      ;; Merge-lane sub-state: only populated when the projected stage is :shipping.
+      :ship-substate (when (= :shipping (:stage proj)) (session/ship-substate sessions))})))
 
 (defn workstream-rows
   "All workstream rows for a project, read from disk. `live-names` (optional) is
@@ -184,14 +186,15 @@
 
 (defn grouped-by-stage
   "Partition rows by lifecycle stage for the overview. :done is intentionally
-   omitted — done is done, not shown. :inbox/ready/in-progress: needs-you first,
-   then newest. Triage is returned as {:in-flight [...] :queued [...]} — see
+   omitted — done is done, not shown. :inbox/ready/in-progress/shipping: needs-you
+   first, then newest. Triage is returned as {:in-flight [...] :queued [...]} — see
    triage-split — each ordered highest-severity-first."
   [rows]
   (let [by (group-by :stage rows)]
     {:inbox       (by-needs-then-newest (:inbox by []))
      :ready       (by-needs-then-newest (:ready by []))
      :in-progress (by-needs-then-newest (:in-progress by []))
+     :shipping    (by-needs-then-newest (:shipping by []))
      :triage      (triage-split (:triage by []))}))
 
 (def ^:private live-engagements
