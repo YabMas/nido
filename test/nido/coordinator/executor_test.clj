@@ -153,3 +153,46 @@
     (ex/tick! (fn [rid] (swap! spawned conj rid)) {})
     (Thread/sleep 50)
     (is (= 2 (count @spawned)) "global cap 2 limits; per-trigger uncapped")))
+
+(deftest uncapped-merge-lane-serializes-by-trigger
+  (let [spawned (atom [])
+        slow    (fn [rid] (swap! spawned conj rid) (Thread/sleep 100))]
+    (ex/configure! {:global-cap 1})
+    ;; two uncapped :merge runs, lane max-in-flight 1
+    (ex/submit! "merge-a" 0 true :merge 1)
+    (ex/submit! "merge-b" 0 true :merge 1)
+    (ex/tick! slow {})                 ; only merge-a promotes (lane full at 1)
+    (Thread/sleep 30)
+    (is (= ["merge-a"] @spawned))
+    (Thread/sleep 200)                 ; merge-a finishes, future reaped
+    (ex/tick! slow {})                 ; now merge-b promotes
+    (Thread/sleep 50)
+    (is (= ["merge-a" "merge-b"] @spawned))))
+
+(deftest uncapped-merge-does-not-consume-a-global-slot
+  (let [spawned (atom #{})
+        slow    (fn [rid] (swap! spawned conj rid) (Thread/sleep 150))]
+    (ex/configure! {:global-cap 1})
+    (ex/submit! "capped-1" 0)          ; consumes the one global slot
+    (ex/submit! "merge-a"  0 true :merge 1)
+    (ex/tick! slow {})                 ; capped-1 (global) AND merge-a (uncapped) both run
+    (Thread/sleep 50)
+    (is (= #{"capped-1" "merge-a"} @spawned))))
+
+(deftest uncapped-with-nil-max-in-flight-still-promotes
+  (let [spawned (atom [])]
+    (ex/configure! {:global-cap 1})
+    (ex/submit! "u1" 0 true nil nil)
+    (ex/submit! "u2" 0 true nil nil)
+    (ex/tick! (fn [rid] (swap! spawned conj rid)) {})
+    (Thread/sleep 50)
+    (is (= #{"u1" "u2"} (set @spawned)))))
+
+(deftest merge-lane-respects-in-flight-by-trigger-arg
+  (let [spawned (atom [])]
+    (ex/configure! {:global-cap 5})
+    (ex/submit! "merge-a" 0 true :merge 1)
+    ;; one :merge already in flight (reported via the arg) → don't promote
+    (ex/tick! (fn [rid] (swap! spawned conj rid)) {:merge 1})
+    (Thread/sleep 50)
+    (is (= [] @spawned))))

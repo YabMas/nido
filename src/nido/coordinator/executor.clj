@@ -90,15 +90,18 @@
 
 (defn tick!
   "Called by the daemon every poll. Reaps finished futures, then:
-   - Promotes ALL queued uncapped Runs immediately (bypass the cap).
+   - Promotes uncapped Runs bypassing the global cap but still subject to
+     per-trigger :max-in-flight (a nil :max-in-flight means promote always).
    - Promotes capped Runs up to (cap - count-in-flight-capped) slots,
      further constrained by per-trigger :max-in-flight when set.
+   Both capped and uncapped picks share the same per-trigger `used` tally,
+   so a trigger mixing capped+uncapped runs cannot exceed its :max-in-flight.
    on-spawn is `(fn [run-id])` — typically a wrapper around run-blocking!.
    in-flight-by-trigger is {trigger -> n}, the current in-progress run count
-   per trigger (from persisted run state). A capped run is promoted only
-   while its trigger's in-flight (the map value plus picks already chosen
-   this tick) is below its :max-in-flight. Runs with nil :max-in-flight obey
-   only the global cap. Uncapped runs bypass both caps entirely."
+   per trigger (from persisted run state). A run is promoted only while its
+   trigger's in-flight (the map value plus picks already chosen this tick) is
+   below its :max-in-flight. Runs with nil :max-in-flight obey only the global
+   cap (capped) or are always promoted (uncapped)."
   ([on-spawn in-flight-by-trigger]
    (locking lock
      (swap! !state #(-> %
@@ -108,18 +111,29 @@
            uncapped (filterv :uncapped? queue)
            capped   (filterv (complement :uncapped?) queue)
            free     (max 0 (- cap (count in-flight-capped)))
-           picks-capped (loop [cs capped, slots free, used {}, acc []]
-                          (if (or (zero? slots) (empty? cs))
-                            acc
-                            (let [c   (first cs)
-                                  t   (:trigger c)
-                                  mif (:max-in-flight c)
-                                  cur (get used t (get in-flight-by-trigger t 0))]
-                              (if (or (nil? mif) (< cur mif))
-                                (recur (rest cs) (dec slots)
-                                       (assoc used t (inc cur)) (conj acc c))
-                                (recur (rest cs) slots used acc)))))
-           picks (concat uncapped picks-capped)]
+           ;; gate helper: walk candidates, picking each while its trigger's
+           ;; running count (seeded from in-flight-by-trigger, grown by picks
+           ;; chosen this tick) is below :max-in-flight. nil mif → always pick.
+           ;; `slots` bounds capped picks by free global slots; uncapped passes
+           ;; slots=∞ so it is bounded ONLY by per-trigger mif (own budget).
+           gate     (fn [cands slots used]
+                      (loop [cs cands, slots slots, used used, acc []]
+                        (if (or (zero? slots) (empty? cs))
+                          [acc used]
+                          (let [c   (first cs)
+                                t   (:trigger c)
+                                mif (:max-in-flight c)
+                                cur (get used t (get in-flight-by-trigger t 0))]
+                            (if (or (nil? mif) (< cur mif))
+                              (recur (rest cs) (dec slots)
+                                     (assoc used t (inc cur)) (conj acc c))
+                              (recur (rest cs) slots used acc))))))
+           ;; uncapped first (own budget, slots effectively unbounded), then
+           ;; capped within free global slots, sharing the same `used` tally so
+           ;; a trigger that mixes capped + uncapped runs can't exceed its mif.
+           [picks-uncapped used1] (gate uncapped Long/MAX_VALUE {})
+           [picks-capped   _]     (gate capped free used1)
+           picks (concat picks-uncapped picks-capped)]
        (when (seq picks)
          (let [new-q        (reduce disj queue picks)
                spawn-future (fn [rid] (future (try (on-spawn rid) (catch Throwable t t))))
