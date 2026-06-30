@@ -79,6 +79,27 @@ Nido does not redocument target-project routing. When working in a brian session
 
 Brian's domain agents and most of its skills are mirrored under `nido/.claude/` via symlink, declared in `nido/.claude/harness.edn`. Run `bb nido:harness:sync` to reconcile after brian ships harness changes — it adds new entries, prunes deletions/exclusions, and leaves any user-overridden file (real, non-symlink) untouched. Currently excluded: `dev`, `push` (brian session/workflow plumbing nido owns).
 
+## Closing a work arc
+
+**End every work arc by rebasing the root `~/Code/nido` checkout onto local `main`** — `jj rebase -d main` (or `jj rebase -r @ -d main@origin` to carry uncommitted working-copy changes forward). Work lands from session worktrees, which share the store but not the root workspace's working copy, so the root checkout stays wherever it was and silently drifts behind `main` as arcs land elsewhere.
+
+This is load-bearing because the **session launcher injects nido's native harness skills by listing the on-disk `~/Code/nido/.claude/skills/` directory** (`nido-native-skill-dirs` → `fs/list-dir`, at runtime — it reads the working tree, not git). A stale root checkout that predates a newly-merged skill therefore starves **every** session of it: the skill is committed, pushed, and in main's tree, yet missing from disk, so it's never composed in. The same hazard applies to any launcher input read from the working tree.
+
+Symptom & fix: a shipped harness skill "missing" from sessions → check `ls ~/Code/nido/.claude/skills/<name>` (on disk, not `jj file list`). Present in main's tree but absent on disk ⇒ stale checkout ⇒ rebase as above, then re-`session:up` the live sessions (or restart the in-session agent) so the launcher recomposes `.claude/skills/`.
+
+## Local merge queue (nido ship)
+
+`nido ship` (run from a session home/worktree) hands the branch to a strictly
+serial **merge lane** in the coordinator: it writes a `:ship` envelope, the daemon
+flips the workstream to the `:shipping` stage and runs `/drive-home` headless
+(one branch at a time, on its own budget — never stealing a triage slot). Close
+the tab; nido drives it home. On a clean finish the PR goes onto GitHub's native
+merge queue (`gh pr merge --auto`) and the existing `github-merge` poller closes
+the workstream to `:done`. On a halt it parks the branch as **blocked** in the
+gate inbox with the blocker — fix it in the worktree and `nido ship` again
+(idempotent). `bb nido:coordinator:status` shows a `Merge lane:` line. The lane is
+cap-1 by design (one brian CI run already saturates ~8 test containers).
+
 ## Session lifecycle
 
 All session verbs take `:project <project>` plus a positional `<session>` (any order).
