@@ -27,6 +27,18 @@ real judgement is required. It assumes the nido 1:1 invariant — one session, o
 branch, one PR — so it takes **no arguments**. (Splitting a session into several
 PRs is a separate, out-of-scope concern; spin a sibling session per branch.)
 
+## Invoked headless by the merge lane
+
+Besides interactive use, `nido ship` runs this skill **headless** under the
+coordinator daemon: `claude -p "/drive-home"` with the **session-home as cwd**
+(same as an interactive run), serialized one branch at a time. Nothing about the
+flow changes — the same halt boundary applies. A halt still records a typed
+`:blocker` event (§"When it halts"); the daemon reads that fingerprint, parks the
+session, and surfaces it in the gate inbox as **blocked**. A clean finish records
+`:implementation-completed` (§5d) and the daemon marks the workstream
+*awaiting-merge*. So: keep emitting both fingerprints exactly as today — they are
+how the lane classifies the run.
+
 ## Relationship to /local-ci — read this before "simplifying"
 
 drive-home does **NOT** invoke `/local-ci`. `/local-ci` has a hard approval gate
