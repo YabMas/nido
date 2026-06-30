@@ -68,7 +68,7 @@
              :ctx {:findings [{:title "b"}] :base-rev "B" :manifest "a"}}
             {:event :phase-started :iter 1 :phase :fix :at "t3"}
             {:event :phase-finished :iter 1 :phase :fix :at "t4"
-             :ctx {:history [{:commit "c1" :fixed-count 1}]}}
+             :ctx {:history [{:iter 1 :commit "c1" :fixed-count 1}]}}
             {:event :phase-started :iter 2 :phase :review :at "t5"}])]
     (is (= "continued" (:status (first (:rounds r)))))
     (is (= "t4" (:ended-at (first (:rounds r)))))
@@ -99,6 +99,28 @@
     (is (= "clean" (:status (first (:rounds r)))))
     (is (= "clean" (:status r)))
     (is (= {:rounds 1 :findings-fixed 0 :final-status "clean"} (:summary r)))))
+
+(deftest fix-noop-round-does-not-inherit-prior-commit
+  (let [r (drive
+           [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+            {:event :phase-started :iter 1 :phase :review :at "t1"}
+            {:event :phase-finished :iter 1 :phase :review :at "t2"
+             :ctx {:findings [{:title "b"}] :base-rev "B" :manifest "a"}}
+            {:event :phase-started :iter 1 :phase :fix :at "t3"}
+            {:event :phase-finished :iter 1 :phase :fix :at "t4"
+             :ctx {:history [{:iter 1 :commit "c1" :fixed-count 2}]}}
+            {:event :phase-started :iter 2 :phase :review :at "t5"}
+            {:event :phase-finished :iter 2 :phase :review :at "t6"
+             :ctx {:findings [{:title "b"}] :base-rev "B" :manifest "a"}}
+            {:event :phase-started :iter 2 :phase :fix :at "t7"}
+            ;; round-2 fix is a NOOP: history STILL has only the iter-1 entry
+            {:event :phase-finished :iter 2 :phase :fix :at "t8"
+             :ctx {:history [{:iter 1 :commit "c1" :fixed-count 2}]}}
+            {:event :run-finalized :status :fix-noop :at "t9"}])
+        r2-fix (->> (:rounds r) second :phases (some #(when (= "fix" (:phase %)) %)))]
+    (is (nil? (:commit r2-fix)) "round-2 noop fix must not inherit round-1's commit")
+    (is (nil? (:fixed-count r2-fix)) "round-2 noop fix has no fixed-count")
+    (is (= 2 (:findings-fixed (:summary r))) "summary counts only the one real fix")))
 
 (deftest persist!-writes-atomic-valid-json
   (let [dir (str (fs/create-temp-dir))

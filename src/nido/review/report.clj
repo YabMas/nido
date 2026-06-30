@@ -81,7 +81,7 @@
                 (assoc ph :decision (some-> (:decision j) name)
                           :reason (:reason j)
                           :fix-findings (:fix-findings j)))
-      :fix    (let [h (last (:history ctx))]
+      :fix    (let [h (last (filter #(= (:iter ctx) (:iter %)) (:history ctx)))]
                 (assoc ph :commit (:commit h) :fixed-count (:fixed-count h)))
       ph)))
 
@@ -129,9 +129,10 @@
                        :started-at (:at ev) :ended-at nil}))
 
     :phase-finished
-    (let [r (update-current-phase report (name (:phase ev))
-                                  #(finish-phase % (:phase ev) (:ctx ev) (:at ev)))]
-      (if (= :review (:phase ev)) (patch-target r (:ctx ev)) r))
+    (let [ctx (assoc (:ctx ev) :iter (:iter ev))
+          r   (update-current-phase report (name (:phase ev))
+                                    #(finish-phase % (:phase ev) ctx (:at ev)))]
+      (if (= :review (:phase ev)) (patch-target r ctx) r))
 
     :phase-errored
     (update-current-phase report (name (:phase ev))
