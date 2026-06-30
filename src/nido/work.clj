@@ -447,6 +447,14 @@
   [source row]
   (or (= source :all) (= source (:origin row))))
 
+(defn overview-visible?
+  "An :incoming-stage row is a pre-promote holding-pen item: it surfaces only
+   under an explicit (non-:all) source selection, never in the cross-source All
+   view. Every other stage is unconstrained here (source-match? gates origin)."
+  [source row]
+  (or (not= :incoming (:stage row))
+      (not= :all source)))
+
 (defn grouped-rows
   "Flat seq of every workstream row in a `work/grouped` map (all bands)."
   [grouped]

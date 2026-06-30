@@ -581,6 +581,14 @@
   (is (work/source-match? :notion {:origin :notion}))
   (is (not (work/source-match? :notion {:origin :slack}))))
 
+(deftest overview-visible-hides-incoming-from-all
+  ;; incoming rows surface only under an explicit (non-:all) source
+  (is (false? (work/overview-visible? :all   {:stage :incoming :origin :slack})))
+  (is (true?  (work/overview-visible? :slack {:stage :incoming :origin :slack})))
+  ;; every non-incoming stage is unconstrained here (source-match handles origin)
+  (is (true?  (work/overview-visible? :all   {:stage :triage :origin :notion})))
+  (is (true?  (work/overview-visible? :all   {:stage :ready  :origin :github}))))
+
 (deftest grouped-rows-flattens-all-bands
   (let [g {:incoming [{:id 1}] :triage {:in-flight [{:id 2}] :queued [{:id 3}]}
            :ready [{:id 4}] :in-progress [{:id 5}]}]

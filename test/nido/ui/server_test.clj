@@ -261,22 +261,23 @@
            (dev/session-dev-state "brian" "feat/x"
                                   {"/wt" {:app-port 3142 :url "http://x.localhost:3142"}})))))
 
-(deftest workstreams-route-honors-source-filter
+(deftest workstreams-route-hides-incoming-under-all-shows-under-slack
   (with-redefs [server/all-grouped
                 (fn [] [{:project :brian
-                         :grouped {:incoming [{:origin :notion :stage :incoming :label "N-one"
-                                               :last-activity "t" :engagement :idle}
-                                              {:origin :slack :stage :incoming :label "S-one"
+                         :grouped {:incoming [{:origin :slack :stage :incoming :label "S-one"
                                                :last-activity "t" :engagement :idle}]
                                    :triage {:in-flight [] :queued []} :ready [] :in-progress []}}])
                 nido.work/all-gates (fn [] [])
                 project/list-projects (fn [] {"brian" {:directory "/x"}})
                 nido.ui.server/read-rail-daemon (fn [] {:state :up})]
-    (let [resp (server/handle-request {:request-method :get :uri "/workstreams"
-                                       :query-string "source=notion"})]
+    ;; source=All → the incoming row is hidden
+    (let [resp (server/handle-request {:request-method :get :uri "/workstreams"})]
       (is (= 200 (:status resp)))
-      (is (str/includes? (:body resp) "N-one"))
-      (is (not (str/includes? (:body resp) "S-one")) "slack row filtered out by source=notion"))))
+      (is (not (str/includes? (:body resp) "S-one")) "incoming hidden under All"))
+    ;; source=Slack → the incoming row is the queue
+    (let [resp (server/handle-request {:request-method :get :uri "/workstreams"
+                                       :query-string "source=slack"})]
+      (is (str/includes? (:body resp) "S-one") "incoming shown under the Slack lens"))))
 
 (deftest fragment-workstream-route-is-sse-and-renders-per-session-dev-env
   (with-redefs [nido.work/workstream

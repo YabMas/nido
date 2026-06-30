@@ -178,13 +178,15 @@
        set))
 
 (defn- apply-filters
-  "Narrow each {:project :grouped} entry's rows by source ∧ facets."
+  "Narrow each {:project :grouped} entry's rows by source ∧ facets ∧ overview
+   visibility (an :incoming row shows only under its own source lens)."
   [source facets groups]
   (mapv (fn [g]
           (update g :grouped
                   #(work/filter-grouped
                     % (fn [row] (and (work/source-match? source row)
-                                     (work/facet-match? facets row))))))
+                                     (work/facet-match? facets row)
+                                     (work/overview-visible? source row))))))
         groups))
 
 (defn- source-counts
