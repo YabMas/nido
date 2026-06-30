@@ -1,20 +1,19 @@
 ;; src/nido/review/loop.clj
 (ns nido.review.loop
   "Review-loop engine: run a stage pipeline over an immutable iteration context
-   until a terminal :control / status. Pure control logic; stages and sink are
-   injectable for tests."
+   until terminal, emitting typed lifecycle events to an injected `emit` fn.
+   Pure control logic; stages and emit are injectable for tests. The engine
+   never prints and never builds the report — it only emits."
   (:require
-   [babashka.fs :as fs]
-   [cheshire.core :as json]
-   [nido.coordinator.state :as cstate]
-   [nido.review.stages :as stages]))
+   [nido.review.stages :as stages])
+  (:import
+   [java.time Instant]))
 
 (def default-pipeline [stages/review-stage stages/judge-stage stages/fix-stage])
 
 (defn- finding-key [f] [(:file f) (:line-start f) (:title f)])
 
 (defn- no-progress?
-  "True when this round's findings did not shrink vs the previous round."
   [prev-findings curr-findings]
   (and (seq prev-findings)
        (>= (count (set (map finding-key curr-findings)))
@@ -22,58 +21,58 @@
        (= (set (map finding-key curr-findings))
           (set (map finding-key prev-findings)))))
 
-(defn- file-sink
-  "Default sink: append the ctx snapshot to <run-dir>/iterations.jsonl."
-  [run-id]
-  (let [dir (cstate/run-dir run-id)]
-    (fs/create-dirs dir)
-    (fn [ctx]
-      (spit (str (fs/path dir "iterations.jsonl"))
-            (str (json/generate-string
-                  (select-keys ctx [:iter :findings :judge :control :status :history]))
-                 "\n")
-            :append true))))
-
 (defn- run-pipeline
-  "Run stages in order over ctx, short-circuiting (reduced) the moment a stage
-   sets a terminal :status or a terminal :control. Stage-agnostic: the engine
-   never names a stage, so the pipeline vector can be extended or reordered.
-   A trailing :continue means 'reached the end, loop again'."
-  [ctx pipeline sink]
+  "Run stages in order over ctx, emitting phase-started before each stage and
+   phase-finished (or phase-errored) after. Short-circuits (reduced) on a
+   terminal :status or terminal :control. Stage-agnostic — never names a stage."
+  [ctx pipeline emit clock]
   (reduce
    (fn [ctx stage]
-     (let [ctx' ((:run stage) ctx)]
-       (sink ctx')
+     (emit {:event :phase-started :iter (:iter ctx) :phase (:name stage)
+            :at (str (clock))})
+     (let [ctx' (try
+                  ((:run stage) ctx)
+                  (catch clojure.lang.ExceptionInfo e
+                    (when (= :review-failed (:reason (ex-data e)))
+                      (emit {:event :phase-errored :iter (:iter ctx)
+                             :phase (:name stage) :error (ex-message e)
+                             :at (str (clock))}))
+                    (throw e)))]
+       (emit {:event :phase-finished :iter (:iter ctx') :phase (:name stage)
+              :ctx ctx' :at (str (clock))})
        (cond
-         (:status ctx')                (reduced ctx')                       ; e.g. :clean / :fix-noop / :judge-indeterminate
+         (:status ctx')                (reduced ctx')
          (= :stop (:control ctx'))     (reduced (assoc ctx' :status :converged))
          (= :escalate (:control ctx')) (reduced (assoc ctx' :status :escalated))
-         :else                         ctx')))                              ; :control still :continue → next stage
+         :else                         ctx')))
    ctx
    pipeline))
 
 (defn run-loop
   "Drive the pipeline until terminal. config:
-   {:cwd :base :run-id :max-iters :pipeline? :sink? :budget? :dry-run?}.
-   :pipeline and :sink are injection seams (defaults: default-pipeline, file sink)."
-  [{:keys [run-id max-iters pipeline sink] :as config
-    :or   {max-iters 5}}]
-  (let [pipeline (or pipeline default-pipeline)
-        sink     (or sink (file-sink run-id))]
+   {:cwd :base :run-id :max-iters :pipeline :emit :clock :budget :dry-run?}.
+   :pipeline / :emit / :clock are injection seams."
+  [{:keys [run-id max-iters pipeline emit clock] :as config
+    :or   {max-iters 5 emit (fn [_]) clock #(Instant/now)}}]
+  (let [pipeline (or pipeline default-pipeline)]
+    (emit {:event :run-started :run-id run-id
+           :cwd (:cwd config) :base (:base config) :at (str (clock))})
     (loop [iter 1, history [], prev-findings nil]
       (let [ctx0 {:config (assoc config :max-iters max-iters)
                   :iter iter :history history :control :continue}
             ctx  (try
-                   (run-pipeline ctx0 pipeline sink)
+                   (run-pipeline ctx0 pipeline emit clock)
                    (catch clojure.lang.ExceptionInfo e
                      (if (= :review-failed (:reason (ex-data e)))
-                       (let [c (assoc ctx0 :status :review-failed :error (ex-message e))]
-                         (sink c) c)
-                       (throw e))))]
-        (cond
-          ;; a stage set a terminal status or terminal control
-          (:status ctx) ctx
-          ;; reached end of pipeline with :control :continue → apply backstops
-          (no-progress? prev-findings (:findings ctx)) (assoc ctx :status :no-progress)
-          (>= iter max-iters)                          (assoc ctx :status :max-iters)
-          :else (recur (inc iter) (:history ctx) (:findings ctx)))))))
+                       (assoc ctx0 :status :review-failed :error (ex-message e))
+                       (throw e))))
+            final (cond
+                    (:status ctx)                                ctx
+                    (no-progress? prev-findings (:findings ctx)) (assoc ctx :status :no-progress)
+                    (>= iter max-iters)                          (assoc ctx :status :max-iters)
+                    :else                                        nil)]
+        (if final
+          (do (emit {:event :run-finalized :status (:status final)
+                     :ctx final :at (str (clock))})
+              final)
+          (recur (inc iter) (:history ctx) (:findings ctx)))))))
