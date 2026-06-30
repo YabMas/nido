@@ -317,3 +317,25 @@
     (is (str/includes? html "ship-badge")   "ship-badge wrapper class present")
     (is (str/includes? html "shipping")     "shipping section header is present")
     (is (str/includes? html "/workstreams/brian/ws-ship") "row links to the workstream")))
+
+;; ---------------------------------------------------------------------------
+;; :incoming action bar in the overview pane
+;; ---------------------------------------------------------------------------
+
+(deftest workstream-pane-renders-incoming-actions
+  (let [html (views/workstream-pane
+              {:project "brian" :ws-id "ws-1" :origin :slack :stage :incoming
+               :label "can you link it" :ledger nil :report nil :entries nil :sessions []}
+              {})]
+    (is (str/includes? html "Promote"))
+    (is (str/includes? html "Dismiss"))
+    (is (str/includes? html "/workstreams/brian/ws-1/gate/promote"))
+    (is (str/includes? html "/workstreams/brian/ws-1/gate/drop"))))
+
+(deftest workstream-pane-stays-read-only-for-non-incoming
+  (let [html (views/workstream-pane
+              {:project "brian" :ws-id "ws-2" :origin :notion :stage :triage
+               :label "BR-7" :ledger nil :report nil :entries nil :sessions []}
+              {})]
+    (is (not (str/includes? html "/gate/promote"))
+        "non-incoming stages keep going through the home gate, not the pane")))

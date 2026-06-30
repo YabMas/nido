@@ -311,6 +311,17 @@
         (gate-resolve! project ws-id action-id input)
         (sse-response (sse-fragment (views/gate-action-confirm-fragment action-id project ws-id))))
 
+      ;; POST /workstreams/:project/:ws-id/gate/:action — resolve an :incoming
+      ;; report from the overview pane (Promote/Dismiss in the Slack lens). Reuses
+      ;; gate-resolve!; the confirmation patches #ws-pane, the list's 5s poll drops
+      ;; the resolved row, the pane's 3s poll settles it.
+      (and (= 5 (count segs)) (= "workstreams" (first segs)) (= "gate" (nth segs 3)))
+      (let [project   (nth segs 1)
+            ws-id     (nth segs 2)
+            action-id (keyword (nth segs 4))]
+        (gate-resolve! project ws-id action-id nil)
+        (sse-response (sse-fragment (views/gate-action-confirm-fragment action-id project ws-id "ws-pane"))))
+
       ;; POST /workstreams/:project/:ws-id/sessions/:session/dev/:action
       (and (= 7 (count segs)) (= "workstreams" (first segs))
            (= "sessions" (nth segs 3)) (= "dev" (nth segs 5)))

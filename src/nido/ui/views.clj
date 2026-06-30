@@ -231,27 +231,29 @@
       [:div {:id "needs"} [:p.empty "Nothing needs you right now."]]))))
 
 (defn gate-action-confirm-fragment
-  "Pane confirmation after a gate action: the per-action outcome + follow-links to
-   where the item now lives. Patches the pane (#gate-pane). The action runs on a
-   background future; this is the immediate, action-keyed feedback."
-  [action-id project ws-id]
-  (let [msg (case action-id
-              :promote "Promoting → in-progress… provisioning the work session."
-              :apply   "Applying… resuming the agent to write the verdict."
-              :dismiss "✓ Dismissed — off your radar, won't be re-triaged."
-              :drop    "✓ Dropped — not pursued."
-              :done    "✓ Marked done."
-              :reply   "Resuming… re-hydrating the session if needed, then resuming the conversation."
-              "Done.")]
-    (str
-     (h/html
-      [:div {:id "gate-pane"}
-       [:h1 msg]
-       [:p.meta "ws " ws-id]
-       [:p "Follow it: "
-        [:a {:href (str "/workstreams/" project "/" ws-id)} "open workstream →"]
-        " · "
-        [:a {:href "/workstreams"} "workstreams →"]]]))))
+  "Immediate, action-keyed confirmation toast. `pane-id` is the element it
+   patches — \"gate-pane\" on the Needs-you page, \"ws-pane\" on the overview.
+   :promote is intentionally destination-neutral: a :ready ticket provisions the
+   work session, an :incoming Slack report starts triage."
+  ([action-id project ws-id] (gate-action-confirm-fragment action-id project ws-id "gate-pane"))
+  ([action-id project ws-id pane-id]
+   (let [msg (case action-id
+               :promote "Promoting…"
+               :apply   "Applying… resuming the agent to write the verdict."
+               :dismiss "✓ Dismissed — off your radar, won't be re-triaged."
+               :drop    "✓ Dropped — not pursued."
+               :done    "✓ Marked done."
+               :reply   "Resuming… re-hydrating the session if needed, then resuming the conversation."
+               "Done.")]
+     (str
+      (h/html
+       [:div {:id pane-id}
+        [:h1 msg]
+        [:p.meta "ws " ws-id]
+        [:p "Follow it: "
+         [:a {:href (str "/workstreams/" project "/" ws-id)} "open workstream →"]
+         " · "
+         [:a {:href "/workstreams"} "workstreams →"]]])))))
 
 (defn- style-class [style]
   (case style :primary "btn btn-primary" :danger "btn btn-danger" "btn"))
@@ -465,6 +467,17 @@
               [:span.lt title]])))
    (when report (report-body report))])
 
+(defn- incoming-action-bar
+  "Promote/Dismiss for an :incoming workstream, rendered inside the overview pane.
+   Buttons POST to the pane-scoped resolve route so the response targets #ws-pane."
+  [project ws-id]
+  (into [:div.actions {:style "margin-top:16px"}]
+        (for [{:keys [id label style]} (work/gate-actions :incoming false)]
+          [:button {:class (style-class style)
+                    "data-on:click" (str "@post('/workstreams/" project "/" ws-id
+                                         "/gate/" (name id) "')")}
+           label])))
+
 (defn workstream-pane
   "Read-only ledger pane: header · stage · ledger summary · report · Sessions table
    with per-row dev-env controls. `session-dev-states` is a map of session-name →
@@ -485,6 +498,7 @@
          [:div.card [:strong "ledger "] (:key ledger) " · " (some-> ledger :status name)
           " · " (:report-count ledger) " report(s)"])
        (ledger-browser project ws-id entries selected-seq report)
+       (when (= :incoming stage) (incoming-action-bar project ws-id))
        [:h2 "Sessions"]
        (if (seq sessions)
          [:table

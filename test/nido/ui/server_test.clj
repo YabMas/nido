@@ -354,3 +354,27 @@
     (let [resp (server/handle-request {:request-method :get
                                        :uri "/workstreams/brian/ws-1"})]
       (is (str/includes? (:body resp) "sel=nil") "absent entry → nil → latest"))))
+
+;; ---------------------------------------------------------------------------
+;; POST /workstreams/:project/:ws-id/gate/:action — pane-scoped resolve route
+;; ---------------------------------------------------------------------------
+
+(deftest post-pane-gate-promote-resolves-and-targets-ws-pane
+  (let [calls (atom [])]
+    (with-redefs [nido.work/resolve-gate! (fn [p w a & [in]] (swap! calls conj [p w a in]) {:decision :triaging})
+                  nido.work/all-gates    (fn [] [])]
+      (let [resp (server/handle-request
+                  {:request-method :post :uri "/workstreams/brian/ws-1/gate/promote"})]
+        (Thread/sleep 50)   ; resolve runs on a background future
+        (is (= 200 (:status resp)))
+        (is (= [["brian" "ws-1" :promote nil]] @calls))
+        (is (str/includes? (:body resp) "ws-pane") "confirmation patches the overview pane")
+        (is (str/includes? (:body resp) "Promoting"))))))
+
+(deftest post-pane-gate-dismiss-resolves
+  (let [calls (atom [])]
+    (with-redefs [nido.work/resolve-gate! (fn [p w a & [in]] (swap! calls conj [p w a in]) {:decision :dismissed})
+                  nido.work/all-gates    (fn [] [])]
+      (server/handle-request {:request-method :post :uri "/workstreams/brian/ws-1/gate/drop"})
+      (Thread/sleep 50)
+      (is (= [["brian" "ws-1" :drop nil]] @calls)))))
