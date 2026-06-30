@@ -6,6 +6,8 @@
    [nido.coordinator.runs :as runs]
    [nido.coordinator.ship :as sut]
    [nido.coordinator.state :as cstate]
+   [nido.coordinator.tickets :as tickets]
+   [nido.coordinator.status-file :as status-file]
    [nido.coordinator.workstream :as ws]))
 
 ;; Redirect ~/.nido to a temp dir for the duration of each test, and reset
@@ -62,3 +64,24 @@
       ;; r1 is still :queued (never transitioned in-progress) — second call must NOT return nil
       (let [r2 (sut/handle-ship! {:type :ship :project :brian :session "impl-br-99" :ws-id (:id w)})]
         (is (some? r2))))))
+
+(deftest classify-reads-ledger-fingerprint
+  (with-redefs [tickets/read-meta (fn [_ _] {:entries [{:kind :implementation-completed}]})]
+    (is (= :awaiting-merge (sut/classify-outcome :brian "BR-1" "r1" {:exit-code 0 :num-turns 5}))))
+  (with-redefs [tickets/read-meta (fn [_ _] {:entries [{:kind :blocker}]})]
+    (is (= :blocked (sut/classify-outcome :brian "BR-1" "r1" {:exit-code 0 :num-turns 5})))))
+
+(deftest classify-hard-failures-are-blocked
+  (is (= :blocked (sut/classify-outcome :brian "BR-1" "r1" {:timed-out? true :exit-code 143})))
+  (is (= :blocked (sut/classify-outcome :brian "BR-1" "r1" {:spawn-error true})))
+  ;; exit 0 but zero turns = no-op (e.g. "Unknown command")
+  (is (= :blocked (sut/classify-outcome :brian "BR-1" "r1" {:exit-code 0 :num-turns 0}))))
+
+(deftest classify-falls-back-to-run-status-then-blocked
+  ;; no BR / no ledger entry → consult run-status file
+  (with-redefs [tickets/read-meta   (fn [_ _] nil)
+                status-file/read-status (fn [_] {:phase :complete})]
+    (is (= :awaiting-merge (sut/classify-outcome :brian nil "r1" {:exit-code 0 :num-turns 3}))))
+  (with-redefs [tickets/read-meta   (fn [_ _] nil)
+                status-file/read-status (fn [_] nil)]
+    (is (= :blocked (sut/classify-outcome :brian nil "r1" {:exit-code 0 :num-turns 3})))))

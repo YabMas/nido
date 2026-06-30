@@ -12,6 +12,8 @@
    [nido.coordinator.runs :as runs]
    [nido.coordinator.session :as session]
    [nido.coordinator.state :as cstate]
+   [nido.coordinator.tickets :as tickets]
+   [nido.coordinator.status-file :as status-file]
    [nido.coordinator.workstream :as ws])
   (:import [java.util UUID]))
 
@@ -95,3 +97,30 @@
         (let [run (create-merge-run! project ws-id session)]
           (executor/submit! (:id run) (:priority run) true :merge 1)
           run)))))
+
+(defn- agent-no-op?
+  "Exit 0 with zero turns = the agent did nothing (e.g. \"Unknown command\")."
+  [{:keys [exit-code num-turns]}]
+  (and (= 0 exit-code) (some? num-turns) (zero? num-turns)))
+
+(defn- latest-ledger-kind
+  "The :kind of the ticket ledger's most recent entry, or nil."
+  [project br]
+  (when (and br (not (str/blank? br)))
+    (:kind (last (:entries (tickets/read-meta project br))))))
+
+(defn classify-outcome
+  "Decide a merge Run's outcome. See Interfaces for precedence."
+  [project br run-id result]
+  (cond
+    (:spawn-error result)  :blocked
+    (:timed-out? result)   :blocked
+    (agent-no-op? result)  :blocked
+    :else
+    (case (latest-ledger-kind project br)
+      :implementation-completed :awaiting-merge
+      :blocker                  :blocked
+      ;; no/ambiguous ledger fingerprint → run-status fallback, else fail-safe
+      (case (:phase (status-file/read-status run-id))
+        :complete :awaiting-merge
+        :blocked))))
