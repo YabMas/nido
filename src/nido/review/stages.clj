@@ -8,6 +8,7 @@
    [cheshire.core :as json]
    [clojure.string :as str]
    [nido.coordinator.agent :as agent]
+   [nido.coordinator.state :as cstate]
    [nido.review.codex :as codex]
    [nido.review.prompts :as prompts]
    [nido.vsdd.jj :as jj]))
@@ -33,12 +34,14 @@
   {:name :review
    :run  (fn [ctx]
            (let [{:keys [cwd base run-id]} (:config ctx)
-                 res (codex/review! {:cwd cwd :base base :run-id run-id})]
+                 res (codex/review! {:cwd cwd :base base :run-id run-id :iter (:iter ctx)})]
              (if (= :clean (:status res))
                (assoc ctx :findings [] :control :stop :status :clean)
                (assoc ctx
                       :findings (:findings res)
-                      :overall-correctness (:overall-correctness res)))))})
+                      :overall-correctness (:overall-correctness res)
+                      :base-rev (:base-rev res)
+                      :manifest (:manifest res)))))})
 
 (defn discover-design-doc
   "Newest docs/superpowers/specs/*-design.md under cwd, or nil."
@@ -61,7 +64,8 @@
                           :design-doc (discover-design-doc cwd)})
                  {:keys [num-turns result-error? result-text]}
                  (agent/launch! {:run-id run-id :cwd cwd
-                                 :first-message prompt :budget budget})
+                                 :first-message prompt :budget budget
+                                 :err-file (str (fs/path (cstate/run-dir run-id) "agent.err.log"))})
                  decision (parse-judge-decision result-text)]
              (if (or (zero? (or num-turns 0)) result-error?
                      (= :indeterminate (:decision decision)))
@@ -89,13 +93,14 @@
                    {:keys [num-turns]}
                    (agent/launch! {:run-id run-id :cwd cwd
                                    :first-message (prompts/fix-prompt {:findings to-fix})
-                                   :budget budget})]
+                                   :budget budget
+                                   :err-file (str (fs/path (cstate/run-dir run-id) "agent.err.log"))})]
                (if (or (zero? (or num-turns 0)) (not (working-copy-dirty? cwd)))
                  (assoc ctx :control :stop :status :fix-noop)
                  (let [msg (str "review-loop: iter " (:iter ctx) " fixes")
                        _   (jj/jj! cwd "commit" "-m" msg)
                        cid (:out (jj/jj! cwd "log" "-r" "@-" "-T" "commit_id" "--no-graph"))]
                    (update ctx :history (fnil conj [])
-                           {:iter (:iter ctx) :commit cid
+                           {:iter (:iter ctx) :commit cid :fixed-count (count to-fix)
                             :findings (:findings ctx) :judge (:judge ctx)}))))))})
 

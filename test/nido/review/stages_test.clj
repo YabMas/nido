@@ -110,3 +110,19 @@
                {:config {:cwd "/w" :run-id "r1"} :iter 1
                 :findings [{:title "only"}] :judge {:fix-findings [0 99]}})]
       (is (= 1 (count (:history ctx)))))))
+
+(deftest review-stage-surfaces-base-rev-and-manifest
+  (with-redefs [codex/review! (fn [_] {:status nil :findings [{:title "x"}]
+                                       :overall-correctness "incorrect"
+                                       :base-rev "BASE" :manifest "src/a.clj\nsrc/b.clj"})]
+    (let [ctx ((:run stages/review-stage)
+               {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 1})]
+      (is (= "BASE" (:base-rev ctx)))
+      (is (= "src/a.clj\nsrc/b.clj" (:manifest ctx))))))
+
+(deftest review-stage-passes-iter-to-codex
+  (let [seen (atom nil)]
+    (with-redefs [codex/review! (fn [opts] (reset! seen opts)
+                                  {:status :clean :findings []})]
+      ((:run stages/review-stage) {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 3})
+      (is (= 3 (:iter @seen)) "review! is told which round it is (for the log name)"))))
