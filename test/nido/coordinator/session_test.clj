@@ -359,3 +359,13 @@
         running {:substrate :live :autonomy {:phase :running}}]
     (is (true?  (:needs-you (sess/stage-projection nil nil [parked] :shipping))))
     (is (false? (:needs-you (sess/stage-projection nil nil [running] :shipping))))))
+
+(deftest workstream-id-for-finds-the-owning-ws
+  (with-tmp
+    (fn [_]
+      (let [ws1 (ws/create! :brian {:stage :triaging :external-refs []})
+            ws2 (ws/create! :brian {:stage :triaging :external-refs []})]
+        (sess/create! :brian (:id ws1) {:name "impl-br-1" :weight :heavy :autonomy nil})
+        (sess/create! :brian (:id ws2) {:name "impl-br-2" :weight :heavy :autonomy nil})
+        (is (= (:id ws2) (sess/workstream-id-for :brian "impl-br-2")))
+        (is (nil? (sess/workstream-id-for :brian "nope")))))))

@@ -35,7 +35,8 @@
              [tasks.nido-review :as nido-review]
              [tasks.nido-work :as nido-work]
              [tasks.nido-shared-pg :as nido-shared-pg]
-             [tasks.nido-scratch :as nido-scratch])
+             [tasks.nido-scratch :as nido-scratch]
+             [nido.ship :as nido-ship])
 
   :init (do
           ;; Disable babashka.process/shell's default destroy-tree JVM
@@ -226,6 +227,10 @@
   nido:vsdd:sweep
   {:doc "Run VSDD across all changed modules: :project-dir <path>"
    :task (apply nido-vsdd/sweep *command-line-args*)}
+
+  nido:ship
+  {:doc "Hand the current session's branch to nido's merge lane (drives /drive-home autonomously, serialized). Run from the session home/worktree."
+   :task (apply nido-ship/ship *command-line-args*)}
 
   nido:run
   {:doc "Run a project-declared command in a session worktree: :project <p> <session> <command-ref>"

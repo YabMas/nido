@@ -236,6 +236,17 @@
       (->> (fs/list-dir d) (filter fs/directory?) (mapv #(str (fs/file-name %))))
       [])))
 
+(defn workstream-id-for
+  "The workstream-id owning the session named `session-name` in `project`, or nil.
+   Scans the project's workstreams; matches on the session record's :name (which
+   round-trips a percent-encoded dir key). Used by the ship handler / CLI to map a
+   session back to its workstream."
+  [project session-name]
+  (some (fn [ws-id]
+          (when (some #(= session-name (:name %)) (list-sessions project ws-id))
+            ws-id))
+        (list-ws-ids project)))
+
 (def gating-phases
   "Autonomy phases that occupy a trigger's in-flight budget FOR SCHEDULING.
    Includes :parked to preserve the legacy run-based backpressure (a session

@@ -762,7 +762,7 @@
 ;; auto-resolved when invoked from a session-home cwd.
 ;; ---------------------------------------------------------------------------
 
-(defn- session-home-coords-from-cwd
+(defn session-home-coords-from-cwd
   "If cwd is a session-home (~/.nido/sessions/<project>/<session>/),
    return [project session]. Otherwise nil. The session name may itself
    contain slashes (feat/x), so it's everything after the first segment
