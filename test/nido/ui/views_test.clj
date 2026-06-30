@@ -319,10 +319,46 @@
     (is (str/includes? html "/workstreams/brian/ws-ship") "row links to the workstream")))
 
 ;; ---------------------------------------------------------------------------
-;; :incoming action bar in the overview pane
+;; Generic stage action bar below the reader pane (current entry only)
 ;; ---------------------------------------------------------------------------
 
+(deftest workstream-pane-renders-stage-actions-for-the-current-entry
+  ;; sample-ws is :triage with a parked "auto" session → Apply / Dismiss / Reply,
+  ;; all POSTing to the pane-scoped resolve route (patches #ws-pane).
+  (let [html (views/workstream-pane (assoc sample-ws :on-latest? true) {})]
+    (is (str/includes? html "Apply"))
+    (is (str/includes? html "Dismiss"))
+    (is (str/includes? html "Send &amp; resume"))                       ; free-text reply
+    (is (str/includes? html "/workstreams/brian/ws-1/gate/apply"))
+    (is (str/includes? html "/workstreams/brian/ws-1/gate/dismiss"))
+    (is (str/includes? html "/workstreams/brian/ws-1/gate/reply"))
+    (is (not (str/includes? html "/gate/brian/ws-1/apply"))
+        "pane actions go through the pane route, not the home gate")))
+
+(deftest workstream-pane-hides-stage-actions-on-older-entries
+  (let [html (views/workstream-pane (assoc sample-ws :on-latest? false) {})]
+    (is (not (str/includes? html "/workstreams/brian/ws-1/gate/"))
+        "an older ledger entry shows no live actions")))
+
+(deftest workstream-pane-stage-actions-vary-by-stage
+  ;; :ready → Promote / Drop regardless of parked-ness.
+  (let [html (views/workstream-pane
+              (assoc sample-ws :stage :ready :sessions [] :on-latest? true) {})]
+    (is (str/includes? html "Promote"))
+    (is (str/includes? html "/workstreams/brian/ws-1/gate/promote"))
+    (is (str/includes? html "/workstreams/brian/ws-1/gate/drop"))
+    (is (not (str/includes? html "/gate/apply")) ":ready offers no Apply")))
+
+(deftest workstream-pane-unparked-triage-offers-only-dismiss
+  ;; :triage with no parked session → just the off-radar Dismiss, no Apply/Reply.
+  (let [html (views/workstream-pane
+              (assoc sample-ws :stage :triage :sessions [] :on-latest? true) {})]
+    (is (str/includes? html "/workstreams/brian/ws-1/gate/dismiss"))
+    (is (not (str/includes? html "/gate/apply")))
+    (is (not (str/includes? html "Send &amp; resume")))))
+
 (deftest workstream-pane-renders-incoming-actions
+  ;; :incoming has no ledger entries → trivially the current state → Promote/Dismiss.
   (let [html (views/workstream-pane
               {:project "brian" :ws-id "ws-1" :origin :slack :stage :incoming
                :label "can you link it" :ledger nil :report nil :entries nil :sessions []}
@@ -331,11 +367,3 @@
     (is (str/includes? html "Dismiss"))
     (is (str/includes? html "/workstreams/brian/ws-1/gate/promote"))
     (is (str/includes? html "/workstreams/brian/ws-1/gate/drop"))))
-
-(deftest workstream-pane-stays-read-only-for-non-incoming
-  (let [html (views/workstream-pane
-              {:project "brian" :ws-id "ws-2" :origin :notion :stage :triage
-               :label "BR-7" :ledger nil :report nil :entries nil :sessions []}
-              {})]
-    (is (not (str/includes? html "/gate/promote"))
-        "non-incoming stages keep going through the home gate, not the pane")))

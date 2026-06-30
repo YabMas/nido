@@ -258,31 +258,40 @@
 (defn- style-class [style]
   (case style :primary "btn btn-primary" :danger "btn btn-danger" "btn"))
 
-(defn- action-button [project ws-id {:keys [id label style]}]
+(defn- gate-route
+  "Default POST target for a gate action: the home /gate route (patches #gate-pane)."
+  [project ws-id action-id]
+  (str "/gate/" project "/" ws-id "/" (name action-id)))
+
+(defn- action-button [project ws-id {:keys [id label style]} route]
   [:button {:class (style-class style)
-            "data-on:click" (str "@post('/gate/" project "/" ws-id "/" (name id) "')")}
+            "data-on:click" (str "@post('" (route project ws-id id) "')")}
    label])
 
 (defn action-bar
   "Render an action set: one-click buttons (mutations + preset-input resumes) in a row,
    plus a free-text reply textarea when a resume action without :input is present.
-   `session` (optional) labels the resume target. The single renderer behind every gate."
-  [project ws-id actions session]
-  (let [buttons   (filter #(or (= :mutation (:kind %)) (:input %)) actions)
-        free-text (some #(and (= :resume (:kind %)) (not (:input %))) actions)]
-    (list
-     (when (seq buttons)
-       (into [:div.actions {:style "margin-top:16px"}]
-             (for [a buttons] (action-button project ws-id a))))
-     (when free-text
-       [:div.reply
-        [:div.meta {:style "text-transform:uppercase;font-size:11px"} "Reply & resume"]
-        [:textarea {"data-bind" "reply" :placeholder "Tell the agent what to do next…"}]
-        [:div {:style "margin-top:9px"}
-         [:button.btn.btn-primary
-          {"data-on:click" (str "@post('/gate/" project "/" ws-id "/reply')")}
-          "Send & resume ▸"]
-         (when session [:span.meta {:style "margin-left:10px"} "resumes " session])]]))))
+   `session` (optional) labels the resume target. `route` (optional, default the home
+   /gate route) builds each button's POST url from (project ws-id action-id) — pass the
+   pane route to keep responses inside the overview pane. The single renderer behind
+   every gate."
+  ([project ws-id actions session] (action-bar project ws-id actions session gate-route))
+  ([project ws-id actions session route]
+   (let [buttons   (filter #(or (= :mutation (:kind %)) (:input %)) actions)
+         free-text (some #(and (= :resume (:kind %)) (not (:input %))) actions)]
+     (list
+      (when (seq buttons)
+        (into [:div.actions {:style "margin-top:16px"}]
+              (for [a buttons] (action-button project ws-id a route))))
+      (when free-text
+        [:div.reply
+         [:div.meta {:style "text-transform:uppercase;font-size:11px"} "Reply & resume"]
+         [:textarea {"data-bind" "reply" :placeholder "Tell the agent what to do next…"}]
+         [:div {:style "margin-top:9px"}
+          [:button.btn.btn-primary
+           {"data-on:click" (str "@post('" (route project ws-id :reply) "')")}
+           "Send & resume ▸"]
+          (when session [:span.meta {:style "margin-left:10px"} "resumes " session])]])))))
 
 (defn- conf-chip [{:keys [level]}]
   [:span {:class (str "chip c-conf-" (name level))} (name level)])
@@ -467,23 +476,30 @@
               [:span.lt title]])))
    (when report (report-body report))])
 
-(defn- incoming-action-bar
-  "Promote/Dismiss for an :incoming workstream, rendered inside the overview pane.
-   Buttons POST to the pane-scoped resolve route so the response targets #ws-pane."
-  [project ws-id]
-  (into [:div.actions {:style "margin-top:16px"}]
-        (for [{:keys [id label style]} (work/gate-actions :incoming false)]
-          [:button {:class (style-class style)
-                    "data-on:click" (str "@post('/workstreams/" project "/" ws-id
-                                         "/gate/" (name id) "')")}
-           label])))
+(defn- pane-route
+  "POST target for the pane-scoped resolve route — responses patch #ws-pane so the
+   action stays inside the overview/detail pane rather than the home gate inbox."
+  [project ws-id action-id]
+  (str "/workstreams/" project "/" ws-id "/gate/" (name action-id)))
+
+(defn- pane-action-bar
+  "Stage-appropriate gate actions rendered below the reader pane, driven by
+   `work/gate-actions` (different stages → different actions; a parked triage adds
+   Apply/Reply). Buttons POST to the pane-scoped route. Shown only for the CURRENT
+   ledger entry — callers gate on :on-latest?. Renders nothing when the stage offers
+   no actions."
+  [project ws-id stage sessions]
+  (let [parked? (boolean (some :parked? sessions))
+        session (:name (first (filter :parked? sessions)))]
+    (action-bar project ws-id (work/gate-actions stage parked?) session pane-route)))
 
 (defn workstream-pane
   "Read-only ledger pane: header · stage · ledger summary · report · Sessions table
    with per-row dev-env controls. `session-dev-states` is a map of session-name →
    {:state … :url :error-msg} (the view does no IO). Polls its own fragment so
    transient dev-env states (starting…) self-advance."
-  [{:keys [project ws-id origin stage label ledger report entries selected-seq sessions]} session-dev-states]
+  [{:keys [project ws-id origin stage label ledger report entries selected-seq sessions on-latest?]
+    :or {on-latest? true}} session-dev-states]
   (str
    (h/html
     (if-not label
@@ -498,7 +514,8 @@
          [:div.card [:strong "ledger "] (:key ledger) " · " (some-> ledger :status name)
           " · " (:report-count ledger) " report(s)"])
        (ledger-browser project ws-id entries selected-seq report)
-       (when (= :incoming stage) (incoming-action-bar project ws-id))
+       ;; Live actions only on the current ledger entry — older entries are read-back.
+       (when on-latest? (pane-action-bar project ws-id stage sessions))
        [:h2 "Sessions"]
        (if (seq sessions)
          [:table

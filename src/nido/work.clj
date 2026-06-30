@@ -234,8 +234,9 @@
 (defn workstream
   "Full detail for one workstream: origin, spine stage, label, a light ledger
    facet, a newest-first entry INDEX (nil when ≤1 entry), the SELECTED entry's
-   report (`selected-seq`, default latest, out-of-range → latest), and its sessions
-   on the autonomy axis. nil when the workstream is absent."
+   report (`selected-seq`, default latest, out-of-range → latest), `:on-latest?`
+   (is the selected entry the current one — gates the pane's live actions), and
+   its sessions on the autonomy axis. nil when the workstream is absent."
   ([project ws-id] (workstream project ws-id nil))
   ([project ws-id selected-seq]
    (when-let [w (cws/read-ws project ws-id)]
@@ -255,6 +256,10 @@
         :ledger       (ledger-summary project (:br-id row))
         :entries      index
         :selected-seq sel
+        ;; The selected entry is the CURRENT one (newest, or there are none).
+        ;; Live actions are offered only on the current entry — older entries are
+        ;; an immutable read-back, not something you act on.
+        :on-latest?   (or (empty? entries) (= sel (:seq (last entries))))
         :report       (if (seq entries)
                         (report-at base-dir entries sel)
                         (latest-report project ws-id))

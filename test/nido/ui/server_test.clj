@@ -378,3 +378,13 @@
       (server/handle-request {:request-method :post :uri "/workstreams/brian/ws-1/gate/drop"})
       (Thread/sleep 50)
       (is (= [["brian" "ws-1" :drop nil]] @calls)))))
+
+(deftest post-pane-gate-reply-passes-input-from-body
+  (let [calls (atom [])]
+    (with-redefs [nido.work/resolve-gate! (fn [p w a & [in]] (swap! calls conj [p w a in]) {:resumed "auto"})
+                  nido.work/all-gates    (fn [] [])]
+      (let [body (java.io.ByteArrayInputStream. (.getBytes "{\"reply\":\"do the fix\"}"))]
+        (server/handle-request {:request-method :post :uri "/workstreams/brian/ws-1/gate/reply" :body body})
+        (Thread/sleep 50)
+        (is (= [["brian" "ws-1" :reply "do the fix"]] @calls)
+            "pane Reply resumes the parked agent with the textarea input")))))

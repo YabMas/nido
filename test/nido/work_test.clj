@@ -117,6 +117,30 @@
         (is (true? (:parked? (first (:sessions (work/workstream :brian (:id w))))))
             "a parked autonomous session is at the HITL gate")))))
 
+(deftest workstream-detail-flags-the-current-ledger-entry
+  (with-tmp
+    (fn [_]
+      (let [w  (workstream/create! :brian {:stage :triaging :external-refs []})
+            id (:id w)]
+        (workstream/append-entry! :brian id {:kind :note} "first")
+        (workstream/append-entry! :brian id {:kind :note} "second")
+        ;; default selection lands on the newest entry (seq 2) and is :on-latest?
+        (let [d (work/workstream :brian id)]
+          (is (= 2 (:selected-seq d)))
+          (is (true? (:on-latest? d)) "no explicit selection → viewing the current entry"))
+        ;; explicitly viewing the older entry (seq 1) is NOT the current entry
+        (is (false? (:on-latest? (work/workstream :brian id 1)))
+            "an older ledger entry is not the current entry")
+        ;; selecting the newest entry explicitly is still :on-latest?
+        (is (true? (:on-latest? (work/workstream :brian id 2))))))))
+
+(deftest workstream-detail-with-no-entries-is-on-latest
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :triaging :external-refs []})]
+        (is (true? (:on-latest? (work/workstream :brian (:id w))))
+            "an entryless workstream is trivially on its current (only) state")))))
+
 (deftest workstream-detail-nil-for-absent
   (with-tmp
     (fn [_]
