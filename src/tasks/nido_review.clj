@@ -1,29 +1,44 @@
 (ns tasks.nido-review
-  "bb-task entrypoint for the codex review loop. Synchronous; streams a final
-   summary. See docs/superpowers/specs/2026-06-26-codex-review-loop-design.md."
+  "bb-task entrypoint for the codex review loop. Drives the engine inside a live
+   terminal frontend (spinner + per-round ledger); persists report.json under
+   the run dir. See docs/superpowers/specs/2026-06-30-review-tui-frontend-design.md."
   (:require
+   [babashka.fs :as fs]
+   [nido.coordinator.state :as cstate]
+   [nido.review.frontend :as frontend]
    [nido.review.loop :as rloop]
+   [nido.review.report :as report]
    [nido.session.lifecycle :as lifecycle]
-   [nido.task-args :as task-args]))
+   [nido.task-args :as task-args])
+  (:import
+   [java.time Instant]))
+
+(defn exit-code
+  "CLI exit code for a terminal review status. review-failed is the only
+   failure; escalated is a reported outcome, not an error."
+  [status]
+  (if (= :review-failed status) 1 0))
 
 (defn loop-cmd* [{:keys [cwd base max-iters dry-run?]}]
-  (let [;; Explicit :cwd wins (standalone / arbitrary workspace). Otherwise
-        ;; resolve the session's worktree from cwd so the verb works from the
-        ;; session-home OR the worktree — hiding that split — falling back to
-        ;; the raw cwd when cwd belongs to no known session.
-        cwd        (or cwd
+  (let [cwd        (or cwd
                        (lifecycle/worktree-from-cwd)
                        (System/getProperty "user.dir"))
         base       (or base "main")
-        config     {:cwd       cwd
-                    :base      base
+        run-id     (str "review-" (random-uuid))
+        clock      #(Instant/now)
+        report-path (str (fs/path (cstate/run-dir run-id) "report.json"))
+        config     {:cwd cwd :base base
                     :max-iters (or max-iters 5)
                     :dry-run?  (boolean dry-run?)
-                    :run-id    (str "review-" (random-uuid))}
-        _          (println (format "review-loop: reviewing %s (base %s)" cwd base))
-        {:keys [status history]} (rloop/run-loop config)]
-    (println (format "review-loop: %s after %d iteration(s); run-id %s"
-                     (name status) (count history) (:run-id config)))
+                    :run-id    run-id
+                    :clock     clock}
+        report-atom (atom (report/init {:run-id run-id :cwd cwd :base base
+                                        :started-at (str (clock))}))
+        {:keys [status]}
+        (frontend/with-live-display
+          {:report-atom report-atom :report-path report-path :clock clock}
+          (fn [emit] (rloop/run-loop (assoc config :emit emit))))]
+    (println (str "review-loop: " (name status) " · report " report-path))
     status))
 
 (defn loop-cmd [& args]

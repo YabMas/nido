@@ -410,7 +410,8 @@
 
   nido:review:loop
   {:doc "Run the codex review loop on the session's branch diff. [:base main] [:max-iters 5] [:cwd <dir>] [:dry-run? false]"
-   :task (apply nido-review/loop-cmd *command-line-args*)}
+   :task (System/exit (nido-review/exit-code
+                        (apply nido-review/loop-cmd *command-line-args*)))}
 
   nido:work
   {:doc "Boot an interactive claude in the current worktree with nido context injected (briefing/MCP/skills)."

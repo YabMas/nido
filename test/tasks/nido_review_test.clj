@@ -12,7 +12,9 @@
       (is (= "develop" (:base @seen)))
       (is (= 3 (:max-iters @seen)))
       (is (= "/w" (:cwd @seen)))
-      (is (string? (:run-id @seen))))))
+      (is (string? (:run-id @seen)))
+      (is (fn? (:emit @seen)) "engine is given an emit fn")
+      (is (fn? (:clock @seen)) "engine is given a clock"))))
 
 (deftest loop-cmd-defaults-base-to-main
   (let [seen (atom nil)]
@@ -22,8 +24,6 @@
       (is (= 5 (:max-iters @seen))))))
 
 (deftest loop-cmd-resolves-worktree-when-cwd-absent
-  ;; With no explicit :cwd, the task resolves the session's worktree from cwd
-  ;; (so it works from the session-home OR the worktree, hiding the split).
   (let [seen (atom nil)]
     (with-redefs [lifecycle/worktree-from-cwd (fn [] "/resolved/wt")
                   rloop/run-loop (fn [cfg] (reset! seen cfg) {:status :clean :history []})]
@@ -36,3 +36,10 @@
                   rloop/run-loop (fn [cfg] (reset! seen cfg) {:status :clean :history []})]
       (t/loop-cmd ":cwd" "/explicit")
       (is (= "/explicit" (:cwd @seen))))))
+
+(deftest loop-cmd-exit-maps-status
+  (with-redefs [rloop/run-loop (fn [_] {:status :clean :history []})]
+    (is (zero? (t/exit-code :clean))))
+  (is (zero? (t/exit-code :converged)))
+  (is (zero? (t/exit-code :escalated)))
+  (is (= 1 (t/exit-code :review-failed))))
