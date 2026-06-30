@@ -120,7 +120,7 @@
       (is (str/includes? (:body resp) "gate-pane")))))
 
 (deftest workstreams-route-renders
-  (with-redefs [nido.work/grouped (fn [_] {:triage {:in-flight [] :queued []} :ready [] :in-progress [] :inbox []})
+  (with-redefs [nido.work/grouped (fn [_] {:triage {:in-flight [] :queued []} :ready [] :in-progress [] :incoming []})
                 project/list-projects (fn [] {"brian" {:directory "/x"}})
                 nido.work/all-gates (fn [] [])
                 nido.ui.server/read-rail-daemon (fn [] {:state :up})]
@@ -129,7 +129,7 @@
       (is (str/includes? (:body resp) "Workstreams")))))
 
 (deftest workstream-pane-route-renders
-  (with-redefs [nido.work/grouped (fn [_] {:triage {:in-flight [] :queued []} :ready [] :in-progress [] :inbox []})
+  (with-redefs [nido.work/grouped (fn [_] {:triage {:in-flight [] :queued []} :ready [] :in-progress [] :incoming []})
                 project/list-projects (fn [] {"brian" {:directory "/x"}})
                 nido.work/all-gates (fn [] [])
                 nido.work/workstream (fn [_ _ & _] {:ws-id "ws-1" :project "brian" :origin :notion
@@ -208,17 +208,17 @@
 
 (deftest apply-filters-narrows-each-grouped-by-source-and-facet
   (let [groups [{:project :brian
-                 :grouped {:inbox [{:origin :notion :facets {:app-domain ["Teacher"]}}
-                                   {:origin :notion :facets {:app-domain ["Student"]}}
-                                   {:origin :slack}]
+                 :grouped {:incoming [{:origin :notion :facets {:app-domain ["Teacher"]}}
+                                      {:origin :notion :facets {:app-domain ["Student"]}}
+                                      {:origin :slack}]
                            :triage {:in-flight [] :queued []} :ready [] :in-progress []}}]
         out (#'server/apply-filters :notion {:app-domain "Teacher"} groups)]
     (is (= [{:origin :notion :facets {:app-domain ["Teacher"]}}]
-           (get-in (first out) [:grouped :inbox])))))
+           (get-in (first out) [:grouped :incoming])))))
 
 (deftest source-counts-tallies-by-origin
   (let [groups [{:project :brian
-                 :grouped {:inbox [{:origin :notion} {:origin :slack}]
+                 :grouped {:incoming [{:origin :notion} {:origin :slack}]
                            :triage {:in-flight [{:origin :notion}] :queued []}
                            :ready [] :in-progress [{:origin :scratch}]}}]]
     (is (= {:notion 2 :slack 1 :scratch 1} (#'server/source-counts groups)))))
@@ -264,10 +264,10 @@
 (deftest workstreams-route-honors-source-filter
   (with-redefs [server/all-grouped
                 (fn [] [{:project :brian
-                         :grouped {:inbox [{:origin :notion :stage :inbox :label "N-one"
-                                            :last-activity "t" :engagement :idle}
-                                           {:origin :slack :stage :inbox :label "S-one"
-                                            :last-activity "t" :engagement :idle}]
+                         :grouped {:incoming [{:origin :notion :stage :incoming :label "N-one"
+                                               :last-activity "t" :engagement :idle}
+                                              {:origin :slack :stage :incoming :label "S-one"
+                                               :last-activity "t" :engagement :idle}]
                                    :triage {:in-flight [] :queued []} :ready [] :in-progress []}}])
                 nido.work/all-gates (fn [] [])
                 project/list-projects (fn [] {"brian" {:directory "/x"}})
@@ -332,7 +332,7 @@
 
 (deftest workstream-route-honours-entry-param
   (with-redefs [nido.work/grouped (fn [_] {:triage {:in-flight [] :queued []}
-                                           :ready [] :in-progress [] :inbox []})
+                                           :ready [] :in-progress [] :incoming []})
                 project/list-projects (fn [] {"brian" {:directory "/x"}})
                 nido.work/all-gates (fn [] [])
                 nido.work/workstream

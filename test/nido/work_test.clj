@@ -500,18 +500,18 @@
                          {:name "auto" :weight :heavy :autonomy (assoc autonomy-running :phase :parked)})
         (is (nil? (:resume-error (first (work/gates :brian)))))))))
 
-(deftest gate-actions-inbox
+(deftest gate-actions-incoming
   (is (= [{:id :promote :label "Promote" :kind :mutation :style :primary}
           {:id :drop    :label "Dismiss" :kind :mutation :style :danger}]
-         (work/gate-actions :inbox false)))
-  (is (= (work/gate-actions :inbox false) (work/gate-actions :inbox true))
-      "inbox actions don't depend on parked state"))
+         (work/gate-actions :incoming false)))
+  (is (= (work/gate-actions :incoming false) (work/gate-actions :incoming true))
+      "incoming actions don't depend on parked state"))
 
 (deftest latest-report-falls-back-to-intake-text
   (with-tmp
     (fn [_]
       (let [w (workstream/create! :brian
-                {:stage :inbox
+                {:stage :incoming
                  :external-refs [{:adapter :slack-message :id "slack-C-1.0"}]
                  :intake {:trigger :triage-slack-bugs
                           :payload {:id "slack-C-1.0" :text "the app crashed on save"}}})
@@ -582,16 +582,16 @@
   (is (not (work/source-match? :notion {:origin :slack}))))
 
 (deftest grouped-rows-flattens-all-bands
-  (let [g {:inbox [{:id 1}] :triage {:in-flight [{:id 2}] :queued [{:id 3}]}
+  (let [g {:incoming [{:id 1}] :triage {:in-flight [{:id 2}] :queued [{:id 3}]}
            :ready [{:id 4}] :in-progress [{:id 5}]}]
     (is (= #{1 2 3 4 5} (set (map :id (work/grouped-rows g)))))))
 
 (deftest filter-grouped-keeps-shape-drops-nonmatching
-  (let [g {:inbox [{:origin :notion} {:origin :slack}]
+  (let [g {:incoming [{:origin :notion} {:origin :slack}]
            :triage {:in-flight [{:origin :notion}] :queued [{:origin :slack}]}
            :ready [{:origin :slack}] :in-progress [{:origin :notion}]}
         f (work/filter-grouped g #(= :notion (:origin %)))]
-    (is (= [{:origin :notion}] (:inbox f)))
+    (is (= [{:origin :notion}] (:incoming f)))
     (is (= [{:origin :notion}] (get-in f [:triage :in-flight])))
     (is (= [] (get-in f [:triage :queued])))
     (is (= [] (:ready f)))

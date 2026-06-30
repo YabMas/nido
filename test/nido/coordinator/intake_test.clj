@@ -25,7 +25,7 @@
   (with-tmp
     (fn [_]
       (let [w (intake/enqueue-inbox! routed)]
-        (is (= :inbox (:stage w)))
+        (is (= :incoming (:stage w)))
         (is (= :triage-slack-bugs (-> w :intake :trigger)))
         (is (= "it broke" (-> w :intake :payload :text)))
         (is (= {:adapter :slack-message :id "slack-C-1.0"}
@@ -57,7 +57,7 @@
         (with-redefs [clock/now-iso (constantly t0)]
           ;; old inbox entry — should expire
           (intake/enqueue-inbox! (assoc-in routed [:payload :id] "slack-C-1.0"))
-          ;; promoted-away entry — advanced off :inbox, should NOT expire
+          ;; promoted-away entry — advanced off :incoming, should NOT expire
           (let [p (intake/enqueue-inbox! (assoc-in routed [:payload :id] "slack-C-2.0"))]
             (ws/advance-stage! :brian (:id p) :triaging)))
         ;; fresh inbox entry created 3 days later — younger than 3 days, should NOT expire

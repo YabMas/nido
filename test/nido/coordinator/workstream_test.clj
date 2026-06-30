@@ -177,11 +177,11 @@
   (with-tmp
     (fn [_]
       (let [w (ws/create! :brian
-                {:stage :inbox
+                {:stage :incoming
                  :external-refs [{:adapter :slack-message :id "slack-C-1.0"}]
                  :intake {:trigger :triage-slack-bugs
                           :payload {:id "slack-C-1.0" :text "it broke"}}})]
-        (is (= :inbox (:stage w)))
+        (is (= :incoming (:stage w)))
         (is (= :triage-slack-bugs (-> w :intake :trigger)))
         (is (= "it broke" (-> w :intake :payload :text)))
         ;; round-trips through validation on read
@@ -258,4 +258,15 @@
         (ws/write! example-ws)
         (is (thrown? clojure.lang.ExceptionInfo
                      (ws/append-entry! :brian (:id example-ws) {:kind :blocker} "not a map"))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest read-ws-normalizes-legacy-inbox-stage
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))
+                    clock/now-iso (constantly "2026-06-05T09:00:00Z")]
+        ;; A record persisted before the rename carries the legacy :stage :inbox.
+        (let [w (ws/create! :brian {:stage :inbox :external-refs []})]
+          (is (= :incoming (:stage (ws/read-ws :brian (:id w))))
+              "legacy :inbox is mapped to :incoming on read")))
       (finally (fs/delete-tree tmp)))))

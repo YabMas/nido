@@ -43,7 +43,7 @@
    :style is a render hint (:primary | :danger | :default)."
   [stage parked?]
   (case stage
-    :inbox       [{:id :promote :label "Promote" :kind :mutation :style :primary}
+    :incoming    [{:id :promote :label "Promote" :kind :mutation :style :primary}
                   {:id :drop    :label "Dismiss" :kind :mutation :style :danger}]
     :triage      (if parked?
                    ;; Apply (resume \"apply\") and Reply (free-text overrides/redo) both
@@ -224,7 +224,7 @@
   "The workstream's most recent ledger entry as a `:format`-tagged gate report,
    or nil. Resolves the active ledger (workstream entries → ticket ledger), reads
    its latest entry, and finally falls back to stored intake text so an un-triaged
-   :inbox Slack report still shows its message body."
+   :incoming Slack report still shows its message body."
   [project ws-id]
   (let [{:keys [base-dir entries]} (active-ledger project ws-id)]
     (if (seq entries)
@@ -450,7 +450,7 @@
 (defn grouped-rows
   "Flat seq of every workstream row in a `work/grouped` map (all bands)."
   [grouped]
-  (concat (:inbox grouped)
+  (concat (:incoming grouped)
           (get-in grouped [:triage :in-flight])
           (get-in grouped [:triage :queued])
           (:ready grouped)
@@ -461,7 +461,7 @@
   "Keep only rows satisfying `pred`, preserving the grouped shape."
   [grouped pred]
   (-> grouped
-      (update :inbox #(filterv pred %))
+      (update :incoming #(filterv pred %))
       (update :ready #(filterv pred %))
       (update :in-progress #(filterv pred %))
       (update :shipping #(filterv pred %))

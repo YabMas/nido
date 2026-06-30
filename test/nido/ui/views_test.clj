@@ -230,9 +230,9 @@
   ;; facet value chips are derived from the displayed rows: distinct present
   ;; App Domain values + :unclassified for the row that lacks the facet.
   (let [groups [{:project :brian
-                 :grouped {:inbox [{:origin :notion :facets {:app-domain ["Teacher"]}}
-                                   {:origin :notion :facets {:app-domain ["Student"]}}
-                                   {:origin :notion :facets {}}]
+                 :grouped {:incoming [{:origin :notion :facets {:app-domain ["Teacher"]}}
+                                      {:origin :notion :facets {:app-domain ["Student"]}}
+                                      {:origin :notion :facets {}}]
                            :triage {:in-flight [] :queued []} :ready [] :in-progress []}}]
         html (views/workstreams-page
               {:active :workstreams :scope "all" :projects [] :needs-count 0 :daemon {:state :up}
@@ -310,7 +310,7 @@
               [{:project "brian"
                 :grouped {:shipping [ship-row]
                           :triage {:in-flight [] :queued []}
-                          :inbox [] :ready [] :in-progress []}}]
+                          :incoming [] :ready [] :in-progress []}}]
               nil)]
     (is (str/includes? html "⚠ blocked")   "blocked sub-state renders the loud badge")
     (is (str/includes? html "ship-blocked") "loud CSS class is emitted")

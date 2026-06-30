@@ -56,10 +56,19 @@
         suf  (subs (str (java.util.UUID/randomUUID)) 0 6)]
     (str "ws-" date "-" suf)))
 
+(defn- normalize-legacy-stage
+  "Back-compat: the holding-pen stage was renamed :inbox → :incoming. Records
+   persisted before the rename still carry :stage :inbox; map them on read so
+   every consumer sees the canonical :incoming."
+  [w]
+  (cond-> w (= :inbox (:stage w)) (assoc :stage :incoming)))
+
 (defn read-ws
-  "Read a workstream.edn by project + id. Returns nil if absent."
+  "Read a workstream.edn by project + id. Returns nil if absent. Normalizes the
+   legacy :inbox stage to :incoming (see normalize-legacy-stage)."
   [project ws-id]
-  (io/read-edn (cstate/workstream-edn-path project ws-id)))
+  (some-> (io/read-edn (cstate/workstream-edn-path project ws-id))
+          normalize-legacy-stage))
 
 (defn write!
   "Validate then write a Workstream record (atomic; parent dirs created)."

@@ -151,7 +151,7 @@
 
 (defn- maybe-expire-inbox!
   "Throttled queue hygiene: at most once per :inbox-sweep-interval-ms, close
-   (:dropped) any still-open :inbox workstream older than :inbox-expiry-ms across
+   (:dropped) any still-open :incoming workstream older than :inbox-expiry-ms across
    all registered projects. Never throws into the tick loop."
   [now-ms]
   (when (>= (- now-ms @!last-inbox-sweep-ms) (:inbox-sweep-interval-ms defaults))
@@ -536,7 +536,7 @@
         (runs/transition! (:id run) :dry-run-would-fire))
 
       ;; Queue-mode intake (spec §Intake → queue): a trigger with :intake :queue
-      ;; parks the report as a session-less :inbox workstream for a human to
+      ;; parks the report as a session-less :incoming workstream for a human to
       ;; promote/dismiss, instead of auto-spawning. No run, no session, and no
       ;; anomaly-detector bump (nothing was spawned). Placed before the triage
       ;; gate so queue mode never consults ticket state.

@@ -212,7 +212,7 @@
    floody (a Slack backlog especially); you open them on demand to walk + promote.
    Engaged-work bands (in flight / ready / in progress) start expanded. `space`
    toggles any band — this is only the initial state."
-  #{:inbox :triage-queued})
+  #{:incoming :triage-queued})
 
 (defn- band-header
   "A foldable section divider carrying its band key (so the `space` toggle knows
@@ -242,7 +242,7 @@
                                    (work/facet-match? facet-filter r)))))
          band (fn [k label rows] (band-rows k label (keep rows) (contains? collapsed k)))
          rows (concat
-               (band :inbox            "Queue"              (:inbox g))
+               (band :incoming         "Queue"              (:incoming g))
                (band :ready            "Ready to pick up"   (:ready g))
                (band :in-progress      "In progress"        (:in-progress g))
                (band :shipping         "Shipping"           (:shipping g))

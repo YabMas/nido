@@ -580,7 +580,7 @@
           (let [ids (ws/list-ids :brian)]
             (is (= 1 (count ids)))
             (let [w (ws/read-ws :brian (first ids))]
-              (is (= :inbox (:stage w)))
+              (is (= :incoming (:stage w)))
               (is (= "it broke" (-> w :intake :payload :text)))
               (is (empty? (session/list-sessions :brian (:id w))))))
           ;; nothing was spawned as a run

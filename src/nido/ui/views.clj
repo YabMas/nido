@@ -395,7 +395,7 @@
    dropping empty stages. Kept as a plain fn (not inline hiccup) for the same
    SCI reason the old stage-sections was."
   [{:keys [project grouped]}]
-  (->> [[:inbox (:inbox grouped)]
+  (->> [[:incoming (:incoming grouped)]
         [:triage (concat (-> grouped :triage :in-flight) (-> grouped :triage :queued))]
         [:ready (:ready grouped)]
         [:in-progress (:in-progress grouped)]

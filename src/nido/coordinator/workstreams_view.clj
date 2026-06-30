@@ -186,12 +186,12 @@
 
 (defn grouped-by-stage
   "Partition rows by lifecycle stage for the overview. :done is intentionally
-   omitted — done is done, not shown. :inbox/ready/in-progress/shipping: needs-you
+   omitted — done is done, not shown. :incoming/ready/in-progress/shipping: needs-you
    first, then newest. Triage is returned as {:in-flight [...] :queued [...]} — see
    triage-split — each ordered highest-severity-first."
   [rows]
   (let [by (group-by :stage rows)]
-    {:inbox       (by-needs-then-newest (:inbox by []))
+    {:incoming    (by-needs-then-newest (:incoming by []))
      :ready       (by-needs-then-newest (:ready by []))
      :in-progress (by-needs-then-newest (:in-progress by []))
      :shipping    (by-needs-then-newest (:shipping by []))

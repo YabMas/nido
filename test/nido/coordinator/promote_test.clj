@@ -135,7 +135,7 @@
             res (promote/promote-workstream! :brian (:id w))
             w'  (ws/read-ws :brian (:id w))]
         (is (= :triaging (:decision res)))
-        ;; advanced off :inbox and a triage session now exists on the SAME ws
+        ;; advanced off :incoming and a triage session now exists on the SAME ws
         (is (= :triaging (:stage w')))
         (is (= 1 (count (session/list-sessions :brian (:id w)))))
         ;; re-promote: no longer in the queue
@@ -153,5 +153,5 @@
         (is (= :skip-no-trigger
                (:decision (promote/promote-workstream! :brian (:id w)))))
         ;; no session spawned, still in the queue
-        (is (= :inbox (:stage (ws/read-ws :brian (:id w)))))
+        (is (= :incoming (:stage (ws/read-ws :brian (:id w)))))
         (is (empty? (session/list-sessions :brian (:id w))))))))

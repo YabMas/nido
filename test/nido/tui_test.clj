@@ -112,7 +112,7 @@
   ;; header + count only, no selectable item rows. Engaged work stays expanded.
   (with-redefs [nido.work/grouped
                 (fn [_ _]
-                  {:inbox  [{:ws-id "s1" :origin :slack :label "can you link it"
+                  {:incoming  [{:ws-id "s1" :origin :slack :label "can you link it"
                              :needs-you true :engagement :idle}]
                    :triage {:in-flight [{:ws-id "f1" :origin :slack :label "teacher report"
                                          :needs-you true :engagement :parked}]
@@ -216,11 +216,11 @@
   ;; collapsed set); space again re-folds. A no-op when the cursor isn't on a band.
   (with-redefs [nido.tui/selected-data (fn [_] {:nido.tui/band :triage-queued})
                 nido.tui/current-rows (constantly [])]
-    (let [state  (assoc (board-state :all) :collapsed #{:inbox :triage-queued})
+    (let [state  (assoc (board-state :all) :collapsed #{:incoming :triage-queued})
           [s1 _] (#'tui/update-board state (msg/key-press " "))]
-      (is (= #{:inbox} (:collapsed s1)) "space unfolds the band under the cursor")
+      (is (= #{:incoming} (:collapsed s1)) "space unfolds the band under the cursor")
       (let [[s2 _] (#'tui/update-board s1 (msg/key-press " "))]
-        (is (= #{:inbox :triage-queued} (:collapsed s2)) "space again re-folds it")))))
+        (is (= #{:incoming :triage-queued} (:collapsed s2)) "space again re-folds it")))))
 
 (deftest space-on-a-non-band-row-is-a-noop
   (with-redefs [nido.tui/selected-data (fn [_] {:ws-id "w1"})
@@ -328,9 +328,9 @@
 
 (deftest board-rows-shows-queue-band
   (with-redefs [nido.work/grouped
-                (constantly {:inbox [{:origin :slack :stage :inbox :needs-you true
-                                      :label "the app crashed" :engagement :idle
-                                      :last-activity "2026-06-02T00:00:00Z"}]
+                (constantly {:incoming [{:origin :slack :stage :incoming :needs-you true
+                                         :label "the app crashed" :engagement :idle
+                                         :last-activity "2026-06-02T00:00:00Z"}]
                              :ready [] :in-progress [] :triage {:in-flight [] :queued []}})
                 nido.tui/live-session-names (constantly #{})]
     (let [titles (map :title (#'nido.tui/board-rows :brian :all))]
