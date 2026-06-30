@@ -88,6 +88,9 @@
   (let [base-rev (merge-base cwd base)
         {:keys [exit out err]} (jj/jj! cwd "diff" "--name-only" "--from" base-rev "--to" "@")
         _        (when-not (zero? exit)
+                   ;; A failed diff (cwd not a jj workspace, bad base, …) must not
+                   ;; be mistaken for an empty diff — that would silently report a
+                   ;; clean review of code nothing ever looked at.
                    (throw (ex-info "jj diff failed — cwd is not a reviewable workspace"
                                    {:reason :review-failed :exit exit
                                     :cwd cwd :base base :base-rev base-rev :err err})))
