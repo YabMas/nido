@@ -291,10 +291,12 @@
   (count-by-trigger project gating-phases))
 
 (defn ship-substate
-  "Merge-lane sub-state for a :shipping workstream, from its autonomous session
-   phase. nil when no autonomous session backs it."
+  "Merge-lane sub-state for a :shipping workstream, from its LIVE autonomous
+   session phase. Archived sessions (e.g. a prior triage run) are skipped so
+   the board badge reflects the live merge driver, not an old parked run.
+   nil when no live autonomous session backs it."
   [sessions]
-  (when-let [s (first (filter autonomous? sessions))]
+  (when-let [s (first (filter (every-pred live? autonomous?) sessions))]
     (case (get-in s [:autonomy :phase])
       :queued                   :queued
       (:running :preprocessing) :driving

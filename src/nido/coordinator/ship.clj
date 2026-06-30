@@ -62,15 +62,23 @@
     (fs/create-dirs (cstate/run-artifacts-dir run-id))
     (runs/write-run! run)))
 
+(def ^:private ship-blocking-states
+  "Merge-Run states that block a re-ship: actively in flight. A :queued run does
+   NOT block (pending pool); a parked :awaiting-review run does NOT block — that
+   is exactly the blocked branch the human is re-shipping after a fix."
+  #{:preprocessing :running})
+
 (defn merge-run-in-flight?
-  "True if a :merge Run in an in-progress state already owns this workstream."
+  "True if a :merge Run actively in flight already owns this workstream.
+   :awaiting-review (blocked/parked) does NOT count — the user must be able
+   to re-ship after fixing a blocker."
   [project ws-id]
   (->> (runs/list-run-ids)
        (keep runs/read-run)
        (some #(and (= :merge (:trigger %))
                    (= ws-id (:workstream-id %))
                    (= (name project) (name (:project %)))
-                   (contains? runs/in-progress-states (:state %))))
+                   (contains? ship-blocking-states (:state %))))
        boolean))
 
 (defn handle-ship!

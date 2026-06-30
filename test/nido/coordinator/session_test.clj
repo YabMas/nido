@@ -370,6 +370,14 @@
         (is (= (:id ws2) (sess/workstream-id-for :brian "impl-br-2")))
         (is (nil? (sess/workstream-id-for :brian "nope")))))))
 
+(deftest ship-substate-reads-the-live-autonomous-session
+  ;; archived triage session (phase :done) + live impl session (phase :running):
+  ;; substate must reflect the LIVE one (driving), not the archived one (awaiting-merge)
+  (let [archived {:substrate :archived :autonomy {:phase :done}}
+        live     {:substrate :live     :autonomy {:phase :running}}]
+    (is (= :driving (sess/ship-substate [archived live])))
+    (is (= :driving (sess/ship-substate [live archived])))))
+
 (deftest ship-substate-from-session-phase
   (let [phase #(do {:substrate :live :autonomy {:phase %}})]
     (is (= :queued         (sess/ship-substate [(phase :queued)])))

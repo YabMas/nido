@@ -68,6 +68,19 @@
       (let [r2 (sut/handle-ship! {:type :ship :project :brian :session "impl-br-99" :ws-id (:id w)})]
         (is (some? r2))))))
 
+(deftest handle-ship-allows-re-ship-after-block
+  (let [w (ws/create! :brian {:stage :shipping
+                              :external-refs [{:adapter :notion :id "BR-88"}]})]
+    (with-redefs [ex/submit! (fn [& _] nil)]
+      (let [r1 (sut/handle-ship! {:project :brian :session "impl-br-88" :ws-id (:id w)})]
+        ;; drive it to a parked/blocked terminal state
+        (runs/transition! (:id r1) :running)
+        (runs/transition! (:id r1) :awaiting-review)
+        ;; the human fixed the blocker and re-ships — must NOT no-op
+        (let [r2 (sut/handle-ship! {:project :brian :session "impl-br-88" :ws-id (:id w)})]
+          (is (some? r2))
+          (is (not= (:id r1) (:id r2))))))))
+
 (deftest classify-reads-ledger-fingerprint
   (with-redefs [tickets/read-meta (fn [_ _] {:entries [{:kind :implementation-completed}]})]
     (is (= :awaiting-merge (sut/classify-outcome :brian "BR-1" "r1" {:exit-code 0 :num-turns 5}))))
