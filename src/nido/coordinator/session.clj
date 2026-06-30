@@ -204,12 +204,13 @@
     :else                                                       :triage))
 
 (defn- stage-needs-you
-  "Does this stage want the human right now? :incoming always (decide promote/dismiss);
-   :ready always (decide promote/drop); :triage/:in-progress/:shipping only when a session is
+  "Does this stage want the human right now? :incoming is a passive queue — NEVER a
+   gate (you pull from it under the Slack lens, it does not push). :ready always
+   (decide promote/drop); :triage/:in-progress/:shipping only when a session is
    parked at the gate; never for :done."
   [stage sessions]
   (case stage
-    (:incoming :ready)                   true
+    :ready                            true
     (:triage :in-progress :shipping)  (boolean (some parked? sessions))
     false))
 

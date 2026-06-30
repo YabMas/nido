@@ -274,7 +274,10 @@
     (is (true?  (:needs-you (sess/stage-projection nil :implementing [parked] :triaging))))
     (is (false? (:needs-you (sess/stage-projection nil :implementing [running] :triaging))))
     ;; done never needs you
-    (is (false? (:needs-you (sess/stage-projection {:at "t" :outcome :done} :done [dead] :triaging))))))
+    (is (false? (:needs-you (sess/stage-projection {:at "t" :outcome :done} :done [dead] :triaging))))
+    ;; the incoming holding pen is passive — never a gate
+    (is (false? (:needs-you (sess/stage-projection nil :investigating [running] :incoming))))
+    (is (false? (:needs-you (sess/stage-projection nil nil [] :incoming))))))
 
 (deftest list-sessions-round-trips-a-slash-containing-name
   (with-tmp
@@ -317,8 +320,8 @@
                      (sess/set-error! :brian (:id w) "me" {:reason :x})))))))
 
 (deftest incoming-stage-projection-open
-  ;; A stored :incoming stage is honored as an override and always needs-you.
-  (is (= {:stage :incoming :needs-you true}
+  ;; A stored :incoming stage is honored as an override but is passive — never needs-you.
+  (is (= {:stage :incoming :needs-you false}
          (sess/stage-projection nil nil [] :incoming))))
 
 (deftest incoming-stage-projection-closed
