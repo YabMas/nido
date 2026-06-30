@@ -158,3 +158,13 @@
     (is (= "hi" (last cmd))))                      ; positional stays last
   (let [cmd (#'agent/build-cmd {:claude-bin "claude" :first-message "hi"})]
     (is (not (some #{"--mcp-config" "--add-dir"} cmd)))))
+
+(deftest launch!-redirects-stderr-to-err-file-when-given
+  (let [tmp (fs/create-temp-dir)]
+    (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (fs/create-dirs (cstate/run-dir "r-err"))
+      (let [err-path (str (fs/path tmp "agent.err.log"))]
+        (agent/launch! {:run-id "r-err" :cwd (str tmp)
+                        :first-message "/x" :claude-bin fake-claude
+                        :claude-session-id "sid" :err-file err-path})
+        (is (fs/exists? err-path) "stderr is captured to the given file")))))

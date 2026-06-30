@@ -95,20 +95,21 @@
    \"Unknown command: /<skill>\". Callers use this to distinguish a real
    completion from a no-op exit (which must not be treated as success)."
   [{:keys [run-id cwd first-message system-prompt claude-bin env budget claude-session-id resume?
-          mcp-config add-dirs]
+           mcp-config add-dirs err-file]
     :or   {claude-bin "claude"}}]
   (let [log-path  (cstate/run-agent-log run-id)
         cmd       (build-cmd {:claude-bin claude-bin :first-message first-message
                               :system-prompt system-prompt :claude-session-id claude-session-id
                               :resume? resume? :mcp-config mcp-config :add-dirs add-dirs})
-        proc      (p/process cmd {:dir cwd
-                                  :env (merge (into {} (System/getenv)) (or env {}))
-                                  ;; Close stdin so claude doesn't wait for input
-                                  ;; (it emits a "no stdin in 3s" warning otherwise).
-                                  :in  ""
-                                  :out :stream
-                                  :err :inherit
-                                  :shutdown nil})
+        proc      (p/process cmd (cond-> {:dir cwd
+                                          :env (merge (into {} (System/getenv)) (or env {}))
+                                          ;; Close stdin so claude doesn't wait for input
+                                          ;; (it emits a "no stdin in 3s" warning otherwise).
+                                          :in  ""
+                                          :out :stream
+                                          :err (if err-file :write :inherit)
+                                          :shutdown nil}
+                                   err-file (assoc :err-file (jio/file err-file))))
         session   (atom nil)
         result-ev (atom nil)
         budget-ms (parse-budget-ms budget)
