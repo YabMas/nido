@@ -53,18 +53,13 @@
     (is (= "correct" overall-correctness))))
 
 (deftest codex-argv-feeds-prompt-via-stdin-not-argv
-  ;; A large diff lives in the prompt; passing it as a CLI argument overflows
-  ;; ARG_MAX (E2BIG / "Argument list too long"). It must go through stdin, with
-  ;; "-" as the positional prompt so codex reads instructions from stdin.
   (let [[opts & args] (codex/codex-argv {:cwd "/w" :schema-path "/s.json"
-                                         :out-path "/o.json"
+                                         :out-path "/o.json" :log-path "/l.log"
                                          :prompt "REVIEW INSTRUCTIONS\n\n<huge diff>"})]
-    (is (= "REVIEW INSTRUCTIONS\n\n<huge diff>" (:in opts))
-        "prompt fed via stdin")
+    (is (= "REVIEW INSTRUCTIONS\n\n<huge diff>" (:in opts)) "prompt fed via stdin")
     (is (not-any? #(= "REVIEW INSTRUCTIONS\n\n<huge diff>" %) args)
         "prompt is NOT an argv element")
-    (is (= "-" (last args))
-        "positional prompt is '-' (read from stdin)")
+    (is (= "-" (last args)) "positional prompt is '-' (read from stdin)")
     (is (= "/w" (:dir opts)))))
 
 (deftest review!-empty-diff-is-clean
@@ -112,14 +107,21 @@
       (is (= :review-failed reason)))))
 
 (deftest codex-argv-restricts-review-to-read-only-sandbox
-  ;; Review only explores (jj diff / file show / grep / read) — it must never
-  ;; mutate the worktree (the separate fix stage does that). So codex exec runs
-  ;; under a read-only sandbox, which also lets it run `jj --ignore-working-copy`
-  ;; reads without tripping the working-copy lock write.
   (let [[_opts & args] (codex/codex-argv {:cwd "/w" :schema-path "/s.json"
-                                          :out-path "/o.json" :prompt "p"})]
+                                          :out-path "/o.json" :log-path "/l.log"
+                                          :prompt "p"})]
     (is (some #{"read-only"} args)
         "codex exec runs under a read-only sandbox during review")))
+
+(deftest codex-argv-captures-output-to-log-not-terminal
+  ;; codex's raw streaming output must NOT inherit the terminal (it floods the
+  ;; review TUI). Capture stdout to the per-round log, merge stderr into it.
+  (let [[opts & _] (codex/codex-argv {:cwd "/w" :schema-path "/s.json"
+                                      :out-path "/o.json" :log-path "/l.log"
+                                      :prompt "p"})]
+    (is (= :write (:out opts)) "stdout is redirected (not :inherit)")
+    (is (= "/l.log" (str (:out-file opts))) "stdout goes to the log path")
+    (is (= :out (:err opts)) "stderr merges into stdout")))
 
 (deftest review!-explores-via-manifest-not-inlined-diff
   ;; The whole concatenated diff overflows codex's 1 MiB input limit. Instead the
