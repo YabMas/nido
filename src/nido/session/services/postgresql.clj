@@ -319,14 +319,27 @@
   [service-def ctx _opts]
   (if (= :shared (resolve-pg-mode service-def))
     ;; --- shared mode: no per-session PGDATA; connect to the shared cluster ---
-    (let [{:keys [db-name db-user db-password flyway-migrate?]
+    (let [{:keys [db-name db-user db-password schema app-db-user app-db-password
+                  flyway-migrate?]
            :or {db-user "user" db-password "password" flyway-migrate? true}} service-def
           project-name (get-in ctx [:session :project-name])
-          {:keys [port]} ((requiring-resolve 'nido.shared-pg/ensure-up!) project-name)]
-      (core/log-step (str "Using shared cluster for " project-name " (port " port ")"))
+          project-dir  (get-in ctx [:session :project-dir])
+          source-repo  ((requiring-resolve 'nido.session.engine/source-project-root)
+                        project-dir)
+          {:keys [port]} ((requiring-resolve 'nido.shared-pg/ensure-ready!)
+                          project-name
+                          {:db-name db-name :owner-user db-user :schema schema
+                           :app-user app-db-user :source-repo source-repo})
+          ;; Sessions connect with the DDL-less app role when configured, so a
+          ;; migration attempt fails permission-denied instead of poisoning the
+          ;; shared history. Falls back to the owner creds when not configured.
+          conn-user (or app-db-user db-user)
+          conn-pass (or app-db-password db-password)]
+      (core/log-step (str "Using shared cluster for " project-name " (port " port ")"
+                          (when app-db-user (str " as " conn-user))))
       {:state {:mode :shared :project-name project-name :pg-port port}
-       :context {:port port :db-name db-name :db-user db-user
-                 :db-password db-password :flyway-migrate? flyway-migrate?}})
+       :context {:port port :db-name db-name :db-user conn-user
+                 :db-password conn-pass :flyway-migrate? flyway-migrate?}})
     ;; --- private mode (:clone / :isolated): EXISTING body, unchanged ---
     (let [{:keys [db-name db-user db-password schema extensions port-range
                   clone-from-template flyway-migrate? baseline]
