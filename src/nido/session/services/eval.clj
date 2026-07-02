@@ -58,13 +58,16 @@
   (let [s (or out "")]
     (some #(str/includes? s %)
           ["Execution error" "Syntax error" ":cause" "FATAL ERROR"
-           "DATABASE STARTUP FAILED" "could not start [#'"])))
+           "DATABASE STARTUP FAILED" "could not start [#'" "permission denied for schema"])))
 
 (def ^:private flyway-checksum-mismatch-re
   #"(?i)checksum mismatch for migration version (\d+)")
 
 (def ^:private flyway-unresolved-applied-re
   #"(?i)applied migration not resolved locally:\s*(\d+)")
+
+(def ^:private flyway-permission-denied-re
+  #"(?i)permission denied for schema (\w+)")
 
 (defn- flyway-divergence-message
   "If `out` carries a Flyway 'shared-cluster diverged' signature, return an
@@ -105,6 +108,13 @@
              "or rebase the branch on main to pick up the missing migrations. "
              "Full Flyway error is in the session eval log."))
 
+      (re-find flyway-permission-denied-re s)
+      (str "Database migration blocked — this session tried to apply a migration to "
+           "the shared cluster, which sessions may not migrate (it is kept at main by "
+           "nido). Run it on a private clone: `bb nido:session:isolate" proj " <session>` "
+           "(its own DB, seeded from the template, where migrations are allowed). "
+           "Full error is in the session eval log.")
+
       :else nil)))
 
 (defn- first-meaningful-line
@@ -121,7 +131,7 @@
                      (some #(str/includes? l %)
                            ["Execution error" "Syntax error" ":cause"
                             "FATAL ERROR" "DATABASE STARTUP FAILED"
-                            "could not start"]))
+                            "could not start" "permission denied for schema"]))
         match (or (first (filter signature? lines))
                   (last lines))]
     (when match

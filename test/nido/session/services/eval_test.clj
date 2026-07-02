@@ -127,3 +127,14 @@
   (is (nil? (#'eval/first-meaningful-line "   \n\n  "))
       "truly-empty output yields nil — nothing to surface")
   (is (nil? (#'eval/first-meaningful-line nil))))
+
+;; Permission denied on shared cluster (when a session tries to migrate the
+;; shared cluster without isolation). This is a new failure mode distinct from
+;; checksum mismatch and stale-branch divergence.
+(deftest permission-denied-on-shared-suggests-isolate
+  (let [msg (#'eval/flyway-divergence-message
+             "org.postgresql.util.PSQLException: ERROR: permission denied for schema brian"
+             "brian")]
+    (is (some? msg))
+    (is (str/includes? msg "shared"))
+    (is (str/includes? msg "bb nido:session:isolate :project brian"))))
