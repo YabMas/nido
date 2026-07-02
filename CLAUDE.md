@@ -42,6 +42,43 @@ Launch the TUI as `nido` (or `nido tui`) rather than `bb nido:tui`. (In Warp the
 
 `nido <verb> [args]` runs `bb nido:<verb>` from your current directory — so `nido session:status`, `nido session:link:add …`, `nido review:loop …` all work from inside a project worktree, with no `cd` to the session home. `--config` makes `bb` load nido's `bb.edn` even though the worktree carries the project's own; the task then resolves which session you're in via `session-from-cwd`.
 
+### Fail-loud `git` in jj-workspace worktrees
+
+Session worktrees are non-colocated jj workspaces nested *inside* the colocated
+source repo, so a bare `git` in a worktree finds no local `.git`, walks up, and
+silently binds to the **parent source repo** — returning wrong content and
+history without erroring (`git show <rev>:file` reads a blob from the wrong
+repo). jj is the source of truth in these worktrees. Add this cwd-gated guard to
+`~/.zshrc` so bare `git` fails loudly instead of lying; it passes through
+untouched in colocated repos, plain-git worktrees, and non-repos.
+
+```zsh
+# Fail loud instead of silently binding to the PARENT source repo when a bare
+# `git` runs inside a nido jj-workspace worktree. Block iff git and jj disagree
+# on the repo root; passthrough everywhere else.
+git() {
+  local top jjroot
+  top=$(command git rev-parse --show-toplevel 2>/dev/null)
+  jjroot=$(command jj root 2>/dev/null)
+  if [[ -n "$jjroot" && -n "$top" && "$top" != "$jjroot" ]]; then
+    print -u2 "✋ nido: bare git binds to the SOURCE repo here ($top), not this"
+    print -u2 "   jj workspace ($jjroot) — it returns wrong content/history. Use jj:"
+    print -u2 "   jj st | jj log | jj diff | jj show <rev>"
+    print -u2 "   file at a revision:  jj file show -r <rev> <path>   (NOT git show <rev>:<path>)"
+    return 1
+  fi
+  command git "$@"
+}
+```
+
+The guard reaches agents because Claude Code's Bash tool sources a snapshot of
+your zsh environment (the same mechanism that makes `nido()` visible). It never
+interferes with jj (which drives its git backend in-process) or nido's own
+`git worktree add` for plain-git projects (babashka `execvp` bypasses shell
+functions). It activates for claude sessions started *after* you add it (the
+shell snapshot is captured at session start) — restart live sessions to pick it
+up. Escape hatch for a deliberate raw-git call: `command git …`.
+
 ### Tab naming (Warp)
 
 Warp's URI can't title the tab, so a shell hook does it from `$PWD` on the new tab's first prompt. Warp ignores shell-set titles unless `WARP_DISABLE_AUTO_TITLE=true`. Add to `~/.zshrc`:
