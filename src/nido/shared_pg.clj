@@ -359,3 +359,18 @@
               (recur more (inc rank) (inc applied))))))
       (finally
         (fs/delete-tree tmp)))))
+
+(defn ensure-ready!
+  "Bring the shared cluster up and, when opts opts-in (has :app-user or
+   :source-repo), advance it to main@origin and ensure the DDL-less role.
+   Returns {:port p}. opts nil/empty ⇒ plain ensure-up!."
+  [project-name {:keys [db-name owner-user schema app-user source-repo] :as opts}]
+  (let [{:keys [port] :as up} (ensure-up! project-name)]
+    (when (and opts (or app-user source-repo))
+      (let [base {:port port :db-name db-name :owner-user (or owner-user "user")
+                  :schema schema}]
+        (when source-repo
+          (advance-shared-to-main! (assoc base :source-repo source-repo)))
+        (when app-user
+          (ensure-app-role! (assoc base :app-user app-user)))))
+    up))

@@ -152,3 +152,22 @@
         (is (str/includes? sql "INSERT INTO brian.flyway_schema_history") "history recorded")
         ;; rank = 231+1; real checksum computed via public pg/flyway-checksum
         (is (re-find #"232, '234', 'add foo', 'SQL', 'V234__add_foo.sql', -?\d+, 'user', now\(\), 0, true" sql))))))
+
+(deftest ensure-ready-orders-up-then-advance-then-role
+  (let [order (atom [])]
+    (with-redefs [shared/ensure-up! (fn [_] (swap! order conj :up) {:port 6000})
+                  shared/advance-shared-to-main! (fn [_] (swap! order conj :advance) 2)
+                  shared/ensure-app-role! (fn [_] (swap! order conj :role))]
+      (let [res (shared/ensure-ready! "brian"
+                  {:db-name "brian" :owner-user "user" :schema "brian"
+                   :app-user "brian_app" :source-repo "/x/Code/brian"})]
+        (is (= {:port 6000} res))
+        (is (= [:up :advance :role] @order))))))
+
+(deftest ensure-ready-without-opts-is-plain-ensure-up
+  (let [order (atom [])]
+    (with-redefs [shared/ensure-up! (fn [_] (swap! order conj :up) {:port 6000})
+                  shared/advance-shared-to-main! (fn [_] (swap! order conj :advance))
+                  shared/ensure-app-role! (fn [_] (swap! order conj :role))]
+      (is (= {:port 6000} (shared/ensure-ready! "brian" nil)))
+      (is (= [:up] @order) "no opts → no advance, no role"))))
