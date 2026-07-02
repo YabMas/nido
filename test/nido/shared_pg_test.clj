@@ -73,3 +73,17 @@
                 proc/find-available-port (fn [pref _] (+ pref 1))]
     (is (= 6146 (#'shared/pick-shared-port "brian"))
         "only an actively-listening preferred port forces a scan to an alternative")))
+
+(deftest migration-file-parsing
+  (is (= 258 (shared/migration-file->version "V258__create_licence_expiry_notification.sql")))
+  (is (= 64  (shared/migration-file->version "V64__change-language-type.sql")))
+  (is (nil?  (shared/migration-file->version "R__repeatable.sql")))
+  (is (= "create email delivery event"
+         (shared/migration-file->description "V232__create_email_delivery_event.sql")))
+  (is (= "change-language-type"
+         (shared/migration-file->description "V64__change-language-type.sql"))))
+
+(deftest pending-migrations-are-sorted-and-filtered
+  (is (= ["V234__a.sql" "V258__c.sql"]
+         (shared/pending-migrations 233 ["V258__c.sql" "V233__b.sql" "V234__a.sql" "not-a-migration.sql"])))
+  (is (= [] (shared/pending-migrations 300 ["V258__c.sql"]))))

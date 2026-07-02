@@ -9,6 +9,7 @@
   (:refer-clojure :exclude [reset!])
   (:require
    [babashka.fs :as fs]
+   [clojure.string :as str]
    [nido.core :as core]
    [nido.process :as proc]
    [nido.session.services.postgresql :as pg]
@@ -181,3 +182,31 @@
     (when (fs/exists? dir)
       (fs/delete-tree dir)
       (core/log-step (str "Destroyed shared cluster for " project-name)))))
+
+;; ---------------------------------------------------------------------------
+;; Migration file helpers
+;; ---------------------------------------------------------------------------
+
+(defn migration-file->version
+  "Numeric version of a Flyway versioned migration filename, or nil for
+   non-versioned (e.g. repeatable R__) names."
+  [filename]
+  (when-let [[_ v] (re-matches #"V(\d+)__.*\.sql" filename)]
+    (parse-long v)))
+
+(defn migration-file->description
+  "Flyway description: the text between the version prefix and .sql, with
+   underscores turned into spaces (matches Flyway's own recorded description)."
+  [filename]
+  (when-let [[_ _ desc] (re-matches #"V(\d+)__(.*)\.sql" filename)]
+    (str/replace desc "_" " ")))
+
+(defn pending-migrations
+  "Migration filenames whose version is greater than applied-max, sorted
+   ascending by version. Non-versioned names are ignored."
+  [applied-max filenames]
+  (->> filenames
+       (keep (fn [f] (when-let [v (migration-file->version f)] [v f])))
+       (filter (fn [[v _]] (> v applied-max)))
+       (sort-by first)
+       (mapv second)))
