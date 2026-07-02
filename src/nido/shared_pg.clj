@@ -9,6 +9,7 @@
   (:refer-clojure :exclude [reset!])
   (:require
    [babashka.fs :as fs]
+   [babashka.process :refer [shell]]
    [clojure.string :as str]
    [nido.core :as core]
    [nido.process :as proc]
@@ -210,3 +211,52 @@
        (filter (fn [[v _]] (> v applied-max)))
        (sort-by first)
        (mapv second)))
+
+;; ---------------------------------------------------------------------------
+;; DDL-less application role
+;; ---------------------------------------------------------------------------
+
+(defn app-role-sql
+  "Idempotent SQL that (re)establishes the DDL-less application role. Grants
+   full DML on current and future objects but never CREATE on the schema, so a
+   Flyway migration run as this role fails `permission denied` and rolls back."
+  [{:keys [schema app-user owner-user] :or {owner-user "user"}}]
+  (str
+   "DO $$ BEGIN "
+   "  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '" app-user "') THEN "
+   "    CREATE ROLE " app-user " LOGIN; "
+   "  END IF; "
+   "END $$;\n"
+   "GRANT USAGE ON SCHEMA " schema " TO " app-user ";\n"
+   "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA " schema " TO " app-user ";\n"
+   "GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA " schema " TO " app-user ";\n"
+   ;; DEFAULT PRIVILEGES only affect objects created by the named role, so it
+   ;; must target the actual owner (the role nido's advance step migrates as),
+   ;; not a hardcoded literal — else future owner-created tables silently miss
+   ;; the app role's grants.
+   "ALTER DEFAULT PRIVILEGES FOR ROLE " owner-user " IN SCHEMA " schema
+   " GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO " app-user ";\n"
+   "ALTER DEFAULT PRIVILEGES FOR ROLE " owner-user " IN SCHEMA " schema
+   " GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO " app-user ";\n"))
+
+(defn run-owner-sql!
+  "Run a SQL string against the shared cluster as the owner via psql. Throws on
+   non-zero exit with the captured stderr."
+  [{:keys [port db-name owner-user]} sql]
+  (let [bin-dir (pg/find-pg-bin-dir)
+        result  (shell {:continue true :out :string :err :string}
+                       (pg/pg-cmd bin-dir "psql")
+                       "-h" "127.0.0.1" "-p" (str port) "-U" owner-user "-d" db-name
+                       "-v" "ON_ERROR_STOP=1" "-c" sql)]
+    (when-not (zero? (:exit result))
+      (throw (ex-info "shared-pg owner SQL failed"
+                      {:error (:err result) :output (:out result)})))))
+
+(defn ensure-app-role!
+  "Create/refresh the DDL-less application role on the shared cluster.
+   No-op when :app-user is nil (feature off)."
+  [{:keys [app-user schema owner-user] :as opts}]
+  (when app-user
+    (core/log-step (str "Ensuring DDL-less shared role " app-user))
+    (run-owner-sql! opts (app-role-sql {:schema schema :app-user app-user
+                                        :owner-user (or owner-user "user")}))))

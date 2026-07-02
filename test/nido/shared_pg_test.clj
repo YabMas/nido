@@ -87,3 +87,25 @@
   (is (= ["V234__a.sql" "V258__c.sql"]
          (shared/pending-migrations 233 ["V258__c.sql" "V233__b.sql" "V234__a.sql" "not-a-migration.sql"])))
   (is (= [] (shared/pending-migrations 300 ["V258__c.sql"]))))
+
+(deftest app-role-sql-grants-dml-and-withholds-ddl
+  (let [sql (shared/app-role-sql {:schema "brian" :app-user "brian_app"})]
+    (is (re-find #"(?i)create role brian_app" sql))
+    (is (re-find #"(?i)grant usage on schema brian to brian_app" sql))
+    (is (re-find #"(?i)grant select, insert, update, delete on all tables in schema brian to brian_app" sql))
+    (is (re-find #"(?i)alter default privileges .* in schema brian grant select, insert, update, delete on tables to brian_app" sql))
+    ;; MUST NOT grant CREATE on the schema — that is the whole guard
+    (is (not (re-find #"(?i)grant .*create.* on schema brian to brian_app" sql)))
+    ;; DEFAULT PRIVILEGES defaults to owner "user" ...
+    (is (re-find #"(?i)alter default privileges for role user in schema brian" sql)))
+  ;; ... and honors a non-default owner-user (so future owner-created tables
+  ;; actually inherit the app role's grants).
+  (let [sql (shared/app-role-sql {:schema "brian" :app-user "brian_app" :owner-user "brian_owner"})]
+    (is (re-find #"(?i)alter default privileges for role brian_owner in schema brian" sql))))
+
+(deftest ensure-app-role-noops-without-app-user
+  (let [calls (atom 0)]
+    (with-redefs [shared/run-owner-sql! (fn [_ _] (swap! calls inc))]
+      (shared/ensure-app-role! {:port 5555 :db-name "brian" :owner-user "user"
+                                :schema "brian" :app-user nil})
+      (is (zero? @calls) "no app-user configured → feature off → no SQL run"))))
