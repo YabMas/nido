@@ -186,7 +186,20 @@
     :jj-workspace
     (str "You are working through the nido orchestrator. You are in the session's\n"
          "worktree; source-code edits land here, NOT in nido's source tree. This\n"
-         "worktree is a jj workspace; `jj st` / `jj log` / `jj git push` work in place.\n")
+         "worktree is a jj workspace; `jj st` / `jj log` / `jj git push` work in place.\n"
+         "\n"
+         "**Do not use bare `git` in this worktree.** It is a non-colocated jj\n"
+         "workspace nested inside the colocated source repo, so bare `git` silently\n"
+         "binds to the *parent source repo* and returns wrong content and history\n"
+         "(`git rev-parse --show-toplevel` prints the source dir, not this worktree).\n"
+         "jj is the source of truth here:\n"
+         "\n"
+         "- status / history / diff:   `jj st` / `jj log` / `jj diff`\n"
+         "- a file's content at a rev:  `jj file show -r <rev> <path>`   (NOT `git show <rev>:<path>`)\n"
+         "- diff a file across revs:    `jj diff --from <a> --to <b> <path>`\n"
+         "- changes vs main:            `jj diff -r 'main..@'`\n"
+         "- blame:                      `jj file annotate <path>`\n"
+         "- push / fetch:               `jj git push` / `jj git fetch`\n")
 
     :jj-source-git-worktree
     (str "You are working through the nido orchestrator. This session was created\n"

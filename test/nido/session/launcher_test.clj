@@ -258,6 +258,15 @@
     (is (not (re-find #"session.home" s)))             ; matches "session home" & "session-home"
     (is (not (re-find #"cd worktree" s)))))
 
+(deftest jj-workspace-briefing-warns-off-bare-git-and-maps-to-jj
+  (let [s (@#'launcher/render-edit-location :jj-workspace "/wt")]
+    (testing "tells the agent bare git is wrong here"
+      (is (re-find #"(?i)do not use bare `?git`?" s))
+      (is (re-find #"parent source repo" s)))
+    (testing "gives the jj file show mapping that was missing"
+      (is (re-find #"jj file show -r <rev> <path>" s))
+      (is (re-find #"NOT `git show <rev>:<path>`" s)))))
+
 (deftest session-briefing-returns-rendered-string
   ;; session-briefing wires persisted state -> render-context. Stub the reads
   ;; it actually uses, matched to the real session.edn structure that
