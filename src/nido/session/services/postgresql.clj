@@ -42,9 +42,11 @@
    and CI clusters coexist here without collision."
   "/tmp/nido-pg-sock")
 
-(defn- flyway-checksum
+(defn flyway-checksum
   "Computes a Flyway-compatible CRC32 checksum over a SQL file.
-   Reads line-by-line, converts each line to UTF-8 bytes, updates CRC32."
+   Reads line-by-line, converts each line to UTF-8 bytes, updates CRC32.
+   Public: nido.shared-pg reuses it to record history rows when advancing the
+   shared cluster, and it must match Flyway's own checksum exactly."
   [file-path]
   (let [crc (CRC32.)
         content (slurp file-path)]

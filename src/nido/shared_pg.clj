@@ -260,3 +260,102 @@
     (core/log-step (str "Ensuring DDL-less shared role " app-user))
     (run-owner-sql! opts (app-role-sql {:schema schema :app-user app-user
                                         :owner-user (or owner-user "user")}))))
+
+;; ---------------------------------------------------------------------------
+;; Advance-to-main apply loop
+;; ---------------------------------------------------------------------------
+
+(defn history-insert-sql
+  "One INSERT into flyway_schema_history matching Flyway's row shape. Wrapped
+   with the migration body in a single transaction by the caller."
+  [{:keys [schema rank version description script checksum owner-user]}]
+  (str "INSERT INTO " schema ".flyway_schema_history "
+       "(installed_rank, version, description, type, script, checksum, "
+       "installed_by, installed_on, execution_time, success) VALUES ("
+       rank ", '" version "', '" description "', 'SQL', '" script "', "
+       checksum ", '" owner-user "', now(), 0, true);"))
+
+(defn shared-applied-max
+  "Max applied version and max installed_rank in the shared history. Returns
+   {:version 0 :rank 0} for an empty/baseline-free history."
+  [{:keys [port db-name owner-user schema]}]
+  (let [bin-dir (pg/find-pg-bin-dir)
+        ;; max(installed_rank) must scan ALL rows — a version-regex filter here
+        ;; would drop NULL/non-numeric versions (e.g. a repeatable R__ row) from
+        ;; the rank max, undercounting the next installed_rank and colliding on
+        ;; its PK. The regex belongs only on the version::int cast.
+        q (str "select "
+               "coalesce((select max(version::int) from " schema ".flyway_schema_history"
+               " where version ~ '^[0-9]+$'), 0), "
+               "coalesce((select max(installed_rank) from " schema ".flyway_schema_history), 0);")
+        result (shell {:continue true :out :string :err :string}
+                      (pg/pg-cmd bin-dir "psql")
+                      "-h" "127.0.0.1" "-p" (str port) "-U" owner-user "-d" db-name
+                      "-At" "-F" "|" "-c" q)
+        [v r] (some-> (:out result) str/trim (str/split #"\|"))]
+    {:version (or (some-> v str/trim parse-long) 0)
+     :rank    (or (some-> r str/trim parse-long) 0)}))
+
+(defn materialize-main-migrations!
+  "Write main@origin's resources/db/migrations files into dest-dir via jj and
+   return their filenames. jj (never bare git) reads the correct blobs from the
+   shared store regardless of any working-copy state."
+  [source-repo dest-dir]
+  (fs/create-dirs dest-dir)
+  (let [list-res (shell {:continue true :out :string :err :string}
+                        "jj" "--ignore-working-copy" "-R" source-repo
+                        "file" "list" "-r" "main@origin" "root:resources/db/migrations")
+        _ (when-not (zero? (:exit list-res))
+            (throw (ex-info "jj file list (main@origin migrations) failed"
+                            {:error (:err list-res) :source-repo source-repo})))
+        paths (->> (str/split-lines (:out list-res))
+                   (map str/trim) (remove str/blank?)
+                   (filter #(str/ends-with? % ".sql")))]
+    (doseq [p paths]
+      (let [show (shell {:continue true :out :string :err :string}
+                        "jj" "--ignore-working-copy" "-R" source-repo
+                        "file" "show" "-r" "main@origin" (str "root:" p))]
+        (when-not (zero? (:exit show))
+          (throw (ex-info "jj file show failed" {:path p :error (:err show)})))
+        (spit (str (fs/path dest-dir (fs/file-name p))) (:out show))))
+    (mapv (comp str fs/file-name) paths)))
+
+(defn advance-shared-to-main!
+  "Advance the shared cluster to main@origin by applying pending migrations as
+   the owner. No-op when already current. Returns the count applied."
+  [{:keys [port db-name owner-user schema source-repo] :as opts}]
+  (let [{:keys [version rank]} (shared-applied-max opts)
+        tmp     (str (fs/create-temp-dir {:prefix "nido-shared-advance"}))]
+    ;; Always remove the scratch dir (a full copy of the migrations dir) —
+    ;; on the no-op path, on success, and on a mid-apply throw.
+    (try
+      (let [files   (materialize-main-migrations! source-repo tmp)
+            pending (pending-migrations version files)]
+        (when (seq pending)
+          (core/log-step (str "Advancing shared cluster to main@origin: applying "
+                              (count pending) " migration(s) from V" version)))
+        (loop [[f & more] pending, rank (inc rank), applied 0]
+          (if-not f
+            applied
+            (let [file-path (str (fs/path tmp f))
+                  checksum  (pg/flyway-checksum file-path)
+                  body      (slurp file-path)
+                  combined  (str "SET search_path TO " schema ", public;\n"
+                                 body "\n"
+                                 (history-insert-sql
+                                  {:schema schema :rank rank
+                                   :version (migration-file->version f)
+                                   :description (migration-file->description f)
+                                   :script f :checksum checksum :owner-user owner-user}))
+                  bin-dir   (pg/find-pg-bin-dir)
+                  res       (shell {:continue true :out :string :err :string}
+                                   (pg/pg-cmd bin-dir "psql")
+                                   "-h" "127.0.0.1" "-p" (str port) "-U" owner-user "-d" db-name
+                                   "--single-transaction" "-v" "ON_ERROR_STOP=1"
+                                   "-c" combined)]
+              (when-not (zero? (:exit res))
+                (throw (ex-info (str "Advancing shared cluster failed applying " f)
+                                {:file f :error (:err res) :output (:out res)})))
+              (recur more (inc rank) (inc applied))))))
+      (finally
+        (fs/delete-tree tmp)))))

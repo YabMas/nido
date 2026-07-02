@@ -2,6 +2,7 @@
   (:require
    [babashka.fs :as fs]
    [babashka.process]
+   [clojure.string :as str]
    [clojure.test :refer [deftest is]]
    [nido.process :as proc]
    [nido.session.services.postgresql :as pg]
@@ -109,3 +110,45 @@
       (shared/ensure-app-role! {:port 5555 :db-name "brian" :owner-user "user"
                                 :schema "brian" :app-user nil})
       (is (zero? @calls) "no app-user configured → feature off → no SQL run"))))
+
+(deftest history-insert-sql-is-well-formed
+  (let [sql (shared/history-insert-sql {:schema "brian" :rank 232 :version 258
+                                        :description "create licence expiry notification"
+                                        :script "V258__create_licence_expiry_notification.sql"
+                                        :checksum -616010157 :owner-user "user"})]
+    (is (re-find #"insert into brian\.flyway_schema_history" (str/lower-case sql)))
+    (is (re-find #"232, '258', 'create licence expiry notification', 'SQL'" sql))
+    (is (re-find #"'V258__create_licence_expiry_notification.sql', -616010157, 'user', now\(\), 0, true" sql))))
+
+(deftest advance-is-a-noop-when-shared-is-current
+  (with-redefs [shared/shared-applied-max (fn [_] {:version 263 :rank 261})
+                shared/materialize-main-migrations! (fn [_ _] ["V263__x.sql"])
+                shared/run-owner-sql! (fn [_ _] (throw (ex-info "should not run" {})))]
+    (is (= 0 (shared/advance-shared-to-main!
+              {:port 5555 :db-name "brian" :owner-user "user" :schema "brian"
+               :source-repo "/Users/x/Code/brian"})))))
+
+;; Drive the pending-apply path end to end with psql mocked. This also exercises
+;; the real (now-public) pg/flyway-checksum on a materialized file — a private
+;; call here would throw at runtime, which the no-op test above cannot catch.
+(deftest advance-applies-pending-migration-with-checksum-and-history
+  (let [shell-calls (atom [])]
+    (with-redefs [shared/shared-applied-max (fn [_] {:version 233 :rank 231})
+                  shared/materialize-main-migrations!
+                  (fn [_src dest]
+                    (spit (str (fs/path dest "V234__add_foo.sql"))
+                          "CREATE TABLE brian.foo (id int);\n")
+                    ["V234__add_foo.sql"])
+                  pg/find-pg-bin-dir (constantly "/usr/bin")
+                  babashka.process/shell (fn [_opts & args]
+                                           (swap! shell-calls conj (vec args))
+                                           {:exit 0 :out "" :err ""})]
+      (let [n   (shared/advance-shared-to-main!
+                 {:port 5555 :db-name "brian" :owner-user "user" :schema "brian"
+                  :source-repo "/x/Code/brian"})
+            sql (last (last @shell-calls))]
+        (is (= 1 n) "one pending migration applied")
+        (is (str/includes? sql "CREATE TABLE brian.foo") "migration body included")
+        (is (str/includes? sql "INSERT INTO brian.flyway_schema_history") "history recorded")
+        ;; rank = 231+1; real checksum computed via public pg/flyway-checksum
+        (is (re-find #"232, '234', 'add foo', 'SQL', 'V234__add_foo.sql', -?\d+, 'user', now\(\), 0, true" sql))))))
