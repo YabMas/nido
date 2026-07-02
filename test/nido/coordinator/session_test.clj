@@ -389,3 +389,40 @@
     (is (= :blocked        (sess/ship-substate [(phase :parked)])))
     (is (= :awaiting-merge (sess/ship-substate [(phase :done)])))
     (is (nil?              (sess/ship-substate [{:substrate :live :autonomy nil}])))))
+
+(defn- auton-for [trigger phase]
+  {:skill :triage-bug :first-message "m" :agent :claude :claude-session-id nil
+   :trigger trigger :limits {} :priority 0 :uncapped? false :on-promote nil
+   :phase phase :phase-history [{:at "2026-06-05T09:00:00Z" :phase phase}] :error nil})
+
+(deftest pending-session-for-trigger-true-for-in-flight-phases
+  ;; A session in any non-terminal phase — INCLUDING :queued (which gating-phases
+  ;; excludes) — counts as an in-flight run the reconcile dedup gate must see.
+  (with-tmp
+    (fn [_]
+      (doseq [phase [:queued :preprocessing :running :parked]]
+        (let [ws-id (str "ws-" (name phase))]
+          (sess/create! :brian ws-id {:name (str "run-" (name phase)) :weight :light
+                                      :autonomy (auton-for :triage-teacher-bugs phase)})
+          (is (true? (sess/pending-session-for-trigger? :brian ws-id :triage-teacher-bugs))
+              (str "phase " phase " should count as pending")))))))
+
+(deftest pending-session-for-trigger-false-for-terminal-mismatch-or-empty
+  (with-tmp
+    (fn [_]
+      ;; terminal phases must not count — a settled ticket stays re-triable
+      (doseq [phase [:done :failed :halted]]
+        (let [ws-id (str "ws-t-" (name phase))]
+          (sess/create! :brian ws-id {:name (str "run-" (name phase)) :weight :light
+                                      :autonomy (auton-for :triage-teacher-bugs phase)})
+          (is (false? (sess/pending-session-for-trigger? :brian ws-id :triage-teacher-bugs))
+              (str "terminal phase " phase " must not count"))))
+      ;; a pending session for a DIFFERENT trigger doesn't count
+      (sess/create! :brian "ws-other" {:name "run-other" :weight :light
+                                       :autonomy (auton-for :triage-new :queued)})
+      (is (false? (sess/pending-session-for-trigger? :brian "ws-other" :triage-teacher-bugs)))
+      ;; a human (non-autonomous) session doesn't count
+      (sess/create! :brian "ws-human" {:name "explore" :weight :light :autonomy nil})
+      (is (false? (sess/pending-session-for-trigger? :brian "ws-human" :triage-teacher-bugs)))
+      ;; empty / unknown workstream
+      (is (false? (sess/pending-session-for-trigger? :brian "ws-empty" :triage-teacher-bugs))))))

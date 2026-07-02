@@ -99,6 +99,22 @@
           (ws/delete! project (:id w)))
         (throw t)))))
 
+(defn ref-has-pending-session?
+  "True when this fire's external ref already resolves to a workstream that has an
+   in-flight autonomous session for the SAME trigger (queued/preprocessing/
+   running/parked). The coordinator's pre-spawn gate uses this to drop a reconcile
+   re-emit instead of minting a duplicate run — the fix for the :queued-run
+   pileup: a merely-queued triage writes no ticket-ledger status, so the
+   ticket-status gate alone can't dedup it. Ref-less fires (no dedup key) are
+   never suppressed. The run stores its trigger as the trigger's :name keyword
+   (runs/create-run!), so we match against that, not the routed trigger map."
+  [routed]
+  (boolean
+   (when-let [ref (external-ref (:payload routed))]
+     (when-let [w (ws/find-by-ref (:project routed) (:adapter ref) (:id ref))]
+       (session/pending-session-for-trigger?
+        (:project routed) (:id w) (-> routed :trigger :name))))))
+
 (defn spawn-and-submit!
   "Spawn the records for a routed fire and submit the run to the executor.
    Shared by the coordinator's live spawn branch and promote's inbox→triage

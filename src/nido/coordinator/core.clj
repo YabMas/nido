@@ -557,6 +557,20 @@
                     (str "INFO: triage gate skip — " (name (:project routed)) "/"
                          br " (" (name decision) ")"))))
 
+      ;; Reconcile dedup (spec §Coordinator pre-spawn gate): a re-emit whose ref
+      ;; already has an in-flight session for this trigger (queued/preprocessing/
+      ;; running/parked) is dropped without minting a duplicate run. This closes
+      ;; the :queued-pileup gap the ticket-status gate above misses — a merely-
+      ;; :queued triage writes no ledger status, so without this a reconcile
+      ;; source re-queues the same ticket every poll (thousands of phantom
+      ;; :queued runs). No spawn ⇒ no anomaly bump.
+      (spawn/ref-has-pending-session? routed)
+      (binding [*err* *err*]
+        (.println ^java.io.PrintWriter *err*
+                  (str "INFO: reconcile dedup — " (name (:project routed)) "/"
+                       (-> routed :payload :id) " already has an in-flight "
+                       (name (-> routed :trigger :name)) " session")))
+
       :else
       (do
         (spawn/spawn-and-submit! routed {:fired-at (clock/now-iso)

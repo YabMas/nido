@@ -255,6 +255,28 @@
    in-progress-phases, which is 'actively executing' work."
   #{:preprocessing :running :parked})
 
+(def pending-phases
+  "Autonomy phases where a session's run is still in flight FOR DEDUP. Unlike
+   gating-phases (scheduling backpressure), this INCLUDES :queued: the reconcile
+   pre-spawn gate exists precisely to avoid minting a SECOND run for a ticket
+   whose first is merely queued (a :queued triage writes no ticket-ledger status,
+   so the status gate alone can't dedup it). Terminal phases (:done/:failed/
+   :halted) are excluded so a settled ticket stays re-triable."
+  #{:queued :preprocessing :running :parked})
+
+(defn pending-session-for-trigger?
+  "True when workstream `ws-id` already has an autonomous session for `trigger`
+   whose phase is still in flight (see pending-phases). The coordinator's
+   pre-spawn gate uses this to drop a reconcile re-emit instead of piling a
+   duplicate run onto a ticket whose first is not yet terminal. Reads disk."
+  [project ws-id trigger]
+  (boolean
+   (some (fn [s]
+           (and (autonomous? s)
+                (= trigger (get-in s [:autonomy :trigger]))
+                (contains? pending-phases (get-in s [:autonomy :phase]))))
+         (list-sessions project ws-id))))
+
 (defn- ws-closed?
   "True when the workstream's record carries a :closed settlement. Read directly
    off disk (not via workstream/read-ws — that ns requires this one). A closed

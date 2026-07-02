@@ -126,3 +126,28 @@
                        :app-domain ["Teacher"] :type "bug"}
               w (spawn/ensure-workstream! :brian payload :triaging)]
           (is (= {:app-domain ["Teacher"] :type "bug"} (:facets w))))))))
+
+(def ^:private teacher-routed
+  {:project :brian
+   :trigger {:name :triage-teacher-bugs :skill :triage-bug :agent :claude
+             :payload "Triage {{event/title}}" :limits {} :source {:type :notion-view}}
+   :payload {:id "BR-42" :title "Forty-two"}
+   :priority 0 :session-profile :lite :uncapped? false})
+
+(deftest ref-has-pending-session-true-once-a-run-is-in-flight
+  ;; The reconcile-dedup gate: after one spawn queues a run for BR-42, a re-emit
+  ;; for the same ref must be seen as already in-flight — the fix for the :queued
+  ;; pileup (a queued triage writes no ticket-ledger status, so the status gate
+  ;; alone can't dedup it).
+  (with-tmp
+    (fn [_]
+      (is (false? (spawn/ref-has-pending-session? teacher-routed))
+          "no workstream yet ⇒ not suppressed (first emit spawns)")
+      (spawn/spawn-records! teacher-routed {:fired-at "2026-06-19T00:00:00Z" :fired-by "t"})
+      (is (true? (spawn/ref-has-pending-session? teacher-routed))
+          "the queued session from the first emit must suppress a re-emit"))))
+
+(deftest ref-has-pending-session-false-for-ref-less-fire
+  (with-tmp
+    (fn [_]
+      (is (false? (spawn/ref-has-pending-session? (assoc teacher-routed :payload {})))))))
