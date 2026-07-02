@@ -122,8 +122,8 @@
 
 (deftest advance-is-a-noop-when-shared-is-current
   (with-redefs [shared/shared-applied-max (fn [_] {:version 263 :rank 261})
-                shared/materialize-main-migrations! (fn [_ _] ["V263__x.sql"])
-                shared/run-owner-sql! (fn [_ _] (throw (ex-info "should not run" {})))]
+                shared/list-main-migration-files (fn [_] ["V263__x.sql"])
+                babashka.process/shell (fn [& _] (throw (ex-info "must not shell out when nothing is pending" {})))]
     (is (= 0 (shared/advance-shared-to-main!
               {:port 5555 :db-name "brian" :owner-user "user" :schema "brian"
                :source-repo "/Users/x/Code/brian"})))))
@@ -134,11 +134,12 @@
 (deftest advance-applies-pending-migration-with-checksum-and-history
   (let [shell-calls (atom [])]
     (with-redefs [shared/shared-applied-max (fn [_] {:version 233 :rank 231})
-                  shared/materialize-main-migrations!
-                  (fn [_src dest]
-                    (spit (str (fs/path dest "V234__add_foo.sql"))
+                  shared/list-main-migration-files (fn [_] ["V234__add_foo.sql"])
+                  shared/materialize-one!
+                  (fn [_src dest filename]
+                    (spit (str (fs/path dest filename))
                           "CREATE TABLE brian.foo (id int);\n")
-                    ["V234__add_foo.sql"])
+                    filename)
                   pg/find-pg-bin-dir (constantly "/usr/bin")
                   babashka.process/shell (fn [_opts & args]
                                            (swap! shell-calls conj (vec args))
@@ -157,7 +158,8 @@
   (let [order (atom [])]
     (with-redefs [shared/ensure-up! (fn [_] (swap! order conj :up) {:port 6000})
                   shared/advance-shared-to-main! (fn [_] (swap! order conj :advance) 2)
-                  shared/ensure-app-role! (fn [_] (swap! order conj :role))]
+                  shared/ensure-app-role! (fn [_] (swap! order conj :role))
+                  shared/with-lock (fn [_ f] (f))]
       (let [res (shared/ensure-ready! "brian"
                   {:db-name "brian" :owner-user "user" :schema "brian"
                    :app-user "brian_app" :source-repo "/x/Code/brian"})]
@@ -168,6 +170,24 @@
   (let [order (atom [])]
     (with-redefs [shared/ensure-up! (fn [_] (swap! order conj :up) {:port 6000})
                   shared/advance-shared-to-main! (fn [_] (swap! order conj :advance))
-                  shared/ensure-app-role! (fn [_] (swap! order conj :role))]
+                  shared/ensure-app-role! (fn [_] (swap! order conj :role))
+                  shared/with-lock (fn [_ f] (f))]
       (is (= {:port 6000} (shared/ensure-ready! "brian" nil)))
       (is (= [:up] @order) "no opts → no advance, no role"))))
+
+(deftest ensure-ready-serializes-advance-and-role-under-a-fresh-lock
+  ;; Once ensure-up! has released its own lock, ensure-ready! must take a
+  ;; SECOND, independent lock around the advance+role block — proving two
+  ;; concurrent shared session:ups can't race past ensure-up! and both
+  ;; compute the same pending set unlocked.
+  (let [lock-calls (atom [])]
+    (with-redefs [shared/ensure-up! (fn [_] {:port 6000})
+                  shared/advance-shared-to-main! (fn [_] 1)
+                  shared/ensure-app-role! (fn [_] nil)
+                  shared/with-lock (fn [path f] (swap! lock-calls conj path) (f))]
+      (let [res (shared/ensure-ready! "brian"
+                  {:db-name "brian" :owner-user "user" :schema "brian"
+                   :app-user "brian_app" :source-repo "/x/Code/brian"})]
+        (is (= {:port 6000} res))
+        (is (= 1 (count @lock-calls))
+            "ensure-ready! itself takes exactly one lock around advance+role")))))

@@ -296,69 +296,79 @@
     {:version (or (some-> v str/trim parse-long) 0)
      :rank    (or (some-> r str/trim parse-long) 0)}))
 
-(defn materialize-main-migrations!
-  "Write main@origin's resources/db/migrations files into dest-dir via jj and
-   return their filenames. jj (never bare git) reads the correct blobs from the
-   shared store regardless of any working-copy state."
-  [source-repo dest-dir]
-  (fs/create-dirs dest-dir)
-  (let [list-res (shell {:continue true :out :string :err :string}
-                        "jj" "--ignore-working-copy" "-R" source-repo
-                        "file" "list" "-r" "main@origin" "root:resources/db/migrations")
-        _ (when-not (zero? (:exit list-res))
-            (throw (ex-info "jj file list (main@origin migrations) failed"
-                            {:error (:err list-res) :source-repo source-repo})))
-        paths (->> (str/split-lines (:out list-res))
-                   (map str/trim) (remove str/blank?)
-                   (filter #(str/ends-with? % ".sql")))]
-    (doseq [p paths]
-      (let [show (shell {:continue true :out :string :err :string}
-                        "jj" "--ignore-working-copy" "-R" source-repo
-                        "file" "show" "-r" "main@origin" (str "root:" p))]
-        (when-not (zero? (:exit show))
-          (throw (ex-info "jj file show failed" {:path p :error (:err show)})))
-        (spit (str (fs/path dest-dir (fs/file-name p))) (:out show))))
-    (mapv (comp str fs/file-name) paths)))
+(def ^:private migrations-subdir "resources/db/migrations")
+
+(defn list-main-migration-files
+  "Basenames of main@origin's migration files, via jj — one cheap subprocess,
+   no per-file `file show`. Fails loud on jj error. (The dir is flat: every
+   file lives directly under resources/db/migrations.)"
+  [source-repo]
+  (let [res (shell {:continue true :out :string :err :string}
+                   "jj" "--ignore-working-copy" "-R" source-repo
+                   "file" "list" "-r" "main@origin" (str "root:" migrations-subdir))]
+    (when-not (zero? (:exit res))
+      (throw (ex-info "jj file list (main@origin migrations) failed"
+                      {:error (:err res) :source-repo source-repo})))
+    (->> (str/split-lines (:out res))
+         (map str/trim) (remove str/blank?)
+         (filter #(str/ends-with? % ".sql"))
+         (mapv (comp str fs/file-name)))))
+
+(defn materialize-one!
+  "Write one main@origin migration file (by basename) into dest-dir via jj.
+   Fails loud on jj error. UTF-8 pinned on the write so the checksum round-trip
+   is charset-independent."
+  [source-repo dest-dir filename]
+  (let [show (shell {:continue true :out :string :err :string}
+                    "jj" "--ignore-working-copy" "-R" source-repo
+                    "file" "show" "-r" "main@origin"
+                    (str "root:" migrations-subdir "/" filename))]
+    (when-not (zero? (:exit show))
+      (throw (ex-info "jj file show failed" {:file filename :error (:err show)})))
+    (spit (str (fs/path dest-dir filename)) (:out show) :encoding "UTF-8")
+    filename))
 
 (defn advance-shared-to-main!
   "Advance the shared cluster to main@origin by applying pending migrations as
-   the owner. No-op when already current. Returns the count applied."
+   the owner. No-op when already current — nothing is materialized or shelled
+   out to jj/psql in that case. Returns the count applied."
   [{:keys [port db-name owner-user schema source-repo] :as opts}]
   (let [{:keys [version rank]} (shared-applied-max opts)
-        tmp     (str (fs/create-temp-dir {:prefix "nido-shared-advance"}))]
-    ;; Always remove the scratch dir (a full copy of the migrations dir) —
-    ;; on the no-op path, on success, and on a mid-apply throw.
-    (try
-      (let [files   (materialize-main-migrations! source-repo tmp)
-            pending (pending-migrations version files)]
-        (when (seq pending)
+        basenames (list-main-migration-files source-repo)
+        pending   (pending-migrations version basenames)]
+    (if (empty? pending)
+      0
+      (let [tmp (str (fs/create-temp-dir {:prefix "nido-shared-advance"}))]
+        ;; Only reached (and only removed) when there IS pending work.
+        (try
           (core/log-step (str "Advancing shared cluster to main@origin: applying "
-                              (count pending) " migration(s) from V" version)))
-        (loop [[f & more] pending, rank (inc rank), applied 0]
-          (if-not f
-            applied
-            (let [file-path (str (fs/path tmp f))
-                  checksum  (pg/flyway-checksum file-path)
-                  body      (slurp file-path)
-                  combined  (str "SET search_path TO " schema ", public;\n"
-                                 body "\n"
-                                 (history-insert-sql
-                                  {:schema schema :rank rank
-                                   :version (migration-file->version f)
-                                   :description (migration-file->description f)
-                                   :script f :checksum checksum :owner-user owner-user}))
-                  bin-dir   (pg/find-pg-bin-dir)
-                  res       (shell {:continue true :out :string :err :string}
-                                   (pg/pg-cmd bin-dir "psql")
-                                   "-h" "127.0.0.1" "-p" (str port) "-U" owner-user "-d" db-name
-                                   "--single-transaction" "-v" "ON_ERROR_STOP=1"
-                                   "-c" combined)]
-              (when-not (zero? (:exit res))
-                (throw (ex-info (str "Advancing shared cluster failed applying " f)
-                                {:file f :error (:err res) :output (:out res)})))
-              (recur more (inc rank) (inc applied))))))
-      (finally
-        (fs/delete-tree tmp)))))
+                              (count pending) " migration(s) from V" version))
+          (loop [[f & more] pending, rank (inc rank), applied 0]
+            (if-not f
+              applied
+              (let [_         (materialize-one! source-repo tmp f)
+                    file-path (str (fs/path tmp f))
+                    checksum  (pg/flyway-checksum file-path)
+                    body      (slurp file-path)
+                    combined  (str "SET search_path TO " schema ", public;\n"
+                                   body "\n"
+                                   (history-insert-sql
+                                    {:schema schema :rank rank
+                                     :version (migration-file->version f)
+                                     :description (migration-file->description f)
+                                     :script f :checksum checksum :owner-user owner-user}))
+                    bin-dir   (pg/find-pg-bin-dir)
+                    res       (shell {:continue true :out :string :err :string}
+                                     (pg/pg-cmd bin-dir "psql")
+                                     "-h" "127.0.0.1" "-p" (str port) "-U" owner-user "-d" db-name
+                                     "--single-transaction" "-v" "ON_ERROR_STOP=1"
+                                     "-c" combined)]
+                (when-not (zero? (:exit res))
+                  (throw (ex-info (str "Advancing shared cluster failed applying " f)
+                                  {:file f :error (:err res) :output (:out res)})))
+                (recur more (inc rank) (inc applied)))))
+          (finally
+            (fs/delete-tree tmp)))))))
 
 (defn ensure-ready!
   "Bring the shared cluster up and, when opts opts-in (has :app-user or
@@ -367,10 +377,16 @@
   [project-name {:keys [db-name owner-user schema app-user source-repo] :as opts}]
   (let [{:keys [port] :as up} (ensure-up! project-name)]
     (when (and opts (or app-user source-repo))
-      (let [base {:port port :db-name db-name :owner-user (or owner-user "user")
-                  :schema schema}]
-        (when source-repo
-          (advance-shared-to-main! (assoc base :source-repo source-repo)))
-        (when app-user
-          (ensure-app-role! (assoc base :app-user app-user)))))
+      ;; ensure-up! already released its lock (sequential in-process, so
+      ;; re-acquiring here is not reentrant) — take a fresh one so a second
+      ;; shared session:up racing right after a main merge can't compute the
+      ;; same pending set concurrently and collide on the history PK.
+      (with-lock (state/shared-lock-file project-name)
+        (fn []
+          (let [base {:port port :db-name db-name :owner-user (or owner-user "user")
+                      :schema schema}]
+            (when source-repo
+              (advance-shared-to-main! (assoc base :source-repo source-repo)))
+            (when app-user
+              (ensure-app-role! (assoc base :app-user app-user)))))))
     up))
