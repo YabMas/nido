@@ -36,3 +36,20 @@
 
 (deftest missing-key-fails
   (is (false? (f/accept? {:status "Untriaged"} {:priority "P0"}))))
+
+(deftest contains-operator-matches-substring
+  (is (true?  (f/accept? {:text {:contains "provider attempted"}}
+                         {:text "Unsupported video provider attempted\nDomain: `vimeo.com`"})))
+  (is (false? (f/accept? {:text {:contains "provider attempted"}}
+                         {:text "Some unrelated product alert"}))))
+
+(deftest contains-operator-missing-key-is-false
+  (is (false? (f/accept? {:text {:contains "x"}} {:title "no :text key here"}))))
+
+(deftest contains-operator-non-string-value-is-false
+  (is (false? (f/accept? {:count {:contains "x"}} {:count 5}))))
+
+(deftest existing-equality-and-set-membership-unaffected
+  (is (true?  (f/accept? {:status "Untriaged"} {:status "Untriaged"})))
+  (is (false? (f/accept? {:status "Untriaged"} {:status "Done"})))
+  (is (true?  (f/accept? {:priority ["P0" "P1"]} {:priority "P0"}))))
