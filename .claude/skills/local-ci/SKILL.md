@@ -1,6 +1,6 @@
 ---
 name: local-ci
-description: Use when asked to run local CI, run `bb ci`, or fix CI findings (lint/test/e2e/migration failures) for the brian session you're working in. Invoked in-session from the session home.
+description: Run brian's CI for the session you're in and fix findings. Bare `/local-ci` triages then STOPS for human approval before any edit. `/local-ci auto` drives autonomously — commits a clean tree, runs CI, applies mechanical fixes and halts on anything needing judgement (the path /drive-home composes). Invoked in-session from the session home.
 ---
 
 # /local-ci
@@ -11,6 +11,18 @@ Run brian's own CI for the session you're in, triage the failures into a
 lane-grouped report, and fix them **only after the user approves**. This drives
 the existing `bb nido:run … ci` task and brian's lane/dev agents (present
 in-session). It does not reimplement CI or parse output in code.
+
+## Two modes
+
+- **bare `/local-ci`** — run CI, triage into a report, **STOP for human
+  approval**, then fix only the approved subset. Refuses a dirty tree (tells you
+  to commit). This is the default and the rest of "## Flow" describes it.
+- **`/local-ci auto`** — the **autonomous** path (what `/drive-home` composes):
+  commit a clean tree, run CI, apply **mechanical** fixes and **halt** on
+  anything needing judgement, no approval gate. See "## Autonomous mode (auto)".
+
+Pick the mode from the argument: no argument ⇒ bare; the literal `auto` ⇒
+autonomous.
 
 ## When to use
 
@@ -83,7 +95,59 @@ findings you may fix directly. **No auto-commit** — leave changes in the workt
 for review (if it's a jj worktree, follow jj commit hygiene). Then suggest
 re-running `/local-ci`.
 
+## Autonomous mode (auto)
+
+Reached only when invoked as `/local-ci auto`. No approval gate — this is the
+path `/drive-home` composes, so it must be able to fix and re-run without a human
+in the loop. It reuses the **same** CI command and the **same Routing table**
+below; only the gate differs.
+
+### 1. Commit a clean tree
+
+CI Docker-COPYs the worktree, so `:ci` aborts on a dirty `jj st`. In auto mode,
+commit any working-copy changes yourself (bare mode refuses instead):
+
+```bash
+cd worktree
+jj st                                   # if dirty…
+jj commit -m "chore(ci): clean tree for CI"   # …fold it in
+cd ..                                   # back to the session home
+```
+
+(A clean tree ⇒ skip the commit.) These `chore(ci): …` commits are throwaway
+scaffolding — `/compact` folds them into the final commit, so the message
+doesn't matter.
+
+### 2. Run CI and triage
+
+Run `bb nido:run :project <project> <session> ci` (see "### 2. Run CI" for the
+`--no-cache` / tag-`rm` rationale). Separate flake/infra from real regressions
+exactly as in "### 4. Triage". Get the real error from logs; don't guess from the
+job name.
+
+### 3. Tiered fix — no gate
+
+Classify every real failure with the **Routing** table below (single source of
+truth):
+
+- **AUTO-FIX (no approval)** — failures whose owner is "fix directly
+  (mechanical)". Fix and commit in the worktree
+  (`cd worktree; jj commit -m "chore(ci): fix <job>"; cd ..`), then re-run CI once.
+- **HALT (report, do not fix)** — every other row (anything the table routes to a
+  domain agent or skill). Produce the lane-grouped report (job, salient error
+  lines, owning agent) and **stop**. Do not dispatch fix agents.
+
+**Loop guard:** at most **two** mechanical fix→re-run cycles. Still red after
+that, or a non-mechanical failure appears ⇒ halt and report. Never loop CI to
+green.
+
+Auto mode emits **no** coordinator ledger events — when `/drive-home` composes it,
+`/drive-home` records the halt in its ledger.
+
 ## The Approval Gate (do not skip)
+
+**This gate applies to bare `/local-ci` only.** `/local-ci auto` deliberately
+skips it — see "## Autonomous mode (auto)".
 
 Steps 1–5 NEVER edit files. Present the triage report and wait for explicit
 approval before ANY fix — **including "obvious", "trivial", or "just
@@ -125,3 +189,5 @@ Starter map:
 - Auto-fixing before approval (see The Approval Gate).
 - Looping CI to green — this skill does ONE run; re-run only after fixes, on request.
 - Treating flaky e2e / Docker infra errors as code bugs — separate them before routing.
+- Running `auto` when you wanted review, or bare mode inside `/drive-home` — the
+  bare gate halts the autonomous flow; `/drive-home` composes `/local-ci auto`.
