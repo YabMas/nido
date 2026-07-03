@@ -90,8 +90,8 @@ poller needs to react when the PR later merges.
 
 7. **Optional — record the PR on the Notion ticket.** If you have the ticket's
    Notion page-id (from the `:notion` external-ref on the workstream, visible in
-   the session briefing/CLAUDE.md), set its `GitHub PR` property to the PR URL via
-   the notionApi MCP `API-patch-page` tool (property `GitHub PR`, type `url`).
+   the session briefing/CLAUDE.md), set its `GitHub PR` property (type `url`) to the
+   PR URL with `notion page set <page-id> "GitHub PR=<pr-url>"`.
 
 ## Done
 
