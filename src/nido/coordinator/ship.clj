@@ -2,7 +2,7 @@
   "Merge lane — the daemon side of `nido ship`. A :ship envelope advances the
    workstream to :shipping and submits a serial :merge Run that drives the branch
    home with /drive-home headless in the EXISTING session-home. Outcome is read
-   from the ticket-ledger fingerprint (see drive-home/SKILL.md §5d / halt).
+   from the ticket-ledger fingerprint (see drive-home/SKILL.md §7 / "When it halts").
    Spec: docs/superpowers/specs/2026-06-30-local-merge-queue-design.md."
   (:require
    [babashka.fs :as fs]
