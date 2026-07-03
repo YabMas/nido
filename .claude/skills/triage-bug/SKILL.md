@@ -25,7 +25,7 @@ The envelope payload for a **Notion** run (per nido's normalised Notion event) i
 
 The envelope payload for a **Slack** run includes `:adapter :slack-message`, `:id` (e.g. `slack-C123-1718000000.000123`), `:url` (Slack permalink), `:title` (truncated text), and `:text` (the full message). It has **no `:page-id`** — see "Source adapter" below.
 
-The session is a **lite session**: the worktree at `./worktree` is a symlink to `~/Code/brian` (read-only intent). No PG, no JVM, no app server. Only the notion MCP server is wired into `.mcp.json`.
+The session is a **lite session**: the worktree at `./worktree` is a symlink to `~/Code/brian` (read-only intent). No PG, no JVM, no app server. Notion access is via the `notion` CLI (on `PATH`).
 
 The Run record lives at `./run-link/` (symlink to `~/.nido/coordinator/runs/<run-id>/`).
 
@@ -38,16 +38,16 @@ This skill triages reports from two sources. Branch on the payload's `:adapter`:
 
 The **ticket key** is what goes in every `bb nido:ticket:*` call's `:br` argument below — `BR-####` for a Notion run, the payload `:id` for a Slack run. (`bb nido:ticket:*` accepts any string as `:br`, so the slack id works as the ledger key directly.)
 
-**Global rule for Slack runs — ledger-only, never touch Notion.** When `:adapter` is `:slack-message`, skip EVERY Notion MCP interaction:
+**Global rule for Slack runs — ledger-only, never touch Notion.** When `:adapter` is `:slack-message`, skip EVERY Notion interaction:
 
 - **Step 1.2 / 1.3:** do NOT fetch the Notion page or block-children. The brief IS the payload — investigate from `:text` (the report body) and `:url` (the Slack permalink). Open the record with the slack `:id` as `:br` and **omit `:page`** (there is no page-id):
   ```bash
   bb nido:ticket:open :project brian :br <slack-id> :url <url> :title "<title>" :opened-by triage-slack-bugs
   ```
-- **Step 4 (apply):** skip the optimistic concurrency check and ALL Notion writes (`API-patch-page`, `API-patch-block-children`, `API-delete-a-block`). The verdict is already captured in the nido record (Step 1.6) — just `bb nido:ticket:complete … :status triaged :disposition applied`. There is no Notion mutation, so write **no** `notion-mutations.log` entry — the nido record is the audit trail.
+- **Step 4 (apply):** skip the optimistic concurrency check and ALL Notion writes (`notion page set`, the callout `notion api PATCH`, `notion block delete`). The verdict is already captured in the nido record (Step 1.6) — just `bb nido:ticket:complete … :status triaged :disposition applied`. There is no Notion mutation, so write **no** `notion-mutations.log` entry — the nido record is the audit trail.
 - **Step 5 (dismiss):** dismiss is nido-only for every source — just `bb nido:ticket:dismiss … :br <slack-id>`. No Notion write, no `notion-mutations.log` entry.
 
-Everything else is **identical** for both sources: the codebase investigation, the report format (§3 "Proposed Notion writes" is simply omitted for Slack — there are none), the HITL halt at `:awaiting-input`, the `bb nido:ticket:*` ledger writes, and the verb grammar. Wherever a step below says "fetch the page", "BR-####", or names a Notion-write MCP tool, a Slack run uses the payload brief, the slack `:id`, or skips the call, respectively.
+Everything else is **identical** for both sources: the codebase investigation, the report format (§3 "Proposed Notion writes" is simply omitted for Slack — there are none), the HITL halt at `:awaiting-input`, the `bb nido:ticket:*` ledger writes, and the verb grammar. Wherever a step below says "fetch the page", "BR-####", or names a Notion-write command, a Slack run uses the payload brief, the slack `:id`, or skips the call, respectively.
 
 ## Lifecycle: ticket status
 
@@ -70,7 +70,7 @@ bb nido:ticket:status :project brian :br <BR-####> :status awaiting-input
 
 ## Step 1 — Investigate (autonomous)
 
-> **Notion access — `notion` CLI (Bash), not an MCP.** Reads: `notion page props <id> ID
+> **Notion access — `notion` CLI (Bash).** Reads: `notion page props <id> ID
 > --format json` (→ `BR-\(.unique_id.number)`); `notion page view <id> --format json` (→
 > `.page.last_edited_time`, `.page.properties`); `notion block list <id> --md --depth 3`
 > (body); `notion comment list <id> --all`. Writes (apply only): `notion page set <id>
@@ -191,7 +191,7 @@ If they say no, treat as redo or cancel.
 
 ### Optimistic concurrency check first
 
-**(Notion run only — skip for a Slack run.)** Re-fetch the page via `mcp__notionApi__API-retrieve-a-page`. Compare `last_edited_time` against the value captured in Step 1. If they differ — a human touched the ticket while we were reviewing — post a warning in chat:
+**(Notion run only — skip for a Slack run.)** Re-fetch via `notion page view <page-id> --format json` → `.page.last_edited_time`. Compare it against the value captured in Step 1. If they differ — a human touched the ticket while we were reviewing — post a warning in chat:
 
 > "⚠️ Ticket was edited externally during review (was: `<old>`, now: `<new>`). Re-read and reconfirm before I apply?"
 
@@ -205,28 +205,29 @@ Wait for re-confirmation in chat before proceeding.
 exactly those Type / Effort / Status / Title values and that `:description-prepend`
 callout — do not re-derive them.
 
-1. **Property update** — `mcp__notionApi__API-patch-page` with the page-id and these properties:
+1. **Property update** — one `notion page set <page-id> "<k>=<v>" …` call, with these properties (the CLI fetches the DB schema and coerces select/status/title automatically):
    - **Type** (select) — must be one of `bug`, `feature`, `improvement`, `research`, `chore`
    - **Effort** (select) — must be one of `XS`, `S`, `M`, `L`, `XL`
    - **Status** (status) — for `:triage-new`, transition `Needs verification` → `Not started` (or `On Hold` if you assessed not-actionable). For `:triage-backlog`, leave unchanged.
    - **Title** — set the title property to the **enriched title** from §1. When the enriched title is identical to the original, this is a harmless no-op — write it anyway, don't special-case it.
 
+   Example: `notion page set <page-id> "Type=bug" "Effort=M" "Status=Not started" "Task result=<enriched title>"`. Title property key is `Task result`.
+
    Do NOT overwrite the description body here — that's the prepend in step 2, which leaves the reporter's original text intact.
 
 2. **Description prepend** — prepend the enriched description as a single **callout** above the reporter's original body. The original body is never overwritten.
 
-   a. **Idempotency guard.** A ticket can hit both triage triggers (`:triage-new` then `:triage-backlog`), so an enriched callout from a prior triage may already exist. Fetch the page's first child block (`mcp__notionApi__API-get-block-children`, look at index 0). If it is a callout whose text contains the marker `🤖 Enriched (triage BR-####)` for THIS `BR-####`, delete it first with `mcp__notionApi__API-delete-a-block` — it's our own block, never the reporter's content. This prevents stacking duplicate callouts.
+   a. **Idempotency guard.** A ticket can hit both triage triggers (`:triage-new` then `:triage-backlog`), so an enriched callout from a prior triage may already exist. Fetch the page's first child block via `notion block list <page-id> --format json --depth 1` → `.results[0]`. If it is a callout whose text contains the marker `🤖 Enriched (triage BR-####)` for THIS `BR-####`, delete it first with `notion block delete <block-id>` (the `<block-id>` is `.results[0].id`) — it's our own block, never the reporter's content. This prevents stacking duplicate callouts.
 
-   b. **Prepend the callout** via `mcp__notionApi__API-patch-block-children` on the page-id, passing `position: {"type": "start"}` so the block lands at the **top** of the page (not the end). The single child block:
+   b. **Prepend the callout.** Build the JSON with `jq` (pass the enriched description as the `--arg desc` value, shell-quoted — `jq` escapes any quotes/backslashes/newlines into valid JSON; never hand-write the JSON string), and PATCH it with `position` "start" so it lands at the top:
 
-   ```json
-   {"type": "callout",
-    "callout": {"icon": {"type": "emoji", "emoji": "🤖"},
-                "rich_text": [{"type": "text",
-                               "text": {"content": "🤖 Enriched (triage BR-####)\n<enriched description from §1>"}}]}}
+   ```bash
+   jq -n --arg marker "🤖 Enriched (triage BR-####)" --arg desc "<enriched description from §1>" \
+     '{children:[{type:"callout",callout:{icon:{type:"emoji",emoji:"🤖"},rich_text:[{type:"text",text:{content:($marker + "\n" + $desc)}}]}}],position:{type:"start"}}' \
+     | notion api PATCH /v1/blocks/<page-id>/children --body -
    ```
 
-   c. **Verify the prepend landed at the top.** The MCP tool declares the deprecated `after` param, not `position`, so although `position` is most likely forwarded to the REST API, it is not guaranteed. Re-fetch the page's first child block and confirm it is the enriched callout. **If it is NOT at index 0** (the callout appended at the bottom instead — `position` was stripped), treat it like a partial write: post `⚠️ enriched callout landed at the bottom, not the top (position param not honored) — fix placement manually`, log it per "Partial-write handling" below, and do NOT complete the record cleanly.
+   c. **Verify the prepend landed at the top.** Notion's API may not honor the `position` param for the CLI's Notion-Version, so although it is most likely applied, it is not guaranteed. Re-fetch the first child block (`notion block list <page-id> --format json --depth 1` → `.results[0]`) and confirm it is the enriched callout. **If it is NOT at index 0** (the callout appended at the bottom instead — `position` was stripped), treat it like a partial write: post `⚠️ enriched callout landed at the bottom, not the top (position param not honored) — fix placement manually`, log it per "Partial-write handling" below, and do NOT complete the record cleanly.
 
 3. **Complete the record** — on success (title + description both landed correctly):
 
@@ -266,7 +267,7 @@ Dismiss takes the ticket **off the triage radar** and is **nido-only for every s
 bb nido:ticket:dismiss :project brian :br <BR-####>
 ```
 
-(For a Slack run, pass the slack `:id` as `:br`.) No `mcp__notionApi__*` call, no `notion-mutations.log` entry. The run is done.
+(For a Slack run, pass the slack `:id` as `:br`.) No `notion` write, no `notion-mutations.log` entry. The run is done.
 
 ## Step 6 — Redo
 
@@ -292,7 +293,7 @@ Triage triggers deliberately do NOT use `:dry-run? true`. The coordinator's dry-
 
 The real safety mechanism for triage is the HITL halt at `:awaiting-input` (Step 1.7 + Step 3): the agent ALWAYS pauses for a chat verdict before any Notion write. No Notion mutation happens until you respond with `apply`. If you say `cancel`, `dismiss`, or `redo`, the apply branch never runs (and `dismiss` is nido-only — it never touches Notion either).
 
-Treat this as a hard contract: never call a Notion-write MCP tool (`API-patch-page`, `API-patch-block-children`, `API-delete-a-block`) outside the explicit `apply` branch in Step 4. `apply` is the ONLY Notion-write verb. On `apply`, the permitted writes are: the Type/Effort/Status/Title property patch, and the prepend (plus idempotency-delete) of **our own** enriched callout. Never overwrite the reporter's original body, and never write comments.
+Treat this as a hard contract: never run a Notion-write `notion` command (`page set`, the callout `notion api PATCH`, `block delete`) outside the explicit `apply` branch in Step 4. `apply` is the ONLY Notion-write verb. On `apply`, the permitted writes are: the Type/Effort/Status/Title property patch, and the prepend (plus idempotency-delete) of **our own** enriched callout. Never overwrite the reporter's original body, and never write comments.
 
 ## Resume behaviour
 
