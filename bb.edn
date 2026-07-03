@@ -326,6 +326,14 @@
    :doc "Print whether a Slack token is present in the macOS Keychain."
    :task (apply nido-slack/auth-check *command-line-args*)}
 
+  nido:slack:react
+  {:doc "React to a Slack message. :channel <C> :ts <ts> [:name eyes]"
+   :task (apply nido-slack/react *command-line-args*)}
+
+  nido:slack:reply
+  {:doc "Post a threaded reply. :channel <C> :thread-ts <ts> :text \"...\""
+   :task (apply nido-slack/reply *command-line-args*)}
+
   nido:notion:views:check
   {:requires ([tasks.nido-notion-views :as nido-notion-views])
    :doc "Validate ~/.nido/projects/<p>/notion-views.edn against the live database. :project <p>."
