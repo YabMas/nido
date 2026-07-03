@@ -70,15 +70,21 @@ bb nido:ticket:status :project brian :br <BR-####> :status awaiting-input
 
 ## Step 1 — Investigate (autonomous)
 
+> **Notion access — `notion` CLI (Bash), not an MCP.** Reads: `notion page props <id> ID
+> --format json` (→ `BR-\(.unique_id.number)`); `notion page view <id> --format json` (→
+> `.page.last_edited_time`, `.page.properties`); `notion block list <id> --md --depth 3`
+> (body); `notion comment list <id> --all`. Writes (apply only): `notion page set <id>
+> "Type=…" "Effort=…" "Status=…" "Task result=…"`; callout via `notion api PATCH`.
+
 1. Read the envelope payload to get `:page-id`, `:url`, `:title`, `:trigger-name`. The payload is in the first user message you receive at session start.
-2. **Resolve the ticket key and open the record (first recorded action).** **(Notion run; a Slack run skips this fetch — see "Source adapter" above, open the record with the slack `:id`.)** Fetch the page (`mcp__notionApi__API-retrieve-a-page`) and read the **"ID" property** — a Notion `unique_id` property with prefix `BR` (e.g. `BR-5236`) — to get the `BR-####`. This is the key for every later `bb nido:ticket:*` call. Then open the nido record as your first recorded action:
+2. **Resolve the ticket key and open the record (first recorded action).** **(Notion run; a Slack run skips this fetch — see "Source adapter" above, open the record with the slack `:id`.)** Fetch the ID property with `notion page props <page-id> ID --format json` — a Notion `unique_id` property with prefix `BR` — and read `.unique_id.prefix` + "-" + `.unique_id.number` (e.g. `BR-5236`) to get the `BR-####`. This is the key for every later `bb nido:ticket:*` call. Then open the nido record as your first recorded action:
 
    ```bash
    bb nido:ticket:open :project brian :br <BR-####> :page <page-id> :url <url> :title "<title>" :opened-by <trigger-name> :edited <last_edited_time>
    ```
 
    `open` creates/refreshes the record and sets status `:investigating`. The `:edited` value is stored as `:notion-last-edited-at` in `meta.edn` for future change-detection. (There is no dedup step here — nido's coordinator pre-spawn gate already reads this record and won't spawn a Run for a ticket that's already triaged/dismissed or has a live session.)
-3. While you have the page response from step 2, capture `last_edited_time` — needed for optimistic concurrency at apply time. Also fetch the body blocks via `mcp__notionApi__API-get-block-children` (description text). **(Notion run only — a Slack run has no page; the description body is the payload `:text`, and there is no concurrency check.)**
+3. Capture `last_edited_time` for optimistic concurrency at apply time via `notion page view <page-id> --format json` → `.page.last_edited_time`. Fetch the body blocks with `notion block list <page-id> --md --depth 3` (description text). **(Notion run only — a Slack run has no page; the description body is the payload `:text`, and there is no concurrency check.)**
 
 ### Pre-staged artifacts (videos)
 
