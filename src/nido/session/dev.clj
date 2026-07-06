@@ -40,12 +40,18 @@
 
 (defn pending-resolve-keys
   "The set of gate-resolve keys currently mid-flight — keys shaped
-   \"<project>/<ws-id>\" (as written by the UI's gate-resolve!). Instance ids
-   (\"project--session\") are excluded. Fed into work/screen as :pending so an
-   optimistic 'working…' survives until the async resolve settles."
+   \"<project>/<ws-id>\" (as written by the UI's gate-resolve!) whose state is
+   still :resuming/:resolving. Fed into work/screen as :pending so an optimistic
+   'working…' survives until the async resolve settles. A :failed resolve is NOT
+   mid-flight — it drops out so the gate re-derives from disk and stays
+   retryable (else a failed Apply would strand a permanent 'working…' with no
+   action buttons). Filtering on state also excludes slashed-session instance-id
+   keys, which never carry :resuming/:resolving."
   []
-  (->> @app-states keys
-       (filter #(and (string? %) (str/includes? % "/")))
+  (->> @app-states
+       (filter (fn [[k v]] (and (string? k) (str/includes? k "/")
+                                (#{:resuming :resolving} (:state v)))))
+       (map key)
        set))
 
 (defn dev-state-for

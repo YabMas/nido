@@ -413,6 +413,19 @@
     (is (contains? (nido.session.dev/pending-resolve-keys) "brian/ws-9"))
     (finally (nido.session.dev/clear-app-state! "brian/ws-9"))))
 
+(deftest pending-resolve-keys-excludes-failed-and-instance-ids
+  ;; a :failed resolve is not mid-flight — it must drop out so the gate stays
+  ;; retryable; a slashed-session instance-id key must never count as pending.
+  (nido.session.dev/set-app-state! "brian/ws-failed" :failed "boom")
+  (nido.session.dev/set-app-state! "brian--fix/foo" :starting)
+  (try
+    (let [ks (nido.session.dev/pending-resolve-keys)]
+      (is (not (contains? ks "brian/ws-failed")) ":failed is not mid-flight")
+      (is (not (contains? ks "brian--fix/foo")) "an instance-id key is never pending"))
+    (finally
+      (nido.session.dev/clear-app-state! "brian/ws-failed")
+      (nido.session.dev/clear-app-state! "brian--fix/foo"))))
+
 (deftest post-pane-gate-reply-passes-input-from-body
   (let [calls (atom [])]
     (with-redefs [nido.work/resolve-gate! (fn [p w a & [in]] (swap! calls conj [p w a in]) {:resumed "auto"})
