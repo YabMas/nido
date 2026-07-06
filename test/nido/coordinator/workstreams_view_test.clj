@@ -70,6 +70,19 @@
             :entries []}]
     (is (= "ws-20260601-aaaaaa" (wsv/label ws [])))))
 
+(deftest label-uses-github-issue-title
+  ;; A github-issue workstream is labelled by the issue title, not the raw ws-id.
+  (let [ws {:id "ws-20260615-20faf3"
+            :external-refs [{:adapter :github-issue :id "brian#123" :title "Fix flaky login redirect"}]
+            :entries []}]
+    (is (= "Fix flaky login redirect" (wsv/label ws [])))))
+
+(deftest label-github-issue-without-title-falls-back-to-repo-number
+  (let [ws {:id "ws-20260615-20faf3"
+            :external-refs [{:adapter :github-issue :id "brian#77"}]
+            :entries []}]
+    (is (= "brian#77" (wsv/label ws [])))))
+
 (deftest label-falls-back-to-latest-entry-title
   (let [ws {:id "ws-20260601-aaaaaa"
             :external-refs []

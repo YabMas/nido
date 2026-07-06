@@ -20,6 +20,11 @@
   [ws]
   (some #(when (= :slack-message (:adapter %)) %) (:external-refs ws)))
 
+(defn- github-ref
+  "The workstream's :github-issue external-ref map, or nil."
+  [ws]
+  (some #(when (= :github-issue (:adapter %)) %) (:external-refs ws)))
+
 (defn ledger-ref
   "The external-ref whose :id keys the per-ticket ledger (`bb nido:ticket:*` :br):
    the :notion ref (BR-####) or the :slack-message ref (slack-<channel>-<ts>).
@@ -51,6 +56,8 @@
    1. Notion external-ref → \"BR-#### · <title>\" (or just BR-#### with no/blank title)
    1b. Slack external-ref → the message text (its :title); the slack-<channel>-<ts>
        id is too noisy to show, and the title IS the report body
+   1c. GitHub-issue external-ref → the issue title (falling back to repo#number,
+       its :id — both read far better than the raw ws-id)
    2. latest ledger entry's :title (when present and non-blank)
    3. originating trigger (from a session's autonomy) + short ws-id suffix
    4. a session name (human one-offs have no ref/entry/trigger — the name reads
@@ -59,6 +66,7 @@
   [ws sessions]
   (let [nref        (notion-ref ws)
         sref        (slack-ref ws)
+        gref        (github-ref ws)
         entry-title (not-empty (some-> ws :entries last :title))
         trigger     (some #(get-in % [:autonomy :trigger]) sessions)
         sname       (some (comp not-empty :name) sessions)]
@@ -67,6 +75,7 @@
                     (str (:id nref) " · " t)
                     (:id nref))
       sref        (or (not-empty (:title sref)) entry-title (:id ws))
+      gref        (or (not-empty (:title gref)) entry-title (:id gref) (:id ws))
       entry-title entry-title
       trigger     (str (name trigger) " · " (short-suffix (:id ws)))
       sname       sname
