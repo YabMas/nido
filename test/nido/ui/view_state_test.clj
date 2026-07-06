@@ -27,3 +27,9 @@
 (deftest parse-unclassified-facet
   (is (= {:app-domain :unclassified}
          (:facets (vs/parse {:uri "/workstreams" :query-string "app-domain=unclassified"})))))
+
+(deftest parse-url-decodes-facet-values
+  ;; a space-encoded facet value round-trips to the raw string (moved here from
+  ;; the old server parse-filters test)
+  (is (= {:app-domain "Onboarding Flow"}
+         (:facets (vs/parse {:uri "/workstreams" :query-string "app-domain=Onboarding%20Flow"})))))

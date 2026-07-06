@@ -54,6 +54,9 @@
 
 (deftest home-route-renders-needs-page
   (with-redefs [nido.work/all-gates (fn [] [])
+                nido.work/all-grouped (fn [] [])
+                nido.session.dev/pending-resolve-keys (fn [] #{})
+                project/list-projects (fn [] {"brian" {:directory "/x"}})
                 nido.ui.server/read-rail-daemon (fn [] {:state :up})]
     (let [resp (server/handle-request {:request-method :get :uri "/"})]
       (is (= 200 (:status resp)))
@@ -61,15 +64,21 @@
 
 (deftest needs-fragment-route-is-sse-and-patches-rail
   (with-redefs [nido.work/all-gates (fn [] [])
+                nido.work/all-grouped (fn [] [])
+                nido.session.dev/pending-resolve-keys (fn [] #{})
+                project/list-projects (fn [] {"brian" {:directory "/x"}})
                 nido.ui.server/read-rail-daemon (fn [] {:state :up})]
     (let [resp (server/handle-request {:request-method :get :uri "/_fragment/needs"})]
       (is (str/includes? (get-in resp [:headers "Content-Type"]) "text/event-stream"))
       (is (str/includes? (:body resp) "rail-needs-count")))))   ; rail patched too
 
-(deftest gate-pane-route-renders                ; keep, unchanged URI /gate/...
+(deftest gate-pane-route-renders                ; legacy URI /gate/… → needs surface, gate selected
   (let [g {:ws-id "ws-1" :project "brian" :origin :notion :stage :triage
            :label "BR-7" :report nil :actions [] :session nil}]
-    (with-redefs [nido.work/all-gates (fn [] [g]) nido.work/gate (fn [_ _] g)
+    (with-redefs [nido.work/all-gates (fn [] [g])
+                  nido.work/all-grouped (fn [] [])
+                  nido.session.dev/pending-resolve-keys (fn [] #{})
+                  project/list-projects (fn [] {"brian" {:directory "/x"}})
                   nido.ui.server/read-rail-daemon (fn [] {:state :up})]
       (let [resp (server/handle-request {:request-method :get :uri "/gate/brian/ws-1"})]
         (is (= 200 (:status resp)))
@@ -142,8 +151,9 @@
 
 (deftest dashboard-routes-smoke
   (with-redefs [nido.work/all-gates (fn [] [])
-                server/all-grouped  (fn [] [])
+                nido.work/all-grouped (fn [] [])
                 server/all-session-rows (fn [] [])
+                project/list-projects (fn [] {"brian" {:directory "/x"}})
                 nido.ui.server/read-rail-daemon (fn [] {:state :up})]
     (doseq [uri ["/" "/workstreams" "/system"]]
       (is (= 200 (:status (server/handle-request {:request-method :get :uri uri})))
@@ -163,21 +173,22 @@
                                              :label "BR-1" :report nil :actions [] :session nil}
                                             {:ws-id "b" :project "foo" :origin :notion :stage :triage
                                              :label "FOO-1" :report nil :actions [] :session nil}])
+                nido.work/all-grouped (fn [] [])
+                nido.session.dev/pending-resolve-keys (fn [] #{})
                 nido.ui.server/read-rail-daemon (fn [] {:state :up})
                 project/list-projects (fn [] {"brian" {:directory "/x"} "foo" {:directory "/y"}})]
     (let [resp (server/handle-request {:request-method :get :uri "/" :query-string "scope=brian"})]
       (is (str/includes? (:body resp) "BR-1"))
       (is (not (str/includes? (:body resp) "FOO-1"))))))
 
-(deftest parse-scope-defaults-to-all
-  (is (= "all" (#'server/parse-scope nil)))
-  (is (= "all" (#'server/parse-scope "")))
-  (is (= "brian" (#'server/parse-scope "scope=brian"))))
+;; (view-state parsing — scope/source/facets/unclassified — is tested in
+;;  nido.ui.view-state-test; source-counts + facet narrowing now live in
+;;  nido.work/screen and are tested there + end-to-end below.)
 
 (deftest removed-routes-404
   (with-redefs [nido.work/all-gates (fn [] [])
                 server/all-session-rows (fn [] [])
-                server/all-grouped (fn [] [])
+                nido.work/all-grouped (fn [] [])
                 project/list-projects (fn [] {"brian" {:directory "/x"}})
                 nido.ui.server/read-rail-daemon (fn [] {:state :up})]
     (doseq [uri ["/projects" "/board" "/ws/brian/ws-1"
@@ -188,40 +199,57 @@
 (deftest live-routes-still-200
   (with-redefs [nido.work/all-gates (fn [] [])
                 server/all-session-rows (fn [] [])
-                server/all-grouped (fn [] [])
+                nido.work/all-grouped (fn [] [])
                 project/list-projects (fn [] {"brian" {:directory "/x"}})
                 nido.ui.server/read-rail-daemon (fn [] {:state :up})]
     (doseq [uri ["/" "/workstreams" "/system"]]
       (is (= 200 (:status (server/handle-request {:request-method :get :uri uri})))))))
 
-(deftest parse-filters-reads-source-and-facets
-  (is (= {:source :notion :facets {:app-domain "Teacher"}}
-         (#'server/parse-filters "scope=brian&source=notion&app-domain=Teacher")))
-  (is (= {:source :all :facets {}} (#'server/parse-filters nil)))
-  (is (= {:source :all :facets {}} (#'server/parse-filters "scope=brian"))))
+(deftest workstreams-overview-and-detail-render-same-list
+  ;; Selecting a workstream must NOT change the filtered list — the overview and
+  ;; the detail (with ?sel=) render the same rows. This is the overview≡detail
+  ;; invariant (the "list jumps" bug).
+  (let [grouped {:incoming [] :triage {:in-flight [] :queued []}
+                 :ready [{:ws-id "r1" :origin :notion :facets {} :stage :ready :label "BR-1" :needs-you false}]
+                 :in-progress [{:ws-id "p1" :origin :github :facets {} :stage :in-progress :label "BR-2" :needs-you false}]
+                 :shipping []}]
+    (with-redefs [nido.work/all-grouped (fn [] [{:project "brian" :grouped grouped}])
+                  nido.work/all-gates   (fn [] [])
+                  nido.work/workstream  (fn [_ _ _] {:project "brian" :ws-id "r1" :origin :notion
+                                                     :stage :ready :label "BR-1" :sessions []})
+                  nido.session.dev/pending-resolve-keys (fn [] #{})
+                  nido.session.dev/ws-session-dev-states (fn [_ _] {})
+                  project/list-projects (fn [] {"brian" {:directory "/x"}})
+                  nido.ui.server/read-rail-daemon (fn [] {:state :up})]
+      (let [over (:body (server/handle-request {:request-method :get :uri "/workstreams"
+                                                :query-string "source=notion"}))
+            det  (:body (server/handle-request {:request-method :get :uri "/workstreams"
+                                                :query-string "source=notion&sel=brian:r1"}))]
+        (is (str/includes? over "BR-1"))
+        (is (str/includes? det "BR-1"))
+        (is (not (str/includes? over "BR-2")) "github row filtered from overview")
+        (is (not (str/includes? det "BR-2"))  "github row filtered from detail too")))))
 
-(deftest parse-filters-decodes-and-coerces-unclassified
-  (is (= {:source :notion :facets {:app-domain :unclassified}}
-         (#'server/parse-filters "source=notion&app-domain=unclassified")))
-  (is (= {:source :all :facets {:app-domain "Onboarding Flow"}}
-         (#'server/parse-filters "app-domain=Onboarding%20Flow"))))
-
-(deftest apply-filters-narrows-each-grouped-by-source-and-facet
-  (let [groups [{:project :brian
-                 :grouped {:incoming [{:origin :notion :facets {:app-domain ["Teacher"]}}
-                                      {:origin :notion :facets {:app-domain ["Student"]}}
-                                      {:origin :slack}]
-                           :triage {:in-flight [] :queued []} :ready [] :in-progress []}}]
-        out (#'server/apply-filters :notion {:app-domain "Teacher"} groups)]
-    (is (= [{:origin :notion :facets {:app-domain ["Teacher"]}}]
-           (get-in (first out) [:grouped :incoming])))))
-
-(deftest source-counts-tallies-by-origin
-  (let [groups [{:project :brian
-                 :grouped {:incoming [{:origin :notion} {:origin :slack}]
-                           :triage {:in-flight [{:origin :notion}] :queued []}
-                           :ready [] :in-progress [{:origin :scratch}]}}]]
-    (is (= {:notion 2 :slack 1 :scratch 1} (#'server/source-counts groups)))))
+(deftest workstreams-route-narrows-by-source-and-facet-end-to-end
+  ;; The whole filter pipeline (parse → screen) narrows the rendered list by
+  ;; source ∧ facet. Replaces the old apply-filters unit test.
+  (with-redefs [nido.work/all-grouped
+                (fn [] [{:project "brian"
+                         :grouped {:incoming [{:ws-id "t" :origin :notion :stage :incoming
+                                               :label "Teacher-row" :facets {:app-domain ["Teacher"]}}
+                                              {:ws-id "s" :origin :notion :stage :incoming
+                                               :label "Student-row" :facets {:app-domain ["Student"]}}
+                                              {:ws-id "k" :origin :slack :stage :incoming
+                                               :label "Slack-row" :facets {}}]
+                                   :triage {:in-flight [] :queued []} :ready [] :in-progress []}}])
+                nido.work/all-gates (fn [] [])
+                project/list-projects (fn [] {"brian" {:directory "/x"}})
+                nido.ui.server/read-rail-daemon (fn [] {:state :up})]
+    (let [resp (server/handle-request {:request-method :get :uri "/workstreams"
+                                       :query-string "source=notion&app-domain=Teacher"})]
+      (is (str/includes? (:body resp) "Teacher-row"))
+      (is (not (str/includes? (:body resp) "Student-row")) "other facet value filtered out")
+      (is (not (str/includes? (:body resp) "Slack-row"))   "other origin filtered out"))))
 
 (deftest dev-state-for-derives-from-registry-probe-and-pending
   (let [reg {"/wt" {:app-port 3142 :url "http://x.localhost:3142"}}]
@@ -262,7 +290,7 @@
                                   {"/wt" {:app-port 3142 :url "http://x.localhost:3142"}})))))
 
 (deftest workstreams-route-hides-incoming-under-all-shows-under-slack
-  (with-redefs [server/all-grouped
+  (with-redefs [nido.work/all-grouped
                 (fn [] [{:project :brian
                          :grouped {:incoming [{:origin :slack :stage :incoming :label "S-one"
                                                :last-activity "t" :engagement :idle}]

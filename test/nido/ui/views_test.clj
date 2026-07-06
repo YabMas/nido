@@ -49,14 +49,27 @@
                   :trail [{:ref "src/order.clj:88" :note "per-line round"}]}))
 
 (deftest needs-fragment-lists-cards
-  (let [html (views/needs-fragment [sample-gate] nil)]
+  (let [html (views/needs-fragment {:gates [sample-gate] :selection nil :scope "all"})]
     (is (str/includes? html "id=\"needs\""))
     (is (str/includes? html "BR-7"))
     (is (str/includes? html ">N<"))
-    (is (str/includes? html "/gate/brian/ws-1"))))
+    ;; selecting a gate carries the view-state (sel) rather than a bare path
+    (is (str/includes? html "sel=brian:ws-1"))))
 
 (deftest needs-fragment-empty-state-is-calm
-  (is (str/includes? (views/needs-fragment [] nil) "Nothing needs you")))
+  (is (str/includes? (views/needs-fragment {:gates [] :selection nil}) "Nothing needs you")))
+
+(deftest needs-fragment-preserves-selection-highlight
+  ;; the polled fragment must keep the open gate's highlight (selection threaded
+  ;; from the screen, not reset to nil each tick)
+  (let [html (views/needs-fragment {:gates [sample-gate]
+                                    :selection {:project "brian" :ws-id "ws-1"} :scope "all"})]
+    (is (str/includes? html "gate-card sel"))))
+
+(deftest needs-fragment-marks-pending-gate-working
+  (let [html (views/needs-fragment {:gates [(assoc sample-gate :pending? true)]
+                                    :selection nil :scope "all"})]
+    (is (str/includes? html "working…") "a resumed gate shows working in the inbox row")))
 
 (deftest gate-pane-renders-markdown-report-and-actions
   (let [html (views/gate-pane sample-gate)]
@@ -85,10 +98,19 @@
 
 (deftest needs-page-has-shell-master-detail-and-poll
   (let [html (views/needs-page {:active :needs :needs-count 1 :daemon {:state :up} :scope "all" :projects []}
-                               [sample-gate] sample-gate)]
+                               {:gates [sample-gate] :selection {:project "brian" :ws-id "ws-1"}
+                                :scope "all" :source :all :facets {}})]
     (is (str/includes? html "rail-link active"))        ; rail present + active
     (is (str/includes? html "/_fragment/needs"))         ; polls the renamed fragment
-    (is (str/includes? html "BR-7"))))
+    (is (str/includes? html "BR-7"))))                   ; the selected gate fills the pane
+
+(deftest gate-pane-pending-shows-working-without-actions
+  ;; after Apply/Reply the agent is running → the pane shows "working…" and NO
+  ;; action buttons, so a poll can't flip it back to a fresh Apply button.
+  (let [html (views/gate-pane (assoc sample-gate :pending? true))]
+    (is (str/includes? html "working…"))
+    (is (not (str/includes? html "/gate/brian/ws-1/apply")) "no action buttons while working")
+    (is (not (str/includes? html "<textarea")))))
 
 (def ^:private sample-grouped
   {:triage {:in-flight [{:ws-id "w1" :origin :notion :stage :triage :label "BR-1 · a" :needs-you true}]
@@ -103,14 +125,25 @@
               {:name "me"   :autonomy-level :interactive :parked? false :status :up :brakes nil}]})
 
 (deftest workstreams-fragment-groups-and-links
-  (let [html (views/workstreams-fragment [{:project "brian" :grouped sample-grouped}] nil)]
+  (let [html (views/workstreams-fragment {:groups [{:project "brian" :grouped sample-grouped}]
+                                          :selection nil :scope "all" :source :all :facets {}})]
     (is (str/includes? html "id=\"workstreams\""))
     (is (str/includes? html "triage"))
     (is (str/includes? html "ready"))
     (is (str/includes? html "in-progress"))
     (is (str/includes? html "BR-1 · a"))
-    (is (str/includes? html "/workstreams/brian/w1"))   ; rows link to the ledger pane
+    (is (str/includes? html "sel=brian:w1"))            ; rows carry the selection in the view-state
     (is (str/includes? html ">N<"))))
+
+(deftest workstreams-fragment-preserves-selection-and-filters
+  ;; a poll refresh keeps the open row highlighted, and each row link preserves
+  ;; the active source filter so selecting one lands on the SAME filtered list.
+  (let [html (views/workstreams-fragment {:groups [{:project "brian" :grouped sample-grouped}]
+                                          :selection {:project "brian" :ws-id "w1"}
+                                          :scope "all" :source :notion :facets {}})]
+    (is (str/includes? html "gate-card sel") "selected row keeps its highlight")
+    (is (str/includes? html "sel=brian:w1"))
+    (is (str/includes? html "source=notion") "row link preserves the active source filter")))
 
 (deftest workstream-pane-shows-ledger-report-and-sessions
   (let [ws   (assoc sample-ws :report {:format :markdown :kind :triage :at "t" :title "Verdict"
@@ -153,7 +186,9 @@
 (deftest workstreams-page-has-shell-and-poll
   (let [html (views/workstreams-page {:active :workstreams :needs-count 0 :daemon {:state :up}
                                       :scope "all" :projects []}
-                                     [{:project "brian" :grouped sample-grouped}] nil nil)]
+                                     {:scope "all" :source :all :facets {} :facet-dims []
+                                      :source-counts {} :selection nil
+                                      :groups [{:project "brian" :grouped sample-grouped}]})]
     (is (str/includes? html "rail-link active"))
     (is (str/includes? html "/_fragment/workstreams"))))
 
@@ -174,7 +209,7 @@
 
 (deftest gate-card-shows-resume-error-badge
   (let [g (assoc sample-gate :resume-error {:reason :resume-failed :message "exec failed"})
-        html (views/needs-fragment [g] nil)]
+        html (views/needs-fragment {:gates [g] :selection nil :scope "all"})]
     (is (str/includes? html "resume failed"))
     (is (str/includes? html "exec failed"))))
 
@@ -205,11 +240,10 @@
     (is (str/includes? html "dot-halted"))))
 
 (deftest workstreams-filter-bar-renders-source-chips-with-counts
-  (let [html (views/workstreams-page
-              {:active :workstreams :scope "all" :projects [] :needs-count 0 :daemon {:state :up}
-               :source :notion :facets {} :facet-dims [:app-domain :type]
-               :source-counts {:notion 3 :slack 1}}
-              [] nil nil)]
+  (let [screen {:active :workstreams :scope "all" :projects [] :needs-count 0 :daemon {:state :up}
+                :source :notion :facets {} :facet-dims [:app-domain :type]
+                :source-counts {:notion 3 :slack 1} :selection nil :groups []}
+        html (views/workstreams-page screen screen)]
     (is (str/includes? html "Notion"))
     (is (str/includes? html "(3)") "per-source count shown")
     (is (str/includes? html "App Domain") "facet row for the Notion source")
@@ -218,11 +252,10 @@
     (is (str/includes? html "source=notion"))))
 
 (deftest workstreams-filter-bar-hides-facets-for-facetless-source
-  (let [html (views/workstreams-page
-              {:active :workstreams :scope "all" :projects [] :needs-count 0 :daemon {:state :up}
-               :source :slack :facets {} :facet-dims []
-               :source-counts {:notion 3 :slack 1}}
-              [] nil nil)]
+  (let [screen {:active :workstreams :scope "all" :projects [] :needs-count 0 :daemon {:state :up}
+                :source :slack :facets {} :facet-dims []
+                :source-counts {:notion 3 :slack 1} :selection nil :groups []}
+        html (views/workstreams-page screen screen)]
     (is (not (str/includes? html "App Domain")) "no facet rows for a facet-less source")
     (is (str/includes? html "source=slack"))))
 
@@ -234,25 +267,28 @@
                                       {:origin :notion :facets {:app-domain ["Student"]}}
                                       {:origin :notion :facets {}}]
                            :triage {:in-flight [] :queued []} :ready [] :in-progress []}}]
-        html (views/workstreams-page
-              {:active :workstreams :scope "all" :projects [] :needs-count 0 :daemon {:state :up}
-               :source :notion :facets {} :facet-dims [:app-domain]
-               :source-counts {:notion 3}}
-              groups nil nil)]
+        screen {:active :workstreams :scope "all" :projects [] :needs-count 0 :daemon {:state :up}
+                :source :notion :facets {} :facet-dims [:app-domain]
+                :source-counts {:notion 3} :selection nil :groups groups}
+        html (views/workstreams-page screen screen)]
     (is (str/includes? html "Teacher")     "present value chip")
     (is (str/includes? html "Student")     "second present value chip")
     (is (str/includes? html "Unclassified") ":unclassified chip for the facet-less row")))
 
-(deftest filter-query-encodes-facet-values
+(deftest screen-query-encodes-facet-values
   ;; :unclassified emits as "unclassified" (no colon); spaces are encoded.
-  (let [q (#'views/filter-query {:scope "all" :source :notion
+  (let [q (#'views/screen-query {:scope "all" :source :notion
                                  :facets {:app-domain :unclassified}})]
     (is (str/includes? q "app-domain=unclassified"))
     (is (not (str/includes? q ":unclassified"))))
-  (let [q (#'views/filter-query {:scope "all" :source :notion
+  (let [q (#'views/screen-query {:scope "all" :source :notion
                                  :facets {:app-domain "Onboarding Flow"}})]
     (is (not (str/includes? q "Onboarding Flow")) "raw space not in the query")
-    (is (or (str/includes? q "Onboarding%20Flow") (str/includes? q "Onboarding+Flow")))))
+    (is (or (str/includes? q "Onboarding%20Flow") (str/includes? q "Onboarding+Flow"))))
+  ;; a :sel override adds the selection while keeping the filters
+  (let [q (#'views/screen-query {:scope "all" :source :notion :facets {}} {:sel "brian:ws-7"})]
+    (is (str/includes? q "source=notion"))
+    (is (str/includes? q "sel=brian:ws-7"))))
 
 (deftest workstream-pane-shows-ledger-index-and-selected-report
   (let [ws   (assoc sample-ws
@@ -307,16 +343,16 @@
   (let [ship-row {:ws-id "ws-ship" :origin :notion :label "BR-99 · Checkout"
                   :needs-you true :stage :shipping :ship-substate :blocked}
         html (views/workstreams-fragment
-              [{:project "brian"
-                :grouped {:shipping [ship-row]
-                          :triage {:in-flight [] :queued []}
-                          :incoming [] :ready [] :in-progress []}}]
-              nil)]
+              {:groups [{:project "brian"
+                         :grouped {:shipping [ship-row]
+                                   :triage {:in-flight [] :queued []}
+                                   :incoming [] :ready [] :in-progress []}}]
+               :selection nil :scope "all" :source :all :facets {}})]
     (is (str/includes? html "⚠ blocked")   "blocked sub-state renders the loud badge")
     (is (str/includes? html "ship-blocked") "loud CSS class is emitted")
     (is (str/includes? html "ship-badge")   "ship-badge wrapper class present")
     (is (str/includes? html "shipping")     "shipping section header is present")
-    (is (str/includes? html "/workstreams/brian/ws-ship") "row links to the workstream")))
+    (is (str/includes? html "sel=brian:ws-ship") "row selection carries the ws id")))
 
 ;; ---------------------------------------------------------------------------
 ;; Generic stage action bar below the reader pane (current entry only)

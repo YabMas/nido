@@ -11,6 +11,7 @@
             [nido.session.state :as state]
             [nido.ui.health :as health]
             [nido.ui.views :as views]
+            [nido.ui.view-state :as view-state]
             [nido.work :as work]
             [org.httpkit.server :as http]))
 
@@ -120,110 +121,92 @@
           (assoc row :project pname))
         (sort-by (juxt #(if (:live? %) 0 1) :project :name)))))
 
-(defn all-grouped
-  "[{:project :grouped} …] across registered projects (mirrors all-session-rows)."
-  []
-  (->> (project/list-projects)
-       (keep (fn [[pname _]]
-               (try {:project pname :grouped (work/grouped pname)}
-                    (catch Throwable _ nil))))
-       vec))
-
 ;; ---------------------------------------------------------------------------
 ;; Rail seam + context
 
 (defn read-rail-daemon "Seam over health for stubbing in tests." [] (health/read-daemon-health))
 
-(defn- parse-entry
-  "Read the `entry` query param as a long seq, or nil (→ latest) when absent/garbage."
-  [query-string]
-  (when query-string
-    (some-> (re-find #"(?:^|&)entry=(\d+)" query-string) second parse-long)))
-
-(defn- parse-scope
-  "Read scope from the query string; \"all\" when absent."
-  [query-string]
-  (or (when query-string
-        (some->> (str/split query-string #"&")
-                 (map #(str/split % #"=" 2))
-                 (some (fn [[k v]] (when (= k "scope") v)))))
-      "all"))
-
-(defn- scope-filter
-  "Keep only rows whose :project matches `scope` (no-op when \"all\")."
+(defn- scope-keep-rows
+  "Keep only rows whose :project matches `scope` (no-op when \"all\"). Used for
+   the system surface's session rows + gates, which are tagged with :project."
   [scope rows]
   (if (= "all" scope) rows (filterv #(= scope (:project %)) rows)))
 
-(defn- parse-filters
-  "Read source + facet params from the query string. :source defaults to :all;
-   :facets is a map of kebab-keyword → value for every non-scope/source param."
-  [query-string]
-  (let [pairs (when query-string
-                (->> (str/split query-string #"&")
-                     (map #(str/split % #"=" 2))
-                     (filter #(= 2 (count %)))))
-        source (some (fn [[k v]] (when (= k "source") (keyword v))) pairs)
-        facets (into {} (for [[k v] pairs
-                              :when (not (#{"scope" "source"} k))]
-                          (let [dv (java.net.URLDecoder/decode v "UTF-8")]
-                            [(keyword k) (if (= dv "unclassified") :unclassified dv)])))]
-    {:source (or source :all) :facets facets}))
+(defn- facet-dims-for
+  "IO: the facet dimensions valid for this view's scope + source across the
+   in-scope projects. Computed here (impure) and injected into the pure
+   work/screen — screen must not hit disk for this."
+  [{:keys [scope source]}]
+  (vec (mapcat (fn [[pname _]]
+                 (when (or (= "all" scope) (= scope (name pname)))
+                   (work/facet-dimensions pname source)))
+               (project/list-projects))))
 
-(defn- valid-facet-keys
-  "Kebab facet keys valid for `source` across the in-scope projects."
-  [scope source]
-  (->> (project/list-projects)
-       (filter (fn [[pname _]] (or (= "all" scope) (= scope (name pname)))))
-       (mapcat (fn [[pname _]] (work/facet-dimensions pname source)))
-       set))
+(defn derive-screen
+  "Impure wiring: gather what only IO can produce (grouped rows, gates, in-flight
+   resolve keys, facet dims), hand off to the pure work/screen, then attach the
+   selection detail. Selection detail is attached HERE (not in work) because it
+   needs the dev layer, which work must not depend on. Every /workstreams + /
+   render route runs through this one function, so no two render sites disagree."
+  [view-state]
+  (let [screen (work/screen view-state
+                            {:groups     (work/all-grouped)
+                             :gates      (work/all-gates)
+                             :pending    (dev/pending-resolve-keys)
+                             ;; Facet dims are only rendered on the workstreams
+                             ;; filter bar — skip the project-scan IO on the
+                             ;; needs surface (and its hot 3s poll).
+                             :facet-dims (if (= :workstreams (:surface view-state))
+                                           (facet-dims-for view-state)
+                                           [])})
+        sel (:selection view-state)]
+    (assoc screen :selection
+           (when sel
+             (let [ws (when (= :workstreams (:surface view-state))
+                        (work/workstream (:project sel) (:ws-id sel) (:entry view-state)))]
+               (cond-> {:project (:project sel) :ws-id (:ws-id sel)}
+                 ws (assoc :ws ws
+                           :dev-states (dev/ws-session-dev-states (:project sel) ws))))))))
 
-(defn- apply-filters
-  "Narrow each {:project :grouped} entry's rows by source ∧ facets ∧ overview
-   visibility (an :incoming row shows only under its own source lens)."
-  [source facets groups]
-  (mapv (fn [g]
-          (update g :grouped
-                  #(work/filter-grouped
-                    % (fn [row] (and (work/source-match? source row)
-                                     (work/facet-match? facets row)
-                                     (work/overview-visible? source row))))))
-        groups))
-
-(defn- source-counts
-  "Tally rows by :origin across all grouped entries."
-  [groups]
-  (->> groups
-       (mapcat (fn [g] (work/grouped-rows (:grouped g))))
-       (reduce (fn [m row] (update m (:origin row) (fnil inc 0))) {})))
-
-(defn- rail-context
-  "Render context for the shell rail on any page."
-  [active scope]
+(defn- rail-ctx
+  "Rail context for the screen-based surfaces (needs, workstreams). The badge
+   count is the screen's own needs-count, so rail + inbox always agree."
+  [active screen]
   {:active      active
-   :scope       scope
-   :needs-count (count (scope-filter scope (work/all-gates)))
+   :scope       (:scope screen)
+   :needs-count (:needs-count screen)
    :daemon      (read-rail-daemon)
    :projects    (mapv (comp name key) (project/list-projects))})
 
-(defn- needs-fragment-response [gates sel-id]
+(defn- rail-context
+  "Rail context for the system surface (not screen-based). Scope-filters gates
+   for the badge count."
+  [active scope]
+  {:active      active
+   :scope       scope
+   :needs-count (count (scope-keep-rows scope (work/all-gates)))
+   :daemon      (read-rail-daemon)
+   :projects    (mapv (comp name key) (project/list-projects))})
+
+(defn- needs-fragment-response [screen]
   (sse-response
    (sse-fragment
-    (str (views/needs-fragment gates sel-id)
-         (views/rail-status-fragment {:needs-count (count gates)
+    (str (views/needs-fragment screen)
+         (views/rail-status-fragment {:needs-count (:needs-count screen)
                                       :daemon (read-rail-daemon)})))))
 
-(defn- workstreams-fragment-response [groups scope]
+(defn- workstreams-fragment-response [screen]
   (sse-response
    (sse-fragment
-    (str (views/workstreams-fragment groups nil)
-         (views/rail-status-fragment {:needs-count (count (scope-filter scope (work/all-gates)))
-                                       :daemon (read-rail-daemon)})))))
+    (str (views/workstreams-fragment screen)
+         (views/rail-status-fragment {:needs-count (:needs-count screen)
+                                      :daemon (read-rail-daemon)})))))
 
 (defn- system-fragment-response [scope]
   (sse-response
    (sse-fragment
-    (str (views/system-fragment (scope-filter scope (all-session-rows)) (read-rail-daemon))
-         (views/rail-status-fragment {:needs-count (count (scope-filter scope (work/all-gates)))
+    (str (views/system-fragment (scope-keep-rows scope (all-session-rows)) (read-rail-daemon))
+         (views/rail-status-fragment {:needs-count (count (scope-keep-rows scope (work/all-gates)))
                                        :daemon (read-rail-daemon)})))))
 
 ;; ---------------------------------------------------------------------------
@@ -355,11 +338,8 @@
       :else
       (html-response 404 (views/not-found-page)))))
 
-(defn- handle-get [{:keys [uri query-string]}]
-  (let [segments (parse-path uri)
-        scope    (parse-scope query-string)
-        {:keys [source facets]} (parse-filters query-string)
-        facets*  (select-keys facets (valid-facet-keys scope source))]
+(defn- handle-get [{:keys [uri] :as req}]
+  (let [segments (parse-path uri)]
     (case segments
       ;; GET /favicon.{png,ico} — the nido icon (browsers auto-request .ico)
       ["favicon.png"] (png-resource-response "favicon.png")
@@ -369,60 +349,52 @@
 
       ;; GET / — Needs you (home)
       []
-      (let [gates (scope-filter scope (work/all-gates))]
-        (html-response 200 (views/needs-page (rail-context :needs scope) gates nil)))
+      (let [screen (derive-screen (view-state/parse req))]
+        (html-response 200 (views/needs-page (rail-ctx :needs screen) screen)))
 
       ;; GET /system — cross-project session board with daemon health banner
       ["system"]
-      (html-response 200 (views/system-page (rail-context :system scope)
-                                            (scope-filter scope (all-session-rows))
-                                            (read-rail-daemon)))
+      (let [scope (:scope (view-state/parse req))]
+        (html-response 200 (views/system-page (rail-context :system scope)
+                                              (scope-keep-rows scope (all-session-rows))
+                                              (read-rail-daemon))))
 
-      ;; GET /workstreams — overview (no selection)
+      ;; GET /workstreams — overview (selection, if any, comes from ?sel=)
       ["workstreams"]
-      (let [scoped (scope-filter scope (all-grouped))]
-        (html-response 200 (views/workstreams-page
-                            (assoc (rail-context :workstreams scope)
-                                   :source source :facets facets*
-                                   :facet-dims (vec (valid-facet-keys scope source))
-                                   :source-counts (source-counts scoped))
-                            (apply-filters source facets* scoped) nil nil)))
+      (let [screen (derive-screen (view-state/parse req))]
+        (html-response 200 (views/workstreams-page (rail-ctx :workstreams screen) screen)))
 
       ;; GET /_fragment/workstreams — SSE workstreams refresh
       ["_fragment" "workstreams"]
-      (let [scoped (scope-filter scope (all-grouped))]
-        (workstreams-fragment-response (apply-filters source facets* scoped) scope))
+      (workstreams-fragment-response (derive-screen (view-state/parse req)))
 
       ;; GET /_fragment/needs — queue + rail
       ["_fragment" "needs"]
-      (let [gates (scope-filter scope (work/all-gates))]
-        (needs-fragment-response gates nil))
+      (needs-fragment-response (derive-screen (view-state/parse req)))
 
       ;; GET /_fragment/system — SSE system surface refresh (patches #system + rail)
       ["_fragment" "system"]
-      (system-fragment-response scope)
+      (system-fragment-response (:scope (view-state/parse req)))
 
       ;; Otherwise, dispatch on structure
       (cond
-        ;; GET /gate/:project/:ws-id — needs page, gate selected
-        (and (= 3 (count segments)) (= "gate" (first segments)))
-        (let [project (nth segments 1) ws-id (nth segments 2)
-              gates (scope-filter scope (work/all-gates))]
-          (html-response 200 (views/needs-page (rail-context :needs scope) gates (work/gate project ws-id))))
-
-        ;; GET /workstreams/:project/:ws-id — overview + ledger pane
-        (and (= 3 (count segments)) (= "workstreams" (first segments)))
-        (let [project (nth segments 1) ws-id (nth segments 2)
-              ws (work/workstream project ws-id (parse-entry query-string))]
-          (html-response 200 (views/workstreams-page (rail-context :workstreams scope)
-                                                     (scope-filter scope (all-grouped))
-                                                     ws
-                                                     (dev/ws-session-dev-states project ws))))
-
         ;; GET /_fragment/workstream/:project/:ws-id — SSE pane refresh (patches #ws-pane)
         (and (= 4 (count segments)) (= "_fragment" (first segments)) (= "workstream" (nth segments 1)))
-        (let [project (nth segments 2) ws-id (nth segments 3)]
-          (ws-pane-fragment-response project ws-id (parse-entry query-string)))
+        (ws-pane-fragment-response (nth segments 2) (nth segments 3) (:entry (view-state/parse req)))
+
+        ;; GET /workstreams/:project/:ws-id — legacy deep link → canonical selection
+        (and (= 3 (count segments)) (= "workstreams" (first segments)))
+        (let [vs     (assoc (view-state/parse req) :surface :workstreams
+                            :selection {:project (nth segments 1) :ws-id (nth segments 2)})
+              screen (derive-screen vs)]
+          (html-response 200 (views/workstreams-page (rail-ctx :workstreams screen) screen)))
+
+        ;; GET /gate/:project/:ws-id — legacy deep link → needs surface, gate selected
+        (and (= 3 (count segments)) (= "gate" (first segments)))
+        (let [vs     (assoc (view-state/parse req) :surface :needs
+                            :selection {:project (nth segments 1) :ws-id (nth segments 2)})
+              screen (derive-screen vs)]
+          (html-response 200 (views/needs-page (rail-ctx :needs screen) screen)))
 
         :else
         (html-response 404 (views/not-found-page))))))

@@ -205,14 +205,37 @@
 (defn- chip [stage]
   [:span {:class (str "chip c-" (name stage))} (name stage)])
 
+(defn- enc-val [v]
+  (java.net.URLEncoder/encode (if (keyword? v) (name v) (str v)) "UTF-8"))
+
+(defn- screen-query
+  "Query string (leading ?) rebuilding the active scope/source/facets from the
+   screen, with optional overrides. `:sel` adds the selection (\"project:ws-id\");
+   `:source`/`:facets` override the corresponding selection (used by the filter
+   chips). The single place selection + filters are serialized — so a row link,
+   a poll refresh, and a deep link all carry the identical view-state."
+  [{:keys [scope source facets]} & [overrides]]
+  (let [src  (get overrides :source source)
+        facs (merge facets (:facets overrides))
+        sel  (:sel overrides)
+        pairs (cond-> []
+                (and scope (not= "all" scope)) (conj (str "scope=" scope))
+                (and src (not= :all src))       (conj (str "source=" (name src)))
+                :always (into (for [[k v] facs :when (not= :all v)]
+                                (str (name k) "=" (enc-val v))))
+                sel (conj (str "sel=" sel)))]
+    (if (seq pairs) (str "?" (str/join "&" pairs)) "")))
+
 (defn- gate-card
-  "One inbox row; links to the gate pane. `sel?` highlights the open gate."
-  [{:keys [ws-id project origin stage label report session resume-error]} sel?]
+  "One inbox row; links to the gate pane. `sel?` highlights the open gate. `href`
+   carries the view-state so selecting a gate preserves scope + selection. A
+   `:pending?` gate (its agent was resumed / is mid-resolve) shows 'working…'."
+  [{:keys [project origin stage label report session resume-error pending?]} sel? href]
   [:a {:class (str "gate-card" (when sel? " sel"))
-       :href  (str "/gate/" project "/" ws-id)}
+       :href  href}
    [:div.gate-top (origin-badge origin) [:span.lbl label] [:span.needs {:title "needs you"}]]
    [:div.gate-sub [:span project] (chip stage)
-    [:span (if session (str "parked · " session) "decide")]]
+    [:span (cond pending? "working…" session (str "parked · " session) :else "decide")]]
    [:div.gate-prev (or (some-> report :markdown
                                (str/replace #"^#.*\n+" "")
                                str/split-lines first)
@@ -222,13 +245,20 @@
                                             (name (:reason resume-error)))])])
 
 (defn needs-fragment
-  "The needs-you queue column — initial render + SSE refresh. `sel` is the open ws-id."
-  [gates sel]
-  (str
-   (h/html
-    (if (seq gates)
-      [:div {:id "needs"} (for [g gates] (gate-card g (= sel (:ws-id g))))]
-      [:div {:id "needs"} [:p.empty "Nothing needs you right now."]]))))
+  "The needs-you queue column — initial render + SSE refresh. Renders from the
+   screen so a poll preserves the open gate's highlight (selection is threaded
+   from the screen, not reset to nil each tick). Each gate's link carries the
+   view-state (scope + selection) so selecting one preserves scope."
+  [{:keys [gates selection] :as screen}]
+  (let [sel-id (:ws-id selection)]
+    (str
+     (h/html
+      (if (seq gates)
+        [:div {:id "needs"}
+         (for [g gates]
+           (gate-card g (= sel-id (:ws-id g))
+                      (str "/" (screen-query screen {:sel (str (:project g) ":" (:ws-id g))}))))]
+        [:div {:id "needs"} [:p.empty "Nothing needs you right now."]])))))
 
 (defn gate-action-confirm-fragment
   "Immediate, action-keyed confirmation toast. `pane-id` is the element it
@@ -375,8 +405,11 @@
     (md/render (:markdown report))))
 
 (defn gate-pane
-  "The detail pane: rendered report + follow-actions. nil -> calm placeholder."
-  [{:keys [ws-id project origin label report actions session] :as gate}]
+  "The detail pane: rendered report + follow-actions. nil -> calm placeholder.
+   A `:pending?` gate (its agent is running after Apply/Reply) shows 'working…'
+   and no action buttons — deriving action availability from the agent's live
+   phase, so a poll can't flip it back to a fresh Apply button."
+  [{:keys [ws-id project origin label report actions session pending?] :as gate}]
   (str
    (h/html
     (if-not gate
@@ -385,18 +418,25 @@
        [:h1 (origin-badge origin) " " label]
        (when report [:div.meta (some-> report :format name) " · " (:at report)])
        (report-body report)
-       (action-bar project ws-id actions session)]))))
+       (if pending?
+         [:div.actions {:style "margin-top:16px"} [:span.meta "working… the agent is running."]]
+         (action-bar project ws-id actions session))]))))
 
 (defn needs-page
-  "Home: the needs-you master-detail inside the shell. `ctx` is the rail context."
-  [ctx gates sel]
-  (let [q (if (= "all" (:scope ctx)) "" (str "?scope=" (:scope ctx)))]
+  "Home: the needs-you master-detail inside the shell, rendered from the screen.
+   The selected gate (matched from the screen's gates by the view-state
+   selection) fills the pane; the poll query carries scope + selection so the
+   3s refresh preserves both."
+  [ctx {:keys [gates selection] :as screen}]
+  (let [sel-id   (:ws-id selection)
+        sel-gate (first (filter #(= sel-id (:ws-id %)) gates))
+        q        (screen-query screen (when sel-id {:sel (str (:project selection) ":" sel-id)}))]
     (shell
      (assoc ctx :active :needs :title "Needs you")
      [:div.gate-wrap
       [:div.inbox {:data-on-interval__duration.3s (str "@get('/_fragment/needs" q "')")}
-       (h/raw (needs-fragment gates (:ws-id sel)))]
-      [:div.pane (h/raw (gate-pane sel))]])))
+       (h/raw (needs-fragment screen))]
+      [:div.pane (h/raw (gate-pane sel-gate))]])))
 
 ;; ---------------------------------------------------------------------------
 ;; Workstreams (overview + ledger) — replaces the board + ws-detail.
@@ -413,9 +453,14 @@
         [:shipping (:shipping grouped)]]
        (keep (fn [[stage rows]] (when (seq rows) {:project project :stage stage :rows rows})))))
 
-(defn- ws-list-row [project sel {:keys [ws-id origin label needs-you stage ship-substate]}]
-  [:a {:class (str "gate-card" (when (= sel ws-id) " sel"))
-       :href  (str "/workstreams/" project "/" ws-id)}
+(defn- ws-list-row
+  "One selectable list row. Its link carries the full view-state (scope + source
+   + facets) plus the selection, so selecting a workstream lands on the SAME
+   filtered list rather than a differently-filtered one. `sel-id` highlights the
+   open row (threaded from the screen so a poll preserves it)."
+  [screen sel-id project {:keys [ws-id origin label needs-you stage ship-substate]}]
+  [:a {:class (str "gate-card" (when (= sel-id ws-id) " sel"))
+       :href  (str "/workstreams" (screen-query screen {:sel (str project ":" ws-id)}))}
    [:div.gate-top (origin-badge origin) [:span.lbl label]
     (when needs-you [:span.needs {:title "needs you"}])
     (when (= :shipping stage)
@@ -428,14 +473,17 @@
    [:div.gate-sub [:span project]]])
 
 (defn workstreams-fragment
-  "Stage-grouped selectable list across projects. `groups` = [{:project :grouped}]."
-  [groups sel]
-  (str
-   (h/html
-    [:div {:id "workstreams"}
-     (for [{:keys [project stage rows]} (mapcat ws-stage-sections groups)]
-       [:div [:h3 (name stage)]
-        (for [r rows] (ws-list-row project sel r))])])))
+  "Stage-grouped selectable list across projects, rendered from the screen.
+   Selection is threaded from the screen so a poll refresh keeps the open row's
+   highlight instead of clearing it."
+  [{:keys [groups selection] :as screen}]
+  (let [sel-id (:ws-id selection)]
+    (str
+     (h/html
+      [:div {:id "workstreams"}
+       (for [{:keys [project stage rows]} (mapcat ws-stage-sections groups)]
+         [:div [:h3 (name stage)]
+          (for [r rows] (ws-list-row screen sel-id project r))])]))))
 
 (defn- session-dev-cell
   "Per-session DEV ENVIRONMENT controls for the Sessions table, driven by the
@@ -529,26 +577,13 @@
               [:td.meta (when brakes (pr-str brakes))]])]]
          [:p.empty "No sessions."])]))))
 
-(defn- enc-val [v]
-  (java.net.URLEncoder/encode (if (keyword? v) (name v) (str v)) "UTF-8"))
-
-(defn- filter-query
-  "Query string (leading ?) for the active scope + source + facet selections.
-   `overrides` lets a chip compute its own target (e.g. {:source :notion})."
-  [{:keys [scope source facets]} & [overrides]]
-  (let [src   (get overrides :source source)
-        facs  (merge facets (:facets overrides))
-        pairs (cond-> []
-                (and scope (not= "all" scope)) (conj (str "scope=" scope))
-                (and src (not= :all src))       (conj (str "source=" (name src)))
-                :always (into (for [[k v] facs :when (not= :all v)]
-                                (str (name k) "=" (enc-val v)))))]
-    (if (seq pairs) (str "?" (str/join "&" pairs)) "")))
-
 (defn- chip-link [label active? href]
   [:a {:class (str "chip" (when active? " active")) :href href} label])
 
-(defn- source-row [{:keys [source source-counts] :as ctx}]
+(defn- source-row
+  "Source filter chips, rendered from the screen. A chip changes the source and
+   drops the current selection (a filter change resets the pane)."
+  [{:keys [source source-counts] :as screen}]
   (let [opts (cons {:id :all :label "All"}
                    (for [o [:notion :github :slack :scratch]]
                      {:id o :label (str/capitalize (name o))}))]
@@ -558,9 +593,9 @@
            :let [n (when (not= id :all) (get source-counts id 0))]]
        (chip-link (if n (str label " (" n ")") label)
                   (= id source)
-                  (str "/workstreams" (filter-query ctx {:source id}))))]))
+                  (str "/workstreams" (screen-query screen {:source id}))))]))
 
-(defn- facet-rows [{:keys [facet-dims facets] :as ctx} groups]
+(defn- facet-rows [{:keys [facet-dims facets] :as screen} groups]
   (for [k facet-dims
         :let [present (->> groups (mapcat (fn [g] (work/grouped-rows (:grouped g))))
                            (mapcat (fn [r] (let [v (get-in r [:facets k])]
@@ -573,21 +608,25 @@
               sel  (get facets k :all)]]
     [:div.filter-row
      [:span.filter-label (->> (str/split (name k) #"-") (map str/capitalize) (str/join " "))]
-     (chip-link "All" (= :all sel) (str "/workstreams" (filter-query ctx {:facets {k :all}})))
+     (chip-link "All" (= :all sel) (str "/workstreams" (screen-query screen {:facets {k :all}})))
      (for [v vals
            :let [lbl (if (keyword? v) (str/capitalize (name v)) (str v))]]
-       (chip-link lbl (= v sel) (str "/workstreams" (filter-query ctx {:facets {k v}}))))]))
+       (chip-link lbl (= v sel) (str "/workstreams" (screen-query screen {:facets {k v}}))))]))
 
 (defn workstreams-page
-  [ctx groups sel-ws session-dev-states]
-  (let [q (filter-query ctx)]
+  "Overview + ledger pane, rendered from the screen. The list, its poll query,
+   and the pane all derive from the one screen value, so overview and detail
+   never disagree and a poll preserves the selection + filters."
+  [ctx {:keys [selection] :as screen}]
+  (let [sel-id (:ws-id selection)
+        q      (screen-query screen (when sel-id {:sel (str (:project selection) ":" sel-id)}))]
     (shell
      (assoc ctx :active :workstreams :title "Workstreams")
      [:div.gate-wrap
-      [:div.filters (source-row ctx) (facet-rows ctx groups)]
+      [:div.filters (source-row screen) (facet-rows screen (:groups screen))]
       [:div.inbox {:data-on-interval__duration.5s (str "@get('/_fragment/workstreams" q "')")}
-       (h/raw (workstreams-fragment groups (:ws-id sel-ws)))]
-      [:div.pane (h/raw (workstream-pane sel-ws session-dev-states))]])))
+       (h/raw (workstreams-fragment screen))]
+      [:div.pane (h/raw (workstream-pane (:ws selection) (:dev-states selection)))]])))
 
 ;; ---------------------------------------------------------------------------
 ;; System (cross-project ops) — replaces the live board + per-project sessions list.
