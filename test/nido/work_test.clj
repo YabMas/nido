@@ -325,6 +325,40 @@
           (is (= "Verdict" (-> g :report :title)))
           (is (= "# Verdict\n\nbug — reproduced." (-> g :report :markdown))))))))
 
+(deftest gate-not-working-when-session-failed-not-in-flight
+  ;; Regression: a live autonomous session stuck at :failed (e.g. a plan-bug spawn
+  ;; failure, whose teardown is a no-op so the session stays :live at :failed) must
+  ;; NOT strand a permanent 'working…' on the gate — that hides Promote/Drop and the
+  ;; ticket looks stuck. resuming? counts only actively-executing phases.
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :triaging
+                                          :external-refs [{:adapter :notion :id "BR-9" :title "t"}]})]
+        (tickets/open! :brian "BR-9" {:title "t"})
+        (tickets/complete! :brian "BR-9" :triaged :applied)   ; ticket :triaged ⇒ :ready gate
+        (session/create! :brian (:id w)
+                         {:name "impl" :weight :heavy
+                          :autonomy (assoc autonomy-running :phase :failed)})
+        (let [g (work/gate :brian (:id w))]
+          (is (= :ready (:stage g)))
+          (is (false? (:working? g))
+              "a live-but-:failed session is NOT in flight ⇒ no stranded 'working…'")
+          (is (= [:promote :drop] (map :id (:actions g))) "Promote/Drop stay actionable"))))))
+
+(deftest gate-working-when-session-actively-running
+  ;; The honest positive case: an autonomous session mid-turn (:running) ⇒ working…
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :triaging
+                                          :external-refs [{:adapter :notion :id "BR-10" :title "t"}]})]
+        (tickets/open! :brian "BR-10" {:title "t"})
+        (tickets/complete! :brian "BR-10" :triaged :applied)
+        (session/create! :brian (:id w)
+                         {:name "impl" :weight :heavy
+                          :autonomy (assoc autonomy-running :phase :running)})
+        (is (true? (:working? (work/gate :brian (:id w))))
+            "an actively-running session ⇒ working… (gate visible, actions gated)")))))
+
 (def ^:private slack-edn-report
   "Valid TriageReport EDN for slack triage ledger tests."
   (pr-str {:format :triage-report :ticket-key "slack-C1-1.0" :determination :bug

@@ -274,15 +274,23 @@
        first))
 
 (defn- resuming?
-  "True iff the workstream has a LIVE autonomous session that is running (not
-   parked) — i.e. a resume is in flight. Keeps 'Apply → working…' honest: the
-   gate stays visible but offers no actions until the agent parks again or
-   terminates."
+  "True iff the workstream has a LIVE autonomous session ACTIVELY EXECUTING a turn
+   (phase :preprocessing/:running) — i.e. a resume/burst is genuinely in flight.
+   Keeps 'Apply → working…' honest: the gate stays visible but offers no actions
+   until the agent parks or terminates.
+
+   Checks in-progress-phases rather than the old `(not parked?)`: a :failed/:done/
+   :queued session is NOT in flight, and counting it stranded a PERMANENT 'working…'
+   on any workstream carrying a failed-but-unarchived session — e.g. a plan-bug
+   spawn failure, whose teardown is a no-op so the session stays :live at :failed.
+   That dead 'working…' hides the gate's own actions (Promote/Drop), so the ticket
+   looks stuck."
   [project ws-id]
   (->> (csession/list-sessions project ws-id)
        (some (fn [s] (and (:autonomy s)
                           (csession/live? s)
-                          (not (csession/parked? s)))))
+                          (contains? csession/in-progress-phases
+                                     (get-in s [:autonomy :phase])))))
        boolean))
 
 (defn- ->gate
