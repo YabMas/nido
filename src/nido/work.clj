@@ -273,6 +273,18 @@
        (filter csession/parked?)
        first))
 
+(defn- resuming?
+  "True iff the workstream has a LIVE autonomous session that is running (not
+   parked) — i.e. a resume is in flight. Keeps 'Apply → working…' honest: the
+   gate stays visible but offers no actions until the agent parks again or
+   terminates."
+  [project ws-id]
+  (->> (csession/list-sessions project ws-id)
+       (some (fn [s] (and (:autonomy s)
+                          (csession/live? s)
+                          (not (csession/parked? s)))))
+       boolean))
+
 (defn- ->gate
   "Hydrate one needs-you spine row into a gate. `:project` is canonicalized to a
    STRING (the web routes on it, e.g. /gate/<project>/…; the dashboard's
@@ -289,7 +301,8 @@
      :report       (latest-report project (:ws-id row))
      :actions      (gate-actions (:stage row) parked?)
      :session      (:name psess)
-     :resume-error (get-in psess [:autonomy :error])}))
+     :resume-error (get-in psess [:autonomy :error])
+     :working?     (resuming? project (:ws-id row))}))
 
 (defn gates
   "A project's gates: workstreams that want you now (needs-you), each hydrated
@@ -513,3 +526,69 @@
              (nil? vals)
              (boolean (some #(= v %) vals))))))
    facet-filter))
+
+(defn all-grouped
+  "[{:project <string> :grouped <grouped-map>} …] across every registered
+   project (mirrors all-gates). A project that can't be read contributes
+   nothing rather than failing the board."
+  []
+  (->> (project/list-projects)
+       (keep (fn [[pname _]]
+               (try {:project (name pname) :grouped (grouped pname)}
+                    (catch Throwable _ nil))))
+       vec))
+
+(defn- scope-keep
+  "Keep only entries whose :project matches `scope` (no-op on \"all\")."
+  [scope xs] (if (= "all" scope) xs (filterv #(= scope (:project %)) xs)))
+
+(defn- visible-pred
+  "The one predicate the filtered list AND the counts share: origin match ∧
+   facet match ∧ overview visibility, all under `source`."
+  [source facets]
+  (fn [row] (and (source-match? source row)
+                 (facet-match? facets row)
+                 (overview-visible? source row))))
+
+(defn- source-counts
+  "Per-origin counts for the source chips, reflecting the CURRENT view's
+   incoming-visibility rule. In the :all view every chip counts only rows visible
+   in that view (incoming holding-pen rows excluded), so each chip matches the
+   rows shown. When a specific source is selected, the selected chip's count still
+   matches its visible rows; other chips show their switch-potential (what you'd
+   see if you clicked them). Facets are always applied."
+  [scoped-groups facets source]
+  (->> [:notion :github :slack :scratch]
+       (reduce (fn [m origin]
+                 (let [n (->> scoped-groups
+                              (mapcat #(grouped-rows (:grouped %)))
+                              (filter #(and (= origin (:origin %))
+                                            (facet-match? facets %)
+                                            (overview-visible? source %)))
+                              count)]
+                   (assoc m origin n)))
+               {})))
+
+(defn screen
+  "The single pure derivation from view-state to the screen-model. Every render
+   site (full page + SSE poll, overview + detail) renders a slice of THIS value,
+   so they cannot disagree. `data` injects what only IO can produce:
+     :groups  (all-grouped)  :gates (all-gates)  :pending (#{\"project/ws-id\"} optimistic bridge keys).
+   Selection detail is attached by the caller (needs work/workstream + dev-states)."
+  [{:keys [scope source facets] :or {scope "all" source :all facets {}}}
+   {:keys [groups gates pending facet-dims] :or {groups [] gates [] pending #{} facet-dims []}}]
+  (let [scoped   (scope-keep scope groups)
+        pred     (visible-pred source facets)
+        filtered (mapv (fn [g] (update g :grouped #(filter-grouped % pred))) scoped)
+        kept-gates (->> (scope-keep scope gates)
+                        (mapv (fn [g] (assoc g :pending?
+                                             (or (boolean (:working? g))
+                                                 (contains? pending (str (:project g) "/" (:ws-id g))))))))]
+    {:scope         scope
+     :source        source
+     :facets        facets
+     :facet-dims    facet-dims
+     :source-counts (source-counts scoped facets source)
+     :groups        filtered
+     :gates         kept-gates
+     :needs-count   (count kept-gates)}))

@@ -714,3 +714,85 @@
         (let [d (work/workstream :brian id)]
           (is (= ["Second needs" "First direction"] (mapv :title (:entries d)))
               "index titles come from each event's fields via report/report-title"))))))
+
+(deftest screen-overview-and-detail-groups-are-identical
+  ;; The same view-state must produce the same filtered :groups regardless of
+  ;; whether a selection is present (the overview vs detail bug).
+  (let [grouped {:incoming [] :triage {:in-flight [] :queued []}
+                 :ready [{:ws-id "r1" :origin :notion :facets {} :stage :ready}]
+                 :in-progress [{:ws-id "p1" :origin :github :facets {} :stage :in-progress}]
+                 :shipping []}
+        groups [{:project "brian" :grouped grouped}]
+        vs-over {:surface :workstreams :scope "all" :source :notion :facets {} :selection nil}
+        vs-det  (assoc vs-over :selection {:project "brian" :ws-id "r1"})
+        g1 (:groups (work/screen vs-over {:groups groups :gates [] :pending #{}}))
+        g2 (:groups (work/screen vs-det  {:groups groups :gates [] :pending #{}}))]
+    (is (= g1 g2) "selection must not change the filtered list")
+    (is (= ["r1"] (map :ws-id (get-in (first g1) [:grouped :ready]))) "notion row kept")
+    (is (empty? (get-in (first g1) [:grouped :in-progress])) "github row filtered out")))
+
+(deftest screen-source-counts-match-visible-rows
+  ;; An :incoming notion row is hidden in the All view (overview-visible?), so it
+  ;; must NOT inflate the Notion source count in the All view.
+  (let [grouped {:incoming [{:ws-id "i1" :origin :notion :facets {} :stage :incoming}]
+                 :triage {:in-flight [] :queued []}
+                 :ready [{:ws-id "r1" :origin :notion :facets {} :stage :ready}]
+                 :in-progress [] :shipping []}
+        groups [{:project "brian" :grouped grouped}]
+        vs {:surface :workstreams :scope "all" :source :all :facets {} :selection nil}
+        s (work/screen vs {:groups groups :gates [] :pending #{}})]
+    (is (= 1 (get-in s [:source-counts :notion]))
+        "count reflects only rows visible in the All view")))
+
+(deftest screen-passes-injected-facet-dims-through
+  (let [s (work/screen {:surface :workstreams :scope "all" :source :notion :facets {}}
+                       {:groups [] :gates [] :pending #{} :facet-dims [:app-domain :type]})]
+    (is (= [:app-domain :type] (:facet-dims s)) "facet-dims come from injected data, not disk")))
+
+(deftest screen-source-counts-under-selected-source
+  ;; With a specific source selected, the SELECTED chip's count matches the rows
+  ;; visible for that source (incoming included, since a non-:all source shows its
+  ;; own holding-pen). Other-origin chips show switch-potential.
+  (let [grouped {:incoming [{:ws-id "ni" :origin :notion :facets {} :stage :incoming}
+                            {:ws-id "gi" :origin :github :facets {} :stage :incoming}]
+                 :triage {:in-flight [] :queued []}
+                 :ready [{:ws-id "nr" :origin :notion :facets {} :stage :ready}]
+                 :in-progress [] :shipping []}
+        groups [{:project "brian" :grouped grouped}]
+        s (work/screen {:surface :workstreams :scope "all" :source :notion :facets {} :selection nil}
+                       {:groups groups :gates [] :pending #{}})
+        visible-notion (->> (:groups s) (mapcat #(work/grouped-rows (:grouped %)))
+                            (filter #(= :notion (:origin %))) count)]
+    (is (= 2 (get-in s [:source-counts :notion])) "selected notion chip counts both notion rows (incl incoming)")
+    (is (= 2 visible-notion) "and that equals the notion rows actually visible under source=notion")
+    (is (= 1 (get-in s [:source-counts :github])) "github chip shows its switch-potential")))
+
+(deftest screen-needs-count-equals-gate-count
+  (let [gates [{:ws-id "a" :project "brian"} {:ws-id "b" :project "brian"}]
+        s (work/screen {:surface :needs :scope "all" :source :all :facets {}}
+                       {:groups [] :gates gates :pending #{}})]
+    (is (= 2 (:needs-count s)))
+    (is (= 2 (count (:gates s))))))
+
+(deftest screen-marks-pending-gates-working
+  (let [gates [{:ws-id "a" :project "brian" :working? false}
+               {:ws-id "b" :project "brian" :working? true}]
+        s (work/screen {:surface :needs :scope "all" :source :all :facets {}}
+                       {:groups [] :gates gates :pending #{"brian/a"}})]
+    (is (true? (:pending? (first (filter #(= "a" (:ws-id %)) (:gates s)))))
+        "optimistic bridge key marks pending")
+    (is (true? (:pending? (first (filter #(= "b" (:ws-id %)) (:gates s)))))
+        "a running (resumed) session marks pending")))
+
+(deftest screen-scope-filters-both-groups-and-gates
+  (let [groups [{:project "brian" :grouped {:incoming [] :triage {:in-flight [] :queued []}
+                                            :ready [{:ws-id "r1" :origin :notion :facets {} :stage :ready}]
+                                            :in-progress [] :shipping []}}
+                {:project "foo" :grouped {:incoming [] :triage {:in-flight [] :queued []}
+                                          :ready [{:ws-id "r2" :origin :notion :facets {} :stage :ready}]
+                                          :in-progress [] :shipping []}}]
+        gates [{:ws-id "r1" :project "brian"} {:ws-id "r2" :project "foo"}]
+        s (work/screen {:surface :workstreams :scope "brian" :source :all :facets {} :selection nil}
+                       {:groups groups :gates gates :pending #{}})]
+    (is (= ["brian"] (map :project (:groups s))))
+    (is (= ["r1"] (map :ws-id (:gates s))))))
