@@ -474,7 +474,7 @@
 
   nido:work
   {:requires ([tasks.nido-work :as nido-work])
-   :doc "Boot an interactive claude in the current worktree with nido context injected (briefing/MCP/skills)."
+   :doc "Boot an interactive agent in the current worktree with nido context injected. Default :agent claude; supports :agent codex."
    :task (apply nido-work/work *command-line-args*)}
 
   }}

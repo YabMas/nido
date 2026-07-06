@@ -79,10 +79,24 @@
     (write-all! (assoc-in m [project trigger] e'))))
 
 (defn tripped-triggers
-  "Vector of {:project :trigger :info} for every breaker that's open."
+  "Vector of {:project :trigger :info} for every breaker that's open —
+   auto-tripped OR user-disabled. Both halt the daemon's processing of that
+   trigger, so this is the set the loop/inspectors skip."
   []
   (vec
     (for [[project ts] (read-all)
           [trigger e]  ts
           :when (or (:tripped? e) (:disabled-by-user? e))]
+      {:project project :trigger trigger :info e})))
+
+(defn auto-tripped-triggers
+  "Vector of {:project :trigger :info} for breakers that AUTO-tripped on
+   consecutive failures — deliberate user pauses excluded. This is the
+   alarm-worthy set: the health dot uses it so a long-standing manual pause
+   doesn't read as a fault (and can't mask a genuine new trip)."
+  []
+  (vec
+    (for [[project ts] (read-all)
+          [trigger e]  ts
+          :when (:tripped? e)]
       {:project project :trigger trigger :info e})))

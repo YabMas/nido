@@ -1,9 +1,10 @@
 (ns nido.session.agent-guidance
-  "Writes a CLAUDE.md at the worktree root declaring the session as
-   nido-managed. Claude Code auto-loads every CLAUDE.md it finds walking
-   up from CWD, so this file composes with — and explicitly overrides —
-   any ancestor CLAUDE.md in the project tree, steering coding agents
-   away from spinning up their own services inside a nido session."
+  "Writes agent guidance files at the worktree root declaring the session as
+   nido-managed. Claude Code auto-loads CLAUDE.md and Codex auto-loads
+   AGENTS.md while walking up from CWD, so these files compose with — and
+   explicitly override — any ancestor guidance in the project tree, steering
+   coding agents away from spinning up their own services inside a nido
+   session."
   (:require
    [babashka.fs :as fs]
    [clojure.string :as str]
@@ -12,7 +13,8 @@
 (def ^:private marker
   "<!-- nido-managed: DO NOT EDIT (remove this line to take ownership) -->")
 
-(def ^:private file-name "CLAUDE.md")
+(def ^:private legacy-file-names ["CLAUDE.md" "AGENTS.md"])
+(def ^:private codex-override-file-name "AGENTS.override.md")
 
 (defn- render
   [{:keys [instance-id worktree pg-port nrepl-port app-port]}]
@@ -58,30 +60,45 @@
        (not (str/starts-with? (slurp path) marker))))
 
 (defn write!
-  "Render a session-specific CLAUDE.md into the worktree root. Skips the
+  "Render session-specific guidance files into the worktree root. Skips each
    write if an existing file lacks the nido marker (user has taken
    ownership). `ctx` is the session context produced by start-services!;
    reads :session {:instance-id :project-dir} and optional
    :app :repl :pg port maps."
   [ctx]
   (let [worktree (get-in ctx [:session :project-dir])
-        path (str (fs/path worktree file-name))
         content (render {:instance-id (get-in ctx [:session :instance-id])
                          :worktree worktree
                          :app-port (get-in ctx [:app :port])
                          :nrepl-port (get-in ctx [:repl :port])
                          :pg-port (get-in ctx [:pg :port])})]
+    (doseq [file-name legacy-file-names
+            :let [path (str (fs/path worktree file-name))]]
+      (if (user-owned? path)
+        (core/log-step (str "Skipping " file-name " write at " path
+                            " — file lacks nido marker (user-owned)"))
+        (do (spit path content)
+            (core/log-step (str "Wrote " path)))))))
+
+(defn write-codex-override!
+  "Write Codex's worktree-local override file from the rendered session briefing.
+   This leaves project-owned AGENTS.md alone while making nido's live-session
+   rules the closest instruction layer when Codex starts in the worktree."
+  [worktree-path briefing]
+  (let [path (str (fs/path worktree-path codex-override-file-name))
+        content (str marker "\n" briefing)]
     (if (user-owned? path)
-      (core/log-step (str "Skipping CLAUDE.md write at " path
+      (core/log-step (str "Skipping " codex-override-file-name " write at " path
                           " — file lacks nido marker (user-owned)"))
       (do (spit path content)
           (core/log-step (str "Wrote " path))))))
 
 (defn remove!
-  "Remove the nido-managed CLAUDE.md from the worktree root. No-op if the
-   file is missing or has been taken over by the user."
+  "Remove nido-managed guidance files from the worktree root. No-op for files
+   that are missing or have been taken over by the user."
   [worktree-path]
-  (let [path (str (fs/path worktree-path file-name))]
+  (doseq [file-name (conj legacy-file-names codex-override-file-name)
+          :let [path (str (fs/path worktree-path file-name))]]
     (cond
       (not (fs/exists? path)) nil
       (user-owned? path) (core/log-step (str "Leaving " path " alone — user-owned"))

@@ -31,5 +31,7 @@
   (daemon-health
    {:alive?        (pid/alive?)
     :halted?       (halt/halted?)
-    :breaker-count (count (breakers/tripped-triggers))
+    ;; Only AUTO-tripped breakers (real failures) light the dot — a deliberate
+    ;; user-pause is a normal operational state, not a fault.
+    :breaker-count (count (breakers/auto-tripped-triggers))
     :status        (read-edn-safe (cstate/status-path))}))

@@ -281,6 +281,35 @@
                 launcher/read-project-briefing (fn [_] nil)]
     (is (string? (launcher/session-briefing "brian" "fix/x" "brian--x")))))
 
+(deftest rerender-briefing-writes-claude-and-agents-files
+  (let [tmp  (fs/create-temp-dir)
+        home (fs/path tmp "home")
+        wt   (fs/path tmp "wt")]
+    (try
+      (fs/create-dirs home)
+      (fs/create-dirs wt)
+      (with-redefs [state/session-home-dir       (fn [_project _session] (str home))
+                    state/read-session           (fn [_id] {:context {:session {:project-dir (str wt)}
+                                                                      :repl    {:port 5000}
+                                                                      :app     {:port 6000}
+                                                                      :pg      {:port 5599}}})
+                    links/read-links             (fn [_id] [])
+                    launcher/read-project-briefing (fn [_] nil)]
+        (launcher/rerender-briefing! "brian" "fix/x" "brian--x")
+        (let [claude (slurp (str (fs/path home "CLAUDE.md")))
+              agents (slurp (str (fs/path home "AGENTS.md")))]
+          (is (= claude agents)
+              "Codex and Claude briefing files should stay byte-identical")
+          (is (str/includes? agents "Active nido session")
+              "AGENTS.md should contain the rendered session briefing")
+          (let [override (slurp (str (fs/path wt "AGENTS.override.md")))]
+            (is (str/starts-with? override "<!-- nido-managed:")
+                "worktree Codex override should be nido-owned")
+            (is (str/includes? override "Active nido session")
+                "worktree Codex override should contain the rendered session briefing"))))
+      (finally
+        (fs/delete-tree tmp)))))
+
 (deftest nido-add-dirs-returns-source-dir
   (with-redefs [nido.core/nido-source-dir (fn [] "/opt/nido")]
     (is (= ["/opt/nido"] (launcher/nido-add-dirs)))))

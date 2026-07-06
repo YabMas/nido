@@ -53,9 +53,9 @@
 
 ;; ---------------------------------------------------------------------------
 ;; Session-home — human-readable per-session dir users cd into.
-;; ~/.nido/sessions/<project>/<session>/ holds .mcp.json, CLAUDE.md, and a
-;; `worktree` symlink. Distinct from instance-state-dir (opaque hash, owned
-;; by nido). Same session is reachable via both paths until the migration
+;; ~/.nido/sessions/<project>/<session>/ holds .mcp.json, CLAUDE.md, AGENTS.md,
+;; and a `worktree` symlink. Distinct from instance-state-dir (opaque hash,
+;; owned by nido). Same session is reachable via both paths until the migration
 ;; off instance-state-dir is complete.
 ;; ---------------------------------------------------------------------------
 
@@ -213,4 +213,3 @@
 
 (defn remove-from-registry! [project-dir]
   (write-registry! (dissoc (read-registry) project-dir)))
-

@@ -8,7 +8,7 @@ Built as a standalone Babashka project. CLI entry points are defined in `bb.edn`
 
 Nido is the harness; the active project (e.g. brian) is the workspace. Each running session has a **session home** at `~/.nido/sessions/<project>/<session>/` containing:
 
-- `CLAUDE.md` — short briefing with the worktree path and live service ports.
+- `CLAUDE.md` / `AGENTS.md` — short briefing with the worktree path and live service ports.
 - `.mcp.json` — postgres MCP wired to the per-session DB.
 - `worktree/` — symlink to the code (`~/Code/<project>-worktrees/<session>/`).
 - `.claude/` — symlink to `worktree/.claude/` so project-local skills/agents/commands resolve from the session home.
@@ -41,6 +41,12 @@ nido() {
 Launch the TUI as `nido` (or `nido tui`) rather than `bb nido:tui`. (In Warp the wrapper is harmless — enter spawns a tab and never writes `.last-cd`, so the trailing `cd` is simply skipped.)
 
 `nido <verb> [args]` runs `bb nido:<verb>` from your current directory — so `nido session:status`, `nido session:link:add …`, `nido review:loop …` all work from inside a project worktree, with no `cd` to the session home. `--config` makes `bb` load nido's `bb.edn` even though the worktree carries the project's own; the task then resolves which session you're in via `session-from-cwd`.
+
+To launch an agent with nido's live-session context injected from inside a
+session worktree, use `nido work`. It defaults to Claude Code. Use
+`nido work :agent codex` for Codex; nido writes a managed
+`AGENTS.override.md` into the worktree so Codex sees the active ports, lifecycle
+rules, links, and project briefing from its normal instruction-discovery chain.
 
 ### Fail-loud `git` in jj-workspace worktrees
 

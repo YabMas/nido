@@ -3,6 +3,7 @@
 
      ~/.nido/sessions/<project>/<session>/.mcp.json
      ~/.nido/sessions/<project>/<session>/CLAUDE.md
+     ~/.nido/sessions/<project>/<session>/AGENTS.md
      ~/.nido/sessions/<project>/<session>/worktree -> <wt-path>
      ~/.nido/sessions/<project>/<session>/.claude  -> worktree/.claude
 
@@ -18,6 +19,7 @@
    [nido.coordinator.state :as cstate]
    [nido.core :as core]
    [nido.io :as io]
+   [nido.session.agent-guidance :as agent-guidance]
    [nido.session.links :as links]
    [nido.session.state :as state]))
 
@@ -111,6 +113,9 @@
 
 (defn claude-md-path [project-name session-name]
   (str (fs/path (state/session-home-dir project-name session-name) "CLAUDE.md")))
+
+(defn agents-md-path [project-name session-name]
+  (str (fs/path (state/session-home-dir project-name session-name) "AGENTS.md")))
 
 (defn worktree-link [project-name session-name]
   (str (fs/path (state/session-home-dir project-name session-name) "worktree")))
@@ -222,7 +227,7 @@
    nil when no briefing resource exists. Looked up on the classpath at
    project-briefings/<project>.md so projects without dedicated briefings
    (most of them today) get a clean default. The content is embedded
-   verbatim into the session-home CLAUDE.md by render-context — keep the
+   verbatim into the session-home CLAUDE.md/AGENTS.md by render-context — keep the
    resource focused on domain rules (routing, REPL discipline, …) that
    nido's generic briefing can't say."
   [project-name]
@@ -441,9 +446,15 @@
           (core/log-step (str "Wrote " path))))
       (when-let [svc-mcp-path (write-session-mcp! (get-in ctx [:session :instance-id]) pg-svc pg-port)]
         (core/log-step (str "Wrote " svc-mcp-path)))
-      (let [path (claude-md-path project-name session-name)]
+      (doseq [path [(claude-md-path project-name session-name)
+                    (agents-md-path project-name session-name)]]
         (io/write-text! path ctx-doc)
         (core/log-step (str "Wrote " path)))
+      (try
+        (agent-guidance/write-codex-override! worktree ctx-doc)
+        (catch Exception e
+          (core/log-step (str "warning: worktree AGENTS.override.md: "
+                              (ex-message e)))))
       (try
         (ensure-worktree-symlink! project-name session-name worktree)
         (catch Exception e
@@ -469,7 +480,8 @@
 
 (defn session-briefing
   "Render the session briefing string from persisted state + links. Reusable as a
-   launch input (claude --append-system-prompt). Source of truth for the home CLAUDE.md."
+   launch input (claude --append-system-prompt). Source of truth for the home
+   CLAUDE.md and AGENTS.md."
   [project-name session-name instance-id]
   (let [home         (state/session-home-dir project-name session-name)
         session      (some-> instance-id state/read-session)
@@ -493,7 +505,7 @@
             ws-ctx))))
 
 (defn rerender-briefing!
-  "Re-render only the session-home CLAUDE.md briefing — used after a
+  "Re-render only the session-home briefing files — used after a
    link mutation so the next session start sees the new entries.
    Reads the current ctx (ports etc.) from the persisted session.edn.
    No-op when the session is down (no session.edn) or when the
@@ -504,8 +516,17 @@
         session (some-> instance-id state/read-session)
         ctx     (:context session)]
     (when (and ctx (fs/exists? home))
-      (io/write-text! (claude-md-path project-name session-name)
-                      (session-briefing project-name session-name instance-id)))))
+      (let [briefing (session-briefing project-name session-name instance-id)]
+        (doseq [path [(claude-md-path project-name session-name)
+                      (agents-md-path project-name session-name)]]
+          (io/write-text! path briefing))
+        (try
+          (agent-guidance/write-codex-override!
+           (get-in ctx [:session :project-dir])
+           briefing)
+          (catch Exception e
+            (core/log-step (str "warning: worktree AGENTS.override.md: "
+                                (ex-message e)))))))))
 
 (defn remove-artifacts!
   "Remove the session home. Called from stop-session!. No-op if the session

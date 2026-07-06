@@ -68,3 +68,18 @@
         (is (= 2 (count t)))
         (is (every? #(contains? % :project) t))
         (is (every? #(contains? % :trigger) t))))))
+
+(deftest auto-tripped-triggers-excludes-user-pauses
+  ;; The health-dot count must reflect only AUTO-tripped breakers (real
+  ;; failures), not deliberate user pauses — else a month-old manual pause
+  ;; lights the rail amber forever and masks a genuine new trip.
+  (with-tmp
+    (fn []
+      (breakers/record-failure! :brian :investigate-bug 3)
+      (breakers/record-failure! :brian :investigate-bug 3)
+      (breakers/record-failure! :brian :investigate-bug 3)   ; auto-trips
+      (breakers/disable-by-user! :fukan :other "off")        ; deliberate pause
+      (let [t (breakers/auto-tripped-triggers)]
+        (is (= 1 (count t)) "only the auto-tripped breaker counts")
+        (is (= :brian (:project (first t))))
+        (is (= :investigate-bug (:trigger (first t))))))))
