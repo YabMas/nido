@@ -12,6 +12,7 @@
    [babashka.fs :as fs]
    [clojure.string :as str]
    [nido.config :as config]
+   [nido.coordinator.facets :as facets]
    [nido.coordinator.promote :as promote]
    [nido.coordinator.report :as report]
    [nido.coordinator.resume :as resume]
@@ -46,9 +47,11 @@
     :incoming    [{:id :promote :label "Promote" :kind :mutation :style :primary}
                   {:id :drop    :label "Dismiss" :kind :mutation :style :danger}]
     :triage      (if parked?
-                   ;; Apply (resume \"apply\") and Reply (free-text overrides/redo) both
-                   ;; resume the agent; Dismiss takes it off the radar nido-side.
-                   [{:id :apply   :label "Apply"   :kind :resume :input "apply" :style :primary}
+                   ;; Apply finalizes the verdict nido-side (ticket:complete — no
+                   ;; conversation, so it works for legacy pre-notion-cli reviews too);
+                   ;; Reply (free-text overrides/redo) resumes the agent; Dismiss takes
+                   ;; it off the radar nido-side.
+                   [{:id :apply   :label "Apply"   :kind :mutation              :style :primary}
                     {:id :dismiss :label "Dismiss" :kind :mutation              :style :danger}
                     {:id :reply   :label "Reply"   :kind :resume                :style :default}]
                    [{:id :dismiss :label "Dismiss" :kind :mutation :style :danger}])
@@ -392,13 +395,31 @@
     (cws/close! project ws-id :dropped))
   {:decision :dismissed})
 
+(defn apply!
+  "Accept a parked triage verdict WITHOUT resuming the review conversation: finalize
+   the ticket :triaged/:applied and refresh its facets — the exact nido-side mutation
+   the current triage skill's apply step performs (`bb nido:ticket:complete`; the
+   notion-cli migration dropped all Notion writeback, so apply is nido-only). Replaces
+   the old resume-\"apply\" path, which replayed the review conversation and FAILED for
+   legacy (pre-migration) reviews whose apply called the removed Notion MCP tools — the
+   agent refused to fabricate a write, the ticket stayed :awaiting-input, and the item
+   bounced back to triage. A ref-less workstream is a no-op. The daemon's sweep settles
+   the now-resolved parked session (ticket left review). Returns {:decision :applied}."
+  [project ws-id]
+  (when-let [w (cws/read-ws project ws-id)]
+    (when-let [br (:id (wsv/ledger-ref w))]
+      (tickets/complete! project br :triaged :applied)
+      (try (facets/refresh-for-ticket! project br)   ; reads Notion — best-effort
+           (catch Throwable _ nil))))
+  {:decision :applied})
+
 (defn resolve-gate!
   "Apply a gate follow-action, dispatching on `action-id`:
      :promote      -> set-stage! :in-progress (the promote gesture)
      :dismiss      -> off-radar: ticket :dismissed + settle :dropped (no re-triage)
      :drop         -> close! :dropped (ready-stage workstream settled; not pursued)
      :done         -> set-stage! :done (close! :done)
-     :apply        -> resume! the parked agent with \"apply\" (canned one-click input)
+     :apply        -> apply! (direct ticket:complete mutation — no conversation)
      :reply        -> resume! the parked agent with `input`
    Returns the resolver's result map."
   ([project ws-id action-id] (resolve-gate! project ws-id action-id nil))
@@ -408,7 +429,7 @@
      :done    (set-stage! project ws-id :done)
      :dismiss (dismiss! project ws-id)
      :drop    (do (cws/close! project ws-id :dropped) {:decision :dropped})
-     :apply   (resume/resume! project ws-id "apply")
+     :apply   (apply! project ws-id)
      :reply   (resume/resume! project ws-id input)
      (throw (ex-info "Unknown gate action" {:action-id action-id :ws-id ws-id})))))
 

@@ -274,7 +274,7 @@
    run-action!'s app-states pattern."
   [project ws-id action-id input]
   (let [k (str project "/" ws-id)]
-    (dev/set-app-state! k (if (#{:reply :apply} action-id) :resuming :resolving))
+    (dev/set-app-state! k (if (= :reply action-id) :resuming :resolving))
     (future
       (try
         (work/resolve-gate! project ws-id action-id input)

@@ -4,6 +4,7 @@
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
    [nido.config]
+   [nido.coordinator.facets]
    [nido.coordinator.promote]
    [nido.coordinator.resume]
    [nido.coordinator.runs :as runs]
@@ -286,11 +287,11 @@
         (is (zero? @spawned))))))
 
 (deftest gate-actions-are-stage-derived
-  (is (= [{:id :apply   :label "Apply"   :kind :resume :input "apply" :style :primary}
+  (is (= [{:id :apply   :label "Apply"   :kind :mutation              :style :primary}
           {:id :dismiss :label "Dismiss" :kind :mutation              :style :danger}
           {:id :reply   :label "Reply"   :kind :resume                :style :default}]
          (work/gate-actions :triage true))
-      "a parked triage offers one-click Apply, Dismiss, and free-text Reply")
+      "a parked triage offers one-click Apply (nido mutation), Dismiss, and free-text Reply")
   (is (= [{:id :dismiss :label "Dismiss" :kind :mutation :style :danger}]
          (work/gate-actions :triage false))
       "an unparked triage can still be dismissed off the radar")
@@ -486,16 +487,24 @@
           (is (= {:resumed "auto"} (work/resolve-gate! :brian (:id w) :reply "do it")))
           (is (= [:brian (:id w) "do it"] @calls)))))))
 
-(deftest resolve-gate-apply-resumes-with-the-apply-verb
+(deftest resolve-gate-apply-finalizes-the-ticket-nido-side
+  ;; Apply is a direct nido-side mutation (ticket:complete → :triaged/:applied), NOT a
+  ;; claude resume — so it works for legacy pre-notion-cli reviews whose apply
+  ;; conversation calls the removed Notion MCP tools (which stranded them in triage).
   (with-tmp
     (fn [_]
-      (let [w (workstream/create! :brian {:stage :triaging :external-refs []})
-            calls (atom nil)]
-        (with-redefs [nido.coordinator.resume/resume!
-                      (fn [p id input] (reset! calls [p id input]) {:resumed "auto"})]
-          (is (= {:resumed "auto"} (work/resolve-gate! :brian (:id w) :apply)))
-          (is (= [:brian (:id w) "apply"] @calls)
-              "the Apply button resumes the parked agent with the canned \"apply\" input"))))))
+      (let [w (workstream/create! :brian {:stage :triaging
+                                          :external-refs [{:adapter :notion :id "BR-A9" :title "t"}]})
+            resumed (atom false)]
+        (tickets/open! :brian "BR-A9" {:title "t"})
+        (tickets/set-status! :brian "BR-A9" :awaiting-input)
+        (with-redefs [nido.coordinator.resume/resume! (fn [& _] (reset! resumed true) {:resumed "x"})
+                      nido.coordinator.facets/refresh-for-ticket! (fn [& _] nil)]
+          (is (= {:decision :applied} (work/resolve-gate! :brian (:id w) :apply)))
+          (is (false? @resumed) "Apply does NOT resume a conversation")
+          (is (= :triaged (tickets/status :brian "BR-A9"))
+              "Apply finalizes the ticket :triaged nido-side ⇒ it leaves :triage")
+          (is (= :applied (:disposition (tickets/read-meta :brian "BR-A9")))))))))
 
 (def ^:private notion-edn-report
   "Valid TriageReport EDN for notion triage ledger tests."
