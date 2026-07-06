@@ -23,8 +23,10 @@
 
 (defn judge-prompt
   "Build the judge prompt. findings: normalized findings this round.
-   history: prior rounds digest. design-doc: path string or nil."
-  [{:keys [findings history design-doc]}]
+   history: prior rounds digest. design-doc-content: inlined spec text or nil.
+   The judge is report-only (no tools), so the design doc is inlined here
+   rather than handed over as a path it would have to open."
+  [{:keys [findings history design-doc-content]}]
   (str
    "You are the JUDGE in an automated code-review loop. Decide whether the\n"
    "current review findings warrant another fix pass.\n\n"
@@ -35,7 +37,8 @@
    "- stop: the change is essentially clean; remaining items are nits.\n"
    "- escalate: the findings point to a FUNDAMENTAL design problem better solved\n"
    "  by a higher-level redesign than by incremental patching.\n\n"
-   (when design-doc (str "Design doc for context: " design-doc "\n\n"))
+   (when design-doc-content
+     (str "Design doc for context (inlined):\n" design-doc-content "\n\n"))
    "History of prior rounds (findings + what was fixed):\n"
    (pr-str history) "\n\n"
    "This round's findings (index: [priority] title — body):\n"

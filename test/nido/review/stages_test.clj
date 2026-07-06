@@ -145,6 +145,15 @@
       (is (= "impl-1" (:claude-session-id @seen)) "resumes the same implementer session id")
       (is (true? (:resume? @seen)) "later round (non-empty history) resumes"))))
 
+(deftest judge-stage-launches-report-only
+  (let [seen (atom nil)]
+    (with-redefs [agent/launch! (fn [opts] (reset! seen opts)
+                                  {:num-turns 3 :result-error? false
+                                   :result-text "```json\n{\"decision\":\"stop\"}\n```"})]
+      ((:run stages/judge-stage)
+       {:config {:cwd "/w" :run-id "r1"} :iter 1 :findings [{:title "x"}]})
+      (is (= "" (:tools @seen)) "judge launches with tools disabled (report-only)"))))
+
 (deftest review-stage-passes-iter-to-codex
   (let [seen (atom nil)]
     (with-redefs [codex/review! (fn [opts] (reset! seen opts)

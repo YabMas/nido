@@ -54,6 +54,21 @@
                last
                str))))
 
+(def ^:private design-doc-char-cap 12000)
+
+(defn- read-design-doc
+  "Slurp a design-doc path, capped so it can't blow up the judge prompt.
+   nil path -> nil. Read failures degrade to nil rather than aborting the
+   (headless) review run — a missing design doc is recoverable, a crash isn't."
+  [path]
+  (when path
+    (try
+      (let [s (slurp path)]
+        (if (> (count s) design-doc-char-cap)
+          (str (subs s 0 design-doc-char-cap) "\n\n…[design doc truncated]")
+          s))
+      (catch java.io.IOException _ nil))))
+
 (def judge-stage
   {:name :judge
    :run  (fn [ctx]
@@ -61,10 +76,11 @@
                  prompt (prompts/judge-prompt
                          {:findings (:findings ctx)
                           :history (mapv #(dissoc % :findings) (:history ctx))
-                          :design-doc (discover-design-doc cwd)})
+                          :design-doc-content (read-design-doc (discover-design-doc cwd))})
                  {:keys [num-turns result-error? result-text]}
                  (agent/launch! {:run-id run-id :cwd cwd
                                  :first-message prompt :budget budget
+                                 :tools ""
                                  :err-file (str (fs/path (cstate/run-dir run-id) "agent.err.log"))})
                  decision (parse-judge-decision result-text)]
              (if (or (zero? (or num-turns 0)) result-error?
