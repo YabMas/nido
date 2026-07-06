@@ -34,7 +34,10 @@
       :entry   <long>|nil}"
   [{:keys [uri query-string]}]
   (let [ps (pairs query-string)
-        reserved #{"scope" "source" "sel" "entry"}]
+        ;; `datastar` is Datastar's own signals param, appended to every @get
+        ;; poll request — reserve it so a poll's URL doesn't turn into a bogus
+        ;; facet filter that matches zero rows and empties the polled list.
+        reserved #{"scope" "source" "sel" "entry" "datastar"}]
     {:surface   (surface uri)
      :scope     (or (some (fn [[k v]] (when (= k "scope") v)) ps) "all")
      :source    (or (some (fn [[k v]] (when (= k "source") (keyword v))) ps) :all)
