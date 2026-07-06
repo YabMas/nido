@@ -379,6 +379,12 @@
       (Thread/sleep 50)
       (is (= [["brian" "ws-1" :drop nil]] @calls)))))
 
+(deftest pending-resolve-keys-returns-slash-keys
+  (nido.session.dev/set-app-state! "brian/ws-9" :resuming)
+  (try
+    (is (contains? (nido.session.dev/pending-resolve-keys) "brian/ws-9"))
+    (finally (nido.session.dev/clear-app-state! "brian/ws-9"))))
+
 (deftest post-pane-gate-reply-passes-input-from-body
   (let [calls (atom [])]
     (with-redefs [nido.work/resolve-gate! (fn [p w a & [in]] (swap! calls conj [p w a in]) {:resumed "auto"})

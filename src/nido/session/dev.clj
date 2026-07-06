@@ -2,7 +2,8 @@
   "Dev-environment state + action primitives shared across nido surfaces
    (web dashboard, TUI). Owns the in-flight app-states atom and every
    function that reads or mutates dev-resource state for a session."
-  (:require [nido.process :as proc]
+  (:require [clojure.string :as str]
+            [nido.process :as proc]
             [nido.session.engine :as engine]
             [nido.session.lifecycle :as lifecycle]
             [nido.session.state :as state]
@@ -36,6 +37,16 @@
 
 (defn current-app-state [instance-id]
   (get @app-states instance-id))
+
+(defn pending-resolve-keys
+  "The set of gate-resolve keys currently mid-flight — keys shaped
+   \"<project>/<ws-id>\" (as written by the UI's gate-resolve!). Instance ids
+   (\"project--session\") are excluded. Fed into work/screen as :pending so an
+   optimistic 'working…' survives until the async resolve settles."
+  []
+  (->> @app-states keys
+       (filter #(and (string? %) (str/includes? % "/")))
+       set))
 
 (defn dev-state-for
   "Pure derivation of a session's dev-resource state from real state: the
