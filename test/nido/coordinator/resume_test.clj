@@ -1,5 +1,6 @@
 (ns nido.coordinator.resume-test
   (:require [babashka.fs :as fs]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [nido.coordinator.agent :as agent]
             [nido.coordinator.resume :as resume]
@@ -232,3 +233,30 @@
         (with-redefs [runs/find-for-session (fn [& _] nil)]
           (is (thrown-with-msg? clojure.lang.ExceptionInfo #"No resumable conversation"
                 (resume/resume! :brian (:id w) "apply"))))))))
+
+(deftest resume-cwd-picks-the-transcript-owning-dir
+  ;; Regression (the "No conversation found with session ID" strand): claude keys a
+  ;; transcript by its launch cwd. New runs are worktree-keyed; LEGACY parked reviews
+  ;; (spawned when cwd was the session-home) are home-keyed. resume-cwd must launch in
+  ;; whichever cwd actually owns <sid>.jsonl, else `claude --resume` fails and the
+  ;; parked review can never be applied. We plant a transcript under the real
+  ;; ~/.claude/projects/<encoded-cwd>/ (cwd is a unique temp path, so no collision)
+  ;; and clean up.
+  (let [home (str (fs/create-temp-dir))
+        wt   (str (fs/create-temp-dir))
+        sid  "sid-legacy-xyz"
+        enc  (fn [p] (str/replace (str p) #"[/.]" "-"))
+        proj (fs/path (System/getProperty "user.home") ".claude" "projects")
+        home-tr (fs/path proj (enc home))]
+    (try
+      (is (= wt (resume/resume-cwd sid wt home))
+          "no transcript anywhere ⇒ worktree default")
+      (fs/create-dirs home-tr)
+      (spit (str (fs/path home-tr (str sid ".jsonl"))) "{}")
+      (is (= home (resume/resume-cwd sid wt home))
+          "transcript lives under the home cwd ⇒ resume there, not the worktree")
+      (is (= wt (resume/resume-cwd sid wt nil))
+          "nil home is tolerated ⇒ worktree default")
+      (finally
+        (when (fs/exists? home-tr) (fs/delete-tree home-tr))
+        (fs/delete-tree home) (fs/delete-tree wt)))))

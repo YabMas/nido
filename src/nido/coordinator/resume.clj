@@ -6,10 +6,13 @@
    not a Run state — so this works whether the owning Run is :awaiting-review or
    already terminal). This is the :reply resolver behind nido.work/resolve-gate!."
   (:require
+   [babashka.fs :as fs]
+   [clojure.string :as str]
    [nido.coordinator.agent :as agent]
    [nido.coordinator.clock :as clock]
    [nido.coordinator.runs :as runs]
-   [nido.coordinator.session :as session]))
+   [nido.coordinator.session :as session]
+   [nido.session.state :as session-state]))
 
 (defn- parked-session
   "The (first) parked autonomous session under a workstream, or nil."
@@ -17,6 +20,32 @@
   (->> (session/list-sessions project ws-id)
        (filter session/parked?)
        first))
+
+(defn- transcript-owner?
+  "True when claude's transcript for `sid` lives under `cwd`'s project dir. claude
+   stores a conversation at ~/.claude/projects/<cwd, with / and . replaced by ->/
+   <sid>.jsonl, keyed by the cwd it launched in."
+  [cwd sid]
+  (boolean
+   (and cwd sid
+        (fs/exists? (fs/path (System/getProperty "user.home") ".claude" "projects"
+                             (str/replace (str cwd) #"[/.]" "-")
+                             (str sid ".jsonl"))))))
+
+(defn resume-cwd
+  "The cwd to launch `claude --resume <sid>` in so it finds the conversation.
+   claude keys a transcript by its launch cwd: a run spawned with cwd=worktree is
+   worktree-keyed, but a LEGACY parked session (spawned when cwd was the
+   session-home) is home-keyed. Resuming in the wrong cwd yields claude's
+   'No conversation found with session ID' and the turn fails — stranding every
+   pre-worktree-cwd parked review as un-appliable. Return whichever of `worktree`
+   / `home` actually owns the transcript (worktree preferred), else `worktree`
+   (new-run default; nil when there is no run substrate)."
+  [sid worktree home]
+  (cond
+    (transcript-owner? worktree sid) worktree
+    (transcript-owner? home sid)     home
+    :else                            worktree))
 
 (defn- run-turn!
   "Synchronous body for one resume turn. Re-provisions the session-home first if it
@@ -33,12 +62,14 @@
   [project ws-id session-name s run input]
   (try
     (when run (runs/ensure-session-home! run))
-    (let [lc (if run (runs/launch-context run) {})]
+    (let [lc   (if run (runs/launch-context run) {})
+          sid  (or (get-in s [:autonomy :claude-session-id])
+                   (:claude-session-id run))
+          home (str (session-state/session-home-dir (name project) session-name))]
       (agent/launch! {:run-id            (:id run)
-                      :cwd               (:cwd lc)
+                      :cwd               (resume-cwd sid (:cwd lc) home)
                       :first-message     input
-                      :claude-session-id (or (get-in s [:autonomy :claude-session-id])
-                                             (:claude-session-id run))
+                      :claude-session-id sid
                       :resume?           true
                       :mcp-config        (:mcp-config lc)
                       :add-dirs          (:add-dirs lc)
