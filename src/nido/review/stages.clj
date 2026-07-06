@@ -87,13 +87,16 @@
    :run  (fn [ctx]
            (if (:dry-run? (:config ctx))
              (assoc ctx :control :stop :status :dry-run)
-             (let [{:keys [cwd run-id budget]} (:config ctx)
+             (let [{:keys [cwd run-id budget impl-session-id]} (:config ctx)
+                   resume? (boolean (seq (:history ctx)))
                    to-fix (select-findings (:findings ctx)
                                            (-> ctx :judge :fix-findings))
                    {:keys [num-turns]}
                    (agent/launch! {:run-id run-id :cwd cwd
                                    :first-message (prompts/fix-prompt {:findings to-fix})
                                    :budget budget
+                                   :claude-session-id impl-session-id
+                                   :resume? resume?
                                    :err-file (str (fs/path (cstate/run-dir run-id) "agent.err.log"))})]
                (if (or (zero? (or num-turns 0)) (not (working-copy-dirty? cwd)))
                  (assoc ctx :control :stop :status :fix-noop)

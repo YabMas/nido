@@ -120,6 +120,31 @@
       (is (= "BASE" (:base-rev ctx)))
       (is (= "src/a.clj\nsrc/b.clj" (:manifest ctx))))))
 
+(deftest fix-stage-records-implementer-session-first-round
+  (let [seen (atom nil)]
+    (with-redefs [agent/launch! (fn [opts] (reset! seen opts)
+                                  {:num-turns 4 :result-error? false :result-text "done"})
+                  stages/working-copy-dirty? (fn [_] true)
+                  jj/jj! (fn [& _] {:out "cid-1" :err "" :exit 0})]
+      ((:run stages/fix-stage)
+       {:config {:cwd "/w" :run-id "r1" :impl-session-id "impl-1"} :iter 1
+        :findings [{:title "x"}] :judge {:fix-findings nil}})
+      (is (= "impl-1" (:claude-session-id @seen)) "records under the implementer session id")
+      (is (false? (:resume? @seen)) "first round (empty history) records, does not resume"))))
+
+(deftest fix-stage-resumes-implementer-session-later-rounds
+  (let [seen (atom nil)]
+    (with-redefs [agent/launch! (fn [opts] (reset! seen opts)
+                                  {:num-turns 4 :result-error? false :result-text "done"})
+                  stages/working-copy-dirty? (fn [_] true)
+                  jj/jj! (fn [& _] {:out "cid-2" :err "" :exit 0})]
+      ((:run stages/fix-stage)
+       {:config {:cwd "/w" :run-id "r1" :impl-session-id "impl-1"} :iter 2
+        :history [{:iter 1 :commit "cid-1"}]
+        :findings [{:title "x"}] :judge {:fix-findings nil}})
+      (is (= "impl-1" (:claude-session-id @seen)) "resumes the same implementer session id")
+      (is (true? (:resume? @seen)) "later round (non-empty history) resumes"))))
+
 (deftest review-stage-passes-iter-to-codex
   (let [seen (atom nil)]
     (with-redefs [codex/review! (fn [opts] (reset! seen opts)

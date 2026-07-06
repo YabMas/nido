@@ -54,11 +54,13 @@
    :pipeline / :emit / :clock are injection seams."
   [{:keys [run-id max-iters pipeline emit clock] :as config
     :or   {max-iters 5 emit (fn [_]) clock #(Instant/now)}}]
-  (let [pipeline (or pipeline default-pipeline)]
+  (let [pipeline (or pipeline default-pipeline)
+        impl-session-id (str (random-uuid))]
     (emit {:event :run-started :run-id run-id
            :cwd (:cwd config) :base (:base config) :at (str (clock))})
     (loop [iter 1, history [], prev-findings nil]
-      (let [ctx0 {:config (assoc config :max-iters max-iters)
+      (let [ctx0 {:config (assoc config :max-iters max-iters
+                                 :impl-session-id impl-session-id)
                   :iter iter :history history :control :continue}
             ctx  (try
                    (run-pipeline ctx0 pipeline emit clock)
