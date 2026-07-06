@@ -288,6 +288,23 @@
        (some? (:num-turns result))
        (zero? (:num-turns result))))
 
+(defn- provision-blocked?
+  "True when a provision-only (:plan-bug / :plan-github-issue) run's launch failed
+   in a way that should PARK the workstream as a blocked gate — surfacing the
+   blocker to the human — rather than mark the Run :failed. A :failed provision Run
+   runs tickets/on-run-terminal!, which reverts the ticket :planning→:triaged and
+   bounces the board back to :ready, SILENTLY hiding the failure (the canonical
+   case: a shared-PG Flyway checksum mismatch blocks the session app boot, so the
+   promote appears to undo itself minutes later). Parking mirrors the merge lane's
+   :blocked handling (ship/drive-home-blocking!): the ticket stays :planning (board
+   stays :in-progress), the session parks, and set-error! carries the blocker into
+   the gate inbox. Scoped to provision-only runs so the triage path's breaker-
+   engaging :failed handling (the '36 sessions' no-op guard) is untouched."
+  [provision-only? result]
+  (boolean
+   (and provision-only?
+        (or (:spawn-error result) (:timed-out? result) (agent-no-op? result)))))
+
 (defn- skill-in-claude-dir?
   "True if `skill-name` resolves under a `.claude` dir as either a skill
    (skills/<name>/) or a slash command (commands/<name>.md)."
@@ -446,6 +463,11 @@
                          (catch Throwable t
                            {:spawn-error true :detail (.getMessage t)})))
         next-state (cond
+                     ;; Provision-only failures park a BLOCKED gate instead of
+                     ;; :failed — a :failed here reverts the ticket :planning→:triaged
+                     ;; (bounces the board back to :ready) and hides the blocker.
+                     ;; See provision-blocked?.
+                     (provision-blocked? provision-only? result) :awaiting-review
                      (:skill-unavailable result) :failed
                      (:spawn-error result) :failed
                      (:timed-out? result) :failed
@@ -485,6 +507,21 @@
                                            (assoc :reason :skill-unavailable
                                                   :detail (str "skill /" (name (:skill result))
                                                                " did not resolve in the session checkout")))))))
+    ;; Provision-only spawn/timeout/no-op parked as a BLOCKED gate: surface the
+    ;; blocker on the session so the gate inbox shows WHY (mirrors the merge
+    ;; lane), and leave the ticket :planning (board stays :in-progress) rather
+    ;; than reverting to :ready. Best-effort — a missing/human session no-ops.
+    (when (provision-blocked? provision-only? result)
+      (let [note (cond
+                   (:spawn-error result) (str "Promote could not start the session: "
+                                              (:detail result))
+                   (:timed-out? result)  (str "/continue-ticket exceeded its "
+                                              (-> run :limits :budget) " budget")
+                   :else                 "/continue-ticket did no work (unknown command?)")]
+        (try
+          (session/set-error! (:project run) (:workstream-id run) (:session-name run)
+                              {:at (clock/now-iso) :reason :promote-blocked :message note})
+          (catch Throwable _ nil))))
     ;; Keep the ticket record honest on terminal exit (spec §Lifecycle):
     ;; clears a stale :investigating after an abnormal exit, leaves completed
     ;; dispositions and parked :awaiting-input drafts alone.

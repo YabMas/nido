@@ -591,6 +591,51 @@
           (is (= :awaiting-review (:state (runs/read-run "rplan")))
               "ticket still :planning (skill not really run) ⇒ parked ready-for-human"))))))
 
+(deftest run-blocking-plan-bug-spawn-failure-parks-blocked-not-reverts
+  ;; Promote regression (the shared-PG Flyway bounce): when a provision-only
+  ;; :plan-bug session fails to boot (canonically a shared-PG migration checksum
+  ;; mismatch), run-blocking! must PARK the workstream as a blocked gate — ticket
+  ;; stays :planning (board stays :in-progress), the blocker rides the session —
+  ;; NOT mark the run :failed. A :failed here runs on-run-terminal!, which reverts
+  ;; the ticket :planning→:triaged, bouncing the board back to :ready and hiding
+  ;; the failure. (Triage runs are unaffected: they still :failed — see
+  ;; run-blocking-fails-cleanly-when-session-spawn-throws.)
+  (gate-with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :triaging
+                                  :external-refs [{:adapter :notion :id "BR-13"}]})]
+        (session/create! :brian (:id w)
+                         {:name "impl-br-13" :weight :heavy
+                          :autonomy (assoc autonomy-parked :skill :plan-bug :phase :running)})
+        (tickets/open! :brian "BR-13" {:notion-page-id "PG13" :url "u" :title "T"
+                                       :opened-by :triage-new :notion-last-edited-at "t"})
+        (tickets/complete! :brian "BR-13" :triaged :applied)
+        (tickets/set-status! :brian "BR-13" :planning)   ; just promoted
+        (runs/write-run! {:id "rblock" :project :brian :trigger :plan-bug
+                          :source {:type :manual} :event-payload {:id "BR-13" :notion-page-id "PG13"}
+                          :skill :plan-bug :first-message "/plan-bug x" :agent :claude
+                          :session-name "impl-br-13" :workstream-id (:id w)
+                          :claude-session-id nil :limits {:budget "30m"}
+                          :priority 0 :session-profile :full :uncapped? false
+                          :on-promote {:notion-status "In progress"}
+                          :state :queued :state-history [{:at "t" :state :queued}]
+                          :artifacts [] :error nil})
+        (with-redefs [runs/spawn-session-for-run!
+                      (fn [_] (throw (ex-info "Database migration failed — Flyway checksum mismatch on V265" {})))
+                      notify/on-plan-spawn! (fn [_] nil)              ; unreached (spawn throws first)
+                      cstate/run-session-home-link (constantly "/tmp/nope")
+                      breakers/record-success! (fn [& _] nil)]
+          (#'core/run-blocking! "rblock")
+          (is (= :awaiting-review (:state (runs/read-run "rblock")))
+              "spawn failure on a promote ⇒ parked (blocked gate), NOT :failed")
+          (is (= :planning (tickets/status :brian "BR-13"))
+              "ticket stays :planning ⇒ board stays :in-progress (no silent revert to :ready)")
+          (let [err (get-in (first (session/list-sessions :brian (:id w))) [:autonomy :error])]
+            (is (= :promote-blocked (:reason err))
+                "blocker recorded on the session so the gate inbox shows WHY")
+            (is (re-find #"Flyway" (:message err))
+                "the blocker detail is surfaced to the human")))))))
+
 (deftest queue-mode-trigger-parks-inbox-no-spawn
   (let [tmp (fs/create-temp-dir)]
     (try
