@@ -41,7 +41,7 @@
    gate reply; otherwise it RECORDS under it (--session-id) — the first burst.
    first-message is the trailing positional argument."
   [{:keys [claude-bin first-message system-prompt claude-session-id resume?
-           mcp-config add-dirs]}]
+           mcp-config add-dirs tools]}]
   (cond-> [claude-bin
            "--print"
            ;; Stream-json output requires --verbose per claude-code's
@@ -56,6 +56,11 @@
     system-prompt                          (into ["--append-system-prompt" system-prompt])
     mcp-config                             (into ["--mcp-config" mcp-config])
     (seq add-dirs)                         (into (mapcat (fn [d] ["--add-dir" d]) add-dirs))
+    ;; --tools "" disables all tools (report-only launches, e.g. the review
+    ;; judge). "" is truthy in Clojure, so this fires exactly when :tools is
+    ;; supplied. --tools is variadic; the `--` terminator below keeps the empty
+    ;; value from consuming the prompt.
+    tools                                  (into ["--tools" tools])
     ;; `--` terminates option parsing so the trailing prompt positional is never
     ;; swallowed by a preceding variadic flag. claude 2.x made --add-dir
     ;; (<directories...>) and --mcp-config (<configs...>) variadic; without the
@@ -95,12 +100,13 @@
    \"Unknown command: /<skill>\". Callers use this to distinguish a real
    completion from a no-op exit (which must not be treated as success)."
   [{:keys [run-id cwd first-message system-prompt claude-bin env budget claude-session-id resume?
-           mcp-config add-dirs err-file]
+           mcp-config add-dirs tools err-file]
     :or   {claude-bin "claude"}}]
   (let [log-path  (cstate/run-agent-log run-id)
         cmd       (build-cmd {:claude-bin claude-bin :first-message first-message
                               :system-prompt system-prompt :claude-session-id claude-session-id
-                              :resume? resume? :mcp-config mcp-config :add-dirs add-dirs})
+                              :resume? resume? :mcp-config mcp-config :add-dirs add-dirs
+                              :tools tools})
         proc      (p/process cmd (cond-> {:dir cwd
                                           :env (merge (into {} (System/getenv)) (or env {}))
                                           ;; Close stdin so claude doesn't wait for input

@@ -168,3 +168,15 @@
                         :first-message "/x" :claude-bin fake-claude
                         :claude-session-id "sid" :err-file err-path})
         (is (fs/exists? err-path) "stderr is captured to the given file")))))
+
+(deftest build-cmd-tools-flag-disables-tools
+  (let [cmd (#'agent/build-cmd {:claude-bin "claude" :first-message "hi" :tools ""})]
+    (is (= ["--tools" ""]
+           (->> cmd (drop-while #(not= % "--tools")) (take 2)))
+        "emits --tools with the given (empty) value to disable all tools")
+    (is (< (.indexOf cmd "--tools") (.indexOf cmd "--"))
+        "--tools precedes the -- option terminator")))
+
+(deftest build-cmd-omits-tools-when-absent
+  (let [cmd (#'agent/build-cmd {:claude-bin "claude" :first-message "hi"})]
+    (is (not (some #{"--tools"} cmd)) "no --tools flag when :tools is not given")))
