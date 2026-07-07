@@ -165,6 +165,12 @@
    (pg-ctl-start! bin-dir data-dir pg-port log-path data-dir))
   ([bin-dir data-dir pg-port log-path socket-dir]
    (core/log-step (str "Starting PostgreSQL on port " pg-port " (data-dir=" data-dir ")"))
+   ;; The `-k` socket dir is a precondition of the flag, not something PG
+   ;; creates. macOS reaps idle `/tmp` entries, so a short-lived socket-base-dir
+   ;; under /tmp can vanish while a cluster is down — the next start then dies
+   ;; with "could not create lock file …: No such file or directory". Ensure it
+   ;; here so every caller (session, shared cluster, template) is protected.
+   (fs/create-dirs socket-dir)
    ;; LC_ALL / LANG must be set BEFORE pg_ctl forks the postmaster — on macOS
    ;; PG's startup invokes locale-sensitive code that becomes multithreaded
    ;; when the locale is empty, which fails the single-threaded-fork invariant
