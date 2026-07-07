@@ -79,6 +79,10 @@
   (is (= 258 (shared/migration-file->version "V258__create_licence_expiry_notification.sql")))
   (is (= 64  (shared/migration-file->version "V64__change-language-type.sql")))
   (is (nil?  (shared/migration-file->version "R__repeatable.sql")))
+  ;; brian's timestamp-versioned migrations exceed int4 (~2.1e9); the version
+  ;; must round-trip as a long, both here and in the shared-history ::bigint
+  ;; cast that consumes it.
+  (is (= 20260708212543 (shared/migration-file->version "V20260708212543__add_thing.sql")))
   (is (= "create email delivery event"
          (shared/migration-file->description "V232__create_email_delivery_event.sql")))
   (is (= "change-language-type"
@@ -87,7 +91,12 @@
 (deftest pending-migrations-are-sorted-and-filtered
   (is (= ["V234__a.sql" "V258__c.sql"]
          (shared/pending-migrations 233 ["V258__c.sql" "V233__b.sql" "V234__a.sql" "not-a-migration.sql"])))
-  (is (= [] (shared/pending-migrations 300 ["V258__c.sql"]))))
+  (is (= [] (shared/pending-migrations 300 ["V258__c.sql"])))
+  ;; a fully-advanced cluster whose max version is a 14-digit timestamp: the
+  ;; older sequential migrations are all below it, so nothing is pending.
+  (is (= [] (shared/pending-migrations 20260708212543
+                                       ["V1__baseline.sql" "V278__x.sql"
+                                        "V20260708212543__y.sql"]))))
 
 (deftest app-role-sql-grants-dml-and-withholds-ddl
   (let [sql (shared/app-role-sql {:schema "brian" :app-user "brian_app"})]

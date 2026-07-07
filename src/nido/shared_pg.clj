@@ -283,9 +283,16 @@
         ;; max(installed_rank) must scan ALL rows — a version-regex filter here
         ;; would drop NULL/non-numeric versions (e.g. a repeatable R__ row) from
         ;; the rank max, undercounting the next installed_rank and colliding on
-        ;; its PK. The regex belongs only on the version::int cast.
+        ;; its PK. The regex belongs only on the version::bigint cast.
+        ;;
+        ;; bigint, not int: brian's timestamp-versioned migrations (e.g.
+        ;; V20260708212543__…) overflow int4 (max ~2.1e9). An ::int cast here
+        ;; ERRORs mid-query; the error is swallowed (:continue true) so the fn
+        ;; falls back to {:version 0}, and the advance loop then re-applies
+        ;; every migration from V1__baseline.sql onto a live schema → "schema
+        ;; already exists". bigint holds a 14-digit timestamp comfortably.
         q (str "select "
-               "coalesce((select max(version::int) from " schema ".flyway_schema_history"
+               "coalesce((select max(version::bigint) from " schema ".flyway_schema_history"
                " where version ~ '^[0-9]+$'), 0), "
                "coalesce((select max(installed_rank) from " schema ".flyway_schema_history), 0);")
         result (shell {:continue true :out :string :err :string}
