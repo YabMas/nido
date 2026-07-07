@@ -325,16 +325,57 @@
 ;; charm list component
 ;; ---------------------------------------------------------------------------
 
-;; Width/height are intentionally left at 0 (charm's "unconstrained"). The
-;; renderer truncates lines to the terminal width itself, and we don't need
-;; vertical scrolling for the small lists we show. Keeping the list component
-;; dimension-independent means our `view` output is byte-stable across the
-;; startup resize message, so JLine's diff-based redraw has no work to do
-;; (which avoids stale-row ghosts on first paint).
-(defn- list-component [items]
-  (item-list/item-list items
-                       :show-descriptions true
-                       :cursor-style (style/style :fg style/cyan :bold true)))
+(declare facet-strip)
+
+;; Main list rows render title + description, so charm's :height is a count of
+;; visible items, not terminal lines. Keep it bounded so list-update can advance
+;; :offset when the cursor moves beyond the visible page.
+(defn- main-list-height [state]
+  (let [term-height (or (some-> state :size second) 28)
+        facet-line? (and (= :board (:screen state))
+                         (not (str/blank?
+                               (facet-strip (:project state)
+                                            (:origin state)
+                                            (or (:facet-filter state) {})))))
+        chrome (+ 5
+                  (if (= :board (:screen state)) 1 0)
+                  (if facet-line? 1 0)
+                  (if (= :system (:screen state)) 1 0)
+                  (if (:status state) 1 0))]
+    (max 1 (quot (max 2 (- term-height chrome)) 2))))
+
+(defn- list-component
+  ([items] (list-component nil items))
+  ([state items]
+   (item-list/item-list items
+                        :height (main-list-height state)
+                        :show-descriptions true
+                        :cursor-style (style/style :fg style/cyan :bold true))))
+
+(defn- ensure-list-cursor-visible [lst]
+  (let [{:keys [cursor height]} lst
+        total (count (:items lst))
+        visible (if (or (zero? height) (<= total height)) total height)
+        offset (cond
+                 (zero? height) 0
+                 (zero? total) 0
+                 :else (max 0 (min (:offset lst)
+                                   (max 0 (- total visible)))))]
+    (cond
+      (zero? total)
+      (assoc lst :offset 0)
+
+      (zero? height)
+      (assoc lst :offset 0)
+
+      (< cursor offset)
+      (assoc lst :offset cursor)
+
+      (>= cursor (+ offset visible))
+      (assoc lst :offset (max 0 (- cursor visible -1)))
+
+      :else
+      (assoc lst :offset offset))))
 
 ;; Single-line picker list (no descriptions) for the modal choosers. Items are
 ;; `{:title <string> :data <value>}`; `enter` reads `selected-item`'s :data.
@@ -359,7 +400,7 @@
 (defn- rebuild-list [state items]
   (assoc state
          :items items
-         :list (list-component items)))
+         :list (list-component state items)))
 
 (defn- refresh-list
   "Update the list's items IN PLACE via `item-list/set-items`, preserving the
@@ -367,9 +408,22 @@
    unlike `rebuild-list`, which builds a fresh component and resets the cursor
    to the top (correct for screen switches, wrong for a timer repaint)."
   [state items]
-  (-> state
-      (assoc :items items)
-      (update :list item-list/set-items items)))
+  (let [cursor (get-in state [:list :cursor] 0)]
+    (-> state
+        (assoc :items items)
+        (update :list (fn [lst]
+                        (-> lst
+                            (item-list/set-items items)
+                            (item-list/set-height (main-list-height state))
+                            (item-list/select cursor)
+                            ensure-list-cursor-visible))))))
+
+(defn- resize-current-list [state]
+  (if (:list state)
+    (update state :list #(-> %
+                             (item-list/set-height (main-list-height state))
+                             ensure-list-cursor-visible))
+    state))
 
 (defn- current-rows
   "Rows for the active screen — the source the live-refresh tick re-reads.
@@ -1229,7 +1283,10 @@
     ;; post-update render! redraw the full frame onto the cleared screen.
     (msg/window-size? msg)
     (do (charm-patch/clear-on-resize!)
-        [(assoc state :size [(:width msg) (:height msg)]) nil])
+        [(-> state
+             (assoc :size [(:width msg) (:height msg)])
+             resize-current-list)
+         nil])
 
     ;; In-app async action machinery (see start-session-down). These flow even
     ;; while :busy — they ARE the busy lifecycle — so they precede the guard.

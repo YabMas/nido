@@ -150,6 +150,38 @@
 (defn- board-state [origin]
   {:screen :board :origin origin :project "brian" :list (#'tui/list-component [])})
 
+(deftest main-list-scrolls-within-terminal-height
+  (let [items (mapv (fn [n] {:title (str "session-" n) :description "" :data {:name (str "session-" n)}})
+                    (range 12))
+        state (-> {:screen :system :project "brian" :size [100 14]}
+                  (#'tui/rebuild-list items))
+        [scrolled _] (reduce (fn [[s _] _] (#'tui/update-system s (msg/key-press "down")))
+                             [state nil]
+                             (range 7))]
+    (is (pos? (get-in scrolled [:list :height]))
+        "terminal-sized main lists must set a nonzero height so charm scrolls")
+    (is (pos? (get-in scrolled [:list :offset]))
+        "moving beyond the visible page scrolls the list instead of leaving the cursor off-screen")
+    (is (not (str/includes? (#'tui/view scrolled) "session-0"))
+        "the rendered list window advances after scrolling")))
+
+(deftest window-size-resizes-main-list-immediately
+  (let [items (mapv (fn [n] {:title (str "session-" n) :description "" :data {:name (str "session-" n)}})
+                    (range 12))
+        state (-> {:screen :system :project "brian" :size [100 40]}
+                  (#'tui/rebuild-list items))
+        old-height (get-in state [:list :height])]
+    (with-redefs [nido.charm-patch/clear-on-resize! (fn [] nil)]
+      (let [[resized _] (#'tui/update-fn state (msg/window-size 100 14))]
+        (is (< (get-in resized [:list :height]) old-height)
+            "the resize event applies the new terminal height to the list immediately")))))
+
+(deftest empty-main-list-keeps-zero-scroll-offset
+  (let [state (-> {:screen :system :project "brian" :size [100 14]}
+                  (#'tui/rebuild-list []))]
+    (is (= 0 (get-in (#'tui/resize-current-list state) [:list :offset]))
+        "empty lists stay at offset zero")))
+
 (deftest board-open-routes-through-open-target
   (with-redefs [nido.work/open-target (fn [_ _] {:project :brian :session "live"})
                 nido.work/reclaimed? (fn [_ _ _] false)
