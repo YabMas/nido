@@ -6,7 +6,8 @@
   (let [v (vs/parse {:uri "/workstreams" :query-string nil})]
     (is (= :workstreams (:surface v)))
     (is (= "all" (:scope v)))
-    (is (= :all (:source v)))
+    (is (= vs/default-source (:source v)) "no cross-source All — defaults to the first source")
+    (is (= :notion (:source v)))
     (is (= {} (:facets v)))
     (is (nil? (:selection v)))
     (is (nil? (:entry v)))))

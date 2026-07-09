@@ -289,7 +289,7 @@
            (dev/session-dev-state "brian" "feat/x"
                                   {"/wt" {:app-port 3142 :url "http://x.localhost:3142"}})))))
 
-(deftest workstreams-route-hides-incoming-under-all-shows-under-slack
+(deftest workstreams-route-shows-slack-incoming-only-under-the-slack-source
   (with-redefs [nido.work/all-grouped
                 (fn [] [{:project :brian
                          :grouped {:incoming [{:origin :slack :stage :incoming :label "S-one"
@@ -298,10 +298,10 @@
                 nido.work/all-gates (fn [] [])
                 project/list-projects (fn [] {"brian" {:directory "/x"}})
                 nido.ui.server/read-rail-daemon (fn [] {:state :up})]
-    ;; source=All → the incoming row is hidden
+    ;; default source (notion) → a slack row doesn't match, so it's not shown
     (let [resp (server/handle-request {:request-method :get :uri "/workstreams"})]
       (is (= 200 (:status resp)))
-      (is (not (str/includes? (:body resp) "S-one")) "incoming hidden under All"))
+      (is (not (str/includes? (:body resp) "S-one")) "slack incoming hidden under the default (notion) source"))
     ;; source=Slack → the incoming row is the queue
     (let [resp (server/handle-request {:request-method :get :uri "/workstreams"
                                        :query-string "source=slack"})]

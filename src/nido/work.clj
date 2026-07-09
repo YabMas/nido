@@ -27,7 +27,8 @@
    [nido.notion.client :as notion]
    [nido.notion.views :as views]
    [nido.project :as project]
-   [nido.session.lifecycle :as lifecycle]))
+   [nido.session.lifecycle :as lifecycle]
+   [nido.ui.view-state :as view-state]))
 
 (def stages
   "The canonical spine, in order. A PR merge is the event that advances
@@ -490,17 +491,10 @@
      [])))
 
 (defn source-match?
-  "True when `row`'s origin matches `source` (:all matches everything)."
+  "True when `row`'s origin matches `source`. There is no cross-source :all — the
+   /workstreams page always shows exactly one source (see view-state/sources)."
   [source row]
-  (or (= source :all) (= source (:origin row))))
-
-(defn overview-visible?
-  "An :incoming-stage row is a pre-promote holding-pen item: it surfaces only
-   under an explicit (non-:all) source selection, never in the cross-source All
-   view. Every other stage is unconstrained here (source-match? gates origin)."
-  [source row]
-  (or (not= :incoming (:stage row))
-      (not= :all source)))
+  (= source (:origin row)))
 
 (defn grouped-rows
   "Flat seq of every workstream row in a `work/grouped` map (all bands)."
@@ -573,27 +567,23 @@
 
 (defn- visible-pred
   "The one predicate the filtered list AND the counts share: origin match ∧
-   facet match ∧ overview visibility, all under `source`."
+   facet match, all under `source`."
   [source facets]
   (fn [row] (and (source-match? source row)
-                 (facet-match? facets row)
-                 (overview-visible? source row))))
+                 (facet-match? facets row))))
 
 (defn- source-counts
-  "Per-origin counts for the source chips, reflecting the CURRENT view's
-   incoming-visibility rule. In the :all view every chip counts only rows visible
-   in that view (incoming holding-pen rows excluded), so each chip matches the
-   rows shown. When a specific source is selected, the selected chip's count still
-   matches its visible rows; other chips show their switch-potential (what you'd
-   see if you clicked them). Facets are always applied."
-  [scoped-groups facets source]
-  (->> [:notion :github :slack :scratch]
+  "Per-origin counts for the source chips: each chip shows how many rows you'd see
+   under it (its own facet-filtered rows — including its :incoming holding-pen),
+   i.e. its switch-potential. Facets are always applied; `source` is unused now
+   that there is no cross-source All view but kept for signature stability."
+  [scoped-groups facets _source]
+  (->> view-state/sources
        (reduce (fn [m origin]
                  (let [n (->> scoped-groups
                               (mapcat #(grouped-rows (:grouped %)))
                               (filter #(and (= origin (:origin %))
-                                            (facet-match? facets %)
-                                            (overview-visible? source %)))
+                                            (facet-match? facets %)))
                               count)]
                    (assoc m origin n)))
                {})))
@@ -604,7 +594,7 @@
    so they cannot disagree. `data` injects what only IO can produce:
      :groups  (all-grouped)  :gates (all-gates)  :pending (#{\"project/ws-id\"} optimistic bridge keys).
    Selection detail is attached by the caller (needs work/workstream + dev-states)."
-  [{:keys [scope source facets] :or {scope "all" source :all facets {}}}
+  [{:keys [scope source facets] :or {scope "all" source view-state/default-source facets {}}}
    {:keys [groups gates pending facet-dims] :or {groups [] gates [] pending #{} facet-dims []}}]
   (let [scoped   (scope-keep scope groups)
         pred     (visible-pred source facets)

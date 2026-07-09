@@ -672,18 +672,11 @@
   (is (= #{:reply :drop} (set (map :id (work/gate-actions :shipping true)))))
   (is (= [] (work/gate-actions :shipping false))))
 
-(deftest source-match-honours-all-and-origin
-  (is (work/source-match? :all {:origin :slack}))
+(deftest source-match-honours-origin
+  ;; No cross-source :all anymore — a row matches iff its origin is the source.
   (is (work/source-match? :notion {:origin :notion}))
-  (is (not (work/source-match? :notion {:origin :slack}))))
-
-(deftest overview-visible-hides-incoming-from-all
-  ;; incoming rows surface only under an explicit (non-:all) source
-  (is (false? (work/overview-visible? :all   {:stage :incoming :origin :slack})))
-  (is (true?  (work/overview-visible? :slack {:stage :incoming :origin :slack})))
-  ;; every non-incoming stage is unconstrained here (source-match handles origin)
-  (is (true?  (work/overview-visible? :all   {:stage :triage :origin :notion})))
-  (is (true?  (work/overview-visible? :all   {:stage :ready  :origin :github}))))
+  (is (not (work/source-match? :notion {:origin :slack})))
+  (is (work/source-match? :slack {:origin :slack})))
 
 (deftest grouped-rows-flattens-all-bands
   (let [g {:incoming [{:id 1}] :triage {:in-flight [{:id 2}] :queued [{:id 3}]}
@@ -803,18 +796,21 @@
     (is (= ["r1"] (map :ws-id (get-in (first g1) [:grouped :ready]))) "notion row kept")
     (is (empty? (get-in (first g1) [:grouped :in-progress])) "github row filtered out")))
 
-(deftest screen-source-counts-match-visible-rows
-  ;; An :incoming notion row is hidden in the All view (overview-visible?), so it
-  ;; must NOT inflate the Notion source count in the All view.
+(deftest screen-source-counts-include-incoming-under-its-source
+  ;; No cross-source All view anymore: a source's chip counts ALL its rows,
+  ;; including its :incoming holding-pen (which is only ever shown under that
+  ;; source), and that count equals the rows actually visible under it.
   (let [grouped {:incoming [{:ws-id "i1" :origin :notion :facets {} :stage :incoming}]
                  :triage {:in-flight [] :queued []}
                  :ready [{:ws-id "r1" :origin :notion :facets {} :stage :ready}]
                  :in-progress [] :shipping []}
         groups [{:project "brian" :grouped grouped}]
-        vs {:surface :workstreams :scope "all" :source :all :facets {} :selection nil}
-        s (work/screen vs {:groups groups :gates [] :pending #{}})]
-    (is (= 1 (get-in s [:source-counts :notion]))
-        "count reflects only rows visible in the All view")))
+        vs {:surface :workstreams :scope "all" :source :notion :facets {} :selection nil}
+        s (work/screen vs {:groups groups :gates [] :pending #{}})
+        visible-notion (->> (:groups s) (mapcat #(work/grouped-rows (:grouped %)))
+                            (filter #(= :notion (:origin %))) count)]
+    (is (= 2 (get-in s [:source-counts :notion])) "notion chip counts ready + incoming")
+    (is (= 2 visible-notion) "and that equals the notion rows actually visible")))
 
 (deftest screen-passes-injected-facet-dims-through
   (let [s (work/screen {:surface :workstreams :scope "all" :source :notion :facets {}}
@@ -841,7 +837,7 @@
 
 (deftest screen-needs-count-equals-gate-count
   (let [gates [{:ws-id "a" :project "brian"} {:ws-id "b" :project "brian"}]
-        s (work/screen {:surface :needs :scope "all" :source :all :facets {}}
+        s (work/screen {:surface :needs :scope "all" :source :notion :facets {}}
                        {:groups [] :gates gates :pending #{}})]
     (is (= 2 (:needs-count s)))
     (is (= 2 (count (:gates s))))))
@@ -849,7 +845,7 @@
 (deftest screen-marks-pending-gates-working
   (let [gates [{:ws-id "a" :project "brian" :working? false}
                {:ws-id "b" :project "brian" :working? true}]
-        s (work/screen {:surface :needs :scope "all" :source :all :facets {}}
+        s (work/screen {:surface :needs :scope "all" :source :notion :facets {}}
                        {:groups [] :gates gates :pending #{"brian/a"}})]
     (is (true? (:pending? (first (filter #(= "a" (:ws-id %)) (:gates s)))))
         "optimistic bridge key marks pending")
@@ -864,7 +860,7 @@
                                           :ready [{:ws-id "r2" :origin :notion :facets {} :stage :ready}]
                                           :in-progress [] :shipping []}}]
         gates [{:ws-id "r1" :project "brian"} {:ws-id "r2" :project "foo"}]
-        s (work/screen {:surface :workstreams :scope "brian" :source :all :facets {} :selection nil}
+        s (work/screen {:surface :workstreams :scope "brian" :source :notion :facets {} :selection nil}
                        {:groups groups :gates gates :pending #{}})]
     (is (= ["brian"] (map :project (:groups s))))
     (is (= ["r1"] (map :ws-id (:gates s))))))

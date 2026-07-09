@@ -4,6 +4,7 @@
             [hiccup2.core :as h]
             [nido.process :as process]
             [nido.ui.markdown :as md]
+            [nido.ui.view-state :as view-state]
             [nido.work :as work]))
 
 ;; ---------------------------------------------------------------------------
@@ -582,18 +583,17 @@
 
 (defn- source-row
   "Source filter chips, rendered from the screen. A chip changes the source and
-   drops the current selection (a filter change resets the pane)."
+   drops the current selection (a filter change resets the pane). There is no
+   cross-source 'All' chip — the page always shows exactly one source."
   [{:keys [source source-counts] :as screen}]
-  (let [opts (cons {:id :all :label "All"}
-                   (for [o [:notion :github :slack :scratch]]
-                     {:id o :label (str/capitalize (name o))}))]
-    [:div.filter-row
-     [:span.filter-label "Source"]
-     (for [{:keys [id label]} opts
-           :let [n (when (not= id :all) (get source-counts id 0))]]
-       (chip-link (if n (str label " (" n ")") label)
-                  (= id source)
-                  (str "/workstreams" (screen-query screen {:source id}))))]))
+  [:div.filter-row
+   [:span.filter-label "Source"]
+   (for [id view-state/sources
+         :let [label (str/capitalize (name id))
+               n     (get source-counts id 0)]]
+     (chip-link (str label " (" n ")")
+                (= id source)
+                (str "/workstreams" (screen-query screen {:source id}))))])
 
 (defn- facet-rows [{:keys [facet-dims facets] :as screen} groups]
   (for [k facet-dims
