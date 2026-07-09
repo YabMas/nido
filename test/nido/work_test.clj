@@ -329,36 +329,62 @@
 (deftest gate-not-working-when-session-failed-not-in-flight
   ;; Regression: a live autonomous session stuck at :failed (e.g. a plan-bug spawn
   ;; failure, whose teardown is a no-op so the session stays :live at :failed) must
-  ;; NOT strand a permanent 'working…' on the gate — that hides Promote/Drop and the
-  ;; ticket looks stuck. resuming? counts only actively-executing phases.
+  ;; NOT strand a permanent 'working…' on the gate — that hides its actions and the
+  ;; ticket looks stuck. resuming? counts only actively-executing phases. Vehicle: a
+  ;; parked triage gate (a :failed session alongside is still not in flight).
   (with-tmp
     (fn [_]
       (let [w (workstream/create! :brian {:stage :triaging
                                           :external-refs [{:adapter :notion :id "BR-9" :title "t"}]})]
         (tickets/open! :brian "BR-9" {:title "t"})
-        (tickets/complete! :brian "BR-9" :triaged :applied)   ; ticket :triaged ⇒ :ready gate
+        (tickets/set-status! :brian "BR-9" :investigating)   ; stays :triage ⇒ a real gate
+        (session/create! :brian (:id w)
+                         {:name "triage" :weight :heavy
+                          :autonomy (assoc autonomy-running :phase :parked)})
         (session/create! :brian (:id w)
                          {:name "impl" :weight :heavy
                           :autonomy (assoc autonomy-running :phase :failed)})
         (let [g (work/gate :brian (:id w))]
-          (is (= :ready (:stage g)))
+          (is (= :triage (:stage g)))
           (is (false? (:working? g))
               "a live-but-:failed session is NOT in flight ⇒ no stranded 'working…'")
-          (is (= [:promote :drop] (map :id (:actions g))) "Promote/Drop stay actionable"))))))
+          (is (= [:apply :dismiss :reply] (map :id (:actions g))) "gate actions stay actionable"))))))
 
 (deftest gate-working-when-session-actively-running
-  ;; The honest positive case: an autonomous session mid-turn (:running) ⇒ working…
+  ;; The honest positive case: a parked triage gate whose agent you resumed is now
+  ;; mid-turn (:running) ⇒ working… (gate visible, actions gated until it re-parks).
   (with-tmp
     (fn [_]
       (let [w (workstream/create! :brian {:stage :triaging
                                           :external-refs [{:adapter :notion :id "BR-10" :title "t"}]})]
         (tickets/open! :brian "BR-10" {:title "t"})
-        (tickets/complete! :brian "BR-10" :triaged :applied)
+        (tickets/set-status! :brian "BR-10" :investigating)
+        (session/create! :brian (:id w)
+                         {:name "triage" :weight :heavy
+                          :autonomy (assoc autonomy-running :phase :parked)})
         (session/create! :brian (:id w)
                          {:name "impl" :weight :heavy
                           :autonomy (assoc autonomy-running :phase :running)})
         (is (true? (:working? (work/gate :brian (:id w))))
             "an actively-running session ⇒ working… (gate visible, actions gated)")))))
+
+(deftest triaged-failed-spawn-is-not-a-gate-but-stays-on-board
+  ;; The scenario the two tests above used to cover on a :ready gate: a triaged
+  ;; ticket whose impl spawn failed. :ready is no longer a gate, so it drops off the
+  ;; Needs-you inbox entirely — no stranded 'working…' possible — and is pulled from
+  ;; the board instead, where its Promote/Drop pane actions render unconditionally.
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :triaging
+                                          :external-refs [{:adapter :notion :id "BR-11" :title "t"}]})]
+        (tickets/open! :brian "BR-11" {:title "t"})
+        (tickets/complete! :brian "BR-11" :triaged :applied)   ; ticket :triaged ⇒ :ready
+        (session/create! :brian (:id w)
+                         {:name "impl" :weight :heavy
+                          :autonomy (assoc autonomy-running :phase :failed)})
+        (is (nil? (work/gate :brian (:id w))) "a :ready workstream is not a gate")
+        (is (= [:promote :drop] (map :id (work/gate-actions :ready false)))
+            "board pane still offers promote/drop")))))
 
 (def ^:private slack-edn-report
   "Valid TriageReport EDN for slack triage ledger tests."
@@ -391,19 +417,22 @@
           (is (= "Verdict" (-> g :report :title)))
           (is (= :bug (-> g :report :determination))))))))
 
-(deftest gates-excludes-workstreams-that-do-not-need-you
+(deftest gates-excludes-a-ready-workstream
   (with-tmp
     (fn [_]
-      ;; triaged + a non-parked session → stage :ready, needs-you TRUE (ready always)
+      ;; triaged + a non-parked session → stage :ready. Ready is a PULL queue: you
+      ;; pull it off the board to promote, so it must NOT appear in the needs-you gates.
       (let [r (workstream/create! :brian {:stage :triaging
                                           :external-refs [{:adapter :notion :id "BR-8" :title "t"}]})]
         (tickets/open! :brian "BR-8" {:title "t"})
         (tickets/set-status! :brian "BR-8" :triaged)
         (session/create! :brian (:id r) {:name "s" :weight :light :autonomy nil}))
-      (let [g (first (work/gates :brian))]
-        (is (= :ready (:stage g)))
-        (is (= [:promote :drop] (map :id (:actions g))) "ready gate decides promote/drop")
-        (is (nil? (:session g)) "no parked session → nothing to reply to")))))
+      (is (empty? (work/gates :brian)) "a :ready workstream is not a gate")
+      ;; …but it is still on the spine at :ready with its board actions available.
+      (let [row (first (filter #(= :ready (:stage %)) (work/list-workstreams :brian)))]
+        (is (some? row) "ready workstream is still on the board")
+        (is (= [:promote :drop] (map :id (work/gate-actions :ready false)))
+            "and its board pane still offers promote/drop")))))
 
 (deftest gate-detail-nil-for-absent
   (with-tmp
@@ -534,12 +563,12 @@
 (deftest gates-excludes-settled-workstreams
   (with-tmp
     (fn [_]
-      ;; a CLOSED workstream with a stale :ready stage-override would otherwise
-      ;; project needs-you=true (ready always needs you) and leak into the inbox
+      ;; a CLOSED workstream with a stale :ready stage-override must still fold to
+      ;; :done and stay out of the inbox — closed wins over any stage-override
       (let [w (workstream/create! :brian {:stage :ready :external-refs []})]
         (workstream/close! :brian (:id w) :done))
       (is (empty? (work/gates :brian))
-          "a settled (closed) workstream is never a gate, even with a needs-you stage-override"))))
+          "a settled (closed) workstream is never a gate, even with a :ready stage-override"))))
 
 (deftest gates-surface-the-parked-session-resume-error
   (with-tmp

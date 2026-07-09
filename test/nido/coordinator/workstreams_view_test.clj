@@ -219,7 +219,7 @@
                                             :autonomy (assoc autonomy-running :phase :done)})
         (let [r (first (wsv/workstream-rows :brian))]
           (is (= :ready (:stage r)))
-          (is (true? (:needs-you r)))
+          (is (false? (:needs-you r)) ":ready is a pull queue, not a needs-you gate")
           (is (= "BR-9" (:br-id r)) "row carries the ticket id for the promote shortcut"))))))
 
 (deftest grouped-by-stage-splits-triage-and-drops-done

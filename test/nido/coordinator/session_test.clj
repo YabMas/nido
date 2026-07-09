@@ -266,8 +266,10 @@
   (let [parked  (assoc autonomous-session :substrate :live :autonomy {:phase :parked})
         running (assoc autonomous-session :substrate :live :autonomy {:phase :running})
         dead    (assoc autonomous-session :substrate :archived :autonomy {:phase :done})]
-    ;; ready is always needs-you
-    (is (true?  (:needs-you (sess/stage-projection nil :triaged [dead] :triaging))))
+    ;; ready is a PULL queue, not a gate — never needs-you (you pull it off the board)
+    (is (false? (:needs-you (sess/stage-projection nil :triaged [dead] :triaging))))
+    (is (= :ready (:stage (sess/stage-projection nil :triaged [dead] :triaging)))
+        "…but it is still on the spine at :ready, visible on the board")
     ;; triage/in-progress need-you only when a session is parked
     (is (true?  (:needs-you (sess/stage-projection nil :awaiting-input [parked] :triaging))))
     (is (false? (:needs-you (sess/stage-projection nil :investigating [running] :triaging))))

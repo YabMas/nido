@@ -204,13 +204,13 @@
     :else                                                       :triage))
 
 (defn- stage-needs-you
-  "Does this stage want the human right now? :incoming is a passive queue — NEVER a
-   gate (you pull from it under the Slack lens, it does not push). :ready always
-   (decide promote/drop); :triage/:in-progress/:shipping only when a session is
-   parked at the gate; never for :done."
+  "Does this stage want the human right now? Needs-you is PUSH: a live agent is
+   parked mid-flight, blocked on your decision. :triage/:in-progress/:shipping
+   qualify only when a session is parked at the gate. Everything at rest is a PULL
+   queue, never a gate: :ready (triaged, you pull it off the board to promote) and
+   :incoming (Slack holding pen, pulled under its lens) — and :done is done."
   [stage sessions]
   (case stage
-    :ready                            true
     (:triage :in-progress :shipping)  (boolean (some parked? sessions))
     false))
 
