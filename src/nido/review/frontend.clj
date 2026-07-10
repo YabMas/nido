@@ -74,13 +74,15 @@
             thread   (future (render-loop report-atom running? clock))]
         (print hide-cursor) (flush)
         (try
-          (let [v (f emit)]
-            (reset! running? false)
-            @thread                 ; let the loop paint the terminal frame
-            v)
+          (f emit)
           (finally
             (reset! running? false)
-            (try @thread (catch Exception _))
-            (print (str show-cursor "\n"))
-            (flush)
-            (println (render/final @report-atom))))))))
+            ;; The render loop's last paint leaves the live frame on screen and
+            ;; returns its line count; `final` re-renders that frame as its
+            ;; static head, so cursor up over the live frame and clear it first
+            ;; — otherwise the round block prints twice.
+            (let [last-lines (try @thread (catch Exception _ 0))]
+              (print (str (when (pos? (long last-lines)) (cursor-up last-lines))
+                          clear-down show-cursor
+                          (render/final @report-atom) "\n"))
+              (flush))))))))

@@ -37,3 +37,29 @@
                  (is (= :ok v))))]
     (is (= "clean" (:status @a)))
     (is (re-find #"review" out) "plain mode narrates phases to stdout")))
+
+(deftest with-live-display-tty-overwrites-live-frame-before-final
+  ;; Regression: the render loop's last paint leaves the live frame (header +
+  ;; round block) on screen, and `render/final` re-renders that frame as its
+  ;; static head. So before printing `final` the frontend must cursor up over
+  ;; the live frame and clear downward — otherwise the round block prints twice
+  ;; on a real terminal. (In captured output the ANSI clear can't erase text, so
+  ;; we assert the cursor-up + clear-down + show-cursor sequence directly.)
+  (let [dir  (str (fs/create-temp-dir))
+        path (str (fs/path dir "report.json"))
+        a    (atom nil)
+        out  (with-out-str
+               (frontend/with-live-display
+                 {:report-atom a :report-path path :clock clock :plain? false}
+                 (fn [emit]
+                   (emit {:event :run-started :run-id "r" :cwd "/w" :base "main" :at "2026-06-30T14:00:00Z"})
+                   (emit {:event :phase-started :iter 1 :phase :review :at "2026-06-30T14:00:01Z"})
+                   (emit {:event :phase-finished :iter 1 :phase :review :at "2026-06-30T14:00:02Z"
+                          :ctx {:findings []}})
+                   (emit {:event :run-finalized :status :clean :ctx {} :at "2026-06-30T14:00:03Z"})
+                   :ok)))]
+    (is (= "clean" (:status @a)))
+    ;; cursor-up (ESC[<n>A) → clear-down (ESC[0J) → show-cursor (ESC[?25h),
+    ;; emitted contiguously right before the final block.
+    (is (re-find #"\x1b\[\d+A\x1b\[0J\x1b\[\?25h" out)
+        "final summary overwrites the live frame instead of appending below it")))
