@@ -166,3 +166,42 @@
                      :needs "Confirm whether to widen scope or re-triage."})
         [ext _] (report/entry-payload :blocker edn)]
     (is (= "edn" ext))))
+
+(def ^:private valid-review
+  {:format :review-report
+   :status :converged
+   :base "main"
+   :base-rev "a1b2c3d"
+   :rounds 2
+   :findings-fixed 3
+   :findings-remaining 0
+   :report-path "/Users/x/.nido/runs/review-abc/report.json"})
+
+(deftest validate-event-accepts-review
+  (is (= valid-review (report/validate-event :review valid-review))))
+
+(deftest validate-event-rejects-bad-review-status
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event :review (assoc valid-review :status :bogus)))))
+
+(deftest validate-event-rejects-review-extra-key
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event :review (assoc valid-review :extra 1)))))
+
+(deftest review-allows-nil-base-rev-and-report-path
+  (is (report/validate-event :review (assoc valid-review :base-rev nil :report-path nil))))
+
+(deftest report->markdown-review-has-verdict-and-counts
+  (let [md (report/report->markdown valid-review)]
+    (is (str/includes? md "Review"))
+    (is (str/includes? md "converged"))
+    (is (str/includes? md "3 fixed"))
+    (is (str/includes? md "report.json"))))
+
+(deftest report-title-review
+  (is (= "Review: converged" (report/report-title valid-review))))
+
+(deftest entry-payload-accepts-review
+  (let [[ext payload] (report/entry-payload :review (pr-str valid-review))]
+    (is (= "edn" ext))
+    (is (= :review-report (:format (edn/read-string payload))))))

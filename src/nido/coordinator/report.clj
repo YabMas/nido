@@ -88,6 +88,24 @@
    [:title   string?]
    [:summary {:optional true} string?]])
 
+(def ReviewReport
+  "The review-loop outcome as one terminal ledger event (verdict + counts). Points
+   at the full report.json rather than embedding it. `:at` is stamped by the ledger."
+  [:map {:closed true}
+   [:format             [:= :review-report]]
+   [:status             [:enum :converged :escalated :clean :no-progress
+                               :max-iters :review-failed :dry-run
+                               :fix-noop :judge-indeterminate]]
+   [:base               string?]
+   [:base-rev           [:maybe string?]]
+   [:rounds             int?]
+   [:findings-fixed     int?]
+   [:findings-remaining int?]
+   [:report-path        [:maybe string?]]
+   ;; Dormant extension point: no caller populates :summary yet (review-event omits it).
+   ;; Kept for a future emitter wanting a one-line human note on the timeline card.
+   [:summary            {:optional true} string?]])
+
 (def event-schemas
   "Entry :kind → its Malli schema. Drives ledger-boundary validation + rendering.
    A :kind absent here is stored as verbatim markdown (legacy / freeform)."
@@ -95,7 +113,8 @@
    :implementation-plan      ImplementationPlan
    :implementation-completed ImplementationCompleted
    :blocker                  Blocker
-   :pr-opened                PrOpened})
+   :pr-opened                PrOpened
+   :review                   ReviewReport})
 
 (defn validate-event
   "Validate `report` (parsed EDN) against the schema registered for entry `kind`.
@@ -181,6 +200,17 @@
   (str/join "\n"
     (remove nil? ["# PR opened" (str "**" title "** — " url) (when summary (str "\n" summary))])))
 
+(defn- review->markdown [{:keys [status base base-rev rounds findings-fixed
+                                 findings-remaining report-path summary]}]
+  (str/join "\n"
+    (remove nil?
+      [(str "# Review: " (name status))
+       (str findings-fixed " fixed  ·  " findings-remaining " remaining  ·  "
+            rounds " rounds")
+       (str "base " base (when base-rev (str "@" base-rev)))
+       (when summary (str "\n" summary))
+       (when report-path (str "\nfull report → " report-path))])))
+
 (defn report->markdown
   "Render a `:format`-tagged report payload to markdown. Each event type → its own
    headed markdown; :markdown → its body; nil/unknown → \"\"."
@@ -192,6 +222,7 @@
     :implementation-completed (completed->markdown report)
     :blocker                  (blocker->markdown report)
     :pr-opened                (pr-opened->markdown report)
+    :review-report            (review->markdown report)
     ""))
 
 (defn report-title
@@ -203,4 +234,5 @@
     :implementation-plan      (:direction report)
     :implementation-completed (first-line (:summary report))
     :blocker                  (or (:needs report) (first-line (:summary report)))
+    :review-report            (str "Review: " (name (:status report)))
     nil))
