@@ -129,7 +129,13 @@
      .ship-blocked { background:#b00020; color:#fff; font-weight:600; }
      .ship-driving { background:#1d4ed8; color:#fff; }
      .ship-awaiting-merge { background:#555; color:#fff; }
-     .ship-queued { background:#777; color:#fff; }"))
+     .ship-queued { background:#777; color:#fff; }
+     .ws-section { margin-top:2px; }
+     .ws-fold-header { cursor:pointer; user-select:none; display:flex; align-items:center;
+                       gap:6px; }
+     .ws-fold-header:hover { color:#ccc; }
+     .ws-fold-mark { display:inline-block; width:10px; color:#666; font-size:11px; }
+     .ws-fold-label { flex:1; }"))
 
 ;; ---------------------------------------------------------------------------
 ;; Shell (persistent rail + content area) — replaces per-page headers.
@@ -442,16 +448,58 @@
 ;; ---------------------------------------------------------------------------
 ;; Workstreams (overview + ledger) — replaces the board + ws-detail.
 
+;; Section fold state. One boolean signal per stage — $wsFold<Suffix>, true =
+;; collapsed — declared on the PERSISTENT page chrome (.gate-wrap), never inside
+;; the 5s-polled #workstreams fragment (so a poll can't reset it). Datastar v1.0.1
+;; has no data-persist plugin, so persistence rides plain localStorage: seed on
+;; load via data-signals__ifmissing, rewrite on every toggle. The suffix must be a
+;; safe JS identifier (":in-progress" → "InProgress"), so it's derived from a fixed
+;; table shared by the initializer, the per-section toggles, and the persist write.
+(def ^:private ws-fold-stages
+  [[:shipping    "Shipping"]
+   [:in-progress "InProgress"]
+   [:ready       "Ready"]
+   [:triage      "Triage"]
+   [:incoming    "Incoming"]])
+
+(defn- ws-fold-signal
+  "Collapsed-flag signal name for a stage, e.g. :in-progress → \"wsFoldInProgress\"."
+  [stage]
+  (str "wsFold" (some (fn [[s suf]] (when (= s stage) suf)) ws-fold-stages)))
+
+(def ^:private ws-fold-storage-key "nidoWsFold")
+
+(def ^:private ws-fold-signals-init
+  "data-signals__ifmissing expression for the persistent chrome: seed each stage's
+   collapsed flag from localStorage on load. `===true` coerces a missing/false key
+   to expanded (the default), and __ifmissing makes the whole thing a no-op once
+   the signals exist — so a full-page reload restores state without clobbering it."
+  (str "{"
+       (str/join ", "
+                 (for [[_ suf] ws-fold-stages]
+                   (str "wsFold" suf
+                        ": (JSON.parse(localStorage.getItem('" ws-fold-storage-key
+                        "')||'{}')." suf ")===true")))
+       "}"))
+
+(def ^:private ws-fold-persist-js
+  "JS appended to every section toggle: after a flag flips, write the full fold
+   state back to localStorage so both a reload and the 5s poll restore it."
+  (str "localStorage.setItem('" ws-fold-storage-key "', JSON.stringify({"
+       (str/join ", " (for [[_ suf] ws-fold-stages] (str suf ":$wsFold" suf)))
+       "}))"))
+
 (defn- ws-stage-sections
-  "Flatten one {:project :grouped} into [{:project :stage :rows}] in spine order,
-   dropping empty stages. Kept as a plain fn (not inline hiccup) for the same
-   SCI reason the old stage-sections was."
+  "Flatten one {:project :grouped} into [{:project :stage :rows}] in most-advanced-
+   first order (shipping → in-progress → ready → triage → incoming), dropping empty
+   stages. Kept as a plain fn (not inline hiccup) for the same SCI reason the old
+   stage-sections was."
   [{:keys [project grouped]}]
-  (->> [[:incoming (:incoming grouped)]
-        [:triage (concat (-> grouped :triage :in-flight) (-> grouped :triage :queued))]
-        [:ready (:ready grouped)]
+  (->> [[:shipping (:shipping grouped)]
         [:in-progress (:in-progress grouped)]
-        [:shipping (:shipping grouped)]]
+        [:ready (:ready grouped)]
+        [:triage (concat (-> grouped :triage :in-flight) (-> grouped :triage :queued))]
+        [:incoming (:incoming grouped)]]
        (keep (fn [[stage rows]] (when (seq rows) {:project project :stage stage :rows rows})))))
 
 (defn- ws-list-row
@@ -482,9 +530,20 @@
     (str
      (h/html
       [:div {:id "workstreams"}
+       ;; The fold signals live on the persistent chrome (see workstreams-page);
+       ;; here we only re-bind the click toggle, the reactive fold marker, and the
+       ;; row list's data-show. These re-attach to the already-declared signals on
+       ;; every 5s poll, which is harmless — the signals (and their state) persist.
        (for [{:keys [project stage rows]} (mapcat ws-stage-sections groups)]
-         [:div [:h3 (name stage)]
-          (for [r rows] (ws-list-row screen sel-id project r))])]))))
+         (let [sig (ws-fold-signal stage)]
+           [:div.ws-section
+            [:h3.ws-fold-header
+             {"data-on:click" (str "$" sig " = !$" sig ", " ws-fold-persist-js)}
+             [:span.ws-fold-mark {:data-show (str "!$" sig)} "▾"]
+             [:span.ws-fold-mark {:data-show (str "$" sig)} "▸"]
+             [:span.ws-fold-label (name stage)]]
+            [:div.ws-section-rows {:data-show (str "!$" sig)}
+             (for [r rows] (ws-list-row screen sel-id project r))]]))]))))
 
 (defn- session-dev-cell
   "Per-session DEV ENVIRONMENT controls for the Sessions table, driven by the
@@ -622,7 +681,11 @@
         q      (screen-query screen (when sel-id {:sel (str (:project selection) ":" sel-id)}))]
     (shell
      (assoc ctx :active :workstreams :title "Workstreams")
-     [:div.gate-wrap
+     ;; Section-fold signals are declared here, on the stable page chrome that the
+     ;; 5s poll never replaces (the poll only patches #workstreams inside .inbox).
+     ;; __ifmissing seeds them from localStorage on load without clobbering live
+     ;; state; a full-page reload re-runs this and restores the persisted fold.
+     [:div.gate-wrap {:data-signals__ifmissing ws-fold-signals-init}
       [:div.filters (source-row screen) (facet-rows screen (:groups screen))]
       [:div.inbox {:data-on-interval__duration.5s (str "@get('/_fragment/workstreams" q "')")}
        (h/raw (workstreams-fragment screen))]

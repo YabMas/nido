@@ -242,12 +242,12 @@
                                    (work/facet-match? facet-filter r)))))
          band (fn [k label rows] (band-rows k label (keep rows) (contains? collapsed k)))
          rows (concat
-               (band :incoming         "Queue"              (:incoming g))
-               (band :ready            "Ready to pick up"   (:ready g))
-               (band :in-progress      "In progress"        (:in-progress g))
                (band :shipping         "Shipping"           (:shipping g))
+               (band :in-progress      "In progress"        (:in-progress g))
+               (band :ready            "Ready to pick up"   (:ready g))
                (band :triage-in-flight "Triage · in flight" (get-in g [:triage :in-flight]))
-               (band :triage-queued    "Triage · queued"    (get-in g [:triage :queued])))]
+               (band :triage-queued    "Triage · queued"    (get-in g [:triage :queued]))
+               (band :incoming         "Queue"              (:incoming g)))]
      (if (empty? rows)
        [{:title "No workstreams here. [n] new · [s] system · [f via system] fire"
          :description "" :data ::empty}]
