@@ -613,7 +613,8 @@
 (defn- pane-action-bar
   "Stage-appropriate gate actions rendered below the reader pane, driven by
    `work/gate-actions` (different stages → different actions; a parked triage adds
-   Apply/Reply). Buttons POST to the pane-scoped route. Shown only for the CURRENT
+   Apply/Reply). Takes `origin` so Notion `:triage` rows drop Dismiss (kept for
+   Slack). Buttons POST to the pane-scoped route. Shown only for the CURRENT
    ledger entry — callers gate on :on-latest?. Renders nothing when the stage offers
    no actions."
   [project ws-id origin stage sessions]

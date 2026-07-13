@@ -237,8 +237,8 @@
 
 (defn notion-stage
   "Board stage from a Notion ticket's live status + whether a triage report exists.
-   Pre-implementation statuses (Needs verification / Not started / On Hold / nil)
-   split on triage-report presence: triaged → :ready, else :triage."
+   Pre-implementation statuses (e.g. Needs verification / Not started / On Hold /
+   nil / other) split on triage-report presence: triaged → :ready, else :triage."
   [notion-status has-triage-report?]
   (cond
     (contains? notion-terminal-statuses notion-status)    :done
