@@ -106,6 +106,25 @@
    ;; Kept for a future emitter wanting a one-line human note on the timeline card.
    [:summary            {:optional true} string?]])
 
+(def FindingItem
+  [:map {:closed true}
+   [:id       string?]
+   [:summary  string?]
+   [:severity [:enum :blocker :tweak :nice-to-have]]
+   [:area     {:optional true} string?]])
+
+(def FindingsRound
+  "One staging-review findings round, filed by a human after reviewing the
+   deployed staging build. Immutable snapshot; live per-item resolution status
+   is tracked on the workstream record (:findings). `:at` is stamped by the
+   ledger at read time."
+  [:map {:closed true}
+   [:format      [:= :findings]]
+   [:round       int?]                        ; 1-based; increments per round on this workstream
+   [:staging-ref {:optional true} string?]    ; where it was reviewed (URL / build / env)
+   [:note        {:optional true} string?]    ; overall reviewer note
+   [:items       [:vector FindingItem]]])
+
 (def event-schemas
   "Entry :kind → its Malli schema. Drives ledger-boundary validation + rendering.
    A :kind absent here is stored as verbatim markdown (legacy / freeform)."
@@ -114,7 +133,8 @@
    :implementation-completed ImplementationCompleted
    :blocker                  Blocker
    :pr-opened                PrOpened
-   :review                   ReviewReport})
+   :review                   ReviewReport
+   :findings                 FindingsRound})
 
 (defn validate-event
   "Validate `report` (parsed EDN) against the schema registered for entry `kind`.
@@ -211,6 +231,19 @@
        (when summary (str "\n" summary))
        (when report-path (str "\nfull report → " report-path))])))
 
+(defn- findings->markdown [{:keys [round staging-ref note items]}]
+  (str/join "\n"
+    (remove nil?
+      (concat
+        [(str "# Findings round " round)
+         (str (count items) " item(s)"
+              (when staging-ref (str "  ·  staging → " staging-ref)))
+         (when note (str "\n" note))
+         ""]
+        (for [{:keys [id summary severity area]} items]
+          (str "- **" (name severity) "** "
+               (when area (str "(" area ") ")) "[" id "] " summary))))))
+
 (defn report->markdown
   "Render a `:format`-tagged report payload to markdown. Each event type → its own
    headed markdown; :markdown → its body; nil/unknown → \"\"."
@@ -223,6 +256,7 @@
     :blocker                  (blocker->markdown report)
     :pr-opened                (pr-opened->markdown report)
     :review-report            (review->markdown report)
+    :findings                 (findings->markdown report)
     ""))
 
 (defn report-title
@@ -235,4 +269,6 @@
     :implementation-completed (first-line (:summary report))
     :blocker                  (or (:needs report) (first-line (:summary report)))
     :review-report            (str "Review: " (name (:status report)))
+    :findings                 (str "Findings round " (:round report)
+                                   " (" (count (:items report)) " items)")
     nil))
