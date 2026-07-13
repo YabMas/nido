@@ -12,3 +12,14 @@
   (is (nil? (nc/parse-priority-rank nil)) "nil in → nil")
   (is (nil? (nc/parse-priority-rank "")) "blank → nil")
   (is (nil? (nc/parse-priority-rank "Must")) "no leading digit → nil"))
+
+(deftest pages-snapshot-shape
+  (let [pages [{:page-id "p1" :status "Not started" :priority "2 - Should"
+                :ball-holder {:type "people" :people [{:id "u1"} {:id "u2"}]}}
+               {:page-id "p2" :status "In progress" :priority "0 – Release Blocker"
+                :ball-holder nil}
+               {:page-id "p3"}]                                  ; no props at all
+        snap  (nc/pages-snapshot pages)]
+    (is (= {:status "Not started" :priority 2 :ball-ids #{"u1" "u2"}} (get snap "p1")))
+    (is (= {:status "In progress" :priority 0 :ball-ids #{}} (get snap "p2")))
+    (is (= {:status nil :priority nil :ball-ids #{}} (get snap "p3")))))

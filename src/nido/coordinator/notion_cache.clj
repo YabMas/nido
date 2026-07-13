@@ -14,3 +14,17 @@
   [s]
   (when-let [m (and s (re-find #"^\s*(\d+)" (str s)))]
     (parse-long (second m))))
+
+(defn pages-snapshot
+  "Build the :pages map {page-id → {:status :priority :ball-ids}} from a vector
+   of normalised Notion pages (client/normalise-page output). :status is the
+   promoted Status string (or nil), :priority the parsed Priority rank (or nil),
+   :ball-ids the set of Ball Holder people ids (empty when unset)."
+  [pages]
+  (into {}
+        (map (fn [p]
+               [(:page-id p)
+                {:status   (:status p)
+                 :priority (parse-priority-rank (:priority p))
+                 :ball-ids (set (map :id (:people (:ball-holder p))))}]))
+        pages))
