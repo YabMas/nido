@@ -109,3 +109,87 @@
   (->> (ws/list-ids project)
        (keep #(ws/read-ws project %))
        (filter #(and (nil? (:closed %)) (notion-page-id %)))))
+
+(defn- state-key [project] (str "notion-sync-" (name project)))
+
+;; Half-open breaker (mirrors github-merge): once tripped, suppress polling for
+;; this long, then allow one probe poll.
+(def ^:private breaker-cooldown-s (* 30 60))
+
+(defn- cooldown-elapsed?
+  "True if a tripped breaker is due for a half-open probe. Permissive when no
+   :breaker-opened-at is recorded, so the poller never stays dark forever."
+  [state]
+  (if-let [opened (:breaker-opened-at state)]
+    (try
+      (>= (.toSeconds (java.time.Duration/between
+                        (java.time.Instant/parse opened)
+                        (java.time.Instant/parse (clock/now-iso))))
+          breaker-cooldown-s)
+      (catch Exception _ true))
+    true))
+
+(defn- action-desc
+  "Human/ledger description of a resolved action for workstream `w`."
+  [action w status page me]
+  (case (if (keyword? action) action (first action))
+    :close-done    (str "notion-sync: closed :done — Notion status " status)
+    :close-dropped (str "notion-sync: dropped — claimed by " (page-ballholder-name page me))
+    :advance       (format "notion-sync: %s → %s — Notion status %s"
+                           (name (:stage w)) (name (second action)) status)))
+
+(defn- apply-action!
+  "Effect one resolved action. dry? logs the would-do without mutating; otherwise
+   mutates the workstream and appends an explanatory ledger entry. :noop → nil."
+  [project w action status page me dry?]
+  (when (not= action :noop)
+    (let [desc (action-desc action w status page me)]
+      (if dry?
+        (println (str "[dry-run] " (:id w) " · " desc))
+        (do
+          (case (if (keyword? action) action (first action))
+            :close-done    (ws/close! project (:id w) :done)
+            :close-dropped (ws/close! project (:id w) :dropped)
+            :advance       (ws/advance-stage! project (:id w) (second action)))
+          (ws/append-entry! project (:id w) {:kind :note} desc)
+          (println (str "notion-sync: " (:id w) " · " desc)))))))
+
+(defn poll-and-react!
+  "One reconcile poll for a project. For each open Notion-linked workstream, read
+   its ticket's Status + Ball Holder and apply sync-action. Read-only against
+   Notion; fail-safe per workstream. A token-wide :auth failure opens the
+   half-open breaker (skips polling until cooldown). Persists state under
+   (state-key project) with :type :notion-sync so it shows under coordinator:status
+   Sources:. Never throws."
+  [project {:keys [me terminal status->stage dry-run?] :as _cfg}]
+  (let [k     (state-key project)
+        prior (sstate/read-state k)]
+    (when-not (and (= :open (:breaker prior)) (not (cooldown-elapsed? prior)))
+      (if-let [token (notion/keychain-token)]
+        (let [auth-failed? (atom false)]
+          (doseq [w (open-notion-workstreams project)
+                  :while (not @auth-failed?)]
+            (let [page (notion/retrieve-page (notion-page-id w) token)]
+              (cond
+                (= :auth (:error page)) (reset! auth-failed? true)
+                (:error page)           (warn (str "notion-sync: read failed for " (:id w)
+                                                   " (" (notion-page-id w) ") — " (:error page)
+                                                   "; skipping"))
+                :else
+                (let [status (page-status page)
+                      action (sync-action {:status         status
+                                           :ballholder-ids (page-ballholder-ids page)
+                                           :me             me
+                                           :terminal       terminal
+                                           :status->stage  status->stage
+                                           :current-stage  (:stage w)})]
+                  (apply-action! project w action status page me dry-run?)))))
+          (sstate/write-state!
+            k (if @auth-failed?
+                (merge (or prior {:type :notion-sync :project project})
+                       {:breaker :open :breaker-opened-at (clock/now-iso)
+                        :last-poll-result {:error :auth} :last-polled-at (clock/now-iso)})
+                {:type :notion-sync :project project
+                 :breaker nil :last-polled-at (clock/now-iso)})))
+        (warn (str "notion-sync: no Notion token; skipping poll for " project))))
+    nil))

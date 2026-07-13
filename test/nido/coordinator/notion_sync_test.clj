@@ -135,3 +135,87 @@
           (is (contains? ids (:id done-open)) "open workstream at :done STAGE still included (filter is :closed, not stage)")
           (is (not (contains? ids (:id closed))) "closed excluded")
           (is (= 2 (count ids)) "only the two open + notion-ref workstreams; no-ref and closed excluded"))))))
+
+(def ^:private cfg
+  {:poll "10m" :me me
+   :terminal ns-sync/default-terminal
+   :status->stage ns-sync/default-status->stage
+   :dry-run? false})
+
+(defn- ws-with [project stage page-id]
+  (ws/create! project {:stage stage
+                       :external-refs [{:adapter :notion :id (str "BR-" page-id) :page-id page-id}]}))
+
+(deftest poll-reacts-close-drop-advance
+  (with-tmp
+    (fn [_]
+      (let [done    (ws-with :brian :triage "P-done")
+            claimed (ws-with :brian :triage "P-claimed")
+            mine    (ws-with :brian :triage "P-mine")
+            pages   {"P-done" page-done "P-claimed" page-claimed "P-mine" page-mine}]
+        (with-redefs [notion/keychain-token (constantly "tok")
+                      notion/retrieve-page  (fn [pid _] (get pages pid))]
+          (ns-sync/poll-and-react! :brian cfg))
+        (is (= :done (get-in (ws/read-ws :brian (:id done)) [:closed :outcome])))
+        (is (= :dropped (get-in (ws/read-ws :brian (:id claimed)) [:closed :outcome])))
+        (let [w (ws/read-ws :brian (:id mine))]
+          (is (nil? (:closed w)))
+          (is (= :in-progress (:stage w)) "Code Review → :in-progress"))
+        (testing "actions leave an explanatory ledger entry"
+          (is (pos? (count (:entries (ws/read-ws :brian (:id done)))))))))))
+
+(deftest poll-is-idempotent
+  (with-tmp
+    (fn [_]
+      (let [mine  (ws-with :brian :triage "P-mine")
+            pages {"P-mine" page-mine}]
+        (with-redefs [notion/keychain-token (constantly "tok")
+                      notion/retrieve-page  (fn [pid _] (get pages pid))]
+          (ns-sync/poll-and-react! :brian cfg)
+          (ns-sync/poll-and-react! :brian cfg))
+        (let [w (ws/read-ws :brian (:id mine))]
+          (is (= :in-progress (:stage w)))
+          (is (= 1 (count (:entries w))) "second poll is a no-op, appends nothing"))))))
+
+(deftest poll-dry-run-mutates-nothing
+  (with-tmp
+    (fn [_]
+      (let [mine  (ws-with :brian :triage "P-mine")
+            pages {"P-mine" page-mine}]
+        (with-redefs [notion/keychain-token (constantly "tok")
+                      notion/retrieve-page  (fn [pid _] (get pages pid))]
+          (ns-sync/poll-and-react! :brian (assoc cfg :dry-run? true)))
+        (let [w (ws/read-ws :brian (:id mine))]
+          (is (= :triage (:stage w)) "dry-run leaves stage untouched")
+          (is (empty? (:entries w))))))))
+
+(deftest poll-read-error-skips-fail-safe
+  (with-tmp
+    (fn [_]
+      (let [mine  (ws-with :brian :triage "P-mine")
+            pages {"P-mine" {:error :http :status 404}}]
+        (with-redefs [notion/keychain-token (constantly "tok")
+                      notion/retrieve-page  (fn [pid _] (get pages pid))]
+          (ns-sync/poll-and-react! :brian cfg))
+        (is (= :triage (:stage (ws/read-ws :brian (:id mine)))) "unreadable page → untouched")))))
+
+(deftest poll-auth-error-opens-breaker
+  (with-tmp
+    (fn [_]
+      (let [_mine (ws-with :brian :triage "P-mine")]
+        (with-redefs [notion/keychain-token (constantly "tok")
+                      notion/retrieve-page  (fn [_ _] {:error :auth})]
+          (ns-sync/poll-and-react! :brian cfg))
+        (is (= :open (:breaker (sstate/read-state "notion-sync-brian"))))))))
+
+(deftest poll-open-breaker-skips-until-cooldown
+  (with-tmp
+    (fn [_]
+      (sstate/write-state! "notion-sync-brian"
+                           {:type :notion-sync :project :brian
+                            :breaker :open :breaker-opened-at (clock/now-iso)})
+      (let [called (atom 0)]
+        (with-redefs [notion/keychain-token (constantly "tok")
+                      notion/retrieve-page  (fn [_ _] (swap! called inc) {:error :auth})]
+          (ns-sync/poll-and-react! :brian cfg))
+        (is (zero? @called) "open breaker within cooldown skips the poll entirely")))))
