@@ -60,6 +60,10 @@
 (defn- config-path [project]
   (str (fs/path (cstate/nido-root) "projects" (name project) "notion-sync.edn")))
 
+;; Projects already warned about a missing :me — warn once per daemon lifetime,
+;; not on every tick (load-config runs each tick, upstream of the poll throttle).
+(defonce ^:private !warned-missing-me (atom #{}))
+
 (defn load-config
   "Read + default-merge notion-sync.edn for a project. Returns nil when the file
    is absent (feature off) or when :me is missing (logs a WARN — the poller cannot
@@ -69,8 +73,10 @@
     (when (fs/exists? p)
       (let [raw (io/read-edn p)]
         (if (str/blank? (str (:me raw)))
-          (do (warn (str "notion-sync: notion-sync.edn for " project
-                         " is missing :me (my Notion user id); poller disabled for this project"))
+          (do (when-not (contains? @!warned-missing-me project)
+                (swap! !warned-missing-me conj project)
+                (warn (str "notion-sync: notion-sync.edn for " project
+                           " is missing :me (my Notion user id); poller disabled for this project")))
               nil)
           (merge {:poll          "10m"
                   :terminal      default-terminal

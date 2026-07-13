@@ -219,3 +219,17 @@
                       notion/retrieve-page  (fn [_ _] (swap! called inc) {:error :auth})]
           (ns-sync/poll-and-react! :brian cfg))
         (is (zero? @called) "open breaker within cooldown skips the poll entirely")))))
+
+(deftest load-config-warns-missing-me-only-once
+  (with-tmp
+    (fn [tmp]
+      (reset! @#'ns-sync/!warned-missing-me #{})
+      (write-config! tmp :brian {:poll "10m"})   ; config present but no :me
+      (let [sw (java.io.StringWriter.)
+            pw (java.io.PrintWriter. sw)]
+        (binding [*err* pw]
+          (is (nil? (ns-sync/load-config :brian)))
+          (is (nil? (ns-sync/load-config :brian)))
+          (.flush pw))
+        (is (= 1 (count (re-seq #"missing :me" (str sw))))
+            "warns once per project across repeated ticks, not on every call")))))
