@@ -150,7 +150,8 @@
       :last-activity (last-activity ws sessions)
       :facets        (:facets ws)
       ;; Merge-lane sub-state: only populated when the projected stage is :shipping.
-      :ship-substate (when (= :shipping (:stage proj)) (session/ship-substate sessions))})))
+      :ship-substate (when (= :shipping (:stage proj)) (session/ship-substate sessions))
+      :open-findings (count (:open (:findings ws)))})))
 
 (defn workstream-rows
   "All workstream rows for a project, read from disk. `live-names` (optional) is

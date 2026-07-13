@@ -2,6 +2,7 @@
   "Hiccup view functions for the nido dashboard."
   (:require [clojure.string :as str]
             [hiccup2.core :as h]
+            [nido.coordinator.report :as report]
             [nido.process :as process]
             [nido.ui.markdown :as md]
             [nido.ui.view-state :as view-state]
@@ -128,6 +129,7 @@
      .filter-label { color:#888; font-size:11px; text-transform:uppercase; min-width:72px; }
      .chip.active { background:#2a4a6a; color:#aee0ff; border:1px solid #3a5a7a; }
      .ship-badge { font-size:.8em; padding:0 .4em; border-radius:.3em; }
+     .badge-findings { color:#e0a34a; border:1px solid #4a3a20; border-radius:4px; padding:1px 6px; font-size:11px; margin-left:6px; }
      .ship-blocked { background:#b00020; color:#fff; font-weight:600; }
      .ship-driving { background:#1d4ed8; color:#fff; }
      .ship-awaiting-merge { background:#555; color:#fff; }
@@ -414,6 +416,7 @@
     :implementation-completed (completed-card report)
     :blocker                  (blocker-card report)
     :pr-opened                (pr-opened-card report)
+    :findings                 (md/render (report/report->markdown report))
     (md/render (:markdown report))))
 
 (defn gate-pane
@@ -513,11 +516,13 @@
    + facets) plus the selection, so selecting a workstream lands on the SAME
    filtered list rather than a differently-filtered one. `sel-id` highlights the
    open row (threaded from the screen so a poll preserves it)."
-  [screen sel-id project {:keys [ws-id origin label needs-you stage ship-substate]}]
+  [screen sel-id project {:keys [ws-id origin label needs-you stage ship-substate open-findings]}]
   [:a {:class (str "gate-card" (when (= sel-id ws-id) " sel"))
        :href  (str "/workstreams" (screen-query screen {:sel (str project ":" ws-id)}))}
    [:div.gate-top (origin-badge origin) [:span.lbl label]
     (when needs-you [:span.needs {:title "needs you"}])
+    (when (pos? (or open-findings 0))
+      [:span.badge-findings (str "⚑ " open-findings " open findings")])
     (when (= :shipping stage)
       [:span {:class (str "ship-badge ship-" (name (or ship-substate :queued)))}
        (case ship-substate
