@@ -439,7 +439,7 @@
         (with-redefs [client/data-source-query (stub-query-result pages)
                       client/resolve-data-source-id (constantly "ds1")]
           (let [new-state (notion-src/poll-once! source-config "tok" (constantly nil))]
-            (is (= {:status "Not started" :priority 2 :ball-ids #{}}
+            (is (= {:status "Not started" :priority 2 :ball-ids #{} :title nil :br nil}
                    (get-in new-state [:pages "p1"]))
                 ":pages carries parsed per-page facts")
             (is (contains? (:last-rows new-state) "p1")
