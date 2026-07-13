@@ -18,14 +18,17 @@
 
 (deftest pages-snapshot-shape
   (let [pages [{:page-id "p1" :status "Not started" :priority "2 - Should"
+                :title "Firefox loading" :id "BR-4659"
                 :ball-holder {:type "people" :people [{:id "u1"} {:id "u2"}]}}
                {:page-id "p2" :status "In progress" :priority "0 – Release Blocker"
-                :ball-holder nil}
+                :title "Modal" :id "BR-1" :ball-holder nil}
                {:page-id "p3"}]                                  ; no props at all
         snap  (nc/pages-snapshot pages)]
-    (is (= {:status "Not started" :priority 2 :ball-ids #{"u1" "u2"}} (get snap "p1")))
-    (is (= {:status "In progress" :priority 0 :ball-ids #{}} (get snap "p2")))
-    (is (= {:status nil :priority nil :ball-ids #{}} (get snap "p3")))))
+    (is (= {:status "Not started" :priority 2 :ball-ids #{"u1" "u2"}
+            :title "Firefox loading" :br "BR-4659"} (get snap "p1")))
+    (is (= {:status "In progress" :priority 0 :ball-ids #{}
+            :title "Modal" :br "BR-1"} (get snap "p2")))
+    (is (= {:status nil :priority nil :ball-ids #{} :title nil :br nil} (get snap "p3")))))
 
 (defn- with-tmp [f]
   (let [tmp (fs/create-temp-dir)]
