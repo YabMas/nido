@@ -3,6 +3,7 @@
    stage, close a workstream. Resolves the target workstream by id or by Notion
    external ref (BR-####). Used by the triage skill's dual-write and by humans."
   (:require
+   [nido.coordinator.report :as report]
    [nido.coordinator.workstream :as ws]
    [nido.task-args :as task-args]
    [nido.work :as work]))
@@ -33,6 +34,23 @@
                  url   (assoc :url url)
                  title (assoc :title title))))
 
+(defn show* [{:keys [project] :as opts}]
+  (let [p     (keyword project)
+        ws-id (resolve-ws-id opts)
+        w     (work/workstream p ws-id)]
+    (if-not w
+      (println "no such workstream:" ws-id)
+      (do
+        (println "ws-id:" ws-id)
+        (println "stage:" (name (:stage w)) "·" (:label w))
+        (when-let [idx (:entries w)]
+          (println "ledger:")
+          (doseq [{:keys [seq kind title]} idx]
+            (println (format "  %2d  %-24s %s" seq (name kind) (or title "")))))
+        (println)
+        (println "── latest entry ──")
+        (println (report/report->markdown (:report w)))))))
+
 (defn- run* [f args]
   (let [[_ opts] (task-args/split-args args)]
     (f opts)
@@ -42,3 +60,7 @@
 (defn stage-advance [& args] (run* stage-advance* args))
 (defn close-cmd     [& args] (run* close* args))
 (defn ref-add       [& args] (run* ref-add* args))
+
+(defn show-cmd [& args]
+  (let [[_ opts] (task-args/split-args args)]
+    (show* opts)))

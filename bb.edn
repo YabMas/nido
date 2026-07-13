@@ -476,6 +476,11 @@
    :doc "Add an external ref to a workstream. :project <p> (:ws-id <id> | :ref <BR-####>) :adapter <kw> :id <str> [:url <str> :title <str>]"
    :task (apply nido-workstream/ref-add *command-line-args*)}
 
+  nido:workstream:show
+  {:requires ([tasks.nido-workstream :as nido-workstream])
+   :doc "Print a workstream's active ledger (own entries else ticket) + latest entry."
+   :task (apply nido-workstream/show-cmd *command-line-args*)}
+
   nido:review:loop
   {:requires ([tasks.nido-review :as nido-review])
    :doc "Run the codex review loop on the session's branch diff. [:base main] [:max-iters 5] [:cwd <dir>] [:dry-run? false]"
