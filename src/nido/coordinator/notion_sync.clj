@@ -52,3 +52,28 @@
         (nil? target)             :noop     ; unknown/absent status
         (= target current-stage)  :noop     ; idempotent
         :else                     [:advance target]))))
+
+(defn- warn [msg]
+  (binding [*err* *err*]
+    (.println ^java.io.PrintWriter *err* (str "WARN: " msg))))
+
+(defn- config-path [project]
+  (str (fs/path (cstate/nido-root) "projects" (name project) "notion-sync.edn")))
+
+(defn load-config
+  "Read + default-merge notion-sync.edn for a project. Returns nil when the file
+   is absent (feature off) or when :me is missing (logs a WARN — the poller cannot
+   distinguish 'claimed by me' from 'claimed by someone else' without it)."
+  [project]
+  (let [p (config-path project)]
+    (when (fs/exists? p)
+      (let [raw (io/read-edn p)]
+        (if (str/blank? (str (:me raw)))
+          (do (warn (str "notion-sync: notion-sync.edn for " project
+                         " is missing :me (my Notion user id); poller disabled for this project"))
+              nil)
+          (merge {:poll          "10m"
+                  :terminal      default-terminal
+                  :status->stage default-status->stage
+                  :dry-run?      false}
+                 raw))))))

@@ -44,3 +44,46 @@
     (is (= :noop (action nil [] :triage))))
   (testing "unknown status but claimed by other still drops"
     (is (= :close-dropped (action "Some Weird Status" ["other"] :triage)))))
+
+(defn- with-tmp
+  "Run f with a fresh temp nido-root (mirrors github_merge_test)."
+  [f]
+  (let [tmp (fs/create-temp-dir)]
+    (try (with-redefs [cstate/nido-root (constantly (str tmp))]
+           (f tmp))
+         (finally (fs/delete-tree tmp)))))
+
+(defn- write-config! [tmp project m]
+  (let [p (fs/path tmp "projects" (name project) "notion-sync.edn")]
+    (fs/create-dirs (fs/parent p))
+    (spit (str p) (pr-str m))))
+
+(deftest load-config-absent-returns-nil
+  (with-tmp (fn [_] (is (nil? (ns-sync/load-config :brian))))))
+
+(deftest load-config-without-me-returns-nil
+  (with-tmp
+    (fn [tmp]
+      (write-config! tmp :brian {:poll "10m"})
+      (is (nil? (ns-sync/load-config :brian))
+          ":me is required — no way to tell 'claimed by me' from 'by someone else'"))))
+
+(deftest load-config-merges-defaults
+  (with-tmp
+    (fn [tmp]
+      (write-config! tmp :brian {:me "me-id"})
+      (let [c (ns-sync/load-config :brian)]
+        (is (= "me-id" (:me c)))
+        (is (= ns-sync/default-terminal (:terminal c)))
+        (is (= ns-sync/default-status->stage (:status->stage c)))
+        (is (= "10m" (:poll c)))
+        (is (false? (:dry-run? c)))))))
+
+(deftest load-config-overrides-defaults
+  (with-tmp
+    (fn [tmp]
+      (write-config! tmp :brian {:me "me-id" :terminal #{"Done"} :dry-run? true :poll "5m"})
+      (let [c (ns-sync/load-config :brian)]
+        (is (= #{"Done"} (:terminal c)))
+        (is (true? (:dry-run? c)))
+        (is (= "5m" (:poll c)))))))
