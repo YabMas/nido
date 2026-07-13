@@ -31,6 +31,7 @@
    [nido.coordinator.executor :as executor]
    [nido.coordinator.github-merge :as github-merge]
    [nido.coordinator.github-issue-intake :as github-issue-intake]
+   [nido.coordinator.notion-sync :as notion-sync]
    [nido.coordinator.intake :as intake]
    [nido.coordinator.ship :as ship]
    [nido.github.config :as gh-config]
@@ -98,6 +99,11 @@
 (defonce ^:private !last-github-poll-ms (atom {}))
 
 (defonce ^:private !last-github-issue-poll-ms (atom {}))
+
+;; Per-project last Notion-sync poll wall-clock ms. Empty ⇒ first tick after a
+;; (re)start reconciles each configured project immediately, then throttles to
+;; that project's notion-sync.edn :poll interval.
+(defonce ^:private !last-notion-sync-ms (atom {}))
 
 ;; Resolved dashboard port for the running daemon (nil when disabled). Recorded
 ;; in the heartbeat so `status` can report + probe the right port.
@@ -227,6 +233,31 @@
         (binding [*err* *err*]
           (.println ^java.io.PrintWriter *err*
                     (str "WARN: github-issue poll threw for " project " — " (ex-message t))))))))
+
+(defn- maybe-poll-notion-sync!
+  "Throttled Notion→workstream reconcile, per project with a notion-sync.edn. At
+   most once per that config's :poll interval (default 10m). Never throws into the
+   tick loop."
+  [now-ms]
+  (doseq [project (registered-projects)
+          :let [cfg (try (notion-sync/load-config project)
+                         (catch Throwable t
+                           (binding [*err* *err*]
+                             (.println ^java.io.PrintWriter *err*
+                                       (str "WARN: notion-sync.edn load failed for " project
+                                            " — " (ex-message t))))
+                           nil))]
+          :when cfg
+          :let [interval (or (parse-duration-ms (or (:poll cfg) "10m")) 600000)
+                last-ms  (get @!last-notion-sync-ms project)]
+          :when (or (nil? last-ms) (>= (- now-ms last-ms) interval))]
+    (swap! !last-notion-sync-ms assoc project now-ms)
+    (try
+      (notion-sync/poll-and-react! project cfg)
+      (catch Throwable t
+        (binding [*err* *err*]
+          (.println ^java.io.PrintWriter *err*
+                    (str "WARN: notion-sync poll threw for " project " — " (ex-message t))))))))
 
 (defn- discover-source-configs
   "Walk loaded triggers and return distinct source-configs whose type is
@@ -671,7 +702,8 @@
           (maybe-reclaim! now-ms)
           (maybe-expire-inbox! now-ms)
           (maybe-poll-github-merges! now-ms)
-          (maybe-poll-github-issues! now-ms))
+          (maybe-poll-github-issues! now-ms)
+          (maybe-poll-notion-sync! now-ms))
         ;; After draining + polling, check anomaly thresholds.
         (when-let [trip (anomaly/check @!detector anomaly-thresholds)]
           (halt/halt! {:source  :auto
