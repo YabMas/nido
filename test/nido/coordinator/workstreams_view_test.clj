@@ -3,6 +3,7 @@
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
    [nido.coordinator.session :as session]
+   [nido.coordinator.sources.state]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.tickets :as tickets]
    [nido.coordinator.workstream :as workstream]
@@ -459,4 +460,30 @@
             row (wsv/workstream-row :brian w nil {})]  ; empty cache
         (is (= :done (:stage row)))
         (is (= :settled (:engagement row)) "legacy engagement still reads :closed")))))
+
+;; ---------------------------------------------------------------------------
+;; workstream-rows — bare rows for uncovered watched-view pages
+;; ---------------------------------------------------------------------------
+
+(deftest workstream-rows-materializes-bare-rows-for-uncovered-pages
+  (with-tmp
+    (fn [_]
+      ;; Cache has two pages; only pg-cov is covered by a workstream.
+      (nido.coordinator.sources.state/write-state! "v1"
+        {:type :notion-view :source-config {:project :brian}
+         :pages {"pg-cov"  {:status "Not started" :priority 2 :ball-ids #{} :title "Covered" :br "BR-1"}
+                 "pg-bare" {:status "Not started" :priority 1 :ball-ids #{} :title "Orphan" :br "BR-9"}}})
+      (make-ws! :brian {:external-refs [{:adapter :notion :id "BR-1" :page-id "pg-cov"}]})
+      (let [rows (wsv/workstream-rows :brian nil)
+            bare (first (filter :bare? rows))]
+        (is (= 1 (count (filter :bare? rows))) "exactly one bare row (pg-bare)")
+        (is (= "pg-bare" (:ws-id bare)) "bare ws-id is the page-id")
+        (is (= "BR-9" (:br-id bare)))
+        (is (= "Orphan" (:label bare)))
+        (is (= :notion (:source bare)))
+        (is (= :triage (:stage bare)) "untriaged Not-started → triage")
+        (is (= 1 (:notion-priority bare)))
+        (is (false? (:needs-you bare)))
+        (is (nil? (first (filter #(= "pg-cov" (:ws-id %)) rows)))
+            "covered page does NOT get a bare row (real ws row instead)")))))
 

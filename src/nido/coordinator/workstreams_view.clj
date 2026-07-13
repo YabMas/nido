@@ -173,16 +173,49 @@
       :ship-substate   (when (= :shipping (:stage proj)) (session/ship-substate sessions))
       :open-findings   (count (:open (:findings ws)))})))
 
+(defn bare-row
+  "A display row for a watched-view Notion page with NO nido workstream, so an
+   orphan / never-provisioned ticket is visible on the board. Synthetic :ws-id is
+   the Notion page-id (stable + unique). Notion-driven stage; no sessions → engagement
+   :idle, needs-you false. Read-only: mutations guard on the missing workstream."
+  [project page-id {:keys [status priority title br]}]
+  (let [has-report? (boolean (and br (tickets/has-triage-report? project br)))]
+    {:ws-id           page-id
+     :project         project
+     :br-id           br
+     :promote-id      br
+     :label           (or title br "(untitled)")
+     :source          :notion
+     :stage           (session/notion-stage status has-report?)
+     :needs-you       false
+     :engagement      :idle
+     :priority        0
+     :notion-priority priority
+     :session-count   0
+     :last-activity   nil
+     :facets          nil
+     :ship-substate   nil
+     :open-findings   0
+     :bare?           true}))
+
 (defn workstream-rows
-  "All workstream rows for a project, read from disk. `live-names` (optional) is
-   threaded into each row's engagement projection — see workstream-row. Builds
-   the project's Notion page-facts cache once and threads it into every row."
+  "All display rows for a project: one per workstream, PLUS a synthesized bare row
+   for each watched-view page (from the Notion cache) that no workstream covers — so
+   orphan / never-provisioned tickets are visible. `live-names` is threaded into each
+   real row's engagement projection. Builds the page-facts cache once."
   ([project] (workstream-rows project nil))
   ([project live-names]
-   (let [facts (notion-cache/project-page-facts project)]
-     (->> (workstream/list-ids project)
-          (keep #(workstream/read-ws project %))
-          (mapv #(workstream-row project % live-names facts))))))
+   (let [facts    (notion-cache/project-page-facts project)
+         wss      (keep #(workstream/read-ws project %) (workstream/list-ids project))
+         ws-rows  (mapv #(workstream-row project % live-names facts) wss)
+         covered  (into #{} (mapcat (fn [w] (remove nil? [(:page-id (notion-ref w))
+                                                           (:id (ledger-ref w))]))) wss)
+         bare     (->> facts
+                       (remove (fn [[page-id fct]]
+                                 (or (contains? covered page-id)
+                                     (contains? covered (:br fct)))))
+                       (mapv (fn [[page-id fct]] (bare-row project page-id fct))))]
+     (into ws-rows bare))))
 
 (defn- by-needs-then-newest
   "needs-you rows first, newest-activity first within each band. ISO strings
