@@ -20,9 +20,12 @@
   (:import [java.util UUID]))
 
 (def merge-budget
-  "Generous wall-clock for a merge Run: a brian CI cycle is ~20-30m and
-   drive-home may run two (mechanical fix → re-CI). SIGTERM→SIGKILL-bounded."
-  "90m")
+  "Runaway-only wall-clock backstop for a merge Run. A brian CI cycle is
+   ~20-30m and drive-home may run two (mechanical fix → re-CI), so real work
+   stays well under this; the ceiling exists only to reap a genuinely wedged
+   drive-home (the merge lane is cap-1, so a stuck one blocks the queue until
+   this fires). SIGTERM→SIGKILL-bounded."
+  "8h")
 
 (defn- ws-br
   "BR-#### for a workstream from its :notion external ref, or nil (scratch)."
