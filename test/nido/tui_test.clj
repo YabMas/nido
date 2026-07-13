@@ -100,7 +100,7 @@
                 nido.tui/live-session-names (constantly #{})]
     (let [all (#'tui/board-rows "brian" :all)
           labels (keep #(get-in % [:data :ws-id]) all)]
-      (is (= ["r1" "p1"] (vec labels)) "ready then in-progress, all origins")
+      (is (= ["p1" "r1"] (vec labels)) "most-advanced-first: in-progress before ready, all origins")
       (is (some #(re-find #"Ready to pick up" (:title %)) all))
       (is (some #(re-find #"In progress" (:title %)) all)))
     (let [scratch-only (#'tui/board-rows "brian" :scratch)
