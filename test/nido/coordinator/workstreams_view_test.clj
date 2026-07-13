@@ -388,6 +388,24 @@
         (let [row (wsv/workstream-row :brian (workstream/read-ws :brian (:id w)))]
           (is (nil? (:ship-substate row)) ":ship-substate is nil for non-shipping workstreams"))))))
 
+(deftest by-notion-priority-orders-lowest-rank-first
+  (let [rows [{:ws-id "a" :notion-priority 2 :priority 0 :last-activity "t"}
+              {:ws-id "b" :notion-priority nil :priority 0 :last-activity "t"}
+              {:ws-id "c" :notion-priority 0 :priority 0 :last-activity "t"}
+              {:ws-id "d" :notion-priority 1 :priority 0 :last-activity "t"}]]
+    (is (= ["c" "d" "a" "b"]
+           (mapv :ws-id (#'wsv/by-notion-priority rows)))
+        "0 first, nils last")))
+
+(deftest workstream-row-stamps-notion-priority-from-facts
+  (with-tmp
+    (fn [_tmp]
+      (let [w     (make-ws! :brian {:external-refs [{:adapter :notion :id "BR-1"
+                                                     :page-id "pg-1"}]})
+            facts {"pg-1" {:status "Not started" :priority 2 :ball-ids #{}}}
+            row   (wsv/workstream-row :brian w nil facts)]
+        (is (= 2 (:notion-priority row)))))))
+
 (deftest grouped-by-stage-includes-shipping-band
   (let [rows [{:ws-id "s1" :stage :shipping :needs-you true  :last-activity "2026-06-05T00:00:00Z"}
               {:ws-id "s2" :stage :shipping :needs-you false :last-activity "2026-06-04T00:00:00Z"}

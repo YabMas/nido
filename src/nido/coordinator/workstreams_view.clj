@@ -6,6 +6,7 @@
    coordination overview."
   (:require
    [clojure.string :as str]
+   [nido.coordinator.notion-cache :as notion-cache]
    [nido.coordinator.session :as session]
    [nido.coordinator.tickets :as tickets]
    [nido.coordinator.workstream :as workstream]))
@@ -124,43 +125,50 @@
    + lifecycle stage. `live-names` (optional) is the set of session names actually
    holding ports; when supplied, a human session not in it is treated as down so
    :engagement reflects real liveness rather than the static :substrate. Omit it
-   (or pass nil) for the legacy substrate-only projection."
-  ([project ws] (workstream-row project ws nil))
-  ([project ws live-names]
+   (or pass nil) for the legacy substrate-only projection. `facts` is the
+   project's Notion page-id → {:status :priority :ball-ids} cache
+   (nido.coordinator.notion-cache); nil ⇒ no Notion priority is stamped."
+  ([project ws] (workstream-row project ws nil nil))
+  ([project ws live-names] (workstream-row project ws live-names nil))
+  ([project ws live-names facts]
    (let [sessions     (session/list-sessions project (:id ws))
          eng-sessions (if live-names (mapv #(reconcile-liveness live-names %) sessions) sessions)
          br-id        (:id (ledger-ref ws))
          status       (when br-id (tickets/status project br-id))
-         proj         (session/stage-projection (:closed ws) status sessions (:stage ws))]
-     {:ws-id         (:id ws)
-      :project       project
-      :br-id         br-id
+         proj         (session/stage-projection (:closed ws) status sessions (:stage ws))
+         page-id      (:page-id (notion-ref ws))]
+     {:ws-id           (:id ws)
+      :project         project
+      :br-id           br-id
       ;; promote-id stays Notion-or-GitHub. A Slack inbox workstream IS promotable
       ;; (promote → start-triage!), but its promote decisions (:triaging etc.) are
       ;; reported br-independently, so it needs no promote-id.
-      :promote-id    (or (:id (notion-ref ws))
-                         (some #(when (= :github-issue (:adapter %)) (:id %)) (:external-refs ws)))
-      :label         (label ws sessions)
-      :source        (ws-source ws)
-      :stage         (:stage proj)
-      :needs-you     (:needs-you proj)
-      :engagement    (session/engagement-state (:closed ws) eng-sessions)
-      :priority      (max-priority sessions)
-      :session-count (count sessions)
-      :last-activity (last-activity ws sessions)
-      :facets        (:facets ws)
+      :promote-id      (or (:id (notion-ref ws))
+                           (some #(when (= :github-issue (:adapter %)) (:id %)) (:external-refs ws)))
+      :label           (label ws sessions)
+      :source          (ws-source ws)
+      :stage           (:stage proj)
+      :needs-you       (:needs-you proj)
+      :engagement      (session/engagement-state (:closed ws) eng-sessions)
+      :priority        (max-priority sessions)
+      :notion-priority (get-in facts [page-id :priority])
+      :session-count   (count sessions)
+      :last-activity   (last-activity ws sessions)
+      :facets          (:facets ws)
       ;; Merge-lane sub-state: only populated when the projected stage is :shipping.
-      :ship-substate (when (= :shipping (:stage proj)) (session/ship-substate sessions))
-      :open-findings (count (:open (:findings ws)))})))
+      :ship-substate   (when (= :shipping (:stage proj)) (session/ship-substate sessions))
+      :open-findings   (count (:open (:findings ws)))})))
 
 (defn workstream-rows
   "All workstream rows for a project, read from disk. `live-names` (optional) is
-   threaded into each row's engagement projection — see workstream-row."
+   threaded into each row's engagement projection — see workstream-row. Builds
+   the project's Notion page-facts cache once and threads it into every row."
   ([project] (workstream-rows project nil))
   ([project live-names]
-   (->> (workstream/list-ids project)
-        (keep #(workstream/read-ws project %))
-        (mapv #(workstream-row project % live-names)))))
+   (let [facts (notion-cache/project-page-facts project)]
+     (->> (workstream/list-ids project)
+          (keep #(workstream/read-ws project %))
+          (mapv #(workstream-row project % live-names facts))))))
 
 (defn- by-needs-then-newest
   "needs-you rows first, newest-activity first within each band. ISO strings
@@ -178,6 +186,17 @@
   [rows]
   (vec (sort-by (juxt (comp - (fnil :priority 0)) #(or (:last-activity %) "")) rows)))
 
+(defn- by-notion-priority
+  "Notion Priority ascending (0 = Release Blocker first); rows without a Notion
+   priority sort last; ties broken by severity (autonomy :priority desc) then
+   longest-waiting (oldest activity first). Used for the pull queues where the
+   human picks what to work next."
+  [rows]
+  (vec (sort-by (juxt #(or (:notion-priority %) 9999)
+                      (comp - (fnil :priority 0))
+                      #(or (:last-activity %) ""))
+                rows)))
+
 (def triage-in-flight-engagements
   "Engagement states that occupy a triage slot: a session is parked at the gate
    for you, or actively running. Everything else in the triage stage is queued
@@ -192,17 +211,19 @@
   [rows]
   (let [in-flight? #(contains? triage-in-flight-engagements (:engagement %))]
     {:in-flight (by-severity (filter in-flight? rows))
-     :queued    (by-severity (remove in-flight? rows))}))
+     :queued    (by-notion-priority (remove in-flight? rows))}))
 
 (defn grouped-by-stage
   "Partition rows by lifecycle stage for the overview. :done is intentionally
-   omitted — done is done, not shown. :incoming/ready/in-progress/shipping: needs-you
-   first, then newest. Triage is returned as {:in-flight [...] :queued [...]} — see
-   triage-split — each ordered highest-severity-first."
+   omitted — done is done, not shown. :incoming/in-progress/shipping: needs-you
+   first, then newest. :ready is a pull queue ordered by Notion Priority (see
+   by-notion-priority). Triage is returned as {:in-flight [...] :queued [...]} —
+   see triage-split — :in-flight highest-severity-first, :queued by Notion
+   Priority."
   [rows]
   (let [by (group-by :stage rows)]
     {:incoming    (by-needs-then-newest (:incoming by []))
-     :ready       (by-needs-then-newest (:ready by []))
+     :ready       (by-notion-priority (:ready by []))
      :in-progress (by-needs-then-newest (:in-progress by []))
      :shipping    (by-needs-then-newest (:shipping by []))
      :triage      (triage-split (:triage by []))}))
