@@ -306,3 +306,19 @@
         (is (str/ends-with? path ".md"))
         (is (nil? (tickets/latest-triage-report :brian "BR-7"))
             "a non-edn entry is not a triage report")))))
+
+;; ---------------------------------------------------------------------------
+;; Task 1: has-triage-report?
+;; ---------------------------------------------------------------------------
+
+(deftest has-triage-report?-detects-triage-entry
+  (with-tmp
+    (fn [_]
+      (tickets/write-meta! :brian "BR-1"
+        {:br-id "BR-1" :status :dismissed
+         :entries [{:kind :note :seq 1} {:kind :triage :seq 2}]})
+      (is (true? (tickets/has-triage-report? :brian "BR-1")) "has a :triage entry")
+      (tickets/write-meta! :brian "BR-2"
+        {:br-id "BR-2" :status :investigating :entries [{:kind :note :seq 1}]})
+      (is (false? (tickets/has-triage-report? :brian "BR-2")) "no :triage entry")
+      (is (false? (tickets/has-triage-report? :brian "BR-nope")) "no ticket record → false"))))
