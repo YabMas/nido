@@ -378,16 +378,19 @@
 
 (defn set-stage!
   "Move a workstream to `target` stage — the single mutation behind the
-   new/promote/done surface verbs. Dispatch:
+   new/promote/done surface verbs. A workstream-less ws-id (e.g. a bare
+   watched-view row) is a no-op: {:decision :no-workstream}. Dispatch:
      :in-progress → the full promote gesture (gate + provision the planning leg)
      :done        → close the workstream (:done outcome)
      other        → advance the stored stage only (no autonomous leg)
    Returns {:decision <kw>}: promote's decision verbatim, else :done / :advanced."
   [project ws-id target]
-  (case target
-    :in-progress (promote/promote-workstream! project ws-id)
-    :done        (do (cws/close! project ws-id :done) {:decision :done})
-    (do (cws/advance-stage! project ws-id target) {:decision :advanced})))
+  (if (nil? (cws/read-ws project ws-id))
+    {:decision :no-workstream}
+    (case target
+      :in-progress (promote/promote-workstream! project ws-id)
+      :done        (do (cws/close! project ws-id :done) {:decision :done})
+      (do (cws/advance-stage! project ws-id target) {:decision :advanced}))))
 
 (defn dismiss!
   "Take a workstream off the triage radar: record a :dismissed disposition on its
@@ -420,24 +423,24 @@
   {:decision :applied})
 
 (defn resolve-gate!
-  "Apply a gate follow-action, dispatching on `action-id`:
-     :promote      -> set-stage! :in-progress (the promote gesture)
-     :dismiss      -> off-radar: ticket :dismissed + settle :dropped (no re-triage)
-     :drop         -> close! :dropped (ready-stage workstream settled; not pursued)
-     :done         -> set-stage! :done (close! :done)
-     :apply        -> apply! (direct ticket:complete mutation — no conversation)
-     :reply        -> resume! the parked agent with `input`
+  "Apply a gate follow-action, dispatching on `action-id`. A workstream-less ws-id
+   (e.g. a bare watched-view row) is a no-op: {:decision :no-workstream}.
+     :promote -> set-stage! :in-progress   :dismiss -> off-radar (ticket :dismissed + :dropped)
+     :drop    -> close! :dropped            :done    -> set-stage! :done
+     :apply   -> apply! (ticket:complete)   :reply   -> resume! the parked agent with `input`
    Returns the resolver's result map."
   ([project ws-id action-id] (resolve-gate! project ws-id action-id nil))
   ([project ws-id action-id input]
-   (case action-id
-     :promote (set-stage! project ws-id :in-progress)
-     :done    (set-stage! project ws-id :done)
-     :dismiss (dismiss! project ws-id)
-     :drop    (do (cws/close! project ws-id :dropped) {:decision :dropped})
-     :apply   (apply! project ws-id)
-     :reply   (resume/resume! project ws-id input)
-     (throw (ex-info "Unknown gate action" {:action-id action-id :ws-id ws-id})))))
+   (if (nil? (cws/read-ws project ws-id))
+     {:decision :no-workstream}
+     (case action-id
+       :promote (set-stage! project ws-id :in-progress)
+       :done    (set-stage! project ws-id :done)
+       :dismiss (dismiss! project ws-id)
+       :drop    (do (cws/close! project ws-id :dropped) {:decision :dropped})
+       :apply   (apply! project ws-id)
+       :reply   (resume/resume! project ws-id input)
+       (throw (ex-info "Unknown gate action" {:action-id action-id :ws-id ws-id}))))))
 
 (defn new!
   "Birth a scratch workstream and bring its session up. Mirrors the proven add

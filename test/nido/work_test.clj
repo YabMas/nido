@@ -878,3 +878,13 @@
       "Slack unparked triage: Dismiss")
   (is (some #{:dismiss} (map :id (work/gate-actions :triage true)))
       "2-arity (origin nil) unchanged: Dismiss present"))
+
+(deftest mutations-noop-on-workstream-less-id
+  (with-tmp
+    (fn [_]
+      ;; A page-id that is not a real workstream (a bare row's ws-id).
+      (is (= {:decision :no-workstream} (work/set-stage! :brian "pg-bare" :in-progress)))
+      (is (= {:decision :no-workstream} (work/set-stage! :brian "pg-bare" :done)))
+      (is (= {:decision :no-workstream} (work/resolve-gate! :brian "pg-bare" :promote)))
+      (is (= {:decision :no-workstream} (work/resolve-gate! :brian "pg-bare" :drop))
+          "drop would otherwise throw Workstream-not-found"))))
