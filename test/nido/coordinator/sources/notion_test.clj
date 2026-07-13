@@ -433,7 +433,6 @@
     (fn [tmp]
       (write-views! tmp default-views)
       (let [source-config {:type :notion-view :view :open-bugs :project :brian}
-            hash          (sources/config-hash source-config)
             pages         [(stub-page "p1" {:properties
                                             {"Status"   {:type "status" :status {:name "Not started"}}
                                              "Priority" {:type "select" :select {:name "2 - Should"}}}})]]

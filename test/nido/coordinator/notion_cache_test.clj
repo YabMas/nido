@@ -54,3 +54,9 @@
         (is (= 0 (get-in facts ["p2" :priority])))
         (is (nil? (get facts "p9")) "other project excluded")
         (is (nil? (get facts "pX")) "non-:notion-view snapshot excluded")))))
+
+(deftest project-page-facts-empty-when-no-snapshots
+  (with-tmp
+    (fn [_tmp]
+      (is (= {} (nc/project-page-facts :nobody))
+          "no matching notion-view snapshots => empty map, not nil/error"))))
