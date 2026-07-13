@@ -887,4 +887,5 @@
       (is (= {:decision :no-workstream} (work/set-stage! :brian "pg-bare" :done)))
       (is (= {:decision :no-workstream} (work/resolve-gate! :brian "pg-bare" :promote)))
       (is (= {:decision :no-workstream} (work/resolve-gate! :brian "pg-bare" :drop))
-          "drop would otherwise throw Workstream-not-found"))))
+          "drop would otherwise throw Workstream-not-found")
+      (is (= {:decision :no-workstream} (work/dismiss! :brian "pg-bare"))))))

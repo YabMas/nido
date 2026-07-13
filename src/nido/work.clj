@@ -396,13 +396,16 @@
   "Take a workstream off the triage radar: record a :dismissed disposition on its
    ticket (so auto-re-triage skips it) and settle the workstream (:dropped, which
    frees its trigger's in-flight slot and removes it from the board). A ref-less
-   workstream just closes. Returns {:decision :dismissed}."
+   workstream just closes. A workstream-less ws-id (e.g. a bare watched-view row)
+   is a no-op: {:decision :no-workstream}. Returns {:decision :dismissed} otherwise."
   [project ws-id]
-  (when-let [w (cws/read-ws project ws-id)]
-    (when-let [br (:id (wsv/ledger-ref w))]
-      (tickets/dismiss! project br))
-    (cws/close! project ws-id :dropped))
-  {:decision :dismissed})
+  (if-let [w (cws/read-ws project ws-id)]
+    (do
+      (when-let [br (:id (wsv/ledger-ref w))]
+        (tickets/dismiss! project br))
+      (cws/close! project ws-id :dropped)
+      {:decision :dismissed})
+    {:decision :no-workstream}))
 
 (defn apply!
   "Accept a parked triage verdict WITHOUT resuming the review conversation: finalize
