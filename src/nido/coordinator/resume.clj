@@ -62,20 +62,39 @@
   [project ws-id session-name s run input]
   (try
     (when run (runs/ensure-session-home! run))
-    (let [lc   (if run (runs/launch-context run) {})
-          sid  (or (get-in s [:autonomy :claude-session-id])
-                   (:claude-session-id run))
-          home (str (session-state/session-home-dir (name project) session-name))]
-      (agent/launch! {:run-id            (:id run)
-                      :cwd               (resume-cwd sid (:cwd lc) home)
-                      :first-message     input
-                      :claude-session-id sid
-                      :resume?           true
-                      :mcp-config        (:mcp-config lc)
-                      :add-dirs          (:add-dirs lc)
-                      :budget            (or (get-in s [:autonomy :limits :budget])
-                                             (-> run :limits :budget))}))
-    (session/set-error! project ws-id session-name nil)
+    (let [lc     (if run (runs/launch-context run) {})
+          sid    (or (get-in s [:autonomy :claude-session-id])
+                     (:claude-session-id run))
+          home   (str (session-state/session-home-dir (name project) session-name))
+          budget (or (get-in s [:autonomy :limits :budget])
+                     (-> run :limits :budget))
+          result (agent/launch! {:run-id            (:id run)
+                                 :cwd               (resume-cwd sid (:cwd lc) home)
+                                 :first-message     input
+                                 :claude-session-id sid
+                                 :resume?           true
+                                 :mcp-config        (:mcp-config lc)
+                                 :add-dirs          (:add-dirs lc)
+                                 :budget            budget})]
+      ;; launch! SIGTERM-kills on budget overrun but RETURNS normally with
+      ;; :timed-out? — the catch never fires. Surface it as a resume error
+      ;; (rendered by the gate inbox) instead of clearing to nil, so a killed
+      ;; redo reads as a timeout, not a silent re-park showing the stale report.
+      (if (:timed-out? result)
+        (do
+          (binding [*err* *err*]
+            (.println ^java.io.PrintWriter *err*
+                      (str "nido coordinator: resume turn for " session-name
+                           " exceeded its " budget " budget — terminated before it "
+                           "could finish; no new report written")))
+          (session/set-error! project ws-id session-name
+                              {:at      (clock/now-iso)
+                               :reason  :budget-exhausted
+                               :message (str "Resume turn hit its " budget
+                                             " budget and was stopped before it finished — "
+                                             "no new report was written. Reply again to retry "
+                                             "(raise the trigger's :limits.budget if this recurs).")}))
+        (session/set-error! project ws-id session-name nil)))
     (catch Throwable t
       (binding [*err* *err*]
         (.println ^java.io.PrintWriter *err*
