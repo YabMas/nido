@@ -36,15 +36,25 @@ If you can't resolve a `BR-####`, ask the user rather than guessing.
 
 ## Step 2 — Read the ledger and determine the stage
 
+Read BOTH the ticket ledger and the workstream's active ledger — a staging
+findings round lands in the *workstream* ledger, not the ticket ledger, so
+`ticket:show` alone will miss it:
+
 ```bash
 bb nido:ticket:show :project brian :br <BR-####>
+bb nido:workstream:show :project brian :ref <BR-####>   # active ledger + latest entry; prints the ws-id
 ```
 
-Look at `:status` and `:entries` to see where the pipeline is:
+Match the **latest** entry against this table — the stage to do is the one that
+comes *after* the latest recorded entry:
 
-- **`:status :planning` with a `:triage` entry** → triage is done; **your stage is implementation.** Read the latest `:triage` entry file (`~/.nido/projects/brian/tickets/<BR-####>/entries/NNNN-triage.md`) — it's the brief the previous stage left you: enriched description, the solution direction(s) it proposed, and the `file:line` leads it already found. Start the implementation on those findings.
+| latest entry | your stage | what to do |
+|---|---|---|
+| `:triage` (status `:planning`) | **implementation** | Read the latest `:triage` entry file (`~/.nido/projects/brian/tickets/<BR-####>/entries/NNNN-triage.md`) — the enriched brief, solution direction(s), and the `file:line` leads it found. Start the implementation on those findings. |
+| `:findings` with open items | **address findings round N** | This workstream shipped, was reviewed on staging, and reopened. `bb nido:workstream:show` prints the round's items and the ws-id. Work the open items (severity `:blocker` first). Mark each resolved **the moment its fix lands**: `bb nido:findings:resolve :project brian :ws <ws-id> :items [<id>] :by <commit-or-PR>`. Then open a **follow-up PR** — see `/prepare-draft-pr` (its "Follow-up PR on a reopened workstream" section) — and ship with `nido ship` / `/drive-home`. |
 
-In general: the stage to do is the one that comes *after* the latest recorded entry. If the ledger state is ambiguous (no entries, an unexpected status), say so and check with the user — don't invent a stage.
+If the ledger state is ambiguous (no entries, an unexpected status), say so and
+check with the user — don't invent a stage.
 
 ## Step 3 — Set the stage marker
 
@@ -95,3 +105,9 @@ Session reminders:
   bb nido:ticket:append :project brian :br <BR-####> :kind blocker \
     :session <session> :run-id <run-id> :file /tmp/blocker.edn
   ```
+
+- If this is a **findings round**, mark each item resolved the moment its fix
+  lands (`bb nido:findings:resolve :project brian :ws <ws-id> :items [<id>] :by <ref>`) —
+  the board's open-findings badge and the round's completeness both read that
+  tracker. Leftover open items only warn at merge; they don't block, but an
+  unresolved item silently means "still outstanding."

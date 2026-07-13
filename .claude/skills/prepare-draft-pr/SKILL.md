@@ -98,3 +98,18 @@ poller needs to react when the PR later merges.
 Report the PR URL and confirm the session link, workstream ref, and the :pr-opened ticket-ledger entry were written.
 When this PR merges, the coordinator's GitHub poller will close the workstream
 and move the Notion ticket to Code Review automatically.
+
+## Follow-up PR on a reopened workstream (findings round)
+
+When a workstream was shipped and later **reopened** for a staging findings round,
+the fix is a **new** PR — not an edit of the merged one:
+
+- **Branch off fresh `main`.** The prior PR already merged; a freshly-provisioned
+  impl session is already on current main. Do **not** reuse or resurrect the old
+  (merged) branch.
+- **Open a brand-new PR.** Never reopen/amend the merged PR. Stamp the new PR's
+  `:github` ref via the same PR-linkage steps above — the merge poller matches
+  *any* `:github` ref on the workstream and dedups the already-merged one, so the
+  new PR's merge re-closes the workstream to `:done`.
+- **Scope the PR to the findings.** The title/body should say it addresses
+  findings round N and list the finding ids it resolves.
