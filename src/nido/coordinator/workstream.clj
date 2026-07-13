@@ -40,7 +40,8 @@
    [:created-at    string?]
    [:entries       [:vector [:map-of keyword? any?]]]
    [:intake        {:optional true} [:maybe IntakePayload]]
-   [:facets        {:optional true} [:map-of keyword? any?]]])
+   [:facets        {:optional true} [:map-of keyword? any?]]
+   [:findings      {:optional true} [:maybe [:map-of keyword? any?]]]])
 
 (defn validate [w]
   (if (m/validate Workstream w)
@@ -125,6 +126,29 @@
   (let [w (or (read-ws project ws-id)
               (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))]
     (write! (assoc w :closed {:at (clock/now-iso) :outcome outcome}))))
+
+(defn reopen!
+  "Un-terminalize a settled workstream: clear :closed, set :stage, and record a
+   stage-history entry marked :reopened. No-op write when already open at `stage`.
+   Throws if the workstream is absent. Returns the record."
+  [project ws-id stage]
+  (let [w (or (read-ws project ws-id)
+              (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))]
+    (if (and (nil? (:closed w)) (= stage (:stage w)))
+      w
+      (write! (-> w
+                  (assoc :closed nil)
+                  (assoc :stage stage)
+                  (update :stage-history (fnil conj [])
+                          {:at (clock/now-iso) :stage stage :reopened true}))))))
+
+(defn set-findings!
+  "Overwrite the workstream's live findings tracker, or remove it when `tracker`
+   is nil/empty. Throws if the workstream is absent. Returns the record."
+  [project ws-id tracker]
+  (let [w (or (read-ws project ws-id)
+              (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))]
+    (write! (if (seq tracker) (assoc w :findings tracker) (dissoc w :findings)))))
 
 (defn append-entry!
   "Write an immutable entry file under entries/ and record it in :entries.
