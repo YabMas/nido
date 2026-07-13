@@ -1,7 +1,10 @@
 (ns nido.coordinator.notion-cache-test
   (:require
+   [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
-   [nido.coordinator.notion-cache :as nc]))
+   [nido.coordinator.notion-cache :as nc]
+   [nido.coordinator.sources.state :as sstate]
+   [nido.coordinator.state :as cstate]))
 
 (deftest parse-priority-rank-cases
   (is (= 0 (nc/parse-priority-rank "0 – Release Blocker")) "en-dash separator")
@@ -23,3 +26,31 @@
     (is (= {:status "Not started" :priority 2 :ball-ids #{"u1" "u2"}} (get snap "p1")))
     (is (= {:status "In progress" :priority 0 :ball-ids #{}} (get snap "p2")))
     (is (= {:status nil :priority nil :ball-ids #{}} (get snap "p3")))))
+
+(defn- with-tmp [f]
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (cstate/ensure-dirs!)
+        (f tmp))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest project-page-facts-merges-notion-view-snapshots
+  (with-tmp
+    (fn [_tmp]
+      (sstate/write-state! "viewA"
+        {:type :notion-view :source-config {:project :brian}
+         :pages {"p1" {:status "Not started" :priority 2 :ball-ids #{}}}})
+      (sstate/write-state! "viewB"
+        {:type :notion-view :source-config {:project :brian}
+         :pages {"p2" {:status "In progress" :priority 0 :ball-ids #{"u1"}}}})
+      (sstate/write-state! "otherProj"
+        {:type :notion-view :source-config {:project :fukan}
+         :pages {"p9" {:status "x" :priority 1 :ball-ids #{}}}})
+      (sstate/write-state! "notion-sync-brian"
+        {:type :notion-sync :pages {"pX" {:status "x" :priority 9 :ball-ids #{}}}})
+      (let [facts (nc/project-page-facts :brian)]
+        (is (= 2 (get-in facts ["p1" :priority])))
+        (is (= 0 (get-in facts ["p2" :priority])))
+        (is (nil? (get facts "p9")) "other project excluded")
+        (is (nil? (get facts "pX")) "non-:notion-view snapshot excluded")))))

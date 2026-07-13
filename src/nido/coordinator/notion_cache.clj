@@ -28,3 +28,17 @@
                  :priority (parse-priority-rank (:priority p))
                  :ball-ids (set (map :id (:people (:ball-holder p))))}]))
         pages))
+
+(defn project-page-facts
+  "Merge the :pages maps of every :notion-view source snapshot belonging to
+   `project` into one page-id → {:status :priority :ball-ids} lookup. A page that
+   appears in two of the project's views carries identical facts, so merge order
+   is immaterial. Empty map when the project has no notion-view snapshots."
+  [project]
+  (let [pk (keyword (name project))]
+    (->> (sstate/list-state-hashes)
+         (keep sstate/read-state)
+         (filter #(and (= :notion-view (:type %))
+                       (= pk (some-> (get-in % [:source-config :project]) name keyword))))
+         (map :pages)
+         (reduce merge {}))))
