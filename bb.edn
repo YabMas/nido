@@ -391,6 +391,16 @@
    :doc "List ticket records grouped by stage (Ready to implement / In progress / Dismissed)."
    :task (apply nido-ticket/list-cmd *command-line-args*)}
 
+  nido:findings:file
+  {:requires ([tasks.nido-findings :as nido-findings])
+   :doc "File a staging findings round on a shipped workstream (reopens it)."
+   :task (apply nido-findings/file-cmd *command-line-args*)}
+
+  nido:findings:resolve
+  {:requires ([tasks.nido-findings :as nido-findings])
+   :doc "Mark findings items resolved by a PR/commit ref."
+   :task (apply nido-findings/resolve-cmd *command-line-args*)}
+
   nido:facets:refresh
   {:requires ([tasks.nido-facets :as nido-facets])
    :doc "Re-read Notion and rewrite workstream classification facets (:project <p> [:ws <id>])."
