@@ -359,14 +359,15 @@
 ;; ---------------------------------------------------------------------------
 
 (deftest workstream-pane-renders-stage-actions-for-the-current-entry
-  ;; sample-ws is :triage with a parked "auto" session → Apply / Dismiss / Reply,
-  ;; all POSTing to the pane-scoped resolve route (patches #ws-pane).
+  ;; sample-ws is :triage (origin :notion) with a parked "auto" session → Apply / Reply,
+  ;; all POSTing to the pane-scoped resolve route (patches #ws-pane). Dismiss is dropped
+  ;; for Notion-origin rows — Notion drives the board.
   (let [html (views/workstream-pane (assoc sample-ws :on-latest? true) {})]
     (is (str/includes? html "Apply"))
-    (is (str/includes? html "Dismiss"))
+    (is (not (str/includes? html "Dismiss")) "Notion origin: Dismiss dropped")
     (is (str/includes? html "Send &amp; resume"))                       ; free-text reply
     (is (str/includes? html "/workstreams/brian/ws-1/gate/apply"))
-    (is (str/includes? html "/workstreams/brian/ws-1/gate/dismiss"))
+    (is (not (str/includes? html "/workstreams/brian/ws-1/gate/dismiss")))
     (is (str/includes? html "/workstreams/brian/ws-1/gate/reply"))
     (is (not (str/includes? html "/gate/brian/ws-1/apply"))
         "pane actions go through the pane route, not the home gate")))
@@ -385,10 +386,21 @@
     (is (str/includes? html "/workstreams/brian/ws-1/gate/drop"))
     (is (not (str/includes? html "/gate/apply")) ":ready offers no Apply")))
 
-(deftest workstream-pane-unparked-triage-offers-only-dismiss
-  ;; :triage with no parked session → just the off-radar Dismiss, no Apply/Reply.
+(deftest workstream-pane-unparked-notion-triage-offers-no-actions
+  ;; :triage (origin :notion) with no parked session → Dismiss is dropped for Notion,
+  ;; so the action bar renders nothing (Notion drives the board).
   (let [html (views/workstream-pane
               (assoc sample-ws :stage :triage :sessions [] :on-latest? true) {})]
+    (is (not (str/includes? html "/workstreams/brian/ws-1/gate/dismiss")))
+    (is (not (str/includes? html "/gate/apply")))
+    (is (not (str/includes? html "Send &amp; resume")))))
+
+(deftest workstream-pane-unparked-slack-triage-offers-only-dismiss
+  ;; :triage (origin :slack) with no parked session → just the off-radar Dismiss,
+  ;; no Apply/Reply. Slack rows keep the local Dismiss (nothing else drives them off
+  ;; the board).
+  (let [html (views/workstream-pane
+              (assoc sample-ws :origin :slack :stage :triage :sessions [] :on-latest? true) {})]
     (is (str/includes? html "/workstreams/brian/ws-1/gate/dismiss"))
     (is (not (str/includes? html "/gate/apply")))
     (is (not (str/includes? html "Send &amp; resume")))))

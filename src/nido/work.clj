@@ -36,40 +36,45 @@
   [:intake :triage :ready :in-progress :shipping :done])
 
 (defn gate-actions
-  "Follow-actions for a gate, derived from its spine `stage` (and whether a
-   session is `parked?`). Each is a descriptor {:id :label :kind :style (:input)}:
+  "Follow-actions for a gate, derived from its spine `stage`, whether a session is
+   `parked?`, and its `origin` (Dismiss is dropped for :notion triage rows — Notion
+   drives the board, so a local dismiss no longer hides them; kept for Slack).
+   Each is a descriptor {:id :label :kind :style (:input)}:
      :kind :mutation -> one-click button, resolved nido-side (resolve-gate! on :id).
      :kind :resume   -> resume the parked agent. With :input it renders a one-click
                         button carrying that canned input (e.g. Apply -> \"apply\");
                         without :input it renders the free-text reply textarea.
    :style is a render hint (:primary | :danger | :default)."
-  [stage parked?]
-  (case stage
-    :incoming    [{:id :promote :label "Promote" :kind :mutation :style :primary}
-                  {:id :drop    :label "Dismiss" :kind :mutation :style :danger}]
-    :triage      (if parked?
-                   ;; Apply finalizes the verdict nido-side (ticket:complete — no
-                   ;; conversation, so it works for legacy pre-notion-cli reviews too);
-                   ;; Reply (free-text overrides/redo) resumes the agent; Dismiss takes
-                   ;; it off the radar nido-side.
-                   [{:id :apply   :label "Apply"   :kind :mutation              :style :primary}
-                    {:id :dismiss :label "Dismiss" :kind :mutation              :style :danger}
-                    {:id :reply   :label "Reply"   :kind :resume                :style :default}]
-                   [{:id :dismiss :label "Dismiss" :kind :mutation :style :danger}])
-    :ready       [{:id :promote :label "Promote" :kind :mutation :style :primary}
-                  {:id :drop    :label "Drop"    :kind :mutation :style :danger}]
-    :in-progress (if parked?
-                   [{:id :reply :label "Reply" :kind :resume :style :default}
-                    {:id :done  :label "Done"  :kind :mutation :style :primary}]
-                   [])
-    :shipping    (if parked?
-                   ;; Blocked in the merge lane: Reply resumes the agent with a
-                   ;; note; Drop takes it off the queue (back to :in-progress).
-                   ;; The usual path is to fix in the worktree and `nido ship` again.
-                   [{:id :reply :label "Reply" :kind :resume                :style :default}
-                    {:id :drop  :label "Drop"  :kind :mutation              :style :danger}]
-                   [])
-    []))
+  ([stage parked?] (gate-actions stage parked? nil))
+  ([stage parked? origin]
+   (case stage
+     :incoming    [{:id :promote :label "Promote" :kind :mutation :style :primary}
+                   {:id :drop    :label "Dismiss" :kind :mutation :style :danger}]
+     :triage      (let [dismiss  {:id :dismiss :label "Dismiss" :kind :mutation :style :danger}
+                        dismiss? (not= :notion origin)]
+                    ;; Apply finalizes the verdict nido-side (ticket:complete — no
+                    ;; conversation, so it works for legacy pre-notion-cli reviews too);
+                    ;; Reply (free-text overrides/redo) resumes the agent; Dismiss takes
+                    ;; it off the radar nido-side (dropped for Notion — Notion drives it).
+                    (if parked?
+                      (into [{:id :apply :label "Apply" :kind :mutation :style :primary}]
+                            (concat (when dismiss? [dismiss])
+                                    [{:id :reply :label "Reply" :kind :resume :style :default}]))
+                      (if dismiss? [dismiss] [])))
+     :ready       [{:id :promote :label "Promote" :kind :mutation :style :primary}
+                   {:id :drop    :label "Drop"    :kind :mutation :style :danger}]
+     :in-progress (if parked?
+                    [{:id :reply :label "Reply" :kind :resume :style :default}
+                     {:id :done  :label "Done"  :kind :mutation :style :primary}]
+                    [])
+     :shipping    (if parked?
+                    ;; Blocked in the merge lane: Reply resumes the agent with a
+                    ;; note; Drop takes it off the queue (back to :in-progress).
+                    ;; The usual path is to fix in the worktree and `nido ship` again.
+                    [{:id :reply :label "Reply" :kind :resume                :style :default}
+                     {:id :drop  :label "Drop"  :kind :mutation              :style :danger}]
+                    [])
+     [])))
 
 (defn classify-origin
   "Origin of a workstream from its RAW record: :notion :github :slack :scratch.
@@ -311,7 +316,7 @@
      :stage        (:stage row)
      :label        (:label row)
      :report       (latest-report project (:ws-id row))
-     :actions      (gate-actions (:stage row) parked?)
+     :actions      (gate-actions (:stage row) parked? (:origin row))
      :session      (:name psess)
      :resume-error (get-in psess [:autonomy :error])
      :working?     (resuming? project (:ws-id row))}))

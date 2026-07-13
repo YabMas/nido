@@ -321,7 +321,8 @@
           (is (= :notion (:origin g)))
           (is (= :triage (:stage g)))
           (is (= "auto" (:session g)) "the parked session a :reply would resume")
-          (is (= [:apply :dismiss :reply] (map :id (:actions g))))
+          (is (= [:apply :reply] (map :id (:actions g)))
+              "Notion origin: Dismiss dropped from the parked triage action bar")
           (is (= :markdown (-> g :report :format)))
           (is (= "Verdict" (-> g :report :title)))
           (is (= "# Verdict\n\nbug — reproduced." (-> g :report :markdown))))))))
@@ -348,7 +349,8 @@
           (is (= :triage (:stage g)))
           (is (false? (:working? g))
               "a live-but-:failed session is NOT in flight ⇒ no stranded 'working…'")
-          (is (= [:apply :dismiss :reply] (map :id (:actions g))) "gate actions stay actionable"))))))
+          (is (= [:apply :reply] (map :id (:actions g)))
+              "gate actions stay actionable (Notion origin: Dismiss dropped)"))))))
 
 (deftest gate-working-when-session-actively-running
   ;; The honest positive case: a parked triage gate whose agent you resumed is now
@@ -864,3 +866,15 @@
                        {:groups groups :gates gates :pending #{}})]
     (is (= ["brian"] (map :project (:groups s))))
     (is (= ["r1"] (map :ws-id (:gates s))))))
+
+(deftest triage-dismiss-dropped-for-notion-kept-for-slack
+  (is (not (some #{:dismiss} (map :id (work/gate-actions :triage true :notion))))
+      "Notion parked triage: no Dismiss")
+  (is (some #{:dismiss} (map :id (work/gate-actions :triage true :slack)))
+      "Slack parked triage: Dismiss kept")
+  (is (= [] (work/gate-actions :triage false :notion))
+      "Notion unparked triage: no actions")
+  (is (= [:dismiss] (map :id (work/gate-actions :triage false :slack)))
+      "Slack unparked triage: Dismiss")
+  (is (some #{:dismiss} (map :id (work/gate-actions :triage true)))
+      "2-arity (origin nil) unchanged: Dismiss present"))

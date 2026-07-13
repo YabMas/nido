@@ -616,10 +616,10 @@
    Apply/Reply). Buttons POST to the pane-scoped route. Shown only for the CURRENT
    ledger entry — callers gate on :on-latest?. Renders nothing when the stage offers
    no actions."
-  [project ws-id stage sessions]
+  [project ws-id origin stage sessions]
   (let [parked? (boolean (some :parked? sessions))
         session (:name (first (filter :parked? sessions)))]
-    (action-bar project ws-id (work/gate-actions stage parked?) session pane-route)))
+    (action-bar project ws-id (work/gate-actions stage parked? origin) session pane-route)))
 
 (defn- file-findings-form
   "Findings-filing form shown on a shipped (:done) workstream's pane. One finding
@@ -660,7 +660,7 @@
           " · " (:report-count ledger) " report(s)"])
        (ledger-browser project ws-id entries selected-seq report)
        ;; Live actions only on the current ledger entry — older entries are read-back.
-       (when on-latest? (pane-action-bar project ws-id stage sessions))
+       (when on-latest? (pane-action-bar project ws-id origin stage sessions))
        (when (= :done stage) (file-findings-form project ws-id))
        [:h2 "Sessions"]
        (if (seq sessions)
