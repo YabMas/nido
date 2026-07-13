@@ -13,6 +13,7 @@
    [clojure.set :as set]
    [clojure.string :as str]
    [nido.coordinator.clock :as clock]
+   [nido.coordinator.notion-cache :as notion-cache]
    [nido.coordinator.sources :as sources]
    [nido.coordinator.sources.state :as sst]
    [nido.notion.client :as notion]
@@ -116,6 +117,7 @@
                                  (assoc :type                 :notion-view
                                         :source-config        source-config
                                         :last-rows            current-rows
+                                        :pages                (notion-cache/pages-snapshot pages)
                                         :last-polled-at       (clock/now-iso)
                                         :last-poll-result     :ok
                                         :consecutive-failures 0

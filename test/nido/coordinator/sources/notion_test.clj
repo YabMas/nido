@@ -423,3 +423,25 @@
             (is (= 1 (count @emitted)))
             (is (nil? (-> @emitted first :payload :priority))
                 "no :priority-from => no :priority stamped on event")))))))
+
+;; ---------------------------------------------------------------------------
+;; Tests — :pages cache in the source snapshot (Task 3)
+;; ---------------------------------------------------------------------------
+
+(deftest poll-stores-pages-cache
+  (with-tmp
+    (fn [tmp]
+      (write-views! tmp default-views)
+      (let [source-config {:type :notion-view :view :open-bugs :project :brian}
+            hash          (sources/config-hash source-config)
+            pages         [(stub-page "p1" {:properties
+                                            {"Status"   {:type "status" :status {:name "Not started"}}
+                                             "Priority" {:type "select" :select {:name "2 - Should"}}}})]]
+        (with-redefs [client/data-source-query (stub-query-result pages)
+                      client/resolve-data-source-id (constantly "ds1")]
+          (let [new-state (notion-src/poll-once! source-config "tok" (constantly nil))]
+            (is (= {:status "Not started" :priority 2 :ball-ids #{}}
+                   (get-in new-state [:pages "p1"]))
+                ":pages carries parsed per-page facts")
+            (is (contains? (:last-rows new-state) "p1")
+                ":last-rows stays a set of page-ids (unchanged)")))))))
