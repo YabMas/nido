@@ -131,12 +131,24 @@
   ([project ws] (workstream-row project ws nil nil))
   ([project ws live-names] (workstream-row project ws live-names nil))
   ([project ws live-names facts]
-   (let [sessions     (session/list-sessions project (:id ws))
-         eng-sessions (if live-names (mapv #(reconcile-liveness live-names %) sessions) sessions)
-         br-id        (:id (ledger-ref ws))
-         status       (when br-id (tickets/status project br-id))
-         proj         (session/stage-projection (:closed ws) status sessions (:stage ws))
-         page-id      (:page-id (notion-ref ws))]
+   (let [sessions       (session/list-sessions project (:id ws))
+         eng-sessions   (if live-names (mapv #(reconcile-liveness live-names %) sessions) sessions)
+         br-id          (:id (ledger-ref ws))
+         page-id        (:page-id (notion-ref ws))
+         notion-backed? (some? (notion-ref ws))
+         in-cache?      (boolean (and page-id (contains? facts page-id)))
+         shipping?      (and (nil? (:closed ws)) (= :shipping (:stage ws)))
+         notion-driven? (and notion-backed? (or in-cache? shipping?))
+         proj           (if notion-driven?
+                          (session/notion-stage-projection
+                            {:shipping?          shipping?
+                             :notion-status      (get-in facts [page-id :status])
+                             :has-triage-report? (boolean (and br-id (tickets/has-triage-report? project br-id)))
+                             :sessions           sessions})
+                          (session/stage-projection
+                            (:closed ws)
+                            (when br-id (tickets/status project br-id))
+                            sessions (:stage ws)))]
      {:ws-id           (:id ws)
       :project         project
       :br-id           br-id
@@ -149,13 +161,14 @@
       :source          (ws-source ws)
       :stage           (:stage proj)
       :needs-you       (:needs-you proj)
-      :engagement      (session/engagement-state (:closed ws) eng-sessions)
+      ;; Notion-driven rows ignore nido :closed for engagement too — else a
+      ;; reopened-in-Notion ticket reads :settled and to-spine folds it to :done.
+      :engagement      (session/engagement-state (when-not notion-driven? (:closed ws)) eng-sessions)
       :priority        (max-priority sessions)
       :notion-priority (get-in facts [page-id :priority])
       :session-count   (count sessions)
       :last-activity   (last-activity ws sessions)
       :facets          (:facets ws)
-      ;; Merge-lane sub-state: only populated when the projected stage is :shipping.
       :ship-substate   (when (= :shipping (:stage proj)) (session/ship-substate sessions))
       :open-findings   (count (:open (:findings ws)))})))
 

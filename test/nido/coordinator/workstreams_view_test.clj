@@ -414,3 +414,49 @@
     (is (= ["s1" "s2"] (map :ws-id (:shipping g))) "shipping rows collected; needs-you first")
     (is (= ["r1"] (map :ws-id (:ready g))))))
 
+;; ---------------------------------------------------------------------------
+;; Notion-driven rows — stage/engagement derive from the Notion cache, not
+;; nido's stored :closed/:stage, when the row is Notion-backed AND either the
+;; page is cached or nido stored an open :shipping stage.
+;; ---------------------------------------------------------------------------
+
+(defn- notion-ws! [project overrides]
+  (make-ws! project (merge {:external-refs [{:adapter :notion :id "BR-1" :page-id "pg-1"}]}
+                           overrides)))
+
+(deftest notion-driven-stale-close-reappears
+  (with-tmp
+    (fn [_]
+      ;; nido closed it, but Notion says In progress and the page is cached → reappears.
+      (let [w     (notion-ws! :brian {:closed {:at "t" :outcome :done}})
+            facts {"pg-1" {:status "In progress" :priority nil :ball-ids #{}}}
+            row   (wsv/workstream-row :brian w nil facts)]
+        (is (= :in-progress (:stage row)) "Notion status drives, nido close ignored")
+        (is (not= :settled (:engagement row)) "engagement not settled → to-spine won't fold to :done")))))
+
+(deftest notion-driven-dismissed-reappears
+  (with-tmp
+    (fn [_]
+      (tickets/write-meta! :brian "BR-1"
+        {:br-id "BR-1" :status :dismissed :entries [{:kind :triage :seq 1}]})
+      (let [w     (notion-ws! :brian {})
+            facts {"pg-1" {:status "Not started" :priority nil :ball-ids #{}}}
+            row   (wsv/workstream-row :brian w nil facts)]
+        (is (= :ready (:stage row)) "local :dismissed ignored; triaged+Not-started → ready")))))
+
+(deftest notion-driven-terminal-status-is-done
+  (with-tmp
+    (fn [_]
+      (let [w   (notion-ws! :brian {})
+            row (wsv/workstream-row :brian w nil {"pg-1" {:status "Done" :priority nil :ball-ids #{}}})]
+        (is (= :done (:stage row)))))))
+
+(deftest notion-uncached-uses-legacy-path
+  (with-tmp
+    (fn [_]
+      ;; Notion-backed but page NOT in the cache → legacy: closed → :done, no crash.
+      (let [w   (notion-ws! :brian {:closed {:at "t" :outcome :done}})
+            row (wsv/workstream-row :brian w nil {})]  ; empty cache
+        (is (= :done (:stage row)))
+        (is (= :settled (:engagement row)) "legacy engagement still reads :closed")))))
+
