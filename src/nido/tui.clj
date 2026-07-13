@@ -992,24 +992,34 @@
     [(assoc state :status "(no workstream selected)") nil]))
 
 (defn- done-selected
-  "Mark the highlighted workstream done via work/set-stage! :done."
+  "Mark the highlighted workstream done via work/set-stage! :done. A bare
+   (workstream-less) row no-ops — surface that honestly rather than claiming
+   success, mirroring promote-selected's :no-workstream handling."
   [state]
   (if-let [ws (selected-workstream state)]
-    (do (work/set-stage! (:project state) (:ws-id ws) :done)
-        [(-> state (refresh-list (current-rows state))
-             (assoc :status (str "marked " (or (:br-id ws) (:ws-id ws)) " done")))
-         nil])
+    (let [decision (:decision (work/set-stage! (:project state) (:ws-id ws) :done))
+          label    (or (:br-id ws) (:ws-id ws))]
+      [(-> state (refresh-list (current-rows state))
+           (assoc :status (if (= decision :no-workstream)
+                             (str "no workstream yet — " label)
+                             (str "marked " label " done"))))
+       nil])
     [(assoc state :status "(no workstream selected)") nil]))
 
 (defn- dismiss-selected
   "Take the highlighted workstream off the triage radar via work/dismiss! — it
-   leaves the queue and is skipped by auto-re-triage."
+   leaves the queue and is skipped by auto-re-triage. A bare (workstream-less)
+   row no-ops — surface that honestly rather than claiming success, mirroring
+   promote-selected's :no-workstream handling."
   [state]
   (if-let [ws (selected-workstream state)]
-    (do (work/dismiss! (:project state) (:ws-id ws))
-        [(-> state (refresh-list (current-rows state))
-             (assoc :status (str "dismissed " (or (:br-id ws) (:ws-id ws)) " — off radar")))
-         nil])
+    (let [decision (:decision (work/dismiss! (:project state) (:ws-id ws)))
+          label    (or (:br-id ws) (:ws-id ws))]
+      [(-> state (refresh-list (current-rows state))
+           (assoc :status (if (= decision :no-workstream)
+                             (str "no workstream yet — " label)
+                             (str "dismissed " label " — off radar"))))
+       nil])
     [(assoc state :status "(no workstream selected)") nil]))
 
 ;; ---------------------------------------------------------------------------
