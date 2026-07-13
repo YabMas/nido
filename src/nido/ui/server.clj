@@ -4,6 +4,7 @@
             [cheshire.core :as json]
             [clojure.java.io :as io]
             [clojure.string :as str]
+            [nido.coordinator.findings :as findings]
             [nido.process :as proc]
             [nido.project :as project]
             [nido.session.dev :as dev]
@@ -268,6 +269,23 @@
     (if body (json/parse-string (slurp body) true) {})
     (catch Exception _ {})))
 
+(def ^:private valid-severities #{:blocker :tweak :nice-to-have})
+
+(defn parse-findings-lines
+  "Parse a textarea of findings, one per line `severity | area | summary`. Blank
+   lines are skipped; a blank/unknown severity defaults to :tweak; a blank area is
+   omitted. Returns a vector of {:summary :severity (:area)} maps."
+  [s]
+  (->> (str/split-lines (or s ""))
+       (map str/trim)
+       (remove str/blank?)
+       (mapv (fn [line]
+               (let [[sev area summary] (map str/trim (str/split line #"\|" 3))
+                     sev-kw (keyword (str/lower-case (or sev "")))]
+                 (cond-> {:summary  (or (not-empty summary) line)
+                          :severity (if (valid-severities sev-kw) sev-kw :tweak)}
+                   (not-empty area) (assoc :area area)))))))
+
 (defn- gate-resolve!
   "Run work/resolve-gate! on a background thread, tracking optimistic state per
    (project,ws-id) so the inbox/pane reflect 'working…' until it settles. Mirrors
@@ -334,6 +352,20 @@
         ;; so the UI sees instant feedback. POSTs have no query-string scope;
         ;; default to "all" so the feedback shows the full system surface.
         (system-fragment-response "all"))
+
+      ;; POST /workstreams/:project/:ws-id/findings — file a staging findings round
+      (and (= 4 (count segs)) (= "workstreams" (first segs)) (= "findings" (nth segs 3)))
+      (let [project (nth segs 1)
+            ws-id   (nth segs 2)
+            b       (parse-json-body body)
+            items   (parse-findings-lines (:findings b))]
+        (when (seq items)
+          (try
+            (findings/file! (keyword project) ws-id
+                            {:items items :staging-ref (not-empty (:staging b))})
+            (catch Exception e
+              (println "[nido ui] findings/file! failed:" (ex-message e)))))
+        (ws-pane-fragment-response project ws-id))
 
       :else
       (html-response 404 (views/not-found-page)))))

@@ -621,6 +621,23 @@
         session (:name (first (filter :parked? sessions)))]
     (action-bar project ws-id (work/gate-actions stage parked?) session pane-route)))
 
+(defn- file-findings-form
+  "Findings-filing form shown on a shipped (:done) workstream's pane. One finding
+   per line `severity | area | summary`. @post → /workstreams/:project/:ws-id/findings,
+   which files the round (reopening the workstream) and patches #ws-pane. The
+   `findings`/`staging` signals auto-serialize into the JSON body (Datastar default)."
+  [project ws-id]
+  [:div.card
+   [:strong "File staging findings"]
+   [:p.meta "One per line:  severity | area | summary   (severity: blocker · tweak · nice-to-have)"]
+   [:textarea {"data-bind" "findings" :rows "5" :style "width:100%;box-sizing:border-box;"
+               :placeholder "blocker | Login | Save button 500s"}]
+   [:input {"data-bind" "staging" :style "width:100%;box-sizing:border-box;margin-top:6px;"
+            :placeholder "staging ref (optional)"}]
+   [:button {:style "margin-top:8px;"
+             "data-on:click" (str "@post('/workstreams/" project "/" ws-id "/findings')")}
+    "File findings & reopen"]])
+
 (defn workstream-pane
   "Read-only ledger pane: header · stage · ledger summary · report · Sessions table
    with per-row dev-env controls. `session-dev-states` is a map of session-name →
@@ -644,6 +661,7 @@
        (ledger-browser project ws-id entries selected-seq report)
        ;; Live actions only on the current ledger entry — older entries are read-back.
        (when on-latest? (pane-action-bar project ws-id stage sessions))
+       (when (= :done stage) (file-findings-form project ws-id))
        [:h2 "Sessions"]
        (if (seq sessions)
          [:table
