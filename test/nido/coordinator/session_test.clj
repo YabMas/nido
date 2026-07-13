@@ -428,3 +428,25 @@
       (is (false? (sess/pending-session-for-trigger? :brian "ws-human" :triage-teacher-bugs)))
       ;; empty / unknown workstream
       (is (false? (sess/pending-session-for-trigger? :brian "ws-empty" :triage-teacher-bugs))))))
+
+(deftest notion-stage-maps-status-to-band
+  (is (= :done        (sess/notion-stage "Done" false)))
+  (is (= :done        (sess/notion-stage "Not Done" true)))
+  (is (= :done        (sess/notion-stage "Review" true)) "Review is done from nido's side")
+  (is (= :in-progress (sess/notion-stage "In progress" false)))
+  (is (= :in-progress (sess/notion-stage "Code Review" false)))
+  (is (= :ready       (sess/notion-stage "Not started" true)) "pre-impl + triaged → ready")
+  (is (= :triage      (sess/notion-stage "Not started" false)) "pre-impl + untriaged → triage")
+  (is (= :triage      (sess/notion-stage nil false)) "no status + untriaged → triage")
+  (is (= :ready       (sess/notion-stage "On Hold" true))))
+
+(deftest notion-stage-projection-shipping-overlay-and-needs-you
+  (is (= :shipping (:stage (sess/notion-stage-projection
+                            {:shipping? true :notion-status "In progress"
+                             :has-triage-report? true :sessions []})))
+      "merge-lane overlay wins over Notion status")
+  (is (= {:stage :triage :needs-you false}
+         (sess/notion-stage-projection
+          {:shipping? false :notion-status "Not started"
+           :has-triage-report? false :sessions []}))
+      "triage at rest is not needs-you"))

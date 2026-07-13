@@ -225,6 +225,35 @@
                 (derive-stage closed ticket-status sessions))]
     {:stage stage :needs-you (stage-needs-you stage sessions)}))
 
+(def notion-terminal-statuses
+  "Notion statuses that are done from nido's side → off the board. 'Review' is a
+   human-review handoff: nido's active involvement is over (self-heals if bounced
+   back to In progress, since this projection is stateless)."
+  #{"Done" "Not Done" "Review"})
+
+(def notion-in-progress-statuses
+  "Notion statuses that map to the :in-progress band."
+  #{"In progress" "Code Review"})
+
+(defn notion-stage
+  "Board stage from a Notion ticket's live status + whether a triage report exists.
+   Pre-implementation statuses (Needs verification / Not started / On Hold / nil)
+   split on triage-report presence: triaged → :ready, else :triage."
+  [notion-status has-triage-report?]
+  (cond
+    (contains? notion-terminal-statuses notion-status)    :done
+    (contains? notion-in-progress-statuses notion-status) :in-progress
+    has-triage-report?                                    :ready
+    :else                                                 :triage))
+
+(defn notion-stage-projection
+  "Stage + needs-you for a Notion-driven workstream (page in a watched-view cache,
+   or on the merge lane). Precedence: merge-lane :shipping overlay → notion-stage.
+   Returns {:stage :needs-you}."
+  [{:keys [shipping? notion-status has-triage-report? sessions]}]
+  (let [stage (if shipping? :shipping (notion-stage notion-status has-triage-report?))]
+    {:stage stage :needs-you (stage-needs-you stage sessions)}))
+
 (def in-progress-phases
   "Autonomy phases that occupy a trigger's in-flight budget: spawned and not yet
    terminal or parked. :queued is the pending pool and does NOT count; :parked is
