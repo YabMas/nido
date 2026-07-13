@@ -87,3 +87,51 @@
         (is (= #{"Done"} (:terminal c)))
         (is (true? (:dry-run? c)))
         (is (= "5m" (:poll c)))))))
+
+(def ^:private page-done
+  {:properties {:Status {:status {:name "Done"}}
+                (keyword "Ball Holder") {:people []}}})
+
+(def ^:private page-claimed
+  {:properties {:Status {:status {:name "In progress"}}
+                (keyword "Ball Holder") {:people [{:id "other-id" :name "A Colleague" :object "user"}]}}})
+
+(def ^:private page-mine
+  {:properties {:Status {:status {:name "Code Review"}}
+                (keyword "Ball Holder") {:people [{:id me :name "Me" :object "user"}]}}})
+
+(def ^:private page-claimed-noname
+  {:properties {:Status {:status {:name "In progress"}}
+                (keyword "Ball Holder") {:people [{:id "other-id" :object "user"}]}}})
+
+(def ^:private page-no-status
+  {:properties {(keyword "Ball Holder") {:people []}}})
+
+(deftest extractors
+  (is (= "Done" (ns-sync/page-status page-done)))
+  (is (nil? (ns-sync/page-status page-no-status)))
+  (is (= #{} (ns-sync/page-ballholder-ids page-done)))
+  (is (= #{"other-id"} (ns-sync/page-ballholder-ids page-claimed)))
+  (is (= #{me} (ns-sync/page-ballholder-ids page-mine)))
+  (is (= "A Colleague" (ns-sync/page-ballholder-name page-claimed me)))
+  (is (= "other-id" (ns-sync/page-ballholder-name page-claimed-noname me))
+      "no :name on the other holder → falls back to :id")
+  (is (= "someone" (ns-sync/page-ballholder-name page-mine me))
+      "only ball holder is me → no 'other' holder → 'someone' default"))
+
+(deftest open-notion-workstreams-filters
+  (with-tmp
+    (fn [_]
+      (let [with-ref (ws/create! :brian {:stage :triage
+                                         :external-refs [{:adapter :notion :id "BR-1" :page-id "P1"}]})
+            _no-ref  (ws/create! :brian {:stage :triage :external-refs []})
+            closed   (ws/create! :brian {:stage :triage
+                                         :external-refs [{:adapter :notion :id "BR-2" :page-id "P2"}]})
+            done-open (ws/create! :brian {:stage :done
+                                          :external-refs [{:adapter :notion :id "BR-3" :page-id "P3"}]})]
+        (ws/close! :brian (:id closed) :done)
+        (let [ids (set (map :id (ns-sync/open-notion-workstreams :brian)))]
+          (is (contains? ids (:id with-ref)) "open + notion ref included")
+          (is (contains? ids (:id done-open)) "open workstream at :done STAGE still included (filter is :closed, not stage)")
+          (is (not (contains? ids (:id closed))) "closed excluded")
+          (is (= 2 (count ids)) "only the two open + notion-ref workstreams; no-ref and closed excluded"))))))

@@ -77,3 +77,35 @@
                   :status->stage default-status->stage
                   :dry-run?      false}
                  raw))))))
+
+(defn page-status
+  "Status option name from a retrieved page, or nil."
+  [page]
+  (get-in page [:properties :Status :status :name]))
+
+(defn- ballholder-people [page]
+  (get-in page [:properties (keyword "Ball Holder") :people]))
+
+(defn page-ballholder-ids
+  "Set of Notion user-id strings on the Ball Holder property (empty when unassigned)."
+  [page]
+  (into #{} (keep :id) (ballholder-people page)))
+
+(defn page-ballholder-name
+  "Display name for the first ball holder that isn't `me` — their :name, else :id,
+   else \"someone\"."
+  [page me]
+  (let [other (first (remove #(= me (:id %)) (ballholder-people page)))]
+    (or (:name other) (:id other) "someone")))
+
+(defn notion-page-id
+  "Page-id of the workstream's :notion external-ref, or nil."
+  [ws]
+  (some #(when (= :notion (:adapter %)) (:page-id %)) (:external-refs ws)))
+
+(defn open-notion-workstreams
+  "Open (:closed nil) workstreams carrying a :notion page-id."
+  [project]
+  (->> (ws/list-ids project)
+       (keep #(ws/read-ws project %))
+       (filter #(and (nil? (:closed %)) (notion-page-id %)))))
