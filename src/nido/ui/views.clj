@@ -57,7 +57,9 @@
         .b-notion{ background:#2a3a4a; color:#aee0ff; } .b-github{ background:#2a2a1a; color:#facc15; }
         .b-slack{ background:#3a2a3a; color:#e0a0e0; } .b-scratch{ background:#252540; color:#9a9ac0; }
         .gate-wrap { display:grid; grid-template-columns: 38% 62%; min-height:80vh; }
-        .inbox { border-right:1px solid #2a2a4a; overflow:auto; }
+        .queue-col { border-right:1px solid #2a2a4a; display:flex; flex-direction:column;
+                     min-width:0; min-height:0; }
+        .inbox { overflow:auto; flex:1; }
         .gate-card { display:block; padding:10px 16px; border-bottom:1px solid #20203a; color:inherit; }
         .gate-card:hover { background:#181830; text-decoration:none; }
         .gate-card.sel { background:#16213e; border-left:3px solid #7eb8da; padding-left:13px; }
@@ -121,7 +123,7 @@
      .dot-halted { background:#f87171; box-shadow:0 0 6px #f87171; }
      .dot-breaker { background:#fb923c; }
      .dot-down { background:#555; }
-     .filters { padding:10px 0 6px; display:flex; flex-direction:column; gap:4px; grid-column:1/-1; }
+     .filters { padding:10px 16px 6px; display:flex; flex-direction:column; gap:4px; }
      .filter-row { display:flex; align-items:center; gap:6px; flex-wrap:wrap; padding:2px 0; }
      .filter-label { color:#888; font-size:11px; text-transform:uppercase; min-width:72px; }
      .chip.active { background:#2a4a6a; color:#aee0ff; border:1px solid #3a5a7a; }
@@ -135,7 +137,10 @@
                        gap:6px; }
      .ws-fold-header:hover { color:#ccc; }
      .ws-fold-mark { display:inline-block; width:10px; color:#666; font-size:11px; }
-     .ws-fold-label { flex:1; }"))
+     .ws-fold-count { color:#666; font-size:11px; }
+     .ws-section-rows { overflow:hidden; max-height:0; opacity:0;
+                        transition:max-height .28s ease, opacity .2s ease; }
+     .ws-section-rows.ws-open { max-height:4000px; opacity:1; }"))
 
 ;; ---------------------------------------------------------------------------
 ;; Shell (persistent rail + content area) — replaces per-page headers.
@@ -441,8 +446,9 @@
     (shell
      (assoc ctx :active :needs :title "Needs you")
      [:div.gate-wrap
-      [:div.inbox {:data-on-interval__duration.3s (str "@get('/_fragment/needs" q "')")}
-       (h/raw (needs-fragment screen))]
+      [:div.queue-col
+       [:div.inbox {:data-on-interval__duration.3s (str "@get('/_fragment/needs" q "')")}
+        (h/raw (needs-fragment screen))]]
       [:div.pane (h/raw (gate-pane sel-gate))]])))
 
 ;; ---------------------------------------------------------------------------
@@ -532,8 +538,8 @@
       [:div {:id "workstreams"}
        ;; The fold signals live on the persistent chrome (see workstreams-page);
        ;; here we only re-bind the click toggle, the reactive fold marker, and the
-       ;; row list's data-show. These re-attach to the already-declared signals on
-       ;; every 5s poll, which is harmless — the signals (and their state) persist.
+       ;; row list's data-class reveal. These re-attach to the already-declared
+       ;; signals on every 5s poll, which is harmless — the state persists.
        (for [{:keys [project stage rows]} (mapcat ws-stage-sections groups)]
          (let [sig (ws-fold-signal stage)]
            [:div.ws-section
@@ -541,8 +547,17 @@
              {"data-on:click" (str "$" sig " = !$" sig ", " ws-fold-persist-js)}
              [:span.ws-fold-mark {:data-show (str "!$" sig)} "▾"]
              [:span.ws-fold-mark {:data-show (str "$" sig)} "▸"]
-             [:span.ws-fold-label (name stage)]]
-            [:div.ws-section-rows {:data-show (str "!$" sig)}
+             [:span.ws-fold-label (name stage)]
+             ;; Count lives in the header (outside the animated wrapper) so it stays
+             ;; visible whether the section is open or collapsed.
+             [:span.ws-fold-count (str "(" (count rows) ")")]]
+            ;; Animated reveal. The wrapper is collapsed by DEFAULT in CSS and gets
+            ;; .ws-open only when the signal says expanded — so the server-rendered
+            ;; state (which can't know localStorage) paints hidden, never as a
+            ;; full-height list. On reload, expanded sections slide in and collapsed
+            ;; ones stay shut: no flash of unfolded content. The 5s poll re-applies
+            ;; the class in the same task before paint, so it never re-animates.
+            [:div.ws-section-rows {:data-class (str "{'ws-open': !$" sig "}")}
              (for [r rows] (ws-list-row screen sel-id project r))]]))]))))
 
 (defn- session-dev-cell
@@ -686,9 +701,13 @@
      ;; __ifmissing seeds them from localStorage on load without clobbering live
      ;; state; a full-page reload re-runs this and restores the persisted fold.
      [:div.gate-wrap {:data-signals__ifmissing ws-fold-signals-init}
-      [:div.filters (source-row screen) (facet-rows screen (:groups screen))]
-      [:div.inbox {:data-on-interval__duration.5s (str "@get('/_fragment/workstreams" q "')")}
-       (h/raw (workstreams-fragment screen))]
+      ;; Filters live INSIDE the left queue column (not a full-width band across
+      ;; the top) so the detail pane on the right always starts at the top,
+      ;; independent of how many filter rows a source contributes.
+      [:div.queue-col
+       [:div.filters (source-row screen) (facet-rows screen (:groups screen))]
+       [:div.inbox {:data-on-interval__duration.5s (str "@get('/_fragment/workstreams" q "')")}
+        (h/raw (workstreams-fragment screen))]]
       [:div.pane (h/raw (workstream-pane (:ws selection) (:dev-states selection)))]])))
 
 ;; ---------------------------------------------------------------------------
