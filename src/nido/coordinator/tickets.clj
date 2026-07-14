@@ -45,13 +45,6 @@
 (defn status [project br-id]
   (:status (read-meta project br-id)))
 
-(defn has-triage-report?
-  "True when the ticket ledger holds at least one :triage entry — it has been
-   triaged at least once. Distinct from status :triaged: a re-opened ticket
-   (status :investigating) can still carry a prior triage report."
-  [project br-id]
-  (boolean (some #(= :triage (:kind %)) (:entries (read-meta project br-id)))))
-
 (defn open!
   "Create (or refresh the descriptive fields of) a ticket record and set status
    :investigating. `base` carries {:notion-page-id :url :title :opened-by

@@ -443,7 +443,30 @@
       (let [w     (notion-ws! :brian {})
             facts {"pg-1" {:status "Not started" :priority nil :ball-ids #{}}}
             row   (wsv/workstream-row :brian w nil facts)]
-        (is (= :ready (:stage row)) "local :dismissed ignored; triaged+Not-started → ready")))))
+        ;; Reappears (not hidden as :done), as :triage — it has an OLD report but
+        ;; status isn't :triaged, so it is NOT promotable; :ready would show a dead
+        ;; Promote button (promote accepts only :triaged).
+        (is (= :triage (:stage row)) "dismissed reappears as :triage, not :ready")))))
+
+(deftest notion-driven-triaged-status-is-ready
+  (with-tmp
+    (fn [_]
+      ;; :triaged (the promotable disposition) + non-terminal Notion → :ready.
+      (tickets/write-meta! :brian "BR-1"
+        {:br-id "BR-1" :status :triaged :entries [{:kind :triage :seq 1}]})
+      (let [w   (notion-ws! :brian {})
+            row (wsv/workstream-row :brian w nil {"pg-1" {:status "Not started" :priority nil :ball-ids #{}}})]
+        (is (= :ready (:stage row)) "status :triaged → :ready (promotable)")))))
+
+(deftest notion-driven-reopened-with-old-report-is-triage
+  (with-tmp
+    (fn [_]
+      ;; The BR-4826 case: has an OLD :triage entry but was re-opened to :investigating.
+      (tickets/write-meta! :brian "BR-1"
+        {:br-id "BR-1" :status :investigating :entries [{:kind :triage :seq 1}]})
+      (let [w   (notion-ws! :brian {})
+            row (wsv/workstream-row :brian w nil {"pg-1" {:status "Not started" :priority nil :ball-ids #{}}})]
+        (is (= :triage (:stage row)) "old report but :investigating → :triage, not :ready")))))
 
 (deftest notion-driven-terminal-status-is-done
   (with-tmp

@@ -236,14 +236,17 @@
   #{"In progress" "Code Review"})
 
 (defn notion-stage
-  "Board stage from a Notion ticket's live status + whether a triage report exists.
+  "Board stage from a Notion ticket's live status + the local triage disposition.
    Pre-implementation statuses (e.g. Needs verification / Not started / On Hold /
-   nil / other) split on triage-report presence: triaged → :ready, else :triage."
-  [notion-status has-triage-report?]
+   nil / other) split on `triaged?` — ticket status :triaged, the ONLY disposition
+   promote accepts — so :ready on the board means promotable. A ticket with an old
+   triage report but a non-:triaged status (re-opened → :investigating, or dismissed)
+   is :triage, not :ready: it isn't promotable yet."
+  [notion-status triaged?]
   (cond
     (contains? notion-terminal-statuses notion-status)    :done
     (contains? notion-in-progress-statuses notion-status) :in-progress
-    has-triage-report?                                    :ready
+    triaged?                                              :ready
     :else                                                 :triage))
 
 (defn notion-stage-projection
@@ -256,16 +259,16 @@
         nido's own in-flight work is ahead of the eventually-consistent Notion cache.
         Honor it, or a just-promoted ticket sits at :ready with a live Promote button
         until the cache repolls. (Distinct from :dismissed, which we still ignore.)
-     3. notion-stage (the cached Notion status, refined by triage-report).
+     3. notion-stage (the cached Notion status, refined by the :triaged disposition).
    Returns {:stage :needs-you}."
-  [{:keys [shipping? in-flight? notion-status has-triage-report? sessions]}]
+  [{:keys [shipping? in-flight? notion-status triaged? sessions]}]
   (let [stage (cond
                 shipping?
                 :shipping
                 (and in-flight? (not (contains? notion-terminal-statuses notion-status)))
                 :in-progress
                 :else
-                (notion-stage notion-status has-triage-report?))]
+                (notion-stage notion-status triaged?))]
     {:stage stage :needs-you (stage-needs-you stage sessions)}))
 
 (def in-progress-phases

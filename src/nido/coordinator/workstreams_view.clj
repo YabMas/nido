@@ -145,7 +145,7 @@
                             {:shipping?          shipping?
                              :in-flight?         (contains? #{:planning :implementing} local-status)
                              :notion-status      (get-in facts [page-id :status])
-                             :has-triage-report? (boolean (and br-id (tickets/has-triage-report? project br-id)))
+                             :triaged?           (= :triaged local-status)
                              :sessions           sessions})
                           (session/stage-projection
                             (:closed ws)
@@ -181,14 +181,14 @@
    the Notion page-id (stable + unique). Notion-driven stage; no sessions → engagement
    :idle, needs-you false. Read-only: mutations guard on the missing workstream."
   [project page-id {:keys [status priority title br]}]
-  (let [has-report? (boolean (and br (tickets/has-triage-report? project br)))]
+  (let [triaged? (= :triaged (when br (tickets/status project br)))]
     {:ws-id           page-id
      :project         project
      :br-id           br
      :promote-id      br
      :label           (or title br "(untitled)")
      :source          :notion
-     :stage           (session/notion-stage status has-report?)
+     :stage           (session/notion-stage status triaged?)
      :needs-you       false
      :engagement      :idle
      :priority        0
