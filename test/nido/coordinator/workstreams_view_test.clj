@@ -487,3 +487,27 @@
         (is (nil? (first (filter #(= "pg-cov" (:ws-id %)) rows)))
             "covered page does NOT get a bare row (real ws row instead)")))))
 
+(deftest notion-driven-in-flight-promote-shows-in-progress
+  (with-tmp
+    (fn [_]
+      ;; Promoted ticket: local status :implementing + live impl work, but the Notion
+      ;; cache still lags at "Not started". The board must show :in-progress — nido's
+      ;; in-flight work is ahead of the eventually-consistent cache. (Bug was :ready.)
+      (tickets/write-meta! :brian "BR-1"
+        {:br-id "BR-1" :status :implementing :entries [{:kind :triage :seq 1}]})
+      (let [w   (notion-ws! :brian {})
+            row (wsv/workstream-row :brian w nil {"pg-1" {:status "Not started" :priority nil :ball-ids #{}}})]
+        (is (= :in-progress (:stage row))
+            "local :implementing overrides the stale Notion 'Not started'")))))
+
+(deftest notion-driven-in-flight-yields-to-terminal-notion
+  (with-tmp
+    (fn [_]
+      ;; local :implementing but Notion is Done → terminal wins (really finished, off board).
+      (tickets/write-meta! :brian "BR-1"
+        {:br-id "BR-1" :status :implementing :entries [{:kind :triage :seq 1}]})
+      (let [w   (notion-ws! :brian {})
+            row (wsv/workstream-row :brian w nil {"pg-1" {:status "Done" :priority nil :ball-ids #{}}})]
+        (is (= :done (:stage row))
+            "terminal Notion status wins over the in-flight overlay")))))
+

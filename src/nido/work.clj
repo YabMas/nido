@@ -13,6 +13,7 @@
    [clojure.string :as str]
    [nido.config :as config]
    [nido.coordinator.facets :as facets]
+   [nido.coordinator.notion-cache :as notion-cache]
    [nido.coordinator.promote :as promote]
    [nido.coordinator.report :as report]
    [nido.coordinator.resume :as resume]
@@ -250,7 +251,10 @@
   ([project ws-id selected-seq]
    (when-let [w (cws/read-ws project ws-id)]
      (let [sessions (csession/list-sessions project ws-id)
-           row      (to-spine (wsv/workstream-row project w))
+           ;; Pass the Notion cache so the pane derives stage exactly like the board
+           ;; list (workstream-rows) — else the pane goes Notion-driven vs legacy and
+           ;; they disagree (e.g. a promoted ticket: list :ready, pane :in-progress).
+           row      (to-spine (wsv/workstream-row project w nil (notion-cache/project-page-facts project)))
            {:keys [base-dir entries]} (active-ledger project ws-id)
            sel      (when (seq entries)
                       (or ((set (map :seq entries)) selected-seq)

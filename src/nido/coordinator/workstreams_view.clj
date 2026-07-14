@@ -134,6 +134,7 @@
    (let [sessions       (session/list-sessions project (:id ws))
          eng-sessions   (if live-names (mapv #(reconcile-liveness live-names %) sessions) sessions)
          br-id          (:id (ledger-ref ws))
+         local-status   (when br-id (tickets/status project br-id))
          page-id        (:page-id (notion-ref ws))
          notion-backed? (some? (notion-ref ws))
          in-cache?      (boolean (and page-id (contains? facts page-id)))
@@ -142,12 +143,13 @@
          proj           (if notion-driven?
                           (session/notion-stage-projection
                             {:shipping?          shipping?
+                             :in-flight?         (contains? #{:planning :implementing} local-status)
                              :notion-status      (get-in facts [page-id :status])
                              :has-triage-report? (boolean (and br-id (tickets/has-triage-report? project br-id)))
                              :sessions           sessions})
                           (session/stage-projection
                             (:closed ws)
-                            (when br-id (tickets/status project br-id))
+                            local-status
                             sessions (:stage ws)))]
      {:ws-id           (:id ws)
       :project         project

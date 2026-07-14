@@ -248,10 +248,24 @@
 
 (defn notion-stage-projection
   "Stage + needs-you for a Notion-driven workstream (page in a watched-view cache,
-   or on the merge lane). Precedence: merge-lane :shipping overlay → notion-stage.
+   or on the merge lane). Precedence:
+     1. merge-lane :shipping overlay (a session on the merge lane)
+     2. nido in-flight overlay: local ticket status :planning/:implementing → :in-progress,
+        UNLESS Notion is already terminal. Promote advances nido's local state and
+        provisions an impl session immediately, but flips Notion asynchronously — so
+        nido's own in-flight work is ahead of the eventually-consistent Notion cache.
+        Honor it, or a just-promoted ticket sits at :ready with a live Promote button
+        until the cache repolls. (Distinct from :dismissed, which we still ignore.)
+     3. notion-stage (the cached Notion status, refined by triage-report).
    Returns {:stage :needs-you}."
-  [{:keys [shipping? notion-status has-triage-report? sessions]}]
-  (let [stage (if shipping? :shipping (notion-stage notion-status has-triage-report?))]
+  [{:keys [shipping? in-flight? notion-status has-triage-report? sessions]}]
+  (let [stage (cond
+                shipping?
+                :shipping
+                (and in-flight? (not (contains? notion-terminal-statuses notion-status)))
+                :in-progress
+                :else
+                (notion-stage notion-status has-triage-report?))]
     {:stage stage :needs-you (stage-needs-you stage sessions)}))
 
 (def in-progress-phases

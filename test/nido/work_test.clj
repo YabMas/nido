@@ -622,7 +622,7 @@
                 work/latest-report (fn [_ _] {:kind :triage :at "t" :title "V" :markdown "# V"})
                 ;; minimal stubs so workstream's other projections don't throw:
                 nido.coordinator.session/list-sessions (fn [_ _] [])
-                nido.coordinator.workstreams-view/workstream-row (fn [_ w] {:stage :triage :label "BR-7" :source :notion})]
+                nido.coordinator.workstreams-view/workstream-row (fn [_ _ & _] {:stage :triage :label "BR-7" :source :notion})]
     (is (= "# V" (-> (work/workstream "brian" "ws-1") :report :markdown)))))
 
 (deftest list-workstreams-rows-carry-facets
