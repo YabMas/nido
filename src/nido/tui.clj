@@ -27,12 +27,14 @@
    [nido.charm-patch :as charm-patch]
    [nido.coordinator.breakers :as breakers]
    [nido.coordinator.halt :as halt]
+   [nido.coordinator.pickup :as pickup]
    [nido.coordinator.queue :as queue]
    [nido.coordinator.report :as report]
    [nido.coordinator.runs-view :as runs-view]
    [nido.coordinator.scratch :as scratch]
    [nido.coordinator.workstreams-view :as wsv]
    [nido.coordinator.triggers :as triggers]
+   [nido.notion.client :as client]
    [nido.project :as project]
    [nido.work :as work]
    [nido.session.dev :as dev]
@@ -1086,6 +1088,46 @@
     (let [[ti cmd] (text-input/text-input-update (:modal-input state) msg)]
       [(assoc state :modal-input ti) cmd])))
 
+;; ---------------------------------------------------------------------------
+;; Pickup — drive a Notion ticket (URL / page-id / BR-####) from the system
+;; surface, no board browsing required. Front-end over
+;; `nido.coordinator.pickup/pickup!` (which resolves the ref and enqueues the
+;; :plan-bug envelope). A single-field text-input mirrors :reply-input.
+;; ---------------------------------------------------------------------------
+
+(defn- pickup-result-status
+  "One-line status message from a `pickup!` result — mirrors the CLI's
+   framing (`tasks.nido-pickup`) so both surfaces read the same."
+  [input result]
+  (if (= :driving (:decision result))
+    (str "driving " (-> result :ref :id) " → queued " (:queued result))
+    (str "could not resolve: " input " (" (name (:error result)) ")")))
+
+(defn- open-pickup-input
+  "Open the text-input modal to collect a Notion URL / page-id / BR-#### for
+   pickup."
+  [state]
+  [(assoc state
+          :modal :pickup-input
+          :modal-input (text-input/text-input :prompt "Notion URL or BR-####: "))
+   nil])
+
+(defn- update-pickup-input [state msg]
+  (cond
+    (msg/key-match? msg "escape")
+    [(close-modal state) nil]
+
+    (msg/key-match? msg "enter")
+    (let [input (str/trim (text-input/value (:modal-input state)))]
+      (if (seq input)
+        (let [result (pickup/pickup! (:project state) input (client/keychain-token))]
+          [(-> state close-modal (assoc :status (pickup-result-status input result))) nil])
+        [(close-modal state) nil]))
+
+    :else
+    (let [[ti cmd] (text-input/text-input-update (:modal-input state) msg)]
+      [(assoc state :modal-input ti) cmd])))
+
 (declare open-stage-picker enter-system)
 
 (defn- open-stage-picker
@@ -1227,6 +1269,7 @@
     (msg/key-match? msg "f") (open-fire-trigger state)
     (msg/key-match? msg "h") (open-halt-confirm state)
     (msg/key-match? msg "c") (open-clear-breaker-picker state)
+    (msg/key-match? msg "p") (open-pickup-input state)
     :else (let [[lst cmd] (item-list/list-update (:list state) msg)]
             [(assoc state :list lst) cmd])))
 
@@ -1371,6 +1414,9 @@
     (= :reply-input (:modal state))
     (update-reply-input state msg)
 
+    (= :pickup-input (:modal state))
+    (update-pickup-input state msg)
+
     ;; No modal: route to the active screen's handler. Origin cycling (Tab/←→) is
     ;; owned by update-board, alongside the other board keys.
     :else
@@ -1482,6 +1528,7 @@
                   :clear-breaker        "nido — clear breaker"
                   :stage-picker         "nido — promote to…"
                   :reply-input          (str "nido — " (:project state) " · " (:ws-label state) " · reply")
+                  :pickup-input         (str "nido — " (:project state) " · pickup")
                   (case (:screen state)
                     :projects   "nido — projects"
                     :board      (str "nido — " (:project state) " · " (name (:origin state)))
@@ -1503,11 +1550,12 @@
                   :clear-breaker        "[↑↓] move  [↵] clear  [esc] cancel"
                   :stage-picker         "[↑↓] move  [↵] promote here  [esc] cancel"
                   :reply-input          "[↵] send  [esc] cancel"
+                  :pickup-input         "[↵] pickup  [esc] cancel"
                   (case (:screen state)
                     :projects   "[↵] open  [q]uit"
                     :board      "[↵/o] open  [i]nspect  [n]ew  [p]romote  [P] promote to…  [d]one  [x] dismiss  [space] fold  [⇄ tab] origin  [ [ ] ] domain  [ { } ] type  [s]ystem  [esc] back  [q]uit"
                     :workstream "[↵] open in chat  [a] apply  [r] reply  [S] dev-start  [X] dev-stop  [R] dev-restart  [esc] back  [q]uit"
-                    :system     "[↵/e] enter  [w]orktree  [i]nfo  [u]p  [d]own  [x] destroy  •  [f]ire  [h]alt  [c]lear breaker  [esc] back  [q]uit"))))
+                    :system     "[↵/e] enter  [w]orktree  [i]nfo  [u]p  [d]own  [x] destroy  •  [f]ire  [h]alt  [c]lear breaker  [p]ickup  [esc] back  [q]uit"))))
 
 (defn- info-row [label value]
   (str (style/render label-style (format "%-13s" label)) " " value))
@@ -1635,6 +1683,9 @@
     (item-list/list-view (:picker (:modal-target state)))
 
     :reply-input
+    (text-input/text-input-view (:modal-input state))
+
+    :pickup-input
     (text-input/text-input-view (:modal-input state))))
 
 (defn- busy-label [verb]

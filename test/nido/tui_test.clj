@@ -1,13 +1,16 @@
 (ns nido.tui-test
   (:require
    [babashka.fs :as fs]
+   [charm.components.text-input :as text-input]
    [charm.message :as msg]
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
+   [nido.coordinator.pickup :as pickup]
    [nido.coordinator.scratch :as scratch]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.triggers]
    [nido.coordinator.workstream :as workstream]
+   [nido.notion.client :as client]
    [nido.project :as project]
    [nido.session.dev]
    [nido.session.lifecycle :as lifecycle]
@@ -530,3 +533,44 @@
           [s' _] (#'tui/update-workstream state (msg/key-press "down"))]
       (is (= 7 (:selected-entry-seq s'))
           "navigating onto an entry row updates :selected-entry-seq to that entry's seq"))))
+
+;; ---------------------------------------------------------------------------
+;; Task 3 (pickup design): TUI pickup input box — drive a Notion ticket by
+;; URL/id from the system surface, no board browsing.
+;; ---------------------------------------------------------------------------
+
+(deftest system-p-opens-pickup-input
+  (let [st (assoc (board-state :all) :screen :system)
+        [s' _] (#'tui/update-system st (msg/key-press "p"))]
+    (is (= :pickup-input (:modal s')) "p on the system surface opens the pickup modal")))
+
+(deftest pickup-input-submit-drives-the-resolved-ticket
+  (let [calls (atom [])]
+    (with-redefs [pickup/pickup! (fn [project input token]
+                                   (swap! calls conj [project input token])
+                                   {:decision :driving :ref {:id "BR-42"} :queued {:id 1}})
+                  client/keychain-token (constantly "tok-123")]
+      (let [opened (first (#'tui/open-pickup-input (assoc (board-state :all) :screen :system)))
+            typed  (assoc opened :modal-input
+                          (text-input/set-value (:modal-input opened) "  BR-42  "))
+            [s' _] (#'tui/update-pickup-input typed (msg/key-press "enter"))]
+        (is (= [["brian" "BR-42" "tok-123"]] @calls)
+            "submit trims the typed input and passes project + keychain token to pickup!")
+        (is (nil? (:modal s')) "submit closes the modal")
+        (is (str/includes? (:status s') "driving BR-42")
+            "status reflects the :driving decision")))))
+
+(deftest pickup-input-submit-reports-an-unresolved-ref
+  (with-redefs [pickup/pickup! (constantly {:decision :unresolved :error :not-found})
+                client/keychain-token (constantly "tok-123")]
+    (let [opened (first (#'tui/open-pickup-input (assoc (board-state :all) :screen :system)))
+          typed  (assoc opened :modal-input (text-input/set-value (:modal-input opened) "junk"))
+          [s' _] (#'tui/update-pickup-input typed (msg/key-press "enter"))]
+      (is (nil? (:modal s')) "submit closes the modal even when unresolved")
+      (is (str/includes? (:status s') "could not resolve")
+          "status reflects the :unresolved decision"))))
+
+(deftest pickup-input-escape-cancels
+  (let [opened (first (#'tui/open-pickup-input (assoc (board-state :all) :screen :system)))
+        [s' _] (#'tui/update-pickup-input opened (msg/key-press "escape"))]
+    (is (nil? (:modal s')) "esc cancels without calling pickup!")))
