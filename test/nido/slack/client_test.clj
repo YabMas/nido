@@ -68,3 +68,31 @@
 (deftest chat-permalink-returns-url
   (with-redefs [slack/http-request (fn [_ _ _] (ok-resp {:permalink "https://x.slack.com/p"}))]
     (is (= "https://x.slack.com/p" (slack/chat-permalink "C123" "1.0" "tok")))))
+
+(deftest owl-reacted?-detects-the-emoji
+  (is (true?  (slack/owl-reacted? {:reactions [{:name "eyes"} {:name "owl" :count 1}]} "owl")))
+  (is (false? (slack/owl-reacted? {:reactions [{:name "eyes"}]} "owl")))
+  (is (false? (slack/owl-reacted? {} "owl"))))
+
+(deftest post-message-posts-threaded
+  (let [captured (atom nil)]
+    (with-redefs [slack/http-request
+                  (fn [_ url opts] (reset! captured {:url url :body (:body opts)})
+                    {:status 200 :body (json/generate-string {:ok true :ts "123.45"})})]
+      (is (= {:ok true :ts "123.45"} (slack/post-message "C1" "tok" {:text "hi" :thread-ts "100.0"})))
+      (let [b (json/parse-string (:body @captured) true)]
+        (is (= "C1" (:channel b))) (is (= "hi" (:text b))) (is (= "100.0" (:thread_ts b)))))))
+
+(deftest post-message-maps-auth-error
+  (with-redefs [slack/http-request (fn [_ _ _] {:status 200 :body (json/generate-string
+                                                                     {:ok false :error "invalid_auth"})})]
+    (is (= :auth (:error (slack/post-message "C1" "tok" {:text "hi"}))))))
+
+(deftest add-reaction-posts-reactions-add
+  (let [captured (atom nil)]
+    (with-redefs [slack/http-request
+                  (fn [_ url opts] (reset! captured {:url url :body (:body opts)})
+                    {:status 200 :body (json/generate-string {:ok true})})]
+      (is (= {:ok true} (slack/add-reaction "C1" "100.0" "tok" "eyes")))
+      (let [b (json/parse-string (:body @captured) true)]
+        (is (= "eyes" (:name b))) (is (= "100.0" (:timestamp b)))))))

@@ -105,6 +105,42 @@
     (when-not (api-error resp)
       (:permalink (json/parse-string (:body resp) true)))))
 
+(defn owl-reacted?
+  "True if `message` carries a reaction whose name = `emoji`."
+  [message emoji]
+  (boolean (some #(= emoji (:name %)) (:reactions message))))
+
+(defn- post-json
+  "POST a JSON body to a Slack Web API method; map to {:ok true ...} or {:error :kw}.
+   `ok-extra` pulls extra keys off the parsed body into the success map."
+  [url token body ok-extra]
+  (let [resp (try
+               (http-request :post url
+                             {:headers {"Authorization" (str "Bearer " token)
+                                        "Content-Type"  "application/json; charset=utf-8"}
+                              :body    (json/generate-string body)
+                              :timeout 10000})
+               (catch Exception e {:status 0 :exception e}))]
+    (if-let [err (api-error resp)]
+      err
+      (merge {:ok true} (ok-extra (json/parse-string (:body resp) true))))))
+
+(defn post-message
+  "POST chat.postMessage. `:thread-ts` (optional) threads the reply.
+   Returns {:ok true :ts <new-ts>} or {:error :kw}."
+  [channel token {:keys [text thread-ts]}]
+  (post-json "https://slack.com/api/chat.postMessage" token
+             (cond-> {:channel channel :text text}
+               thread-ts (assoc :thread_ts thread-ts))
+             (fn [parsed] {:ts (:ts parsed)})))
+
+(defn add-reaction
+  "POST reactions.add — best-effort emoji ack. Returns {:ok true} or {:error :kw}."
+  [channel ts token emoji]
+  (post-json "https://slack.com/api/reactions.add" token
+             {:channel channel :timestamp ts :name emoji}
+             (constantly {})))
+
 (defn message-id
   "Stable, unique, filesystem-safe id for a channel message."
   [channel ts]
