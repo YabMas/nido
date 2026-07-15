@@ -42,7 +42,7 @@
   (->> (runs/list-run-ids)
        (keep runs/read-run)
        (filter #(and (= :awaiting-review (:state %))
-                     (#{:triage-bug :plan-bug} (:skill %))))
+                     (#{:triage-bug :plan-bug :triage-slack} (:skill %))))
        (remove #(in-review? (:project %) (some-> % :event-payload :id)))
        (reduce (fn [n r]
                  (runs/transition! (:id r) :done)

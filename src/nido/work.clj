@@ -27,6 +27,7 @@
    [nido.coordinator.workstreams-view :as wsv]
    [nido.notion.client :as notion]
    [nido.notion.views :as views]
+   [nido.slack.client :as slack]
    [nido.project :as project]
    [nido.session.lifecycle :as lifecycle]
    [nido.ui.view-state :as view-state]))
@@ -402,23 +403,84 @@
       {:decision :dismissed})
     {:decision :no-workstream}))
 
+(defn- slack-ref-of
+  "The workstream's :slack-message external-ref map, or nil."
+  [w]
+  (some #(when (= :slack-message (:adapter %)) %) (:external-refs w)))
+
+(defn- parse-slack-id
+  "Split a Slack message id `slack-<channel>-<ts>` into {:channel <str> :ts <str>},
+   or nil. Channel is dashless (e.g. \"C07N0U273AR\"); ts is digits+dot — the greedy
+   channel group backtracks so the trailing numeric ts stays whole."
+  [slack-id]
+  (when-let [[_ channel ts] (re-matches #"^slack-(.+)-([0-9.]+)$" (str slack-id))]
+    {:channel channel :ts ts}))
+
+(defn- apply-proposed!
+  "Approve a Slack-originated proposal: create the Notion page at \"Not started\",
+   associate the new BR-#### with THIS workstream (one ledger across the backlog
+   gap), post the ticket link back to the Slack thread, and complete the slack-id
+   ticket record so the parked session sweeps to :done. On a create error, leaves
+   the ws parked & re-approvable. Returns {:decision :created :br …} |
+   {:decision :error :error :kw}.
+
+   Ordering is load-bearing: ledger-ref = (or notion-ref slack-ref), so once the
+   :notion BR is add-ref!'d it becomes the ledger key. Capture the slack-id BEFORE
+   add-ref!, and complete! the SLACK-id record — that is the id the run's
+   event-payload carries, so completing it is what lets sweep-resolved! settle the
+   parked session."
+  [project ws-id proposal w]
+  (let [slack-id             (:id (slack-ref-of w))
+        {:keys [channel ts]} (parse-slack-id slack-id)
+        db                   (:database (views/load-registry project))
+        ntok                 (notion/keychain-token)
+        ds                   (notion/resolve-data-source-id db ntok)
+        created              (notion/create-page! ds ntok
+                               {:title       (:title proposal)
+                                :description (:description proposal)
+                                :type        (:ticket-type proposal)
+                                :status      "Not started"
+                                :priority    (:priority proposal)})]
+    (if (:error created)
+      {:decision :error :error (:error created)}
+      (let [br (:id created)]
+        (cws/add-ref! project ws-id {:adapter :notion :id br
+                                     :page-id (:page-id created) :url (:url created)})
+        (try (slack/post-message channel (slack/keychain-token)
+               {:text (str "Ticket created: " (:url created)) :thread-ts ts})
+             (catch Throwable _ nil))   ; link-back is best-effort; the ticket already stands
+        (tickets/complete! project slack-id :triaged :applied)
+        {:decision :created :br br}))))
+
 (defn apply!
-  "Accept a parked triage verdict WITHOUT resuming the review conversation: finalize
-   the ticket :triaged/:applied and refresh its facets — the exact nido-side mutation
-   the current triage skill's apply step performs (`bb nido:ticket:complete`; the
-   notion-cli migration dropped all Notion writeback, so apply is nido-only). Replaces
-   the old resume-\"apply\" path, which replayed the review conversation and FAILED for
-   legacy (pre-migration) reviews whose apply called the removed Notion MCP tools — the
-   agent refused to fabricate a write, the ticket stayed :awaiting-input, and the item
-   bounced back to triage. A ref-less workstream is a no-op. The daemon's sweep settles
-   the now-resolved parked session (ticket left review). Returns {:decision :applied}."
+  "Accept a parked triage verdict WITHOUT resuming the review conversation. Two paths:
+
+   • Slack proposal — when the latest ledger report is a `:proposed-ticket` and the
+     workstream carries no :notion ref yet, deterministically create the Notion page,
+     associate its BR-####, post the link back to Slack, and complete the slack-id
+     record (see apply-proposed!). Returns {:decision :created :br …} | {:decision :error …}.
+
+   • Legacy nido-only — otherwise finalize the ticket :triaged/:applied and refresh its
+     facets — the exact nido-side mutation the current triage skill's apply step performs
+     (`bb nido:ticket:complete`; the notion-cli migration dropped all Notion writeback).
+     Replaces the old resume-\"apply\" path, which replayed the review conversation and
+     FAILED for legacy reviews whose apply called the removed Notion MCP tools. A ref-less
+     workstream is a no-op. Returns {:decision :applied}.
+
+   The daemon's sweep settles the now-resolved parked session (ticket left review)."
   [project ws-id]
-  (when-let [w (cws/read-ws project ws-id)]
-    (when-let [br (:id (wsv/ledger-ref w))]
-      (tickets/complete! project br :triaged :applied)
-      (try (facets/refresh-for-ticket! project br)   ; reads Notion — best-effort
-           (catch Throwable _ nil))))
-  {:decision :applied})
+  (if-let [w (cws/read-ws project ws-id)]
+    (let [report (latest-report project ws-id)]
+      (if (and (= :proposed-ticket (:format report))
+               (nil? (wsv/notion-ref w)))
+        (apply-proposed! project ws-id report w)
+        (do
+          (when-let [br (:id (wsv/ledger-ref w))]
+            (tickets/complete! project br :triaged :applied)
+            (try (facets/refresh-for-ticket! project br)   ; reads Notion — best-effort
+                 (catch Throwable _ nil)))
+          {:decision :applied})))
+    {:decision :applied}))
 
 (defn resolve-gate!
   "Apply a gate follow-action, dispatching on `action-id`. A workstream-less ws-id

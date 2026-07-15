@@ -12,7 +12,9 @@
    [nido.coordinator.state :as cstate]
    [nido.coordinator.tickets :as tickets]
    [nido.coordinator.workstream :as workstream]
+   [nido.notion.client :as notion-client]
    [nido.notion.views :as views]
+   [nido.slack.client :as slack-client]
    [nido.project]
    [nido.session.lifecycle]
    [nido.work :as work]))
@@ -898,6 +900,86 @@
       "Slack unparked triage: Dismiss")
   (is (some #{:dismiss} (map :id (work/gate-actions :triage true)))
       "2-arity (origin nil) unchanged: Dismiss present"))
+
+(def ^:private proposed-ticket-edn
+  "Valid ProposedTicket EDN for the Slack-approval path."
+  (pr-str {:format :proposed-ticket
+           :title "Logo bug on the pricing page"
+           :description "The logo disappears on mobile Safari."
+           :ticket-type "bug"
+           :priority "2 - Should"
+           :source-url "https://myco.slack.com/archives/C1/p100"}))
+
+(deftest parse-slack-id-splits-channel-and-ts
+  (is (= {:channel "C07N0U273AR" :ts "1718000000.000123"}
+         (#'work/parse-slack-id "slack-C07N0U273AR-1718000000.000123"))
+      "id is slack-<channel>-<ts>: channel dashless, ts digits+dot")
+  (is (= {:channel "C1" :ts "100.0"} (#'work/parse-slack-id "slack-C1-100.0"))))
+
+(deftest apply-proposed-creates-ticket-associates-ref-and-posts-link
+  (with-tmp
+    (fn [_]
+      (let [ws     (workstream/create! :brian {:stage :triaging
+                                               :external-refs [{:adapter :slack-message
+                                                                :id "slack-C1-100.0" :title "msg"}]})
+            posted (atom nil)]
+        (tickets/open! :brian "slack-C1-100.0" {:title "msg"})
+        (tickets/set-status! :brian "slack-C1-100.0" :awaiting-input)
+        (workstream/append-to-ref! :brian "slack-C1-100.0" {:kind :proposed-ticket}
+                                   proposed-ticket-edn)
+        (with-redefs [views/load-registry (fn [_] {:database "db-1"})
+                      notion-client/keychain-token (fn [] "ntok")
+                      notion-client/resolve-data-source-id (fn [_ _] "ds-1")
+                      notion-client/create-page!
+                      (fn [_ds _tok _fields] {:id "BR-4900" :page-id "pg" :url "https://notion/pg"})
+                      slack-client/keychain-token (fn [] "stok")
+                      slack-client/post-message (fn [ch _ opts] (reset! posted {:ch ch :opts opts}) {:ok true})]
+          (let [r (work/apply! :brian (:id ws))]
+            (is (= :created (:decision r)))
+            (is (= "BR-4900" (:br r)))
+            (is (= (:id ws) (:id (workstream/find-by-ref-id :brian "BR-4900")))
+                "the BR-#### associates to THIS workstream — one ledger")
+            (is (= "C1" (:ch @posted)) "posts to the origin channel")
+            (is (= "100.0" (get-in @posted [:opts :thread-ts])) "threaded on the message ts")
+            (is (re-find #"notion/pg" (get-in @posted [:opts :text])) "link-back carries the page url")
+            (is (= :triaged (tickets/status :brian "slack-C1-100.0"))
+                "the slack-id ticket record completes → parked session sweeps to :done")))))))
+
+(deftest apply-proposed-error-leaves-ws-parked
+  (with-tmp
+    (fn [_]
+      (let [ws     (workstream/create! :brian {:stage :triaging
+                                               :external-refs [{:adapter :slack-message
+                                                                :id "slack-C1-100.0" :title "msg"}]})
+            posted (atom nil)]
+        (tickets/open! :brian "slack-C1-100.0" {:title "msg"})
+        (tickets/set-status! :brian "slack-C1-100.0" :awaiting-input)
+        (workstream/append-to-ref! :brian "slack-C1-100.0" {:kind :proposed-ticket}
+                                   proposed-ticket-edn)
+        (with-redefs [views/load-registry (fn [_] {:database "db-1"})
+                      notion-client/keychain-token (fn [] "ntok")
+                      notion-client/resolve-data-source-id (fn [_ _] "ds-1")
+                      notion-client/create-page! (fn [_ds _tok _fields] {:error :auth})
+                      slack-client/keychain-token (fn [] "stok")
+                      slack-client/post-message (fn [ch _ opts] (reset! posted {:ch ch :opts opts}) {:ok true})]
+          (let [r (work/apply! :brian (:id ws))]
+            (is (= {:decision :error :error :auth} r))
+            (is (nil? (workstream/find-by-ref-id :brian "BR-4900")) "no notion ref added on error")
+            (is (nil? @posted) "no Slack post on error")
+            (is (= :awaiting-input (tickets/status :brian "slack-C1-100.0"))
+                "ticket not completed → ws stays parked & re-approvable")))))))
+
+(deftest apply-non-proposal-still-finalizes-nido-side
+  ;; Regression: the proposal branch must not disturb the legacy nido-only apply.
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :triaging
+                                          :external-refs [{:adapter :notion :id "BR-B1" :title "t"}]})]
+        (tickets/open! :brian "BR-B1" {:title "t"})
+        (tickets/set-status! :brian "BR-B1" :awaiting-input)
+        (with-redefs [nido.coordinator.facets/refresh-for-ticket! (fn [& _] nil)]
+          (is (= {:decision :applied} (work/apply! :brian (:id w))))
+          (is (= :triaged (tickets/status :brian "BR-B1"))))))))
 
 (deftest mutations-noop-on-workstream-less-id
   (with-tmp

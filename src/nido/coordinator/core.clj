@@ -513,7 +513,7 @@
                        ;; (frees the trigger's slot) and the session OUTLIVES it (the
                        ;; teardown no-op in runs/teardown-session-for-run!).
                        (= :plan-github-issue (:skill run)) :done
-                       (#{:triage-bug :plan-bug} (:skill run))
+                       (#{:triage-bug :plan-bug :triage-slack} (:skill run))
                        (review/run-state-from-ticket
                          (tickets/status (:project run) (some-> run :event-payload :id)))
                        :else
