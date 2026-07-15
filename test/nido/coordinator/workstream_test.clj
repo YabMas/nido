@@ -260,6 +260,27 @@
                      (ws/append-entry! :brian (:id example-ws) {:kind :blocker} "not a map"))))
       (finally (fs/delete-tree tmp)))))
 
+(deftest append-to-ref-routes-to-existing-workstream
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :triaging
+                                   :external-refs [{:adapter :notion :id "BR-1"}]})]
+        (ws/append-to-ref! :brian "BR-1" {:kind :note} "hi")
+        (let [w2 (ws/read-ws :brian (:id w))]
+          (is (= (:id w) (:id (ws/find-by-ref-id :brian "BR-1"))) "found by ref id")
+          (is (= "BR-1" (:id (first (:external-refs w2)))))
+          (is (= 1 (count (:entries w2))) "entry appended to the workstream, not a ticket store")
+          (is (= :note (:kind (last (:entries w2))))))))))
+
+(deftest append-to-ref-mints-minimal-workstream-when-absent
+  (with-tmp
+    (fn [_]
+      (ws/append-to-ref! :brian "BR-9" {:kind :note} "hi")
+      (let [w (ws/find-by-ref-id :brian "BR-9")]
+        (is (some? w) "a workstream was minted for the ref")
+        (is (= "BR-9" (:id (first (:external-refs w)))))
+        (is (= 1 (count (:entries w))))))))
+
 (deftest read-ws-normalizes-legacy-inbox-stage
   (let [tmp (fs/create-temp-dir)]
     (try

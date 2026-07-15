@@ -203,6 +203,29 @@
                            (:external-refs w))
                  w)))))
 
+(defn find-by-ref-id
+  "The workstream carrying any external-ref whose :id = `external-id` (adapter-
+   agnostic — Notion BR-#### or Slack id), or nil. Used to route a ref-keyed
+   ledger append/read to its workstream. O(workstreams)."
+  [project external-id]
+  (->> (list-ids project)
+       (keep #(read-ws project %))
+       (some (fn [w] (when (some #(= external-id (:id %)) (:external-refs w)) w)))))
+
+(defn append-to-ref!
+  "Append a ledger entry to the workstream carrying `external-id`, found-or-created
+   by ref (the spine: intake-triage and pickup-drive share one workstream). A minimal
+   workstream is minted when none exists (adapter inferred from the id). Returns the
+   entry file path."
+  [project external-id entry content]
+  (let [w (or (find-by-ref-id project external-id)
+              (create! project
+                       {:stage :triaging
+                        :external-refs [{:adapter (if (str/starts-with? (str external-id) "slack-")
+                                                    :slack-message :notion)
+                                         :id external-id}]}))]
+    (append-entry! project (:id w) entry content)))
+
 (defn engagement
   "Engagement state of a workstream: loads its sessions and projects. Returns
    :idle / :active / :parked-at-gate / :settled. Returns :idle if the workstream
