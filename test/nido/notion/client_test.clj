@@ -287,3 +287,50 @@
           "ex-data carries the underlying retrieve-block-children error")
       (is (= "page-1" (-> (ex-data ex) :block))
           "ex-data identifies which block failed"))))
+
+(deftest create-page!-posts-a-data-source-page-and-reads-back-br
+  ;; NB: the captured request body is parsed WITHOUT keywordizing (plain string
+  ;; keys throughout) — "Task result" as a keywordized key would be the keyword
+  ;; :Task\ result, which isn't valid Clojure reader syntax to write literally.
+  ;; String keys keep every assertion below unambiguous.
+  (let [captured (atom nil)]
+    (with-redefs [notion/http-request
+                  (fn [method url opts]
+                    (reset! captured {:method method :url url
+                                      :body (cheshire.core/parse-string (:body opts) false)})
+                    {:status 200
+                     :body (cheshire.core/generate-string
+                             {:id "pg-new" :url "https://notion.so/pg-new"
+                              :properties {"ID" {:type "unique_id"
+                                                 :unique_id {:prefix "BR" :number 4900}}
+                                           "Task result" {:type "title"
+                                                          :title [{:plain_text "Logo bug"}]}}})})]
+      (let [r (notion/create-page! "ds-1" "tok"
+                                   {:title "Logo bug" :description "grounded findings"
+                                    :type "bug" :status "Not started" :priority "2 - Should"})]
+        (is (= "BR-4900" (:id r)))
+        (is (= "pg-new" (:page-id r)))
+        ;; request shape
+        (is (= :post (:method @captured)))
+        (is (= "https://api.notion.com/v1/pages" (:url @captured)))
+        (let [b (:body @captured)]
+          (is (= {"type" "data_source_id" "data_source_id" "ds-1"} (get b "parent")))
+          (is (= [{"text" {"content" "Logo bug"}}] (get-in b ["properties" "Task result" "title"])))
+          (is (= {"name" "Not started"} (get-in b ["properties" "Status" "status"])))
+          (is (= {"name" "bug"} (get-in b ["properties" "Type" "select"])))
+          (is (= {"name" "2 - Should"} (get-in b ["properties" "Priority" "select"]))))))))
+
+(deftest create-page!-omits-priority-when-nil
+  (with-redefs [notion/http-request
+                (fn [_ _ opts]
+                  (let [b (cheshire.core/parse-string (:body opts) false)]
+                    (is (not (contains? (get b "properties") "Priority")))
+                    {:status 200 :body (cheshire.core/generate-string
+                                         {:id "p" :url "u" :properties {}})}))]
+    (notion/create-page! "ds-1" "tok" {:title "t" :description "d" :type "bug"
+                                       :status "Not started" :priority nil})))
+
+(deftest create-page!-maps-errors
+  (with-redefs [notion/http-request (fn [_ _ _] {:status 401})]
+    (is (= {:error :auth} (notion/create-page! "ds-1" "tok" {:title "t" :description "d"
+                                                             :type "bug" :status "Not started"})))))

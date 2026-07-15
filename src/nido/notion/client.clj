@@ -254,6 +254,40 @@
            ;; checks top-level first, then :properties).
            props-kw)))
 
+(defn create-page!
+  "POST /v1/pages creating a page in the data source `data-source-id`. `fields`:
+     {:title s :description s :type s :status s :priority s-or-nil}
+   Builds the Notion property payload (title = \"Task result\", status = \"Status\",
+   type = \"Type\", priority = \"Priority\" when non-blank) plus a single paragraph
+   block holding :description, and returns the created page via `normalise-page`
+   (so the caller reads back :id = the auto-assigned BR-####, :page-id, :url).
+   Returns {:error :kw} on failure; never throws."
+  [data-source-id token {:keys [title description type status priority]}]
+  (let [props (cond-> {"Task result" {:title [{:text {:content title}}]}
+                       "Status"      {:status {:name status}}
+                       "Type"        {:select {:name type}}}
+                (not (str/blank? priority)) (assoc "Priority" {:select {:name priority}}))
+        body  {:parent     {:type "data_source_id" :data_source_id data-source-id}
+               :properties props
+               :children   [{:object "block" :type "paragraph"
+                             :paragraph {:rich_text [{:text {:content (or description "")}}]}}]}
+        resp  (try
+                (http-request
+                  :post "https://api.notion.com/v1/pages"
+                  {:headers {"Authorization"  (str "Bearer " token)
+                             "Notion-Version" notion-api-version
+                             "Content-Type"   "application/json"}
+                   :body    (json/generate-string body)
+                   :timeout 10000})
+                (catch Exception e {:status 0 :exception e}))
+        {:keys [status body]} resp]
+    (cond
+      (= status 200) (normalise-page (json/parse-string body true))
+      (= status 401) {:error :auth}
+      (>= (or status 0) 500) {:error :server}
+      (= status 0)   {:error :network}
+      :else          {:error :http :status status})))
+
 (defn retrieve-block-children
   "GET /v1/blocks/<block-id>/children. Single page; pass `:start-cursor`
    to get the next page. Returns:
