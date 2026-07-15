@@ -391,6 +391,11 @@
    :doc "List ticket records grouped by stage (Ready to implement / In progress / Dismissed)."
    :task (apply nido-ticket/list-cmd *command-line-args*)}
 
+  nido:pickup
+  {:requires ([tasks.nido-pickup :as nido-pickup])
+   :doc "Drive a Notion ticket by URL or id: :project <p> <notion-url-or-BR-####>"
+   :task (apply nido-pickup/pickup *command-line-args*)}
+
   nido:findings:file
   {:requires ([tasks.nido-findings :as nido-findings])
    :doc "File a staging findings round on a shipped workstream (reopens it)."

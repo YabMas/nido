@@ -2,6 +2,7 @@
   (:require
    [clojure.test :refer [deftest is]]
    [nido.coordinator.pickup :as pickup]
+   [nido.coordinator.queue :as queue]
    [nido.notion.client :as client]))
 
 (deftest extract-page-id-from-urls-and-ids
@@ -75,3 +76,16 @@
                 client/data-source-query
                 (fn [_ds-id _tok _opts] {:error :auth :status 401})]
     (is (= {:error :auth} (pickup/resolve-ref :brian "BR-4826" "tok")))))
+
+(deftest pickup-enqueues-plan-bug-for-a-resolved-ref
+  (with-redefs [pickup/resolve-ref (fn [_ _ _] {:id "BR-1" :page-id "pg-1" :url "u" :title "t"})]
+    (let [captured (atom nil)]
+      (with-redefs [queue/enqueue! (fn [env] (reset! captured env) "/q/x.edn")]
+        (let [r (pickup/pickup! :brian "https://notion.so/x-<id>" "tok")]
+          (is (= :driving (:decision r)))
+          (is (= {:project :brian :trigger :plan-bug} (:target @captured)))
+          (is (= {:id "BR-1" :notion-page-id "pg-1" :url "u" :title "t"} (:payload @captured))))))))
+
+(deftest pickup-reports-unresolved
+  (with-redefs [pickup/resolve-ref (fn [_ _ _] {:error :not-found})]
+    (is (= :unresolved (:decision (pickup/pickup! :brian "BR-nope" "tok"))))))

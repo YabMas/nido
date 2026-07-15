@@ -3,6 +3,7 @@
    human can hand nido a backlog item to drive. Front-end over the :plan-bug leg."
   (:require
    [clojure.string :as str]
+   [nido.coordinator.queue :as queue]
    [nido.notion.client :as client]
    [nido.notion.views :as views]))
 
@@ -57,3 +58,19 @@
         (catch Exception _e
           {:error :notion-error}))
       {:error :unrecognized-input})))
+
+(defn pickup!
+  "Resolve `input` and, on success, enqueue the :plan-bug envelope to drive the
+   ticket (the daemon find-or-creates the workstream by its Notion ref → the shared
+   Phase-B ledger). Returns {:decision :driving :ref … :queued …} or {:decision
+   :unresolved :error …}."
+  [project input token]
+  (let [r (resolve-ref project input token)]
+    (if (:error r)
+      {:decision :unresolved :error (:error r)}
+      {:decision :driving
+       :ref      r
+       :queued   (queue/enqueue!
+                   {:target  {:project (keyword (name project)) :trigger :plan-bug}
+                    :payload {:id (:id r) :notion-page-id (:page-id r)
+                              :url (:url r) :title (:title r)}})})))
