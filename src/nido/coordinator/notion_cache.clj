@@ -5,7 +5,8 @@
    select and merges the per-project view snapshots into one page-id → facts
    lookup the board reads. Read-only; no Notion I/O."
   (:require
-   [nido.coordinator.sources.state :as sstate]))
+   [nido.coordinator.sources.state :as sstate]
+   [nido.notion.views :as views]))
 
 (defn parse-priority-rank
   "Leading integer of a Notion Priority select label → int (lower = more
@@ -33,16 +34,18 @@
         pages))
 
 (defn project-page-facts
-  "Merge the :pages maps of every :notion-view source snapshot belonging to
-   `project` into one page-id → {:status :priority :ball-ids :title :br} lookup.
-   A page that appears in two of the project's views carries identical facts, so
-   merge order is immaterial. Empty map when the project has no notion-view
-   snapshots."
+  "Merge the :pages maps of the project's :notion-view snapshots into one
+   page-id → {:status :priority :ball-ids :title :br} lookup. Restricted to the
+   registry's :board-views when set (else every watched view). Empty map when
+   the project has no matching snapshots."
   [project]
-  (let [pk (keyword (name project))]
+  (let [pk    (keyword (name project))
+        board (views/board-views project)]
     (->> (sstate/list-state-hashes)
          (keep sstate/read-state)
          (filter #(and (= :notion-view (:type %))
-                       (= pk (some-> (get-in % [:source-config :project]) name keyword))))
+                       (= pk (some-> (get-in % [:source-config :project]) name keyword))
+                       (or (nil? board)
+                           (contains? board (get-in % [:source-config :view])))))
          (map :pages)
          (reduce merge {}))))

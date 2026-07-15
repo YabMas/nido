@@ -28,6 +28,14 @@
                       {:project project :path path})))
     (io/read-edn path)))
 
+(defn board-views
+  "The set of view keywords that feed the board (`:board-views` in the registry),
+   or nil when unset. nil means every watched view feeds the board (back-compat)."
+  [project]
+  (let [path (registry-path project)]
+    (when (fs/exists? path)
+      (some-> (io/read-edn path) :board-views set))))
+
 (defn resolve-view
   "Returns {:database <id> :filter <map>} for the given (project, view-kw).
    Throws on missing registry or unknown view."

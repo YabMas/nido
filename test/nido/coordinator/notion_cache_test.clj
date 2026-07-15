@@ -4,7 +4,8 @@
    [clojure.test :refer [deftest is]]
    [nido.coordinator.notion-cache :as nc]
    [nido.coordinator.sources.state :as sstate]
-   [nido.coordinator.state :as cstate]))
+   [nido.coordinator.state :as cstate]
+   [nido.io :as io]))
 
 (deftest parse-priority-rank-cases
   (is (= 0 (nc/parse-priority-rank "0 – Release Blocker")) "en-dash separator")
@@ -57,6 +58,24 @@
         (is (= 0 (get-in facts ["p2" :priority])))
         (is (nil? (get facts "p9")) "other project excluded")
         (is (nil? (get facts "pX")) "non-:notion-view snapshot excluded")))))
+
+(deftest project-page-facts-honors-board-views
+  (with-tmp
+    (fn [tmp]
+      ;; registry restricts the board to :new-reports (drop :open-bugs)
+      (fs/create-dirs (str (fs/path tmp "projects" "brian")))
+      (io/write-edn! (str (fs/path tmp "projects" "brian" "notion-views.edn"))
+                     {:database "db" :board-views [:new-reports]
+                      :views {:new-reports {} :open-bugs {}}})
+      (sstate/write-state! "vNew"
+        {:type :notion-view :source-config {:project :brian :view :new-reports}
+         :pages {"p1" {:status "Needs verification" :priority nil :ball-ids #{} :title "R" :br "BR-1"}}})
+      (sstate/write-state! "vOpen"
+        {:type :notion-view :source-config {:project :brian :view :open-bugs}
+         :pages {"p2" {:status "Not started" :priority nil :ball-ids #{} :title "B" :br "BR-2"}}})
+      (let [facts (nc/project-page-facts :brian)]
+        (is (contains? facts "p1") ":new-reports page is a board view")
+        (is (nil? (get facts "p2")) ":open-bugs excluded by :board-views")))))
 
 (deftest project-page-facts-empty-when-no-snapshots
   (with-tmp
