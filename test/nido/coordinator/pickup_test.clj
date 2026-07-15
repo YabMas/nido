@@ -58,3 +58,20 @@
 
 (deftest resolve-ref-unrecognized-input
   (is (= {:error :unrecognized-input} (pickup/resolve-ref :brian "not a ref" "tok"))))
+
+(deftest resolve-ref-br-id-data-source-resolution-throws
+  (with-redefs [nido.notion.views/load-registry
+                (fn [_project] {:database "db-1"})
+                client/resolve-data-source-id
+                (fn [_database-id _tok]
+                  (throw (ex-info "Failed to resolve data-source id" {})))]
+    (is (= {:error :notion-error} (pickup/resolve-ref :brian "BR-4826" "tok")))))
+
+(deftest resolve-ref-br-id-query-failure-is-not-mistaken-for-not-found
+  (with-redefs [nido.notion.views/load-registry
+                (fn [_project] {:database "db-1"})
+                client/resolve-data-source-id
+                (fn [_database-id _tok] "ds-1")
+                client/data-source-query
+                (fn [_ds-id _tok _opts] {:error :auth :status 401})]
+    (is (= {:error :auth} (pickup/resolve-ref :brian "BR-4826" "tok")))))

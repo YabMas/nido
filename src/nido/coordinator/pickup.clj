@@ -44,10 +44,16 @@
     (let [page (client/retrieve-page pid token)]
       (if (:error page) {:error (:error page)} (normalise page)))
     (if-let [[_ n] (re-matches #"(?i)(?:BR-)?(\d+)" (str/trim (str input)))]
-      (let [{:keys [database]} (views/load-registry project)
-            ds   (client/resolve-data-source-id database token)
-            resp (client/data-source-query ds token
-                   {:filter {:property "ID" :unique_id {:equals (parse-long n)}}})
-            page (first (:results resp))]
-        (if page (normalise page) {:error :not-found}))
+      (try
+        (let [{:keys [database]} (views/load-registry project)
+              ds     (client/resolve-data-source-id database token)
+              resp   (client/data-source-query ds token
+                       {:filter {:property "ID" :unique_id {:equals (parse-long n)}}})
+              page   (first (:results resp))]
+          (cond
+            (:error resp)  {:error (:error resp)}
+            (some? page)   (normalise page)
+            :else          {:error :not-found}))
+        (catch Exception _e
+          {:error :notion-error}))
       {:error :unrecognized-input})))
