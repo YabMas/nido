@@ -417,6 +417,7 @@
     :blocker                  (blocker-card report)
     :pr-opened                (pr-opened-card report)
     :findings                 (md/render (report/report->markdown report))
+    :proposed-ticket          (md/render (report/report->markdown report))
     (md/render (:markdown report))))
 
 (defn gate-pane
