@@ -91,11 +91,15 @@
 
 (deftest board-rows-group-by-spine-and-filter-by-origin
   ;; :ready is no longer a band (backlog lives in Notion) — a :ready row supplied
-  ;; via work/grouped simply doesn't render on the board.
+  ;; via work/grouped simply doesn't render on the board. Feed a real :ready row
+  ;; here so this genuinely proves board-rows drops it, rather than passing
+  ;; vacuously because the mock never carried a :ready key at all.
   (with-redefs [nido.work/grouped
                 (fn [_ _]
                   {:in-progress [{:ws-id "p1" :origin :scratch :label "spike"
                                   :needs-you false :engagement :active}]
+                   :ready       [{:ws-id "r1" :origin :notion :label "BR-9 · ready row"
+                                  :needs-you false :engagement :idle}]
                    :triage      {:in-flight [] :queued []}})
                 nido.tui/live-session-names (constantly #{})]
     (let [all (#'tui/board-rows "brian" :all)

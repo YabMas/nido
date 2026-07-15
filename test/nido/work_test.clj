@@ -688,14 +688,16 @@
     (is (= #{1 2 3 5} (set (map :id (work/grouped-rows g)))))))
 
 (deftest filter-grouped-keeps-shape-drops-nonmatching
+  ;; :ready is not a key filter-grouped touches — grouped-by-stage never emits
+  ;; one, so filter-grouped's key set matches it exactly (:incoming
+  ;; :in-progress :shipping :triage).
   (let [g {:incoming [{:origin :notion} {:origin :slack}]
            :triage {:in-flight [{:origin :notion}] :queued [{:origin :slack}]}
-           :ready [{:origin :slack}] :in-progress [{:origin :notion}]}
+           :in-progress [{:origin :notion}]}
         f (work/filter-grouped g #(= :notion (:origin %)))]
     (is (= [{:origin :notion}] (:incoming f)))
     (is (= [{:origin :notion}] (get-in f [:triage :in-flight])))
     (is (= [] (get-in f [:triage :queued])))
-    (is (= [] (:ready f)))
     (is (= [{:origin :notion}] (:in-progress f)))))
 
 (deftest latest-report-prefers-workstream-entries

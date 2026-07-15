@@ -113,10 +113,13 @@
     (is (not (str/includes? html "<textarea")))))
 
 (def ^:private sample-grouped
-  ;; :ready is intentionally NOT a rendered band — backlog lives in Notion, not
-  ;; on the nido board (a :ready row here would simply never appear).
+  ;; :ready carries a real row here on purpose — ws-stage-sections must drop it
+  ;; (backlog lives in Notion, not on the nido board), so the "no ready band"
+  ;; assertion below actually exercises that omission instead of passing
+  ;; vacuously against an empty/absent key.
   {:triage {:in-flight [{:ws-id "w1" :origin :notion :stage :triage :label "BR-1 · a" :needs-you true}]
             :queued []}
+   :ready [{:ws-id "w2" :origin :notion :stage :ready :label "BR-2 · ready row" :needs-you false}]
    :in-progress [{:ws-id "w3" :origin :scratch :stage :in-progress :label "spike" :needs-you false}]})
 
 (def ^:private sample-ws

@@ -525,7 +525,6 @@
   [grouped pred]
   (-> grouped
       (update :incoming #(filterv pred %))
-      (update :ready #(filterv pred %))
       (update :in-progress #(filterv pred %))
       (update :shipping #(filterv pred %))
       (update :triage (fn [t] (-> t
