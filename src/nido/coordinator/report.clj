@@ -55,6 +55,18 @@
                              [:ref  string?]
                              [:note string?]]]]]) ; §5 log-only
 
+(def ProposedTicket
+  "A grounded ticket the triage-slack skill proposes for human approval before
+   creation in the Notion Task DB."
+  [:map {:closed true}
+   [:format      [:= :proposed-ticket]]
+   [:title       :string]
+   [:description :string]           ; grounded findings → the page body
+   [:ticket-type :string]           ; Notion Type option, e.g. "bug"
+   [:priority    {:optional true} [:maybe :string]]  ; Notion Priority option or nil
+   [:source-url  :string]           ; the Slack permalink
+   [:trail       {:optional true} [:maybe :string]]])
+
 (def ImplementationPlan
   "A high-level implementation plan — authored by triage (obvious) or the impl
    session (deferred); resolves a triage :squirrel into a concrete direction + effort."
@@ -134,7 +146,8 @@
    :blocker                  Blocker
    :pr-opened                PrOpened
    :review                   ReviewReport
-   :findings                 FindingsRound})
+   :findings                 FindingsRound
+   :proposed-ticket          ProposedTicket})
 
 (defn validate-event
   "Validate `report` (parsed EDN) against the schema registered for entry `kind`.
@@ -244,6 +257,17 @@
           (str "- **" (name severity) "** "
                (when area (str "(" area ") ")) "[" id "] " summary))))))
 
+(defn- proposed-ticket->markdown [{:keys [title description ticket-type priority source-url trail]}]
+  (str/join "\n"
+    (remove nil?
+      [(str "# Proposed ticket: " title)
+       (str "**Type:** " ticket-type
+            (when priority (str "  ·  **Priority:** " priority)))
+       (str "Source: " source-url)
+       ""
+       description
+       (when trail (str "\n## Investigation trail\n" trail))])))
+
 (defn report->markdown
   "Render a `:format`-tagged report payload to markdown. Each event type → its own
    headed markdown; :markdown → its body; nil/unknown → \"\"."
@@ -257,6 +281,7 @@
     :pr-opened                (pr-opened->markdown report)
     :review-report            (review->markdown report)
     :findings                 (findings->markdown report)
+    :proposed-ticket          (proposed-ticket->markdown report)
     ""))
 
 (defn report-title

@@ -205,3 +205,47 @@
   (let [[ext payload] (report/entry-payload :review (pr-str valid-review))]
     (is (= "edn" ext))
     (is (= :review-report (:format (edn/read-string payload))))))
+
+(def ^:private valid-proposed-ticket
+  {:format :proposed-ticket
+   :title "Logo bug on the pricing page"
+   :description "The logo disappears on mobile Safari. Steps: …"
+   :ticket-type "bug"
+   :priority "2 - Should"
+   :source-url "https://myco.slack.com/archives/C123/p456"
+   :trail "src/order.clj:88 — grounded here"})
+
+(deftest validate-event-accepts-proposed-ticket
+  (is (= valid-proposed-ticket (report/validate-event :proposed-ticket valid-proposed-ticket))))
+
+(deftest validate-event-accepts-proposed-ticket-without-optional-keys
+  (let [minimal (dissoc valid-proposed-ticket :priority :trail)]
+    (is (= minimal (report/validate-event :proposed-ticket minimal)))))
+
+(deftest validate-event-accepts-proposed-ticket-with-nil-priority-and-trail
+  (is (report/validate-event :proposed-ticket
+        (assoc valid-proposed-ticket :priority nil :trail nil))))
+
+(deftest validate-event-rejects-proposed-ticket-missing-required-key
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event :proposed-ticket (dissoc valid-proposed-ticket :source-url)))))
+
+(deftest validate-event-rejects-proposed-ticket-extra-key
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event :proposed-ticket (assoc valid-proposed-ticket :extra 1)))))
+
+(deftest validate-event-rejects-proposed-ticket-wrong-format-tag
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event :proposed-ticket (assoc valid-proposed-ticket :format :triage-report)))))
+
+(deftest entry-payload-accepts-proposed-ticket
+  (let [[ext payload] (report/entry-payload :proposed-ticket (pr-str valid-proposed-ticket))]
+    (is (= "edn" ext))
+    (is (= :proposed-ticket (:format (edn/read-string payload))))))
+
+(deftest report->markdown-proposed-ticket-has-title-and-source
+  (let [md (report/report->markdown valid-proposed-ticket)]
+    (is (str/includes? md "Logo bug on the pricing page"))
+    (is (str/includes? md "bug"))
+    (is (str/includes? md "https://myco.slack.com/archives/C123/p456"))
+    (is (str/includes? md "disappears on mobile Safari"))))
