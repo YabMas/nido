@@ -223,7 +223,7 @@
 
 (defn latest-report
   "The workstream's most recent ledger entry as a `:format`-tagged gate report,
-   or nil. Resolves the active ledger (workstream entries → ticket ledger), reads
+   or nil. Resolves the active ledger (the workstream's own event store), reads
    its latest entry, and finally falls back to stored intake text so an un-triaged
    :incoming Slack report still shows its message body."
   [project ws-id]
