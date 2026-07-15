@@ -467,7 +467,6 @@
 (def ^:private ws-fold-stages
   [[:shipping    "Shipping"]
    [:in-progress "InProgress"]
-   [:ready       "Ready"]
    [:triage      "Triage"]
    [:incoming    "Incoming"]])
 
@@ -500,13 +499,12 @@
 
 (defn- ws-stage-sections
   "Flatten one {:project :grouped} into [{:project :stage :rows}] in most-advanced-
-   first order (shipping → in-progress → ready → triage → incoming), dropping empty
+   first order (shipping → in-progress → triage → incoming), dropping empty
    stages. Kept as a plain fn (not inline hiccup) for the same SCI reason the old
    stage-sections was."
   [{:keys [project grouped]}]
   (->> [[:shipping (:shipping grouped)]
         [:in-progress (:in-progress grouped)]
-        [:ready (:ready grouped)]
         [:triage (concat (-> grouped :triage :in-flight) (-> grouped :triage :queued))]
         [:incoming (:incoming grouped)]]
        (keep (fn [[stage rows]] (when (seq rows) {:project project :stage stage :rows rows})))))

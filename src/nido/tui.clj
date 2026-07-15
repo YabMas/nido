@@ -244,7 +244,6 @@
          rows (concat
                (band :shipping         "Shipping"           (:shipping g))
                (band :in-progress      "In progress"        (:in-progress g))
-               (band :ready            "Ready to pick up"   (:ready g))
                (band :triage-in-flight "Triage · in flight" (get-in g [:triage :in-flight]))
                (band :triage-queued    "Triage · queued"    (get-in g [:triage :queued]))
                (band :incoming         "Queue"              (:incoming g)))]

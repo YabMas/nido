@@ -209,8 +209,11 @@
   ;; Selecting a workstream must NOT change the filtered list — the overview and
   ;; the detail (with ?sel=) render the same rows. This is the overview≡detail
   ;; invariant (the "list jumps" bug).
-  (let [grouped {:incoming [] :triage {:in-flight [] :queued []}
-                 :ready [{:ws-id "r1" :origin :notion :facets {} :stage :ready :label "BR-1" :needs-you false}]
+  ;; r1 sits under :incoming rather than :ready — :ready is no longer a rendered
+  ;; band (backlog lives in Notion), and this test's point is the overview≡detail
+  ;; invariant across bands, not the :ready stage specifically.
+  (let [grouped {:incoming [{:ws-id "r1" :origin :notion :facets {} :stage :ready :label "BR-1" :needs-you false}]
+                 :triage {:in-flight [] :queued []}
                  :in-progress [{:ws-id "p1" :origin :github :facets {} :stage :in-progress :label "BR-2" :needs-you false}]
                  :shipping []}]
     (with-redefs [nido.work/all-grouped (fn [] [{:project "brian" :grouped grouped}])

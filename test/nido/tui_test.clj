@@ -90,19 +90,19 @@
   (is (= "·" (#'tui/origin-badge :scratch))))
 
 (deftest board-rows-group-by-spine-and-filter-by-origin
+  ;; :ready is no longer a band (backlog lives in Notion) — a :ready row supplied
+  ;; via work/grouped simply doesn't render on the board.
   (with-redefs [nido.work/grouped
                 (fn [_ _]
-                  {:ready       [{:ws-id "r1" :origin :notion :label "BR-1 · a"
-                                  :needs-you true :engagement :idle}]
-                   :in-progress [{:ws-id "p1" :origin :scratch :label "spike"
+                  {:in-progress [{:ws-id "p1" :origin :scratch :label "spike"
                                   :needs-you false :engagement :active}]
                    :triage      {:in-flight [] :queued []}})
                 nido.tui/live-session-names (constantly #{})]
     (let [all (#'tui/board-rows "brian" :all)
           labels (keep #(get-in % [:data :ws-id]) all)]
-      (is (= ["p1" "r1"] (vec labels)) "most-advanced-first: in-progress before ready, all origins")
-      (is (some #(re-find #"Ready to pick up" (:title %)) all))
-      (is (some #(re-find #"In progress" (:title %)) all)))
+      (is (= ["p1"] (vec labels)) "in-progress renders, no :ready band")
+      (is (some #(re-find #"In progress" (:title %)) all))
+      (is (not (some #(re-find #"Ready to pick up" (:title %)) all)) "no :ready band header"))
     (let [scratch-only (#'tui/board-rows "brian" :scratch)
           ids (keep #(get-in % [:data :ws-id]) scratch-only)]
       (is (= ["p1"] (vec ids)) "origin filter keeps only scratch rows"))))

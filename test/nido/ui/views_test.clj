@@ -113,9 +113,10 @@
     (is (not (str/includes? html "<textarea")))))
 
 (def ^:private sample-grouped
+  ;; :ready is intentionally NOT a rendered band — backlog lives in Notion, not
+  ;; on the nido board (a :ready row here would simply never appear).
   {:triage {:in-flight [{:ws-id "w1" :origin :notion :stage :triage :label "BR-1 · a" :needs-you true}]
             :queued []}
-   :ready [{:ws-id "w2" :origin :github :stage :ready :label "#2 · b" :needs-you true}]
    :in-progress [{:ws-id "w3" :origin :scratch :stage :in-progress :label "spike" :needs-you false}]})
 
 (def ^:private sample-ws
@@ -129,7 +130,7 @@
                                           :selection nil :scope "all" :source :all :facets {}})]
     (is (str/includes? html "id=\"workstreams\""))
     (is (str/includes? html "triage"))
-    (is (str/includes? html "ready"))
+    (is (not (str/includes? html "ready")) "no :ready band section")
     (is (str/includes? html "in-progress"))
     (is (str/includes? html "BR-1 · a"))
     (is (str/includes? html "sel=brian:w1"))            ; rows carry the selection in the view-state

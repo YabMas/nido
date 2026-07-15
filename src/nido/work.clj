@@ -512,12 +512,11 @@
   (= source (:origin row)))
 
 (defn grouped-rows
-  "Flat seq of every workstream row in a `work/grouped` map (all bands)."
+  "Flat seq of every workstream row in a `work/grouped` map (all board bands)."
   [grouped]
   (concat (:incoming grouped)
           (get-in grouped [:triage :in-flight])
           (get-in grouped [:triage :queued])
-          (:ready grouped)
           (:in-progress grouped)
           (:shipping grouped)))
 

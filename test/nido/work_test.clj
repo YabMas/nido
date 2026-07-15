@@ -74,16 +74,16 @@
       ;; a scratch one-off
       (let [s (workstream/create! :brian {:stage :scratch :external-refs []})]
         (session/create! :brian (:id s) {:name "poke" :weight :light :autonomy nil}))
-      ;; a triaged notion ticket → :ready
+      ;; a triaged notion ticket → :ready, which is NOT a board band (backlog
+      ;; lives in Notion) — it doesn't appear in any group.
       (let [n (workstream/create! :brian {:stage :triaging
                                           :external-refs [{:adapter :notion :id "BR-3" :title "t"}]})]
         (tickets/open! :brian "BR-3" {:title "t"})
         (tickets/set-status! :brian "BR-3" :triaged)
         (session/create! :brian (:id n) {:name "s" :weight :light :autonomy nil}))
       (let [g (work/grouped :brian #{"poke"})]
-        (is (= 1 (count (:ready g))) "the triaged notion ticket is in :ready")
-        (is (= 1 (count (:in-progress g))) "the scratch one-off folds into :in-progress")
-        (is (= "BR-3 · t" (:label (first (:ready g)))))))))
+        (is (not (contains? g :ready)) "no :ready band — backlog is Notion's")
+        (is (= 1 (count (:in-progress g))) "the scratch one-off folds into :in-progress")))))
 
 (def ^:private autonomy-running
   {:skill :triage-bug :first-message "x" :agent :claude :claude-session-id nil
@@ -681,9 +681,11 @@
   (is (work/source-match? :slack {:origin :slack})))
 
 (deftest grouped-rows-flattens-all-bands
+  ;; :ready is not a board band — grouped-rows never includes it, even when
+  ;; present in the map (e.g. a hand-built fixture).
   (let [g {:incoming [{:id 1}] :triage {:in-flight [{:id 2}] :queued [{:id 3}]}
            :ready [{:id 4}] :in-progress [{:id 5}]}]
-    (is (= #{1 2 3 4 5} (set (map :id (work/grouped-rows g)))))))
+    (is (= #{1 2 3 5} (set (map :id (work/grouped-rows g)))))))
 
 (deftest filter-grouped-keeps-shape-drops-nonmatching
   (let [g {:incoming [{:origin :notion} {:origin :slack}]
@@ -799,9 +801,10 @@
     (is (empty? (get-in (first g1) [:grouped :in-progress])) "github row filtered out")))
 
 (deftest screen-source-counts-include-incoming-under-its-source
-  ;; No cross-source All view anymore: a source's chip counts ALL its rows,
-  ;; including its :incoming holding-pen (which is only ever shown under that
-  ;; source), and that count equals the rows actually visible under it.
+  ;; No cross-source All view anymore: a source's chip counts ALL its VISIBLE
+  ;; rows, including its :incoming holding-pen (which is only ever shown under
+  ;; that source). :ready is not a board band/row-source at all — it never
+  ;; contributes to a chip count.
   (let [grouped {:incoming [{:ws-id "i1" :origin :notion :facets {} :stage :incoming}]
                  :triage {:in-flight [] :queued []}
                  :ready [{:ws-id "r1" :origin :notion :facets {} :stage :ready}]
@@ -811,8 +814,8 @@
         s (work/screen vs {:groups groups :gates [] :pending #{}})
         visible-notion (->> (:groups s) (mapcat #(work/grouped-rows (:grouped %)))
                             (filter #(= :notion (:origin %))) count)]
-    (is (= 2 (get-in s [:source-counts :notion])) "notion chip counts ready + incoming")
-    (is (= 2 visible-notion) "and that equals the notion rows actually visible")))
+    (is (= 1 (get-in s [:source-counts :notion])) "notion chip counts incoming only — :ready isn't a band")
+    (is (= 1 visible-notion) "and that equals the notion rows actually visible")))
 
 (deftest screen-passes-injected-facet-dims-through
   (let [s (work/screen {:surface :workstreams :scope "all" :source :notion :facets {}}
@@ -822,7 +825,8 @@
 (deftest screen-source-counts-under-selected-source
   ;; With a specific source selected, the SELECTED chip's count matches the rows
   ;; visible for that source (incoming included, since a non-:all source shows its
-  ;; own holding-pen). Other-origin chips show switch-potential.
+  ;; own holding-pen). Other-origin chips show switch-potential. :ready is not a
+  ;; board band, so a :ready row never contributes to any chip count.
   (let [grouped {:incoming [{:ws-id "ni" :origin :notion :facets {} :stage :incoming}
                             {:ws-id "gi" :origin :github :facets {} :stage :incoming}]
                  :triage {:in-flight [] :queued []}
@@ -833,8 +837,8 @@
                        {:groups groups :gates [] :pending #{}})
         visible-notion (->> (:groups s) (mapcat #(work/grouped-rows (:grouped %)))
                             (filter #(= :notion (:origin %))) count)]
-    (is (= 2 (get-in s [:source-counts :notion])) "selected notion chip counts both notion rows (incl incoming)")
-    (is (= 2 visible-notion) "and that equals the notion rows actually visible under source=notion")
+    (is (= 1 (get-in s [:source-counts :notion])) "selected notion chip counts incoming only — :ready isn't a band")
+    (is (= 1 visible-notion) "and that equals the notion rows actually visible under source=notion")
     (is (= 1 (get-in s [:source-counts :github])) "github chip shows its switch-potential")))
 
 (deftest screen-needs-count-equals-gate-count

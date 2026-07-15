@@ -263,16 +263,13 @@
      :queued    (by-notion-priority (remove in-flight? rows))}))
 
 (defn grouped-by-stage
-  "Partition rows by lifecycle stage for the overview. :done is intentionally
-   omitted — done is done, not shown. :incoming/in-progress/shipping: needs-you
-   first, then newest. :ready is a pull queue ordered by Notion Priority (see
-   by-notion-priority). Triage is returned as {:in-flight [...] :queued [...]} —
-   see triage-split — :in-flight highest-severity-first, :queued by Notion
-   Priority."
+  "Partition rows by lifecycle stage for the two-surface board — Intake
+   (:triage/:incoming) and Active (:in-progress/:shipping). :done and :ready are
+   omitted: :done is done; :ready (triaged, awaiting pickup) is the backlog, which
+   lives in Notion, not on the nido board."
   [rows]
   (let [by (group-by :stage rows)]
     {:incoming    (by-needs-then-newest (:incoming by []))
-     :ready       (by-notion-priority (:ready by []))
      :in-progress (by-needs-then-newest (:in-progress by []))
      :shipping    (by-needs-then-newest (:shipping by []))
      :triage      (triage-split (:triage by []))}))

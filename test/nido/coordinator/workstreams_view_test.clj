@@ -223,7 +223,7 @@
           (is (false? (:needs-you r)) ":ready is a pull queue, not a needs-you gate")
           (is (= "BR-9" (:br-id r)) "row carries the ticket id for the promote shortcut"))))))
 
-(deftest grouped-by-stage-splits-triage-and-drops-done
+(deftest grouped-by-stage-splits-triage-and-drops-done-and-ready
   (let [rows [{:ws-id "r1" :stage :ready       :needs-you true  :last-activity "2026-06-01T00:00:00Z"}
               ;; triage in-flight: parked (high prio) + active (low prio)
               {:ws-id "t-parked" :stage :triage :engagement :parked-at-gate :priority 5 :last-activity "2026-06-03T00:00:00Z"}
@@ -234,7 +234,7 @@
               {:ws-id "p1" :stage :in-progress :needs-you false :last-activity "2026-06-01T00:00:00Z"}
               {:ws-id "d1" :stage :done        :needs-you false :last-activity "2026-06-09T00:00:00Z"}]
         g (wsv/grouped-by-stage rows)]
-    (is (= ["r1"] (map :ws-id (:ready g))))
+    (is (not (contains? g :ready)) "no :ready band — backlog is Notion's")
     (is (= ["p1"] (map :ws-id (:in-progress g))))
     (is (= ["t-active" "t-parked"]
            (map :ws-id (get-in g [:triage :in-flight])))
@@ -413,7 +413,7 @@
               {:ws-id "r1" :stage :ready    :needs-you true  :last-activity "2026-06-01T00:00:00Z"}]
         g (wsv/grouped-by-stage rows)]
     (is (= ["s1" "s2"] (map :ws-id (:shipping g))) "shipping rows collected; needs-you first")
-    (is (= ["r1"] (map :ws-id (:ready g))))))
+    (is (not (contains? g :ready)) "no :ready band — backlog is Notion's")))
 
 ;; ---------------------------------------------------------------------------
 ;; Notion-driven rows — stage/engagement derive from the Notion cache, not
@@ -533,4 +533,13 @@
             row (wsv/workstream-row :brian w nil {"pg-1" {:status "Done" :priority nil :ball-ids #{}}})]
         (is (= :done (:stage row))
             "terminal Notion status wins over the in-flight overlay")))))
+
+(deftest grouped-by-stage-omits-ready-band
+  (let [rows [{:stage :ready :last-activity "t" :needs-you false}
+              {:stage :triage :engagement :idle :last-activity "t" :needs-you false}
+              {:stage :in-progress :last-activity "t" :needs-you false}]
+        g    (wsv/grouped-by-stage rows)]
+    (is (not (contains? g :ready)) "no :ready band — backlog is Notion's")
+    (is (contains? g :triage))
+    (is (contains? g :in-progress))))
 
