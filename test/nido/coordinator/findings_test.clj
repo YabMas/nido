@@ -21,7 +21,7 @@
     (ws/close! :brian (:id w) :done)
     w))
 
-(deftest file-appends-event-to-ticket-ledger-seeds-tracker-reopens-enqueues
+(deftest file-appends-event-to-workstream-ledger-seeds-tracker-reopens-enqueues
   (with-tmp
     (fn []
       (let [enq (atom nil)]
@@ -33,9 +33,8 @@
                                      :staging-ref "s://build"
                                      :session "sess-1"})]
             (is (= 1 (:round res)))
-            (let [m (tickets/read-meta :brian "BR-7")]
-              (is (= :findings (-> m :entries last :kind))))
             (let [w2 (ws/read-ws :brian (:id w))]
+              (is (= :findings (-> w2 :entries last :kind)))
               (is (= #{"f1" "f2"} (-> w2 :findings :open)))
               (is (= 1 (-> w2 :findings :round)))
               (is (nil? (:closed w2)))

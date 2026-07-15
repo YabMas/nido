@@ -1,14 +1,17 @@
 (ns nido.coordinator.tickets
-  "Per-ticket work ledger in nido. One directory per Notion ticket, keyed by
-   BR-#### (Notion's unique-id property). Holds machine-readable triage state
-   (meta.edn) plus an append-only entry log. Triage is the first writer; later
-   sessions will append entries. See spec
+  "Per-ticket status in nido. One directory per Notion ticket, keyed by
+   BR-#### (Notion's unique-id property). Holds machine-readable triage
+   status (meta.edn) — :status, :disposition, gate/promote decisions. Entry
+   writes (triage reports, findings, …) live on the workstream's ledger
+   (nido.coordinator.workstream/append-to-ref!), not here — see the
+   ledger-unification design. `io/read-edn` of legacy meta.edn may still
+   carry a pre-migration :entries vector; `latest-triage-report` reads it
+   for old tickets. See spec
    docs/superpowers/specs/2026-06-04-triage-record-store-design.md."
   (:require
    [babashka.fs :as fs]
    [clojure.string :as str]
    [nido.coordinator.clock :as clock]
-   [nido.coordinator.report :as report]
    [nido.coordinator.state :as cstate]
    [nido.io :as io]))
 
@@ -86,26 +89,6 @@
   (write-meta! project br-id
                (assoc (or (read-meta project br-id) {:br-id br-id :entries []})
                       :status :dismissed)))
-
-(defn append-entry!
-  "Write a new immutable entry file under entries/ and record it in meta :entries.
-   `entry` = {:kind <kw> :session <str> :run-id <str>}. A :triage entry's `content`
-   is a typed report (EDN): it is parsed + validated against report/TriageReport and
-   stored as NNNN-triage.edn — an invalid report throws (rejected at the source).
-   Every other kind stores `content` verbatim as NNNN-<kind>.md. Returns the file path."
-  [project br-id entry content]
-  (when-not (blank-br? br-id)
-    (let [m       (read-meta project br-id)
-          seq-n   (inc (count (:entries m)))
-          [ext payload] (report/entry-payload (:kind entry) content)
-          fname   (format "%04d-%s.%s" seq-n (name (:kind entry)) ext)
-          rel     (str "entries/" fname)
-          abs     (str (fs/path (ticket-dir project br-id) rel))]
-      (io/write-text! abs payload)
-      (write-meta! project br-id
-                   (update m :entries (fnil conj [])
-                           (assoc entry :seq seq-n :at (clock/now-iso) :file rel)))
-      abs)))
 
 (defn latest-triage-report
   "The latest ticket entry parsed as a TriageReport map, or nil when the latest

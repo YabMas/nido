@@ -7,6 +7,7 @@
    [nido.coordinator.report :as report]
    [nido.coordinator.tickets :as tickets]
    [nido.coordinator.tickets-view :as tickets-view]
+   [nido.coordinator.workstream :as workstream]
    [nido.task-args :as task-args]))
 
 (defn- project-kw [opts] (keyword (or (:project opts) "brian")))
@@ -63,15 +64,17 @@
 (defn append-cmd
   "bb nido:ticket:append :project <p> :br BR-#### :kind <kw> :session <s> :run-id <r> :file <path>
    Reads entry body from :file. A :triage body must be valid TriageReport EDN —
-   a malformed report is rejected (non-zero exit + explain) so the skill retries."
+   a malformed report is rejected (non-zero exit + explain) so the skill retries.
+   Writes land on the workstream's ledger (the one canonical store), found-or-
+   created by the BR-#### ref."
   [& args]
   (let [[_ o] (task-args/split-args args)]
     (try
-      (let [path (tickets/append-entry! (project-kw o) (str (:br o))
-                                        {:kind (keyword (:kind o))
-                                         :session (str (:session o))
-                                         :run-id (str (:run-id o))}
-                                        (slurp (str (:file o))))]
+      (let [path (workstream/append-to-ref! (project-kw o) (str (:br o))
+                                            {:kind (keyword (:kind o))
+                                             :session (str (:session o))
+                                             :run-id (str (:run-id o))}
+                                            (slurp (str (:file o))))]
         (println "appended" path))
       (catch Exception e
         (binding [*out* *err*]

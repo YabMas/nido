@@ -1,7 +1,6 @@
 (ns nido.coordinator.tickets-test
   (:require
    [babashka.fs :as fs]
-   [clojure.string :as str]
    [clojure.test :refer [deftest is]]
    [nido.coordinator.clock :as clock]
    [nido.coordinator.state :as cstate]
@@ -36,8 +35,7 @@
                                             :opened-by :triage-new :notion-last-edited-at "t"})))
         (is (nil? (tickets/set-status! :brian br :awaiting-input)))
         (is (nil? (tickets/complete! :brian br :triaged :applied)))
-        (is (nil? (tickets/clear-status! :brian br)))
-        (is (nil? (tickets/append-entry! :brian br {:kind :note} "body"))))
+        (is (nil? (tickets/clear-status! :brian br))))
       ;; on-run-terminal! over a record-less run is also a no-op
       (is (nil? (tickets/on-run-terminal!
                   {:skill :triage-bug :project :brian :event-payload {}} :failed))))))
@@ -116,20 +114,6 @@
         {:skill :triage-bug :project :brian :event-payload {:id "BR-7"}} :failed)
       (is (= :dismissed (tickets/status :brian "BR-7"))))))
 
-(deftest append-entry-writes-file-and-records-it
-  (with-tmp
-    (fn [_]
-      (tickets/open! :brian "BR-1" {:notion-page-id "p" :url "u" :title "T"
-                                    :opened-by :triage-new :notion-last-edited-at "t0"})
-      (let [path (tickets/append-entry! :brian "BR-1"
-                                        {:kind :note :session "s1" :run-id "r1"}
-                                        "# report body")
-            m    (tickets/read-meta :brian "BR-1")]
-        (is (fs/exists? path))
-        (is (= "# report body" (slurp path)))
-        (is (= 1 (count (:entries m))))
-        (is (= "entries/0001-note.md" (:file (first (:entries m)))))))))
-
 (deftest gate-decision-three-way
   (with-tmp
     (fn [_]
@@ -171,18 +155,6 @@
       ;; Non-triage runs are ignored.
       (is (nil? (tickets/on-run-terminal!
                   {:project :brian :skill :investigate-bug :event-payload {:id "BR-q"}} :failed))))))
-
-(deftest append-entry-numbers-sequentially
-  (with-tmp
-    (fn [_]
-      (tickets/open! :brian "BR-2" {:notion-page-id "p" :url "u" :title "T"
-                                    :opened-by :triage-new :notion-last-edited-at "t0"})
-      (tickets/append-entry! :brian "BR-2" {:kind :note :session "s" :run-id "r"} "first")
-      (tickets/append-entry! :brian "BR-2" {:kind :note :session "s" :run-id "r"} "second")
-      (let [m (tickets/read-meta :brian "BR-2")]
-        (is (= 2 (count (:entries m))))
-        (is (= 2 (:seq (second (:entries m)))))
-        (is (= "entries/0002-note.md" (:file (second (:entries m)))))))))
 
 (deftest on-run-terminal-tolerates-missing-br-id
   (with-tmp
@@ -256,53 +228,9 @@
           "a restart-orphaned plan Run must not revert an :implementing ticket"))))
 
 ;; ---------------------------------------------------------------------------
-;; Task 2: triage EDN validation at append + latest-triage-report
+;; Ledger unification Task 2: entry writes moved to the workstream ledger
 ;; ---------------------------------------------------------------------------
 
-(defn- with-ticket-tmp
-  "Like with-tmp but calls f with no argument (brief-style)."
-  [f]
-  (let [tmp (fs/create-temp-dir)]
-    (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
-        (cstate/ensure-dirs!)
-        (f))
-      (finally (fs/delete-tree tmp)))))
-
-(def ^:private edn-report
-  (pr-str {:format :triage-report :ticket-key "BR-7" :determination :bug
-           :title "t" :summary "s" :confidence {:level :high :reason "r"}
-           :directions [{:label "A" :shape "x" :effort :M
-                         :confidence {:level :medium :reason "r"}}]
-           :notion-writes nil
-           :trail [{:ref "f:1" :note "n"}]}))
-
-(deftest triage-append-stores-validated-edn
-  (with-ticket-tmp
-    (fn []
-      (tickets/open! :brian "BR-7" {:title "t"})
-      (let [path (tickets/append-entry! :brian "BR-7"
-                                        {:kind :triage :session "s" :run-id "r"}
-                                        edn-report)]
-        (is (str/ends-with? path ".edn") "triage entries are .edn")
-        (is (= :bug (:determination (tickets/latest-triage-report :brian "BR-7"))))))))
-
-(deftest triage-append-rejects-invalid-report
-  (with-ticket-tmp
-    (fn []
-      (tickets/open! :brian "BR-7" {:title "t"})
-      (is (thrown? clojure.lang.ExceptionInfo
-                   (tickets/append-entry! :brian "BR-7"
-                                          {:kind :triage :session "s" :run-id "r"}
-                                          (pr-str {:format :triage-report :bogus 1})))))))
-
-(deftest non-triage-append-stays-markdown
-  (with-ticket-tmp
-    (fn []
-      (tickets/open! :brian "BR-7" {:title "t"})
-      (let [path (tickets/append-entry! :brian "BR-7"
-                                        {:kind :note :session "s" :run-id "r"}
-                                        "# free text")]
-        (is (str/ends-with? path ".md"))
-        (is (nil? (tickets/latest-triage-report :brian "BR-7"))
-            "a non-edn entry is not a triage report")))))
+(deftest tickets-no-longer-writes-entries
+  (is (nil? (resolve 'nido.coordinator.tickets/append-entry!))
+      "entry writes moved to the workstream ledger"))

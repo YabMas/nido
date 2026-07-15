@@ -11,8 +11,7 @@
    [nido.coordinator.queue :as queue]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.tickets :as tickets]
-   [nido.coordinator.workstream :as ws]
-   [nido.coordinator.workstreams-view :as wsv]))
+   [nido.coordinator.workstream :as ws]))
 
 (defn- assign-ids
   "Fill any missing :id on items as f1, f2, … (1-based positional)."
@@ -20,19 +19,12 @@
   (vec (map-indexed (fn [i it] (update it :id #(or % (str "f" (inc i))))) items)))
 
 (defn- append-event!
-  "Append the :findings event to the workstream's active ledger, mirroring
-   nido.work/active-ledger's READ precedence: the workstream's own :entries when
-   non-empty, else the ticket ledger (BR-#### / slack id via wsv/ledger-ref), else
-   the workstream's own entries. This guarantees the dashboard + /continue-ticket
-   read the event from the same store it was written to. Validation runs at the
-   ledger boundary (report/entry-payload)."
+  "Append the :findings event to the workstream's ledger (the one canonical store).
+   Validation runs at the ledger boundary (report/entry-payload)."
   [project w round session]
   (let [content (with-out-str (pprint/pprint round))
         entry   (cond-> {:kind :findings} session (assoc :session session))]
-    (cond
-      (seq (:entries w)) (ws/append-entry! project (:id w) entry content)
-      (:id (wsv/ledger-ref w)) (tickets/append-entry! project (:id (wsv/ledger-ref w)) entry content)
-      :else (ws/append-entry! project (:id w) entry content))))
+    (ws/append-entry! project (:id w) entry content)))
 
 (defn- notion-br
   "The workstream's Notion BR-#### id, or nil. Only Notion-backed workstreams can be

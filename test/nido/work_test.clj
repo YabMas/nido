@@ -10,8 +10,10 @@
    [nido.coordinator.runs :as runs]
    [nido.coordinator.session :as session]
    [nido.coordinator.state :as cstate]
+   [nido.coordinator.report :as report]
    [nido.coordinator.tickets :as tickets]
    [nido.coordinator.workstream :as workstream]
+   [nido.io :as io]
    [nido.notion.views :as views]
    [nido.project]
    [nido.session.lifecycle]
@@ -24,6 +26,26 @@
         (cstate/ensure-dirs!)
         (f tmp))
       (finally (fs/delete-tree tmp)))))
+
+(defn- legacy-ticket-entry!
+  "Write an entry directly into a ticket's on-disk ledger, reproducing the shape
+   tickets/append-entry! used to write before ledger-unification Task 2 moved
+   every writer onto the workstream ledger (append-entry! was then deleted, now
+   unused). work/active-ledger's ticket-ledger-fallback branch still reads this
+   on-disk shape for tickets triaged before the migration, so tests exercising
+   that fallback recreate it here rather than through the (removed) writer."
+  [project br-id entry content]
+  (let [m       (tickets/read-meta project br-id)
+        seq-n   (inc (count (:entries m)))
+        [ext payload] (report/entry-payload (:kind entry) content)
+        fname   (format "%04d-%s.%s" seq-n (name (:kind entry)) ext)
+        rel     (str "entries/" fname)
+        abs     (str (fs/path (tickets/ticket-dir project br-id) rel))]
+    (io/write-text! abs payload)
+    (tickets/write-meta! project br-id
+                         (update m :entries (fnil conj [])
+                                 (assoc entry :seq seq-n :at "t" :file rel)))
+    abs))
 
 (deftest stages-is-the-canonical-spine
   (is (= [:intake :triage :ready :in-progress :shipping :done] work/stages)))
@@ -396,8 +418,10 @@
            :directions [] :notion-writes nil :trail []}))
 
 (deftest gates-hydrates-a-slack-triage-report-from-the-ticket-ledger
-  ;; A Slack workstream's triage report is written to the TICKET ledger keyed by
-  ;; the slack-message id (not the workstream ledger). The gate must surface it.
+  ;; A pre-migration Slack triage report lives in the TICKET ledger keyed by the
+  ;; slack-message id (nothing writes there anymore post ledger-unification —
+  ;; see legacy-ticket-entry! — but old on-disk records still do). The gate must
+  ;; still surface it via work/active-ledger's ticket-ledger-fallback branch.
   (with-tmp
     (fn [_]
       (let [slack-id "slack-C1-1.0"
@@ -406,8 +430,8 @@
                                                            :id slack-id :title "msg"}]})]
         (tickets/open! :brian slack-id {:title "msg"})
         (tickets/set-status! :brian slack-id :awaiting-input)
-        (tickets/append-entry! :brian slack-id {:kind :triage}
-                               slack-edn-report)
+        (legacy-ticket-entry! :brian slack-id {:kind :triage}
+                              slack-edn-report)
         (session/create! :brian (:id w)
                          {:name "auto" :weight :heavy
                           :autonomy (assoc autonomy-running :phase :parked)})
@@ -547,13 +571,14 @@
 (deftest gates-report-falls-back-to-the-ticket-ledger
   (with-tmp
     (fn [_]
-      ;; a parked Notion triage gate whose report lives ONLY in the ticket ledger
-      ;; (the triage skill writes there, not the workstream ledger)
+      ;; a parked Notion triage gate whose report lives ONLY in a pre-migration
+      ;; ticket ledger (see legacy-ticket-entry! — no live writer targets the
+      ;; ticket ledger anymore, but old on-disk records still do)
       (let [w (workstream/create! :brian {:stage :triaging
                                           :external-refs [{:adapter :notion :id "BR-9" :title "t"}]})]
         (tickets/open! :brian "BR-9" {:title "t"})
         (tickets/set-status! :brian "BR-9" :investigating)
-        (tickets/append-entry! :brian "BR-9" {:kind :triage} notion-edn-report)
+        (legacy-ticket-entry! :brian "BR-9" {:kind :triage} notion-edn-report)
         ;; deliberately NO workstream-level entry
         (session/create! :brian (:id w)
                          {:name "auto" :weight :heavy
@@ -716,7 +741,7 @@
       (let [w (workstream/create! :brian {:stage :triaging
                                           :external-refs [{:adapter :notion :id "BR-9"}]})]
         (tickets/open! :brian "BR-9" {:title "t"})
-        (tickets/append-entry! :brian "BR-9" {:kind :impl} "# Impl\n\ndid it")
+        (legacy-ticket-entry! :brian "BR-9" {:kind :impl} "# Impl\n\ndid it")
         (let [r (work/latest-report :brian (:id w))]
           (is (str/includes? (:markdown r) "did it")
               "no workstream entries → reads the ticket ledger"))))))
