@@ -221,7 +221,7 @@
   (let [w (or (find-by-ref-id project external-id)
               (create! project
                        {:stage :triaging
-                        :external-refs [{:adapter (if (str/starts-with? (str external-id) "slack-")
+                        :external-refs [{:adapter (if (str/starts-with? external-id "slack-")
                                                     :slack-message :notion)
                                          :id external-id}]}))]
     (append-entry! project (:id w) entry content)))

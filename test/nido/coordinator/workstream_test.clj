@@ -279,7 +279,20 @@
       (let [w (ws/find-by-ref-id :brian "BR-9")]
         (is (some? w) "a workstream was minted for the ref")
         (is (= "BR-9" (:id (first (:external-refs w)))))
-        (is (= 1 (count (:entries w))))))))
+        (is (= 1 (count (:entries w))))
+        (is (= :triaging (:stage w)) "minted workstream starts at :triaging")
+        (is (= :notion (:adapter (first (:external-refs w))))
+            "non-slack id infers a :notion adapter")))))
+
+(deftest append-to-ref-infers-slack-adapter
+  (with-tmp
+    (fn [_]
+      (ws/append-to-ref! :brian "slack-C1-100.5" {:kind :note} "hi")
+      (let [w (ws/find-by-ref-id :brian "slack-C1-100.5")]
+        (is (some? w) "a workstream was minted for the ref")
+        (is (= "slack-C1-100.5" (:id (first (:external-refs w)))))
+        (is (= :slack-message (:adapter (first (:external-refs w))))
+            "slack- prefixed id infers a :slack-message adapter")))))
 
 (deftest read-ws-normalizes-legacy-inbox-stage
   (let [tmp (fs/create-temp-dir)]
