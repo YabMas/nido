@@ -229,6 +229,7 @@
         (let [res (migrate/ledger->workstreams! :brian)]
           (is (= 1 (:migrated res)))
           (is (= 1 (:orphans res)))
+          (is (= 0 (:failed-entries res)))
           (let [w2 (ws/read-ws :brian (:id w))]
             (is (= 1 (count (:entries w2)))
                 "the ticket entry now lives on the workstream")
@@ -245,18 +246,24 @@
         ;; first run migrates it onto the workstream
         (let [first-res (migrate/ledger->workstreams! :brian)]
           (is (= 1 (:migrated first-res)))
-          (is (= 0 (:orphans first-res))))
+          (is (= 0 (:orphans first-res)))
+          (is (= 0 (:failed-entries first-res))))
         ;; a second run must not double-append — the workstream already carries entries
         (let [second-res (migrate/ledger->workstreams! :brian)]
           (is (= 0 (:migrated second-res)))
-          (is (= 0 (:orphans second-res))))
+          (is (= 0 (:orphans second-res)))
+          (is (= 0 (:failed-entries second-res))))
         (is (= 1 (count (:entries (ws/read-ws :brian (:id w)))))
             "re-running the migration never duplicates the entry")))))
 
 (deftest ledger-migration-catches-a-legacy-entry-that-no-longer-validates
   ;; report/entry-payload re-validates a typed kind (e.g. :triage) on append; a
-  ;; legacy body that fails that validation must abandon the ticket, not throw
-  ;; and abort the whole run.
+  ;; legacy body that fails that validation must abandon just THAT ENTRY, not
+  ;; throw and abort the whole run. Per-entry model: the ticket DID have a
+  ;; workstream and WAS processed, so it counts as :migrated (not :orphans)
+  ;; even though its only entry landed 0 entries — :failed-entries is where
+  ;; the failure is visible. (Contrast with the true-orphan case above, where
+  ;; there is no workstream at all.)
   (with-tmp
     (fn [_]
       (let [w (ws/create! :brian {:stage :triaging :external-refs [{:adapter :notion :id "BR-bad"}]})]
@@ -266,7 +273,36 @@
         (io/write-text! (str (fs/path (tickets/ticket-dir :brian "BR-bad") "entries" "0001-triage.md"))
                         "not a valid triage report")
         (let [res (migrate/ledger->workstreams! :brian)]
-          (is (= 0 (:migrated res)))
-          (is (= 1 (:orphans res)))
+          (is (= 1 (:migrated res)))
+          (is (= 0 (:orphans res)))
+          (is (= 1 (:failed-entries res)))
           (is (= 0 (count (:entries (ws/read-ws :brian (:id w)))))
-              "the failed ticket's workstream gains no entry"))))))
+              "the failed entry's workstream gains no entry"))))))
+
+(deftest ledger-migration-lands-earlier-entries-when-a-later-entry-fails
+  ;; A multi-entry ticket where entry 2 fails re-validation must NOT strand
+  ;; entry 1 (already appended non-transactionally by ws/append-entry!) nor
+  ;; mislabel the ticket as an orphan — this is the Important-fix regression
+  ;; guard: the old whole-ticket try/catch would have counted this ticket as
+  ;; an :orphan (wrong — it HAS a workstream) while leaving entry 1 already
+  ;; written, and the idempotency guard would then have permanently skipped
+  ;; ever copying entry 2's replacement/successor on any re-run.
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :triaging :external-refs [{:adapter :notion :id "BR-multi"}]})]
+        (tickets/write-meta! :brian "BR-multi"
+          {:br-id "BR-multi" :status :triaged
+           :entries [{:kind :note :seq 1 :at "t1" :file "entries/0001-note.md"}
+                     {:kind :triage :seq 2 :at "t2" :file "entries/0002-triage.md"}]})
+        (io/write-text! (str (fs/path (tickets/ticket-dir :brian "BR-multi") "entries" "0001-note.md"))
+                        "legacy body one")
+        (io/write-text! (str (fs/path (tickets/ticket-dir :brian "BR-multi") "entries" "0002-triage.md"))
+                        "not a valid triage report")
+        (let [res (migrate/ledger->workstreams! :brian)]
+          (is (= 1 (:migrated res)) "the ticket is migrated, not orphaned")
+          (is (= 0 (:orphans res)))
+          (is (= 1 (:failed-entries res)))
+          (let [w2 (ws/read-ws :brian (:id w))]
+            (is (= 1 (count (:entries w2)))
+                "the first entry landed even though the second failed")
+            (is (= :note (-> w2 :entries first :kind)))))))))

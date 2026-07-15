@@ -45,6 +45,6 @@
     (when-not project
       (println "usage: bb nido:migrate:ledger :project <project>")
       (System/exit 2))
-    (let [{:keys [migrated orphans]} (migrate/ledger->workstreams! (keyword project))]
-      (println (format "Migrated %d ticket ledger(s) into workstreams. %d orphan(s) skipped (no workstream, or unmigratable)."
-                       migrated orphans)))))
+    (let [{:keys [migrated orphans failed-entries]} (migrate/ledger->workstreams! (keyword project))]
+      (println (format "Migrated %d ticket ledger(s) into workstreams. %d orphan(s) skipped (no workstream). %d entries failed re-validation and were skipped (within an otherwise-migrated ticket)."
+                       migrated orphans failed-entries)))))

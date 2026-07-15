@@ -214,6 +214,27 @@
 
 ;; --- ledger unification: one-shot ticket-ledger → workstream-ledger migration
 
+(defn- copy-ledger-entry!
+  "Copy ONE legacy ticket-ledger entry `e` onto workstream `w`'s ledger via
+   `ws/append-entry!`. Returns :ok on a successful append, :failed if the
+   source file is missing/blank or `ws/append-entry!`'s re-validation throws
+   (notably a legacy `:triage` `.edn` body that no longer validates against
+   `report/entry-payload`). A :failed entry is simply skipped — it does not
+   abort the ticket's remaining entries, so entries already appended before it
+   stay put and entries after it still get a chance."
+  [project br w e]
+  (try
+    (let [src  (str (fs/path (tickets/ticket-dir project br) (:file e)))
+          body (when (fs/exists? src) (slurp src))]
+      (if (str/blank? body)
+        :failed
+        (do
+          (ws/append-entry! project (:id w)
+                            (select-keys e [:kind :session :run-id]) body)
+          :ok)))
+    (catch Exception _
+      :failed)))
+
 (defn ledger->workstreams!
   "One-shot, best-effort migration of legacy ticket ledgers (tickets/<br>/entries/)
    into the workstream ledger that owns that ref (see the 2026-07-15 Provenance
@@ -225,18 +246,21 @@
      - workstream found but ALREADY carries entries → skipped as a no-op (the
        idempotency guard: a second run, or a workstream that has since started
        receiving entries directly, is never double-appended).
-     - otherwise → each entry's file body is copied and re-appended via
-       `ws/append-entry!` (which re-numbers :seq and re-stamps :at).
-
-   A per-ticket copy failure — notably a legacy `:triage` `.edn` body that no
-   longer validates against `report/entry-payload`'s re-validation on append —
-   is caught and the ticket is counted as an orphan rather than aborting the
-   whole run.
+     - otherwise → the ticket is migratable: each entry is copied and
+       re-appended INDEPENDENTLY via `copy-ledger-entry!` (which re-numbers
+       :seq and re-stamps :at on success). A single bad entry — e.g. a legacy
+       `:triage` body that no longer validates — is caught and counted in
+       :failed-entries; it neither strands the entries already copied before
+       it (append-entry! writes immediately, non-transactionally) nor blocks
+       the entries after it, and it does NOT relabel the ticket as an orphan
+       (the ticket DID have a workstream and WAS processed).
 
    Ticket entry files are left on disk (copied, not moved); a later cleanup
    pass can delete tickets/*/entries/ once the migration is verified.
 
-   Returns {:migrated n :orphans m}."
+   Returns {:migrated n :orphans m :failed-entries f} — :migrated counts
+   tickets (once each, even if some of their entries failed); :failed-entries
+   counts entries."
   [project]
   (let [brs (->> (tickets/list-ids project)
                  (map (fn [br] [br (tickets/read-meta project br)]))
@@ -246,17 +270,12 @@
        (if-let [w (ws/find-by-ref-id project br)]
          (if (seq (:entries (ws/read-ws project (:id w))))
            acc ;; already carries entries — idempotency guard, no-op
-           (try
-             (doseq [e (:entries m)]
-               (let [src  (str (fs/path (tickets/ticket-dir project br) (:file e)))
-                     body (when (fs/exists? src) (slurp src))]
-                 (when body
-                   (ws/append-entry! project (:id w)
-                                     (select-keys e [:kind :session :run-id]) body))))
-             (update acc :migrated inc)
-             (catch Exception _
-               ;; a legacy body that no longer validates (or any other per-ticket
-               ;; copy failure) — abandon this ticket, don't abort the run.
-               (update acc :orphans inc))))
+           (let [failed (->> (:entries m)
+                              (map #(copy-ledger-entry! project br w %))
+                              (filter #(= :failed %))
+                              count)]
+             (-> acc
+                 (update :migrated inc)
+                 (update :failed-entries + failed))))
          (update acc :orphans inc)))
-     {:migrated 0 :orphans 0} brs)))
+     {:migrated 0 :orphans 0 :failed-entries 0} brs)))
