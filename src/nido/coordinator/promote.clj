@@ -16,11 +16,12 @@
    [nido.github.client :as gh]))
 
 (defn- latest-entry-of-kind
-  "Absolute path to the most recent ledger entry of `kind`, or nil."
+  "Absolute path to the most recent workstream-ledger entry of `kind` (workstream
+   resolved by the BR-#### ref), or nil."
   [project br-id kind]
-  (when-let [m (tickets/read-meta project br-id)]
-    (when-let [e (->> (:entries m) (filter #(= kind (:kind %))) last)]
-      (str (fs/path (tickets/ticket-dir project br-id) (:file e))))))
+  (when-let [w (ws/find-by-ref-id project br-id)]
+    (when-let [e (->> (:entries w) (filter #(= kind (:kind %))) last)]
+      (str (fs/path (cstate/workstream-dir project (:id w)) (:file e))))))
 
 (defn promote!
   "Attempt to promote a ticket to a planning Run.

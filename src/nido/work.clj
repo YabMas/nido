@@ -135,14 +135,15 @@
      :error          (when auto (:error auto))}))
 
 (defn- ledger-summary
-  "Light ledger facet for the detail view: its key (BR-#### / slack id), status,
-   and report count. nil when `k` is nil (the workstream carries no ledger ref)."
+  "Light ledger facet for the detail view: its key (BR-#### / slack id), status
+   (from the ticket status record), and report count (from the workstream
+   ledger — the single event store). nil when `k` is nil (the workstream
+   carries no ledger ref)."
   [project k]
   (when k
-    (let [m (tickets/read-meta project k)]
-      {:key          k
-       :status       (:status m)
-       :report-count (count (:entries m))})))
+    {:key          k
+     :status       (:status (tickets/read-meta project k))
+     :report-count (count (:entries (cws/find-by-ref-id project k)))}))
 
 (defn- first-heading
   "The text of the first markdown heading in `md` (e.g. '# Verdict' -> \"Verdict\"),
@@ -199,21 +200,11 @@
     (entry->report base-dir (or (get by-seq seq) (last entries)))))
 
 (defn- active-ledger
-  "Resolve which ledger the workstream pane browses, plus its on-disk base dir.
-   Precedence: the workstream's own :entries; else the ticket ledger's :entries
-   (Notion BR-#### or Slack id — wsv/ledger-ref); else empty. :entries are stored
-   oldest-first. {:base-dir <string|nil> :entries <vector>}."
+  "The workstream's own ledger — the single event store. {:base-dir <string|nil>
+   :entries <vector>}, oldest-first."
   [project ws-id]
   (if-let [w (cws/read-ws project ws-id)]
-    (cond
-      (seq (:entries w))
-      {:base-dir (cstate/workstream-dir project ws-id) :entries (vec (:entries w))}
-
-      :else
-      (if-let [br-id (:id (wsv/ledger-ref w))]
-        {:base-dir (tickets/ticket-dir project br-id)
-         :entries  (vec (:entries (tickets/read-meta project br-id)))}
-        {:base-dir nil :entries []}))
+    {:base-dir (cstate/workstream-dir project ws-id) :entries (vec (:entries w))}
     {:base-dir nil :entries []}))
 
 (defn- intake-fallback

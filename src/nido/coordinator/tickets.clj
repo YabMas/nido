@@ -2,17 +2,17 @@
   "Per-ticket status in nido. One directory per Notion ticket, keyed by
    BR-#### (Notion's unique-id property). Holds machine-readable triage
    status (meta.edn) — :status, :disposition, gate/promote decisions. Entry
-   writes (triage reports, findings, …) live on the workstream's ledger
-   (nido.coordinator.workstream/append-to-ref!), not here — see the
-   ledger-unification design. `io/read-edn` of legacy meta.edn may still
-   carry a pre-migration :entries vector; `latest-triage-report` reads it
-   for old tickets. See spec
+   writes AND reads (triage reports, findings, …) live on the workstream's
+   ledger (nido.coordinator.workstream/append-to-ref! / :entries), not here —
+   see the ledger-unification design; `latest-triage-report` routes to the
+   workstream by the BR-#### ref. See spec
    docs/superpowers/specs/2026-06-04-triage-record-store-design.md."
   (:require
    [babashka.fs :as fs]
    [clojure.string :as str]
    [nido.coordinator.clock :as clock]
    [nido.coordinator.state :as cstate]
+   [nido.coordinator.workstream :as cws]
    [nido.io :as io]))
 
 (defn ticket-dir [project br-id]
@@ -91,12 +91,14 @@
                       :status :dismissed)))
 
 (defn latest-triage-report
-  "The latest ticket entry parsed as a TriageReport map, or nil when the latest
-   entry isn't an `.edn` (e.g. a legacy markdown report or a non-triage entry)."
+  "The latest workstream-ledger entry (workstream resolved by the BR-#### ref)
+   parsed as a TriageReport map, or nil when the latest entry isn't an `.edn`
+   (e.g. a legacy markdown report or a non-triage entry)."
   [project br-id]
-  (when-let [e (last (:entries (read-meta project br-id)))]
-    (when (str/ends-with? (str (:file e)) ".edn")
-      (io/read-edn (str (fs/path (ticket-dir project br-id) (:file e)))))))
+  (when-let [w (cws/find-by-ref-id project br-id)]
+    (when-let [e (last (:entries w))]
+      (when (str/ends-with? (str (:file e)) ".edn")
+        (io/read-edn (str (fs/path (cstate/workstream-dir project (:id w)) (:file e))))))))
 
 (defn gate-decision
   "Decide the coordinator pre-spawn action by reading the ticket's meta status

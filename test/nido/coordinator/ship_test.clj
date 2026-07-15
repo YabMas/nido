@@ -8,7 +8,6 @@
    [nido.coordinator.session :as session]
    [nido.coordinator.ship :as sut]
    [nido.coordinator.state :as cstate]
-   [nido.coordinator.tickets :as tickets]
    [nido.coordinator.status-file :as status-file]
    [nido.coordinator.workstream :as ws]
    [nido.session.state]))
@@ -82,9 +81,9 @@
           (is (not= (:id r1) (:id r2))))))))
 
 (deftest classify-reads-ledger-fingerprint
-  (with-redefs [tickets/read-meta (fn [_ _] {:entries [{:kind :implementation-completed}]})]
+  (with-redefs [ws/find-by-ref-id (fn [_ _] {:entries [{:kind :implementation-completed}]})]
     (is (= :awaiting-merge (sut/classify-outcome :brian "BR-1" "r1" {:exit-code 0 :num-turns 5}))))
-  (with-redefs [tickets/read-meta (fn [_ _] {:entries [{:kind :blocker}]})]
+  (with-redefs [ws/find-by-ref-id (fn [_ _] {:entries [{:kind :blocker}]})]
     (is (= :blocked (sut/classify-outcome :brian "BR-1" "r1" {:exit-code 0 :num-turns 5})))))
 
 (deftest classify-hard-failures-are-blocked
@@ -95,10 +94,10 @@
 
 (deftest classify-falls-back-to-run-status-then-blocked
   ;; no BR / no ledger entry → consult run-status file
-  (with-redefs [tickets/read-meta   (fn [_ _] nil)
+  (with-redefs [ws/find-by-ref-id   (fn [_ _] nil)
                 status-file/read-status (fn [_] {:phase :complete})]
     (is (= :awaiting-merge (sut/classify-outcome :brian nil "r1" {:exit-code 0 :num-turns 3}))))
-  (with-redefs [tickets/read-meta   (fn [_ _] nil)
+  (with-redefs [ws/find-by-ref-id   (fn [_ _] nil)
                 status-file/read-status (fn [_] nil)]
     (is (= :blocked (sut/classify-outcome :brian nil "r1" {:exit-code 0 :num-turns 3})))))
 

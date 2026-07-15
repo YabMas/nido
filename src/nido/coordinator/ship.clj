@@ -13,7 +13,6 @@
    [nido.coordinator.runs :as runs]
    [nido.coordinator.session :as session]
    [nido.coordinator.state :as cstate]
-   [nido.coordinator.tickets :as tickets]
    [nido.coordinator.status-file :as status-file]
    [nido.coordinator.workstream :as ws]
    [nido.session.state :as session-state])
@@ -132,10 +131,11 @@
   (and (= 0 exit-code) (some? num-turns) (zero? num-turns)))
 
 (defn- latest-ledger-kind
-  "The :kind of the ticket ledger's most recent entry, or nil."
+  "The :kind of the workstream ledger's most recent entry (resolved by the
+   BR-#### ref), or nil."
   [project br]
   (when (and br (not (str/blank? br)))
-    (:kind (last (:entries (tickets/read-meta project br))))))
+    (:kind (last (:entries (ws/find-by-ref-id project br))))))
 
 (defn classify-outcome
   "Decide a merge Run's outcome. See Interfaces for precedence."
