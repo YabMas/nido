@@ -969,6 +969,23 @@
             (is (= :awaiting-input (tickets/status :brian "slack-C1-100.0"))
                 "ticket not completed → ws stays parked & re-approvable")))))))
 
+(deftest apply-proposed-guards-against-missing-slack-ref
+  ;; Defensive: apply-proposed! is only reachable via the real Slack intake path,
+  ;; where a proposal workstream always carries a :slack-message ref — but if one
+  ;; ever lacked it (or carried a malformed id), the guard must short-circuit
+  ;; BEFORE create-page! rather than create a Notion page and write ticket meta
+  ;; under a nil key.
+  (with-tmp
+    (fn [_]
+      (let [ws (workstream/create! :brian {:stage :triaging :external-refs []})]
+        (workstream/append-entry! :brian (:id ws) {:kind :proposed-ticket} proposed-ticket-edn)
+        (with-redefs [notion-client/create-page!
+                      (fn [& _] (throw (ex-info "create-page! must not be called" {})))]
+          (let [r (work/apply! :brian (:id ws))]
+            (is (= {:decision :error :error :no-slack-ref} r))
+            (is (nil? (workstream/find-by-ref-id :brian "BR-4900"))
+                "no notion ref added")))))))
+
 (deftest apply-non-proposal-still-finalizes-nido-side
   ;; Regression: the proposal branch must not disturb the legacy nido-only apply.
   (with-tmp

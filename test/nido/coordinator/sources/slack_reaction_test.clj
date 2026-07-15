@@ -108,3 +108,11 @@
 (deftest plugin-is-registered
   (sr/register!)
   (is (some? (sources/lookup :slack-reaction))))
+
+(deftest window->seconds-parses-units-and-falls-back-to-default
+  (is (= 259200 (#'sr/window->seconds "3d")))
+  (is (= 43200  (#'sr/window->seconds "12h")))
+  (is (= 1800   (#'sr/window->seconds "30m")))
+  (is (= 259200 (#'sr/window->seconds nil))    "absent -> 3-day default")
+  (is (= 259200 (#'sr/window->seconds "banana")) "garbage -> 3-day default")
+  (is (= 259200 (#'sr/window->seconds ""))       "empty string -> 3-day default"))

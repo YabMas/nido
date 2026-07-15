@@ -430,27 +430,30 @@
    event-payload carries, so completing it is what lets sweep-resolved! settle the
    parked session."
   [project ws-id proposal w]
-  (let [slack-id             (:id (slack-ref-of w))
-        {:keys [channel ts]} (parse-slack-id slack-id)
-        db                   (:database (views/load-registry project))
-        ntok                 (notion/keychain-token)
-        ds                   (notion/resolve-data-source-id db ntok)
-        created              (notion/create-page! ds ntok
-                               {:title       (:title proposal)
-                                :description (:description proposal)
-                                :type        (:ticket-type proposal)
-                                :status      "Not started"
-                                :priority    (:priority proposal)})]
-    (if (:error created)
-      {:decision :error :error (:error created)}
-      (let [br (:id created)]
-        (cws/add-ref! project ws-id {:adapter :notion :id br
-                                     :page-id (:page-id created) :url (:url created)})
-        (try (slack/post-message channel (slack/keychain-token)
-               {:text (str "Ticket created: " (:url created)) :thread-ts ts})
-             (catch Throwable _ nil))   ; link-back is best-effort; the ticket already stands
-        (tickets/complete! project slack-id :triaged :applied)
-        {:decision :created :br br}))))
+  (let [slack-id (:id (slack-ref-of w))
+        parsed   (parse-slack-id slack-id)]
+    (if (or (str/blank? slack-id) (nil? parsed))
+      {:decision :error :error :no-slack-ref}
+      (let [{:keys [channel ts]} parsed
+            db                   (:database (views/load-registry project))
+            ntok                 (notion/keychain-token)
+            ds                   (notion/resolve-data-source-id db ntok)
+            created              (notion/create-page! ds ntok
+                                   {:title       (:title proposal)
+                                    :description (:description proposal)
+                                    :type        (:ticket-type proposal)
+                                    :status      "Not started"
+                                    :priority    (:priority proposal)})]
+        (if (:error created)
+          {:decision :error :error (:error created)}
+          (let [br (:id created)]
+            (cws/add-ref! project ws-id {:adapter :notion :id br
+                                         :page-id (:page-id created) :url (:url created)})
+            (try (slack/post-message channel (slack/keychain-token)
+                   {:text (str "Ticket created: " (:url created)) :thread-ts ts})
+                 (catch Throwable _ nil))   ; link-back is best-effort; the ticket already stands
+            (tickets/complete! project slack-id :triaged :applied)
+            {:decision :created :br br}))))))
 
 (defn apply!
   "Accept a parked triage verdict WITHOUT resuming the review conversation. Two paths:
