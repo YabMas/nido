@@ -26,6 +26,7 @@
    [nido.coordinator.tickets :as tickets]
    [nido.coordinator.sources.notion :as nsource]
    [nido.coordinator.sources.slack :as slack-source]
+   [nido.coordinator.sources.slack-reaction :as slack-reaction-source]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.status-file :as status-file]
    [nido.coordinator.executor :as executor]
@@ -768,6 +769,7 @@
   (executor/configure! {:global-cap (:global-parallel-cap defaults)})
   (nsource/register!)                                 ; register Notion source plugin
   (slack-source/register!)                            ; register Slack source plugin
+  (slack-reaction-source/register!)                   ; register Slack-reaction source plugin
   (loop []
     (tick!)
     (Thread/sleep poll-ms)
