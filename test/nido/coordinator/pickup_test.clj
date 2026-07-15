@@ -3,7 +3,8 @@
    [clojure.test :refer [deftest is]]
    [nido.coordinator.pickup :as pickup]
    [nido.coordinator.queue :as queue]
-   [nido.notion.client :as client]))
+   [nido.notion.client :as client]
+   [nido.notion.views :as views]))
 
 (deftest extract-page-id-from-urls-and-ids
   (let [pid "2a1b3c4d5e6f7081a2b3c4d5e6f70810"]
@@ -28,7 +29,7 @@
       (is (= "Logo bug" (:title r))))))
 
 (deftest resolve-ref-fetches-a-br-id
-  (with-redefs [nido.notion.views/load-registry
+  (with-redefs [views/load-registry
                 (fn [_project] {:database "db-1"})
                 client/resolve-data-source-id
                 (fn [database-id _tok]
@@ -49,7 +50,7 @@
       (is (= "Logo bug" (:title r))))))
 
 (deftest resolve-ref-not-found
-  (with-redefs [nido.notion.views/load-registry
+  (with-redefs [views/load-registry
                 (fn [_project] {:database "db-1"})
                 client/resolve-data-source-id
                 (fn [_database-id _tok] "ds-1")
@@ -61,7 +62,7 @@
   (is (= {:error :unrecognized-input} (pickup/resolve-ref :brian "not a ref" "tok"))))
 
 (deftest resolve-ref-br-id-data-source-resolution-throws
-  (with-redefs [nido.notion.views/load-registry
+  (with-redefs [views/load-registry
                 (fn [_project] {:database "db-1"})
                 client/resolve-data-source-id
                 (fn [_database-id _tok]
@@ -69,7 +70,7 @@
     (is (= {:error :notion-error} (pickup/resolve-ref :brian "BR-4826" "tok")))))
 
 (deftest resolve-ref-br-id-query-failure-is-not-mistaken-for-not-found
-  (with-redefs [nido.notion.views/load-registry
+  (with-redefs [views/load-registry
                 (fn [_project] {:database "db-1"})
                 client/resolve-data-source-id
                 (fn [_database-id _tok] "ds-1")
@@ -89,3 +90,25 @@
 (deftest pickup-reports-unresolved
   (with-redefs [pickup/resolve-ref (fn [_ _ _] {:error :not-found})]
     (is (= :unresolved (:decision (pickup/pickup! :brian "BR-nope" "tok"))))))
+
+(deftest resolve-ref-url-page-without-id-property-is-not-a-ticket
+  (with-redefs [client/retrieve-page
+                (fn [_pid _tok]
+                  {:id "pg-1" :url "u" :properties
+                   {"Task result" {:type "title" :title [{:plain_text "Some page"}]}}})]
+    (is (= {:error :not-a-ticket}
+           (pickup/resolve-ref :brian "https://www.notion.so/Some-2a1b3c4d5e6f7081a2b3c4d5e6f70810" "tok")))))
+
+(deftest resolve-ref-nil-token-short-circuits
+  (with-redefs [client/retrieve-page (fn [& _] (throw (ex-info "should not be called" {})))
+                views/load-registry (fn [& _] (throw (ex-info "should not be called" {})))]
+    (is (= {:error :no-token} (pickup/resolve-ref :brian "BR-4826" nil)))
+    (is (= {:error :no-token} (pickup/resolve-ref :brian "BR-4826" "  ")))
+    (is (= {:error :no-token}
+           (pickup/resolve-ref :brian "https://www.notion.so/x-2a1b3c4d5e6f7081a2b3c4d5e6f70810" "")))))
+
+(deftest pickup-reports-no-token
+  (with-redefs [client/retrieve-page (fn [& _] (throw (ex-info "should not be called" {})))]
+    (let [r (pickup/pickup! :brian "BR-4826" nil)]
+      (is (= :unresolved (:decision r)))
+      (is (= :no-token (:error r))))))
