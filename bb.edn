@@ -456,6 +456,11 @@
    :doc "Migrate legacy run/ticket records into the workstream/session model: :project <p>"
    :task (apply nido-migrate/migrate-cmd *command-line-args*)}
 
+  nido:migrate:ledger
+  {:requires ([tasks.nido-migrate :as nido-migrate])
+   :doc "One-shot: copy each ticket's legacy ledger entries into its workstream (found by ref). :project <p>"
+   :task (apply nido-migrate/ledger-cmd *command-line-args*)}
+
   nido:workstream:entry:add
   {:requires ([tasks.nido-workstream :as nido-workstream])
    :doc "Append an entry to a workstream ledger. :project <p> (:ws-id <id> | :ref <BR-####>) :kind <kw> :content <str>"

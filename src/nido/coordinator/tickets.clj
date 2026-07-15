@@ -36,6 +36,15 @@
   (when-not (blank-br? br-id)
     (io/read-edn (meta-path project br-id))))
 
+(defn list-ids
+  "Vector of ticket ids (dir names, e.g. BR-####) under a project's tickets
+   dir; [] if the dir is absent."
+  [project]
+  (let [d (str (fs/path (cstate/nido-root) "projects" (name project) "tickets"))]
+    (if (fs/exists? d)
+      (->> (fs/list-dir d) (filter fs/directory?) (mapv #(str (fs/file-name %))))
+      [])))
+
 (defn write-meta!
   "Persist a ticket's meta.edn. No-op (returns nil) for a nil/blank br-id — a
    run with no ticket has nothing to write. This is the write chokepoint, so

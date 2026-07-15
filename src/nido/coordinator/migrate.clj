@@ -130,10 +130,7 @@
 ;; --- migration driver --------------------------------------------------------
 
 (defn- ticket-ids [project]
-  (let [d (str (fs/path (cstate/nido-root) "projects" (name project) "tickets"))]
-    (if (fs/exists? d)
-      (->> (fs/list-dir d) (filter fs/directory?) (mapv #(str (fs/file-name %))))
-      [])))
+  (tickets/list-ids project))
 
 (defn- archive-tree!
   "Move <src> to <dest>, creating parent dirs. No-op (nil) if <src> is absent —
@@ -214,3 +211,52 @@
       (archive-tree! (cstate/run-dir run-id)
                      (str (fs/path pre "runs" run-id))))
     {:workstreams (count br->ws) :sessions (count converted)}))
+
+;; --- ledger unification: one-shot ticket-ledger → workstream-ledger migration
+
+(defn ledger->workstreams!
+  "One-shot, best-effort migration of legacy ticket ledgers (tickets/<br>/entries/)
+   into the workstream ledger that owns that ref (see the 2026-07-15 Provenance
+   spine design — the workstream is now the whole-lifetime ledger). For each
+   ticket carrying legacy `:entries`:
+     - no workstream found by ref (`find-by-ref-id`) → the ticket is an orphan:
+       abandoned and counted, not migrated (lossy is acceptable — the ticket's
+       thin status record is untouched either way).
+     - workstream found but ALREADY carries entries → skipped as a no-op (the
+       idempotency guard: a second run, or a workstream that has since started
+       receiving entries directly, is never double-appended).
+     - otherwise → each entry's file body is copied and re-appended via
+       `ws/append-entry!` (which re-numbers :seq and re-stamps :at).
+
+   A per-ticket copy failure — notably a legacy `:triage` `.edn` body that no
+   longer validates against `report/entry-payload`'s re-validation on append —
+   is caught and the ticket is counted as an orphan rather than aborting the
+   whole run.
+
+   Ticket entry files are left on disk (copied, not moved); a later cleanup
+   pass can delete tickets/*/entries/ once the migration is verified.
+
+   Returns {:migrated n :orphans m}."
+  [project]
+  (let [brs (->> (tickets/list-ids project)
+                 (map (fn [br] [br (tickets/read-meta project br)]))
+                 (filter (comp seq :entries second)))]
+    (reduce
+     (fn [acc [br m]]
+       (if-let [w (ws/find-by-ref-id project br)]
+         (if (seq (:entries (ws/read-ws project (:id w))))
+           acc ;; already carries entries — idempotency guard, no-op
+           (try
+             (doseq [e (:entries m)]
+               (let [src  (str (fs/path (tickets/ticket-dir project br) (:file e)))
+                     body (when (fs/exists? src) (slurp src))]
+                 (when body
+                   (ws/append-entry! project (:id w)
+                                     (select-keys e [:kind :session :run-id]) body))))
+             (update acc :migrated inc)
+             (catch Exception _
+               ;; a legacy body that no longer validates (or any other per-ticket
+               ;; copy failure) — abandon this ticket, don't abort the run.
+               (update acc :orphans inc))))
+         (update acc :orphans inc)))
+     {:migrated 0 :orphans 0} brs)))

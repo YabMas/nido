@@ -6,8 +6,15 @@
    [nido.coordinator.migrate :as migrate]
    [nido.coordinator.session :as sess]
    [nido.coordinator.state :as cstate]
+   [nido.coordinator.tickets :as tickets]
    [nido.coordinator.workstream :as ws]
    [nido.io :as io]))
+
+(defn- with-tmp [f]
+  (let [tmp (fs/create-temp-dir)]
+    (try (with-redefs [cstate/nido-root (constantly (str tmp))]
+           (cstate/ensure-dirs!) (f tmp))
+         (finally (fs/delete-tree tmp)))))
 
 (def old-ticket
   {:br-id "BR-4659"
@@ -204,3 +211,62 @@
             (is (= :live (:substrate (sess/read-session :brian (:id w) "impl-handed")))
                 "plan-bug session is the human's workspace — never archived"))))
       (finally (fs/delete-tree tmp)))))
+
+;; --- ledger->workstreams! -----------------------------------------------
+
+(deftest ledger-migration-copies-ticket-entries-into-workstreams
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :triaging :external-refs [{:adapter :notion :id "BR-1"}]})]
+        ;; legacy: an entry in the ticket store, none on the workstream
+        (tickets/write-meta! :brian "BR-1"
+          {:br-id "BR-1" :status :triaged :entries [{:kind :note :seq 1 :at "t" :file "entries/0001-note.md"}]})
+        (io/write-text! (str (fs/path (tickets/ticket-dir :brian "BR-1") "entries" "0001-note.md"))
+                        "legacy body")
+        ;; an orphan: entries, no workstream
+        (tickets/write-meta! :brian "BR-orphan"
+          {:br-id "BR-orphan" :status :triaged :entries [{:kind :note :seq 1 :at "t" :file "entries/0001-note.md"}]})
+        (let [res (migrate/ledger->workstreams! :brian)]
+          (is (= 1 (:migrated res)))
+          (is (= 1 (:orphans res)))
+          (let [w2 (ws/read-ws :brian (:id w))]
+            (is (= 1 (count (:entries w2)))
+                "the ticket entry now lives on the workstream")
+            (is (= :note (-> w2 :entries first :kind)))))))))
+
+(deftest ledger-migration-skips-a-ticket-whose-workstream-already-has-entries
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :triaging :external-refs [{:adapter :notion :id "BR-2"}]})]
+        (tickets/write-meta! :brian "BR-2"
+          {:br-id "BR-2" :status :triaged :entries [{:kind :note :seq 1 :at "t" :file "entries/0001-note.md"}]})
+        (io/write-text! (str (fs/path (tickets/ticket-dir :brian "BR-2") "entries" "0001-note.md"))
+                        "legacy body")
+        ;; first run migrates it onto the workstream
+        (let [first-res (migrate/ledger->workstreams! :brian)]
+          (is (= 1 (:migrated first-res)))
+          (is (= 0 (:orphans first-res))))
+        ;; a second run must not double-append — the workstream already carries entries
+        (let [second-res (migrate/ledger->workstreams! :brian)]
+          (is (= 0 (:migrated second-res)))
+          (is (= 0 (:orphans second-res))))
+        (is (= 1 (count (:entries (ws/read-ws :brian (:id w)))))
+            "re-running the migration never duplicates the entry")))))
+
+(deftest ledger-migration-catches-a-legacy-entry-that-no-longer-validates
+  ;; report/entry-payload re-validates a typed kind (e.g. :triage) on append; a
+  ;; legacy body that fails that validation must abandon the ticket, not throw
+  ;; and abort the whole run.
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :triaging :external-refs [{:adapter :notion :id "BR-bad"}]})]
+        (tickets/write-meta! :brian "BR-bad"
+          {:br-id "BR-bad" :status :triaged
+           :entries [{:kind :triage :seq 1 :at "t" :file "entries/0001-triage.md"}]})
+        (io/write-text! (str (fs/path (tickets/ticket-dir :brian "BR-bad") "entries" "0001-triage.md"))
+                        "not a valid triage report")
+        (let [res (migrate/ledger->workstreams! :brian)]
+          (is (= 0 (:migrated res)))
+          (is (= 1 (:orphans res)))
+          (is (= 0 (count (:entries (ws/read-ws :brian (:id w)))))
+              "the failed ticket's workstream gains no entry"))))))
