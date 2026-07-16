@@ -56,17 +56,25 @@ bb nido:ticket:status :project brian :br <slack-id> :status investigating
    - Read 2–5 relevant files, ~500 lines total cap. Don't go deeper than needed.
    - If the report mentions a stack trace or specific error message, grep for it verbatim first.
    - Stop once you have enough to write a real, specific ticket — this is triage, not a fix.
-4. Determine, for the report:
-   - Is this actually reproducible / a real bug worth a ticket? (If clearly not, say so plainly in the proposed ticket's `:problem` and let the human `dismiss` — see "Resume behaviour".)
-   - What part of the system is affected, and what's the likely root cause?
+4. **Classify** the report as one of exactly two `:ticket-type` values:
+   - **`"bug"`** — a defect: something is broken, regressed, or not working as intended.
+   - **`"improvement"`** — a request for new or better behavior. Feature requests are `"improvement"`, not a third type.
+   - When genuinely borderline (e.g. "this is confusing" could be a UX bug or a feature ask), make the call and record the uncertainty in `:watch-out` rather than stalling on the label.
+5. Determine, for the report:
+   - Is this actually reproducible / a real bug worth a ticket (bug case), or a real, scoped ask (improvement case)? (If clearly not worth a ticket, say so plainly in the proposal body and let the human `dismiss` — see "Resume behaviour".)
+   - **For a `"bug"`:** what part of the system is affected, and what's the likely root cause?
+   - **For an `"improvement"`:** don't manufacture a root cause — instead *scope the change*: locate where it would land, assess its rough size, and note the touchpoints.
    - A concise, enriched title.
    - A Notion Priority guess, or `nil` if unsure (see "Priority guidance" below).
 
 ## Step 2 — Propose (compose + append + park)
 
-Compose a `ProposedTicket` EDN map (schema: `nido.coordinator.report/ProposedTicket`) to a temp `.edn` file. The map is **compact and structured**, not a freeform essay — keep doing the deep investigation in Step 1, but distill it down to these 1–2-line fields; the depth of your investigation shows up as *confidence* in what you write, not as length:
+Compose a `ProposedTicket` EDN map (schema: `nido.coordinator.report/ProposedTicket`) to a temp `.edn` file. The map is **compact and structured**, not a freeform essay — keep doing the deep investigation in Step 1, but distill it down to these 1–2-line fields; the depth of your investigation shows up as *confidence* in what you write, not as length.
+
+The schema is a **closed, `:ticket-type`-dispatched multi-schema with no default** — emit exactly one of these two shapes, matching the classification from Step 1:
 
 ```clojure
+;; ── if ticket-type "bug" (a defect) ──
 {:format      :proposed-ticket
  :title       "concise enriched title, no trailing punctuation"
  :ticket-type "bug"
@@ -76,7 +84,20 @@ Compose a `ProposedTicket` EDN map (schema: `nido.coordinator.report/ProposedTic
  :root-cause  "1-2 lines: the cause + evidence — cite the root-cause commit and say 'verified live in REPL' when you confirmed it there."
  :fix         "1-2 lines: fix shape + rough size (e.g. 'revert-shaped, small') + the CONCRETE file:line targets. This is the only field carrying file:line refs — it must be actionable."
  :watch-out   "optional: a real caveat / scope question (e.g. the reporter may mean a different screen). nil when there is none."}
+
+;; ── if ticket-type "improvement" (a request for new/better behavior; feature requests too) ──
+{:format          :proposed-ticket
+ :title           "concise enriched title, no trailing punctuation"
+ :ticket-type     "improvement"
+ :priority        "3 - Could"   ; one of the Notion Priority options below, or nil if unsure
+ :source-url      "…"           ; the ACTUAL Slack permalink from the envelope (NOT the literal "{{event/url}}")
+ :request         "1-2 lines: what's being asked for + the current gap."
+ :proposed-change "1-2 lines: the change shape + rough size + CONCRETE file:line touchpoints (the actionable field — where the scoped-in-Step-1 change would land)."
+ :rationale       "1-2 lines: why it's worth doing / who benefits."
+ :watch-out       "optional: a real caveat / scope question. nil when there is none."}
 ```
+
+The **only** accepted `:ticket-type` values are `"bug"` and `"improvement"` — any other value (including `"feature"`) is rejected by `append`, so label feature requests `"improvement"`. Emitting the wrong body fields for the chosen type (e.g. `:root-cause` on an `"improvement"`, or `:request` on a `"bug"`) also fails validation — both shapes are closed maps, so stray/extra keys are rejected too; fix and retry.
 
 Append it to the ticket record and re-park:
 
