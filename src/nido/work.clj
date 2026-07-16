@@ -440,7 +440,7 @@
             ds                   (notion/resolve-data-source-id db ntok)
             created              (notion/create-page! ds ntok
                                    {:title       (:title proposal)
-                                    :description (:description proposal)
+                                    :description (report/report->markdown proposal)
                                     :type        (:ticket-type proposal)
                                     :status      "Not started"
                                     :priority    (:priority proposal)})]

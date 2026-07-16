@@ -905,10 +905,12 @@
   "Valid ProposedTicket EDN for the Slack-approval path."
   (pr-str {:format :proposed-ticket
            :title "Logo bug on the pricing page"
-           :description "The logo disappears on mobile Safari."
            :ticket-type "bug"
            :priority "2 - Should"
-           :source-url "https://myco.slack.com/archives/C1/p100"}))
+           :source-url "https://myco.slack.com/archives/C1/p100"
+           :problem "The logo disappears on mobile Safari."
+           :root-cause "CSS media-query regression; verified live in REPL."
+           :fix "Restore the logo rule for the mobile breakpoint. pricing.clj:42. Revert-shaped, small."}))
 
 (deftest parse-slack-id-splits-channel-and-ts
   (is (= {:channel "C07N0U273AR" :ts "1718000000.000123"}
@@ -919,10 +921,11 @@
 (deftest apply-proposed-creates-ticket-associates-ref-and-posts-link
   (with-tmp
     (fn [_]
-      (let [ws     (workstream/create! :brian {:stage :triaging
-                                               :external-refs [{:adapter :slack-message
-                                                                :id "slack-C1-100.0" :title "msg"}]})
-            posted (atom nil)]
+      (let [ws       (workstream/create! :brian {:stage :triaging
+                                                 :external-refs [{:adapter :slack-message
+                                                                  :id "slack-C1-100.0" :title "msg"}]})
+            posted   (atom nil)
+            captured (atom nil)]
         (tickets/open! :brian "slack-C1-100.0" {:title "msg"})
         (tickets/set-status! :brian "slack-C1-100.0" :awaiting-input)
         (workstream/append-to-ref! :brian "slack-C1-100.0" {:kind :proposed-ticket}
@@ -931,7 +934,9 @@
                       notion-client/keychain-token (fn [] "ntok")
                       notion-client/resolve-data-source-id (fn [_ _] "ds-1")
                       notion-client/create-page!
-                      (fn [_ds _tok _fields] {:id "BR-4900" :page-id "pg" :url "https://notion/pg"})
+                      (fn [_ds _tok fields]
+                        (reset! captured fields)
+                        {:id "BR-4900" :page-id "pg" :url "https://notion/pg"})
                       slack-client/keychain-token (fn [] "stok")
                       slack-client/post-message (fn [ch _ opts] (reset! posted {:ch ch :opts opts}) {:ok true})]
           (let [r (work/apply! :brian (:id ws))]
@@ -939,6 +944,9 @@
             (is (= "BR-4900" (:br r)))
             (is (= (:id ws) (:id (workstream/find-by-ref-id :brian "BR-4900")))
                 "the BR-#### associates to THIS workstream — one ledger")
+            (is (str/includes? (:description @captured) "**Problem**")
+                "Notion body is the compact render, not a raw :description essay")
+            (is (str/includes? (:description @captured) "**Fix**"))
             (is (= "C1" (:ch @posted)) "posts to the origin channel")
             (is (= "100.0" (get-in @posted [:opts :thread-ts])) "threaded on the message ts")
             (is (re-find #"notion/pg" (get-in @posted [:opts :text])) "link-back carries the page url")
