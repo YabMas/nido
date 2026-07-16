@@ -1,11 +1,11 @@
 ---
-name: compact
-description: Squash the current session's branch (main@origin..@) into one coherent commit with a synthesized conventional-commit subject + layered body, then — if a PR exists — regenerate the PR title/description from it. Mechanical — never halts, no push, no ledger events. Run from a session worktree. Usage: /compact
+name: squash
+description: Squash the current session's branch (main@origin..@) into one coherent commit with a synthesized conventional-commit subject + layered body, then — if a PR exists — regenerate the PR title/description from it. Mechanical — never halts, no push, no ledger events. Run from a session worktree. Usage: /squash
 ---
 
-# /compact
+# /squash
 
-> **Harness-side skill, owned by nido.** Lives at `nido/.claude/skills/compact/`
+> **Harness-side skill, owned by nido.** Lives at `nido/.claude/skills/squash/`
 > and is injected into every spawned session's composed `.claude/skills/`.
 > Sibling of `/align`, `/local-ci`, and `/drive-home` — the squash + PR-text
 > phase `/drive-home` composes.
@@ -111,8 +111,8 @@ re-derives the same body — idempotent, no append-drift.
 - **Leaving the squashed commit's subject as a `chore(ci)` message** — synthesize
   a real conventional-commit subject from the change.
 - **Splitting into multiple commits, or halting to ask about commit structure** —
-  `/compact` always squashes to one.
+  `/squash` always squashes to one.
 - **Proofreading/appending to the old PR body** — §2 is a full overwrite
   synthesized from the final state, not an edit of the existing text.
-- **Pushing** — not `/compact`'s job.
+- **Pushing** — not `/squash`'s job.
 - **Running from the session home** — `cd worktree` first.

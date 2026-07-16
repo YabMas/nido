@@ -115,7 +115,7 @@ cd ..                                   # back to the session home
 ```
 
 (A clean tree ⇒ skip the commit.) These `chore(ci): …` commits are throwaway
-scaffolding — `/compact` folds them into the final commit, so the message
+scaffolding — `/squash` folds them into the final commit, so the message
 doesn't matter.
 
 ### 2. Run CI and triage

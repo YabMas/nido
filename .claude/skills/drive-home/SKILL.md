@@ -1,6 +1,6 @@
 ---
 name: drive-home
-description: Take the current nido session's branch home by composing /align (rebase + trivial-conflict resolution), /local-ci auto (CI + autonomous mechanical fix), and /compact (squash + regenerate the PR title/description), then mark the PR ready and put it on the merge queue. Halts for human judgement on semantic conflicts or non-mechanical CI failures. Usage: /drive-home
+description: Take the current nido session's branch home by composing /align (rebase + trivial-conflict resolution), /local-ci auto (CI + autonomous mechanical fix), and /squash (fold to one commit + regenerate the PR title/description), then mark the PR ready and put it on the merge queue. Halts for human judgement on semantic conflicts or non-mechanical CI failures. Usage: /drive-home
 ---
 
 # drive-home
@@ -8,7 +8,7 @@ description: Take the current nido session's branch home by composing /align (re
 > **Harness-side skill, owned by nido.** Lives at `nido/.claude/skills/drive-home/`
 > and is injected into every spawned session's composed `.claude/skills/` (see
 > `nido.session.launcher/compose-claude-dir!`). Sibling of `/align`, `/local-ci`,
-> `/compact`, and `/prepare-draft-pr`.
+> `/squash`, and `/prepare-draft-pr`.
 
 ## What this is
 
@@ -19,7 +19,7 @@ One command that drives the **current session's** branch from "work written" to
    conflicts (halt on anything semantic),
 2. `/local-ci auto` — run CI and auto-fix only the mechanical class (halt on
    anything needing judgement),
-3. `/compact` — squash the whole branch into one coherent commit and regenerate
+3. `/squash` — squash the whole branch into one coherent commit and regenerate
    the PR title/description from it,
 4. mark the draft PR ready and enable auto-merge (native merge queue).
 
@@ -106,10 +106,10 @@ Read its reported outcome — **CI green** ⇒ continue; **halted** (a non-mecha
 failure) ⇒ record a `:blocker` and stop. CI is a slow Docker build, so trust
 `/local-ci auto`'s green/halted report rather than re-running to check.
 
-## 5. Squash + PR text — `/compact`
+## 5. Squash + PR text — `/squash`
 
 Reached **only** on green CI with no unresolved conflicts. `cd worktree`, then
-invoke **`/compact`**. It squashes the branch into one coherent commit and
+invoke **`/squash`**. It squashes the branch into one coherent commit and
 regenerates the PR title/description. It is mechanical and never halts.
 
 ## 6. Finish — push, ready, enqueue
@@ -207,6 +207,6 @@ stops and makes no `ready`/`merge` calls.
   home).
 - **Flipping `ready` before CI is green** — §6 is reached only after §4 reports
   green.
-- **Proceeding to `/compact` before `/local-ci auto` reports green** — `/compact`
+- **Proceeding to `/squash` before `/local-ci auto` reports green** — `/squash`
   (squash + PR text) is the last phase, after green CI. Commit-shaping itself
-  lives in `/compact`; drive-home never splits or reshapes commits here.
+  lives in `/squash`; drive-home never splits or reshapes commits here.
