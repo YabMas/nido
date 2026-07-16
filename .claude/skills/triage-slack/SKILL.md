@@ -57,23 +57,25 @@ bb nido:ticket:status :project brian :br <slack-id> :status investigating
    - If the report mentions a stack trace or specific error message, grep for it verbatim first.
    - Stop once you have enough to write a real, specific ticket — this is triage, not a fix.
 4. Determine, for the report:
-   - Is this actually reproducible / a real bug worth a ticket? (If clearly not, say so plainly in the proposed ticket's description and let the human `dismiss` — see "Resume behaviour".)
+   - Is this actually reproducible / a real bug worth a ticket? (If clearly not, say so plainly in the proposed ticket's `:problem` and let the human `dismiss` — see "Resume behaviour".)
    - What part of the system is affected, and what's the likely root cause?
-   - A concise, enriched title and a self-contained grounded description (the page body a human/implementer will read cold).
+   - A concise, enriched title.
    - A Notion Priority guess, or `nil` if unsure (see "Priority guidance" below).
 
 ## Step 2 — Propose (compose + append + park)
 
-Compose a `ProposedTicket` EDN map (schema: `nido.coordinator.report/ProposedTicket`) to a temp `.edn` file:
+Compose a `ProposedTicket` EDN map (schema: `nido.coordinator.report/ProposedTicket`) to a temp `.edn` file. The map is **compact and structured**, not a freeform essay — keep doing the deep investigation in Step 1, but distill it down to these 1–2-line fields; the depth of your investigation shows up as *confidence* in what you write, not as length:
 
 ```clojure
 {:format      :proposed-ticket
  :title       "concise enriched title, no trailing punctuation"
- :description "grounded findings, self-contained — the Notion page body. Assume the reader hasn't seen the Slack thread."
  :ticket-type "bug"
  :priority    "2 - Should"   ; one of the Notion Priority options below, or nil if unsure
- :source-url  "…"            ; the ACTUAL Slack permalink you read from the envelope (the substituted {{event/url}}) — NOT the literal string "{{event/url}}"
- :trail       "optional: 1-3 lines of investigation notes (file:line refs, what you ruled out)"}
+ :source-url  "…"            ; the ACTUAL Slack permalink from the envelope (NOT the literal "{{event/url}}")
+ :problem     "1-2 lines: what's wrong + who it affects. No prose sections."
+ :root-cause  "1-2 lines: the cause + evidence — cite the root-cause commit and say 'verified live in REPL' when you confirmed it there."
+ :fix         "1-2 lines: fix shape + rough size (e.g. 'revert-shaped, small') + the CONCRETE file:line targets. This is the only field carrying file:line refs — it must be actionable."
+ :watch-out   "optional: a real caveat / scope question (e.g. the reporter may mean a different screen). nil when there is none."}
 ```
 
 Append it to the ticket record and re-park:
