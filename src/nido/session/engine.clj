@@ -160,8 +160,22 @@
 ;; Session lifecycle
 ;; ---------------------------------------------------------------------------
 
+(defn session-edn-path [project-name]
+  (str (fs/path (core/nido-home) "projects" project-name "session.edn")))
+
+(defn read-session-edn
+  "Soft read: the project's session.edn, or nil when it has no session.edn.
+   For read-only callers that can still answer from defaults — a project can be
+   registered in projects.edn but never configured, and enumerating it must not
+   throw. Use `load-session-edn` wherever the config is genuinely required
+   (anything that boots or mutates a session)."
+  [project-name]
+  (let [path (session-edn-path project-name)]
+    (when (fs/exists? path)
+      (io/read-edn path))))
+
 (defn load-session-edn [project-name]
-  (let [path (str (fs/path (core/nido-home) "projects" project-name "session.edn"))]
+  (let [path (session-edn-path project-name)]
     (when-not (fs/exists? path)
       (throw (ex-info (str "No session.edn found for project '" project-name "'")
                       {:path path

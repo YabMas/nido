@@ -80,9 +80,14 @@
      - unset                                                → default
                                                               <parent>/<project>-worktrees
    The relative form lets a project keep its worktrees inside its own
-   checkout (e.g. \".worktrees\" so files like .claude/ apply to them)."
+   checkout (e.g. \".worktrees\" so files like .claude/ apply to them).
+
+   `:worktrees-dir` is optional, so this reads session.edn softly: a registered
+   but unconfigured project (no session.edn) resolves to the default rather than
+   throwing, which keeps read-only enumeration (the TUI project list / board)
+   alive. Booting such a session still fails loudly in `load-session-edn`."
   [project-name project-dir]
-  (let [session-edn (engine/load-session-edn project-name)
+  (let [session-edn (engine/read-session-edn project-name)
         configured (:worktrees-dir session-edn)]
     (cond
       (and configured (or (str/starts-with? configured "/")

@@ -403,6 +403,37 @@
     (is (= {:from-kw :full} (#'lifecycle/effective-profile "brian" {})))
     (is (= {:from-kw :lite} (#'lifecycle/effective-profile "brian" {:session-profile :lite})))))
 
+(deftest worktrees-dir-falls-back-to-default-when-project-has-no-session-edn
+  ;; A project can be registered in projects.edn but never configured (no
+  ;; session.edn). :worktrees-dir is optional, so resolution must fall back to
+  ;; the default rather than throw — read-only enumeration (the TUI project
+  ;; list / board) walks every registered project and must not die on one.
+  (let [tmp         (fs/create-temp-dir)
+        project-dir (str (fs/path tmp "src" "unconfigured"))]
+    (try
+      (fs/create-dirs (str (fs/path tmp "projects")))  ; no projects/unconfigured/
+      (with-redefs [nido.core/nido-home (constantly (str tmp))]
+        (is (= (str (fs/path tmp "src" "unconfigured-worktrees"))
+               (lifecycle/worktrees-dir "unconfigured" project-dir))
+            "unconfigured project resolves to the default worktrees-dir")
+        (is (thrown? clojure.lang.ExceptionInfo
+                     (engine/load-session-edn "unconfigured"))
+            "the boot path still fails loudly — only the soft read tolerates it"))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest worktrees-dir-honours-session-edn-override-when-configured
+  (let [tmp         (fs/create-temp-dir)
+        project-dir (str (fs/path tmp "src" "configured"))]
+    (try
+      (fs/create-dirs (str (fs/path tmp "projects" "configured")))
+      (spit (str (fs/path tmp "projects" "configured" "session.edn"))
+            (pr-str {:worktrees-dir ".worktrees"}))
+      (with-redefs [nido.core/nido-home (constantly (str tmp))]
+        (is (= (str (fs/path project-dir ".worktrees"))
+               (lifecycle/worktrees-dir "configured" project-dir))
+            "a relative override still resolves against project-dir"))
+      (finally (fs/delete-tree tmp)))))
+
 (deftest session-coords-resolves-wt-path-and-canonical-instance-id
   (with-redefs [lifecycle/resolve-project (fn [_] ["brian" {:directory "/Code/brian"}])
                 lifecycle/worktrees-dir   (fn [_ _] "/Code/brian/.worktrees")
