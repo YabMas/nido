@@ -55,22 +55,43 @@
                              [:ref  string?]
                              [:note string?]]]]]) ; §5 log-only
 
-(def ProposedTicket
-  "A grounded ticket the triage-slack skill proposes for human approval, in a
-   compact structured shape (Problem / Root cause / Fix / Watch-out). Rendered by
-   proposed-ticket->markdown; the render is BOTH the gate card and the created
-   Notion ticket body (compact everywhere), so :fix must carry the concrete
-   file:line targets + root-cause commit."
-  [:map {:closed true}
-   [:format      [:= :proposed-ticket]]
+(def ^:private proposed-ticket-common
+  "Fields shared by both proposed-ticket templates."
+  [[:format      [:= :proposed-ticket]]
    [:title       :string]
-   [:ticket-type :string]           ; Notion Type option, e.g. "bug"
-   [:priority    {:optional true} [:maybe :string]]  ; Notion Priority option or nil
-   [:source-url  :string]           ; the Slack permalink
-   [:problem     :string]
-   [:root-cause  :string]
-   [:fix         :string]
-   [:watch-out   {:optional true} [:maybe :string]]])
+   [:ticket-type :string]                        ; Notion Type: "bug" | "improvement"
+   [:priority    {:optional true} [:maybe :string]]
+   [:source-url  :string]])
+
+(def BugProposal
+  "Bug template: a defect, root-caused. :fix carries the file:line targets."
+  (into [:map {:closed true}]
+        (concat proposed-ticket-common
+                [[:problem    :string]
+                 [:root-cause :string]
+                 [:fix        :string]
+                 [:watch-out  {:optional true} [:maybe :string]]])))
+
+(def ChangeProposal
+  "Improvement template: a request for new/better behavior. :proposed-change
+   carries the file:line touchpoints."
+  (into [:map {:closed true}]
+        (concat proposed-ticket-common
+                [[:request         :string]
+                 [:proposed-change :string]
+                 [:rationale       :string]
+                 [:watch-out       {:optional true} [:maybe :string]]])))
+
+(def ProposedTicket
+  "A grounded ticket the triage-slack skill proposes for human approval. The
+   template is chosen by :ticket-type — \"bug\" (problem/root-cause/fix) or
+   \"improvement\" (request/proposed-change/rationale). No default: an unlisted
+   type is rejected, forcing the skill to classify. Rendered by
+   proposed-ticket->markdown; the render is BOTH the gate card and the created
+   Notion ticket body (compact everywhere)."
+  [:multi {:dispatch :ticket-type}
+   ["bug"         BugProposal]
+   ["improvement" ChangeProposal]])
 
 (def ImplementationPlan
   "A high-level implementation plan — authored by triage (obvious) or the impl
@@ -262,20 +283,30 @@
           (str "- **" (name severity) "** "
                (when area (str "(" area ") ")) "[" id "] " summary))))))
 
+(defn- proposed-ticket-head
+  [{:keys [title ticket-type priority]}]
+  [(str "# " title)
+   (str "**Type:** " ticket-type
+        (when priority (str "  ·  **Priority:** " priority)))
+   ""])
+
 (defn- proposed-ticket->markdown
-  [{:keys [title ticket-type priority source-url problem root-cause fix watch-out]}]
+  [{:keys [ticket-type source-url problem root-cause fix
+           request proposed-change rationale watch-out] :as report}]
   (str/join "\n"
     (remove nil?
-      [(str "# " title)
-       (str "**Type:** " ticket-type
-            (when priority (str "  ·  **Priority:** " priority)))
-       ""
-       (str "**Problem** — " problem)
-       (str "**Root cause** — " root-cause)
-       (str "**Fix** — " fix)
-       (when-not (str/blank? watch-out) (str "**Watch out** — " watch-out))
-       ""
-       (str "Source: " source-url)])))
+      (concat
+        (proposed-ticket-head report)
+        (if (= "improvement" ticket-type)
+          [(str "**Request** — " request)
+           (str "**Proposed change** — " proposed-change)
+           (str "**Rationale** — " rationale)]
+          [(str "**Problem** — " problem)
+           (str "**Root cause** — " root-cause)
+           (str "**Fix** — " fix)])
+        [(when-not (str/blank? watch-out) (str "**Watch out** — " watch-out))
+         ""
+         (str "Source: " source-url)]))))
 
 (defn report->markdown
   "Render a `:format`-tagged report payload to markdown. Each event type → its own

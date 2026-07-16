@@ -285,3 +285,48 @@
   (let [md (report/report->markdown (dissoc compact-proposal :watch-out :priority))]
     (is (not (str/includes? md "**Watch out**")))
     (is (not (str/includes? md "Priority")))))
+
+(def ^:private improvement-proposal
+  {:format :proposed-ticket
+   :title "Bulk-export button on the admin courses tab"
+   :ticket-type "improvement" :priority "3 - Could"
+   :source-url "https://slack/x"
+   :request "No way to export the admin courses list; staff copy rows by hand."
+   :proposed-change "Add an Export CSV toolbar action reusing export/csv. admin.clj:684, handlers/export.clj:20."
+   :rationale "Recurring manual toil for ops; data + CSV helper already exist."
+   :watch-out "Confirm filtered view vs all courses."})
+
+(deftest proposed-ticket-multi-schema-dispatches-on-type
+  ;; improvement validates against ChangeProposal
+  (is (= improvement-proposal (report/validate-event :proposed-ticket improvement-proposal)))
+  (is (report/validate-event :proposed-ticket (dissoc improvement-proposal :priority :watch-out)))
+  ;; bug still validates (compact-proposal defined earlier in this file)
+  (is (= compact-proposal (report/validate-event :proposed-ticket compact-proposal)))
+  ;; wrong body for the type is rejected: bug fields under "improvement"
+  (is (thrown? clojure.lang.ExceptionInfo
+        (report/validate-event :proposed-ticket
+          (assoc compact-proposal :ticket-type "improvement"))))
+  ;; improvement fields under "bug" is rejected
+  (is (thrown? clojure.lang.ExceptionInfo
+        (report/validate-event :proposed-ticket
+          (assoc improvement-proposal :ticket-type "bug"))))
+  ;; an unlisted type (no default) is rejected
+  (is (thrown? clojure.lang.ExceptionInfo
+        (report/validate-event :proposed-ticket (assoc improvement-proposal :ticket-type "chore"))))
+  ;; a required change field missing is rejected
+  (is (thrown? clojure.lang.ExceptionInfo
+        (report/validate-event :proposed-ticket (dissoc improvement-proposal :rationale)))))
+
+(deftest proposed-ticket-improvement-markdown
+  (let [md (report/report->markdown improvement-proposal)]
+    (is (str/includes? md "Bulk-export button on the admin courses tab"))
+    (is (str/includes? md "**Request**"))
+    (is (str/includes? md "**Proposed change**"))
+    (is (str/includes? md "**Rationale**"))
+    (is (str/includes? md "**Watch out**"))
+    (is (str/includes? md "3 - Could"))
+    (is (not (str/includes? md "**Root cause**"))))
+  ;; bug still renders the bug card (regression guard)
+  (let [md (report/report->markdown compact-proposal)]
+    (is (str/includes? md "**Root cause**"))
+    (is (not (str/includes? md "**Request**")))))

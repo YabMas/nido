@@ -22,3 +22,23 @@
     (is (str/includes? html "Regressed in #3802"))
     (is (str/includes? html "Problem"))
     (is (str/includes? html "bug"))))
+
+(def ^:private improvement-report
+  {:format :proposed-ticket
+   :title "Bulk-export button on the admin courses tab"
+   :ticket-type "improvement" :priority "3 - Could"
+   :source-url "https://slack/x"
+   :request "No export on the admin courses list."
+   :proposed-change "Add an Export CSV toolbar action. admin.clj:684."
+   :rationale "Recurring manual toil for ops."
+   :at "2026-07-16T10:00:00Z"})
+
+(deftest gate-pane-renders-improvement-proposal
+  (let [html (views/gate-pane {:ws-id "w" :project "brian" :origin :slack
+                               :label "proposed-ticket" :report improvement-report
+                               :actions []})]
+    (is (str/includes? html "Bulk-export button on the admin courses tab"))
+    (is (str/includes? html "Request"))
+    (is (str/includes? html "Proposed change"))
+    (is (str/includes? html "Rationale"))
+    (is (str/includes? html "improvement"))))
