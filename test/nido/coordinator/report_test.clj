@@ -209,22 +209,24 @@
 (def ^:private valid-proposed-ticket
   {:format :proposed-ticket
    :title "Logo bug on the pricing page"
-   :description "The logo disappears on mobile Safari. Steps: …"
    :ticket-type "bug"
    :priority "2 - Should"
    :source-url "https://myco.slack.com/archives/C123/p456"
-   :trail "src/order.clj:88 — grounded here"})
+   :problem "The logo disappears on mobile Safari."
+   :root-cause "A media query hides the header on narrow viewports."
+   :fix "Scope the media query to exclude the logo. header.css:42."
+   :watch-out "src/order.clj:88 — grounded here"})
 
 (deftest validate-event-accepts-proposed-ticket
   (is (= valid-proposed-ticket (report/validate-event :proposed-ticket valid-proposed-ticket))))
 
 (deftest validate-event-accepts-proposed-ticket-without-optional-keys
-  (let [minimal (dissoc valid-proposed-ticket :priority :trail)]
+  (let [minimal (dissoc valid-proposed-ticket :priority :watch-out)]
     (is (= minimal (report/validate-event :proposed-ticket minimal)))))
 
-(deftest validate-event-accepts-proposed-ticket-with-nil-priority-and-trail
+(deftest validate-event-accepts-proposed-ticket-with-nil-priority-and-watch-out
   (is (report/validate-event :proposed-ticket
-        (assoc valid-proposed-ticket :priority nil :trail nil))))
+        (assoc valid-proposed-ticket :priority nil :watch-out nil))))
 
 (deftest validate-event-rejects-proposed-ticket-missing-required-key
   (is (thrown? clojure.lang.ExceptionInfo
@@ -249,3 +251,37 @@
     (is (str/includes? md "bug"))
     (is (str/includes? md "https://myco.slack.com/archives/C123/p456"))
     (is (str/includes? md "disappears on mobile Safari"))))
+
+(def ^:private compact-proposal
+  {:format :proposed-ticket
+   :title "Restore active-students count on admin courses tab"
+   :ticket-type "bug" :priority "2 - Should"
+   :source-url "https://slack/x"
+   :problem "Admin courses tab lost the per-course active-students count."
+   :root-cause "Collateral from PR #3802 (bea3fac); verified live in REPL."
+   :fix "Restore the column on the admin tab only. courses.clj:913, admin.clj:684."
+   :watch-out "Confirm the reporter means the admin tab, not the Org detail page."})
+
+(deftest proposed-ticket-compact-schema
+  (is (= compact-proposal (report/validate-event :proposed-ticket compact-proposal)))
+  ;; optional fields absent is fine
+  (is (report/validate-event :proposed-ticket (dissoc compact-proposal :priority :watch-out)))
+  ;; missing a required field is rejected
+  (is (thrown? clojure.lang.ExceptionInfo
+        (report/validate-event :proposed-ticket (dissoc compact-proposal :root-cause))))
+  ;; the old essay key is rejected (closed schema)
+  (is (thrown? clojure.lang.ExceptionInfo
+        (report/validate-event :proposed-ticket (assoc compact-proposal :description "essay")))))
+
+(deftest proposed-ticket-compact-markdown
+  (let [md (report/report->markdown compact-proposal)]
+    (is (str/includes? md "Restore active-students count on admin courses tab"))
+    (is (str/includes? md "**Problem**"))
+    (is (str/includes? md "**Root cause**"))
+    (is (str/includes? md "**Fix**"))
+    (is (str/includes? md "**Watch out**"))
+    (is (str/includes? md "2 - Should")))
+  ;; Watch-out line omitted when nil; Priority clause omitted when nil
+  (let [md (report/report->markdown (dissoc compact-proposal :watch-out :priority))]
+    (is (not (str/includes? md "**Watch out**")))
+    (is (not (str/includes? md "Priority")))))

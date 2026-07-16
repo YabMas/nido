@@ -56,16 +56,21 @@
                              [:note string?]]]]]) ; §5 log-only
 
 (def ProposedTicket
-  "A grounded ticket the triage-slack skill proposes for human approval before
-   creation in the Notion Task DB."
+  "A grounded ticket the triage-slack skill proposes for human approval, in a
+   compact structured shape (Problem / Root cause / Fix / Watch-out). Rendered by
+   proposed-ticket->markdown; the render is BOTH the gate card and the created
+   Notion ticket body (compact everywhere), so :fix must carry the concrete
+   file:line targets + root-cause commit."
   [:map {:closed true}
    [:format      [:= :proposed-ticket]]
    [:title       :string]
-   [:description :string]           ; grounded findings → the page body
    [:ticket-type :string]           ; Notion Type option, e.g. "bug"
    [:priority    {:optional true} [:maybe :string]]  ; Notion Priority option or nil
    [:source-url  :string]           ; the Slack permalink
-   [:trail       {:optional true} [:maybe :string]]])
+   [:problem     :string]
+   [:root-cause  :string]
+   [:fix         :string]
+   [:watch-out   {:optional true} [:maybe :string]]])
 
 (def ImplementationPlan
   "A high-level implementation plan — authored by triage (obvious) or the impl
@@ -257,16 +262,20 @@
           (str "- **" (name severity) "** "
                (when area (str "(" area ") ")) "[" id "] " summary))))))
 
-(defn- proposed-ticket->markdown [{:keys [title description ticket-type priority source-url trail]}]
+(defn- proposed-ticket->markdown
+  [{:keys [title ticket-type priority source-url problem root-cause fix watch-out]}]
   (str/join "\n"
     (remove nil?
-      [(str "# Proposed ticket: " title)
+      [(str "# " title)
        (str "**Type:** " ticket-type
             (when priority (str "  ·  **Priority:** " priority)))
-       (str "Source: " source-url)
        ""
-       description
-       (when trail (str "\n## Investigation trail\n" trail))])))
+       (str "**Problem** — " problem)
+       (str "**Root cause** — " root-cause)
+       (str "**Fix** — " fix)
+       (when-not (str/blank? watch-out) (str "**Watch out** — " watch-out))
+       ""
+       (str "Source: " source-url)])))
 
 (defn report->markdown
   "Render a `:format`-tagged report payload to markdown. Each event type → its own
