@@ -1033,6 +1033,130 @@
           (is (= {:decision :applied} (work/apply! :brian (:id w))))
           (is (= :triaged (tickets/status :brian "BR-B1"))))))))
 
+(defn- routed-report-edn
+  "TriageReport EDN string for a routed triage. `depth` :shallow ⇒ notion-writes nil."
+  [{:keys [owner app-domain depth]}]
+  (pr-str
+   (cond-> {:format :triage-report :ticket-key "BR-77" :determination :bug
+            :title "t" :summary "s" :confidence {:level :high :reason "r"}
+            :routing {:owner owner :app-domain app-domain :depth depth}
+            :directions [] :notion-writes nil :trail []}
+     (= depth :deep)
+     (assoc :notion-writes {:type "bug" :effort :M
+                            :status-transition ["Needs verification" "Not started"]
+                            :title "enriched title"
+                            :description-prepend "the enriched body"}))))
+
+(defn- with-routed-ws [depth owner app-domain f]
+  ;; a parked Notion triage ws whose latest ledger entry is a routed :triage-report
+  (let [w (workstream/create! :brian {:stage :triaging
+                                      :external-refs [{:adapter :notion :id "BR-77"
+                                                       :page-id "pg-77" :title "t"}]})]
+    (tickets/open! :brian "BR-77" {:title "t"})
+    (tickets/set-status! :brian "BR-77" :awaiting-input)
+    (workstream/append-to-ref! :brian "BR-77" {:kind :triage}
+                               (routed-report-edn {:owner owner :app-domain app-domain :depth depth}))
+    (f w)))
+
+(deftest apply-routed-shallow-writes-ball-holder-and-additive-app-domain
+  (with-tmp
+    (fn [_]
+      (with-routed-ws :shallow :eric "Backend"
+        (fn [w]
+          (let [props (atom nil)]
+            (with-redefs [notion-client/keychain-token (fn [] "tok")
+                          notion-client/retrieve-page
+                          (fn [_ _] {:properties {(keyword "App Domain")
+                                                  {:multi_select [{:name "Teacher"}]}}})
+                          notion-client/update-page-properties!
+                          (fn [_pg p _tok] (reset! props p) {:ok true})
+                          nido.coordinator.facets/refresh-for-ticket! (fn [& _] nil)]
+              (let [r (work/apply! :brian (:id w))]
+                (is (= :applied (:decision r)))
+                (is (= {:people [{:id "955b4c25-7bce-4ca2-ab5e-d99acbcd423a"}]}
+                       (get @props "Ball Holder")))
+                (is (= #{"Teacher" "Backend"}
+                       (set (map :name (:multi_select (get @props "App Domain")))))
+                    "App Domain unions the routed value with the page's current tags")
+                (is (nil? (get @props "Status")) "shallow writes no Status")
+                (is (nil? (get @props "Type")) "shallow writes no Type")
+                (is (= :triaged (tickets/status :brian "BR-77")))))))))))
+
+(deftest apply-routed-deep-writes-properties-and-prepends-callout
+  (with-tmp
+    (fn [_]
+      (with-routed-ws :deep :jaap "Teacher"
+        (fn [w]
+          (let [props (atom nil) prepended (atom nil)]
+            (with-redefs [notion-client/keychain-token (fn [] "tok")
+                          notion-client/retrieve-page (fn [_ _] {:properties {}})
+                          notion-client/update-page-properties!
+                          (fn [_pg p _tok] (reset! props p) {:ok true})
+                          notion-client/retrieve-block-children (fn [_ _ _] {:results []})
+                          notion-client/prepend-block-children!
+                          (fn [_pg children _tok] (reset! prepended children) {:ok true})
+                          nido.coordinator.facets/refresh-for-ticket! (fn [& _] nil)]
+              ;; make the placement verify pass: first child after prepend is our callout
+              (with-redefs [notion-client/retrieve-block-children
+                            (fn [_ _ _] {:results [{:type "callout"
+                                                    :callout {:rich_text [{:text {:content "🤖 Enriched (triage BR-77)\nx"}}]}}]})]
+                (let [r (work/apply! :brian (:id w))]
+                  (is (= :applied (:decision r)))
+                  (is (= {:name "Not started"} (:status (get @props "Status"))) "deep sets Status to the transition target")
+                  (is (= {:name "bug"} (:select (get @props "Type"))))
+                  (is (= {:name "M"} (:select (get @props "Effort"))))
+                  (is (= "enriched title" (get-in @props ["Task result" :title 0 :text :content])))
+                  (is (some? @prepended) "deep prepends a callout")
+                  (is (= :triaged (tickets/status :brian "BR-77"))))))))))))
+
+(deftest apply-routed-notion-failure-does-not-complete
+  (with-tmp
+    (fn [_]
+      (with-routed-ws :shallow :eric "Backend"
+        (fn [w]
+          (with-redefs [notion-client/keychain-token (fn [] "tok")
+                        notion-client/retrieve-page (fn [_ _] {:properties {}})
+                        notion-client/update-page-properties! (fn [_ _ _] {:error :server})
+                        nido.coordinator.facets/refresh-for-ticket! (fn [& _] nil)]
+            (let [r (work/apply! :brian (:id w))]
+              (is (= :notion-failed (:decision r)))
+              (is (= :server (:error r)))
+              (is (= :awaiting-input (tickets/status :brian "BR-77"))
+                  "a failed Notion write leaves the ticket parked, NOT triaged"))))))))
+
+(deftest apply-routed-page-read-failure-does-not-clobber-or-complete
+  (with-tmp
+    (fn [_]
+      (with-routed-ws :shallow :eric "Backend"
+        (fn [w]
+          (let [wrote (atom false)]
+            (with-redefs [notion-client/keychain-token (fn [] "tok")
+                          notion-client/retrieve-page (fn [_ _] {:error :server})
+                          notion-client/update-page-properties! (fn [_ _ _] (reset! wrote true) {:ok true})
+                          nido.coordinator.facets/refresh-for-ticket! (fn [& _] nil)]
+              (let [r (work/apply! :brian (:id w))]
+                (is (= :notion-failed (:decision r)))
+                (is (false? @wrote) "no property write is attempted when the page read failed — never clobber")
+                (is (= :awaiting-input (tickets/status :brian "BR-77"))
+                    "a failed read leaves the ticket parked, not triaged")))))))))
+
+(deftest apply-routed-callout-bottom-landing-warns-but-completes
+  (with-tmp
+    (fn [_]
+      (with-routed-ws :deep :jaap "Teacher"
+        (fn [w]
+          (with-redefs [notion-client/keychain-token (fn [] "tok")
+                        notion-client/retrieve-page (fn [_ _] {:properties {}})
+                        notion-client/update-page-properties! (fn [_ _ _] {:ok true})
+                        ;; first child never becomes our callout ⇒ position stripped
+                        notion-client/retrieve-block-children (fn [_ _ _] {:results [{:type "paragraph"}]})
+                        notion-client/prepend-block-children! (fn [_ _ _] {:ok true})
+                        nido.coordinator.facets/refresh-for-ticket! (fn [& _] nil)]
+            (let [r (work/apply! :brian (:id w))]
+              (is (= :applied (:decision r)) "properties landed ⇒ still applied")
+              (is (= :warn (:callout r)) "callout didn't land at the top ⇒ flagged")
+              (is (= :triaged (tickets/status :brian "BR-77"))))))))))
+
 (deftest mutations-noop-on-workstream-less-id
   (with-tmp
     (fn [_]

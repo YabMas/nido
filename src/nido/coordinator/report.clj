@@ -37,6 +37,13 @@
   "Semantic triage owner; the skill maps it to a Notion Ball Holder user-id."
   [:enum :ataberk :eric :jaap])
 
+(def owner->user-id
+  "Semantic triage owner → Notion Ball Holder user-id. Single source; the skill emits
+   the keyword and nido resolves it at apply time."
+  {:ataberk "3eb98667-d12e-4e9e-9342-48fec803b571"
+   :eric    "955b4c25-7bce-4ca2-ab5e-d99acbcd423a"
+   :jaap    "169d872b-594c-8160-b432-000250f98e86"})
+
 (def Routing
   "Where triage routed the report. nil on a TriageReport means no routing (Slack,
    or a legacy pre-routing report). :depth :shallow = Ball Holder + App Domain only

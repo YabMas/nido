@@ -79,8 +79,9 @@
                    {:id :drop    :label "Dismiss" :kind :mutation :style :danger}]
      :triage      (let [dismiss  {:id :dismiss :label "Dismiss" :kind :mutation :style :danger}
                         dismiss? (not= :notion origin)]
-                    ;; Apply finalizes the verdict nido-side (ticket:complete — no
-                    ;; conversation, so it works for legacy pre-notion-cli reviews too);
+                    ;; Apply executes the routed verdict to Notion nido-side (Ball Holder +
+                    ;; App Domain, deep properties/callout — apply-routed!, no conversation),
+                    ;; falling back to nido-only ticket:complete for legacy/Slack reports;
                     ;; Reply (free-text overrides/redo) resumes the agent; Dismiss takes
                     ;; it off the radar nido-side (dropped for Notion — Notion drives it).
                     (if parked?
@@ -480,32 +481,111 @@
             (tickets/complete! project slack-id :triaged :applied)
             {:decision :created :br br}))))))
 
+(defn- triage-notion-props
+  "Notion :properties map for a routed :triage-report. Ball Holder replaces; App Domain
+   unions `current-domains` (the page's existing multi_select names) with the routed one.
+   Deep (`:notion-writes` present) adds Type/Effort/Status/Title; Effort is skipped when
+   :squirrel (not a real select option)."
+  [{:keys [routing notion-writes]} current-domains]
+  (let [domains (->> (conj (vec current-domains) (:app-domain routing))
+                     (remove nil?) distinct (mapv (fn [n] {:name n})))]
+    (cond-> {"Ball Holder" {:people [{:id (report/owner->user-id (:owner routing))}]}
+             "App Domain"  {:multi_select domains}}
+      notion-writes
+      (into (cond-> {}
+              (:type notion-writes)
+              (assoc "Type" {:select {:name (:type notion-writes)}})
+              (and (:effort notion-writes) (not= :squirrel (:effort notion-writes)))
+              (assoc "Effort" {:select {:name (name (:effort notion-writes))}})
+              (:status-transition notion-writes)
+              (assoc "Status" {:status {:name (second (:status-transition notion-writes))}})
+              (:title notion-writes)
+              (assoc "Task result" {:title [{:text {:content (:title notion-writes)}}]}))))))
+
+(defn- our-callout?
+  "True when `block` is our enriched callout carrying `marker`."
+  [block marker]
+  (and (= "callout" (:type block))
+       (some #(str/includes? (or (get-in % [:text :content]) "") marker)
+             (get-in block [:callout :rich_text]))))
+
+(defn- prepend-enriched-callout!
+  "Best-effort deep enrichment: delete our prior callout (idempotency), prepend a fresh
+   one, verify it landed at the top. Returns :ok | :warn. Never throws."
+  [page-id br desc token]
+  (try
+    (let [marker (str "🤖 Enriched (triage " br ")")
+          block  {:object "block" :type "callout"
+                  :callout {:icon {:type "emoji" :emoji "🤖"}
+                            :rich_text [{:type "text" :text {:content (str marker "\n" desc)}}]}}
+          first0 (-> (notion/retrieve-block-children page-id token {}) :results first)]
+      (when (and first0 (our-callout? first0 marker))
+        (notion/delete-block! (:id first0) token))
+      (if (:error (notion/prepend-block-children! page-id [block] token))
+        :warn
+        (if (our-callout? (-> (notion/retrieve-block-children page-id token {}) :results first) marker)
+          :ok :warn)))
+    (catch Throwable _ :warn)))
+
+(defn- apply-routed!
+  "Execute a routed :triage-report's Notion writes, then complete the record. Property
+   writes gate completion; the deep callout is best-effort. Returns {:decision :applied
+   [:callout :warn]} on success, {:decision :notion-failed :error <kw>} otherwise."
+  [project _ws-id report w]
+  (let [page-id (:page-id (wsv/notion-ref w))
+        br      (:id (wsv/ledger-ref w))
+        token   (notion/keychain-token)]
+    (cond
+      (nil? token)          {:decision :notion-failed :error :no-token}
+      (str/blank? page-id)  {:decision :notion-failed :error :no-page-id}
+      :else
+      (let [page (notion/retrieve-page page-id token)]
+        (if (:error page)
+          ;; Can't read the current App Domain tags, so we can't honor "additive, never
+          ;; clobber" — fail closed and leave the ticket parked for retry rather than
+          ;; write with incomplete data (see nido.coordinator.notify/merged-participants
+          ;; for the same additive-write contract).
+          {:decision :notion-failed :error (:error page)}
+          (let [current (keep :name (get-in page [:properties (keyword "App Domain") :multi_select]))
+                res     (notion/update-page-properties! page-id (triage-notion-props report current) token)]
+            (if (:error res)
+              {:decision :notion-failed :error (:error res)}
+              (let [callout (when-let [desc (get-in report [:notion-writes :description-prepend])]
+                              (prepend-enriched-callout! page-id br desc token))]
+                (when br
+                  (tickets/complete! project br :triaged :applied)
+                  (try (facets/refresh-for-ticket! project br) (catch Throwable _ nil)))
+                (cond-> {:decision :applied}
+                  (= :warn callout) (assoc :callout :warn))))))))))
+
 (defn apply!
-  "Accept a parked triage verdict WITHOUT resuming the review conversation. Two paths:
+  "Accept a parked triage verdict WITHOUT resuming the review conversation. Three paths:
 
-   • Slack proposal — when the latest ledger report is a `:proposed-ticket` and the
-     workstream carries no :notion ref yet, deterministically create the Notion page,
-     associate its BR-####, post the link back to Slack, and complete the slack-id
-     record (see apply-proposed!). Returns {:decision :created :br …} | {:decision :error …}.
+   • Slack proposal (`:proposed-ticket`, no :notion ref yet) → create the Notion page
+     (apply-proposed!). Returns {:decision :created …} | {:decision :error …}.
+   • Routed Notion triage (`:triage-report` with :routing, on a :notion-backed ws) →
+     execute the routing outcome to Notion (apply-routed!): Ball Holder + App Domain,
+     deep properties, deep callout. Returns {:decision :applied [:callout :warn]} or
+     {:decision :notion-failed :error <kw>} (ticket left parked to retry).
+   • Legacy / Slack-triage (any other report, or a ref-less ws) → finalize the ticket
+     :triaged/:applied nido-side only. Returns {:decision :applied}.
 
-   • Legacy nido-only — otherwise finalize the ticket :triaged/:applied and refresh its
-     facets — the exact nido-side mutation the current triage skill's apply step performs
-     (`bb nido:ticket:complete`; the notion-cli migration dropped all Notion writeback).
-     Replaces the old resume-\"apply\" path, which replayed the review conversation and
-     FAILED for legacy reviews whose apply called the removed Notion MCP tools. A ref-less
-     workstream is a no-op. Returns {:decision :applied}.
-
-   The daemon's sweep settles the now-resolved parked session (ticket left review)."
+   The daemon's sweep settles the now-resolved parked session."
   [project ws-id]
   (if-let [w (cws/read-ws project ws-id)]
     (let [report (latest-report project ws-id)]
-      (if (and (= :proposed-ticket (:format report))
-               (nil? (wsv/notion-ref w)))
+      (cond
+        (and (= :proposed-ticket (:format report)) (nil? (wsv/notion-ref w)))
         (apply-proposed! project ws-id report w)
+
+        (and (= :triage-report (:format report)) (:routing report) (wsv/notion-ref w))
+        (apply-routed! project ws-id report w)
+
+        :else
         (do
           (when-let [br (:id (wsv/ledger-ref w))]
             (tickets/complete! project br :triaged :applied)
-            (try (facets/refresh-for-ticket! project br)   ; reads Notion — best-effort
+            (try (facets/refresh-for-ticket! project br)
                  (catch Throwable _ nil)))
           {:decision :applied})))
     {:decision :applied}))

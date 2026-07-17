@@ -363,3 +363,9 @@
     (is (str/includes? md "Backend"))
     (is (not (str/includes? md "Solution directions")) "shallow omits the directions section")
     (is (not (str/includes? md "Proposed Notion writes")) "shallow has no notion-writes")))
+
+(deftest owner->user-id-covers-the-owner-enum
+  (doseq [o [:ataberk :eric :jaap]]
+    (is (string? (report/owner->user-id o)) (str o " maps to a user-id"))
+    (is (not (clojure.string/blank? (report/owner->user-id o)))))
+  (is (= "955b4c25-7bce-4ca2-ab5e-d99acbcd423a" (report/owner->user-id :eric))))
