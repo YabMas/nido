@@ -688,6 +688,50 @@
           :href  (str "/workstreams" (screen-query screen {:tab id}))}
       (str/capitalize (name id))])])
 
+(defn pickup-bar
+  "Paste-a-ticket bar at the top of /workstreams. Binds a `pickup` signal, POSTs
+   it to /workstreams/pickup/<project> (Enter or the button), and reserves an
+   empty #pickup-result the SSE response patches. Lives on the page chrome, NOT
+   inside workstreams-fragment, so the 5s poll never clobbers the result."
+  [project]
+  (let [post (str "@post('/workstreams/pickup/" project "')")]
+    [:div.card {:style "margin-bottom:12px;"}
+     [:strong "Drive a ticket"]
+     [:div {:style "display:flex; gap:8px; margin-top:6px;"}
+      [:input {"data-bind" "pickup"
+               "data-on:keydown" (str "evt.key === 'Enter' && (" post ")")
+               :placeholder "paste Notion URL / page id / BR-#…"
+               :style "flex:1; box-sizing:border-box;"}]
+      [:button.btn.btn-primary {"data-on:click" post} "Drive →"]]
+     [:div {:id "pickup-result"}]]))
+
+(defn pickup-result-fragment
+  "HTML string (root #pickup-result) reporting the outcome of a pickup POST.
+   `result` is pickup!'s return; opts is {:project <str> :daemon-ready? <bool>}."
+  [result {:keys [project daemon-ready?]}]
+  (str
+   (h/html
+    [:div {:id "pickup-result" :style "margin-top:8px;"}
+     (if (= :unresolved (:decision result))
+       [:p.meta
+        (case (:error result)
+          :no-token           "No Notion token in keychain."
+          (:not-found
+           :not-a-ticket)     (h/raw "Couldn't find that ticket.")
+          :unrecognized-input "Paste a Notion URL, page id, or BR-####."
+          "Notion lookup failed — try again.")]
+       (let [{:keys [continuing? ws-id ref]} result
+             {:keys [id title]} ref]
+         [:div
+          (if continuing?
+            [:p "✓ Continuing " [:strong id] " \"" title "\" → "
+             [:a {:href (str "/workstreams/" project "/" ws-id)} "workstream ↗"]
+             " (session spinning up…)"]
+            [:p "✓ Starting " [:strong id] " \"" title "\" (new workstream) — "
+             "it'll appear in the spine shortly."])
+          (when-not daemon-ready?
+            [:p.meta "⚠ daemon is down — queued, but it won't run until the daemon is back up."])]))])))
+
 (defn workstreams-page
   "Overview + ledger pane, rendered from the screen. The list, its poll query,
    and the pane all derive from the one screen value, so overview and detail
