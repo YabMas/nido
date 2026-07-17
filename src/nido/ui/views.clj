@@ -153,7 +153,8 @@
      .ws-fold-count { color:#666; font-size:11px; }
      .ws-section-rows { overflow:hidden; max-height:0; opacity:0;
                         transition:max-height .28s ease, opacity .2s ease; }
-     .ws-section-rows.ws-open { max-height:4000px; opacity:1; }"))
+     .ws-section-rows.ws-open { max-height:4000px; opacity:1; }
+     .winddown { opacity: 0.65; }"))
 
 ;; ---------------------------------------------------------------------------
 ;; Shell (persistent rail + content area) — replaces per-page headers.
@@ -484,6 +485,7 @@
 (def ^:private ws-fold-stages
   [[:shipping    "Shipping"]
    [:in-progress "InProgress"]
+   [:winding-down "WindingDown"]
    [:triage      "Triage"]
    [:incoming    "Incoming"]])
 
@@ -543,6 +545,24 @@
          "queued")])]
    [:div.gate-sub [:span project]]])
 
+(defn- winddown-row
+  "One winding-down row: closed workstream still holding live sessions. Muted;
+   one action. A :pending? row shows 'stopping…' (no re-clickable button); the
+   5s poll drops the row once its sessions are down."
+  [{:keys [project ws-id origin label outcome sessions rss-str pending?]}]
+  [:div.gate-card.winddown
+   [:div.gate-top (origin-badge origin) [:span.lbl label]]
+   [:div.gate-sub
+    [:span project]
+    [:span.meta (str "closed:" (name (or outcome :done)) " · "
+                     (count sessions) " live session(s)"
+                     (when rss-str (str " · " rss-str)))]
+    (if pending?
+      [:span.meta "stopping…"]
+      [:button.btn.btn-danger
+       {"data-on:click" (str "@post('/workstreams/" project "/" ws-id "/winddown')")}
+       "Bring down"])]])
+
 (defn workstreams-fragment
   "The selected tab's stage-grouped selectable list across projects, rendered
    from the screen. Selection is threaded from the screen so a poll refresh keeps
@@ -574,7 +594,10 @@
             ;; ones stay shut: no flash of unfolded content. The 5s poll re-applies
             ;; the class in the same task before paint, so it never re-animates.
             [:div.ws-section-rows {:data-class (str "{'ws-open': !$" sig "}")}
-             (for [r rows] (ws-list-row screen sel-id project r))]]))]))))
+             (for [r rows]
+               (if (= :winding-down stage)
+                 (winddown-row (assoc r :project project))
+                 (ws-list-row screen sel-id project r)))]]))]))))
 
 (defn- session-dev-cell
   "Per-session DEV ENVIRONMENT controls for the Sessions table, driven by the

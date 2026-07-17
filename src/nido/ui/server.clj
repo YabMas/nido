@@ -143,18 +143,35 @@
    runs through this one function, so no two render sites disagree."
   [view-state]
   (let [screen (work/screen view-state
-                            {:groups  (work/all-grouped)
-                             :gates   (work/all-gates)
-                             :pending (dev/pending-resolve-keys)})
+                            {:groups           (work/all-grouped)
+                             :gates            (work/all-gates)
+                             :pending          (dev/pending-resolve-keys)
+                             :winddown-pending (dev/pending-winddown-keys)})
         sel (:selection view-state)]
-    (assoc screen :selection
-           (when sel
-             (let [ws (when (= :workstreams (:surface view-state))
-                        (work/workstream (:project sel) (:ws-id sel) (:entry view-state)))]
-               (cond-> {:project (:project sel) :ws-id (:ws-id sel)}
-                 ws (assoc :ws ws
-                           :dev-states (dev/ws-session-dev-states (:project sel) ws)
-                           :machine (work/machine-facts (:project sel) (map :name (:sessions ws))))))))))
+    (-> screen
+        (assoc :selection
+               (when sel
+                 (let [ws (when (= :workstreams (:surface view-state))
+                            (work/workstream (:project sel) (:ws-id sel) (:entry view-state)))]
+                   (cond-> {:project (:project sel) :ws-id (:ws-id sel)}
+                     ws (assoc :ws ws
+                               :dev-states (dev/ws-session-dev-states (:project sel) ws)
+                               :machine (work/machine-facts (:project sel) (map :name (:sessions ws))))))))
+        (update :groups
+                (fn [groups]
+                  (mapv (fn [{:keys [project] :as g}]
+                          (update-in g [:grouped :winding-down]
+                                     (fn [rows]
+                                       (mapv (fn [row]
+                                               (let [facts (work/machine-facts project (:sessions row))
+                                                     total (->> (vals facts)
+                                                                (mapcat (juxt :repl-rss :pg-rss))
+                                                                (remove nil?)
+                                                                (reduce + 0))]
+                                                 (cond-> row
+                                                   (pos? total) (assoc :rss-str (proc/human-bytes total)))))
+                                             rows))))
+                        groups))))))
 
 (defn- rail-ctx
   "Rail context for the screen-based surfaces (needs, workstreams). The badge
@@ -292,7 +309,7 @@
         (catch Exception e
           (dev/set-app-state! k :failed (or (:reason (ex-data e)) (ex-message e))))))))
 
-(defn- handle-post [{:keys [uri body]}]
+(defn- handle-post [{:keys [uri body] :as req}]
   (let [segs (parse-path uri)]
     (cond
       ;; POST /gate/:project/:ws-id/:action — resolve a gate follow-action
@@ -360,6 +377,19 @@
             (sse-response
              (sse-fragment
               (views/pickup-result-fragment result {:project project :daemon-ready? ready?}))))))
+
+      ;; POST /workstreams/:project/:ws-id/winddown — bring a closed workstream's
+      ;; leftover sessions down. Optimistic :stopping keyed "project/ws-id" (same
+      ;; key-space as gate-resolve!) marks the row pending until down! settles.
+      (and (= 4 (count segs)) (= "workstreams" (first segs)) (= "winddown" (nth segs 3)))
+      (let [project (nth segs 1) ws-id (nth segs 2) k (str project "/" ws-id)]
+        (dev/set-app-state! k :stopping)
+        (future
+          (try (work/bring-down! project ws-id)
+               (dev/clear-app-state! k)
+               (catch Exception e
+                 (dev/set-app-state! k :failed (ex-message e)))))
+        (workstreams-fragment-response (derive-screen (view-state/parse req))))
 
       ;; POST /workstreams/:project/:ws-id/findings — file a staging findings round
       (and (= 4 (count segs)) (= "workstreams" (first segs)) (= "findings" (nth segs 3)))

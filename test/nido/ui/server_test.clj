@@ -436,6 +436,29 @@
       (nido.session.dev/clear-app-state! "brian/ws-failed")
       (nido.session.dev/clear-app-state! "brian--fix/foo"))))
 
+;; ---------------------------------------------------------------------------
+;; POST /workstreams/:project/:ws-id/winddown — bring a closed workstream's
+;; leftover sessions down
+;; ---------------------------------------------------------------------------
+
+(deftest post-winddown-sets-stopping-and-responds-with-fragment
+  (let [called (atom nil)]
+    (with-redefs [nido.work/bring-down! (fn [p w] (reset! called [p w]) {:downed []})
+                  nido.work/all-grouped (fn [] [])
+                  nido.work/all-gates (fn [] [])
+                  server/read-rail-daemon (fn [] {:state :up})]
+      (let [resp (server/handle-request {:request-method :post
+                                         :uri "/workstreams/p/w1/winddown"})]
+        (is (= 200 (:status resp)))
+        (is (str/includes? (get-in resp [:headers "Content-Type"]) "text/event-stream"))
+        ;; the future runs async — poll until the pending key CLEARS (asserting
+        ;; on @called alone races the clear-app-state! that follows it)
+        (loop [n 40]
+          (when (and (seq (dev/pending-winddown-keys)) (pos? n))
+            (Thread/sleep 50) (recur (dec n))))
+        (is (= ["p" "w1"] @called))
+        (is (empty? (dev/pending-winddown-keys)) "cleared after bring-down returns")))))
+
 (deftest post-pane-gate-reply-passes-input-from-body
   (let [calls (atom [])]
     (with-redefs [nido.work/resolve-gate! (fn [p w a & [in]] (swap! calls conj [p w a in]) {:resumed "auto"})

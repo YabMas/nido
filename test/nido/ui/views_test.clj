@@ -190,6 +190,21 @@
     (is (str/includes? html "scope=brian"))
     (is (str/includes? html "sel=brian:w1"))))
 
+(deftest workstreams-fragment-renders-winding-down-rows
+  (let [screen {:scope "all" :tab :active :selection nil
+                :groups [{:project "p"
+                          :grouped {:winding-down
+                                    [{:ws-id "w1" :origin :scratch :label "old-one"
+                                      :outcome :done :sessions ["s1"] :rss-str "612 MB"}
+                                     {:ws-id "w2" :origin :scratch :label "stopping-one"
+                                      :outcome :dropped :sessions ["s2"] :pending? true}]}}]}
+        html (views/workstreams-fragment screen)]
+    (is (str/includes? html "old-one"))
+    (is (str/includes? html "612 MB"))
+    (is (str/includes? html "/workstreams/p/w1/winddown"))
+    (is (str/includes? html "stopping…") "pending row shows progress, no button")
+    (is (not (str/includes? html "/workstreams/p/w2/winddown")))))
+
 (deftest workstreams-fragment-preserves-selection
   ;; a poll refresh keeps the open row highlighted, and each row link preserves
   ;; the view-state so selecting one lands on the SAME list.
