@@ -184,6 +184,34 @@
     (is (str/includes? html "stopping…") "pending row shows progress, no button")
     (is (not (str/includes? html "/workstreams/p/w2/winddown")))))
 
+(deftest winddown-row-post-url-carries-the-screen-query
+  ;; Fix 1: the button's POST url must preserve scope + tab (as query params) so
+  ;; the winddown route's derive-screen renders the SAME screen the user was on
+  ;; instead of defaulting to intake/all/deselected.
+  (let [screen {:scope "brian" :tab :active :selection nil
+                :groups [{:project "brian"
+                          :grouped {:winding-down
+                                    [{:ws-id "w1" :origin :scratch :label "old-one"
+                                      :outcome :done :sessions ["s1"]}]}}]}
+        html (views/workstreams-fragment screen)]
+    (is (str/includes? html "/workstreams/brian/w1/winddown?scope=brian&amp;tab=active")
+        "the POST url is the exact winddown route plus the preserved screen query")))
+
+(deftest winddown-row-failed-shows-error-and-keeps-the-button
+  ;; Fix 3: a failed bring-down! must be visible on the row AND retryable — the
+  ;; button stays so clicking it again sets :stopping, self-clearing the error.
+  (let [screen {:scope "all" :tab :active :selection nil
+                :groups [{:project "p"
+                          :grouped {:winding-down
+                                    [{:ws-id "w1" :origin :scratch :label "old-one"
+                                      :outcome :done :sessions ["s1"]
+                                      :error-msg "bring-down! failed: connection refused"}]}}]}
+        html (views/workstreams-fragment screen)]
+    (is (str/includes? html "bring-down! failed: connection refused"))
+    (is (str/includes? html "/workstreams/p/w1/winddown") "the button still POSTs — retry is one click")
+    (is (str/includes? html "Bring down"))
+    (is (not (str/includes? html "stopping…")))))
+
 (deftest workstreams-fragment-preserves-selection
   ;; a poll refresh keeps the open row highlighted, and each row link preserves
   ;; the view-state so selecting one lands on the SAME list.
@@ -343,6 +371,20 @@
     (is (str/includes? html "dot-up"))
     ;; the page body lands in the content area
     (is (str/includes? html "body-here"))))
+
+(deftest shell-ops-poll-carries-the-active-scope
+  ;; Fix 2: the ops mount's @get must carry the current scope so a scoped
+  ;; badge count isn't periodically clobbered by the unscoped total.
+  (let [scoped   (views/shell {:active :workstreams :title "t" :needs-count 0
+                               :daemon {:state :up} :scope "brian" :projects []}
+                              [:p "body"])
+        unscoped (views/shell {:active :workstreams :title "t" :needs-count 0
+                               :daemon {:state :up} :scope "all" :projects []}
+                              [:p "body"])]
+    (is (str/includes? scoped "@get(&apos;/_fragment/ops?scope=brian&apos;)"))
+    (is (str/includes? unscoped "@get(&apos;/_fragment/ops&apos;)")
+        "\"all\" scope omits the query param, matching the pre-fix url")
+    (is (not (str/includes? unscoped "scope=")))))
 
 (deftest rail-status-fragment-has-both-live-bits
   (let [html (views/rail-status-fragment {:needs-count 2 :daemon {:state :halted}})]

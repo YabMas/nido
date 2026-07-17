@@ -590,7 +590,7 @@
 
 ;; ---------------------------------------------------------------------------
 ;; Task 3 (pickup design): TUI pickup input box — drive a Notion ticket by
-;; URL/id from the system surface, no board browsing.
+;; URL/id from the ops overlay, no board browsing.
 ;; ---------------------------------------------------------------------------
 
 (deftest pickup-input-submit-drives-the-resolved-ticket

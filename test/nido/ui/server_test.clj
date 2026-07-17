@@ -430,6 +430,23 @@
         (is @halted)
         (is (str/includes? (:body resp) "ops-panel"))))))
 
+(deftest ops-fragment-badge-count-is-scoped-when-scope-param-present
+  ;; Fix 2: GET /_fragment/ops?scope=brian must filter the rail badge to
+  ;; brian's gates only; the scope-less request keeps counting every gate.
+  (with-redefs [nido.work/all-gates (fn [] [{:project "brian" :ws-id "w1"}
+                                            {:project "brian" :ws-id "w2"}
+                                            {:project "fukan" :ws-id "w3"}])
+                nido.coordinator.halt/read-halt-info (fn [] nil)
+                nido.coordinator.breakers/tripped-triggers (fn [] [])
+                nido.coordinator.triggers/load-for-project (fn [_] [])
+                project/list-projects (fn [] {"brian" {:directory "/x"} "fukan" {:directory "/y"}})
+                server/read-rail-daemon (fn [] {:state :up})]
+    (let [scoped   (server/handle-request {:request-method :get :uri "/_fragment/ops"
+                                           :query-string "scope=brian"})
+          unscoped (server/handle-request {:request-method :get :uri "/_fragment/ops"})]
+      (is (str/includes? (:body scoped) ">2<") "scoped badge counts only brian's 2 gates")
+      (is (str/includes? (:body unscoped) ">3<") "unscoped badge counts all 3 gates"))))
+
 (deftest post-pane-gate-reply-passes-input-from-body
   (let [calls (atom [])]
     (with-redefs [nido.work/resolve-gate! (fn [p w a & [in]] (swap! calls conj [p w a in]) {:resumed "auto"})

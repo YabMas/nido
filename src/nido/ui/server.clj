@@ -80,7 +80,8 @@
                              :gates            (work/all-gates)
                              :pending          (dev/pending-resolve-keys)
                              :winddown-pending (dev/pending-winddown-keys)})
-        sel (:selection view-state)]
+        sel (:selection view-state)
+        winddown-errors (dev/failed-winddown-errors)]
     (-> screen
         (assoc :selection
                (when sel
@@ -100,9 +101,12 @@
                                                      total (->> (vals facts)
                                                                 (mapcat (juxt :repl-rss :pg-rss))
                                                                 (remove nil?)
-                                                                (reduce + 0))]
+                                                                (reduce + 0))
+                                                     err   (get winddown-errors
+                                                                (str project "/" (:ws-id row)))]
                                                  (cond-> row
-                                                   (pos? total) (assoc :rss-str (proc/human-bytes total)))))
+                                                   (pos? total) (assoc :rss-str (proc/human-bytes total))
+                                                   (and err (not (:pending? row))) (assoc :error-msg err))))
                                              rows))))
                         groups))))))
 
@@ -142,12 +146,19 @@
                            (filter #(= :manual (-> % :source :type)))
                            vec)]))})
 
-(defn- ops-fragment-response []
-  (sse-response
-   (sse-fragment
-    (str (views/ops-panel-fragment (ops-context))
-         (views/rail-status-fragment {:needs-count (count (work/all-gates))
-                                      :daemon (read-rail-daemon)})))))
+(defn- ops-fragment-response
+  "`scope` filters the badge count to one project's gates (string :project on
+   each gate); \"all\" (or omitted) counts every gate, matching prior behavior."
+  ([] (ops-fragment-response "all"))
+  ([scope]
+   (sse-response
+    (sse-fragment
+     (str (views/ops-panel-fragment (ops-context))
+          (views/rail-status-fragment
+           {:needs-count (->> (work/all-gates)
+                              (filter #(or (= "all" scope) (= scope (:project %))))
+                              count)
+            :daemon (read-rail-daemon)}))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Routing
@@ -300,7 +311,7 @@
                                    [k (str (get body* (keyword (views/fire-signal tname k)) ""))]))]
             (queue/enqueue! {:target {:project project :trigger tname} :payload payload}))
           :else nil)
-        (ops-fragment-response))
+        (ops-fragment-response (:scope (view-state/parse req))))
 
       :else
       (html-response 404 (views/not-found-page)))))
@@ -336,9 +347,12 @@
       ["_fragment" "needs"]
       (needs-fragment-response (derive-screen (view-state/parse req)))
 
-      ;; GET /_fragment/ops — SSE ops-panel refresh (patches #ops-panel + rail)
+      ;; GET /_fragment/ops — SSE ops-panel refresh (patches #ops-panel + rail).
+      ;; Scope rides ?scope=, parsed the same way every other view-state is —
+      ;; so the shell's scoped poll (see views/shell) gets a scoped badge count
+      ;; instead of the unscoped total clobbering it every 5s.
       ["_fragment" "ops"]
-      (ops-fragment-response)
+      (ops-fragment-response (:scope (view-state/parse req)))
 
       ;; Otherwise, dispatch on structure
       (cond

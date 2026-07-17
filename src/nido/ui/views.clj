@@ -272,24 +272,29 @@
 
 (defn shell
   "Page chrome: persistent rail + content area. Replaces `layout`. `ctx` carries
-   {:active :title :needs-count :daemon :scope :projects :tab}; `content` is hiccup."
-  [{:keys [title] :as ctx} & content]
-  (str
-   (h/html
-    [:html {:lang "en"}
-     [:head
-      [:meta {:charset "utf-8"}]
-      [:meta {:name "viewport" :content "width=device-width, initial-scale=1"}]
-      [:link {:rel "icon" :type "image/png" :href "/favicon.png"}]
-      [:title (or title "nido") " — nido"]
-      [:script {:type "module" :src "https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.1/bundles/datastar.js"}]
-      [:style shell-css]]
-     [:body {:data-signals__ifmissing "{opsOpen: false}"}
-      (rail ctx)
-      (into [:main.content] content)
-      [:div.ops-wrap {:data-show "$opsOpen"
-                      :data-on-interval__duration.5s "$opsOpen && @get('/_fragment/ops')"}
-       [:div {:id "ops-panel"} [:p.meta "…"]]]]])))
+   {:active :title :needs-count :daemon :scope :projects :tab}; `content` is hiccup.
+   The ops poll carries the current :scope (when not \"all\") so the badge count
+   the poll patches in stays scoped instead of periodically clobbering it back
+   to the global count."
+  [{:keys [title scope] :as ctx} & content]
+  (let [ops-q (if (and scope (not= "all" scope)) (str "?scope=" scope) "")]
+    (str
+     (h/html
+      [:html {:lang "en"}
+       [:head
+        [:meta {:charset "utf-8"}]
+        [:meta {:name "viewport" :content "width=device-width, initial-scale=1"}]
+        [:link {:rel "icon" :type "image/png" :href "/favicon.png"}]
+        [:title (or title "nido") " — nido"]
+        [:script {:type "module" :src "https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.1/bundles/datastar.js"}]
+        [:style shell-css]]
+       [:body {:data-signals__ifmissing "{opsOpen: false}"}
+        (rail ctx)
+        (into [:main.content] content)
+        [:div.ops-wrap {:data-show "$opsOpen"
+                        :data-on-interval__duration.5s
+                        (str "$opsOpen && @get('/_fragment/ops" ops-q "')")}
+         [:div {:id "ops-panel"} [:p.meta "…"]]]]]))))
 
 ;; ---------------------------------------------------------------------------
 ;; Components
@@ -616,8 +621,13 @@
 (defn- winddown-row
   "One winding-down row: closed workstream still holding live sessions. Muted;
    one action. A :pending? row shows 'stopping…' (no re-clickable button); the
-   5s poll drops the row once its sessions are down."
-  [{:keys [project ws-id origin label outcome sessions rss-str pending?]}]
+   5s poll drops the row once its sessions are down. `q` is the current
+   screen's query string (screen-query) so the POST preserves scope + tab
+   instead of the fragment's response resetting the view to defaults. An
+   :error-msg (from a failed bring-down!) renders inline AND keeps the button —
+   clicking retry sets :stopping, which overwrites the :failed entry, so retry
+   self-clears the error."
+  [{:keys [project ws-id origin label outcome sessions rss-str pending? error-msg]} q]
   [:div.gate-card.winddown
    [:div.gate-top (origin-badge origin) [:span.lbl label]]
    [:div.gate-sub
@@ -627,16 +637,19 @@
                      (when rss-str (str " · " rss-str)))]
     (if pending?
       [:span.meta "stopping…"]
-      [:button.btn.btn-danger
-       {"data-on:click" (str "@post('/workstreams/" project "/" ws-id "/winddown')")}
-       "Bring down"])]])
+      (list
+       (when error-msg [:div.error-msg error-msg])
+       [:button.btn.btn-danger
+        {"data-on:click" (str "@post('/workstreams/" project "/" ws-id "/winddown" q "')")}
+        "Bring down"]))]])
 
 (defn workstreams-fragment
   "The selected tab's stage-grouped selectable list across projects, rendered
    from the screen. Selection is threaded from the screen so a poll refresh keeps
    the open row's highlight instead of clearing it."
   [{:keys [groups selection tab] :as screen}]
-  (let [sel-id (:ws-id selection)]
+  (let [sel-id (:ws-id selection)
+        wd-q   (screen-query screen)]
     (str
      (h/html
       [:div {:id "workstreams"}
@@ -664,7 +677,7 @@
             [:div.ws-section-rows {:data-class (str "{'ws-open': !$" sig "}")}
              (for [r rows]
                (if (= :winding-down stage)
-                 (winddown-row (assoc r :project project))
+                 (winddown-row (assoc r :project project) wd-q)
                  (ws-list-row screen sel-id project r)))]]))]))))
 
 (defn- session-dev-cell

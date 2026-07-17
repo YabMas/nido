@@ -65,6 +65,19 @@
        (map key)
        set))
 
+(defn failed-winddown-errors
+  "Map of \"<project>/<ws-id>\" -> error message for winddown attempts whose
+   state is :failed. Fed into derive-screen so a failed bring-down! renders on
+   the row instead of vanishing silently (nothing else reads :failed for
+   winddown keys). Clicking the row's Bring down button again sets :stopping,
+   which overwrites this entry — retry self-clears the error."
+  []
+  (->> @app-states
+       (filter (fn [[k v]] (and (string? k) (str/includes? k "/")
+                                (= :failed (:state v)))))
+       (map (fn [[k v]] [k (:error-msg v)]))
+       (into {})))
+
 (defn dev-state-for
   "Pure derivation of a session's dev-resource state from real state: the
    registry entry (looked up by worktree path), a TCP probe of its app port,
@@ -104,15 +117,6 @@
       (let [registry (state/read-registry)]
         (into {} (for [{:keys [name]} sessions]
                    [name (session-dev-state project name registry)]))))))
-
-(defn pending-state-for-action
-  "Map a lifecycle action vector to its optimistic transient state keyword."
-  [action]
-  (case action
-    ["start"]   :starting
-    ["stop"]    :stopping
-    ["restart"] :restarting
-    nil))
 
 (defn app-port-for-instance
   "Look up the app port stored in the session state file for this instance,
