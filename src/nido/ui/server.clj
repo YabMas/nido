@@ -279,8 +279,10 @@
     (dev/set-app-state! k (if (= :reply action-id) :resuming :resolving))
     (future
       (try
-        (work/resolve-gate! project ws-id action-id input)
-        (dev/clear-app-state! k)
+        (let [{:keys [decision error]} (work/resolve-gate! project ws-id action-id input)]
+          (if (contains? #{:notion-failed :error} decision)
+            (dev/set-app-state! k :failed (str "Apply failed" (when error (str ": " (name error)))))
+            (dev/clear-app-state! k)))
         (catch Exception e
           (dev/set-app-state! k :failed (or (:reason (ex-data e)) (ex-message e))))))))
 

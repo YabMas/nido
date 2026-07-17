@@ -191,6 +191,26 @@
       (is (str/includes? (:body resp) "/workstreams/brian/ws-1"))
       (is (str/includes? (:body resp) "/workstreams")))))
 
+(deftest gate-resolve-surfaces-a-notion-failed-decision
+  ;; resolve-gate! signals failure by RETURNING a decision, not by throwing —
+  ;; gate-resolve! must route that value-level failure to :failed so the board
+  ;; doesn't silently clear the working state on a lost Notion write.
+  (with-redefs [nido.work/resolve-gate! (fn [& _] {:decision :notion-failed :error :server})]
+    (try
+      (#'server/gate-resolve! "brian" "ws-notion-fail" :apply nil)
+      (Thread/sleep 50)   ; resolve runs on a background future
+      (is (= {:state :failed :error-msg "Apply failed: server"}
+             (dev/current-app-state "brian/ws-notion-fail")))
+      (finally (dev/clear-app-state! "brian/ws-notion-fail")))))
+
+(deftest gate-resolve-clears-on-success-decision
+  (with-redefs [nido.work/resolve-gate! (fn [& _] {:decision :applied})]
+    (try
+      (#'server/gate-resolve! "brian" "ws-notion-ok" :apply nil)
+      (Thread/sleep 50)
+      (is (nil? (dev/current-app-state "brian/ws-notion-ok")))
+      (finally (dev/clear-app-state! "brian/ws-notion-ok")))))
+
 (deftest scope-filters-needs-to-one-project
   (with-redefs [nido.work/all-gates (fn [] [{:ws-id "a" :project "brian" :origin :notion :stage :triage
                                              :label "BR-1" :report nil :actions [] :session nil}
