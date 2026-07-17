@@ -11,16 +11,13 @@ description: Triage a bug-report ticket (Notion ticket or Slack-channel message)
 
 ## When this fires
 
-The nido coordinator fires this skill when a triage trigger matches — from a Notion view or the Slack bug channel:
-- `:triage-new` — `Status = Needs verification` Notion view
-- `:triage-backlog` — `Type = bug AND Status NOT IN {Done, Not Done, Needs verification, Review}` Notion view, filtered to rows with no `Effort` set
-- `:triage-slack-bugs` — a new top-level message in the Slack bug channel (`:source {:type :slack-channel ...}`)
+The nido coordinator fires this skill when a triage trigger matches — from a Notion view or the Slack bug channel. The live Notion trigger is `:triage-new` — `Status = Needs verification` Notion view (see `~/.nido/projects/brian/triggers.edn` for the current set; don't assume other trigger names are wired up).
 
 The envelope payload for a **Notion** run (per nido's normalised Notion event) includes:
 - `:page-id` — Notion page id
 - `:url` — Notion page URL
 - `:title` — page title
-- `:trigger-name` — `:triage-new` or `:triage-backlog`
+- `:trigger-name` — `:triage-new`
 - Other Notion properties flattened (e.g. `:type`, `:status`, `:priority`)
 
 The envelope payload for a **Slack** run includes `:adapter :slack-message`, `:id` (e.g. `slack-C123-1718000000.000123`), `:url` (Slack permalink), `:title` (truncated text), and `:text` (the full message). It has **no `:page-id`** — see "Source adapter" below.
@@ -42,25 +39,102 @@ The **ticket key** is what goes in every `bb nido:ticket:*` call's `:br` argumen
 
 - **Step 1.2 / 1.3:** do NOT fetch the Notion page or block-children. The brief IS the payload — investigate from `:text` (the report body) and `:url` (the Slack permalink). Open the record with the slack `:id` as `:br` and **omit `:page`** (there is no page-id):
   ```bash
-  bb nido:ticket:open :project brian :br <slack-id> :url <url> :title "<title>" :opened-by triage-slack-bugs
+  bb nido:ticket:open :project brian :br <slack-id> :url <url> :title "<title>" :opened-by <trigger-name>
   ```
+- **Report (Step 1.6 / Step 2):** there is no Notion owner to route to, so the report EDN's `:routing` field is `:routing nil` (see the schema in Step 2).
 - **Step 4 (apply):** skip the optimistic concurrency check and ALL Notion writes (`notion page set`, the callout `notion api PATCH`, `notion block delete`). The verdict is already captured in the nido record (Step 1.6) — just `bb nido:ticket:complete … :status triaged :disposition applied`. There is no Notion mutation, so write **no** `notion-mutations.log` entry — the nido record is the audit trail.
-- **Step 5 (dismiss):** dismiss is nido-only for every source — just `bb nido:ticket:dismiss … :br <slack-id>`. No Notion write, no `notion-mutations.log` entry.
+- **Step 5 (dismiss):** dismiss is a Slack-only, nido-ledger action (Notion runs never dismiss) — just `bb nido:ticket:dismiss … :br <slack-id>`. No Notion write, no `notion-mutations.log` entry.
 
 Everything else is **identical** for both sources: the codebase investigation, the report format (§3 "Proposed Notion writes" is simply omitted for Slack — there are none), the HITL halt at `:awaiting-input`, the `bb nido:ticket:*` ledger writes, and the verb grammar. Wherever a step below says "fetch the page", "BR-####", or names a Notion-write command, a Slack run uses the payload brief, the slack `:id`, or skips the call, respectively.
 
+## Routing (Notion runs)
+
+The triage of a Notion report is a **routing decision**: get it to the right owner.
+Set the Notion **Ball Holder** (people, replace) and **App Domain** (multi_select,
+additive) accordingly. The owner AND the bug determination together decide how deep
+this triage goes (see Depth below) — owner alone is not enough.
+
+| Report is about… | Ball Holder (user-id) | App Domain | Depth |
+|---|---|---|---|
+| Student environment / mobile app | Ataberk Koroglu — `3eb98667-d12e-4e9e-9342-48fec803b571` | `Student` | shallow |
+| Auth (backend), external integrations (Canvas, Entra, …), large architecture / design-pattern concerns | Eric Dvorsak — `955b4c25-7bce-4ca2-ab5e-d99acbcd423a` | `Backend` | shallow |
+| Teacher environment | Jaap Maaskant — `169d872b-594c-8160-b432-000250f98e86` | `Teacher` | deep if `:determination :bug`, else shallow |
+| General backend (not Eric's specialty) | Jaap Maaskant — `169d872b-594c-8160-b432-000250f98e86` | `Backend` | deep if `:determination :bug`, else shallow |
+| Doesn't clearly fit Student / Teacher / Backend | Jaap Maaskant — `169d872b-594c-8160-b432-000250f98e86` | `Misc` | shallow |
+
+Jaap's depth is **conditional**, not fixed: deep only when the report is an actionable
+bug (`:determination :bug`); a not-a-bug / needs-info / can't-verify report routed to
+Jaap is always shallow, same as an Ataberk/Eric route. See Depth below.
+
+**The Backend split is the one real judgment.** Authentication / login / SSO / Entra /
+Canvas / any external-system integration / large architectural or design-pattern
+concern → **Eric**. Any other backend work → **Jaap**. When you genuinely can't tell
+which side of the split a report falls on, route to **Jaap** and say so in chat.
+
+**A report that doesn't clearly fit Student / Teacher / Backend** uses App Domain
+`"Misc"` and routes to **Jaap** (the default owner), shallow.
+
+**Every report gets an owner, routed by area — not by determination.** A report you
+read as not-a-bug / noise / needs-info is NOT dismissed — route it exactly like a bug
+report would be, by AREA: Student → **Ataberk**, the Eric-split list
+(auth/login/SSO/Entra/Canvas/external-integration/large-architecture) → **Eric**,
+Teacher / general Backend → **Jaap**. `:determination` never changes the owner, only
+the depth (see Depth below). **Jaap is the default owner only when the report has no
+clear specialist area** — it isn't clearly Student and isn't clearly Eric's
+auth/integration/architecture domain — which is where a vague/noise/"Misc" report
+lands. Either way this is always a **shallow** route: set Ball Holder + App Domain
+only, keep the status at "Needs verification", and let the owner disposition it in
+Notion. There is no ownerless outcome and no `dismiss` for Notion tickets.
+
+The report's `:routing` field carries the semantic owner keyword — `:ataberk`,
+`:eric`, or `:jaap` — plus `:app-domain` and `:depth`. The user-ids above are only for
+the Notion write in Step 4.
+
+### Depth: shallow vs deep
+
+Depth is gated on the **determination**, not purely on the owner:
+
+- **Deep applies ONLY to an actionable bug routed to Jaap** — `:determination :bug`
+  AND owner Jaap (Teacher, or general Backend not in Eric's specialty). The full
+  triage: investigate the codebase, propose 1–3 directions with effort (or
+  `:squirrel`), enrich the title and prepend the enriched-description callout, and
+  transition **Status "Needs verification" → "Not started"**. Emit the populated
+  `:directions`, `:notion-writes` (as today), and `:routing {… :depth :deep}`.
+- **A not-a-bug / needs-info / can't-verify report is shallow, regardless of owner** —
+  including one routed to Jaap. Shallow also covers every Ataberk/Eric route
+  unconditionally. Set Ball Holder + App Domain and **nothing else**. No solution
+  directions, no effort, no enriched title/description, and **no theories you can't
+  verify from the codebase**. Notion **Status stays "Needs verification"** — the owner
+  picks it up from there (Jaap dispositions his own not-a-bug/needs-info reports in
+  Notion). You may read the report and take a light look to *confirm the area*, but do
+  not root-cause. Emit `:directions []` and `:notion-writes nil`; set
+  `:routing {… :depth :shallow}`.
+
+A not-a-bug / needs-info report is **never** deep and **never** transitions Notion
+Status away from "Needs verification" — that transition happens only for a confirmed,
+actionable bug.
+
+Either way, HITL is unchanged: propose, halt at `:awaiting-input`, and wait for the
+human to `apply`. Shallow routes still pass the human — every routing is acked.
+
 ## Lifecycle: ticket status
 
-**Two terminal outcomes, nothing in between.** A report is either *on the radar* — worth pursuing, so it gets a real triage verdict (`apply` → `:triaged`) — or it's *off the radar* (`dismiss` → `:dismissed`). There is no "skip" verdict any more: don't half-handle a ticket. If it's not worth triaging, dismiss it.
+**One terminal outcome for a Notion report: `apply` (route it).** Every new report is
+triaged to an owner (see Routing) — there is no `dismiss` for Notion tickets. `dismiss`
+survives only for **Slack** runs (ledger-only, off the nido radar); a Notion run never
+uses it. On `apply` the nido record is marked `:triaged`, which takes the ticket off
+nido's Intake radar even though a shallow route leaves the Notion status at "Needs
+verification".
 
-Triage state lives in the nido ticket record, keyed by `BR-####`. Set the record's status via `bb nido:ticket:status`; this is recorded in the ticket's `meta.edn` and is the durable triage state the coordinator's pre-spawn gate reads. Terminal completion goes through `bb nido:ticket:complete` (triaged) or `bb nido:ticket:dismiss` (off-radar).
+Triage state lives in the nido ticket record, keyed by `BR-####`. Set the record's status via `bb nido:ticket:status`; this is recorded in the ticket's `meta.edn` and is the durable triage state the coordinator's pre-spawn gate reads. Terminal completion goes through `bb nido:ticket:complete` (triaged) or `bb nido:ticket:dismiss` (off-radar, Slack-only).
 
 | Status | Set by | Means |
 |---|---|---|
 | `:investigating` | `bb nido:ticket:open` (Step 1), and `redo:` | Reading the report (Notion page or Slack brief), walking codebase, drafting report |
 | `:awaiting-input` | `bb nido:ticket:status … :status awaiting-input` | Draft written + appended to the record. Awaiting human reply in chat. |
 | `:triaged` | `bb nido:ticket:complete … :status triaged` | Verdict applied — Notion properties written on `apply` (Notion run); ledger-only, no Notion (Slack run). Run done. |
-| `:dismissed` | `bb nido:ticket:dismiss …` | Off-radar (nido-only, no Notion write). Run done. |
+
+`:dismissed` (`bb nido:ticket:dismiss …`) remains a status, but it's **Slack-only** — off-radar, nido-only, no Notion write. A Notion run never reaches it.
 
 To set a non-terminal status mid-run:
 
@@ -147,6 +221,9 @@ report (non-zero exit + an explain dump) — fix and retry until it's accepted.
  :summary       "2–6 sentences, self-contained — assumes the reader hasn't seen the original."
  :confidence    {:level :high        ; :high | :medium | :low
                  :reason "one line"}
+ :routing       {:owner :jaap        ; :ataberk | :eric | :jaap
+                 :app-domain "Teacher" ; "Student" | "Teacher" | "Backend" | "Misc"
+                 :depth :deep}         ; :deep ONLY for :determination :bug routed to Jaap; :shallow otherwise (Ataberk/Eric always, or any not-a-bug/needs-info report)
  :directions    [{:label "A" :shape "1 sentence"
                   :effort :M    ; :XS :S :M :L :XL — or :squirrel to defer sizing
                   :confidence {:level :medium :reason "one line"}}]
@@ -160,8 +237,13 @@ report (non-zero exit + an explain dump) — fix and retry until it's accepted.
 ```
 
 Notes:
+- **`:routing` is required for a Notion run** (nil only for Slack). A **shallow** route
+  (Ataberk/Eric always, or a not-a-bug/needs-info report even when routed to Jaap)
+  emits `:directions []` and `:notion-writes nil` — routing is the whole outcome. A
+  **deep** route (Jaap, and only for `:determination :bug`) populates `:directions` and
+  `:notion-writes` as below. See Routing / Depth above.
 - `:notion-writes` is **nil for Slack runs** — there are no Notion writes.
-- There is **no dismiss-recommendation field**. If the report isn't worth pursuing, say so in chat and `dismiss` — don't encode it in the report.
+- There is **no dismiss-recommendation field**. If the report isn't worth pursuing, say so in chat and `dismiss` — don't encode it in the report (Slack runs only; a Notion report is always routed, never dismissed).
 - **`:squirrel` is the joker** — use it for `:effort` when the implementation direction is genuinely ambiguous and sizing should defer to the implementation-plan stage. When you use it, set `:defer-note` explaining why; `/continue-ticket` resolves it into a concrete effort later.
 - After appending, print the report into chat with `bb nido:ticket:report :project brian :br <key>` (renders the stored report as markdown) so the user sees it on `nido enter`.
 
@@ -173,7 +255,7 @@ When the session resumes (the user replied), the latest user message contains th
 |---|---|
 | `apply` | Execute §3 verbatim |
 | `apply: <override>` | Apply with overrides, e.g. `apply: effort=L, title="..."` |
-| `dismiss` | Execute §5 — take the ticket off the radar (nido-only) |
+| `dismiss` | *(Slack runs only)* Execute §5 — take the ticket off the radar (nido-only). A Notion run has no `dismiss` — every report is routed. |
 | `redo: <correction>` | Re-run Step 1 + Step 2 with the correction in mind; new draft, re-halt at `:awaiting-input` |
 | `cancel` | Abort and exit. Leave Notion untouched and do NOT mark the record terminal — nido's run-termination hook clears the ticket status so it's re-triable |
 
@@ -201,14 +283,46 @@ Wait for re-confirmation in chat before proceeding.
 
 **Read the verdict from the record, not your memory.** Run
 `bb nido:ticket:report :project brian :br <BR-####>` (or read the stored EDN via
-`bb nido:ticket:show`); the `:notion-writes` map is the canonical apply payload. Write
-exactly those Type / Effort / Status / Title values and that `:description-prepend`
-callout — do not re-derive them.
+`bb nido:ticket:show`); the `:routing` and `:notion-writes` maps are the canonical
+apply payload. Write exactly those values — do not re-derive them.
+
+### Routing write (both depths, Notion run)
+
+Always set Ball Holder (replace) and App Domain (additive) from `:routing`. These are a
+people + multi_select property, so use `notion api PATCH` (the `notion page set`
+key=value form does not handle people). Map `:owner` → user-id via the Routing table.
+
+1. Read the current App Domain so the write is additive:
+
+   ```bash
+   notion page view <page-id> --format json \
+     | jq -c '[.page.properties["App Domain"].multi_select[].name] + ["<routed-domain>"] | unique | map({name: .})'
+   ```
+
+   Let `<domains-json>` be that array (e.g. `[{"name":"Backend"}]`).
+
+2. PATCH Ball Holder + App Domain:
+
+   ```bash
+   notion api PATCH /v1/pages/<page-id> --body '{
+     "properties": {
+       "Ball Holder": {"people": [{"id": "<owner-user-id>"}]},
+       "App Domain":  {"multi_select": <domains-json>}
+     }
+   }'
+   ```
+
+**Shallow route stops here** — no Type/Effort/Status/Title write, Status stays "Needs
+verification". Record the routing write in `notion-mutations.log` and complete the
+record (`bb nido:ticket:complete … :status triaged :disposition applied`).
+
+**Deep route continues** to the Property update + enriched-callout prepend below
+(unchanged), which sets Type/Effort/Status ("Needs verification" → "Not started")/Title.
 
 1. **Property update** — one `notion page set <page-id> "<k>=<v>" …` call, with these properties (the CLI fetches the DB schema and coerces select/status/title automatically):
    - **Type** (select) — must be one of `bug`, `feature`, `improvement`, `research`, `chore`
    - **Effort** (select) — must be one of `XS`, `S`, `M`, `L`, `XL`
-   - **Status** (status) — for `:triage-new`, transition `Needs verification` → `Not started` (or `On Hold` if you assessed not-actionable). For `:triage-backlog`, leave unchanged.
+   - **Status** (status) — transition `Needs verification` → `Not started`. (Deep route only — see Depth above; deep requires `:determination :bug`, so this transition never fires for a not-a-bug/needs-info report, and a shallow route never reaches this property update at all.)
    - **Title** — set the title property to the **enriched title** from §1. When the enriched title is identical to the original, this is a harmless no-op — write it anyway, don't special-case it.
 
    Example: `notion page set <page-id> "Type=bug" "Effort=M" "Status=Not started" "Task result=<enriched title>"`. Title property key is `Task result`.
@@ -217,7 +331,7 @@ callout — do not re-derive them.
 
 2. **Description prepend** — prepend the enriched description as a single **callout** above the reporter's original body. The original body is never overwritten.
 
-   a. **Idempotency guard.** A ticket can hit both triage triggers (`:triage-new` then `:triage-backlog`), so an enriched callout from a prior triage may already exist. Fetch the page's first child block via `notion block list <page-id> --format json --depth 1` → `.results[0]`. If it is a callout whose text contains the marker `🤖 Enriched (triage BR-####)` for THIS `BR-####`, delete it first with `notion block delete <block-id>` (the `<block-id>` is `.results[0].id`) — it's our own block, never the reporter's content. This prevents stacking duplicate callouts.
+   a. **Idempotency guard.** A ticket can be re-triaged (e.g. via `redo`, or a fresh triage pass later in its life), so an enriched callout from a prior triage may already exist. Fetch the page's first child block via `notion block list <page-id> --format json --depth 1` → `.results[0]`. If it is a callout whose text contains the marker `🤖 Enriched (triage BR-####)` for THIS `BR-####`, delete it first with `notion block delete <block-id>` (the `<block-id>` is `.results[0].id`) — it's our own block, never the reporter's content. This prevents stacking duplicate callouts.
 
    b. **Prepend the callout.** Build the JSON with `jq` (pass the enriched description as the `--arg desc` value, shell-quoted — `jq` escapes any quotes/backslashes/newlines into valid JSON; never hand-write the JSON string), and PATCH it with `position` "start" so it lands at the top:
 
@@ -261,7 +375,9 @@ If any apply write fails after a partial write (some properties landed but the p
 
 ## Step 5 — Dismiss
 
-Dismiss takes the ticket **off the triage radar** and is **nido-only for every source** — it writes **nothing** to Notion. The Notion ticket stays on the team's board untouched; it's simply no longer in nido's triage queue and auto-re-triage skips it. (If a ticket should also change state in Notion — e.g. marked *Not Done* or deleted as spam — that's a human action in Notion, not triage's job.)
+**Slack runs only.** A Notion report is never dismissed — it is always routed to an owner (see Routing). For a Notion run this step does not apply.
+
+Dismiss takes the ticket **off the triage radar** and is **nido-only** — it writes **nothing** to Notion. The Notion ticket stays on the team's board untouched; it's simply no longer in nido's triage queue and auto-re-triage skips it. (If a ticket should also change state in Notion — e.g. marked *Not Done* or deleted as spam — that's a human action in Notion, not triage's job.)
 
 ```bash
 bb nido:ticket:dismiss :project brian :br <BR-####>
@@ -293,7 +409,7 @@ Triage triggers deliberately do NOT use `:dry-run? true`. The coordinator's dry-
 
 The real safety mechanism for triage is the HITL halt at `:awaiting-input` (Step 1.7 + Step 3): the agent ALWAYS pauses for a chat verdict before any Notion write. No Notion mutation happens until you respond with `apply`. If you say `cancel`, `dismiss`, or `redo`, the apply branch never runs (and `dismiss` is nido-only — it never touches Notion either).
 
-Treat this as a hard contract: never run a Notion-write `notion` command (`page set`, the callout `notion api PATCH`, `block delete`) outside the explicit `apply` branch in Step 4. `apply` is the ONLY Notion-write verb. On `apply`, the permitted writes are: the Type/Effort/Status/Title property patch, and the prepend (plus idempotency-delete) of **our own** enriched callout. Never overwrite the reporter's original body, and never write comments.
+Treat this as a hard contract: never run a Notion-write `notion` command (`page set`, `api PATCH`, `block delete`) outside the explicit `apply` branch in Step 4. `apply` is the ONLY Notion-write verb. On `apply`, the permitted writes are: the **Ball Holder + App Domain PATCH** (both depths — see Routing write above), plus, **deep route only**, the Type/Effort/Status/Title property patch and the prepend (plus idempotency-delete) of **our own** enriched callout. Never overwrite the reporter's original body, and never write comments.
 
 ## Resume behaviour
 
