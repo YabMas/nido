@@ -22,7 +22,9 @@
    [nido.coordinator.tickets :as tickets]
    [nido.coordinator.status-file :as status-file]
    [nido.coordinator.workstream :as ws]
-   [nido.session.profiles :as profiles]))
+   [nido.project :as project]
+   [nido.session.profiles :as profiles]
+   [nido.work :as work]))
 
 (defn- reset-executor! [f]
   (executor/configure! {:global-cap 1})
@@ -725,3 +727,17 @@
           nil))
       (is (false? @handle-ship-called)
           "non-:ship envelope must NOT route to handle-ship!"))))
+
+;; ---------------------------------------------------------------------------
+;; Task 5: throttled maybe-adopt! sweep on the tick
+;; ---------------------------------------------------------------------------
+
+(deftest maybe-adopt!-throttles-and-sweeps-all-projects
+  (let [calls (atom [])]
+    (with-redefs [nido.work/adopt-orphans! (fn [p] (swap! calls conj p) {:adopted [] :yielded []})
+                  nido.project/list-projects (constantly {"brian" {:directory "/x"}})]
+      ;; private fn + private atom: test through the var
+      (#'nido.coordinator.core/reset-adopt-throttle!)
+      (#'nido.coordinator.core/maybe-adopt! 1000000)
+      (#'nido.coordinator.core/maybe-adopt! 1001000)   ; 1s later — throttled
+      (is (= [:brian] @calls)))))

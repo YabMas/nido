@@ -41,7 +41,8 @@
    [nido.project :as project]
    [nido.reclaim :as reclaim]
    [nido.session.profiles :as profiles]
-   [nido.ui.server :as ui-server]))
+   [nido.ui.server :as ui-server]
+   [nido.work :as work]))
 
 (def ^:private defaults
   {:poll-ms             1000
@@ -55,6 +56,10 @@
    ;; entry is written, so a young orphan may actually be a live boot in flight.
    :reclaim-interval-ms (* 60 60 1000)   ; hourly
    :reclaim-min-age-ms  (* 60 60 1000)   ; only orphans idle ≥ 1h
+   ;; Adoption sweep: enforce "every live session belongs to a workstream" by
+   ;; adopting live orphans into scratch workstreams (work/adopt-orphans!). First
+   ;; tick after (re)start sweeps immediately (throttle clock starts at 0).
+   :adopt-interval-ms (* 5 60 1000)   ; every 5 min
    ;; Queue hygiene: drop un-promoted Slack inbox entries after 3 days. Swept at
    ;; most once per :inbox-sweep-interval-ms (and on the first tick after start,
    ;; since the throttle clock starts at 0).
@@ -89,6 +94,12 @@
 ;; Last wall-clock ms an auto-reclaim sweep ran. Starts at 0 so the first tick
 ;; after a daemon (re)start sweeps immediately, then throttles to the interval.
 (defonce ^:private !last-reclaim-ms (atom 0))
+
+;; Last wall-clock ms an adoption sweep ran. Starts at 0 so the first tick after
+;; a daemon (re)start sweeps immediately, then throttles to the interval.
+(defonce ^:private !last-adopt-ms (atom 0))
+
+(defn- reset-adopt-throttle! [] (reset! !last-adopt-ms 0))
 
 ;; Last wall-clock ms an inbox-expiry sweep ran. Starts at 0 so the first tick
 ;; after a (re)start sweeps immediately, then throttles to the interval.
@@ -149,6 +160,29 @@
   ;; Envelopes (and load-all-triggers' returned map) use keyword project names,
   ;; so coerce here to a vector of keywords.
   (mapv keyword (keys (project/list-projects))))
+
+(defn- maybe-adopt!
+  "Throttled invariant sweep: at most once per :adopt-interval-ms, adopt live
+   orphan sessions into scratch workstreams and yield claimed duplicates
+   (work/adopt-orphans!). Never throws into the tick loop."
+  [now-ms]
+  (when (>= (- now-ms @!last-adopt-ms) (:adopt-interval-ms defaults))
+    (reset! !last-adopt-ms now-ms)
+    (doseq [project (registered-projects)]
+      (try
+        (let [{:keys [adopted yielded]} (work/adopt-orphans! project)]
+          (when (seq adopted)
+            (println (str "nido coordinator: adopted " (count adopted)
+                          " orphan session(s) in " (name project) ": "
+                          (str/join ", " adopted))))
+          (when (seq yielded)
+            (println (str "nido coordinator: yielded " (count yielded)
+                          " scratch workstream(s) in " (name project)))))
+        (catch Throwable t
+          (binding [*err* *err*]
+            (.println ^java.io.PrintWriter *err*
+                      (str "WARN: adoption sweep threw for " (name project)
+                           " — " (ex-message t)))))))))
 
 (defn- load-all-triggers
   "Returns {:brian [triggers] :foo [triggers]}."
@@ -701,6 +735,7 @@
             (swap! !source-instances assoc-in [hash :last-polled-ms] now-ms))
           ;; Periodic disk hygiene (throttled to :reclaim-interval-ms).
           (maybe-reclaim! now-ms)
+          (maybe-adopt! now-ms)
           (maybe-expire-inbox! now-ms)
           (maybe-poll-github-merges! now-ms)
           (maybe-poll-github-issues! now-ms)
