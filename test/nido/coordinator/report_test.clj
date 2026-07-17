@@ -34,6 +34,12 @@
 (deftest validate-allows-nil-notion-writes-for-slack
   (is (report/validate (assoc valid-report :notion-writes nil))))
 
+(deftest validate-accepts-a-pre-routing-report-missing-routing
+  ;; Backward-compat: reports written before the routing arc have NO :routing key.
+  ;; :routing is {:optional true} so they still validate — else entry->report falls
+  ;; back to dumping the raw EDN into the pane (regression).
+  (is (report/validate (dissoc valid-report :routing))))
+
 (deftest report->markdown-triage-has-sections-and-trail-last
   (let [md (report/report->markdown valid-report)]
     (is (str/includes? md "Checkout off by a cent"))

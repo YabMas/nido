@@ -72,7 +72,7 @@
    [:title         string?]          ; §1 enriched title
    [:summary       string?]          ; §1 enriched description (markdown text)
    [:confidence    Confidence]       ; §1
-   [:routing       [:maybe Routing]] ; §2 — nil for Slack / legacy
+   [:routing       {:optional true} [:maybe Routing]] ; §2 — absent on pre-routing reports, nil for Slack
    [:directions    [:vector Direction]]   ; §2
    [:notion-writes [:maybe NotionWrites]] ; §3 — nil for slack
    [:defer-note    {:optional true} string?]   ; why the plan was deferred (paired with :squirrel)
