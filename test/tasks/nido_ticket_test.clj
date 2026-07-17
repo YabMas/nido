@@ -4,6 +4,7 @@
    [nido.coordinator.facets :as facets]
    [nido.coordinator.tickets :as tickets]
    [nido.coordinator.workstream :as workstream]
+   [nido.work :as work]
    [tasks.nido-ticket :as t]))
 
 (deftest complete-refreshes-facets-after-completing
@@ -32,3 +33,25 @@
       (is (= [[:brian "BR-7" {:kind :note :session "s1" :run-id "r1"} "body text"]]
              @calls)
           "append-cmd hands off to workstream/append-to-ref!, not tickets/"))))
+
+(deftest apply-cmd-resolves-ws-and-calls-work-apply
+  (let [calls (atom [])]
+    (with-redefs [workstream/find-by-ref-id (fn [_ br] {:id (str "ws-" br)})
+                  work/apply! (fn [p id] (swap! calls conj [p id]) {:decision :applied})]
+      (t/apply-cmd ":project" "brian" ":br" "BR-5")
+      (is (= [[:brian "ws-BR-5"]] @calls) "resolves the ws by BR and calls work/apply!"))))
+
+(deftest apply-cmd-no-workstream-exits-nonzero
+  ;; apply-cmd's exit path goes through the redefable t/exit! (matches this
+  ;; codebase's exit-test convention, e.g. nido-transcribe/nido-notion-preprocess)
+  ;; instead of a raw System/exit, so the test can capture the code without
+  ;; killing the test JVM.
+  (let [exit-code (atom nil)
+        err       (java.io.StringWriter.)]
+    (with-redefs [workstream/find-by-ref-id (fn [_ _] nil)
+                  work/apply! (fn [& _] (throw (ex-info "should not be called" {})))
+                  t/exit! (fn [c] (reset! exit-code c))]
+      (binding [*err* err]
+        (t/apply-cmd ":project" "brian" ":br" "BR-none")))
+    (is (= 1 @exit-code) "exits non-zero when no workstream is found for the BR")
+    (is (re-find #"no workstream for BR-none" (str err)))))

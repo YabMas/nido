@@ -361,6 +361,11 @@
    :doc "Terminal completion of a triage verdict (:triaged + disposition)."
    :task (apply nido-ticket/complete-cmd *command-line-args*)}
 
+  nido:ticket:apply
+  {:requires ([tasks.nido-ticket :as nido-ticket])
+   :doc "Execute a parked triage verdict via nido (writes Notion from the typed report)."
+   :task (apply nido-ticket/apply-cmd *command-line-args*)}
+
   nido:ticket:dismiss
   {:requires ([tasks.nido-ticket :as nido-ticket])
    :doc "Take a ticket off the triage radar (:dismissed); skipped by auto-re-triage."

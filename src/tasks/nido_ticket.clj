@@ -8,9 +8,17 @@
    [nido.coordinator.tickets :as tickets]
    [nido.coordinator.tickets-view :as tickets-view]
    [nido.coordinator.workstream :as workstream]
-   [nido.task-args :as task-args]))
+   [nido.task-args :as task-args]
+   [nido.work :as work]))
 
 (defn- project-kw [opts] (keyword (or (:project opts) "brian")))
+
+(defn exit!
+  "Redefable wrapper around System/exit (matches the exit-test convention used
+   elsewhere in tasks.* — see tasks.nido-transcribe / tasks.nido-notion-preprocess)
+   so tests can capture the exit code without killing the test JVM."
+  [code]
+  (System/exit code))
 
 (def ^:private raw-string-keys
   "Kwarg keys whose values must be passed through verbatim — URLs and titles
@@ -113,6 +121,24 @@
       (println (str "── " label " (" (count ts) ") ──"))
       (doseq [t ts] (println "  " (tickets-view/format-row t)))
       (println))))
+
+(defn apply-cmd
+  "bb nido:ticket:apply :project <p> :br BR-#### — execute a parked triage's verdict via
+   nido (work/apply!): reads the typed report from the ledger and writes Notion (Ball
+   Holder + App Domain, deep properties + callout), then completes the record. Prints the
+   decision; exits non-zero on :notion-failed or an unknown BR so the caller can retry."
+  [& args]
+  (let [[_ o] (task-args/split-args args)
+        project (project-kw o)
+        br      (str (:br o))]
+    (if-let [w (workstream/find-by-ref-id project br)]
+      (let [{:keys [decision error callout]} (work/apply! project (:id w))]
+        (println "apply" br "->" (name decision) (when callout (str "(callout " (name callout) ")")))
+        (when (= :notion-failed decision)
+          (binding [*out* *err*] (println "Notion write failed:" (some-> error name)))
+          (exit! 1)))
+      (do (binding [*out* *err*] (println "no workstream for" br))
+          (exit! 1)))))
 
 (defn promote-cmd
   "bb nido:ticket:promote :project <p> :br BR-#### (or positional BR-####)
