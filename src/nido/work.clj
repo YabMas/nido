@@ -578,7 +578,12 @@
 (defn facet-dimensions
   "Ordered facet keys (kebab keywords) for `source` in `project`. :notion and :all
    resolve to the configured Notion dimensions (today the only configured source);
-   other sources have none yet. 1-arity = project-wide (:all)."
+   other sources have none yet. 1-arity = project-wide (:all).
+
+   The 2-arity `source` dispatch has no production caller today — the TUI's three
+   call sites (tui.clj) all use the 1-arity, and server/facet-dims-for (the web
+   caller) was deleted with the source/facet chips. Kept for the TUI's later
+   migration onto the band model; do not remove."
   ([project] (facet-dimensions project :all))
   ([project source]
    (if (contains? #{:all :notion} source)
@@ -586,7 +591,13 @@
      [])))
 
 (defn grouped-rows
-  "Flat seq of every workstream row in a `work/grouped` map (all board bands)."
+  "Flat seq of every workstream row in a `work/grouped` map (all board bands).
+
+   No production caller today (views/facet-rows, its last one, is gone with the
+   source/facet chips) — but it is load-bearing as a test oracle: it is the
+   independent traversal work_test.clj's tab-bands-union-covers-every-row-exactly-once
+   cross-checks tab-bands against, so a one-sided edit to either breaks that test.
+   Do not delete as 'unused'."
   [grouped]
   (concat (:incoming grouped)
           (get-in grouped [:triage :in-flight])
