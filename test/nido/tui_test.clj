@@ -238,6 +238,15 @@
         (is (= [["brian" "w1"]] @calls) "x → work/dismiss!")
         (is (re-find #"dismissed" (:status s')))))))
 
+(deftest board-x-noop-on-notion-row
+  (let [calls (atom [])]
+    (with-redefs [nido.tui/selected-workstream (fn [_] {:ws-id "w1" :br-id "BR-1" :origin :notion})
+                  nido.work/dismiss! (fn [p id] (swap! calls conj [p id]) {:decision :dismissed})
+                  nido.tui/current-rows (constantly [])]
+      (let [[s' _] (#'tui/update-board (board-state :all) (msg/key-press "x"))]
+        (is (= [] @calls) "x does NOT dismiss a Notion row — Notion owns it")
+        (is (re-find #"Notion" (:status s')) "status explains why")))))
+
 (deftest board-n-opens-create-session
   (let [[s' _] (#'tui/update-board (board-state :all) (msg/key-press "n"))]
     (is (= :create-session (:modal s')) "n opens the new-workstream modal"))

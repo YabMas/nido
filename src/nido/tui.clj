@@ -1009,18 +1009,22 @@
 
 (defn- dismiss-selected
   "Take the highlighted workstream off the triage radar via work/dismiss! — it
-   leaves the queue and is skipped by auto-re-triage. A bare (workstream-less)
-   row no-ops — surface that honestly rather than claiming success, mirroring
-   promote-selected's :no-workstream handling."
+   leaves the queue and is skipped by auto-re-triage. Dismiss is retired for Notion
+   tickets: Notion owns their lifecycle, so a local dismiss is a no-op there and we
+   refuse it honestly rather than pretend. A bare (workstream-less) row no-ops too —
+   mirroring promote-selected's :no-workstream handling."
   [state]
   (if-let [ws (selected-workstream state)]
-    (let [decision (:decision (work/dismiss! (:project state) (:ws-id ws)))
-          label    (or (:br-id ws) (:ws-id ws))]
-      [(-> state (refresh-list (current-rows state))
-           (assoc :status (if (= decision :no-workstream)
-                             (str "no workstream yet — " label)
-                             (str "dismissed " label " — off radar"))))
-       nil])
+    (if (= :notion (:origin ws))
+      [(assoc state :status "dismiss doesn't apply to Notion tickets — they're owned in Notion")
+       nil]
+      (let [decision (:decision (work/dismiss! (:project state) (:ws-id ws)))
+            label    (or (:br-id ws) (:ws-id ws))]
+        [(-> state (refresh-list (current-rows state))
+             (assoc :status (if (= decision :no-workstream)
+                               (str "no workstream yet — " label)
+                               (str "dismissed " label " — off radar"))))
+         nil]))
     [(assoc state :status "(no workstream selected)") nil]))
 
 ;; ---------------------------------------------------------------------------
@@ -1553,7 +1557,7 @@
                   :pickup-input         "[↵] pickup  [esc] cancel"
                   (case (:screen state)
                     :projects   "[↵] open  [q]uit"
-                    :board      "[↵/o] open  [i]nspect  [n]ew  [p]romote  [P] promote to…  [d]one  [x] dismiss  [space] fold  [⇄ tab] origin  [ [ ] ] domain  [ { } ] type  [s]ystem  [esc] back  [q]uit"
+                    :board      "[↵/o] open  [i]nspect  [n]ew  [p]romote  [P] promote to…  [d]one  [x] dismiss (slack)  [space] fold  [⇄ tab] origin  [ [ ] ] domain  [ { } ] type  [s]ystem  [esc] back  [q]uit"
                     :workstream "[↵] open in chat  [a] apply  [r] reply  [S] dev-start  [X] dev-stop  [R] dev-restart  [esc] back  [q]uit"
                     :system     "[↵/e] enter  [w]orktree  [i]nfo  [u]p  [d]own  [x] destroy  •  [f]ire  [h]alt  [c]lear breaker  [p]ickup  [esc] back  [q]uit"))))
 

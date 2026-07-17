@@ -63,8 +63,9 @@
 
 (defn gate-actions
   "Follow-actions for a gate, derived from its spine `stage`, whether a session is
-   `parked?`, and its `origin` (Dismiss is dropped for :notion triage rows — Notion
-   drives the board, so a local dismiss no longer hides them; kept for Slack).
+   `parked?`, and its `origin`. Dismiss is retired for :notion triage rows by design —
+   Notion owns their lifecycle, so a local dismiss would be a no-op; it is kept only
+   for Slack triage (ledger-only, where it works).
    Each is a descriptor {:id :label :kind :style (:input)}:
      :kind :mutation -> one-click button, resolved nido-side (resolve-gate! on :id).
      :kind :resume   -> resume the parked agent. With :input it renders a one-click
