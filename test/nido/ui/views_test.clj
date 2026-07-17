@@ -300,6 +300,32 @@
     (is (not (str/includes? html "filter-label")))
     (is (not (str/includes? html ">Source<")))))
 
+;; ---------------------------------------------------------------------------
+;; Ops panel — ambient chrome behind the rail health dot
+;; ---------------------------------------------------------------------------
+
+(deftest ops-panel-renders-daemon-halt-breakers-and-fire
+  (let [html (views/ops-panel-fragment
+              {:daemon   {:state :breaker :heartbeat-at "2026-07-21T10:00:00Z"}
+               :halt     nil
+               :breakers [{:project :brian :trigger :triage-new
+                           :info {:consecutive-failures 3}}]
+               :triggers {:brian [{:name :one-off :payload "{}"}
+                                  {:name :with-args :payload "{\"u\":\"{{event/url}}\"}"}
+                                  {:name :two-part-name :payload "{\"u\":\"{{event/page-url}}\"}"}]}})]
+    (is (str/includes? html "id=\"ops-panel\""))
+    (is (str/includes? html "/ops/halt"))
+    (is (str/includes? html "/ops/breakers/brian/triage-new/clear"))
+    (is (str/includes? html "/ops/fire/brian/one-off"))
+    (is (str/includes? html "/ops/fire/brian/with-args"))
+    ;; hyphenated trigger/placeholder names must sanitize to JS-identifier-safe
+    ;; signal names — the ONE place that mapping is built (views/fire-signal).
+    (is (str/includes? html "fire_two_part_name_page_url"))))
+
+(deftest rail-health-toggles-the-ops-panel
+  (let [html (str (h/html (#'views/rail-health {:state :up})))]
+    (is (str/includes? html "$opsOpen"))))
+
 (deftest gate-action-confirm-reply-targets-the-pane
   (let [html (views/gate-action-confirm-fragment :reply "brian" "ws-1")]
     (is (str/includes? html "id=\"gate-pane\""))

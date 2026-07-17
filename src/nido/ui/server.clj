@@ -4,8 +4,12 @@
             [cheshire.core :as json]
             [clojure.java.io :as io]
             [clojure.string :as str]
+            [nido.coordinator.breakers :as breakers]
             [nido.coordinator.findings :as findings]
+            [nido.coordinator.halt :as halt]
             [nido.coordinator.pickup :as pickup]
+            [nido.coordinator.queue :as queue]
+            [nido.coordinator.triggers :as triggers]
             [nido.notion.client :as client]
             [nido.process :as proc]
             [nido.project :as project]
@@ -216,6 +220,24 @@
          (views/rail-status-fragment {:needs-count (count (scope-keep-rows scope (work/all-gates)))
                                        :daemon (read-rail-daemon)})))))
 
+(defn- ops-context []
+  {:daemon   (read-rail-daemon)
+   :halt     (halt/read-halt-info)
+   :breakers (breakers/tripped-triggers)
+   :triggers (into {}
+                   (for [[pname _] (project/list-projects)]
+                     [(keyword pname)
+                      (->> (triggers/load-for-project (keyword pname))
+                           (filter #(= :manual (-> % :source :type)))
+                           vec)]))})
+
+(defn- ops-fragment-response []
+  (sse-response
+   (sse-fragment
+    (str (views/ops-panel-fragment (ops-context))
+         (views/rail-status-fragment {:needs-count (count (work/all-gates))
+                                      :daemon (read-rail-daemon)})))))
+
 ;; ---------------------------------------------------------------------------
 ;; Routing
 
@@ -405,6 +427,30 @@
               (println "[nido ui] findings/file! failed:" (ex-message e)))))
         (ws-pane-fragment-response project ws-id))
 
+      ;; POST /ops/... — ambient ops levers (halt/resume, breaker clear, fire).
+      ;; Every lever responds with the refreshed ops fragment + rail status.
+      (= "ops" (first segs))
+      (do
+        (cond
+          (= ["ops" "halt"] segs)   (halt/halt! {:source :user :note "from dashboard"})
+          (= ["ops" "resume"] segs) (halt/resume!)
+          ;; /ops/breakers/:project/:trigger/clear
+          (and (= 5 (count segs)) (= "breakers" (second segs)) (= "clear" (nth segs 4)))
+          (breakers/enable! (keyword (nth segs 2)) (keyword (nth segs 3)))
+          ;; /ops/fire/:project/:trigger — placeholder values ride the JSON signal body
+          (and (= 4 (count segs)) (= "fire" (second segs)))
+          (let [project (keyword (nth segs 2))
+                tname   (keyword (nth segs 3))
+                trig    (->> (triggers/load-for-project project)
+                             (filter #(= tname (:name %))) first)
+                ks      (triggers/placeholder-keys (or (:payload trig) "{}"))
+                body*   (parse-json-body body)
+                payload (into {} (for [k ks]
+                                   [k (str (get body* (keyword (views/fire-signal tname k)) ""))]))]
+            (queue/enqueue! {:target {:project project :trigger tname} :payload payload}))
+          :else nil)
+        (ops-fragment-response))
+
       :else
       (html-response 404 (views/not-found-page)))))
 
@@ -445,6 +491,10 @@
       ;; GET /_fragment/system — SSE system surface refresh (patches #system + rail)
       ["_fragment" "system"]
       (system-fragment-response (:scope (view-state/parse req)))
+
+      ;; GET /_fragment/ops — SSE ops-panel refresh (patches #ops-panel + rail)
+      ["_fragment" "ops"]
+      (ops-fragment-response)
 
       ;; Otherwise, dispatch on structure
       (cond

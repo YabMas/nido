@@ -3,6 +3,7 @@
   (:require [clojure.string :as str]
             [hiccup2.core :as h]
             [nido.coordinator.report :as report]
+            [nido.coordinator.triggers :as triggers]
             [nido.process :as process]
             [nido.ui.markdown :as md]
             [nido.ui.view-state :as view-state]
@@ -134,6 +135,16 @@
      .rail-scope a { display:block; padding:3px 6px; color:#9a9ac0; }
      .rail-scope a.active { color:#fff; }
      .rail-health { margin-top:auto; padding-top:14px; font-size:12px; color:#888; }
+     .rail-health-btn { background:none; border:none; color:inherit; font:inherit;
+                        cursor:pointer; padding:0; display:flex; align-items:center; }
+     .ops-wrap { position:fixed; left:14px; bottom:14px; width:340px; max-width:360px;
+                 max-height:70vh; overflow-y:auto; z-index:50; }
+     .ops-panel .card { background:#16213e; }
+     .ops-panel .fire-row { display:flex; align-items:center; gap:6px; flex-wrap:wrap;
+                             margin:6px 0; }
+     .ops-panel .fire-row input { background:#0f0f1e; border:1px solid #2a2a4a;
+                                   border-radius:4px; color:#fff; font:inherit;
+                                   font-size:12px; padding:4px 8px; width:100px; }
      .dot { width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:6px; }
      .dot-up { background:#4ade80; box-shadow:0 0 6px #4ade80; }
      .dot-halted { background:#f87171; box-shadow:0 0 6px #f87171; }
@@ -165,7 +176,9 @@
 (defn- rail-health [{:keys [state]}]
   (let [s (name (or state :down))]
     [:div {:id "rail-health" :class "rail-health"}
-     [:span {:class (str "dot dot-" s)}] s]))
+     [:button.rail-health-btn {"data-on:click" "$opsOpen = !$opsOpen"
+                               :title "ops panel"}
+      [:span {:class (str "dot dot-" s)}] s]]))
 
 (defn- rail
   "The persistent navigation rail. Scope is a sticky dimension: a scope link stays on the
@@ -205,6 +218,59 @@
   (str (h/html (rail-needs-badge needs-count))
        (h/html (rail-health daemon))))
 
+(defn fire-signal
+  "Signal name for one fire-form input: JS-identifier-safe (hyphens → underscores).
+   The /ops/fire route reads the SAME name back out of the signal body — keep the
+   two sides on this one fn."
+  [trigger-name k]
+  (str "fire_" (str/replace (name trigger-name) "-" "_")
+       "_" (str/replace (name k) "-" "_")))
+
+(defn ops-panel-fragment
+  "The ambient ops chrome: daemon state, halt/resume, open breakers with
+   per-trigger clear, and a fire form per manual trigger (placeholder-less →
+   one click; placeholder-carrying → one input per {{event/*}} key, signals
+   fire_<trigger>_<key>). No route of its own — lives behind the rail dot."
+  [{:keys [daemon halt breakers triggers]}]
+  (str
+   (h/html
+    [:div {:id "ops-panel" :class "ops-panel"}
+     [:div.card
+      [:span {:class (str "dot dot-" (name (or (:state daemon) :down)))}]
+      " daemon " (name (or (:state daemon) :down))
+      (when-let [hb (:heartbeat-at daemon)] [:span.meta " · heartbeat " hb])]
+     [:div.card
+      (if halt
+        (list [:span "⏸ halted by " (name (:source halt))
+               (when (:note halt) (str " — " (:note halt)))]
+              [:button.btn.btn-primary {"data-on:click" "@post('/ops/resume')"} "Resume"])
+        (list [:span "running"]
+              [:button.btn.btn-danger {"data-on:click" "@post('/ops/halt')"} "Halt"]))]
+     [:div.card
+      [:strong "Breakers"]
+      (if (seq breakers)
+        (for [{:keys [project trigger]} breakers]
+          [:div.actions
+           [:span.mono (str (name project) "/" (name trigger))]
+           [:button.btn {"data-on:click"
+                         (str "@post('/ops/breakers/" (name project) "/" (name trigger) "/clear')")}
+            "clear"]])
+        [:span.meta "none tripped"])]
+     [:div.card
+      [:strong "Fire trigger"]
+      (for [[project ts] triggers
+            {:keys [name payload] :as _t} ts]
+        (let [ks (triggers/placeholder-keys (or payload "{}"))]
+          [:div.fire-row
+           [:span.mono (str (clojure.core/name project) "/" (clojure.core/name name))]
+           (for [k ks]
+             [:input {"data-bind" (fire-signal name k)
+                      :placeholder (clojure.core/name k)}])
+           [:button.btn {"data-on:click"
+                         (str "@post('/ops/fire/" (clojure.core/name project)
+                              "/" (clojure.core/name name) "')")}
+            "fire"]]))]])))
+
 (defn shell
   "Page chrome: persistent rail + content area. Replaces `layout`. `ctx` carries
    {:active :title :needs-count :daemon :scope :projects :tab}; `content` is hiccup."
@@ -219,9 +285,12 @@
       [:title (or title "nido") " — nido"]
       [:script {:type "module" :src "https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.1/bundles/datastar.js"}]
       [:style shell-css]]
-     [:body
+     [:body {:data-signals__ifmissing "{opsOpen: false}"}
       (rail ctx)
-      (into [:main.content] content)]])))
+      (into [:main.content] content)
+      [:div.ops-wrap {:data-show "$opsOpen"
+                      :data-on-interval__duration.5s "$opsOpen && @get('/_fragment/ops')"}
+       [:div {:id "ops-panel"} [:p.meta "…"]]]]])))
 
 ;; ---------------------------------------------------------------------------
 ;; Components

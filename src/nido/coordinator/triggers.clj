@@ -74,3 +74,13 @@
   [template event]
   (str/replace template placeholder-re
                (fn [[_ path]] (str (lookup-path event path)))))
+
+(defn placeholder-keys
+  "Return ordered vector of placeholder names from a trigger's :payload
+   template. `{{event/url}}` → `:url`. Top-level keys only — slash-paths
+   are not addressable from the form."
+  [payload-template]
+  (->> (re-seq #"\{\{event/([^}/]+)\}\}" payload-template)
+       (map second)
+       distinct
+       (mapv keyword)))

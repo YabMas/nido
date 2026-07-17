@@ -743,16 +743,6 @@
 ;; update-system can call open-fire-trigger without a forward declaration.
 ;; ---------------------------------------------------------------------------
 
-(defn- placeholder-keys
-  "Return ordered vector of placeholder names from a trigger's :payload
-   template. `{{event/url}}` → `:url`. Top-level keys only — slash-paths
-   are not addressable from the form."
-  [payload-template]
-  (->> (re-seq #"\{\{event/([^}/]+)\}\}" payload-template)
-       (map second)
-       distinct
-       (mapv keyword)))
-
 (defn- queued-status
   "One-line status message confirming an envelope was enqueued."
   [project trigger-name]
@@ -763,7 +753,7 @@
   "Either enqueue immediately (no placeholders) or open the payload-input
    sub-modal seeded with the first field's text-input."
   [state project trigger]
-  (let [ks (placeholder-keys (:payload trigger))]
+  (let [ks (triggers/placeholder-keys (:payload trigger))]
     (if (empty? ks)
       (do
         (queue/enqueue! {:target  {:project project :trigger (:name trigger)}

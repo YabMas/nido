@@ -2,6 +2,9 @@
   (:require [clojure.test :refer [deftest is]]
             [clojure.string :as str]
             [nido.ui.server :as server]
+            [nido.coordinator.breakers]
+            [nido.coordinator.halt]
+            [nido.coordinator.triggers]
             [nido.session.dev :as dev]
             [nido.session.engine]
             [nido.session.lifecycle :as lifecycle]
@@ -458,6 +461,22 @@
             (Thread/sleep 50) (recur (dec n))))
         (is (= ["p" "w1"] @called))
         (is (empty? (dev/pending-winddown-keys)) "cleared after bring-down returns")))))
+
+;; ---------------------------------------------------------------------------
+;; Ops panel — ambient chrome behind the rail health dot
+;; ---------------------------------------------------------------------------
+
+(deftest post-ops-halt-writes-halt-and-responds-with-ops-fragment
+  (let [halted (atom false)]
+    (with-redefs [nido.coordinator.halt/halt! (fn [_] (reset! halted true))
+                  nido.coordinator.halt/read-halt-info (fn [] nil)
+                  nido.coordinator.breakers/tripped-triggers (fn [] [])
+                  nido.coordinator.triggers/load-for-project (fn [_] [])
+                  server/read-rail-daemon (fn [] {:state :up})
+                  nido.work/all-gates (fn [] [])]
+      (let [resp (server/handle-request {:request-method :post :uri "/ops/halt"})]
+        (is @halted)
+        (is (str/includes? (:body resp) "ops-panel"))))))
 
 (deftest post-pane-gate-reply-passes-input-from-body
   (let [calls (atom [])]

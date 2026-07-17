@@ -138,6 +138,11 @@
                        {:name :plan-bug :source {:type :manual} :skill :plan-bug
                         :payload "x" :session-name-prefix 42}))))
 
+(deftest placeholder-keys-extracts-ordered-distinct-event-keys
+  (is (= [:url :note]
+         (triggers/placeholder-keys "{\"u\":\"{{event/url}}\",\"n\":\"{{event/note}}\",\"u2\":\"{{event/url}}\"}")))
+  (is (= [] (triggers/placeholder-keys "{}"))))
+
 (deftest intake-queue-trigger-loads
   (let [tmp (fs/create-temp-dir)]
     (try
