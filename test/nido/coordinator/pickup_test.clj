@@ -3,6 +3,7 @@
    [clojure.test :refer [deftest is]]
    [nido.coordinator.pickup :as pickup]
    [nido.coordinator.queue :as queue]
+   [nido.coordinator.workstream :as ws]
    [nido.notion.client :as client]
    [nido.notion.views :as views]))
 
@@ -79,7 +80,8 @@
     (is (= {:error :auth} (pickup/resolve-ref :brian "BR-4826" "tok")))))
 
 (deftest pickup-enqueues-plan-bug-for-a-resolved-ref
-  (with-redefs [pickup/resolve-ref (fn [_ _ _] {:id "BR-1" :page-id "pg-1" :url "u" :title "t"})]
+  (with-redefs [pickup/resolve-ref (fn [_ _ _] {:id "BR-1" :page-id "pg-1" :url "u" :title "t"})
+                ws/find-by-ref-id (fn [_ _] nil)]
     (let [captured (atom nil)]
       (with-redefs [queue/enqueue! (fn [env] (reset! captured env) "/q/x.edn")]
         (let [r (pickup/pickup! :brian "https://notion.so/x-<id>" "tok")]
@@ -112,3 +114,23 @@
     (let [r (pickup/pickup! :brian "BR-4826" nil)]
       (is (= :unresolved (:decision r)))
       (is (= :no-token (:error r))))))
+
+(deftest pickup-reports-continuing-when-workstream-exists
+  (with-redefs [pickup/resolve-ref (fn [_ _ _] {:id "BR-1" :page-id "pg-1" :url "u" :title "t"})
+                ws/find-by-ref-id  (fn [_project external-id]
+                                     (is (= "BR-1" external-id))
+                                     {:id "ws-42"})
+                queue/enqueue!     (fn [_env] "/q/x.edn")]
+    (let [r (pickup/pickup! :brian "https://notion.so/x" "tok")]
+      (is (= :driving (:decision r)))
+      (is (true? (:continuing? r)))
+      (is (= "ws-42" (:ws-id r))))))
+
+(deftest pickup-reports-starting-fresh-when-no-workstream
+  (with-redefs [pickup/resolve-ref (fn [_ _ _] {:id "BR-1" :page-id "pg-1" :url "u" :title "t"})
+                ws/find-by-ref-id  (fn [_ _] nil)
+                queue/enqueue!     (fn [_env] "/q/x.edn")]
+    (let [r (pickup/pickup! :brian "https://notion.so/x" "tok")]
+      (is (= :driving (:decision r)))
+      (is (false? (:continuing? r)))
+      (is (nil? (:ws-id r))))))

@@ -4,6 +4,7 @@
   (:require
    [clojure.string :as str]
    [nido.coordinator.queue :as queue]
+   [nido.coordinator.workstream :as ws]
    [nido.notion.client :as client]
    [nido.notion.views :as views]))
 
@@ -69,15 +70,20 @@
 (defn pickup!
   "Resolve `input` and, on success, enqueue the :plan-bug envelope to drive the
    ticket (the daemon find-or-creates the workstream by its Notion ref → the shared
-   Phase-B ledger). Returns {:decision :driving :ref … :queued …} or {:decision
-   :unresolved :error …}."
+   Phase-B ledger). Reports whether an existing workstream ledger will be continued
+   (`:continuing?` + `:ws-id`) so the caller can say which path the daemon will take.
+   Returns {:decision :driving :ref … :continuing? … :ws-id … :queued …} or
+   {:decision :unresolved :error …}."
   [project input token]
   (let [r (resolve-ref project input token)]
     (if (:error r)
       {:decision :unresolved :error (:error r)}
-      {:decision :driving
-       :ref      r
-       :queued   (queue/enqueue!
-                   {:target  {:project (keyword (name project)) :trigger :plan-bug}
-                    :payload {:id (:id r) :notion-page-id (:page-id r)
-                              :url (:url r) :title (:title r)}})})))
+      (let [existing (ws/find-by-ref-id project (:id r))]
+        {:decision    :driving
+         :ref         r
+         :continuing? (some? existing)
+         :ws-id       (:id existing)
+         :queued      (queue/enqueue!
+                        {:target  {:project (keyword (name project)) :trigger :plan-bug}
+                         :payload {:id (:id r) :notion-page-id (:page-id r)
+                                   :url (:url r) :title (:title r)}})}))))
