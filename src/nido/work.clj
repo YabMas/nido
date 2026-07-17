@@ -293,12 +293,26 @@
       (entry->report base-dir (last entries))
       (intake-fallback project ws-id))))
 
+(defn environment
+  "The workstream's single current environment: its latest live HEAVY (impl)
+   session record, or nil when none exists yet (still triage, or a light-only
+   scratch). Resolved by weight + recency, NOT by liveness — a down-but-provisioned
+   impl session is still the environment (you Start it). :archived (torn-down)
+   sessions are excluded. Callers use (:name env) to resolve dev-state/facts."
+  [project ws-id]
+  (->> (csession/list-sessions project ws-id)
+       (filter #(= :heavy (:weight %)))
+       (filter csession/live?)
+       (sort-by :created-at)
+       last))
+
 (defn workstream
   "Full detail for one workstream: origin, spine stage, label, a light ledger
    facet, a newest-first entry INDEX (nil when ≤1 entry), the SELECTED entry's
    report (`selected-seq`, default latest, out-of-range → latest), `:on-latest?`
-   (is the selected entry the current one — gates the pane's live actions), and
-   its sessions on the autonomy axis. nil when the workstream is absent."
+   (is the selected entry the current one — gates the pane's live actions),
+   `:environment` (the one current session — `work/environment`), and its sessions
+   on the autonomy axis. nil when the workstream is absent."
   ([project ws-id] (workstream project ws-id nil))
   ([project ws-id selected-seq]
    (when-let [w (cws/read-ws project ws-id)]
@@ -328,6 +342,7 @@
         :report       (if (seq entries)
                         (report-at base-dir entries sel)
                         (latest-report project ws-id))
+        :environment  (environment project ws-id)
         :sessions     (mapv session-facet sessions)}))))
 
 (defn- parked-session

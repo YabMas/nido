@@ -919,6 +919,29 @@
     (is (not (contains? s :source-counts)) "source-counts is gone")
     (is (not (contains? s :facet-dims)) "facet-dims is gone")))
 
+(deftest environment-resolves-latest-live-heavy-session
+  (with-redefs [nido.coordinator.session/list-sessions
+                (fn [_ _]
+                  [{:name "triage-BR-1" :weight :light :substrate :live :created-at "2026-07-20T10:00:00Z"}
+                   {:name "impl-BR-1"   :weight :heavy :substrate :live :created-at "2026-07-21T10:00:00Z"}
+                   {:name "impl-BR-1b"  :weight :heavy :substrate :live :created-at "2026-07-22T10:00:00Z"}])]
+    (is (= "impl-BR-1b" (:name (work/environment :brian "ws-1")))
+        "latest heavy session by :created-at")))
+
+(deftest environment-nil-when-no-heavy-session
+  (with-redefs [nido.coordinator.session/list-sessions
+                (fn [_ _] [{:name "triage-BR-1" :weight :light :substrate :live :created-at "2026-07-20T10:00:00Z"}])]
+    (is (nil? (work/environment :brian "ws-1"))
+        "triage-only (light) workstream has no environment")))
+
+(deftest environment-excludes-archived-heavy
+  (with-redefs [nido.coordinator.session/list-sessions
+                (fn [_ _]
+                  [{:name "impl-old" :weight :heavy :substrate :archived :created-at "2026-07-22T10:00:00Z"}
+                   {:name "impl-new" :weight :heavy :substrate :live     :created-at "2026-07-21T10:00:00Z"}])]
+    (is (= "impl-new" (:name (work/environment :brian "ws-1")))
+        "an archived heavy session is excluded even if newer")))
+
 (deftest work-core-does-not-require-a-ui-namespace
   ;; Layering: nido.work is the model core every surface wraps. It must not
   ;; depend on a UI namespace (it used to require nido.ui.view-state purely to
