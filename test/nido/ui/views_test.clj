@@ -139,15 +139,15 @@
     (is (str/includes? html "sel=brian:w1"))            ; rows carry the selection in the view-state
     (is (str/includes? html ">N<"))))
 
-(deftest workstreams-fragment-preserves-selection-and-filters
+(deftest workstreams-fragment-preserves-selection
   ;; a poll refresh keeps the open row highlighted, and each row link preserves
-  ;; the active source filter so selecting one lands on the SAME filtered list.
+  ;; the view-state so selecting one lands on the SAME list.
   (let [html (views/workstreams-fragment {:groups [{:project "brian" :grouped sample-grouped}]
                                           :selection {:project "brian" :ws-id "w1"}
-                                          :scope "all" :source :notion :facets {}})]
+                                          :scope "all"})]
     (is (str/includes? html "gate-card sel") "selected row keeps its highlight")
     (is (str/includes? html "sel=brian:w1"))
-    (is (str/includes? html "source=notion") "row link preserves the active source filter")))
+    (is (not (str/includes? html "source=")) "no source filter in row links")))
 
 (deftest workstream-pane-shows-ledger-report-and-sessions
   (let [ws   (assoc sample-ws :report {:format :markdown :kind :triage :at "t" :title "Verdict"
@@ -190,11 +190,23 @@
 (deftest workstreams-page-has-shell-and-poll
   (let [html (views/workstreams-page {:active :workstreams :needs-count 0 :daemon {:state :up}
                                       :scope "all" :projects []}
-                                     {:scope "all" :source :all :facets {} :facet-dims []
-                                      :source-counts {} :selection nil
+                                     {:scope "all" :selection nil
                                       :groups [{:project "brian" :grouped sample-grouped}]})]
     (is (str/includes? html "rail-link active"))
     (is (str/includes? html "/_fragment/workstreams"))))
+
+(deftest workstreams-page-renders-no-filter-chrome
+  ;; The source + facet chips are gone: no filter row, no Source label, and a
+  ;; :scratch in-progress row renders on the default landing (it used to be
+  ;; hidden behind source=notion).
+  (let [html (views/workstreams-page {:active :workstreams :needs-count 0 :daemon {:state :up}
+                                      :scope "all" :projects []}
+                                     {:scope "all" :selection nil
+                                      :groups [{:project "brian" :grouped sample-grouped}]})]
+    (is (not (str/includes? html "filter-row")))
+    (is (not (str/includes? html "filter-label")))
+    (is (not (str/includes? html ">Source<")))
+    (is (str/includes? html "spike") "the scratch in-progress row is visible by default")))
 
 (deftest gate-action-confirm-reply-targets-the-pane
   (let [html (views/gate-action-confirm-fragment :reply "brian" "ws-1")]
@@ -242,57 +254,6 @@
     (is (str/includes? html ">2<"))
     (is (str/includes? html "id=\"rail-health\""))
     (is (str/includes? html "dot-halted"))))
-
-(deftest workstreams-filter-bar-renders-source-chips-with-counts
-  (let [screen {:active :workstreams :scope "all" :projects [] :needs-count 0 :daemon {:state :up}
-                :source :notion :facets {} :facet-dims [:app-domain :type]
-                :source-counts {:notion 3 :slack 1} :selection nil :groups []}
-        html (views/workstreams-page screen screen)]
-    (is (str/includes? html "Notion"))
-    (is (str/includes? html "(3)") "per-source count shown")
-    (is (str/includes? html "App Domain") "facet row for the Notion source")
-    (is (str/includes? html "Type"))
-    ;; the interval @get must carry the active source so SSE refresh preserves it
-    (is (str/includes? html "source=notion"))))
-
-(deftest workstreams-filter-bar-hides-facets-for-facetless-source
-  (let [screen {:active :workstreams :scope "all" :projects [] :needs-count 0 :daemon {:state :up}
-                :source :slack :facets {} :facet-dims []
-                :source-counts {:notion 3 :slack 1} :selection nil :groups []}
-        html (views/workstreams-page screen screen)]
-    (is (not (str/includes? html "App Domain")) "no facet rows for a facet-less source")
-    (is (str/includes? html "source=slack"))))
-
-(deftest workstreams-filter-bar-renders-facet-values-from-rows
-  ;; facet value chips are derived from the displayed rows: distinct present
-  ;; App Domain values + :unclassified for the row that lacks the facet.
-  (let [groups [{:project :brian
-                 :grouped {:incoming [{:origin :notion :facets {:app-domain ["Teacher"]}}
-                                      {:origin :notion :facets {:app-domain ["Student"]}}
-                                      {:origin :notion :facets {}}]
-                           :triage {:in-flight [] :queued []} :ready [] :in-progress []}}]
-        screen {:active :workstreams :scope "all" :projects [] :needs-count 0 :daemon {:state :up}
-                :source :notion :facets {} :facet-dims [:app-domain]
-                :source-counts {:notion 3} :selection nil :groups groups}
-        html (views/workstreams-page screen screen)]
-    (is (str/includes? html "Teacher")     "present value chip")
-    (is (str/includes? html "Student")     "second present value chip")
-    (is (str/includes? html "Unclassified") ":unclassified chip for the facet-less row")))
-
-(deftest screen-query-encodes-facet-values
-  ;; :unclassified emits as "unclassified" (no colon); spaces are encoded.
-  (let [q (#'views/screen-query {:scope "all" :source :notion
-                                 :facets {:app-domain :unclassified}})]
-    (is (str/includes? q "app-domain=unclassified"))
-    (is (not (str/includes? q ":unclassified"))))
-  (let [q (#'views/screen-query {:scope "all" :source :notion
-                                 :facets {:app-domain "Onboarding Flow"}})]
-    (is (not (str/includes? q "Onboarding Flow")) "raw space not in the query")
-    (is (or (str/includes? q "Onboarding%20Flow") (str/includes? q "Onboarding+Flow"))))
-  ;; a :sel override adds the selection while keeping the filters
-  (let [q (#'views/screen-query {:scope "all" :source :notion :facets {}} {:sel "brian:ws-7"})]
-    (is (str/includes? q "source=notion"))
-    (is (str/includes? q "sel=brian:ws-7"))))
 
 (deftest workstream-pane-shows-ledger-index-and-selected-report
   (let [ws   (assoc sample-ws

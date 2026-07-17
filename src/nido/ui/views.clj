@@ -5,7 +5,6 @@
             [nido.coordinator.report :as report]
             [nido.process :as process]
             [nido.ui.markdown :as md]
-            [nido.ui.view-state :as view-state]
             [nido.work :as work]))
 
 ;; ---------------------------------------------------------------------------
@@ -124,10 +123,6 @@
      .dot-halted { background:#f87171; box-shadow:0 0 6px #f87171; }
      .dot-breaker { background:#fb923c; }
      .dot-down { background:#555; }
-     .filters { padding:10px 16px 6px; display:flex; flex-direction:column; gap:4px; }
-     .filter-row { display:flex; align-items:center; gap:6px; flex-wrap:wrap; padding:2px 0; }
-     .filter-label { color:#888; font-size:11px; text-transform:uppercase; min-width:72px; }
-     .chip.active { background:#2a4a6a; color:#aee0ff; border:1px solid #3a5a7a; }
      .ship-badge { font-size:.8em; padding:0 .4em; border-radius:.3em; }
      .badge-findings { color:#e0a34a; border:1px solid #4a3a20; border-radius:4px; padding:1px 6px; font-size:11px; margin-left:6px; }
      .ship-blocked { background:#b00020; color:#fff; font-weight:600; }
@@ -219,24 +214,15 @@
 (defn- chip [stage]
   [:span {:class (str "chip c-" (name stage))} (name stage)])
 
-(defn- enc-val [v]
-  (java.net.URLEncoder/encode (if (keyword? v) (name v) (str v)) "UTF-8"))
-
 (defn- screen-query
-  "Query string (leading ?) rebuilding the active scope/source/facets from the
-   screen, with optional overrides. `:sel` adds the selection (\"project:ws-id\");
-   `:source`/`:facets` override the corresponding selection (used by the filter
-   chips). The single place selection + filters are serialized — so a row link,
-   a poll refresh, and a deep link all carry the identical view-state."
-  [{:keys [scope source facets]} & [overrides]]
-  (let [src  (get overrides :source source)
-        facs (merge facets (:facets overrides))
-        sel  (:sel overrides)
+  "Query string (leading ?) rebuilding the active scope from the screen, with
+   optional overrides. `:sel` adds the selection (\"project:ws-id\"). The single
+   place scope + selection are serialized — so a row link, a poll refresh, and a
+   deep link all carry the identical view-state."
+  [{:keys [scope]} & [overrides]]
+  (let [sel   (:sel overrides)
         pairs (cond-> []
                 (and scope (not= "all" scope)) (conj (str "scope=" scope))
-                (and src (not= :all src))       (conj (str "source=" (name src)))
-                :always (into (for [[k v] facs :when (not= :all v)]
-                                (str (name k) "=" (enc-val v))))
                 sel (conj (str "sel=" sel)))]
     (if (seq pairs) (str "?" (str/join "&" pairs)) "")))
 
@@ -511,9 +497,8 @@
        (keep (fn [[stage rows]] (when (seq rows) {:project project :stage stage :rows rows})))))
 
 (defn- ws-list-row
-  "One selectable list row. Its link carries the full view-state (scope + source
-   + facets) plus the selection, so selecting a workstream lands on the SAME
-   filtered list rather than a differently-filtered one. `sel-id` highlights the
+  "One selectable list row. Its link carries the view-state (scope + selection),
+   so selecting a workstream lands on the SAME list. `sel-id` highlights the
    open row (threaded from the screen so a poll preserves it)."
   [screen sel-id project {:keys [ws-id origin label needs-you stage ship-substate open-findings]}]
   [:a {:class (str "gate-card" (when (= sel-id ws-id) " sel"))
@@ -675,41 +660,6 @@
               [:td.meta (when brakes (pr-str brakes))]])]]
          [:p.empty "No sessions."])]))))
 
-(defn- chip-link [label active? href]
-  [:a {:class (str "chip" (when active? " active")) :href href} label])
-
-(defn- source-row
-  "Source filter chips, rendered from the screen. A chip changes the source and
-   drops the current selection (a filter change resets the pane). There is no
-   cross-source 'All' chip — the page always shows exactly one source."
-  [{:keys [source source-counts] :as screen}]
-  [:div.filter-row
-   [:span.filter-label "Source"]
-   (for [id view-state/sources
-         :let [label (str/capitalize (name id))
-               n     (get source-counts id 0)]]
-     (chip-link (str label " (" n ")")
-                (= id source)
-                (str "/workstreams" (screen-query screen {:source id}))))])
-
-(defn- facet-rows [{:keys [facet-dims facets] :as screen} groups]
-  (for [k facet-dims
-        :let [present (->> groups (mapcat (fn [g] (work/grouped-rows (:grouped g))))
-                           (mapcat (fn [r] (let [v (get-in r [:facets k])]
-                                             (cond (nil? v) nil (coll? v) v :else [v]))))
-                           distinct)
-              vals (concat present (when (some (fn [g]
-                                                 (some #(empty? (or (get-in % [:facets k]) []))
-                                                       (work/grouped-rows (:grouped g)))) groups)
-                                     [:unclassified]))
-              sel  (get facets k :all)]]
-    [:div.filter-row
-     [:span.filter-label (->> (str/split (name k) #"-") (map str/capitalize) (str/join " "))]
-     (chip-link "All" (= :all sel) (str "/workstreams" (screen-query screen {:facets {k :all}})))
-     (for [v vals
-           :let [lbl (if (keyword? v) (str/capitalize (name v)) (str v))]]
-       (chip-link lbl (= v sel) (str "/workstreams" (screen-query screen {:facets {k v}}))))]))
-
 (defn workstreams-page
   "Overview + ledger pane, rendered from the screen. The list, its poll query,
    and the pane all derive from the one screen value, so overview and detail
@@ -724,11 +674,7 @@
      ;; __ifmissing seeds them from localStorage on load without clobbering live
      ;; state; a full-page reload re-runs this and restores the persisted fold.
      [:div.gate-wrap {:data-signals__ifmissing ws-fold-signals-init}
-      ;; Filters live INSIDE the left queue column (not a full-width band across
-      ;; the top) so the detail pane on the right always starts at the top,
-      ;; independent of how many filter rows a source contributes.
       [:div.queue-col
-       [:div.filters (source-row screen) (facet-rows screen (:groups screen))]
        [:div.inbox {:data-on-interval__duration.5s (str "@get('/_fragment/workstreams" q "')")}
         (h/raw (workstreams-fragment screen))]]
       [:div.pane (h/raw (workstream-pane (:ws selection) (:dev-states selection)))]])))

@@ -6,41 +6,24 @@
   (let [v (vs/parse {:uri "/workstreams" :query-string nil})]
     (is (= :workstreams (:surface v)))
     (is (= "all" (:scope v)))
-    (is (= vs/default-source (:source v)) "no cross-source All — defaults to the first source")
-    (is (= :notion (:source v)))
-    (is (= {} (:facets v)))
     (is (nil? (:selection v)))
-    (is (nil? (:entry v)))))
+    (is (nil? (:entry v)))
+    (is (not (contains? v :source)) "no source filter — the board shows every origin")
+    (is (not (contains? v :facets)) "no facet filter")))
 
 (deftest parse-surface-from-path
   (is (= :needs (:surface (vs/parse {:uri "/" :query-string nil}))))
   (is (= :workstreams (:surface (vs/parse {:uri "/workstreams" :query-string nil})))))
 
-(deftest parse-filters-and-selection
-  (let [v (vs/parse {:uri "/workstreams"
-                     :query-string "scope=brian&source=notion&app-domain=Tutor&sel=brian:ws-7&entry=3"})]
+(deftest parse-scope-and-selection
+  (let [v (vs/parse {:uri "/workstreams" :query-string "scope=brian&sel=brian%3Aws-1&entry=3"})]
     (is (= "brian" (:scope v)))
-    (is (= :notion (:source v)))
-    (is (= {:app-domain "Tutor"} (:facets v)))
-    (is (= {:project "brian" :ws-id "ws-7"} (:selection v)))
+    (is (= {:project "brian" :ws-id "ws-1"} (:selection v)))
     (is (= 3 (:entry v)))))
 
-(deftest parse-unclassified-facet
-  (is (= {:app-domain :unclassified}
-         (:facets (vs/parse {:uri "/workstreams" :query-string "app-domain=unclassified"})))))
-
-(deftest parse-url-decodes-facet-values
-  ;; a space-encoded facet value round-trips to the raw string (moved here from
-  ;; the old server parse-filters test)
-  (is (= {:app-domain "Onboarding Flow"}
-         (:facets (vs/parse {:uri "/workstreams" :query-string "app-domain=Onboarding%20Flow"})))))
-
-(deftest parse-ignores-datastar-signals-param
-  ;; Datastar appends its signals JSON as a `datastar` query param on every @get
-  ;; poll. It must NOT be mistaken for a facet filter — that facet matches zero
-  ;; rows and empties the polled list. Real facets alongside it still parse.
-  (let [v (vs/parse {:uri "/_fragment/workstreams"
-                     :query-string "source=notion&app-domain=Tutor&datastar=%7B%22foo%22%3A1%7D"})]
-    (is (= :notion (:source v)))
-    (is (= {:app-domain "Tutor"} (:facets v))
-        "the `datastar` signals param must not leak into :facets")))
+(deftest parse-ignores-a-legacy-filter-bookmark
+  ;; An old ?source=/facet bookmark must parse cleanly and filter nothing.
+  (let [v (vs/parse {:uri "/workstreams" :query-string "source=scratch&app-domain=Teacher"})]
+    (is (= "all" (:scope v)))
+    (is (not (contains? v :source)))
+    (is (not (contains? v :facets)))))

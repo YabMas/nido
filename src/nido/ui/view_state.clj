@@ -11,17 +11,6 @@
 
 (defn- decode [v] (java.net.URLDecoder/decode v "UTF-8"))
 
-(def sources
-  "Workstream origins for the /workstreams source filter, in chip/display order.
-   The FIRST entry is the default view. There is deliberately no cross-source
-   'All' overview — merging every source across every stage was too noisy to be
-   useful, so the page always shows exactly one source."
-  [:notion :github :slack :scratch])
-
-(def default-source
-  "The source /workstreams opens on when none is selected — the first chip."
-  (first sources))
-
 (defn- surface [uri]
   (let [segs (remove str/blank? (str/split (or uri "") #"/"))]
     (case (first segs)
@@ -39,24 +28,15 @@
   "Request map -> view-state:
      {:surface :needs|:workstreams|:other
       :scope   \"all\"|<project>
-      :source  :notion|:github|:slack|:scratch   ; no cross-source :all — see `sources`
-      :facets  {kebab-kw value}   ; :unclassified for the \"unclassified\" bucket
       :selection {:project _ :ws-id _}|nil
-      :entry   <long>|nil}"
+      :entry   <long>|nil}
+
+   No source/facet filtering: the board shows every origin, and its tabs select
+   BANDS rather than rows (see nido.work/tab-bands). A legacy ?source= / facet
+   bookmark parses cleanly and constrains nothing."
   [{:keys [uri query-string]}]
-  (let [ps (pairs query-string)
-        ;; `datastar` is Datastar's own signals param, appended to every @get
-        ;; poll request — reserve it so a poll's URL doesn't turn into a bogus
-        ;; facet filter that matches zero rows and empties the polled list.
-        reserved #{"scope" "source" "sel" "entry" "datastar"}]
+  (let [ps (pairs query-string)]
     {:surface   (surface uri)
      :scope     (or (some (fn [[k v]] (when (= k "scope") v)) ps) "all")
-     ;; An unknown/absent source (e.g. a legacy `?source=all` bookmark) falls back
-     ;; to the default rather than filtering to an empty list.
-     :source    (let [s (some (fn [[k v]] (when (= k "source") (keyword v))) ps)]
-                  (if (some #{s} sources) s default-source))
-     :facets    (into {} (for [[k v] ps :when (not (reserved k))]
-                           (let [dv (decode v)]
-                             [(keyword k) (if (= dv "unclassified") :unclassified dv)])))
      :selection (selection ps)
      :entry     (some (fn [[k v]] (when (= k "entry") (parse-long v))) ps)}))
