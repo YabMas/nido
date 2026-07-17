@@ -1186,3 +1186,42 @@
         rows     (work/all-machine-rows rows-fn projects)]
     (is (= [["brian" "b-up" true] ["foo" "f-up" true] ["brian" "b-down" false]]
            (map (juxt :project :name :live?) rows)))))
+
+(deftest orphan-live-sessions-is-the-set-difference
+  (is (= #{"a"} (work/orphan-live-sessions #{"a" "b"} #{"b" "c"}))))
+
+(deftest adopt-orphans!-births-scratch-for-live-orphans-idempotently
+  (with-tmp
+    (fn [_]
+      (with-redefs [work/live-session-names (constantly #{"one-off"})]
+        (is (= ["one-off"] (:adopted (work/adopt-orphans! :p))))
+        ;; the born scratch ws owns the session now → second pass adopts nothing
+        (is (= [] (:adopted (work/adopt-orphans! :p))))
+        (let [ws (map #(workstream/read-ws :p %) (workstream/list-ids :p))]
+          (is (= 1 (count ws)))
+          (is (empty? (:external-refs (first ws)))))))))
+
+(deftest adopt-orphans!-skips-closed-owned-sessions
+  ;; A session under a CLOSED ws is a winding-down leftover, not an orphan.
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :p {:stage :in-progress :external-refs []})]
+        (session/create! :p (:id w) {:name "left" :weight :light :autonomy nil})
+        (workstream/close! :p (:id w) :done)
+        (with-redefs [work/live-session-names (constantly #{"left"})]
+          (is (= [] (:adopted (work/adopt-orphans! :p)))))))))
+
+(deftest adopt-orphans!-yields-a-bare-scratch-double-owner
+  ;; Adopted-then-claimed: when a REAL open ws also owns the session, the bare
+  ;; scratch ws is deleted (newest real owner wins).
+  (with-tmp
+    (fn [_]
+      (with-redefs [work/live-session-names (constantly #{"claimed"})]
+        (work/adopt-orphans! :p)                              ; births scratch owner
+        (let [real (workstream/create! :p {:stage :in-progress
+                                           :external-refs [{:adapter :notion :id "BR-1"}]})]
+          (session/create! :p (:id real) {:name "claimed" :weight :light :autonomy nil})
+          (let [{:keys [yielded]} (work/adopt-orphans! :p)]
+            (is (= 1 (count yielded)))
+            (is (= [(:id real)]
+                   (map :id (keep #(workstream/read-ws :p %) (workstream/list-ids :p)))))))))))

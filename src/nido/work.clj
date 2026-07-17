@@ -10,6 +10,7 @@
    today's storage — no migration."
   (:require
    [babashka.fs :as fs]
+   [clojure.set :as set]
    [clojure.string :as str]
    [nido.config :as config]
    [nido.coordinator.facets :as facets]
@@ -729,6 +730,56 @@
        :sessions
        (keep (fn [s] (when (or (:pg-port s) (:app-port s) (:nrepl-port s)) (:name s))))
        set))
+
+(defn- owned-session-names
+  "Session names owned by ANY workstream of `project` — open or closed. Closed
+   owners keep their sessions out of adoption (they are winding-down leftovers)."
+  [project]
+  (->> (cws/list-ids project)
+       (mapcat #(csession/list-sessions project %))
+       (map :name)
+       set))
+
+(defn orphan-live-sessions
+  "Pure: the live sessions no workstream owns."
+  [live owned]
+  (set/difference (set live) (set owned)))
+
+(defn- yield-duplicate-scratch!
+  "Adopted-then-claimed: delete any BARE scratch workstream (no refs, no ledger
+   entries, exactly one session) whose session is also owned by another OPEN
+   workstream — the newest real owner wins. Returns the deleted ws-ids."
+  [project]
+  (let [open (->> (cws/list-ids project)
+                  (keep #(cws/read-ws project %))
+                  (remove :closed))
+        owners-of (fn [n]
+                    (filter (fn [w] (some #(= n (:name %))
+                                          (csession/list-sessions project (:id w))))
+                            open))]
+    (->> open
+         (filter (fn [w] (and (scratch/scratch? w) (empty? (:entries w)))))
+         (keep (fn [w]
+                 (let [sess (csession/list-sessions project (:id w))]
+                   (when (and (= 1 (count sess))
+                              (some #(not= (:id w) (:id %))
+                                    (owners-of (:name (first sess)))))
+                     (cws/delete! project (:id w))
+                     (:id w)))))
+         vec)))
+
+(defn adopt-orphans!
+  "Enforce the invariant: every live session is reachable from a workstream.
+   Births a scratch workstream for each live orphan (idempotent — birth! no-ops
+   on an owned name), then yields bare scratch duplicates to real owners.
+   Returns {:adopted [names] :yielded [ws-ids]}."
+  [project]
+  (let [orphans (sort (orphan-live-sessions (live-session-names project)
+                                            (owned-session-names project)))]
+    (doseq [n orphans]
+      (scratch/birth! (keyword (name project)) n))
+    {:adopted (vec orphans)
+     :yielded (yield-duplicate-scratch! project)}))
 
 (defn- instance-id-for [project-name session-name]
   (if (= project-name session-name)
