@@ -29,6 +29,23 @@
    [:effort     TriageEffort]
    [:confidence Confidence]])
 
+(def AppDomain
+  "Notion App Domain multi_select value used for routing."
+  [:enum "Student" "Teacher" "Backend" "Misc"])
+
+(def Owner
+  "Semantic triage owner; the skill maps it to a Notion Ball Holder user-id."
+  [:enum :ataberk :eric :jaap])
+
+(def Routing
+  "Where triage routed the report. nil on a TriageReport means no routing (Slack,
+   or a legacy pre-routing report). :depth :shallow = Ball Holder + App Domain only
+   (Notion status stays Needs verification); :deep = full triage (status → Not started)."
+  [:map {:closed true}
+   [:owner      Owner]
+   [:app-domain AppDomain]
+   [:depth      [:enum :shallow :deep]]])
+
 (def NotionWrites
   "Nil/omitted for Slack runs (no Notion writes)."
   [:map {:closed true}
@@ -48,6 +65,7 @@
    [:title         string?]          ; §1 enriched title
    [:summary       string?]          ; §1 enriched description (markdown text)
    [:confidence    Confidence]       ; §1
+   [:routing       [:maybe Routing]] ; §2 — nil for Slack / legacy
    [:directions    [:vector Direction]]   ; §2
    [:notion-writes [:maybe NotionWrites]] ; §3 — nil for slack
    [:defer-note    {:optional true} string?]   ; why the plan was deferred (paired with :squirrel)
@@ -204,21 +222,26 @@
       ["edn" (with-out-str (pprint/pprint report))])
     ["md" content]))
 
+(def ^:private owner-display
+  {:ataberk "Ataberk" :eric "Eric" :jaap "Jaap"})
+
 (defn- triage->markdown [{:keys [title determination summary confidence
-                                 directions notion-writes trail]}]
+                                 routing directions notion-writes trail]}]
   (str/join
    "\n"
    (concat
     [(str "# Triage: " title)
      (str "**Determination:** " (name determination)
-          "  ·  **Confidence:** " (name (:level confidence)) " — " (:reason confidence))
-     ""
-     summary
-     ""
-     "## Solution directions"]
-    (for [{:keys [label shape effort confidence]} directions]
-      (str "- **" label "** — " shape ". Effort: " (name effort)
-           ". Confidence: " (name (:level confidence)) " — " (:reason confidence)))
+          "  ·  **Confidence:** " (name (:level confidence)) " — " (:reason confidence))]
+    (when routing
+      [(str "**Routing:** " (owner-display (:owner routing) (name (:owner routing)))
+            " · " (:app-domain routing) " · " (name (:depth routing)))])
+    ["" summary ""]
+    (when (seq directions)
+      (cons "## Solution directions"
+            (for [{:keys [label shape effort confidence]} directions]
+              (str "- **" label "** — " shape ". Effort: " (name effort)
+                   ". Confidence: " (name (:level confidence)) " — " (:reason confidence)))))
     (when notion-writes
       (remove nil?
               ["" "## Proposed Notion writes (on `apply`)"

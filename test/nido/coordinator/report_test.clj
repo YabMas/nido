@@ -11,6 +11,7 @@
    :title "Checkout off by a cent"
    :summary "Rounding applied per-line instead of on the total."
    :confidence {:level :high :reason "reproduced in the calc fn"}
+   :routing {:owner :jaap :app-domain "Teacher" :depth :deep}
    :directions [{:label "A" :shape "round once on the total"
                  :effort :M :confidence {:level :medium :reason "touches money math"}}]
    :notion-writes {:type "bug" :effort :M
@@ -330,3 +331,35 @@
   (let [md (report/report->markdown compact-proposal)]
     (is (str/includes? md "**Root cause**"))
     (is (not (str/includes? md "**Request**")))))
+
+(def ^:private shallow-report
+  {:format :triage-report :ticket-key "BR-8" :determination :needs-info
+   :title "Login loops on SSO" :summary "Looks like auth — Eric's area; not investigated."
+   :confidence {:level :low :reason "routed without root-causing"}
+   :routing {:owner :eric :app-domain "Backend" :depth :shallow}
+   :directions [] :notion-writes nil :trail []})
+
+(deftest validate-accepts-a-shallow-routed-report
+  (is (= shallow-report (report/validate shallow-report))))
+
+(deftest validate-accepts-nil-routing-for-slack
+  (is (report/validate (assoc valid-report :routing nil :notion-writes nil :directions []))))
+
+(deftest validate-rejects-bad-owner
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate (assoc-in valid-report [:routing :owner] :bob)))))
+
+(deftest validate-rejects-bad-app-domain
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate (assoc-in valid-report [:routing :app-domain] "Mobile")))))
+
+(deftest report->markdown-deep-shows-routing
+  (is (str/includes? (report/report->markdown valid-report) "Routing:")))
+
+(deftest report->markdown-shallow-has-routing-no-directions-no-writes
+  (let [md (report/report->markdown shallow-report)]
+    (is (str/includes? md "Routing:"))
+    (is (str/includes? md "Eric"))
+    (is (str/includes? md "Backend"))
+    (is (not (str/includes? md "Solution directions")) "shallow omits the directions section")
+    (is (not (str/includes? md "Proposed Notion writes")) "shallow has no notion-writes")))

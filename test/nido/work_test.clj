@@ -446,6 +446,7 @@
   (pr-str {:format :triage-report :ticket-key "slack-C1-1.0" :determination :bug
            :title "Verdict" :summary "bug — slack report."
            :confidence {:level :high :reason "r"}
+           :routing nil
            :directions [] :notion-writes nil :trail []}))
 
 (deftest gates-hydrates-a-slack-triage-report-from-the-workstream-ledger
@@ -596,6 +597,7 @@
   (pr-str {:format :triage-report :ticket-key "BR-9" :determination :bug
            :title "Verdict" :summary "ticket-ledger report."
            :confidence {:level :high :reason "r"}
+           :routing nil
            :directions [] :notion-writes nil :trail []}))
 
 (deftest gates-report-reads-a-triage-report-from-the-workstream-ledger
