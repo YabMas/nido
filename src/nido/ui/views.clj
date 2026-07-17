@@ -60,6 +60,16 @@
         .gate-wrap { display:grid; grid-template-columns: 38% 62%; min-height:80vh; }
         .queue-col { border-right:1px solid #2a2a4a; display:flex; flex-direction:column;
                      min-width:0; min-height:0; }
+        .pickup { margin:12px 16px 10px; padding:12px 14px; border:1px solid #2a2a4a;
+                  border-radius:6px; background:#16213e; }
+        .pickup-label { color:#f0f0f5; font-size:11px; text-transform:uppercase; letter-spacing:0.04em; margin-bottom:6px; }
+        .pickup-row { display:flex; gap:6px; }
+        .pickup input { flex:1; box-sizing:border-box; background:#0f0f1e; border:1px solid #2a2a4a;
+                        border-radius:4px; color:#fff; font:inherit; font-size:12px; padding:6px 9px; }
+        .pickup input::placeholder { color:#8a8aa8; }
+        .pickup input:focus { outline:none; border-color:#3a5a7a; }
+        .pickup .btn { color:#fff; }
+        .pickup-result { margin-top:2px; }
         .tabs { display:flex; gap:4px; padding:10px 16px 6px; }
         .tab { padding:4px 10px; border-radius:4px; color:#888; font-size:12px;
                text-transform:uppercase; border:1px solid transparent; }
@@ -695,15 +705,14 @@
    inside workstreams-fragment, so the 5s poll never clobbers the result."
   [project]
   (let [post (str "@post('/workstreams/pickup/" project "')")]
-    [:div.card {:style "margin-bottom:12px;"}
-     [:strong "Drive a ticket"]
-     [:div {:style "display:flex; gap:8px; margin-top:6px;"}
+    [:div.pickup
+     [:div.pickup-label "Drive a ticket"]
+     [:div.pickup-row
       [:input {"data-bind" "pickup"
                "data-on:keydown" (str "evt.key === 'Enter' && (" post ")")
-               :placeholder "paste Notion URL / page id / BR-#…"
-               :style "flex:1; box-sizing:border-box;"}]
-      [:button.btn.btn-primary {"data-on:click" post} "Drive →"]]
-     [:div {:id "pickup-result"}]]))
+               :placeholder "paste Notion URL / page id / BR-#…"}]
+      [:button.btn {"data-on:click" post} "Drive →"]]
+     [:div {:id "pickup-result" :class "pickup-result"}]]))
 
 (defn pickup-result-fragment
   "HTML string (root #pickup-result) reporting the outcome of a pickup POST.
@@ -711,7 +720,7 @@
   [result {:keys [project daemon-ready?]}]
   (str
    (h/html
-    [:div {:id "pickup-result" :style "margin-top:8px;"}
+    [:div {:id "pickup-result" :class "pickup-result" :style "margin-top:8px;"}
      (if (= :unresolved (:decision result))
        [:p.meta
         (case (:error result)
