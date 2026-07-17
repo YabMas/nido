@@ -159,6 +159,7 @@
   [active screen]
   {:active      active
    :scope       (:scope screen)
+   :tab         (:tab screen)
    :needs-count (:needs-count screen)
    :daemon      (read-rail-daemon)
    :projects    (mapv (comp name key) (project/list-projects))})
@@ -169,6 +170,7 @@
   [active scope]
   {:active      active
    :scope       scope
+   :tab         nil
    :needs-count (count (scope-keep-rows scope (work/all-gates)))
    :daemon      (read-rail-daemon)
    :projects    (mapv (comp name key) (project/list-projects))})

@@ -1,6 +1,7 @@
 (ns nido.ui.views-test
   (:require [clojure.test :refer [deftest is]]
             [clojure.string :as str]
+            [hiccup2.core :as h]
             [nido.ui.views :as views]))
 
 (deftest system-fragment-banner-table-and-actions
@@ -317,6 +318,26 @@
     (is (str/includes? html ">2<"))
     (is (str/includes? html "id=\"rail-health\""))
     (is (str/includes? html "dot-halted"))))
+
+(deftest rail-scope-link-stays-on-current-surface
+  (let [html (str (h/html (#'views/rail {:active :system :scope "all" :needs-count 0
+                                         :daemon {:state :up} :projects ["brian"] :tab nil})))]
+    (is (re-find #"/system\?scope=brian" html) "a scope link stays on the current (system) surface")
+    (is (not (re-find #"href=\"/\?scope=brian\"" html)) "scope link does NOT jump to the home surface")))
+
+(deftest rail-surface-link-carries-current-scope
+  (let [html (str (h/html (#'views/rail {:active :system :scope "brian" :needs-count 0
+                                         :daemon {:state :up} :projects ["brian"] :tab nil})))]
+    (is (re-find #"/workstreams\?scope=brian" html) "the Workstreams surface link carries the current scope")
+    (is (re-find #"href=\"/\?scope=brian\"" html) "the Needs-you surface link carries the current scope")))
+
+(deftest rail-scope-link-preserves-workstreams-tab
+  (let [html (str (h/html (#'views/rail {:active :workstreams :scope "brian" :tab :active
+                                         :needs-count 0 :daemon {:state :up} :projects ["brian"]})))]
+    ;; hiccup escapes "&" to "&amp;" inside a rendered attribute value (same quirk
+    ;; documented in workstreams-page-poll-carries-tab for &apos;).
+    (is (re-find #"/workstreams\?scope=brian&amp;tab=active" html)
+        "on workstreams, a scope link preserves the active tab")))
 
 (deftest workstream-pane-shows-ledger-index-and-selected-report
   (let [ws   (assoc sample-ws

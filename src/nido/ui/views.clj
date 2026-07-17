@@ -157,13 +157,25 @@
      [:span {:class (str "dot dot-" s)}] s]))
 
 (defn- rail
-  "The persistent navigation rail. Identical on every surface except the active
-   highlight + the two live elements (badge, health dot)."
-  [{:keys [active needs-count daemon scope projects]}]
-  (let [dest (fn [id href label]
-               [:a {:class (str "rail-link" (when (= id active) " active")) :href href}
+  "The persistent navigation rail. Scope is a sticky dimension: a scope link stays on the
+   current surface (changing only scope, preserving the workstreams tab); a surface link
+   carries the current scope. Selecting a project changes what you see, never where you are."
+  [{:keys [active needs-count daemon scope projects tab]}]
+  (let [surface-path {:needs "/" :workstreams "/workstreams" :system "/system"}
+        q (fn [scope-val workstreams?]
+            (let [parts (cond-> []
+                          (and scope-val (not= "all" scope-val)) (conj (str "scope=" scope-val))
+                          (and workstreams? tab (not= view-state/default-tab tab)) (conj (str "tab=" (name tab))))]
+              (if (seq parts) (str "?" (str/join "&" parts)) "")))
+        dest (fn [id href label]
+               [:a {:class (str "rail-link" (when (= id active) " active"))
+                    :href (str href (q scope (= id :workstreams)))}
                 [:span label]
-                (when (= id :needs) (rail-needs-badge needs-count))])]
+                (when (= id :needs) (rail-needs-badge needs-count))])
+        scope-link (fn [scope-val label]
+                     [:a {:class (when (= scope scope-val) "active")
+                          :href (str (surface-path active) (q scope-val (= active :workstreams)))}
+                      label])]
     [:nav.rail
      [:a.rail-brand {:href "/" :title "nido"}
       [:img.rail-logo {:src "/nido-logo.png" :alt "nido" :width 84 :height 84}]]
@@ -172,10 +184,8 @@
      (dest :system "/system" "System")
      [:div.rail-scope
       [:div.meta "Scope"]
-      ;; Static for now; the scope task wires these to real project filters.
-      [:a {:class (when (= scope "all") "active") :href "/"} "All projects"]
-      (for [p projects]
-        [:a {:class (when (= scope p) "active") :href (str "/?scope=" p)} p])]
+      (scope-link "all" "All projects")
+      (for [p projects] (scope-link p p))]
      (rail-health daemon)]))
 
 (defn rail-status-fragment
@@ -186,7 +196,7 @@
 
 (defn shell
   "Page chrome: persistent rail + content area. Replaces `layout`. `ctx` carries
-   {:active :title :needs-count :daemon :scope :projects}; `content` is hiccup."
+   {:active :title :needs-count :daemon :scope :projects :tab}; `content` is hiccup."
   [{:keys [title] :as ctx} & content]
   (str
    (h/html
