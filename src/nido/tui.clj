@@ -213,12 +213,24 @@
          :data {::band band-key}))
 
 (defn- band-rows
-  "Header + (when expanded) badged item rows for a stage band; nil when the band
-   is empty so callers can `concat`. A collapsed band renders just its header."
-  [band-key label rows collapsed?]
-  (when (seq rows)
-    (cons (band-header band-key collapsed? label (count rows))
-          (when-not collapsed? (mapv badged-item-row rows)))))
+  "Header + (when expanded) item rows for a stage band; nil when the band is
+   empty so callers can `concat`. A collapsed band renders just its header.
+   `row-fn` renders one row (default `badged-item-row`) — the winding-down
+   band uses a different renderer (see `winddown-item-row`)."
+  ([band-key label rows collapsed?] (band-rows band-key label rows collapsed? badged-item-row))
+  ([band-key label rows collapsed? row-fn]
+   (when (seq rows)
+     (cons (band-header band-key collapsed? label (count rows))
+           (when-not collapsed? (mapv row-fn rows))))))
+
+(defn- winddown-item-row
+  "One winding-down row: closed workstream still holding live sessions."
+  [r]
+  {:title (str (origin-badge (:origin r)) "  " (:label r)
+               "  [closed:" (name (or (:outcome r) :done))
+               " · " (count (:sessions r)) " live]")
+   :description "d brings its sessions down"
+   :data r})
 
 (defn- board-rows
   "Rows for the spine board: work/grouped, filtered by `origin` and `facet-filter`,
@@ -237,7 +249,13 @@
                (band :in-progress      "In progress"        (:in-progress g))
                (band :triage-in-flight "Triage · in flight" (get-in g [:triage :in-flight]))
                (band :triage-queued    "Triage · queued"    (get-in g [:triage :queued]))
-               (band :incoming         "Queue"              (:incoming g)))]
+               (band :incoming         "Queue"              (:incoming g))
+               ;; Winding-down rows carry :origin (so the origin filter composes via
+               ;; `keep`) but no :facets — an ACTIVE facet selection hides them
+               ;; (facet-match? treats facet-less rows as non-matching then). Acceptable:
+               ;; the band only disappears while you're actively slicing by facet.
+               (band-rows :winding-down "Winding down" (keep (:winding-down g))
+                          (contains? collapsed :winding-down) winddown-item-row))]
      (if (empty? rows)
        [{:title "No workstreams here. [n] new · [s] system · [f via system] fire"
          :description "" :data ::empty}]
@@ -621,7 +639,11 @@
    :add     {:fn #'create-workstream-action!                        :gerund "Creating"   :past "Created"   :failed "create"}
    ;; :rehydrate has no :fn — it runs work/ensure-open! via rehydrate-and-enter,
    ;; not run-session-action!. The labels feed the spinner + failure panel.
-   :rehydrate {                                                      :gerund "Re-hydrating" :past "Re-hydrated" :failed "re-hydrate"}})
+   :rehydrate {                                                      :gerund "Re-hydrating" :past "Re-hydrated" :failed "re-hydrate"}
+   ;; :bring-down has no :fn either — it runs work/bring-down! directly from
+   ;; update-board's `d` arm (see the winding-down band above), not via
+   ;; run-session-action!'s [name {:project}] calling convention.
+   :bring-down {                                                     :gerund "Bringing down" :past "Brought down" :failed "bring down"}})
 
 (defn- run-session-action!
   "Run `verb`'s lifecycle fn for session `sn` in project `p`, then its `:after`
@@ -1168,7 +1190,18 @@
     (msg/key-match? msg "n") (open-create-session state (:project state))
     (msg/key-match? msg "p") (promote-selected state)
     (msg/key-match? msg "P") (open-stage-picker state)
-    (msg/key-match? msg "d") (done-selected state)
+    (msg/key-match? msg "d")
+    (let [sel (selected-workstream state)]
+      (if (= :winding-down (:stage sel))
+        (with-spinner state :bring-down (:label sel)
+          (captured-cmd
+           (fn [] (work/bring-down! (:project state) (:ws-id sel)))
+           (fn [{:keys [ok? error output]}]
+             (if ok?
+               {:type ::action-done :verb :bring-down :subject (:label sel)}
+               {:type ::action-failed :verb :bring-down :subject (:label sel)
+                :error error :output output}))))
+        (done-selected state)))
     (msg/key-match? msg "x") (dismiss-selected state)
     (msg/key-match? msg "s") [(enter-system state) nil]
     (or (msg/key-match? msg "tab") (msg/key-match? msg "right"))
@@ -1545,7 +1578,7 @@
                   :pickup-input         "[↵] pickup  [esc] cancel"
                   (case (:screen state)
                     :projects   "[↵] open  [q]uit"
-                    :board      "[↵/o] open  [i]nspect  [n]ew  [p]romote  [P] promote to…  [d]one  [x] dismiss (slack)  [space] fold  [⇄ tab] origin  [ [ ] ] domain  [ { } ] type  [s]ystem  [esc] back  [q]uit"
+                    :board      "[↵/o] open  [i]nspect  [n]ew  [p]romote  [P] promote to…  [d]one/bring-down  [x] dismiss (slack)  [space] fold  [⇄ tab] origin  [ [ ] ] domain  [ { } ] type  [s]ystem  [esc] back  [q]uit"
                     :workstream "[↵] open in chat  [w]orktree  [a] apply  [r] reply  [u]p  [d]own  [x] destroy  [S] dev-start  [X] dev-stop  [R] dev-restart  [esc] back  [q]uit"
                     :system     "[↵/e] enter  [w]orktree  [i]nfo  [u]p  [d]own  [x] destroy  •  [f]ire  [h]alt  [c]lear breaker  [p]ickup  [esc] back  [q]uit"))))
 

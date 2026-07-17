@@ -220,6 +220,17 @@
       (#'tui/update-board (board-state :all) (msg/key-press "d"))
       (is (= [["w1" :done]] @calls) "d → set-stage! :done"))))
 
+(deftest board-d-on-winding-down-row-arms-bring-down
+  ;; d on a winding-down row is contextual: it arms the bring-down busy action
+  ;; instead of falling through to done-selected.
+  (let [state (#'tui/rebuild-list {:screen :board :project "p" :origin :all}
+                                  [{:title "x" :description ""
+                                    :data {:ws-id "w" :stage :winding-down :label "leftover"
+                                           :sessions ["s1"]}}])
+        [state' _] (#'tui/update-fn state (msg/key-press "d"))]
+    (is (= :bring-down (get-in state' [:busy :verb])))
+    (is (= "leftover" (get-in state' [:busy :subject])))))
+
 (deftest board-x-dismisses-selected-workstream
   (let [calls (atom [])]
     (with-redefs [nido.tui/selected-workstream (fn [_] {:ws-id "w1" :br-id "BR-1"})
@@ -401,6 +412,20 @@
       (is (some #(str/includes? % "Queue (1)") titles))
       (is (str/includes? (first titles) "Queue")
           "Queue band renders first (inbox-first spec requirement)"))))
+
+(deftest board-rows-include-winding-down-band
+  ;; A closed workstream still holding live sessions renders as a trailing
+  ;; "Winding down" band — the one place bring-down! applies.
+  (with-redefs [nido.work/grouped
+                (fn [_ _] {:incoming [] :in-progress [] :shipping []
+                          :triage {:in-flight [] :queued []}
+                          :winding-down [{:ws-id "w" :origin :scratch
+                                          :label "leftover" :outcome :done
+                                          :sessions ["s1"] :stage :winding-down}]})
+                nido.work/live-session-names (constantly #{"s1"})]
+    (let [titles (map :title (#'tui/board-rows :brian :all #{} {}))]
+      (is (some #(str/includes? % "Winding down") titles))
+      (is (some #(str/includes? % "leftover") titles)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Task 8: composable facet sub-queue selectors
