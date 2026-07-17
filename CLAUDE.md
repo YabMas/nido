@@ -148,7 +148,7 @@ cap-1 by design (one brian CI run already saturates ~8 test containers).
 All session verbs take `:project <project>` plus a positional `<session>` (any order).
 
 - `bb nido:session:up :project <p> <session>` — create the worktree if missing, start PG + JVM + app, write the session home. Idempotent. Prints the session-home path on success.
-- `bb nido:session:enter :project <p> <session>` — write the session-home path to `~/.nido/.last-cd` and exit. Pair with the `nido` shell function (see "Shell wrapper" above) to actually `cd` your shell there. Refuses if the session is down. Pass `:cd worktree` to land in the worktree (the actual code) instead — useful when you want to edit / git-grep without the extra `cd worktree`. The TUI exposes the same opt-in on its **system surface** (`s`): <kbd>e</kbd> / <kbd>↵</kbd> for session-home, <kbd>w</kbd> for worktree (and the board's <kbd>↵</kbd>/<kbd>o</kbd> opens a workstream's session-home directly) — but in Warp the TUI spawns a new tab in place rather than quitting to this `cd`-handoff (see "How land in the session works" above). The CLI verb always uses the `.last-cd` handoff.
+- `bb nido:session:enter :project <p> <session>` — write the session-home path to `~/.nido/.last-cd` and exit. Pair with the `nido` shell function (see "Shell wrapper" above) to actually `cd` your shell there. Refuses if the session is down. Pass `:cd worktree` to land in the worktree (the actual code) instead — useful when you want to edit / git-grep without the extra `cd worktree`. The TUI exposes the same opt-in on a workstream's detail screen, on its session rows: <kbd>↵</kbd> for session-home/chat, <kbd>w</kbd> for worktree, plus <kbd>u</kbd>/<kbd>d</kbd>/<kbd>x</kbd> for up/down/destroy (and the board's <kbd>↵</kbd>/<kbd>o</kbd> opens a workstream's session-home directly) — but in Warp the TUI spawns a new tab in place rather than quitting to this `cd`-handoff (see "How land in the session works" above). The CLI verb always uses the `.last-cd` handoff.
 - `bb nido:session:down :project <p> <session>` — stop the session; worktree + on-disk state preserved.
 - `bb nido:session:reset :project <p> <session>` — nuclear recovery. Down → drop PGDATA → re-clone from the current template → up. The "I'm wedged, fix it" button.
 - `bb nido:session:destroy :project <p> <session>` — down + remove the worktree.
@@ -157,6 +157,8 @@ All session verbs take `:project <project>` plus a positional `<session>` (any o
 There is no `restart` task — use `down` then `up` (or just `up`, since it's idempotent on a running session and a no-op there). The dashboard's restart button still exists; it's an internal UI-only path.
 
 Sessions stay up until explicitly stopped. There is no automatic idle-suspension — bring a session `down` yourself when you're done with it.
+
+Debug escape hatch: `bb nido:session:status` / `bb nido:session:list` stay scan-based and model-independent — they work even when the workstream model is wedged.
 
 ## Launcher artifacts
 
@@ -266,8 +268,11 @@ drop / done / reply). The stage-grouped **Workstreams** overview is at `/workstr
 workstream detail is at `/workstreams/<project>/<ws-id>` — a ledger reader plus, below it,
 a stage-appropriate action bar (the same gate actions as the inbox, e.g. parked triage →
 Apply/Dismiss/Reply) shown only for the current ledger entry. The old flat live-sessions board
-(each live session a clickable friendly-host link `<session>.<project>.localhost`)
-moved to `/system`. The Workstreams overview (`/workstreams`) filters by **scope** (project), **source** (All/Notion/GitHub/Slack/Scratch, with per-source counts) and **context-dependent facets** (App Domain / Type for the Notion source) — the cockpit's overview surface. The TUI stays a lean session launcher. Override the port with `bb nido:coordinator:up :dashboard-port <n>`;
+is gone: every live session belongs to a workstream (the daemon adopts orphans into scratch
+workstreams every 5 minutes), machine facts (ports, RSS, lifecycle) live on each workstream's
+session rows, closed-but-still-running workstreams surface in the Active tab's winding-down
+band, and global ops levers (halt, breakers, fire-trigger) sit behind the rail's health dot.
+`/system` redirects to `/workstreams`. The Workstreams overview (`/workstreams`) filters by **scope** (project), **source** (All/Notion/GitHub/Slack/Scratch, with per-source counts) and **context-dependent facets** (App Domain / Type for the Notion source) — the cockpit's overview surface. The TUI stays a lean session launcher. Override the port with `bb nido:coordinator:up :dashboard-port <n>`;
 disable with `:no-dashboard true`. `bb nido:coordinator:status` shows a `Dashboard:`
 line (port + reachability).
 
@@ -319,7 +324,7 @@ bb nido:trigger:fire :project brian <name> :<key> <value>
 bb nido:runs:list / bb nido:runs:show <id>
 ```
 
-Or in the TUI: the spine board lists workstreams by stage — `↵`/`o` opens a workstream's session, `i` inspects its sessions (autonomous runs show on the autonomy axis), `n` starts a new one-off, `p`/`P` promote (default / pick-a-stage), `d` marks done, `tab` cycles the origin filter, and `s` opens the system surface.
+Or in the TUI: the spine board lists workstreams by stage — `↵`/`o` opens a workstream's session, `i` inspects its sessions (autonomous runs show on the autonomy axis), `n` starts a new one-off, `p`/`P` promote (default / pick-a-stage), `d` marks done, `tab` cycles the origin filter, and `s` opens the ops overlay (halt / clear breaker / fire / pickup).
 
 ### Classification-facet sub-queues
 
@@ -332,7 +337,7 @@ is applied (`nido:ticket:complete`), and re-syncable on demand with
 `bb nido:facets:refresh :project <p> [:ws <id>]`. They are a pure organizational
 lens; the stage spine is unchanged.
 
-**Safety brakes (Stage 2):** per-Run wall-clock budget (`:limits.budget`, default 30m, SIGTERM→SIGKILL), per-trigger circuit breaker (`:limits.max-failures`, default 3), daemon-wide anomaly auto-halt, kill switch (`bb nido:halt` + `bb nido:coordinator:resume`). On the TUI **system surface** (`s`): `h` halts, `c` clears a breaker, `f` fires a trigger.
+**Safety brakes (Stage 2):** per-Run wall-clock budget (`:limits.budget`, default 30m, SIGTERM→SIGKILL), per-trigger circuit breaker (`:limits.max-failures`, default 3), daemon-wide anomaly auto-halt, kill switch (`bb nido:halt` + `bb nido:coordinator:resume`). On the TUI, `s` opens the ops overlay: `h` halts, `c` clears a breaker, `f` fires a trigger.
 
 **Startup reconciliation (Stage 3):** when the daemon starts, any non-terminal Run on disk is forced to a terminal state from observable evidence (artifacts, `_run-status.edn`, agent.log). Crashed/orphaned Runs get marked `:failed :reason :orphaned-from-restart` so the dashboard stays honest.
 
