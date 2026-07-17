@@ -5,10 +5,10 @@
      :projects   — registered projects (one row per project) → enter drills in
      :board      — the active project's workstreams grouped by stage, filtered by
                    origin (All/Notion/GitHub/Slack/Scratch) via Tab/←→.
-                   ↵ opens the workstream's session; [i] drills into detail; [s] system.
+                   ↵ opens the workstream's session; [i] drills into detail;
+                   [s] opens the ops overlay (status + halt/breaker/fire/pickup levers).
      :workstream — the highlighted workstream's sessions; ↵ enters one in chat,
                    esc returns to the board.
-     :system     — session plumbing (up/down/destroy) + coordinator levers.
 
    The TUI itself does no service work. Action keys queue an action into
    `exit-action` and quit the program; the bb task wrapper (`tasks.nido-tui`)
@@ -38,9 +38,7 @@
    [nido.project :as project]
    [nido.work :as work]
    [nido.session.dev :as dev]
-   [nido.session.engine :as engine]
    [nido.session.lifecycle :as lifecycle]
-   [nido.session.links :as links]
    [nido.session.state :as state]))
 
 ;; ---------------------------------------------------------------------------
@@ -121,20 +119,6 @@
                    {:title (str glyph "  " name)
                     :description (str directory "    " running " running")
                     :data {:name name :directory directory}}))))))
-
-(defn- session-rows [project-name]
-  (let [{:keys [sessions]} (lifecycle/list-all-data {:project project-name})]
-    (mapv (fn [{:keys [name pg-port app-port nrepl-port] :as s}]
-            (let [up?   (boolean (or pg-port app-port nrepl-port))
-                  glyph (if up? "●" "○")
-                  parts (cond-> []
-                          app-port   (conj (format "app  %s"  app-port))
-                          pg-port    (conj (format "pg   %s"  pg-port))
-                          nrepl-port (conj (format "repl %s"  nrepl-port)))]
-              {:title (str glyph "  " name)
-               :description (if up? (str/join "    " parts) "—")
-               :data s}))
-          sessions)))
 
 ;; ---------------------------------------------------------------------------
 ;; Workstreams surface — list (engagement groups) + detail (its sessions)
@@ -257,7 +241,7 @@
                (band-rows :winding-down "Winding down" (keep (:winding-down g))
                           (contains? collapsed :winding-down) winddown-item-row))]
      (if (empty? rows)
-       [{:title "No workstreams here. [n] new · [s] system · [f via system] fire"
+       [{:title "No workstreams here. [n] new · [s] ops · [f via ops] fire"
          :description "" :data ::empty}]
        (vec (strip-leading-blank rows))))))
 
@@ -348,7 +332,6 @@
         chrome (+ 5
                   (if (= :board (:screen state)) 1 0)
                   (if facet-line? 1 0)
-                  (if (= :system (:screen state)) 1 0)
                   (if (:status state) 1 0))]
     (max 1 (quot (max 2 (- term-height chrome)) 2))))
 
@@ -436,15 +419,13 @@
 (defn- current-rows
   "Rows for the active screen — the source the live-refresh tick re-reads.
    On :board, dispatches on origin filter for the spine board.
-   On :workstream, shows the detail rows for the highlighted workstream.
-   On :system, shows the session-plumbing rows for the active project."
+   On :workstream, shows the detail rows for the highlighted workstream."
   [state]
   (case (:screen state)
     :board      (board-rows (:project state) (:origin state)
                             (or (:collapsed state) default-collapsed-bands)
                             (or (:facet-filter state) {}))
     :workstream (detail-rows (:project state) (:ws-id state) (:selected-entry-seq state))
-    :system     (session-rows (:project state))
     :projects   (project-rows)))
 
 ;; ---------------------------------------------------------------------------
@@ -547,16 +528,6 @@
 
 (defn- open-confirm-destroy [state p s]
   [(assoc state :modal :confirm-destroy :modal-target {:project p :session s}) nil])
-
-(defn- open-session-info
-  "Snapshot the highlighted session's data into the modal so the panel
-   stays consistent if the registry shifts underneath."
-  [state p s]
-  (let [data (selected-data state)]
-    [(assoc state
-            :modal :session-info
-            :modal-target {:project p :session s :data data})
-     nil]))
 
 (defn- open-create-session [state p]
   [(assoc state
@@ -753,7 +724,7 @@
 
 
 ;; ---------------------------------------------------------------------------
-;; Fire-trigger modal (system surface, `f` key)
+;; Fire-trigger modal (ops overlay, `f` key)
 ;;
 ;; Three sub-states cooperate to walk the user through:
 ;;   :fire-pick-project  — choose project (skipped when only one is registered)
@@ -762,7 +733,7 @@
 ;; The final state enqueues an envelope via `queue/enqueue!` and surfaces a
 ;; status-line message; the live-refresh tick picks up the result automatically.
 ;; Defined here (rather than alongside the other modal handlers below) so
-;; update-system can call open-fire-trigger without a forward declaration.
+;; update-ops can call open-fire-trigger without a forward declaration.
 ;; ---------------------------------------------------------------------------
 
 (defn- queued-status
@@ -1094,8 +1065,8 @@
       [(assoc state :modal-input ti) cmd])))
 
 ;; ---------------------------------------------------------------------------
-;; Pickup — drive a Notion ticket (URL / page-id / BR-####) from the system
-;; surface, no board browsing required. Front-end over
+;; Pickup — drive a Notion ticket (URL / page-id / BR-####) from the ops
+;; overlay, no board browsing required. Front-end over
 ;; `nido.coordinator.pickup/pickup!` (which resolves the ref and enqueues the
 ;; :plan-bug envelope). A single-field text-input mirrors :reply-input.
 ;; ---------------------------------------------------------------------------
@@ -1133,7 +1104,7 @@
     (let [[ti cmd] (text-input/text-input-update (:modal-input state) msg)]
       [(assoc state :modal-input ti) cmd])))
 
-(declare open-stage-picker enter-system)
+(declare open-stage-picker)
 
 (defn- open-stage-picker
   "Open a picker over the spine stages to aim `promote` at a target (the override
@@ -1161,12 +1132,6 @@
          nil])
       [state nil])
     :else (picker-route state msg)))
-
-(defn- enter-system
-  "Drill from the board into the system surface (daemon health + session plumbing)."
-  [state]
-  (let [s (assoc state :screen :system :status nil)]
-    (rebuild-list s (session-rows (:project state)))))
 
 (defn- toggle-band
   "Fold/unfold the band under the cursor, persisting the set on `state` so the
@@ -1203,7 +1168,7 @@
                 :error error :output output}))))
         (done-selected state)))
     (msg/key-match? msg "x") (dismiss-selected state)
-    (msg/key-match? msg "s") [(enter-system state) nil]
+    (msg/key-match? msg "s") [(assoc state :modal :ops :status nil) nil]
     (or (msg/key-match? msg "tab") (msg/key-match? msg "right"))
     [(set-origin state (step-origin (:origin state) 1)) nil]
     (or (msg/key-match? msg "shift+tab") (msg/key-match? msg "left"))
@@ -1281,22 +1246,22 @@
           [(refresh-list s2 (current-rows s2)) cmd])
         [s' cmd]))))
 
-(defn- update-system [state msg]
+;; ---------------------------------------------------------------------------
+;; Ops overlay (`s` on the board) — a read-only status/breaker panel whose keys
+;; route straight to the existing coordinator-lever modal openers. Replaces the
+;; old :system screen: session plumbing lives on the workstream detail view
+;; (absorbed by Task 10), and per-project session links/ports are reachable via
+;; `bb nido:session:link:*` / the web pane instead of a dedicated TUI screen.
+;; ---------------------------------------------------------------------------
+
+(defn- update-ops [state msg]
   (cond
-    (msg/key-match? msg "escape") [(set-origin state (:origin state)) nil]
-    (or (msg/key-match? msg "enter") (msg/key-match? msg "e"))
-    (with-selected-session state (fn [s p sn] (enter-session s p sn :home)))
-    (msg/key-match? msg "w") (with-selected-session state (fn [s p sn] (enter-session s p sn :worktree)))
-    (msg/key-match? msg "u") (with-selected-session state start-session-up)
-    (msg/key-match? msg "d") (with-selected-session state start-session-down)
-    (msg/key-match? msg "x") (with-selected-session state (fn [s p sn] (open-confirm-destroy s p sn)))
-    (msg/key-match? msg "i") (with-selected-session state (fn [s p sn] (open-session-info s p sn)))
-    (msg/key-match? msg "f") (open-fire-trigger state)
-    (msg/key-match? msg "h") (open-halt-confirm state)
-    (msg/key-match? msg "c") (open-clear-breaker-picker state)
-    (msg/key-match? msg "p") (open-pickup-input state)
-    :else (let [[lst cmd] (item-list/list-update (:list state) msg)]
-            [(assoc state :list lst) cmd])))
+    (msg/key-match? msg "escape") [(close-modal state) nil]
+    (msg/key-match? msg "h") (open-halt-confirm (close-modal state))
+    (msg/key-match? msg "c") (open-clear-breaker-picker (close-modal state))
+    (msg/key-match? msg "f") (open-fire-trigger (close-modal state))
+    (msg/key-match? msg "p") (open-pickup-input (close-modal state))
+    :else [state nil]))
 
 ;; ---------------------------------------------------------------------------
 ;; Modals — handled before the regular screen update so input is captured.
@@ -1313,14 +1278,6 @@
     ;; n / esc / anything else cancels
     :else
     [(close-modal state) nil]))
-
-(defn- update-session-info
-  "Only `esc` closes the info panel; other keys are swallowed so the
-   modal stays open until explicitly dismissed."
-  [state msg]
-  (if (msg/key-match? msg "escape")
-    [(close-modal state) nil]
-    [state nil]))
 
 (defn- update-viewport-modal
   "Shared handler for read-only scrollable modals (action-error).
@@ -1406,9 +1363,6 @@
     (= :confirm-destroy (:modal state))
     (update-confirm-destroy state msg)
 
-    (= :session-info (:modal state))
-    (update-session-info state msg)
-
     (= :action-error (:modal state))
     (update-viewport-modal state msg)
 
@@ -1442,14 +1396,16 @@
     (= :pickup-input (:modal state))
     (update-pickup-input state msg)
 
+    (= :ops (:modal state))
+    (update-ops state msg)
+
     ;; No modal: route to the active screen's handler. Origin cycling (Tab/←→) is
     ;; owned by update-board, alongside the other board keys.
     :else
     (case (:screen state)
       :projects   (update-projects state msg)
       :board      (update-board state msg)
-      :workstream (update-workstream state msg)
-      :system     (update-system state msg))))
+      :workstream (update-workstream state msg))))
 
 ;; ---------------------------------------------------------------------------
 ;; View
@@ -1535,9 +1491,6 @@
                   :confirm-destroy "nido — confirm destroy"
                   :create-session  (str "nido — " (-> state :modal-target :project)
                                         " · new session")
-                  :session-info    (str "nido — " (-> state :modal-target :project)
-                                        " · " (-> state :modal-target :session)
-                                        " · info")
                   :action-error        (str "nido — action failed · " (-> state :modal-target :subject))
                   :fire-pick-project
                   "nido — fire trigger · pick project"
@@ -1554,18 +1507,17 @@
                   :stage-picker         "nido — promote to…"
                   :reply-input          (str "nido — " (:project state) " · " (:ws-label state) " · reply")
                   :pickup-input         (str "nido — " (:project state) " · pickup")
+                  :ops                  (str "nido — " (:project state) " · ops")
                   (case (:screen state)
                     :projects   "nido — projects"
                     :board      (str "nido — " (:project state) " · " (name (:origin state)))
-                    :workstream (str "nido — " (:project state) " · " (:ws-label state))
-                    :system     (str "nido — " (:project state) " · system")))))
+                    :workstream (str "nido — " (:project state) " · " (:ws-label state))))))
 
 (defn- footer [state]
   (style/render subtle-style
                 (case (:modal state)
                   :confirm-destroy    "[y] destroy  [n/esc] cancel"
                   :create-session     "[↵] create  [esc] cancel"
-                  :session-info       "[esc] back"
                   :action-error           "[↑↓/pgup/pgdn] scroll  [esc] dismiss"
                   :fire-pick-project  "[↑↓] move  [↵] pick  [esc] cancel"
                   :fire-pick-trigger  "[↑↓] move  [↵] pick  [esc] cancel"
@@ -1576,71 +1528,11 @@
                   :stage-picker         "[↑↓] move  [↵] promote here  [esc] cancel"
                   :reply-input          "[↵] send  [esc] cancel"
                   :pickup-input         "[↵] pickup  [esc] cancel"
+                  :ops                  "[h]alt  [c]lear breaker  [f]ire  [p]ickup  [esc] back"
                   (case (:screen state)
                     :projects   "[↵] open  [q]uit"
-                    :board      "[↵/o] open  [i]nspect  [n]ew  [p]romote  [P] promote to…  [d]one/bring-down  [x] dismiss (slack)  [space] fold  [⇄ tab] origin  [ [ ] ] domain  [ { } ] type  [s]ystem  [esc] back  [q]uit"
-                    :workstream "[↵] open in chat  [w]orktree  [a] apply  [r] reply  [u]p  [d]own  [x] destroy  [S] dev-start  [X] dev-stop  [R] dev-restart  [esc] back  [q]uit"
-                    :system     "[↵/e] enter  [w]orktree  [i]nfo  [u]p  [d]own  [x] destroy  •  [f]ire  [h]alt  [c]lear breaker  [p]ickup  [esc] back  [q]uit"))))
-
-(defn- info-row [label value]
-  (str (style/render label-style (format "%-13s" label)) " " value))
-
-(defn- session-link-entries
-  "Read the highlighted session's links by deriving instance-id from
-   worktree. Returns [] when worktree is nil or any error escapes —
-   the panel must never throw."
-  [worktree]
-  (when worktree
-    (try
-      (links/read-links (engine/resolve-instance-id worktree))
-      (catch Exception _ []))))
-
-(def ^:private link-indent "              ")
-
-(defn- render-link-rows
-  "Sequence of strings — one type-header row plus one row per link.
-   Empty when entries is empty; only types with entries are emitted."
-  [entries]
-  (when (seq entries)
-    (apply concat
-           (for [[t ls] (links/group-by-type entries)]
-             (cons (str link-indent
-                        (style/render label-style
-                                      (links/display-labels t (name t))))
-                   (for [{:keys [url title]} ls]
-                     (str link-indent "  " url
-                          (when (seq title) (str " — " title)))))))))
-
-(defn- session-info-body
-  "Render the read-only session-info panel. `data` is the session row
-   (`:name :worktree :pg-port :app-port :nrepl-port :repl-pid`) snapshotted
-   at modal open time. `app-port` nil means the session is down — every
-   live-port row falls back to `—` and the dev URL is omitted."
-  [project session data]
-  (let [{:keys [worktree app-port pg-port nrepl-port]} data
-        up?      (boolean (or pg-port app-port nrepl-port))
-        dash     "—"
-        glyph    (if up? "●" "○")
-        status   (if up? "up" "down")
-        dev-url  (if app-port (str "http://localhost:" app-port) dash)
-        home     (state/session-home-dir project session)
-        entries  (session-link-entries worktree)
-        link-rows (render-link-rows entries)]
-    (str/join "\n"
-              (concat
-               [(info-row "session"      (str project "/" session))
-                (info-row "status"       (str glyph "  " status))
-                ""
-                (info-row "dev URL"      dev-url)
-                (info-row "app port"     (or app-port dash))
-                (info-row "pg port"      (or pg-port dash))
-                (info-row "nrepl port"   (or nrepl-port dash))
-                ""
-                (info-row "session home" home)
-                (info-row "worktree"     (or worktree dash))]
-               (when link-rows
-                 (cons "" (cons (info-row "links" "")
-                                link-rows)))))))
+                    :board      "[↵/o] open  [i]nspect  [n]ew  [p]romote  [P] promote to…  [d]one/bring-down  [x] dismiss (slack)  [space] fold  [⇄ tab] origin  [ [ ] ] domain  [ { } ] type  [s] ops  [esc] back  [q]uit"
+                    :workstream "[↵] open in chat  [w]orktree  [a] apply  [r] reply  [u]p  [d]own  [x] destroy  [S] dev-start  [X] dev-stop  [R] dev-restart  [esc] back  [q]uit"))))
 
 (defn- text-viewport
   "Viewport over `content`, sized to the stashed terminal height (minus
@@ -1658,10 +1550,6 @@
       (str (style/render warning-style "destroy ")
            project "/" session
            (style/render warning-style " ?")))
-
-    :session-info
-    (let [{:keys [project session data]} (:modal-target state)]
-      (session-info-body project session data))
 
     :action-error
     (viewport/viewport-view (:viewport (:modal-target state)))
@@ -1711,7 +1599,20 @@
     (text-input/text-input-view (:modal-input state))
 
     :pickup-input
-    (text-input/text-input-view (:modal-input state))))
+    (text-input/text-input-view (:modal-input state))
+
+    :ops
+    (str (status-bar) "\n\n"
+         (when-let [h (halt/read-halt-info)]
+           (str "halted by " (name (:source h))
+                (when (:note h) (str " — " (:note h))) "\n\n"))
+         (let [tripped (breakers/tripped-triggers)]
+           (if (seq tripped)
+             (str "breakers:\n"
+                  (str/join "\n" (for [{:keys [project trigger info]} tripped]
+                                   (str "  " (name project) "/" (name trigger)
+                                        "  —  " (runs-view/breaker-reason info)))))
+             "no breakers tripped")))))
 
 (defn- busy-label [verb]
   (str (get-in action-defs [verb :gerund] "Working on") " "))
@@ -1737,8 +1638,6 @@
            (str (origin-strip (:origin state)) "\n"
                 (let [fs (facet-strip (:project state) (:origin state) (or (:facet-filter state) {}))]
                   (if (str/blank? fs) "" (str fs "\n")))))
-         (when (= :system (:screen state))
-           (str (status-bar) "\n"))
          "\n"
          (item-list/list-view (:list state)) "\n\n"
          (when-let [s (:status state)]

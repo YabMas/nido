@@ -54,12 +54,12 @@
 
 (deftest board-footer-has-work-verbs
   ;; The unified spine board surfaces the work verbs in one footer (no per-source
-  ;; split). System levers live on the system surface, not here.
+  ;; split). Coordinator levers live behind the `s` ops overlay, not inline here.
   (let [f (#'tui/footer {:screen :board :origin :all})]
     (is (re-find #"\[p\]romote" f) "board footer surfaces promote")
     (is (re-find #"\[d\]one" f) "board footer surfaces done")
     (is (re-find #"\[n\]ew" f) "board footer surfaces new")
-    (is (re-find #"\[s\]ystem" f) "board footer points at the system surface")
+    (is (re-find #"\[s\] ops" f) "board footer points at the ops overlay")
     (is (not (re-find #"\[h\]alt" f)) "no coordinator levers on the board footer")))
 
 (deftest board-footer-is-origin-agnostic
@@ -151,9 +151,9 @@
 (deftest main-list-scrolls-within-terminal-height
   (let [items (mapv (fn [n] {:title (str "session-" n) :description "" :data {:name (str "session-" n)}})
                     (range 12))
-        state (-> {:screen :system :project "brian" :size [100 14]}
+        state (-> {:screen :board :origin :all :project "brian" :size [100 14]}
                   (#'tui/rebuild-list items))
-        [scrolled _] (reduce (fn [[s _] _] (#'tui/update-system s (msg/key-press "down")))
+        [scrolled _] (reduce (fn [[s _] _] (#'tui/update-board s (msg/key-press "down")))
                              [state nil]
                              (range 7))]
     (is (pos? (get-in scrolled [:list :height]))
@@ -166,7 +166,7 @@
 (deftest window-size-resizes-main-list-immediately
   (let [items (mapv (fn [n] {:title (str "session-" n) :description "" :data {:name (str "session-" n)}})
                     (range 12))
-        state (-> {:screen :system :project "brian" :size [100 40]}
+        state (-> {:screen :board :origin :all :project "brian" :size [100 40]}
                   (#'tui/rebuild-list items))
         old-height (get-in state [:list :height])]
     (with-redefs [nido.charm-patch/clear-on-resize! (fn [] nil)]
@@ -175,7 +175,7 @@
             "the resize event applies the new terminal height to the list immediately")))))
 
 (deftest empty-main-list-keeps-zero-scroll-offset
-  (let [state (-> {:screen :system :project "brian" :size [100 14]}
+  (let [state (-> {:screen :board :origin :all :project "brian" :size [100 14]}
                   (#'tui/rebuild-list []))]
     (is (= 0 (get-in (#'tui/resize-current-list state) [:list :offset]))
         "empty lists stay at offset zero")))
@@ -252,9 +252,8 @@
 (deftest board-n-opens-create-session
   (let [[s' _] (#'tui/update-board (board-state :all) (msg/key-press "n"))]
     (is (= :create-session (:modal s')) "n opens the new-workstream modal"))
-  (with-redefs [nido.tui/session-rows (constantly [])]
-    (is (= :system (:screen (first (#'tui/update-board (board-state :all) (msg/key-press "s")))))
-        "s opens the system surface")))
+  (is (= :ops (:modal (first (#'tui/update-board (board-state :all) (msg/key-press "s")))))
+      "s opens the ops overlay"))
 
 (deftest board-tab-cycles-origin-filter
   (with-redefs [nido.tui/current-rows (constantly [])]
@@ -365,36 +364,41 @@
           (is (= [["w1" :ready]] @calls) "P → set-stage! to the picked stage")
           (is (nil? (:modal s')) "picker closes after pick"))))))
 
-(deftest system-surface-opens-from-board-and-returns
-  ;; enter-system reads session-rows; esc → set-origin → current-rows. Stub both.
-  (with-redefs [nido.tui/session-rows (constantly [])
-                nido.tui/current-rows (constantly [])]
-    (let [opened (#'tui/enter-system (board-state :all))]
-      (is (= :system (:screen opened)))
-      (let [[back _] (#'tui/update-system opened (msg/key-press "escape"))]
-        (is (= :board (:screen back)) "esc returns to the board")))))
+(deftest s-opens-the-ops-overlay
+  (let [state (#'tui/rebuild-list {:screen :board :project "p" :origin :all} [])
+        [state' _] (#'tui/update-fn state (msg/key-press "s"))]
+    (is (= :ops (:modal state')))))
 
-(deftest system-down-runs-the-async-action
-  (with-redefs [nido.tui/selected-data (fn [_] {:name "sess"})
-                nido.tui/start-session-down (fn [s _ sn] [(assoc s ::down sn) nil])]
-    (let [st (assoc (board-state :all) :screen :system)
-          [s' _] (#'tui/update-system st (msg/key-press "d"))]
-      (is (= "sess" (::down s')) "d on the system surface stops the highlighted session"))))
+(deftest ops-overlay-routes-to-the-levers
+  (with-redefs [nido.coordinator.halt/halted? (fn [] false)]
+    (let [state {:screen :board :project "p" :origin :all :modal :ops}
+          [s-h _] (#'tui/update-fn state (msg/key-press "h"))
+          [s-esc _] (#'tui/update-fn state (msg/key-press "escape"))]
+      (is (= :halt-confirm (:modal s-h)))
+      (is (nil? (:modal s-esc))))))
 
-(deftest system-x-opens-confirm-destroy
-  (with-redefs [nido.tui/selected-data (fn [_] {:name "sess"})]
-    (let [st (assoc (board-state :all) :screen :system)
-          [s' _] (#'tui/update-system st (msg/key-press "x"))]
-      (is (= :confirm-destroy (:modal s'))))))
+(deftest ops-overlay-routes-c-to-clear-breaker
+  (with-redefs [nido.coordinator.breakers/tripped-triggers
+                (constantly [{:project :brian :trigger :t :info {}}])]
+    (let [state {:screen :board :project "p" :origin :all :modal :ops}
+          [s' _] (#'tui/update-fn state (msg/key-press "c"))]
+      (is (= :clear-breaker (:modal s'))))))
 
-(deftest system-f-opens-fire-trigger
-  ;; Stub the project list (1 project skips the project picker) and triggers so
-  ;; fire opens the trigger picker in its no-triggers error state — hermetic.
+(deftest ops-overlay-routes-f-to-fire-trigger
   (with-redefs [nido.project/list-projects (constantly {"brian" {}})
                 nido.coordinator.triggers/load-for-project (constantly [])]
-    (let [st (assoc (board-state :all) :screen :system)
-          [s' _] (#'tui/update-system st (msg/key-press "f"))]
+    (let [state {:screen :board :project "p" :origin :all :modal :ops}
+          [s' _] (#'tui/update-fn state (msg/key-press "f"))]
       (is (= :fire-pick-trigger (:modal s'))))))
+
+(deftest ops-overlay-routes-p-to-pickup-input
+  (let [state {:screen :board :project "p" :origin :all :modal :ops}
+        [s' _] (#'tui/update-fn state (msg/key-press "p"))]
+    (is (= :pickup-input (:modal s')))))
+
+(deftest system-screen-is-gone
+  (is (nil? (resolve 'nido.tui/enter-system)))
+  (is (nil? (resolve 'nido.tui/update-system))))
 
 (deftest board-no-longer-handles-system-levers
   (doseq [k ["f" "h" "c"]]
@@ -589,18 +593,13 @@
 ;; URL/id from the system surface, no board browsing.
 ;; ---------------------------------------------------------------------------
 
-(deftest system-p-opens-pickup-input
-  (let [st (assoc (board-state :all) :screen :system)
-        [s' _] (#'tui/update-system st (msg/key-press "p"))]
-    (is (= :pickup-input (:modal s')) "p on the system surface opens the pickup modal")))
-
 (deftest pickup-input-submit-drives-the-resolved-ticket
   (let [calls (atom [])]
     (with-redefs [pickup/pickup! (fn [project input token]
                                    (swap! calls conj [project input token])
                                    {:decision :driving :ref {:id "BR-42"} :queued {:id 1}})
                   client/keychain-token (constantly "tok-123")]
-      (let [opened (first (#'tui/open-pickup-input (assoc (board-state :all) :screen :system)))
+      (let [opened (first (#'tui/open-pickup-input (board-state :all)))
             typed  (assoc opened :modal-input
                           (text-input/set-value (:modal-input opened) "  BR-42  "))
             [s' _] (#'tui/update-pickup-input typed (msg/key-press "enter"))]
@@ -613,7 +612,7 @@
 (deftest pickup-input-submit-reports-an-unresolved-ref
   (with-redefs [pickup/pickup! (constantly {:decision :unresolved :error :not-found})
                 client/keychain-token (constantly "tok-123")]
-    (let [opened (first (#'tui/open-pickup-input (assoc (board-state :all) :screen :system)))
+    (let [opened (first (#'tui/open-pickup-input (board-state :all)))
           typed  (assoc opened :modal-input (text-input/set-value (:modal-input opened) "junk"))
           [s' _] (#'tui/update-pickup-input typed (msg/key-press "enter"))]
       (is (nil? (:modal s')) "submit closes the modal even when unresolved")
@@ -621,6 +620,6 @@
           "status reflects the :unresolved decision"))))
 
 (deftest pickup-input-escape-cancels
-  (let [opened (first (#'tui/open-pickup-input (assoc (board-state :all) :screen :system)))
+  (let [opened (first (#'tui/open-pickup-input (board-state :all)))
         [s' _] (#'tui/update-pickup-input opened (msg/key-press "escape"))]
     (is (nil? (:modal s')) "esc cancels without calling pickup!")))
