@@ -38,13 +38,14 @@
         "-s" "nido-notion" "-a" (whoami) "-U" "-w" token]))
 
 (defn http-request
-  "Wrapped HTTP call so tests can stub. Dispatches on method (:get/:post/:patch).
+  "Wrapped HTTP call so tests can stub. Dispatches on method (:get/:post/:patch/:delete).
    Returns {:status :body}."
   [method url opts]
   (case method
-    :get   (http/get   url (assoc opts :throw false))
-    :post  (http/post  url (assoc opts :throw false))
-    :patch (http/patch url (assoc opts :throw false))))
+    :get    (http/get    url (assoc opts :throw false))
+    :post   (http/post   url (assoc opts :throw false))
+    :patch  (http/patch  url (assoc opts :throw false))
+    :delete (http/delete url (assoc opts :throw false))))
 
 (def ^:private notion-api-version "2025-09-03")
 
@@ -314,6 +315,42 @@
       (>= status 500) {:status status :error :server}
       (= status 0)    {:status 0     :error :network}
       :else           {:status status :error :http})))
+
+(defn- block-write-result
+  "Map a Notion write response {:status …} to {:ok true} | {:error :kw}."
+  [{:keys [status]}]
+  (cond
+    (= status 200)         {:ok true}
+    (= status 401)         {:error :auth}
+    (>= (or status 0) 500) {:error :server}
+    (= status 0)           {:error :network}
+    :else                  {:error :http :status status}))
+
+(defn delete-block!
+  "DELETE /v1/blocks/<block-id> (archives the block). Returns {:ok true} | {:error :kw}."
+  [block-id token]
+  (block-write-result
+   (try
+     (http-request :delete (str "https://api.notion.com/v1/blocks/" block-id)
+                   {:headers {"Authorization"  (str "Bearer " token)
+                              "Notion-Version" notion-api-version}
+                    :timeout 10000})
+     (catch Exception e {:status 0 :exception e}))))
+
+(defn prepend-block-children!
+  "PATCH /v1/blocks/<page-id>/children with `children` and position:start (prepend to
+   the top). Notion may ignore `position` for the pinned Notion-Version and append at
+   the bottom instead — the caller verifies placement. Returns {:ok true} | {:error :kw}."
+  [page-id children token]
+  (block-write-result
+   (try
+     (http-request :patch (str "https://api.notion.com/v1/blocks/" page-id "/children")
+                   {:headers {"Authorization"  (str "Bearer " token)
+                              "Notion-Version" notion-api-version
+                              "Content-Type"   "application/json"}
+                    :body    (json/generate-string {:children children :position {:type "start"}})
+                    :timeout 10000})
+     (catch Exception e {:status 0 :exception e}))))
 
 (defn walk-blocks
   "Recursively walk a page's block tree. Returns a vector of

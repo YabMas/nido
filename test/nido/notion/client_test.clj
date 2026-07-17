@@ -334,3 +334,31 @@
   (with-redefs [notion/http-request (fn [_ _ _] {:status 401})]
     (is (= {:error :auth} (notion/create-page! "ds-1" "tok" {:title "t" :description "d"
                                                              :type "bug" :status "Not started"})))))
+
+(deftest delete-block-sends-delete-and-maps-status
+  (let [captured (atom nil)]
+    (with-redefs [notion/http-request
+                  (fn [method url _opts]
+                    (reset! captured {:method method :url url})
+                    {:status 200 :body ""})]
+      (is (= {:ok true} (notion/delete-block! "blk-1" "tok")))
+      (is (= :delete (:method @captured)))
+      (is (re-find #"/v1/blocks/blk-1$" (:url @captured)))))
+  (with-redefs [notion/http-request (fn [_ _ _] {:status 401 :body ""})]
+    (is (= :auth (:error (notion/delete-block! "b" "t"))))))
+
+(deftest prepend-block-children-patches-with-position-start
+  (let [captured (atom nil)]
+    (with-redefs [notion/http-request
+                  (fn [method url opts]
+                    (reset! captured {:method method :url url
+                                      :body (cheshire.core/parse-string (:body opts) true)})
+                    {:status 200 :body "{}"})]
+      (is (= {:ok true}
+             (notion/prepend-block-children! "page-1" [{:object "block" :type "callout"}] "tok")))
+      (is (= :patch (:method @captured)))
+      (is (re-find #"/v1/blocks/page-1/children$" (:url @captured)))
+      (is (= {:type "start"} (get-in @captured [:body :position])))
+      (is (= 1 (count (get-in @captured [:body :children]))))))
+  (with-redefs [notion/http-request (fn [_ _ _] {:status 500 :body ""})]
+    (is (= :server (:error (notion/prepend-block-children! "p" [] "t"))))))
