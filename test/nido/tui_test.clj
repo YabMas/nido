@@ -316,6 +316,31 @@
           [s' _] (#'tui/update-workstream st (msg/key-press "enter"))]
       (is (= "sess" (::opened s')) "enter opens the highlighted session"))))
 
+(deftest detail-u-starts-the-selected-session
+  ;; start-session-up builds a charm cmd (data — {:type :cmd :fn ...}) that the
+  ;; event loop invokes asynchronously; update-workstream never calls its :fn,
+  ;; so no lifecycle/scratch redefs are needed here — just the busy-state arm.
+  (let [state (#'tui/rebuild-list {:screen :workstream :project "p" :ws-id "w"}
+                                  [{:title "s" :description ""
+                                    :data {:name "sess1" :autonomy-level :interactive}}])
+        [state' _] (#'tui/update-workstream state (msg/key-press "u"))]
+    (is (= :up (get-in state' [:busy :verb])))
+    (is (= "sess1" (get-in state' [:busy :subject])))))
+
+(deftest detail-w-on-a-non-session-row-sets-no-session-status
+  ;; A ledger/report/header row has no :name in its :data — `w` must route
+  ;; through with-selected-session like its u/d/x siblings, not silently no-op.
+  (let [state (#'tui/rebuild-list {:screen :workstream :project "p" :ws-id "w"}
+                                  [{:title "entry" :description "" :data {:kind :ledger-entry}}])
+        [state' cmd] (#'tui/update-workstream state (msg/key-press "w"))]
+    (is (= "(no session selected)" (:status state')))
+    (is (nil? cmd))))
+
+(deftest detail-footer-lists-the-plumbing-verbs
+  (let [f (#'tui/footer {:screen :workstream})]
+    (doseq [verb ["[u]p" "[d]own" "[x] destroy" "[w]orktree"]]
+      (is (str/includes? f verb)))))
+
 (deftest stage-picker-promotes-to-the-chosen-target
   (let [calls (atom [])]
     (with-redefs [nido.tui/selected-workstream (fn [_] {:ws-id "w1" :promote-id "BR-1"})

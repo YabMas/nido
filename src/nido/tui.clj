@@ -1229,6 +1229,15 @@
       (fn [s _ ws-id sname]
         (dev-restart! (:project s) ws-id sname)
         [(assoc s :status (str "restarting " sname "…")) nil]))
+    ;; Session plumbing for the highlighted row — absorbed from the system
+    ;; surface (spec: dissolve the workstream/system UI split). `d`/`x` act on
+    ;; the SESSION here (down/destroy), unlike the board's `d`/`x` (done/dismiss
+    ;; on the workstream) — the footer strings spell out which per screen.
+    (msg/key-match? msg "w")
+    (with-selected-session state (fn [s p sn] (enter-session s p sn :worktree)))
+    (msg/key-match? msg "u") (with-selected-session state start-session-up)
+    (msg/key-match? msg "d") (with-selected-session state start-session-down)
+    (msg/key-match? msg "x") (with-selected-session state (fn [s p sn] (open-confirm-destroy s p sn)))
     :else
     (let [[lst cmd] (item-list/list-update (:list state) msg)
           d         (some-> (item-list/selected-item lst) :data)
@@ -1537,7 +1546,7 @@
                   (case (:screen state)
                     :projects   "[↵] open  [q]uit"
                     :board      "[↵/o] open  [i]nspect  [n]ew  [p]romote  [P] promote to…  [d]one  [x] dismiss (slack)  [space] fold  [⇄ tab] origin  [ [ ] ] domain  [ { } ] type  [s]ystem  [esc] back  [q]uit"
-                    :workstream "[↵] open in chat  [a] apply  [r] reply  [S] dev-start  [X] dev-stop  [R] dev-restart  [esc] back  [q]uit"
+                    :workstream "[↵] open in chat  [w]orktree  [a] apply  [r] reply  [u]p  [d]own  [x] destroy  [S] dev-start  [X] dev-stop  [R] dev-restart  [esc] back  [q]uit"
                     :system     "[↵/e] enter  [w]orktree  [i]nfo  [u]p  [d]own  [x] destroy  •  [f]ire  [h]alt  [c]lear breaker  [p]ickup  [esc] back  [q]uit"))))
 
 (defn- info-row [label value]
