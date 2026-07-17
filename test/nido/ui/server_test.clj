@@ -13,47 +13,10 @@
             [nido.work]
             [nido.project :as project]))
 
-(deftest all-session-rows-aggregates-and-sorts-live-first
-  ;; Pure 2-arity: inject the per-project row builder + the projects map so the
-  ;; aggregation/sort is testable without a real registry or worktrees on disk.
-  (let [rows-fn  (fn [pname _dir]
-                   (case pname
-                     "brian" [{:name "b-down" :live? false :entry nil}
-                              {:name "b-up"   :live? true  :entry {:url "u1"}}]
-                     "foo"   [{:name "f-up"   :live? true  :entry {:url "u2"}}]))
-        projects {"brian" {:directory "/x"} "foo" {:directory "/y"}}
-        rows     (server/all-session-rows rows-fn projects)]
-    ;; live-first, then project, then name; each row tagged with :project
-    (is (= [["brian" "b-up" true] ["foo" "f-up" true] ["brian" "b-down" false]]
-           (map (juxt :project :name :live?) rows)))))
-
-(deftest system-route-renders-on-shell
-  (with-redefs [server/all-session-rows (fn [] [])
-                nido.work/all-gates (fn [] [])
-                nido.ui.server/read-rail-daemon (fn [] {:state :up})]
-    (let [resp (server/handle-request {:request-method :get :uri "/system"})]
-      (is (= 200 (:status resp)))
-      (is (str/includes? (:body resp) "id=\"system\"")))))
-
-
-(deftest system-fragment-route-is-sse-and-patches-rail
-  (with-redefs [server/all-session-rows (fn [] [])
-                nido.work/all-gates (fn [] [])
-                nido.ui.server/read-rail-daemon (fn [] {:state :up})]
-    (let [resp (server/handle-request {:request-method :get :uri "/_fragment/system"})]
-      (is (str/includes? (get-in resp [:headers "Content-Type"]) "text/event-stream"))
-      (is (str/includes? (:body resp) "rail-needs-count")))))
-
-(deftest all-session-rows-skips-unreadable-projects
-  ;; A project with no session.edn makes the real session-rows throw
-  ;; (worktrees-dir → load-session-edn). The board must skip it, not crash.
-  (let [rows-fn  (fn [pname _dir]
-                   (if (= pname "broken")
-                     (throw (ex-info "No session.edn found for project 'broken'" {}))
-                     [{:name "ok" :live? true :entry {:url "u"}}]))
-        projects {"good" {:directory "/g"} "broken" {:directory "/b"}}
-        rows     (server/all-session-rows rows-fn projects)]
-    (is (= [["good" "ok" true]] (map (juxt :project :name :live?) rows)))))
+(deftest system-redirects-to-workstreams
+  (let [resp (server/handle-request {:request-method :get :uri "/system"})]
+    (is (= 302 (:status resp)))
+    (is (= "/workstreams" (get-in resp [:headers "Location"])))))
 
 (deftest home-route-renders-needs-page
   (with-redefs [nido.work/all-gates (fn [] [])
@@ -86,14 +49,6 @@
       (let [resp (server/handle-request {:request-method :get :uri "/gate/brian/ws-1"})]
         (is (= 200 (:status resp)))
         (is (str/includes? (:body resp) "BR-7"))))))
-
-(deftest post-system-lifecycle-renamed-path
-  (with-redefs [server/all-session-rows (fn [] [])
-                lifecycle/up! (fn [& _] nil)
-                nido.ui.server/read-rail-daemon (fn [] {:state :up})]
-    (let [resp (server/handle-request {:request-method :post :uri "/system/brian/doc-room/start"})]
-      (Thread/sleep 30)
-      (is (str/includes? (get-in resp [:headers "Content-Type"]) "text/event-stream")))))
 
 (deftest post-gate-mutation-calls-resolve-and-returns-sse
   (let [calls (atom [])]
@@ -178,10 +133,9 @@
 (deftest dashboard-routes-smoke
   (with-redefs [nido.work/all-gates (fn [] [])
                 nido.work/all-grouped (fn [] [])
-                server/all-session-rows (fn [] [])
                 project/list-projects (fn [] {"brian" {:directory "/x"}})
                 nido.ui.server/read-rail-daemon (fn [] {:state :up})]
-    (doseq [uri ["/" "/workstreams" "/system"]]
+    (doseq [uri ["/" "/workstreams"]]
       (is (= 200 (:status (server/handle-request {:request-method :get :uri uri})))
           (str uri " serves 200")))))
 
@@ -233,7 +187,6 @@
 
 (deftest removed-routes-404
   (with-redefs [nido.work/all-gates (fn [] [])
-                server/all-session-rows (fn [] [])
                 nido.work/all-grouped (fn [] [])
                 project/list-projects (fn [] {"brian" {:directory "/x"}})
                 nido.ui.server/read-rail-daemon (fn [] {:state :up})]
@@ -244,11 +197,10 @@
 
 (deftest live-routes-still-200
   (with-redefs [nido.work/all-gates (fn [] [])
-                server/all-session-rows (fn [] [])
                 nido.work/all-grouped (fn [] [])
                 project/list-projects (fn [] {"brian" {:directory "/x"}})
                 nido.ui.server/read-rail-daemon (fn [] {:state :up})]
-    (doseq [uri ["/" "/workstreams" "/system"]]
+    (doseq [uri ["/" "/workstreams"]]
       (is (= 200 (:status (server/handle-request {:request-method :get :uri uri})))))))
 
 (deftest workstreams-overview-and-detail-render-same-list

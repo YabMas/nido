@@ -360,9 +360,9 @@
 
 (defn- ->gate
   "Hydrate one needs-you spine row into a gate. `:project` is canonicalized to a
-   STRING (the web routes on it, e.g. /gate/<project>/…; the dashboard's
-   all-session-rows tags rows with the same string key) so a gate reads the same
-   whether it came from `gates` (string or keyword arg) or `all-gates`."
+   STRING (the web routes on it, e.g. /gate/<project>/…; all-machine-rows tags
+   rows with the same string key) so a gate reads the same whether it came from
+   `gates` (string or keyword arg) or `all-gates`."
   [project row]
   (let [parked? (= :parked-at-gate (:engagement row))
         psess   (parked-session project (:ws-id row))]
@@ -398,7 +398,7 @@
 
 (defn all-gates
   "Gates across every registered project, needs-you/newest-first within each.
-   Mirrors the dashboard's cross-project aggregation (see ui.server/all-session-rows).
+   Mirrors the dashboard's cross-project aggregation (see all-machine-rows).
    `->gate` canonicalizes each gate's :project to a string, so the raw
    list-projects key threads straight through. A project that can't be read
    contributes no gates rather than failing the board."

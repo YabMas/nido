@@ -185,7 +185,7 @@
    current surface (changing only scope, preserving the workstreams tab); a surface link
    carries the current scope. Selecting a project changes what you see, never where you are."
   [{:keys [active needs-count daemon scope projects tab]}]
-  (let [surface-path {:needs "/" :workstreams "/workstreams" :system "/system"}
+  (let [surface-path {:needs "/" :workstreams "/workstreams"}
         q (fn [scope-val workstreams?]
             (let [parts (cond-> []
                           (and scope-val (not= "all" scope-val)) (conj (str "scope=" scope-val))
@@ -205,7 +205,6 @@
       [:img.rail-logo {:src "/nido-logo.png" :alt "nido" :width 84 :height 84}]]
      (dest :needs "/" "Needs you")
      (dest :workstreams "/workstreams" "Workstreams")
-     (dest :system "/system" "System")
      [:div.rail-scope
       [:div.meta "Scope"]
       (scope-link "all" "All projects")
@@ -866,88 +865,6 @@
        [:div.inbox {:data-on-interval__duration.5s (str "@get('/_fragment/workstreams" q "')")}
         (h/raw (workstreams-fragment screen))]]
       [:div.pane (h/raw (workstream-pane (:ws selection) (:dev-states selection) (:machine selection)))]])))
-
-;; ---------------------------------------------------------------------------
-;; System (cross-project ops) — replaces the live board + per-project sessions list.
-
-(defn- system-row
-  "One cross-project table row: pending-state badges (app-state-*), heap-max, RSS,
-   error messages, and transient/failed state logic. Action URLs use the
-   /system/:project/:name/:action path."
-  [{:keys [project name entry live? pending-state repl-rss pg-rss heap-max]}]
-  (let [url (:url entry)
-        pg-port (:pg-port entry)
-        repl-port (:nrepl-port entry)
-        app-port (:app-port entry)
-        pending-kw  (cond
-                      (map? pending-state)     (:state pending-state)
-                      (keyword? pending-state) pending-state)
-        pending-err (when (map? pending-state) (:error-msg pending-state))
-        state (cond
-                live?        :running
-                pending-kw   pending-kw
-                (not entry)  :dormant
-                :else        :idle)
-        state-class (str "app-state app-state-" (clojure.core/name state))
-        action-base (str "/system/" project "/" name)
-        transient?  (#{:starting :stopping :restarting} state)
-        failed?     (= state :failed)
-        pg-rss-str  (process/human-bytes pg-rss)
-        jvm-rss-str (process/human-bytes repl-rss)]
-    [:tr
-     [:td [:strong name]]
-     [:td.mono project]
-     [:td [:span {:class state-class :title (or pending-err "")} (clojure.core/name state)]
-      (when (and failed? pending-err)
-        [:div.error-msg pending-err])]
-     [:td (if (and live? url)
-            [:a {:href url :target "_blank"} url]
-            [:span.meta "—"])]
-     [:td.mono (or pg-port "—")
-      (when pg-rss [:div.meta pg-rss-str])]
-     [:td.mono (or repl-port "—")
-      (when repl-rss [:div.meta jvm-rss-str])
-      (when heap-max [:div.meta (str "max " heap-max)])]
-     [:td.mono (or app-port "—")]
-     [:td [:div.actions
-           (cond
-             transient? [:span.meta "working…"]
-             failed?
-             [:button.btn.btn-primary {"data-on:click" (str "@post('" action-base "/restart')")} "retry"]
-             (= state :dormant)
-             [:button.btn.btn-primary {"data-on:click" (str "@post('" action-base "/start')")} "start"])
-           (when (and entry (not transient?))
-             [:button.btn {"data-on:click" (str "@post('" action-base "/restart')")} "restart"])
-           (when (and entry (not transient?))
-             [:button.btn {"data-on:click" (str "@post('" action-base "/stop')")} "stop"])]]]))
-
-(defn system-fragment
-  "Daemon banner + cross-project session table. `daemon` is the health map.
-   Renders pending-state badges, heap-max, RSS, and error messages per row.
-   Action URLs use the /system/:project/:name/:action path."
-  [rows {:keys [state heartbeat-at] :as _daemon}]
-  (str
-   (h/html
-    [:div {:id "system"}
-     [:div.card
-      [:span {:class (str "dot dot-" (clojure.core/name (or state :down)))}]
-      "daemon " (clojure.core/name (or state :down))
-      (when heartbeat-at [:span.meta " · heartbeat " heartbeat-at])]
-     (if (seq rows)
-       [:table
-        [:thead [:tr [:th "session"] [:th "project"] [:th "state"] [:th "dev url"]
-                 [:th "pg"] [:th "repl"] [:th "app"] [:th "actions"]]]
-        [:tbody (for [r rows] (system-row r))]]
-       [:p.empty "No sessions."])])))
-
-(defn system-page
-  "System surface: daemon health banner + cross-project session table in the shell."
-  [ctx rows daemon]
-  (let [q (if (= "all" (:scope ctx)) "" (str "?scope=" (:scope ctx)))]
-    (shell
-     (assoc ctx :active :system :title "System")
-     [:div {:data-on-interval__duration.3s (str "@get('/_fragment/system" q "')")}
-      (h/raw (system-fragment rows daemon))])))
 
 (defn not-found-page []
   (shell {:title "404"} [:h1 "Not found"]))

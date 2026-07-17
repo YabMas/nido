@@ -4,27 +4,6 @@
             [hiccup2.core :as h]
             [nido.ui.views :as views]))
 
-(deftest system-fragment-banner-table-and-actions
-  (let [html (views/system-fragment
-              [{:project "brian" :name "fix-login" :live? true
-                :entry {:url "http://fix-login.brian.localhost:3142"}}
-               {:project "brian" :name "doc-room" :live? false :entry nil}]
-              {:state :up})]
-    (is (str/includes? html "id=\"system\""))
-    (is (str/includes? html "dot-up"))                                  ; daemon banner
-    (is (str/includes? html "href=\"http://fix-login.brian.localhost:3142\""))
-    (is (str/includes? html "target=\"_blank\""))
-    (is (str/includes? html "fix-login"))
-    (is (str/includes? html "doc-room"))
-    (is (str/includes? html "data-on:click"))
-    (is (str/includes? html "/system/brian/doc-room/start"))))         ; renamed POST
-
-(deftest system-page-has-shell-and-poll
-  (let [html (views/system-page {:active :system :needs-count 0 :daemon {:state :up}
-                                 :scope "all" :projects []} [] {:state :up})]
-    (is (str/includes? html "rail-link active"))
-    (is (str/includes? html "/_fragment/system"))))
-
 (def ^:private sample-gate
   {:ws-id "ws-1" :project "brian" :origin :notion :stage :triage
    :label "BR-7 · checkout off by a cent"
@@ -351,10 +330,9 @@
   (let [html (views/shell {:active :workstreams :title "Workstreams"
                            :needs-count 3 :daemon {:state :up} :scope "all" :projects []}
                           [:p "body-here"])]
-    ;; all three destinations always present (no per-page drift)
+    ;; both destinations always present (no per-page drift)
     (is (str/includes? html "Needs you"))
     (is (str/includes? html "Workstreams"))
-    (is (str/includes? html "System"))
     ;; active highlight on the current destination
     (is (str/includes? html "rail-link active"))
     ;; live needs badge + count
@@ -374,13 +352,13 @@
     (is (str/includes? html "dot-halted"))))
 
 (deftest rail-scope-link-stays-on-current-surface
-  (let [html (str (h/html (#'views/rail {:active :system :scope "all" :needs-count 0
+  (let [html (str (h/html (#'views/rail {:active :workstreams :scope "all" :needs-count 0
                                          :daemon {:state :up} :projects ["brian"] :tab nil})))]
-    (is (re-find #"/system\?scope=brian" html) "a scope link stays on the current (system) surface")
+    (is (re-find #"/workstreams\?scope=brian" html) "a scope link stays on the current (workstreams) surface")
     (is (not (re-find #"href=\"/\?scope=brian\"" html)) "scope link does NOT jump to the home surface")))
 
 (deftest rail-surface-link-carries-current-scope
-  (let [html (str (h/html (#'views/rail {:active :system :scope "brian" :needs-count 0
+  (let [html (str (h/html (#'views/rail {:active :needs :scope "brian" :needs-count 0
                                          :daemon {:state :up} :projects ["brian"] :tab nil})))]
     (is (re-find #"/workstreams\?scope=brian" html) "the Workstreams surface link carries the current scope")
     (is (re-find #"href=\"/\?scope=brian\"" html) "the Needs-you surface link carries the current scope")))

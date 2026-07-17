@@ -2,7 +2,7 @@
 (ns nido.ui.health
   "Daemon health for the dashboard rail dot. Read-only over the coordinator's
    status/halt/breaker files. Pure `daemon-health` + impure `read-daemon-health`,
-   mirroring nido.ui.server/all-session-rows' split so the state logic is testable
+   mirroring nido.work/all-machine-rows' split so the state logic is testable
    without disk."
   (:require
    [nido.coordinator.breakers :as breakers]
