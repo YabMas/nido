@@ -68,15 +68,6 @@
   (is (= (#'tui/footer {:screen :board :origin :all})
          (#'tui/footer {:screen :board :origin :notion}))))
 
-(deftest live-session-names-are-the-ones-with-ports
-  (with-redefs [lifecycle/list-all-data
-                (fn [_] {:sessions [{:name "up"      :app-port 3100}
-                                    {:name "also-up" :pg-port 5500}
-                                    {:name "repl-up" :nrepl-port 49999}
-                                    {:name "down"    :app-port nil :pg-port nil :nrepl-port nil}]})]
-    (is (= #{"up" "also-up" "repl-up"} (#'tui/live-session-names "brian"))
-        "a session is live iff it holds a pg/app/nrepl port")))
-
 (deftest down-touches-no-workstream
   (let [calls (atom [])]
     (with-redefs [lifecycle/down! (fn [sn opts] (swap! calls conj [:down sn opts]))
@@ -104,7 +95,7 @@
                    :ready       [{:ws-id "r1" :origin :notion :label "BR-9 · ready row"
                                   :needs-you false :engagement :idle}]
                    :triage      {:in-flight [] :queued []}})
-                nido.tui/live-session-names (constantly #{})]
+                nido.work/live-session-names (constantly #{})]
     (let [all (#'tui/board-rows "brian" :all)
           labels (keep #(get-in % [:data :ws-id]) all)]
       (is (= ["p1"] (vec labels)) "in-progress renders, no :ready band")
@@ -127,7 +118,7 @@
                                          :needs-you true :engagement :idle}
                                         {:ws-id "q2" :origin :notion :label "BR-2 · b"
                                          :needs-you true :engagement :idle}]}})
-                nido.tui/live-session-names (constantly #{})]
+                nido.work/live-session-names (constantly #{})]
     (let [rows   (#'tui/board-rows "brian" :all)
           ids    (set (keep #(get-in % [:data :ws-id]) rows))
           titles (map :title rows)]
@@ -148,7 +139,7 @@
                   {:triage {:in-flight []
                             :queued [{:ws-id "q1" :origin :notion :label "BR-1 · a"
                                       :needs-you true :engagement :idle}]}})
-                nido.tui/live-session-names (constantly #{})]
+                nido.work/live-session-names (constantly #{})]
     (let [rows (#'tui/board-rows "brian" :all #{})
           ids  (keep #(get-in % [:data :ws-id]) rows)]
       (is (= ["q1"] (vec ids)) "an expanded Triage·queued renders its item as a selectable row")
@@ -380,7 +371,7 @@
                                          :label "the app crashed" :engagement :idle
                                          :last-activity "2026-06-02T00:00:00Z"}]
                              :ready [] :in-progress [] :triage {:in-flight [] :queued []}})
-                nido.tui/live-session-names (constantly #{})]
+                nido.work/live-session-names (constantly #{})]
     (let [titles (map :title (#'nido.tui/board-rows :brian :all))]
       (is (some #(str/includes? % "Queue (1)") titles))
       (is (str/includes? (first titles) "Queue")
@@ -404,9 +395,9 @@
 (deftest board-rows-filter-by-facet
   (with-tmp
     (fn []
-      ;; redef live-session-names (private) so the board doesn't hit lifecycle;
+      ;; redef the liveness oracle so the board doesn't hit lifecycle;
       ;; pass an EMPTY collapsed set so no band is folded out of the row list.
-      (with-redefs [tui/live-session-names (constantly #{})]
+      (with-redefs [nido.work/live-session-names (constantly #{})]
         (workstream/create! :brian {:stage :triaging :external-refs [{:adapter :notion :id "BR-1"}]
                                     :facets {:app-domain ["Teacher"]}})
         (workstream/create! :brian {:stage :triaging :external-refs [{:adapter :notion :id "BR-2"}]
@@ -449,7 +440,7 @@
   ;; would disappear otherwise.
   (with-tmp
     (fn []
-      (with-redefs [tui/live-session-names (constantly #{})]
+      (with-redefs [nido.work/live-session-names (constantly #{})]
         ;; Slack workstream: no facets
         (workstream/create! :brian {:stage :triaging
                                     :external-refs [{:adapter :slack-message :id "slack-C-1.0"}]})

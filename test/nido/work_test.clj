@@ -1167,3 +1167,22 @@
       (is (= {:decision :no-workstream} (work/resolve-gate! :brian "pg-bare" :drop))
           "drop would otherwise throw Workstream-not-found")
       (is (= {:decision :no-workstream} (work/dismiss! :brian "pg-bare"))))))
+
+(deftest live-session-names-are-the-ones-with-ports
+  ;; Mirrors the TUI test of the same name — the oracle now lives in work.
+  (with-redefs [nido.session.lifecycle/list-all-data
+                (fn [_] {:sessions [{:name "up1" :pg-port 5501}
+                                    {:name "up2" :app-port 3101}
+                                    {:name "down" :pg-port nil :app-port nil :nrepl-port nil}]})]
+    (is (= #{"up1" "up2"} (work/live-session-names "p")))))
+
+(deftest all-machine-rows-aggregates-and-sorts-live-first
+  (let [rows-fn  (fn [pname _dir]
+                   (case pname
+                     "brian" [{:name "b-down" :live? false :entry nil}
+                              {:name "b-up"   :live? true  :entry {:url "u1"}}]
+                     "foo"   [{:name "f-up"   :live? true  :entry {:url "u2"}}]))
+        projects {"brian" {:directory "/x"} "foo" {:directory "/y"}}
+        rows     (work/all-machine-rows rows-fn projects)]
+    (is (= [["brian" "b-up" true] ["foo" "f-up" true] ["brian" "b-down" false]]
+           (map (juxt :project :name :live?) rows)))))

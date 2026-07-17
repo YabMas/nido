@@ -28,8 +28,10 @@
    [nido.notion.client :as notion]
    [nido.notion.views :as views]
    [nido.slack.client :as slack]
+   [nido.process :as proc]
    [nido.project :as project]
-   [nido.session.lifecycle :as lifecycle]))
+   [nido.session.lifecycle :as lifecycle]
+   [nido.session.state :as sstate]))
 
 (def stages
   "The canonical spine, in order. A PR merge is the event that advances
@@ -718,6 +720,62 @@
              (boolean (some #(= v %) vals))))))
    facet-filter))
 
+(defn live-session-names
+  "Set of session names for `project` that are actually up — i.e. hold a pg/app/
+   nrepl port in the registry. THE liveness oracle: the TUI board, the web
+   grouping, the adopter, and the winding-down band all read this one fn."
+  [project]
+  (->> (lifecycle/list-all-data {:project (name project)})
+       :sessions
+       (keep (fn [s] (when (or (:pg-port s) (:app-port s) (:nrepl-port s)) (:name s))))
+       set))
+
+(defn- instance-id-for [project-name session-name]
+  (if (= project-name session-name)
+    project-name
+    (str project-name "--" session-name)))
+
+(defn machine-rows
+  "Machine facts for every worktree of one project: registry entry, TCP liveness,
+   RSS for the repl JVM + PG, and the configured heap ceiling. No UI-optimistic
+   state — that is a surface concern injected by callers that need it."
+  [project-name project-dir]
+  (let [base     (lifecycle/worktrees-dir project-name project-dir)
+        registry (sstate/read-registry)]
+    (when (fs/exists? base)
+      (->> (fs/list-dir base)
+           (filter fs/directory?)
+           (map (fn [d]
+                  (let [nm       (str (fs/file-name d))
+                        wt-path  (str d)
+                        entry    (get registry wt-path)
+                        port     (:app-port entry)
+                        live?    (and (pos-int? port) (proc/tcp-open? port))
+                        iid      (instance-id-for project-name nm)
+                        repl-rss (when (and live? (:repl-pid entry))
+                                   (proc/rss-bytes (:repl-pid entry)))
+                        session  (when live? (sstate/read-session iid))
+                        pg-pid   (when session
+                                   (get-in session [:service-states :pg :pg-pid]))
+                        pg-rss   (when (and live? pg-pid) (proc/rss-bytes pg-pid))
+                        heap-max (when session
+                                   (get-in session [:context :session :jvm :heap-max]))]
+                    {:name nm :wt-path wt-path :entry entry :live? live?
+                     :repl-rss repl-rss :pg-rss pg-rss :heap-max heap-max})))
+           (sort-by :name)))))
+
+(defn all-machine-rows
+  "Machine rows across all registered projects, live-first, each tagged :project.
+   2-arity is pure (inject rows-fn + projects) for tests."
+  ([] (all-machine-rows machine-rows (project/list-projects)))
+  ([rows-fn projects]
+   (->> (for [[pname entry] projects
+              row           (or (try (rows-fn pname (:directory entry))
+                                     (catch Throwable _ nil))
+                                [])]
+          (assoc row :project pname))
+        (sort-by (juxt #(if (:live? %) 0 1) :project :name)))))
+
 (defn all-grouped
   "[{:project <string> :grouped <grouped-map>} …] across every registered
    project (mirrors all-gates). A project that can't be read contributes
@@ -725,7 +783,7 @@
   []
   (->> (project/list-projects)
        (keep (fn [[pname _]]
-               (try {:project (name pname) :grouped (grouped pname)}
+               (try {:project (name pname) :grouped (grouped pname (live-session-names pname))}
                     (catch Throwable _ nil))))
        vec))
 
