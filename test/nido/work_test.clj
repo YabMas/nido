@@ -1227,6 +1227,18 @@
                                     {:name "down" :pg-port nil :app-port nil :nrepl-port nil}]})]
     (is (= #{"up1" "up2"} (work/live-session-names "p")))))
 
+(deftest machine-facts-keyed-by-session-name
+  (with-redefs [work/machine-rows
+                (fn [_ _] [{:name "a" :live? true :entry {:url "u" :pg-port 5501 :app-port 3101}
+                            :repl-rss 1024 :pg-rss 2048 :heap-max "2g"}
+                           {:name "b" :live? false :entry nil}])
+                nido.project/list-projects (constantly {"p" {:directory "/x"}})]
+    (let [facts (work/machine-facts "p" ["a"])]
+      (is (= ["a"] (keys facts)))
+      (is (= {:live? true :url "u" :pg-port 5501 :nrepl-port nil :app-port 3101
+              :repl-rss 1024 :pg-rss 2048 :heap-max "2g"}
+             (get facts "a"))))))
+
 (deftest all-machine-rows-aggregates-and-sorts-live-first
   (let [rows-fn  (fn [pname _dir]
                    (case pname

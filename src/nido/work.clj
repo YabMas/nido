@@ -860,6 +860,21 @@
                      :repl-rss repl-rss :pg-rss pg-rss :heap-max heap-max})))
            (sort-by :name)))))
 
+(defn machine-facts
+  "Machine facts for `names` (sessions of `project`), keyed by session name.
+   The workstream pane's per-session ports/RSS/heap column feed."
+  [project names]
+  (let [dir  (:directory (get (project/list-projects) (name project)))
+        keep (set names)]
+    (into {}
+          (for [{:keys [name entry live? repl-rss pg-rss heap-max]}
+                (machine-rows (clojure.core/name project) dir)
+                :when (contains? keep name)]
+            [name {:live? live? :url (:url entry)
+                   :pg-port (:pg-port entry) :nrepl-port (:nrepl-port entry)
+                   :app-port (:app-port entry)
+                   :repl-rss repl-rss :pg-rss pg-rss :heap-max heap-max}]))))
+
 (defn all-machine-rows
   "Machine rows across all registered projects, live-first, each tagged :project.
    2-arity is pure (inject rows-fn + projects) for tests."

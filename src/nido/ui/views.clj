@@ -589,7 +589,8 @@
       :running
       [:div.actions
        [:a.btn.btn-primary {:href url :target "_blank"} "Open app ↗"]
-       [:button.btn {"data-on:click" (act "stop")} "stop"]]
+       [:button.btn {"data-on:click" (act "stop")} "stop"]
+       [:button.btn {"data-on:click" (act "restart")} "restart"]]
       (:starting :stopping :restarting) [:span.meta "working…"]
       :failed
       [:div
@@ -652,40 +653,51 @@
 
 (defn workstream-pane
   "Read-only ledger pane: header · stage · ledger summary · report · Sessions table
-   with per-row dev-env controls. `session-dev-states` is a map of session-name →
-   {:state … :url :error-msg} (the view does no IO). Polls its own fragment so
-   transient dev-env states (starting…) self-advance."
-  [{:keys [project ws-id origin stage label ledger report entries selected-seq sessions on-latest?]
-    :or {on-latest? true}} session-dev-states]
-  (str
-   (h/html
-    (if-not label
-      [:div {:id "ws-pane"} [:p.empty "Select a workstream."]]
-      [:div {:id "ws-pane"
-             :data-on-interval__duration.3s
-             (str "@get('/_fragment/workstream/" project "/" ws-id
-                  (when selected-seq (str "?entry=" selected-seq)) "')")}
-       [:h1 (origin-badge origin) " " label]
-       [:p.meta (name stage)]
-       (when ledger
-         [:div.card [:strong "ledger "] (:key ledger) " · " (some-> ledger :status name)
-          " · " (:report-count ledger) " report(s)"])
-       (ledger-browser project ws-id entries selected-seq report)
-       ;; Live actions only on the current ledger entry — older entries are read-back.
-       (when on-latest? (pane-action-bar project ws-id origin stage sessions))
-       (when (= :done stage) (file-findings-form project ws-id))
-       [:h2 "Sessions"]
-       (if (seq sessions)
-         [:table
-          [:thead [:tr [:th "session"] [:th "axis"] [:th "status"] [:th "dev env"] [:th "brakes"]]]
-          [:tbody
-           (for [{:keys [name autonomy-level parked? status brakes]} sessions]
-             [:tr [:td name]
-              [:td (clojure.core/name autonomy-level) (when parked? " · gate")]
-              [:td (clojure.core/name (or status :down))]
-              [:td (session-dev-cell project ws-id name (get session-dev-states name))]
-              [:td.meta (when brakes (pr-str brakes))]])]]
-         [:p.empty "No sessions."])]))))
+   with per-row dev-env controls, ports, and mem/heap facts. `session-dev-states`
+   is a map of session-name → {:state … :url :error-msg} (the view does no IO).
+   `machine-facts` is a map of session-name → {:pg-port :nrepl-port :app-port
+   :repl-rss :pg-rss :heap-max} (also no IO — a projection the caller injects).
+   Polls its own fragment so transient dev-env states (starting…) self-advance."
+  ([ws session-dev-states] (workstream-pane ws session-dev-states {}))
+  ([{:keys [project ws-id origin stage label ledger report entries selected-seq sessions on-latest?]
+     :or {on-latest? true}} session-dev-states machine-facts]
+   (str
+    (h/html
+     (if-not label
+       [:div {:id "ws-pane"} [:p.empty "Select a workstream."]]
+       [:div {:id "ws-pane"
+              :data-on-interval__duration.3s
+              (str "@get('/_fragment/workstream/" project "/" ws-id
+                   (when selected-seq (str "?entry=" selected-seq)) "')")}
+        [:h1 (origin-badge origin) " " label]
+        [:p.meta (name stage)]
+        (when ledger
+          [:div.card [:strong "ledger "] (:key ledger) " · " (some-> ledger :status name)
+           " · " (:report-count ledger) " report(s)"])
+        (ledger-browser project ws-id entries selected-seq report)
+        ;; Live actions only on the current ledger entry — older entries are read-back.
+        (when on-latest? (pane-action-bar project ws-id origin stage sessions))
+        (when (= :done stage) (file-findings-form project ws-id))
+        [:h2 "Sessions"]
+        (if (seq sessions)
+          [:table
+           [:thead [:tr [:th "session"] [:th "axis"] [:th "status"] [:th "dev env"]
+                    [:th "ports"] [:th "mem"] [:th "brakes"]]]
+           [:tbody
+            (for [{:keys [name autonomy-level parked? status brakes]} sessions]
+              [:tr [:td name]
+               [:td (clojure.core/name autonomy-level) (when parked? " · gate")]
+               [:td (clojure.core/name (or status :down))]
+               [:td (session-dev-cell project ws-id name (get session-dev-states name))]
+               [:td.mono (let [{:keys [pg-port nrepl-port app-port]} (get machine-facts name)]
+                           (str/join " · " (keep (fn [[l p]] (when p (str l " " p)))
+                                                 [["pg" pg-port] ["repl" nrepl-port] ["app" app-port]])))]
+               [:td.meta (let [{:keys [repl-rss pg-rss heap-max]} (get machine-facts name)]
+                           (list (when repl-rss (str "jvm " (process/human-bytes repl-rss) " "))
+                                 (when pg-rss (str "pg " (process/human-bytes pg-rss) " "))
+                                 (when heap-max (str "max " heap-max))))]
+               [:td.meta (when brakes (pr-str brakes))]])]]
+          [:p.empty "No sessions."])])))))
 
 (defn- tab-row
   "The board's two tabs — Intake | Active. A tab selects BANDS, not rows: every
@@ -761,7 +773,7 @@
        (tab-row screen)
        [:div.inbox {:data-on-interval__duration.5s (str "@get('/_fragment/workstreams" q "')")}
         (h/raw (workstreams-fragment screen))]]
-      [:div.pane (h/raw (workstream-pane (:ws selection) (:dev-states selection)))]])))
+      [:div.pane (h/raw (workstream-pane (:ws selection) (:dev-states selection) (:machine selection)))]])))
 
 ;; ---------------------------------------------------------------------------
 ;; System (cross-project ops) — replaces the live board + per-project sessions list.

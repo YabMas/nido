@@ -153,7 +153,8 @@
                         (work/workstream (:project sel) (:ws-id sel) (:entry view-state)))]
                (cond-> {:project (:project sel) :ws-id (:ws-id sel)}
                  ws (assoc :ws ws
-                           :dev-states (dev/ws-session-dev-states (:project sel) ws))))))))
+                           :dev-states (dev/ws-session-dev-states (:project sel) ws)
+                           :machine (work/machine-facts (:project sel) (map :name (:sessions ws))))))))))
 
 (defn- rail-ctx
   "Rail context for the screen-based surfaces (needs, workstreams). The badge
@@ -209,7 +210,8 @@
    (let [ws (work/workstream project ws-id entry)]
      (sse-response
       (sse-fragment
-       (views/workstream-pane ws (dev/ws-session-dev-states project ws)))))))
+       (views/workstream-pane ws (dev/ws-session-dev-states project ws)
+                              (work/machine-facts project (map :name (:sessions ws)))))))))
 
 (defn- run-action!
   "Run the lifecycle action matching `action` and update the app-states

@@ -238,6 +238,19 @@
 (deftest workstream-pane-empty-when-nil
   (is (str/includes? (views/workstream-pane nil nil) "Select a workstream")))
 
+(deftest workstream-pane-session-row-shows-machine-facts
+  (let [html (views/workstream-pane
+              {:project "p" :ws-id "w" :origin :scratch :stage :in-progress :label "L"
+               :sessions [{:name "s1" :autonomy-level :interactive :parked? false :status :up}]}
+              {"s1" {:state :running :url "http://localhost:3101"}}
+              {"s1" {:pg-port 5501 :nrepl-port 7001 :app-port 3101
+                     :repl-rss (* 512 1024 1024) :pg-rss (* 100 1024 1024) :heap-max "2g"}})]
+    (is (str/includes? html "5501"))
+    (is (str/includes? html "7001"))
+    (is (str/includes? html "3101"))
+    (is (str/includes? html "max 2g"))
+    (is (str/includes? html "restart"))))
+
 (deftest workstreams-page-has-shell-and-poll
   (let [html (views/workstreams-page {:active :workstreams :needs-count 0 :daemon {:state :up}
                                       :scope "all" :projects []}
