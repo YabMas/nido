@@ -138,6 +138,23 @@
     (is (str/includes? html "sel=brian:w1"))            ; rows carry the selection in the view-state
     (is (str/includes? html ">N<"))))
 
+(deftest screen-query-composes-the-url-contract
+  ;; screen-query is the single place scope + tab + selection are serialized —
+  ;; it also produces the 5s poll URL (see workstreams-page-poll-carries-tab
+  ;; below). Pin its contract directly since the poll URL is easy to silently
+  ;; regress without a caller-side test noticing.
+  (is (= "" (#'views/screen-query {:scope "all" :tab :intake}))
+      "scope=all and the default tab are both omitted")
+  (is (= "?scope=brian" (#'views/screen-query {:scope "brian" :tab :intake}))
+      "a real scope is present")
+  (is (= "?tab=active" (#'views/screen-query {:scope "all" :tab :active}))
+      "a non-default tab is present")
+  (is (= "?sel=brian:w1" (#'views/screen-query {:scope "all" :tab :intake} {:sel "brian:w1"}))
+      ":sel composes with the rest")
+  (is (= "?scope=brian&tab=active&sel=brian:w1"
+         (#'views/screen-query {:scope "brian" :tab :intake} {:tab :active :sel "brian:w1"}))
+      "an explicit :tab override wins over the screen's tab, and all three compose"))
+
 (deftest workstreams-page-renders-both-tabs-with-the-active-one-marked
   (let [html (views/workstreams-page {:active :workstreams :needs-count 0 :daemon {:state :up}
                                       :scope "all" :projects []}
@@ -227,6 +244,19 @@
                                       :groups [{:project "brian" :grouped sample-grouped}]})]
     (is (str/includes? html "rail-link active"))
     (is (str/includes? html "/_fragment/workstreams"))))
+
+(deftest workstreams-page-poll-carries-tab
+  ;; The 5s poll's @get URL is built by screen-query too (see workstreams-page,
+  ;; the .inbox data-on-interval). Assert on the @get(...) substring itself —
+  ;; not merely that "tab=active" appears somewhere in the page, which the tab
+  ;; link alone would satisfy — so a regression that drops the tab from the
+  ;; poll (but not the link) fails here.
+  (let [html (views/workstreams-page {:active :workstreams :needs-count 0 :daemon {:state :up}
+                                      :scope "all" :projects []}
+                                     {:scope "all" :tab :active :selection nil
+                                      :groups [{:project "brian" :grouped sample-grouped}]})]
+    (is (str/includes? html "@get(&apos;/_fragment/workstreams?tab=active&apos;)")
+        "hiccup escapes the quote to &apos; in the rendered attribute")))
 
 (deftest workstreams-page-renders-no-filter-chrome
   ;; The source + facet chips are gone: no filter row, no Source label. The

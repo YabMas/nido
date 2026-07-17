@@ -204,7 +204,7 @@
       (is (str/includes? (:body resp) "BR-1"))
       (is (not (str/includes? (:body resp) "FOO-1"))))))
 
-;; (view-state parsing — scope/source/facets/unclassified — is tested in
+;; (view-state parsing — scope/tab/selection/entry — is tested in
 ;;  nido.ui.view-state-test. nido.work/screen does no row filtering at all —
 ;;  see nido.work-test's screen-does-not-filter-rows.)
 
