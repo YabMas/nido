@@ -29,8 +29,7 @@
    [nido.notion.views :as views]
    [nido.slack.client :as slack]
    [nido.project :as project]
-   [nido.session.lifecycle :as lifecycle]
-   [nido.ui.view-state :as view-state]))
+   [nido.session.lifecycle :as lifecycle]))
 
 (def stages
   "The canonical spine, in order. A PR merge is the event that advances
@@ -561,12 +560,6 @@
      (mapv notion/normalise-property-name (views/facet-properties project))
      [])))
 
-(defn source-match?
-  "True when `row`'s origin matches `source`. There is no cross-source :all — the
-   /workstreams page always shows exactly one source (see view-state/sources)."
-  [source row]
-  (= source (:origin row)))
-
 (defn grouped-rows
   "Flat seq of every workstream row in a `work/grouped` map (all board bands)."
   [grouped]
@@ -575,17 +568,6 @@
           (get-in grouped [:triage :queued])
           (:in-progress grouped)
           (:shipping grouped)))
-
-(defn filter-grouped
-  "Keep only rows satisfying `pred`, preserving the grouped shape."
-  [grouped pred]
-  (-> grouped
-      (update :incoming #(filterv pred %))
-      (update :in-progress #(filterv pred %))
-      (update :shipping #(filterv pred %))
-      (update :triage (fn [t] (-> t
-                                  (update :in-flight #(filterv pred %))
-                                  (update :queued #(filterv pred %)))))))
 
 (defn- facet-row-values
   "The value(s) a row carries for facet `k`, as a seq (vector facets expand to
@@ -634,49 +616,28 @@
   "Keep only entries whose :project matches `scope` (no-op on \"all\")."
   [scope xs] (if (= "all" scope) xs (filterv #(= scope (:project %)) xs)))
 
-(defn- visible-pred
-  "The one predicate the filtered list AND the counts share: origin match ∧
-   facet match, all under `source`."
-  [source facets]
-  (fn [row] (and (source-match? source row)
-                 (facet-match? facets row))))
-
-(defn- source-counts
-  "Per-origin counts for the source chips: each chip shows how many rows you'd see
-   under it (its own facet-filtered rows — including its :incoming holding-pen),
-   i.e. its switch-potential. Facets are always applied; `source` is unused now
-   that there is no cross-source All view but kept for signature stability."
-  [scoped-groups facets _source]
-  (->> view-state/sources
-       (reduce (fn [m origin]
-                 (let [n (->> scoped-groups
-                              (mapcat #(grouped-rows (:grouped %)))
-                              (filter #(and (= origin (:origin %))
-                                            (facet-match? facets %)))
-                              count)]
-                   (assoc m origin n)))
-               {})))
-
 (defn screen
   "The single pure derivation from view-state to the screen-model. Every render
    site (full page + SSE poll, overview + detail) renders a slice of THIS value,
    so they cannot disagree. `data` injects what only IO can produce:
      :groups  (all-grouped)  :gates (all-gates)  :pending (#{\"project/ws-id\"} optimistic bridge keys).
-   Selection detail is attached by the caller (needs work/workstream + dev-states)."
-  [{:keys [scope source facets] :or {scope "all" source view-state/default-source facets {}}}
-   {:keys [groups gates pending facet-dims] :or {groups [] gates [] pending #{} facet-dims []}}]
-  (let [scoped   (scope-keep scope groups)
-        pred     (visible-pred source facets)
-        filtered (mapv (fn [g] (update g :grouped #(filter-grouped % pred))) scoped)
+   Selection detail is attached by the caller (needs work/workstream + dev-states).
+
+   NO row filtering: every workstream the model emits is reachable from the
+   surface. The board's tabs select BANDS, not rows — filtering here is what hid
+   every :in-progress row behind the source chip's `source=notion` default.
+   `:tab` is passed through verbatim for the surface to render; defaulting it is
+   view-state's job, not the core's (borrowing that default is what pulled a UI
+   require into this namespace)."
+  [{:keys [scope tab] :or {scope "all"}}
+   {:keys [groups gates pending] :or {groups [] gates [] pending #{}}}]
+  (let [scoped     (scope-keep scope groups)
         kept-gates (->> (scope-keep scope gates)
                         (mapv (fn [g] (assoc g :pending?
                                              (or (boolean (:working? g))
                                                  (contains? pending (str (:project g) "/" (:ws-id g))))))))]
-    {:scope         scope
-     :source        source
-     :facets        facets
-     :facet-dims    facet-dims
-     :source-counts (source-counts scoped facets source)
-     :groups        filtered
-     :gates         kept-gates
-     :needs-count   (count kept-gates)}))
+    {:scope       scope
+     :tab         tab
+     :groups      scoped
+     :gates       kept-gates
+     :needs-count (count kept-gates)}))

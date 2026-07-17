@@ -1,6 +1,7 @@
 (ns nido.work-test
   (:require
    [babashka.fs :as fs]
+   [clojure.java.io :as io]
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
    [nido.config]
@@ -677,31 +678,12 @@
   (is (= #{:reply :drop} (set (map :id (work/gate-actions :shipping true)))))
   (is (= [] (work/gate-actions :shipping false))))
 
-(deftest source-match-honours-origin
-  ;; No cross-source :all anymore — a row matches iff its origin is the source.
-  (is (work/source-match? :notion {:origin :notion}))
-  (is (not (work/source-match? :notion {:origin :slack})))
-  (is (work/source-match? :slack {:origin :slack})))
-
 (deftest grouped-rows-flattens-all-bands
   ;; :ready is not a board band — grouped-rows never includes it, even when
   ;; present in the map (e.g. a hand-built fixture).
   (let [g {:incoming [{:id 1}] :triage {:in-flight [{:id 2}] :queued [{:id 3}]}
            :ready [{:id 4}] :in-progress [{:id 5}]}]
     (is (= #{1 2 3 5} (set (map :id (work/grouped-rows g)))))))
-
-(deftest filter-grouped-keeps-shape-drops-nonmatching
-  ;; :ready is not a key filter-grouped touches — grouped-by-stage never emits
-  ;; one, so filter-grouped's key set matches it exactly (:incoming
-  ;; :in-progress :shipping :triage).
-  (let [g {:incoming [{:origin :notion} {:origin :slack}]
-           :triage {:in-flight [{:origin :notion}] :queued [{:origin :slack}]}
-           :in-progress [{:origin :notion}]}
-        f (work/filter-grouped g #(= :notion (:origin %)))]
-    (is (= [{:origin :notion}] (:incoming f)))
-    (is (= [{:origin :notion}] (get-in f [:triage :in-flight])))
-    (is (= [] (get-in f [:triage :queued])))
-    (is (= [{:origin :notion}] (:in-progress f)))))
 
 (deftest latest-report-prefers-workstream-entries
   (with-tmp
@@ -803,61 +785,54 @@
               "index titles come from each event's fields via report/report-title"))))))
 
 (deftest screen-overview-and-detail-groups-are-identical
-  ;; The same view-state must produce the same filtered :groups regardless of
-  ;; whether a selection is present (the overview vs detail bug).
+  ;; The same view-state must produce the same :groups regardless of whether a
+  ;; selection is present (the overview vs detail bug).
   (let [grouped {:incoming [] :triage {:in-flight [] :queued []}
-                 :ready [{:ws-id "r1" :origin :notion :facets {} :stage :ready}]
-                 :in-progress [{:ws-id "p1" :origin :github :facets {} :stage :in-progress}]
+                 :in-progress [{:ws-id "p1" :origin :github :stage :in-progress}]
                  :shipping []}
         groups [{:project "brian" :grouped grouped}]
-        vs-over {:surface :workstreams :scope "all" :source :notion :facets {} :selection nil}
-        vs-det  (assoc vs-over :selection {:project "brian" :ws-id "r1"})
+        vs-over {:surface :workstreams :scope "all" :selection nil}
+        vs-det  (assoc vs-over :selection {:project "brian" :ws-id "p1"})
         g1 (:groups (work/screen vs-over {:groups groups :gates [] :pending #{}}))
         g2 (:groups (work/screen vs-det  {:groups groups :gates [] :pending #{}}))]
-    (is (= g1 g2) "selection must not change the filtered list")
-    (is (= ["r1"] (map :ws-id (get-in (first g1) [:grouped :ready]))) "notion row kept")
-    (is (empty? (get-in (first g1) [:grouped :in-progress])) "github row filtered out")))
+    (is (= g1 g2) "selection must not change the list")
+    (is (= ["p1"] (map :ws-id (get-in (first g1) [:grouped :in-progress])))
+        "rows survive regardless of origin — screen does not filter")))
 
-(deftest screen-source-counts-include-incoming-under-its-source
-  ;; No cross-source All view anymore: a source's chip counts ALL its VISIBLE
-  ;; rows, including its :incoming holding-pen (which is only ever shown under
-  ;; that source). :ready is not a board band/row-source at all — it never
-  ;; contributes to a chip count.
-  (let [grouped {:incoming [{:ws-id "i1" :origin :notion :facets {} :stage :incoming}]
-                 :triage {:in-flight [] :queued []}
-                 :ready [{:ws-id "r1" :origin :notion :facets {} :stage :ready}]
-                 :in-progress [] :shipping []}
-        groups [{:project "brian" :grouped grouped}]
-        vs {:surface :workstreams :scope "all" :source :notion :facets {} :selection nil}
-        s (work/screen vs {:groups groups :gates [] :pending #{}})
-        visible-notion (->> (:groups s) (mapcat #(work/grouped-rows (:grouped %)))
-                            (filter #(= :notion (:origin %))) count)]
-    (is (= 1 (get-in s [:source-counts :notion])) "notion chip counts incoming only — :ready isn't a band")
-    (is (= 1 visible-notion) "and that equals the notion rows actually visible")))
+(deftest screen-does-not-filter-rows
+  ;; The regression guard for the bug this design fixes: a scratch :in-progress
+  ;; row used to be invisible because the surface defaulted to source=notion.
+  ;; screen must now return every row it is given, whatever the origin.
+  (let [grouped {:incoming [{:ws-id "i1" :origin :slack :stage :incoming}]
+                 :triage {:in-flight [{:ws-id "t1" :origin :notion :stage :triage}]
+                          :queued []}
+                 :in-progress [{:ws-id "p1" :origin :scratch :stage :in-progress}]
+                 :shipping [{:ws-id "s1" :origin :github :stage :shipping}]}
+        s (work/screen {:surface :workstreams :scope "all" :selection nil}
+                       {:groups [{:project "brian" :grouped grouped}]
+                        :gates [] :pending #{}})
+        ids (set (map :ws-id (work/grouped-rows (:grouped (first (:groups s))))))]
+    (is (= #{"i1" "t1" "p1" "s1"} ids) "every row survives, every origin")
+    (is (not (contains? s :source-counts)) "source-counts is gone")
+    (is (not (contains? s :facet-dims)) "facet-dims is gone")))
 
-(deftest screen-passes-injected-facet-dims-through
-  (let [s (work/screen {:surface :workstreams :scope "all" :source :notion :facets {}}
-                       {:groups [] :gates [] :pending #{} :facet-dims [:app-domain :type]})]
-    (is (= [:app-domain :type] (:facet-dims s)) "facet-dims come from injected data, not disk")))
-
-(deftest screen-source-counts-under-selected-source
-  ;; With a specific source selected, the SELECTED chip's count matches the rows
-  ;; visible for that source (incoming included, since a non-:all source shows its
-  ;; own holding-pen). Other-origin chips show switch-potential. :ready is not a
-  ;; board band, so a :ready row never contributes to any chip count.
-  (let [grouped {:incoming [{:ws-id "ni" :origin :notion :facets {} :stage :incoming}
-                            {:ws-id "gi" :origin :github :facets {} :stage :incoming}]
-                 :triage {:in-flight [] :queued []}
-                 :ready [{:ws-id "nr" :origin :notion :facets {} :stage :ready}]
-                 :in-progress [] :shipping []}
-        groups [{:project "brian" :grouped grouped}]
-        s (work/screen {:surface :workstreams :scope "all" :source :notion :facets {} :selection nil}
-                       {:groups groups :gates [] :pending #{}})
-        visible-notion (->> (:groups s) (mapcat #(work/grouped-rows (:grouped %)))
-                            (filter #(= :notion (:origin %))) count)]
-    (is (= 1 (get-in s [:source-counts :notion])) "selected notion chip counts incoming only — :ready isn't a band")
-    (is (= 1 visible-notion) "and that equals the notion rows actually visible under source=notion")
-    (is (= 1 (get-in s [:source-counts :github])) "github chip shows its switch-potential")))
+(deftest work-core-does-not-require-a-ui-namespace
+  ;; Layering: nido.work is the model core every surface wraps. It must not
+  ;; depend on a UI namespace (it used to require nido.ui.view-state purely to
+  ;; borrow the source-filter defaults). Read via io/resource, not a relative
+  ;; path: `bb --config ~/Code/nido/bb.edn` runs with the caller's cwd (that is
+  ;; how the `nido` shell wrapper dispatches), so "src/nido/work.clj" would not
+  ;; resolve. "src" is on :paths, so the file is a classpath resource.
+  (let [ns-form  (read-string (slurp (io/resource "nido/work.clj")))
+        required (->> ns-form
+                      (filter list?)
+                      (filter #(= :require (first %)))
+                      (mapcat rest)
+                      (map first)
+                      (map str))]
+    (is (seq required) "sanity: the ns form was actually parsed")
+    (is (not-any? #(str/starts-with? % "nido.ui") required)
+        "the model core must not require a UI namespace")))
 
 (deftest screen-needs-count-equals-gate-count
   (let [gates [{:ws-id "a" :project "brian"} {:ws-id "b" :project "brian"}]

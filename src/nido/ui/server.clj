@@ -133,33 +133,17 @@
   [scope rows]
   (if (= "all" scope) rows (filterv #(= scope (:project %)) rows)))
 
-(defn- facet-dims-for
-  "IO: the facet dimensions valid for this view's scope + source across the
-   in-scope projects. Computed here (impure) and injected into the pure
-   work/screen — screen must not hit disk for this."
-  [{:keys [scope source]}]
-  (vec (mapcat (fn [[pname _]]
-                 (when (or (= "all" scope) (= scope (name pname)))
-                   (work/facet-dimensions pname source)))
-               (project/list-projects))))
-
 (defn derive-screen
   "Impure wiring: gather what only IO can produce (grouped rows, gates, in-flight
-   resolve keys, facet dims), hand off to the pure work/screen, then attach the
-   selection detail. Selection detail is attached HERE (not in work) because it
-   needs the dev layer, which work must not depend on. Every /workstreams + /
-   render route runs through this one function, so no two render sites disagree."
+   resolve keys), hand off to the pure work/screen, then attach the selection
+   detail. Selection detail is attached HERE (not in work) because it needs the
+   dev layer, which work must not depend on. Every /workstreams + / render route
+   runs through this one function, so no two render sites disagree."
   [view-state]
   (let [screen (work/screen view-state
-                            {:groups     (work/all-grouped)
-                             :gates      (work/all-gates)
-                             :pending    (dev/pending-resolve-keys)
-                             ;; Facet dims are only rendered on the workstreams
-                             ;; filter bar — skip the project-scan IO on the
-                             ;; needs surface (and its hot 3s poll).
-                             :facet-dims (if (= :workstreams (:surface view-state))
-                                           (facet-dims-for view-state)
-                                           [])})
+                            {:groups  (work/all-grouped)
+                             :gates   (work/all-gates)
+                             :pending (dev/pending-resolve-keys)})
         sel (:selection view-state)]
     (assoc screen :selection
            (when sel

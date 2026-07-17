@@ -182,8 +182,8 @@
       (is (not (str/includes? (:body resp) "FOO-1"))))))
 
 ;; (view-state parsing — scope/source/facets/unclassified — is tested in
-;;  nido.ui.view-state-test; source-counts + facet narrowing now live in
-;;  nido.work/screen and are tested there + end-to-end below.)
+;;  nido.ui.view-state-test. nido.work/screen does no row filtering at all —
+;;  see nido.work-test's screen-does-not-filter-rows.)
 
 (deftest removed-routes-404
   (with-redefs [nido.work/all-gates (fn [] [])
@@ -206,9 +206,10 @@
       (is (= 200 (:status (server/handle-request {:request-method :get :uri uri})))))))
 
 (deftest workstreams-overview-and-detail-render-same-list
-  ;; Selecting a workstream must NOT change the filtered list — the overview and
+  ;; Selecting a workstream must NOT change the rendered list — the overview and
   ;; the detail (with ?sel=) render the same rows. This is the overview≡detail
-  ;; invariant (the "list jumps" bug).
+  ;; invariant (the "list jumps" bug). screen no longer filters rows by origin,
+  ;; so both BR-1 (notion) and BR-2 (github) render in both overview and detail.
   ;; r1 sits under :incoming rather than :ready — :ready is no longer a rendered
   ;; band (backlog lives in Notion), and this test's point is the overview≡detail
   ;; invariant across bands, not the :ready stage specifically.
@@ -230,29 +231,8 @@
                                                 :query-string "source=notion&sel=brian:r1"}))]
         (is (str/includes? over "BR-1"))
         (is (str/includes? det "BR-1"))
-        (is (not (str/includes? over "BR-2")) "github row filtered from overview")
-        (is (not (str/includes? det "BR-2"))  "github row filtered from detail too")))))
-
-(deftest workstreams-route-narrows-by-source-and-facet-end-to-end
-  ;; The whole filter pipeline (parse → screen) narrows the rendered list by
-  ;; source ∧ facet. Replaces the old apply-filters unit test.
-  (with-redefs [nido.work/all-grouped
-                (fn [] [{:project "brian"
-                         :grouped {:incoming [{:ws-id "t" :origin :notion :stage :incoming
-                                               :label "Teacher-row" :facets {:app-domain ["Teacher"]}}
-                                              {:ws-id "s" :origin :notion :stage :incoming
-                                               :label "Student-row" :facets {:app-domain ["Student"]}}
-                                              {:ws-id "k" :origin :slack :stage :incoming
-                                               :label "Slack-row" :facets {}}]
-                                   :triage {:in-flight [] :queued []} :ready [] :in-progress []}}])
-                nido.work/all-gates (fn [] [])
-                project/list-projects (fn [] {"brian" {:directory "/x"}})
-                nido.ui.server/read-rail-daemon (fn [] {:state :up})]
-    (let [resp (server/handle-request {:request-method :get :uri "/workstreams"
-                                       :query-string "source=notion&app-domain=Teacher"})]
-      (is (str/includes? (:body resp) "Teacher-row"))
-      (is (not (str/includes? (:body resp) "Student-row")) "other facet value filtered out")
-      (is (not (str/includes? (:body resp) "Slack-row"))   "other origin filtered out"))))
+        (is (str/includes? over "BR-2") "github row survives in overview — screen does not filter")
+        (is (str/includes? det "BR-2")  "github row survives in detail too")))))
 
 (deftest dev-state-for-derives-from-registry-probe-and-pending
   (let [reg {"/wt" {:app-port 3142 :url "http://x.localhost:3142"}}]
@@ -291,24 +271,6 @@
     (is (= {:state :running :url "http://x.localhost:3142"}
            (dev/session-dev-state "brian" "feat/x"
                                   {"/wt" {:app-port 3142 :url "http://x.localhost:3142"}})))))
-
-(deftest workstreams-route-shows-slack-incoming-only-under-the-slack-source
-  (with-redefs [nido.work/all-grouped
-                (fn [] [{:project :brian
-                         :grouped {:incoming [{:origin :slack :stage :incoming :label "S-one"
-                                               :last-activity "t" :engagement :idle}]
-                                   :triage {:in-flight [] :queued []} :ready [] :in-progress []}}])
-                nido.work/all-gates (fn [] [])
-                project/list-projects (fn [] {"brian" {:directory "/x"}})
-                nido.ui.server/read-rail-daemon (fn [] {:state :up})]
-    ;; default source (notion) → a slack row doesn't match, so it's not shown
-    (let [resp (server/handle-request {:request-method :get :uri "/workstreams"})]
-      (is (= 200 (:status resp)))
-      (is (not (str/includes? (:body resp) "S-one")) "slack incoming hidden under the default (notion) source"))
-    ;; source=Slack → the incoming row is the queue
-    (let [resp (server/handle-request {:request-method :get :uri "/workstreams"
-                                       :query-string "source=slack"})]
-      (is (str/includes? (:body resp) "S-one") "incoming shown under the Slack lens"))))
 
 (deftest fragment-workstream-route-is-sse-and-renders-per-session-dev-env
   (with-redefs [nido.work/workstream
