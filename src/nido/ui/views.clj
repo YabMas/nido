@@ -5,6 +5,7 @@
             [nido.coordinator.report :as report]
             [nido.process :as process]
             [nido.ui.markdown :as md]
+            [nido.ui.view-state :as view-state]
             [nido.work :as work]))
 
 ;; ---------------------------------------------------------------------------
@@ -59,6 +60,11 @@
         .gate-wrap { display:grid; grid-template-columns: 38% 62%; min-height:80vh; }
         .queue-col { border-right:1px solid #2a2a4a; display:flex; flex-direction:column;
                      min-width:0; min-height:0; }
+        .tabs { display:flex; gap:4px; padding:10px 16px 6px; }
+        .tab { padding:4px 10px; border-radius:4px; color:#888; font-size:12px;
+               text-transform:uppercase; border:1px solid transparent; }
+        .tab:hover { color:#ccc; text-decoration:none; }
+        .tab.active { background:#2a4a6a; color:#aee0ff; border-color:#3a5a7a; }
         .inbox { overflow:auto; flex:1; }
         .gate-card { display:block; padding:10px 16px; border-bottom:1px solid #20203a; color:inherit; }
         .gate-card:hover { background:#181830; text-decoration:none; }
@@ -215,14 +221,18 @@
   [:span {:class (str "chip c-" (name stage))} (name stage)])
 
 (defn- screen-query
-  "Query string (leading ?) rebuilding the active scope from the screen, with
-   optional overrides. `:sel` adds the selection (\"project:ws-id\"). The single
-   place scope + selection are serialized — so a row link, a poll refresh, and a
-   deep link all carry the identical view-state."
-  [{:keys [scope]} & [overrides]]
-  (let [sel   (:sel overrides)
+  "Query string (leading ?) rebuilding the active scope + tab from the screen,
+   with optional overrides. `:sel` adds the selection (\"project:ws-id\"); `:tab`
+   overrides the tab (used by the tab links). The single place scope, tab and
+   selection are serialized — so a row link, a poll refresh, and a deep link all
+   carry the identical view-state. The default tab is omitted, keeping
+   /workstreams clean."
+  [{:keys [scope tab]} & [overrides]]
+  (let [tb    (get overrides :tab tab)
+        sel   (:sel overrides)
         pairs (cond-> []
                 (and scope (not= "all" scope)) (conj (str "scope=" scope))
+                (and tb (not= view-state/default-tab tb)) (conj (str "tab=" (name tb)))
                 sel (conj (str "sel=" sel)))]
     (if (seq pairs) (str "?" (str/join "&" pairs)) "")))
 
@@ -484,17 +494,14 @@
        (str/join ", " (for [[_ suf] ws-fold-stages] (str suf ":$wsFold" suf)))
        "}))"))
 
-(defn- ws-stage-sections
-  "Flatten one {:project :grouped} into [{:project :stage :rows}] in most-advanced-
-   first order (shipping → in-progress → triage → incoming), dropping empty
-   stages. Kept as a plain fn (not inline hiccup) for the same SCI reason the old
-   stage-sections was."
-  [{:keys [project grouped]}]
-  (->> [[:shipping (:shipping grouped)]
-        [:in-progress (:in-progress grouped)]
-        [:triage (concat (-> grouped :triage :in-flight) (-> grouped :triage :queued))]
-        [:incoming (:incoming grouped)]]
-       (keep (fn [[stage rows]] (when (seq rows) {:project project :stage stage :rows rows})))))
+(defn- ws-tab-sections
+  "Flatten one {:project :grouped} into [{:project :stage :rows}] for `tab`,
+   taking the band list + order from work/tab-bands — the single place the
+   band→tab mapping lives. Kept as a plain fn (not inline hiccup) so the
+   fragment's `for` stays readable."
+  [tab {:keys [project grouped]}]
+  (for [[stage rows] (work/tab-bands tab grouped)]
+    {:project project :stage stage :rows rows}))
 
 (defn- ws-list-row
   "One selectable list row. Its link carries the view-state (scope + selection),
@@ -517,10 +524,10 @@
    [:div.gate-sub [:span project]]])
 
 (defn workstreams-fragment
-  "Stage-grouped selectable list across projects, rendered from the screen.
-   Selection is threaded from the screen so a poll refresh keeps the open row's
-   highlight instead of clearing it."
-  [{:keys [groups selection] :as screen}]
+  "The selected tab's stage-grouped selectable list across projects, rendered
+   from the screen. Selection is threaded from the screen so a poll refresh keeps
+   the open row's highlight instead of clearing it."
+  [{:keys [groups selection tab] :as screen}]
   (let [sel-id (:ws-id selection)]
     (str
      (h/html
@@ -529,7 +536,7 @@
        ;; here we only re-bind the click toggle, the reactive fold marker, and the
        ;; row list's data-class reveal. These re-attach to the already-declared
        ;; signals on every 5s poll, which is harmless — the state persists.
-       (for [{:keys [project stage rows]} (mapcat ws-stage-sections groups)]
+       (for [{:keys [project stage rows]} (mapcat #(ws-tab-sections tab %) groups)]
          (let [sig (ws-fold-signal stage)]
            [:div.ws-section
             [:h3.ws-fold-header
@@ -660,10 +667,21 @@
               [:td.meta (when brakes (pr-str brakes))]])]]
          [:p.empty "No sessions."])]))))
 
+(defn- tab-row
+  "The board's two tabs — Intake | Active. A tab selects BANDS, not rows: every
+   workstream in the tab renders whatever its origin, so nothing is hidden by
+   default. Switching tabs preserves scope + selection."
+  [{:keys [tab] :as screen}]
+  [:div.tabs
+   (for [id view-state/tabs]
+     [:a {:class (str "tab" (when (= id tab) " active"))
+          :href  (str "/workstreams" (screen-query screen {:tab id}))}
+      (str/capitalize (name id))])])
+
 (defn workstreams-page
   "Overview + ledger pane, rendered from the screen. The list, its poll query,
    and the pane all derive from the one screen value, so overview and detail
-   never disagree and a poll preserves the selection + filters."
+   never disagree and a poll preserves the selection + tab."
   [ctx {:keys [selection] :as screen}]
   (let [sel-id (:ws-id selection)
         q      (screen-query screen (when sel-id {:sel (str (:project selection) ":" sel-id)}))]
@@ -675,6 +693,7 @@
      ;; state; a full-page reload re-runs this and restores the persisted fold.
      [:div.gate-wrap {:data-signals__ifmissing ws-fold-signals-init}
       [:div.queue-col
+       (tab-row screen)
        [:div.inbox {:data-on-interval__duration.5s (str "@get('/_fragment/workstreams" q "')")}
         (h/raw (workstreams-fragment screen))]]
       [:div.pane (h/raw (workstream-pane (:ws selection) (:dev-states selection)))]])))

@@ -36,6 +36,31 @@
    :shipping → :done; :shipping is the merge-pipeline stage entered by `nido ship`."
   [:intake :triage :ready :in-progress :shipping :done])
 
+(defn tab-bands
+  "Ordered [stage rows] pairs for `tab` out of a `grouped` map, empty bands
+   dropped. The ONE place the band→tab mapping lives, so no surface can disagree
+   about where a band belongs.
+
+     :intake — :triage (in-flight then queued) + :incoming   — work arriving via
+               the various streams, awaiting a verdict.
+     :active — :shipping + :in-progress (most-advanced first) — work nido is
+               driving.
+
+   These are nido's two jobs. The backlog (:ready) and the archive (:done) live
+   in Notion and are never emitted by grouped-by-stage, so they are not bands
+   here. Their union is every row `grouped-rows` emits — a workstream is always
+   reachable from exactly one tab, which is the guarantee that nothing can be
+   hidden by default (a source filter defaulting to :notion once hid every
+   :in-progress row). An unrecognized `tab` reads as :intake."
+  [tab grouped]
+  (->> (case tab
+         :active [[:shipping    (:shipping grouped)]
+                  [:in-progress (:in-progress grouped)]]
+         [[:triage   (concat (-> grouped :triage :in-flight)
+                             (-> grouped :triage :queued))]
+          [:incoming (:incoming grouped)]])
+       (into [] (keep (fn [[stage rows]] (when (seq rows) [stage (vec rows)]))))))
+
 (defn gate-actions
   "Follow-actions for a gate, derived from its spine `stage`, whether a session is
    `parked?`, and its `origin` (Dismiss is dropped for :notion triage rows — Notion

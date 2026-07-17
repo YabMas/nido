@@ -27,3 +27,11 @@
     (is (= "all" (:scope v)))
     (is (not (contains? v :source)))
     (is (not (contains? v :facets)))))
+
+(deftest parse-tab
+  (is (= :intake (:tab (vs/parse {:uri "/workstreams" :query-string nil})))
+      "defaults to the first tab")
+  (is (= :intake vs/default-tab))
+  (is (= :active (:tab (vs/parse {:uri "/workstreams" :query-string "tab=active"}))))
+  (is (= :intake (:tab (vs/parse {:uri "/workstreams" :query-string "tab=bogus"})))
+      "an unknown tab falls back to the default rather than rendering an empty list"))

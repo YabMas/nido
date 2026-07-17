@@ -99,7 +99,7 @@
 (deftest needs-page-has-shell-master-detail-and-poll
   (let [html (views/needs-page {:active :needs :needs-count 1 :daemon {:state :up} :scope "all" :projects []}
                                {:gates [sample-gate] :selection {:project "brian" :ws-id "ws-1"}
-                                :scope "all" :source :all :facets {}})]
+                                :scope "all"})]
     (is (str/includes? html "rail-link active"))        ; rail present + active
     (is (str/includes? html "/_fragment/needs"))         ; polls the renamed fragment
     (is (str/includes? html "BR-7"))))                   ; the selected gate fills the pane
@@ -130,14 +130,47 @@
 
 (deftest workstreams-fragment-groups-and-links
   (let [html (views/workstreams-fragment {:groups [{:project "brian" :grouped sample-grouped}]
-                                          :selection nil :scope "all" :source :all :facets {}})]
+                                          :selection nil :scope "all" :tab :intake})]
     (is (str/includes? html "id=\"workstreams\""))
     (is (str/includes? html "triage"))
     (is (not (str/includes? html "ready")) "no :ready band section")
-    (is (str/includes? html "in-progress"))
     (is (str/includes? html "BR-1 · a"))
     (is (str/includes? html "sel=brian:w1"))            ; rows carry the selection in the view-state
     (is (str/includes? html ">N<"))))
+
+(deftest workstreams-page-renders-both-tabs-with-the-active-one-marked
+  (let [html (views/workstreams-page {:active :workstreams :needs-count 0 :daemon {:state :up}
+                                      :scope "all" :projects []}
+                                     {:scope "all" :tab :intake :selection nil
+                                      :groups [{:project "brian" :grouped sample-grouped}]})]
+    (is (str/includes? html "Intake"))
+    (is (str/includes? html "Active"))
+    (is (str/includes? html "tab active") "the current tab is marked")
+    (is (str/includes? html "tab=active") "the other tab is one click away")))
+
+(deftest workstreams-fragment-intake-shows-triage-not-in-progress
+  (let [html (views/workstreams-fragment {:groups [{:project "brian" :grouped sample-grouped}]
+                                          :selection nil :scope "all" :tab :intake})]
+    (is (str/includes? html "triage"))
+    (is (str/includes? html "BR-1 · a"))
+    (is (not (str/includes? html "spike")) "the in-progress row belongs to the Active tab")
+    (is (not (str/includes? html "ready")) "no :ready band — the backlog lives in Notion")))
+
+(deftest workstreams-fragment-active-shows-in-progress-not-triage
+  (let [html (views/workstreams-fragment {:groups [{:project "brian" :grouped sample-grouped}]
+                                          :selection nil :scope "all" :tab :active})]
+    (is (str/includes? html "in-progress"))
+    (is (str/includes? html "spike") "the scratch session is reachable — the bug this fixes")
+    (is (not (str/includes? html "BR-1 · a")) "the triage row belongs to the Intake tab")))
+
+(deftest tab-links-preserve-scope-and-selection
+  (let [html (views/workstreams-page {:active :workstreams :needs-count 0 :daemon {:state :up}
+                                      :scope "brian" :projects []}
+                                     {:scope "brian" :tab :intake
+                                      :selection {:project "brian" :ws-id "w1"}
+                                      :groups [{:project "brian" :grouped sample-grouped}]})]
+    (is (str/includes? html "scope=brian"))
+    (is (str/includes? html "sel=brian:w1"))))
 
 (deftest workstreams-fragment-preserves-selection
   ;; a poll refresh keeps the open row highlighted, and each row link preserves
@@ -196,17 +229,17 @@
     (is (str/includes? html "/_fragment/workstreams"))))
 
 (deftest workstreams-page-renders-no-filter-chrome
-  ;; The source + facet chips are gone: no filter row, no Source label, and a
-  ;; :scratch in-progress row renders on the default landing (it used to be
-  ;; hidden behind source=notion).
+  ;; The source + facet chips are gone: no filter row, no Source label. The
+  ;; :scratch in-progress row is no longer hidden behind source=notion — it's
+  ;; reachable via the Active tab (see workstreams-fragment-active-shows-in-progress-not-triage);
+  ;; the default landing is the Intake tab, which doesn't include it.
   (let [html (views/workstreams-page {:active :workstreams :needs-count 0 :daemon {:state :up}
                                       :scope "all" :projects []}
                                      {:scope "all" :selection nil
                                       :groups [{:project "brian" :grouped sample-grouped}]})]
     (is (not (str/includes? html "filter-row")))
     (is (not (str/includes? html "filter-label")))
-    (is (not (str/includes? html ">Source<")))
-    (is (str/includes? html "spike") "the scratch in-progress row is visible by default")))
+    (is (not (str/includes? html ">Source<")))))
 
 (deftest gate-action-confirm-reply-targets-the-pane
   (let [html (views/gate-action-confirm-fragment :reply "brian" "ws-1")]
@@ -312,7 +345,7 @@
                          :grouped {:shipping [ship-row]
                                    :triage {:in-flight [] :queued []}
                                    :incoming [] :ready [] :in-progress []}}]
-               :selection nil :scope "all" :source :all :facets {}})]
+               :selection nil :scope "all" :tab :active})]
     (is (str/includes? html "⚠ blocked")   "blocked sub-state renders the loud badge")
     (is (str/includes? html "ship-blocked") "loud CSS class is emitted")
     (is (str/includes? html "ship-badge")   "ship-badge wrapper class present")

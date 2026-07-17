@@ -2,6 +2,7 @@
   (:require
    [babashka.fs :as fs]
    [clojure.java.io :as io]
+   [clojure.set :as set]
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
    [nido.config]
@@ -30,6 +31,55 @@
 
 (deftest stages-is-the-canonical-spine
   (is (= [:intake :triage :ready :in-progress :shipping :done] work/stages)))
+
+(deftest tab-bands-splits-the-spine-into-two-jobs
+  (let [grouped {:incoming [{:ws-id "i"}]
+                 :triage {:in-flight [{:ws-id "tf"}] :queued [{:ws-id "tq"}]}
+                 :in-progress [{:ws-id "p"}]
+                 :shipping [{:ws-id "s"}]}]
+    (is (= [[:triage ["tf" "tq"]] [:incoming ["i"]]]
+           (for [[stage rows] (work/tab-bands :intake grouped)]
+             [stage (mapv :ws-id rows)]))
+        "intake = triage (in-flight then queued) then incoming")
+    (is (= [[:shipping ["s"]] [:in-progress ["p"]]]
+           (for [[stage rows] (work/tab-bands :active grouped)]
+             [stage (mapv :ws-id rows)]))
+        "active = shipping then in-progress, most-advanced-first")))
+
+(deftest tab-bands-union-covers-every-row-exactly-once
+  ;; The guarantee this whole design exists for: nothing can be hidden by
+  ;; default again. Every row the model emits is reachable from exactly one tab.
+  (let [grouped {:incoming [{:ws-id "i"}]
+                 :triage {:in-flight [{:ws-id "tf"}] :queued [{:ws-id "tq"}]}
+                 :in-progress [{:ws-id "p"}]
+                 :shipping [{:ws-id "s"}]}
+        rows-of (fn [tab] (mapcat second (work/tab-bands tab grouped)))
+        intake  (set (map :ws-id (rows-of :intake)))
+        active  (set (map :ws-id (rows-of :active)))]
+    (is (= (set (map :ws-id (work/grouped-rows grouped)))
+           (into intake active))
+        "union of both tabs = every row grouped-rows emits")
+    (is (empty? (set/intersection intake active))
+        "and no row appears in both tabs")))
+
+(deftest tab-bands-drops-empty-bands-and-tolerates-absent-keys
+  (is (= [] (work/tab-bands :active {:in-progress [] :shipping []}))
+      "empty bands are dropped")
+  (is (= [] (work/tab-bands :active {}))
+      "absent keys are not an error")
+  (is (= [[:triage ["t"]]]
+         (for [[stage rows] (work/tab-bands :intake {:triage {:in-flight [{:ws-id "t"}] :queued []}})]
+           [stage (mapv :ws-id rows)]))
+      "a band with rows survives while its empty sibling is dropped"))
+
+(deftest tab-bands-unknown-tab-behaves-as-intake
+  (let [grouped {:triage {:in-flight [{:ws-id "t"}] :queued []} :in-progress [{:ws-id "p"}]}]
+    (is (= (work/tab-bands :intake grouped) (work/tab-bands :bogus grouped)))))
+
+(deftest screen-passes-the-tab-through
+  (let [s (work/screen {:surface :workstreams :scope "all" :tab :active}
+                       {:groups [] :gates [] :pending #{}})]
+    (is (= :active (:tab s)))))
 
 (deftest classify-origin-delegates-to-source-classifier
   (is (= :scratch (work/classify-origin {:stage :scratch :external-refs []})))

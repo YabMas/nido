@@ -24,12 +24,25 @@
       (when (and (seq project) (seq ws-id))
         {:project project :ws-id ws-id}))))
 
+(def tabs
+  "The /workstreams surfaces, in display order. The FIRST entry is the default.
+   A tab is a BAND selector — which part of the stage spine is on screen (see
+   nido.work/tab-bands) — NOT a row filter: every row in the tab renders
+   whatever its origin. They are nido's two jobs: intake via the various
+   streams, and orchestrating work in progress."
+  [:intake :active])
+
+(def default-tab
+  "The tab /workstreams opens on when none is selected — the first one."
+  (first tabs))
+
 (defn parse
   "Request map -> view-state:
      {:surface :needs|:workstreams|:other
       :scope   \"all\"|<project>
       :selection {:project _ :ws-id _}|nil
-      :entry   <long>|nil}
+      :entry   <long>|nil
+      :tab     :intake|:active}
 
    No source/facet filtering: the board shows every origin, and its tabs select
    BANDS rather than rows (see nido.work/tab-bands). A legacy ?source= / facet
@@ -39,4 +52,6 @@
     {:surface   (surface uri)
      :scope     (or (some (fn [[k v]] (when (= k "scope") v)) ps) "all")
      :selection (selection ps)
-     :entry     (some (fn [[k v]] (when (= k "entry") (parse-long v))) ps)}))
+     :entry     (some (fn [[k v]] (when (= k "entry") (parse-long v))) ps)
+     :tab       (let [t (some (fn [[k v]] (when (= k "tab") (keyword v))) ps)]
+                  (if (some #{t} tabs) t default-tab))}))
