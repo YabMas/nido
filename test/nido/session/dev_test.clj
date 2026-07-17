@@ -16,3 +16,12 @@
   (is (= {:state :starting :error-msg nil}
          (dev/dev-state-for "/wt" "iid" {} (constantly false)
                             (constantly {:state :starting})))))
+
+(deftest pending-winddown-keys-are-the-stopping-slash-keys
+  (dev/set-app-state! "p/ws1" :stopping)
+  (dev/set-app-state! "p/ws2" :resolving)
+  (dev/set-app-state! "plain-instance" :stopping)
+  (try
+    (is (= #{"p/ws1"} (dev/pending-winddown-keys)))
+    (finally
+      (doseq [k ["p/ws1" "p/ws2" "plain-instance"]] (dev/clear-app-state! k)))))

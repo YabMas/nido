@@ -763,6 +763,19 @@
        (keep (fn [s] (when (or (:pg-port s) (:app-port s) (:nrepl-port s)) (:name s))))
        set))
 
+(defn bring-down!
+  "Down every live session of a workstream — the winding-down band's one action.
+   Synchronous and slow (lifecycle/down! per session); callers own async + UI
+   optimism. Returns {:downed [names]}."
+  [project ws-id]
+  (let [live  (live-session-names project)
+        names (->> (csession/list-sessions project ws-id)
+                   (map :name)
+                   (filterv live))]
+    (doseq [n names]
+      (lifecycle/down! n {:project (name project)}))
+    {:downed names}))
+
 (defn- owned-session-names
   "Session names owned by ANY workstream of `project` — open or closed. Closed
    owners keep their sessions out of adoption (they are winding-down leftovers)."

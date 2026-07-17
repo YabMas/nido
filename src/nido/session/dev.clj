@@ -54,6 +54,17 @@
        (map key)
        set))
 
+(defn pending-winddown-keys
+  "The \"<project>/<ws-id>\" keys with a :stopping state mid-flight — the web's
+   winddown POST writes them; work/screen marks the matching winding-down rows
+   :pending? so the 5s poll shows 'stopping…' instead of a re-clickable button."
+  []
+  (->> @app-states
+       (filter (fn [[k v]] (and (string? k) (str/includes? k "/")
+                                (= :stopping (:state v)))))
+       (map key)
+       set))
+
 (defn dev-state-for
   "Pure derivation of a session's dev-resource state from real state: the
    registry entry (looked up by worktree path), a TCP probe of its app port,

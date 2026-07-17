@@ -86,6 +86,19 @@
         (session/create! :p (:id w) {:name "s1" :weight :light :autonomy nil})
         (is (= [] (work/winding-down :p #{"s1"})))))))
 
+(deftest bring-down!-downs-only-live-sessions
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :p {:stage :in-progress :external-refs []})
+            downed (atom [])]
+        (session/create! :p (:id w) {:name "live1" :weight :light :autonomy nil})
+        (session/create! :p (:id w) {:name "dead1" :weight :light :autonomy nil})
+        (workstream/close! :p (:id w) :done)
+        (with-redefs [work/live-session-names (constantly #{"live1"})
+                      nido.session.lifecycle/down! (fn [n _] (swap! downed conj n))]
+          (is (= {:downed ["live1"]} (work/bring-down! :p (:id w))))
+          (is (= ["live1"] @downed)))))))
+
 (deftest tab-bands-active-appends-winding-down
   (let [grouped {:in-progress [{:ws-id "p"}] :shipping [{:ws-id "s"}]
                  :winding-down [{:ws-id "w"}]}]
