@@ -54,11 +54,15 @@
    here. Their union is every row `grouped-rows` emits — a workstream is always
    reachable from exactly one tab, which is the guarantee that nothing can be
    hidden by default (a source filter defaulting to :notion once hid every
-   :in-progress row). An unrecognized `tab` reads as :intake."
+   :in-progress row). An unrecognized `tab` reads as :intake.
+
+   :active's trailing band is :winding-down — closed workstreams still holding
+   live resources (bring-down! is their one action)."
   [tab grouped]
   (->> (case tab
-         :active [[:shipping    (:shipping grouped)]
-                  [:in-progress (:in-progress grouped)]]
+         :active [[:shipping     (:shipping grouped)]
+                  [:in-progress  (:in-progress grouped)]
+                  [:winding-down (:winding-down grouped)]]
          [[:triage   (concat (-> grouped :triage :in-flight)
                              (-> grouped :triage :queued))]
           [:incoming (:incoming grouped)]])
@@ -135,6 +139,32 @@
   ([project live-names]
    (mapv to-spine (wsv/workstream-rows project live-names))))
 
+(defn winding-down
+  "Closed (:done/:dropped) workstreams of `project` still holding ≥1 live
+   session — resources you're paying for on finished work. Never gates
+   (:needs-you false); rendered as the Active tab's trailing band with one
+   action: bring-down!. Empty when live-names is empty/nil."
+  [project live-names]
+  (let [live (set live-names)]
+    (if (empty? live)
+      []
+      (->> (cws/list-ids project)
+           (keep #(cws/read-ws project %))
+           (filter :closed)
+           (keep (fn [w]
+                   (let [sessions (csession/list-sessions project (:id w))
+                         live-s   (filterv #(contains? live (:name %)) sessions)]
+                     (when (seq live-s)
+                       {:ws-id     (:id w)
+                        :project   (name project)
+                        :stage     :winding-down
+                        :origin    (classify-origin w)
+                        :label     (wsv/label w sessions)
+                        :outcome   (get-in w [:closed :outcome])
+                        :sessions  (mapv :name live-s)
+                        :needs-you false}))))
+           vec))))
+
 (defn grouped
   "Workstreams grouped along the single spine for the board:
    {:triage {:in-flight [..] :queued [..]} :ready [..] :in-progress [..]}.
@@ -142,7 +172,8 @@
    :done is omitted. The board renders these groups directly."
   ([project] (grouped project nil))
   ([project live-names]
-   (wsv/grouped-by-stage (list-workstreams project live-names))))
+   (assoc (wsv/grouped-by-stage (list-workstreams project live-names))
+          :winding-down (winding-down project live-names))))
 
 (defn- session-status
   "Unified status across the autonomy axis: an autonomous session reports its
@@ -687,7 +718,8 @@
           (get-in grouped [:triage :in-flight])
           (get-in grouped [:triage :queued])
           (:in-progress grouped)
-          (:shipping grouped)))
+          (:shipping grouped)
+          (:winding-down grouped)))
 
 (defn- facet-row-values
   "The value(s) a row carries for facet `k`, as a seq (vector facets expand to
@@ -846,7 +878,8 @@
   "The single pure derivation from view-state to the screen-model. Every render
    site (full page + SSE poll, overview + detail) renders a slice of THIS value,
    so they cannot disagree. `data` injects what only IO can produce:
-     :groups  (all-grouped)  :gates (all-gates)  :pending (#{\"project/ws-id\"} optimistic bridge keys).
+     :groups  (all-grouped)  :gates (all-gates)  :pending (#{\"project/ws-id\"} optimistic bridge keys)
+     :winddown-pending (#{\"project/ws-id\"} optimistic bridge keys for pending bring-down!s).
    Selection detail is attached by the caller (needs work/workstream + dev-states).
 
    NO row filtering: every workstream the model emits is reachable from the
@@ -856,8 +889,16 @@
    view-state's job, not the core's (borrowing that default is what pulled a UI
    require into this namespace)."
   [{:keys [scope tab] :or {scope "all"}}
-   {:keys [groups gates pending] :or {groups [] gates [] pending #{}}}]
-  (let [scoped     (scope-keep scope groups)
+   {:keys [groups gates pending winddown-pending]
+    :or {groups [] gates [] pending #{} winddown-pending #{}}}]
+  (let [scoped     (->> (scope-keep scope groups)
+                        (mapv (fn [{:keys [project] :as g}]
+                                (update-in g [:grouped :winding-down]
+                                           (fn [rows]
+                                             (mapv #(assoc % :pending?
+                                                           (contains? winddown-pending
+                                                                      (str project "/" (:ws-id %))))
+                                                   rows))))))
         kept-gates (->> (scope-keep scope gates)
                         (mapv (fn [g] (assoc g :pending?
                                              (or (boolean (:working? g))

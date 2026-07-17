@@ -36,15 +36,16 @@
   (let [grouped {:incoming [{:ws-id "i"}]
                  :triage {:in-flight [{:ws-id "tf"}] :queued [{:ws-id "tq"}]}
                  :in-progress [{:ws-id "p"}]
-                 :shipping [{:ws-id "s"}]}]
+                 :shipping [{:ws-id "s"}]
+                 :winding-down [{:ws-id "w"}]}]
     (is (= [[:triage ["tf" "tq"]] [:incoming ["i"]]]
            (for [[stage rows] (work/tab-bands :intake grouped)]
              [stage (mapv :ws-id rows)]))
         "intake = triage (in-flight then queued) then incoming")
-    (is (= [[:shipping ["s"]] [:in-progress ["p"]]]
+    (is (= [[:shipping ["s"]] [:in-progress ["p"]] [:winding-down ["w"]]]
            (for [[stage rows] (work/tab-bands :active grouped)]
              [stage (mapv :ws-id rows)]))
-        "active = shipping then in-progress, most-advanced-first")))
+        "active = shipping then in-progress then winding-down")))
 
 (deftest tab-bands-union-covers-every-row-exactly-once
   ;; The guarantee this whole design exists for: nothing can be hidden by
@@ -52,7 +53,8 @@
   (let [grouped {:incoming [{:ws-id "i"}]
                  :triage {:in-flight [{:ws-id "tf"}] :queued [{:ws-id "tq"}]}
                  :in-progress [{:ws-id "p"}]
-                 :shipping [{:ws-id "s"}]}
+                 :shipping [{:ws-id "s"}]
+                 :winding-down [{:ws-id "w"}]}
         rows-of (fn [tab] (mapcat second (work/tab-bands tab grouped)))
         intake  (set (map :ws-id (rows-of :intake)))
         active  (set (map :ws-id (rows-of :active)))]
@@ -61,6 +63,42 @@
         "union of both tabs = every row grouped-rows emits")
     (is (empty? (set/intersection intake active))
         "and no row appears in both tabs")))
+
+(deftest winding-down-lists-closed-ws-with-live-sessions
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :p {:stage :in-progress :external-refs []})]
+        (session/create! :p (:id w) {:name "s1" :weight :light :autonomy nil})
+        (workstream/close! :p (:id w) :done)
+        (let [[row :as rows] (work/winding-down :p #{"s1"})]
+          (is (= 1 (count rows)))
+          (is (= (:id w) (:ws-id row)))
+          (is (= :winding-down (:stage row)))
+          (is (= :done (:outcome row)))
+          (is (= ["s1"] (:sessions row)))
+          (is (false? (:needs-you row))))
+        (is (= [] (work/winding-down :p #{})) "downed sessions → gone")))))
+
+(deftest winding-down-ignores-open-workstreams
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :p {:stage :in-progress :external-refs []})]
+        (session/create! :p (:id w) {:name "s1" :weight :light :autonomy nil})
+        (is (= [] (work/winding-down :p #{"s1"})))))))
+
+(deftest tab-bands-active-appends-winding-down
+  (let [grouped {:in-progress [{:ws-id "p"}] :shipping [{:ws-id "s"}]
+                 :winding-down [{:ws-id "w"}]}]
+    (is (= [[:shipping ["s"]] [:in-progress ["p"]] [:winding-down ["w"]]]
+           (for [[stage rows] (work/tab-bands :active grouped)]
+             [stage (mapv :ws-id rows)])))))
+
+(deftest screen-marks-pending-winding-down-rows
+  (let [groups [{:project "p" :grouped {:winding-down [{:ws-id "w1"} {:ws-id "w2"}]}}]
+        screen (work/screen {:scope "all" :tab :active}
+                            {:groups groups :winddown-pending #{"p/w1"}})]
+    (is (= [true false]
+           (->> screen :groups first :grouped :winding-down (map (comp boolean :pending?)))))))
 
 (deftest tab-bands-drops-empty-bands-and-tolerates-absent-keys
   (is (= [] (work/tab-bands :active {:in-progress [] :shipping []}))
