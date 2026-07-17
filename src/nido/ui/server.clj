@@ -5,6 +5,8 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [nido.coordinator.findings :as findings]
+            [nido.coordinator.pickup :as pickup]
+            [nido.notion.client :as client]
             [nido.process :as proc]
             [nido.project :as project]
             [nido.session.dev :as dev]
@@ -340,6 +342,22 @@
         ;; so the UI sees instant feedback. POSTs have no query-string scope;
         ;; default to "all" so the feedback shows the full system surface.
         (system-fragment-response "all"))
+
+      ;; POST /workstreams/pickup/:project — resolve a pasted Notion ref, enqueue
+      ;; the :plan-bug leg, and patch #pickup-result with the continuing/new report.
+      (and (= 3 (count segs)) (= "workstreams" (first segs)) (= "pickup" (nth segs 1)))
+      (let [project (nth segs 2)
+            input   (str/trim (str (:pickup (parse-json-body body))))
+            ready?  (= :up (:state (read-rail-daemon)))]
+        (if (str/blank? input)
+          (sse-response
+           (sse-fragment
+            (views/pickup-result-fragment {:decision :unresolved :error :unrecognized-input}
+                                          {:project project :daemon-ready? ready?})))
+          (let [result (pickup/pickup! (keyword project) input (client/keychain-token))]
+            (sse-response
+             (sse-fragment
+              (views/pickup-result-fragment result {:project project :daemon-ready? ready?}))))))
 
       ;; POST /workstreams/:project/:ws-id/findings — file a staging findings round
       (and (= 4 (count segs)) (= "workstreams" (first segs)) (= "findings" (nth segs 3)))

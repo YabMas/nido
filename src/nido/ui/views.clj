@@ -737,8 +737,9 @@
    and the pane all derive from the one screen value, so overview and detail
    never disagree and a poll preserves the selection + tab."
   [ctx {:keys [selection] :as screen}]
-  (let [sel-id (:ws-id selection)
-        q      (screen-query screen (when sel-id {:sel (str (:project selection) ":" sel-id)}))]
+  (let [sel-id  (:ws-id selection)
+        q       (screen-query screen (when sel-id {:sel (str (:project selection) ":" sel-id)}))
+        project (if (= "all" (:scope screen)) "brian" (:scope screen))]
     (shell
      (assoc ctx :active :workstreams :title "Workstreams")
      ;; Section-fold signals are declared here, on the stable page chrome that the
@@ -747,6 +748,7 @@
      ;; state; a full-page reload re-runs this and restores the persisted fold.
      [:div.gate-wrap {:data-signals__ifmissing ws-fold-signals-init}
       [:div.queue-col
+       (pickup-bar project)
        (tab-row screen)
        [:div.inbox {:data-on-interval__duration.5s (str "@get('/_fragment/workstreams" q "')")}
         (h/raw (workstreams-fragment screen))]]
