@@ -272,10 +272,11 @@
            (dev/session-dev-state "brian" "feat/x"
                                   {"/wt" {:app-port 3142 :url "http://x.localhost:3142"}})))))
 
-(deftest fragment-workstream-route-is-sse-and-renders-per-session-dev-env
+(deftest fragment-workstream-route-is-sse-and-renders-environment
   (with-redefs [nido.work/workstream
                 (fn [_ _ & _] {:project "brian" :ws-id "ws-1" :origin :notion
                                :stage :triage :label "BR-7 · t" :ledger nil :report nil
+                               :environment {:name "me" :weight :heavy}
                                :sessions [{:name "me" :autonomy-level :interactive
                                            :parked? false :status :up :brakes nil}]})
                 nido.session.state/read-registry (fn [] {})
