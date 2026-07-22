@@ -681,10 +681,10 @@
                  (ws-list-row screen sel-id project r)))]]))]))))
 
 (defn- session-dev-cell
-  "Per-session DEV ENVIRONMENT controls for the Sessions table, driven by the
-   session's derived dev-resource state. Actions POST to the per-session
-   lifecycle route; the session name is URL-encoded so a slash-namespaced name
-   (feat/foo) stays a single path segment."
+  "DEV ENVIRONMENT controls (start/stop/restart/Open-app) for the workstream's
+   environment block, driven by the session's derived dev-resource state. Actions
+   POST to the per-session lifecycle route; the session name is URL-encoded so a
+   slash-namespaced name (feat/foo) stays a single path segment."
   [project ws-id session {:keys [state url error-msg]}]
   (let [enc (java.net.URLEncoder/encode (str session) "UTF-8")
         act (fn [a] (str "@post('/workstreams/" project "/" ws-id
@@ -756,14 +756,15 @@
     "File findings & reopen"]])
 
 (defn workstream-pane
-  "Read-only ledger pane: header · stage · ledger summary · report · Sessions table
-   with per-row dev-env controls, ports, and mem/heap facts. `session-dev-states`
+  "Read-only ledger pane: header · stage · ledger summary · report · the one
+   ENVIRONMENT block (the workstream's `:environment` session — dev-env controls,
+   URL, ports, mem/heap facts), or 'no runnable version yet'. `session-dev-states`
    is a map of session-name → {:state … :url :error-msg} (the view does no IO).
    `machine-facts` is a map of session-name → {:pg-port :nrepl-port :app-port
    :repl-rss :pg-rss :heap-max} (also no IO — a projection the caller injects).
    Polls its own fragment so transient dev-env states (starting…) self-advance."
   ([ws session-dev-states] (workstream-pane ws session-dev-states {}))
-  ([{:keys [project ws-id origin stage label ledger report entries selected-seq sessions on-latest?]
+  ([{:keys [project ws-id origin stage label ledger report entries selected-seq sessions environment on-latest?]
      :or {on-latest? true}} session-dev-states machine-facts]
    (str
     (h/html
@@ -782,26 +783,21 @@
         ;; Live actions only on the current ledger entry — older entries are read-back.
         (when on-latest? (pane-action-bar project ws-id origin stage sessions))
         (when (= :done stage) (file-findings-form project ws-id))
-        [:h2 "Sessions"]
-        (if (seq sessions)
-          [:table
-           [:thead [:tr [:th "session"] [:th "axis"] [:th "status"] [:th "dev env"]
-                    [:th "ports"] [:th "mem"] [:th "brakes"]]]
-           [:tbody
-            (for [{:keys [name autonomy-level parked? status brakes]} sessions]
-              [:tr [:td name]
-               [:td (clojure.core/name autonomy-level) (when parked? " · gate")]
-               [:td (clojure.core/name (or status :down))]
-               [:td (session-dev-cell project ws-id name (get session-dev-states name))]
-               [:td.mono (let [{:keys [pg-port nrepl-port app-port]} (get machine-facts name)]
-                           (str/join " · " (keep (fn [[l p]] (when p (str l " " p)))
-                                                 [["pg" pg-port] ["repl" nrepl-port] ["app" app-port]])))]
-               [:td.meta (let [{:keys [repl-rss pg-rss heap-max]} (get machine-facts name)]
-                           (list (when repl-rss (str "jvm " (process/human-bytes repl-rss) " "))
-                                 (when pg-rss (str "pg " (process/human-bytes pg-rss) " "))
-                                 (when heap-max (str "max " heap-max))))]
-               [:td.meta (when brakes (pr-str brakes))]])]]
-          [:p.empty "No sessions."])])))))
+        [:h2 "Environment"]
+        (if-let [env-name (:name environment)]
+          (let [dev (get session-dev-states env-name)
+                {:keys [pg-port nrepl-port app-port repl-rss pg-rss heap-max]}
+                (get machine-facts env-name)]
+            [:div.card.env
+             [:div.env-head [:strong env-name] " " (session-dev-cell project ws-id env-name dev)]
+             (when-let [url (:url dev)]
+               [:div [:a {:href url :target "_blank"} url]])
+             [:div.mono (str/join " · " (keep (fn [[l p]] (when p (str l " " p)))
+                                              [["pg" pg-port] ["repl" nrepl-port] ["app" app-port]]))]
+             [:div.meta (list (when repl-rss (str "jvm " (process/human-bytes repl-rss) " "))
+                              (when pg-rss (str "pg " (process/human-bytes pg-rss) " "))
+                              (when heap-max (str "max " heap-max)))]])
+          [:p.empty "no runnable version yet"])])))))
 
 (defn- tab-row
   "The board's two tabs — Intake | Active. A tab selects BANDS, not rows: every

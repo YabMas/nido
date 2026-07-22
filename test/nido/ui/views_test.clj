@@ -222,32 +222,37 @@
     (is (str/includes? html "sel=brian:w1"))
     (is (not (str/includes? html "source=")) "no source filter in row links")))
 
-(deftest workstream-pane-shows-ledger-report-and-sessions
-  (let [ws   (assoc sample-ws :report {:format :markdown :kind :triage :at "t" :title "Verdict"
-                                       :markdown "# Verdict\n\nbug — reproduced."})
+(deftest workstream-pane-shows-ledger-report-and-environment
+  ;; The pane shows the ledger summary + report, and — bound to the resolved
+  ;; environment session — its Open-app link. One environment, no session table.
+  (let [ws   (assoc sample-ws :environment {:name "auto"}
+                    :report {:format :markdown :kind :triage :at "t" :title "Verdict"
+                             :markdown "# Verdict\n\nbug — reproduced."})
         html (views/workstream-pane ws {"auto" {:state :running :url "http://auto.brian.localhost:3142"}})]
     (is (str/includes? html "BR-7"))
     (is (str/includes? html "investigating"))            ; ledger summary status
     (is (str/includes? html "bug — reproduced."))        ; report markdown
-    (is (str/includes? html "auto"))                     ; session listed
-    (is (str/includes? html "http://auto.brian.localhost:3142")))) ; per-row Open-app link
+    (is (str/includes? html "auto"))                     ; environment session named
+    (is (str/includes? html "http://auto.brian.localhost:3142")))) ; env Open-app link
 
-(deftest workstream-pane-session-running-shows-open-and-stop
-  (let [html (views/workstream-pane sample-ws {"me" {:state :running :url "http://me.brian.localhost:3142"}})]
-    (is (str/includes? html "dev env"))                  ; new table column header
+(deftest workstream-pane-environment-running-shows-open-and-stop
+  (let [ws   (assoc sample-ws :environment {:name "me"})
+        html (views/workstream-pane ws {"me" {:state :running :url "http://me.brian.localhost:3142"}})]
+    (is (str/includes? html "Environment"))              ; the environment section
     (is (str/includes? html "Open app"))
     (is (str/includes? html "http://me.brian.localhost:3142"))
     (is (str/includes? html "/workstreams/brian/ws-1/sessions/me/dev/stop"))
     (is (str/includes? html "id=\"ws-pane\""))
-    (is (str/includes? html "/_fragment/workstream/brian/ws-1"))   ; pane interval poll
-    (is (str/includes? html "auto"))))                             ; other session row intact
+    (is (str/includes? html "/_fragment/workstream/brian/ws-1"))))  ; pane interval poll
 
-(deftest workstream-pane-session-down-shows-start
-  (let [html (views/workstream-pane sample-ws {"me" {:state :down}})]
+(deftest workstream-pane-environment-down-shows-start
+  (let [ws   (assoc sample-ws :environment {:name "me"})
+        html (views/workstream-pane ws {"me" {:state :down}})]
     (is (str/includes? html "/workstreams/brian/ws-1/sessions/me/dev/start"))))
 
-(deftest workstream-pane-session-failed-shows-retry-and-error
-  (let [html (views/workstream-pane sample-ws {"me" {:state :failed :error-msg "boom: port never opened"}})]
+(deftest workstream-pane-environment-failed-shows-retry-and-error
+  (let [ws   (assoc sample-ws :environment {:name "me"})
+        html (views/workstream-pane ws {"me" {:state :failed :error-msg "boom: port never opened"}})]
     (is (str/includes? html "retry"))
     (is (str/includes? html "boom: port never opened"))
     (is (str/includes? html "/workstreams/brian/ws-1/sessions/me/dev/start"))))   ; retry POSTs to start
@@ -260,9 +265,10 @@
 (deftest workstream-pane-empty-when-nil
   (is (str/includes? (views/workstream-pane nil nil) "Select a workstream")))
 
-(deftest workstream-pane-session-row-shows-machine-facts
+(deftest workstream-pane-environment-shows-machine-facts
   (let [html (views/workstream-pane
               {:project "p" :ws-id "w" :origin :scratch :stage :in-progress :label "L"
+               :environment {:name "s1" :weight :heavy}
                :sessions [{:name "s1" :autonomy-level :interactive :parked? false :status :up}]}
               {"s1" {:state :running :url "http://localhost:3101"}}
               {"s1" {:pg-port 5501 :nrepl-port 7001 :app-port 3101
@@ -272,6 +278,23 @@
     (is (str/includes? html "3101"))
     (is (str/includes? html "max 2g"))
     (is (str/includes? html "restart"))))
+
+(deftest pane-renders-single-environment-block
+  (let [ws  {:project "brian" :ws-id "ws-1" :origin :notion :stage :in-progress
+             :label "BR-1 · x" :environment {:name "impl-br-1" :weight :heavy}
+             :sessions [{:name "impl-br-1" :autonomy-level :interactive}]}
+        html (views/workstream-pane ws
+                                    {"impl-br-1" {:state :running :url "http://localhost:3100"}}
+                                    {"impl-br-1" {:app-port 3100 :pg-port 5500 :nrepl-port 6100}})]
+    (is (str/includes? html "Environment") "an Environment section, not Sessions")
+    (is (not (str/includes? html "<table")) "no session table")
+    (is (str/includes? html "http://localhost:3100") "the environment URL is shown")))
+
+(deftest pane-environment-empty-state
+  (let [ws  {:project "brian" :ws-id "ws-1" :origin :notion :stage :triage
+             :label "BR-1 · x" :environment nil :sessions []}
+        html (views/workstream-pane ws {} {})]
+    (is (str/includes? html "no runnable version") "empty state when no environment")))
 
 (deftest workstreams-page-has-shell-and-poll
   (let [html (views/workstreams-page {:active :workstreams :needs-count 0 :daemon {:state :up}
