@@ -282,25 +282,6 @@
   (is (re-find #"fold" (#'tui/footer {:screen :board :origin :all}))
       "board footer documents the [space] fold toggle"))
 
-(deftest detail-rows-render-sessions-on-the-autonomy-axis
-  ;; The detail screen is session management only — no ledger/report rows, even
-  ;; when the workstream carries a ledger. Only the sessions render.
-  (with-redefs [nido.work/workstream
-                (fn [_ _ & _]
-                  {:ws-id "w1" :origin :notion :stage :triage :label "BR-1 · a"
-                   :ledger {:key "BR-1" :status :investigating :report-count 1}
-                   :sessions [{:name "auto" :autonomy-level :autonomous :parked? true
-                               :status :parked :brakes {:budget "30m"}}
-                              {:name "me" :autonomy-level :interactive :parked? false
-                               :status :up :brakes nil}]})]
-    (let [rows (#'tui/detail-rows "brian" "w1")
-          titles (mapv :title rows)]
-      (is (not-any? #(re-find #"ledger: BR-1" %) titles) "no ledger line on the detail screen")
-      (is (some #(re-find #"auto" %) titles))
-      (is (some #(re-find #"parked|autonomous" %) titles) "autonomy state shown")
-      (is (some #(re-find #"me" %) titles))
-      (is (some #(= "auto" (-> % :data :name)) rows) "session rows carry :name for open"))))
-
 (deftest workstream-esc-returns-to-board
   (with-redefs [nido.tui/current-rows (constantly [])]
     (let [st (assoc (board-state :all) :screen :workstream :ws-id "w1" :ws-label "x")

@@ -247,48 +247,6 @@
          :description "" :data ::empty}]
        (vec (strip-leading-blank rows))))))
 
-(defn- format-detail-session
-  "Display string for a session on the autonomy axis. `dev-state` is the
-   optional map from `dev/session-dev-state` — {:state :running/:down/…
-   :url :error-msg?}. When present, appends the dev-env state to the row."
-  ([session] (format-detail-session session nil))
-  ([{:keys [name autonomy-level status parked? brakes]} dev-state]
-   (let [dev-str (when dev-state
-                   (let [ds (:state dev-state)
-                         label (case ds
-                                 :running  "▶ running"
-                                 :starting "⟳ starting"
-                                 :stopping "⟳ stopping"
-                                 :restarting "⟳ restarting"
-                                 :failed   "✗ failed"
-                                 :down     "○ down"
-                                 (str (clojure.core/name ds)))]
-                     (str "  ·  dev:" label)))]
-     (format "%s%s  ·  %s  ·  %s%s%s"
-             (if parked? "⏸ " "  ")
-             name
-             (clojure.core/name (or autonomy-level :?))
-             (clojure.core/name (or status :?))
-             (if brakes (str "  ·  " (clojure.core/name (ffirst brakes)) " " (val (first brakes))) "")
-             (or dev-str "")))))
-
-(defn- detail-rows
-  "Session-management rows for one workstream: its sessions on the autonomy axis,
-   each annotated with live dev-environment state. Reads nido.work/workstream
-   (string project ok). The ledger/report reader lives on the web dashboard; this
-   screen is deliberately just the sessions."
-  [project ws-id]
-  (let [ws         (work/workstream project ws-id)
-        sessions   (:sessions ws)
-        dev-states (when (seq sessions)
-                     (dev/ws-session-dev-states project ws))]
-    (if (seq sessions)
-      (mapv (fn [s]
-              {:title (format-detail-session s (get dev-states (:name s)))
-               :description "" :data s})
-            sessions)
-      [{:title "No sessions in this workstream yet." :description "" :data ::empty}])))
-
 ;; ---------------------------------------------------------------------------
 ;; charm list component
 ;; ---------------------------------------------------------------------------
@@ -299,21 +257,17 @@
 ;; visible items, not terminal lines. Keep it bounded so list-update can advance
 ;; :offset when the cursor moves beyond the visible page.
 (defn- main-list-height [state]
-  (if (= :workstream (:screen state))
-    ;; Detail screen: size the list to its exact session count so it doesn't pad
-    ;; to a full page — the selected session's info block renders right below it.
-    (max 1 (count (:items state)))
-    (let [term-height (or (some-> state :size second) 28)
-          facet-line? (and (= :board (:screen state))
-                           (not (str/blank?
-                                 (facet-strip (:project state)
-                                              (:origin state)
-                                              (or (:facet-filter state) {})))))
-          chrome (+ 5
-                    (if (= :board (:screen state)) 1 0)
-                    (if facet-line? 1 0)
-                    (if (:status state) 1 0))]
-      (max 1 (quot (max 2 (- term-height chrome)) 2)))))
+  (let [term-height (or (some-> state :size second) 28)
+        facet-line? (and (= :board (:screen state))
+                         (not (str/blank?
+                               (facet-strip (:project state)
+                                            (:origin state)
+                                            (or (:facet-filter state) {})))))
+        chrome (+ 5
+                  (if (= :board (:screen state)) 1 0)
+                  (if facet-line? 1 0)
+                  (if (:status state) 1 0))]
+    (max 1 (quot (max 2 (- term-height chrome)) 2))))
 
 (defn- list-component
   ([items] (list-component nil items))
@@ -500,11 +454,6 @@
     (let [[lst cmd] (item-list/list-update (:list state) msg)]
       [(assoc state :list lst) cmd])))
 
-(defn- with-selected-session [state f]
-  (if-let [s (some-> (selected-data state) :name)]
-    (f state (:project state) s)
-    [(assoc state :status "(no session selected)") nil]))
-
 (defn- open-confirm-destroy [state p s]
   [(assoc state :modal :confirm-destroy :modal-target {:project p :session s}) nil])
 
@@ -668,8 +617,6 @@
         [(assoc state :status (str "✗ " (ex-message t))) nil]))
     [state (queue-action! [:enter p sn target])]))
 
-(defn- start-session-down    [state p sn] (start-session-action :down    state p sn))
-(defn- start-session-up      [state p sn] (start-session-action :up      state p sn))
 (defn- start-session-destroy [state p sn] (start-session-action :destroy state p sn))
 (defn- start-session-add     [state p sn] (start-session-action :add     state p sn))
 
@@ -1125,14 +1072,6 @@
     :else (let [[lst cmd] (item-list/list-update (:list state) msg)]
             [(assoc state :list lst) cmd])))
 
-(defn- with-selected-session-detail
-  "Like with-selected-session but for the workstream detail screen.
-   Resolves the session name from the highlighted detail row's :name field."
-  [state f]
-  (if-let [sname (some-> (selected-data state) :name)]
-    (f state (:project state) (:ws-id state) sname)
-    [(assoc state :status "(no session selected)") nil]))
-
 (defn- with-environment
   "Resolve the workstream's environment session and hand its name to `f`
    (fn [state project ws-id session-name]). Sets a status hint when there's no
@@ -1258,7 +1197,7 @@
              resize-current-list)
          nil])
 
-    ;; In-app async action machinery (see start-session-down). These flow even
+    ;; In-app async action machinery (see start-session-destroy). These flow even
     ;; while :busy — they ARE the busy lifecycle — so they precede the guard.
     (spinner/tick-msg? msg)
     (update-spinner-tick state msg)
