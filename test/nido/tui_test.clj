@@ -283,6 +283,8 @@
       "board footer documents the [space] fold toggle"))
 
 (deftest detail-rows-render-sessions-on-the-autonomy-axis
+  ;; The detail screen is session management only — no ledger/report rows, even
+  ;; when the workstream carries a ledger. Only the sessions render.
   (with-redefs [nido.work/workstream
                 (fn [_ _ & _]
                   {:ws-id "w1" :origin :notion :stage :triage :label "BR-1 · a"
@@ -293,63 +295,78 @@
                                :status :up :brakes nil}]})]
     (let [rows (#'tui/detail-rows "brian" "w1")
           titles (mapv :title rows)]
-      (is (some #(re-find #"ledger: BR-1" %) titles) "ledger line rendered first")
+      (is (not-any? #(re-find #"ledger: BR-1" %) titles) "no ledger line on the detail screen")
       (is (some #(re-find #"auto" %) titles))
       (is (some #(re-find #"parked|autonomous" %) titles) "autonomy state shown")
       (is (some #(re-find #"me" %) titles))
       (is (some #(= "auto" (-> % :data :name)) rows) "session rows carry :name for open"))))
 
-(deftest detail-rows-shows-entry-index-and-report
-  (with-redefs [nido.work/workstream
-                (fn [_ _ & _]
-                  {:ledger {:key "BR-1" :status :triaged :report-count 2}
-                   :entries [{:seq 2 :kind :implementation-plan :at "t2" :title "Null-check"}
-                             {:seq 1 :kind :triage :at "t1" :title "Firefox modal"}]
-                   :selected-seq 2
-                   :report {:format :implementation-plan :summary "do X" :direction "Null-check" :effort :S}
-                   :sessions []})]
-    (let [rows (#'nido.tui/detail-rows "brian" "ws-1")
-          titles (map :title rows)]
-      (is (some #(re-find #"Null-check" %) titles) "entry index present")
-      (is (some #(re-find #"do X|Implementation plan" %) titles) "report body rendered"))))
-
-(deftest workstream-detail-transitions
-  ;; esc → board (set-origin → current-rows); stub current-rows for hermeticity.
+(deftest workstream-esc-returns-to-board
   (with-redefs [nido.tui/current-rows (constantly [])]
     (let [st (assoc (board-state :all) :screen :workstream :ws-id "w1" :ws-label "x")
           [back _] (#'tui/update-workstream st (msg/key-press "escape"))]
-      (is (= :board (:screen back)) "esc returns to the board")))
-  ;; ↵ opens the highlighted session via enter-session
-  (with-redefs [nido.tui/selected-data (fn [_] {:name "sess"})
+      (is (= :board (:screen back)) "esc returns to the board"))))
+
+(deftest workstream-enter-opens-the-environment-chat
+  (with-redefs [nido.work/environment (fn [_ _] {:name "impl-br-1"})
                 nido.tui/enter-session (fn [s _ sn _] [(assoc s ::opened sn) nil])]
-    (let [st (assoc (board-state :all) :screen :workstream)
+    (let [st (assoc (board-state :all) :screen :workstream :project "brian" :ws-id "w1")
           [s' _] (#'tui/update-workstream st (msg/key-press "enter"))]
-      (is (= "sess" (::opened s')) "enter opens the highlighted session"))))
+      (is (= "impl-br-1" (::opened s')) "enter opens the resolved environment's chat"))))
 
-(deftest detail-u-starts-the-selected-session
-  ;; start-session-up builds a charm cmd (data — {:type :cmd :fn ...}) that the
-  ;; event loop invokes asynchronously; update-workstream never calls its :fn,
-  ;; so no lifecycle/scratch redefs are needed here — just the busy-state arm.
-  (let [state (#'tui/rebuild-list {:screen :workstream :project "p" :ws-id "w"}
-                                  [{:title "s" :description ""
-                                    :data {:name "sess1" :autonomy-level :interactive}}])
-        [state' _] (#'tui/update-workstream state (msg/key-press "u"))]
-    (is (= :up (get-in state' [:busy :verb])))
-    (is (= "sess1" (get-in state' [:busy :subject])))))
+(deftest workstream-u-starts-the-environment
+  (let [calls (atom [])]
+    (with-redefs [nido.work/environment (fn [_ _] {:name "impl-br-1"})
+                  nido.session.dev/dev-action! (fn [p w s a] (swap! calls conj [p w s a]) (future nil))]
+      (let [st (assoc (board-state :all) :screen :workstream :project "brian" :ws-id "w1")]
+        (#'tui/update-workstream st (msg/key-press "u"))
+        (is (= [["brian" "w1" "impl-br-1" "start"]] @calls) "u starts the environment via dev-action")))))
 
-(deftest detail-w-on-a-non-session-row-sets-no-session-status
-  ;; A ledger/report/header row has no :name in its :data — `w` must route
-  ;; through with-selected-session like its u/d/x siblings, not silently no-op.
-  (let [state (#'tui/rebuild-list {:screen :workstream :project "p" :ws-id "w"}
-                                  [{:title "entry" :description "" :data {:kind :ledger-entry}}])
-        [state' cmd] (#'tui/update-workstream state (msg/key-press "w"))]
-    (is (= "(no session selected)" (:status state')))
-    (is (nil? cmd))))
+(deftest workstream-key-no-env-sets-status
+  (with-redefs [nido.work/environment (fn [_ _] nil)]
+    (let [st (assoc (board-state :all) :screen :workstream :project "brian" :ws-id "w1")
+          [s' cmd] (#'tui/update-workstream st (msg/key-press "u"))]
+      (is (str/includes? (:status s') "no runnable version"))
+      (is (nil? cmd)))))
 
-(deftest detail-footer-lists-the-plumbing-verbs
+(deftest workstream-footer-lists-environment-verbs
   (let [f (#'tui/footer {:screen :workstream})]
-    (doseq [verb ["[u]p" "[d]own" "[x] destroy" "[w]orktree"]]
+    (doseq [verb ["[u] start" "[d] stop" "[r] restart" "[o] browser" "[w]orktree"]]
       (is (str/includes? f verb)))))
+
+(deftest environment-block-renders-resolved-session-facts
+  (with-redefs [nido.work/environment (fn [_ _] {:name "impl-br-1" :weight :heavy})
+                nido.session.dev/session-dev-state (fn [_ _] {:state :running :url "http://localhost:3100"})
+                nido.session.lifecycle/list-all-data
+                (fn [_] {:sessions [{:name "impl-br-1" :app-port 3100 :pg-port 5500
+                                     :nrepl-port 6100 :worktree "/wt/impl-br-1"}]})
+                nido.session.state/session-home-dir (fn [_ _] "/home/brian/impl-br-1")
+                nido.tui/session-link-entries (fn [_] [])]
+    (let [block (#'tui/environment-block "brian" "w")]
+      (is (str/includes? block "running") "live dev-state status shown")
+      (is (str/includes? block "http://localhost:3100") "dev URL shown")
+      (is (str/includes? block "5500") "pg port shown"))))
+
+(deftest environment-block-empty-state-when-no-env
+  (with-redefs [nido.work/environment (fn [_ _] nil)]
+    (is (str/includes? (#'tui/environment-block "brian" "w") "no runnable version")
+        "empty state when the workstream has no heavy session")))
+
+(deftest session-info-body-lists-link-and-basic-info
+  ;; The inline block lists the session's links plus the basic info the user
+  ;; missed: dev URL, ports, session home, worktree.
+  (with-redefs [nido.session.state/session-home-dir (fn [_ _] "/home/brian/impl-br-1")
+                nido.tui/session-link-entries
+                (fn [_] [{:type :notion :url "https://notion.so/BR-1" :title "BR-1"}])
+                nido.session.links/group-by-type (fn [es] {:notion es})
+                nido.session.links/display-labels (fn [_ _] "Notion")]
+    (let [body (#'tui/session-info-body "brian" "impl-br-1"
+                                        {:worktree "/wt/impl-br-1" :app-port 3100
+                                         :pg-port 5500 :nrepl-port 6100})]
+      (is (str/includes? body "http://localhost:3100") "dev URL listed")
+      (is (str/includes? body "3100") "app port listed")
+      (is (str/includes? body "worktree") "worktree listed")
+      (is (str/includes? body "https://notion.so/BR-1") "session link listed"))))
 
 (deftest stage-picker-promotes-to-the-chosen-target
   (let [calls (atom [])]
@@ -476,18 +493,6 @@
     (is (not (str/blank? (#'tui/facet-strip :brian :all {:app-domain :all})))
         "facet-strip renders on :all origin")))
 
-;; ---------------------------------------------------------------------------
-;; Task 4.3: gate Apply/Reply for parked workstreams
-;; ---------------------------------------------------------------------------
-
-(deftest apply-key-resolves-gate
-  (let [calls (atom [])]
-    (with-redefs [nido.work/resolve-gate! (fn [p w a & more]
-                                            (swap! calls conj (into [p w a] more))
-                                            {:resumed "auto"})]
-      (#'nido.tui/apply-gate! "brian" "ws-1")
-      (is (= [["brian" "ws-1" :apply]] @calls)))))
-
 (deftest board-rows-ignores-facets-on-non-facet-origin
   ;; A non-empty facet-filter (e.g. {:app-domain "Teacher"}) must NOT filter rows
   ;; on :slack/:github/:scratch origins — those workstreams have no facets and
@@ -532,61 +537,6 @@
     (with-redefs [nido.work/new! (fn [p s] (swap! calls conj [p s]) "ws-9")]
       (#'nido.tui/create-workstream! "brian" "scratch-foo")
       (is (= [["brian" "scratch-foo"]] @calls)))))
-
-;; ---------------------------------------------------------------------------
-;; Item 1: TUI ledger-entry navigation — report follows the cursor
-;; ---------------------------------------------------------------------------
-
-(deftest detail-rows-renders-selected-entry-report
-  ;; 3-arity detail-rows passes selected-seq to work/workstream and renders
-  ;; the corresponding report body; the cursor-row entry is marked with ▶.
-  (let [ws-calls (atom [])]
-    (with-redefs [nido.work/workstream
-                  (fn [_ _ sel]
-                    (swap! ws-calls conj sel)
-                    {:ledger nil
-                     :entries [{:seq 9 :kind :triage :at "t9" :title "Triage v2"}
-                               {:seq 5 :kind :triage :at "t5" :title "Triage v1"}]
-                     :selected-seq sel
-                     :report {:format :markdown
-                              :markdown (str (if (= sel 5) "FIVE" "NINE") " report")}
-                     :sessions []})]
-      (let [rows   (#'nido.tui/detail-rows "brian" "ws-1" 5)
-            titles (map :title rows)]
-        (is (= [5] @ws-calls)
-            "work/workstream was called with selected-seq 5")
-        (is (some #(str/includes? % "FIVE") titles)
-            "report body renders the text for the selected entry (seq 5)")
-        (is (some #(and (= {:nido.tui/entry-seq 5} (:data %))
-                        (str/starts-with? (:title %) "▶"))
-                  rows)
-            "entry row with seq 5 is marked with ▶")))))
-
-(deftest workstream-cursor-on-entry-selects-it
-  ;; When the cursor moves onto an entry row, update-workstream records
-  ;; that entry's seq in :selected-entry-seq.
-  (with-redefs [nido.work/workstream
-                (fn [_ _ & _]
-                  {:ledger nil
-                   :entries [{:seq 7 :kind :triage :at "t7" :title "Entry 7"}]
-                   :selected-seq 7
-                   :report {:format :markdown :markdown "Report for 7"}
-                   :sessions []})]
-    (let [;; item 0: non-entry row; item 1: entry row with seq 7
-          items [{:title "report line" :description "" :data :nido.tui/report-body}
-                 {:title "entry 7"    :description "" :data {:nido.tui/entry-seq 7}}]
-          ;; list-component starts with cursor at 0 (non-entry row)
-          lst   (#'tui/list-component items)
-          state {:screen           :workstream
-                 :project          "brian"
-                 :ws-id            "ws-1"
-                 :ws-label         "ws-1"
-                 :selected-entry-seq nil
-                 :list             lst}
-          ;; "down" moves cursor from item 0 to item 1 (the entry row)
-          [s' _] (#'tui/update-workstream state (msg/key-press "down"))]
-      (is (= 7 (:selected-entry-seq s'))
-          "navigating onto an entry row updates :selected-entry-seq to that entry's seq"))))
 
 ;; ---------------------------------------------------------------------------
 ;; Task 3 (pickup design): TUI pickup input box — drive a Notion ticket by

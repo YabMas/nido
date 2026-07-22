@@ -16,6 +16,7 @@
    normal terminal, and re-enters the TUI."
   (:require
    [babashka.fs :as fs]
+   [babashka.process :as bp]
    [charm.components.list :as item-list]
    [charm.components.spinner :as spinner]
    [charm.components.text-input :as text-input]
@@ -29,7 +30,6 @@
    [nido.coordinator.halt :as halt]
    [nido.coordinator.pickup :as pickup]
    [nido.coordinator.queue :as queue]
-   [nido.coordinator.report :as report]
    [nido.coordinator.runs-view :as runs-view]
    [nido.coordinator.scratch :as scratch]
    [nido.coordinator.workstreams-view :as wsv]
@@ -38,7 +38,9 @@
    [nido.project :as project]
    [nido.work :as work]
    [nido.session.dev :as dev]
+   [nido.session.engine :as engine]
    [nido.session.lifecycle :as lifecycle]
+   [nido.session.links :as links]
    [nido.session.state :as state]))
 
 ;; ---------------------------------------------------------------------------
@@ -271,47 +273,21 @@
              (or dev-str "")))))
 
 (defn- detail-rows
-  "Read-only detail rows for one workstream: a ledger line (when present), the
-   entry index (when >1 entry exists), the selected report body (first 12 lines),
-   and sessions on the autonomy axis. Reads nido.work/workstream (string project ok).
-   `selected-seq` (nil = latest) chooses which entry's report body renders, so the
-   detail cursor can browse the ledger."
-  ([project ws-id] (detail-rows project ws-id nil))
-  ([project ws-id selected-seq]
-   (let [ws                               (work/workstream project ws-id selected-seq)
-        {:keys [ledger entries selected-seq report sessions]} ws
-        ledger-row (when ledger
-                     [{:title (str "ledger: " (:key ledger) " · "
-                                   (clojure.core/name (or (:status ledger) :?)) " · "
-                                   (:report-count ledger) " report(s)")
-                       :description "" :data ::ledger}])
-        entry-rows (when (seq entries)
-                     (mapv (fn [{eseq :seq :keys [kind at title]}]
-                             {:title (str (if (= eseq selected-seq) "▶ " "  ")
-                                          title " · " (clojure.core/name kind) " · " at)
-                              :description "" :data {::entry-seq eseq}})
-                           entries))
-        report-rows (when report
-                      (let [md   (report/report->markdown report)
-                            lines (->> (str/split-lines md)
-                                       (remove str/blank?)
-                                       (take 12))]
-                        (when (seq lines)
-                          (mapv (fn [line] {:title line :description "" :data ::report-body})
-                                lines))))
-        dev-states  (when (seq sessions)
-                      (dev/ws-session-dev-states project ws))]
-    (vec
-     (concat
-      ledger-row
-      entry-rows
-      report-rows
-      (if (seq sessions)
-        (mapv (fn [s]
-                {:title (format-detail-session s (get dev-states (:name s)))
-                 :description "" :data s})
-              sessions)
-        [{:title "No sessions in this workstream yet." :description "" :data ::empty}]))))))
+  "Session-management rows for one workstream: its sessions on the autonomy axis,
+   each annotated with live dev-environment state. Reads nido.work/workstream
+   (string project ok). The ledger/report reader lives on the web dashboard; this
+   screen is deliberately just the sessions."
+  [project ws-id]
+  (let [ws         (work/workstream project ws-id)
+        sessions   (:sessions ws)
+        dev-states (when (seq sessions)
+                     (dev/ws-session-dev-states project ws))]
+    (if (seq sessions)
+      (mapv (fn [s]
+              {:title (format-detail-session s (get dev-states (:name s)))
+               :description "" :data s})
+            sessions)
+      [{:title "No sessions in this workstream yet." :description "" :data ::empty}])))
 
 ;; ---------------------------------------------------------------------------
 ;; charm list component
@@ -323,17 +299,21 @@
 ;; visible items, not terminal lines. Keep it bounded so list-update can advance
 ;; :offset when the cursor moves beyond the visible page.
 (defn- main-list-height [state]
-  (let [term-height (or (some-> state :size second) 28)
-        facet-line? (and (= :board (:screen state))
-                         (not (str/blank?
-                               (facet-strip (:project state)
-                                            (:origin state)
-                                            (or (:facet-filter state) {})))))
-        chrome (+ 5
-                  (if (= :board (:screen state)) 1 0)
-                  (if facet-line? 1 0)
-                  (if (:status state) 1 0))]
-    (max 1 (quot (max 2 (- term-height chrome)) 2))))
+  (if (= :workstream (:screen state))
+    ;; Detail screen: size the list to its exact session count so it doesn't pad
+    ;; to a full page — the selected session's info block renders right below it.
+    (max 1 (count (:items state)))
+    (let [term-height (or (some-> state :size second) 28)
+          facet-line? (and (= :board (:screen state))
+                           (not (str/blank?
+                                 (facet-strip (:project state)
+                                              (:origin state)
+                                              (or (:facet-filter state) {})))))
+          chrome (+ 5
+                    (if (= :board (:screen state)) 1 0)
+                    (if facet-line? 1 0)
+                    (if (:status state) 1 0))]
+      (max 1 (quot (max 2 (- term-height chrome)) 2)))))
 
 (defn- list-component
   ([items] (list-component nil items))
@@ -389,9 +369,10 @@
     [(assoc-in state [:modal-target :picker] lst) cmd]))
 
 (defn- rebuild-list [state items]
-  (assoc state
-         :items items
-         :list (list-component state items)))
+  ;; Set :items BEFORE building the component so main-list-height can size the
+  ;; :workstream list to its session count.
+  (let [s (assoc state :items items)]
+    (assoc s :list (list-component s items))))
 
 (defn- refresh-list
   "Update the list's items IN PLACE via `item-list/set-items`, preserving the
@@ -399,15 +380,14 @@
    unlike `rebuild-list`, which builds a fresh component and resets the cursor
    to the top (correct for screen switches, wrong for a timer repaint)."
   [state items]
-  (let [cursor (get-in state [:list :cursor] 0)]
-    (-> state
-        (assoc :items items)
-        (update :list (fn [lst]
-                        (-> lst
-                            (item-list/set-items items)
-                            (item-list/set-height (main-list-height state))
-                            (item-list/select cursor)
-                            ensure-list-cursor-visible))))))
+  (let [cursor (get-in state [:list :cursor] 0)
+        s      (assoc state :items items)]
+    (update s :list (fn [lst]
+                      (-> lst
+                          (item-list/set-items items)
+                          (item-list/set-height (main-list-height s))
+                          (item-list/select cursor)
+                          ensure-list-cursor-visible)))))
 
 (defn- resize-current-list [state]
   (if (:list state)
@@ -425,7 +405,7 @@
     :board      (board-rows (:project state) (:origin state)
                             (or (:collapsed state) default-collapsed-bands)
                             (or (:facet-filter state) {}))
-    :workstream (detail-rows (:project state) (:ws-id state) (:selected-entry-seq state))
+    :workstream []
     :projects   (project-rows)))
 
 ;; ---------------------------------------------------------------------------
@@ -445,12 +425,11 @@
     (rebuild-list s (current-rows s))))
 
 (defn- enter-workstream
-  "Drill from the workstreams list into one workstream's session detail."
+  "Drill from the workstreams list into one workstream's environment panel."
   [state ws-id label]
   (-> state
-      (assoc :screen :workstream :ws-id ws-id :ws-label label :status nil
-             :selected-entry-seq nil)
-      (rebuild-list (detail-rows (:project state) ws-id))))
+      (assoc :screen :workstream :ws-id ws-id :ws-label label :status nil)
+      (rebuild-list [])))
 
 (defn- set-origin
   "Switch the board to `origin` filter and rebuild the list.
@@ -535,6 +514,14 @@
           :modal-target {:project p}
           :modal-input (text-input/text-input :prompt "name: "))
    nil])
+
+(defn- session-facts
+  "The lifecycle session map (`:name :worktree :pg-port :app-port :nrepl-port …`)
+   for `sname` in `project`, or nil. The detail rows carry the work-session shape
+   (no ports), so the info panel sources its machine facts fresh from here."
+  [project sname]
+  (->> (:sessions (lifecycle/list-all-data {:project project}))
+       (some #(when (= sname (:name %)) %))))
 
 (defn- close-modal [state]
   (-> state (dissoc :modal :modal-target :modal-input)))
@@ -1003,24 +990,6 @@
 ;; Gate Apply/Reply — parked workstream helpers
 ;; ---------------------------------------------------------------------------
 
-(defn- apply-gate!
-  "Call work/resolve-gate! :apply for project + ws-id. Returns the result map."
-  [project ws-id]
-  (work/resolve-gate! project ws-id :apply))
-
-(defn- reply-gate!
-  "Call work/resolve-gate! :reply for project + ws-id with `text`. Returns the result map."
-  [project ws-id text]
-  (work/resolve-gate! project ws-id :reply text))
-
-(defn- gate-result-status
-  "One-line status string for a gate resolution result map."
-  [result]
-  (cond
-    (:resumed result)  (str "resumed: " (:resumed result))
-    (:decision result) (str "decision: " (name (:decision result)))
-    :else              "resolved"))
-
 ;; ---------------------------------------------------------------------------
 ;; Dev-environment controls — wrap dev/dev-action! for the workstream detail view
 ;; ---------------------------------------------------------------------------
@@ -1040,35 +1009,11 @@
   [project ws-id session]
   (dev/dev-action! project ws-id session "restart"))
 
-(defn- open-reply-input
-  "Open the text-input modal to collect the reply text for the current parked workstream."
-  [state]
-  [(assoc state
-          :modal :reply-input
-          :modal-input (text-input/text-input :prompt "reply: "))
-   nil])
-
-(defn- update-reply-input [state msg]
-  (cond
-    (msg/key-match? msg "escape")
-    [(close-modal state) nil]
-
-    (msg/key-match? msg "enter")
-    (let [text (str/trim (text-input/value (:modal-input state)))]
-      (if (seq text)
-        (let [result (reply-gate! (:project state) (:ws-id state) text)]
-          [(-> state close-modal (assoc :status (gate-result-status result))) nil])
-        [(close-modal state) nil]))
-
-    :else
-    (let [[ti cmd] (text-input/text-input-update (:modal-input state) msg)]
-      [(assoc state :modal-input ti) cmd])))
-
 ;; ---------------------------------------------------------------------------
 ;; Pickup — drive a Notion ticket (URL / page-id / BR-####) from the ops
 ;; overlay, no board browsing required. Front-end over
 ;; `nido.coordinator.pickup/pickup!` (which resolves the ref and enqueues the
-;; :plan-bug envelope). A single-field text-input mirrors :reply-input.
+;; :plan-bug envelope). A single-field text-input like the create-session modal.
 ;; ---------------------------------------------------------------------------
 
 (defn- pickup-result-status
@@ -1188,63 +1133,54 @@
     (f state (:project state) (:ws-id state) sname)
     [(assoc state :status "(no session selected)") nil]))
 
+(defn- with-environment
+  "Resolve the workstream's environment session and hand its name to `f`
+   (fn [state project ws-id session-name]). Sets a status hint when there's no
+   runnable version yet."
+  [state f]
+  (if-let [sname (:name (work/environment (:project state) (:ws-id state)))]
+    (f state (:project state) (:ws-id state) sname)
+    [(assoc state :status "(no runnable version yet)") nil]))
+
+(defn- open-browser!
+  "Open `url` in the default browser (macOS `open`), fire-and-forget. No-op on blank."
+  [url]
+  (when (seq url)
+    (try (bp/process ["open" url]) (catch Exception _ nil))))
+
 (defn- update-workstream
-  "Workstream detail screen. ↵ routes into the highlighted session's home (same
-   handoff the Sessions view uses → lands you in the chat). esc returns to the
-   board at the active origin. [a] Apply / [r] Reply are gated to parked
-   workstreams only (work/gate returns non-nil). [S]/[X]/[R] start/stop/restart
-   the dev environment for the selected session (background futures)."
+  "Workstream detail = the environment panel for one workstream. Keys act on the
+   resolved environment (work/environment), not a list selection:
+   ↵ enter chat · o open browser · w worktree · u start · d stop · r restart ·
+   X destroy · esc back. Start/Stop/Restart route through dev/dev-action! (its
+   `start` does a full session up + app probe). No env yet → a status hint."
   [state msg]
   (cond
     (msg/key-match? msg "escape") [(set-origin state (:origin state)) nil]
-    (or (msg/key-match? msg "enter") (msg/key-match? msg "o"))
-    (if-let [sname (some-> (selected-data state) :name)]
-      (enter-session state (:project state) sname :home)
-      [state nil])
-    (msg/key-match? msg "a")
-    (if (work/gate (:project state) (:ws-id state))
-      (let [result (apply-gate! (:project state) (:ws-id state))]
-        [(assoc state :status (gate-result-status result)) nil])
-      [(assoc state :status "(not a parked workstream — a/r unavailable)") nil])
-    (msg/key-match? msg "r")
-    (if (work/gate (:project state) (:ws-id state))
-      (open-reply-input state)
-      [(assoc state :status "(not a parked workstream — a/r unavailable)") nil])
-    ;; Dev-environment controls for the selected session (uppercase keys to
-    ;; avoid collision with `a`/`r` Apply/Reply and `enter`/`o`/`esc`).
-    (msg/key-match? msg "S")
-    (with-selected-session-detail state
-      (fn [s _ ws-id sname]
-        (dev-start! (:project s) ws-id sname)
-        [(assoc s :status (str "starting " sname "…")) nil]))
-    (msg/key-match? msg "X")
-    (with-selected-session-detail state
-      (fn [s _ ws-id sname]
-        (dev-stop! (:project s) ws-id sname)
-        [(assoc s :status (str "stopping " sname "…")) nil]))
-    (msg/key-match? msg "R")
-    (with-selected-session-detail state
-      (fn [s _ ws-id sname]
-        (dev-restart! (:project s) ws-id sname)
-        [(assoc s :status (str "restarting " sname "…")) nil]))
-    ;; Session plumbing for the highlighted row — absorbed from the system
-    ;; surface (spec: dissolve the workstream/system UI split). `d`/`x` act on
-    ;; the SESSION here (down/destroy), unlike the board's `d`/`x` (done/dismiss
-    ;; on the workstream) — the footer strings spell out which per screen.
+    (msg/key-match? msg "enter")
+    (with-environment state (fn [s p _ sn] (enter-session s p sn :home)))
     (msg/key-match? msg "w")
-    (with-selected-session state (fn [s p sn] (enter-session s p sn :worktree)))
-    (msg/key-match? msg "u") (with-selected-session state start-session-up)
-    (msg/key-match? msg "d") (with-selected-session state start-session-down)
-    (msg/key-match? msg "x") (with-selected-session state (fn [s p sn] (open-confirm-destroy s p sn)))
-    :else
-    (let [[lst cmd] (item-list/list-update (:list state) msg)
-          d         (some-> (item-list/selected-item lst) :data)
-          entry-seq (when (map? d) (::entry-seq d))
-          s'        (assoc state :list lst)]
-      (if (and entry-seq (not= entry-seq (:selected-entry-seq state)))
-        (let [s2 (assoc s' :selected-entry-seq entry-seq)]
-          [(refresh-list s2 (current-rows s2)) cmd])
-        [s' cmd]))))
+    (with-environment state (fn [s p _ sn] (enter-session s p sn :worktree)))
+    (msg/key-match? msg "o")
+    (with-environment state
+      (fn [s p _ sn]
+        (open-browser! (:url (dev/session-dev-state p sn)))
+        [(assoc s :status (str "opening " sn " in browser…")) nil]))
+    (msg/key-match? msg "u")
+    (with-environment state
+      (fn [s _ ws-id sn] (dev-start! (:project s) ws-id sn)
+        [(assoc s :status (str "starting " sn "…")) nil]))
+    (msg/key-match? msg "d")
+    (with-environment state
+      (fn [s _ ws-id sn] (dev-stop! (:project s) ws-id sn)
+        [(assoc s :status (str "stopping " sn "…")) nil]))
+    (msg/key-match? msg "r")
+    (with-environment state
+      (fn [s _ ws-id sn] (dev-restart! (:project s) ws-id sn)
+        [(assoc s :status (str "restarting " sn "…")) nil]))
+    (msg/key-match? msg "X")
+    (with-environment state (fn [s p _ sn] (open-confirm-destroy s p sn)))
+    :else [state nil]))
 
 ;; ---------------------------------------------------------------------------
 ;; Ops overlay (`s` on the board) — a read-only status/breaker panel whose keys
@@ -1390,9 +1326,6 @@
     (= :stage-picker (:modal state))
     (update-stage-picker state msg)
 
-    (= :reply-input (:modal state))
-    (update-reply-input state msg)
-
     (= :pickup-input (:modal state))
     (update-pickup-input state msg)
 
@@ -1505,7 +1438,6 @@
                   :halt-resume-confirm  "nido — resume coordinator?"
                   :clear-breaker        "nido — clear breaker"
                   :stage-picker         "nido — promote to…"
-                  :reply-input          (str "nido — " (:project state) " · " (:ws-label state) " · reply")
                   :pickup-input         (str "nido — " (:project state) " · pickup")
                   :ops                  (str "nido — " (:project state) " · ops")
                   (case (:screen state)
@@ -1526,13 +1458,81 @@
                   :halt-resume-confirm  "[y] resume  [n/esc] cancel"
                   :clear-breaker        "[↑↓] move  [↵] clear  [esc] cancel"
                   :stage-picker         "[↑↓] move  [↵] promote here  [esc] cancel"
-                  :reply-input          "[↵] send  [esc] cancel"
                   :pickup-input         "[↵] pickup  [esc] cancel"
                   :ops                  "[h]alt  [c]lear breaker  [f]ire  [p]ickup  [esc] back"
                   (case (:screen state)
                     :projects   "[↵] open  [q]uit"
                     :board      "[↵/o] open  [i]nspect  [n]ew  [p]romote  [P] promote to…  [d]one/bring-down  [x] dismiss (slack)  [space] fold  [⇄ tab] origin  [ [ ] ] domain  [ { } ] type  [s] ops  [esc] back  [q]uit"
-                    :workstream "[↵] open in chat  [w]orktree  [a] apply  [r] reply  [u]p  [d]own  [x] destroy  [S] dev-start  [X] dev-stop  [R] dev-restart  [esc] back  [q]uit"))))
+                    :workstream "[↵] chat  [o] browser  [w]orktree  [u] start  [d] stop  [r] restart  [X] destroy  [esc] back  [q]uit"))))
+
+(defn- info-row [label value]
+  (str (style/render label-style (format "%-13s" label)) " " value))
+
+(defn- session-link-entries
+  "Read the highlighted session's links by deriving instance-id from
+   worktree. Returns [] when worktree is nil or any error escapes —
+   the panel must never throw."
+  [worktree]
+  (when worktree
+    (try
+      (links/read-links (engine/resolve-instance-id worktree))
+      (catch Exception _ []))))
+
+(def ^:private link-indent "              ")
+
+(defn- render-link-rows
+  "Sequence of strings — one type-header row plus one row per link.
+   Empty when entries is empty; only types with entries are emitted."
+  [entries]
+  (when (seq entries)
+    (apply concat
+           (for [[t ls] (links/group-by-type entries)]
+             (cons (str link-indent
+                        (style/render label-style
+                                      (links/display-labels t (name t))))
+                   (for [{:keys [url title]} ls]
+                     (str link-indent "  " url
+                          (when (seq title) (str " — " title)))))))))
+
+(defn- session-info-body
+  "The inline session-info block for the selected detail row. `data` is the
+   lifecycle session map (`:worktree :app-port :pg-port :nrepl-port …`). `app-port`
+   nil means the session is down, so ports fall back to `—` and the dev URL is
+   omitted. The session name + status already show on the list row above, so this
+   block leads straight with the machine facts and links."
+  [project session data]
+  (let [{:keys [worktree app-port pg-port nrepl-port]} data
+        dash      "—"
+        dev-url   (if app-port (str "http://localhost:" app-port) dash)
+        home      (state/session-home-dir project session)
+        entries   (session-link-entries worktree)
+        link-rows (render-link-rows entries)]
+    (str/join "\n"
+              (concat
+               [(info-row "dev URL"      dev-url)
+                (info-row "app port"     (or app-port dash))
+                (info-row "pg port"      (or pg-port dash))
+                (info-row "nrepl port"   (or nrepl-port dash))
+                (info-row "session home" home)
+                (info-row "worktree"     (or worktree dash))]
+               (when link-rows
+                 (cons (info-row "links" "") link-rows))))))
+
+(defn- environment-block
+  "The workstream's environment panel body: a live status line (from the probed
+   dev-state) plus the resolved session's machine facts (dev URL, ports, home,
+   worktree, links). The empty-state string when the workstream has no runnable
+   version yet. Reads dev-state + lifecycle facts; the view calls it each render."
+  [project ws-id]
+  (if-let [sname (:name (work/environment project ws-id))]
+    (let [st    (dev/session-dev-state project sname)
+          glyph (case (:state st)
+                  :running                          "●"
+                  (:starting :stopping :restarting) "◐"
+                  "○")
+          head  (info-row "status" (str glyph "  " (clojure.core/name (or (:state st) :down))))]
+      (str head "\n" (session-info-body project sname (session-facts project sname))))
+    (style/render subtle-style "no runnable version yet")))
 
 (defn- text-viewport
   "Viewport over `content`, sized to the stashed terminal height (minus
@@ -1595,9 +1595,6 @@
     :stage-picker
     (item-list/list-view (:picker (:modal-target state)))
 
-    :reply-input
-    (text-input/text-input-view (:modal-input state))
-
     :pickup-input
     (text-input/text-input-view (:modal-input state))
 
@@ -1639,7 +1636,9 @@
                 (let [fs (facet-strip (:project state) (:origin state) (or (:facet-filter state) {}))]
                   (if (str/blank? fs) "" (str fs "\n")))))
          "\n"
-         (item-list/list-view (:list state)) "\n\n"
+         (if (= :workstream (:screen state))
+           (str (environment-block (:project state) (:ws-id state)) "\n\n")
+           (str (item-list/list-view (:list state)) "\n\n"))
          (when-let [s (:status state)]
            (str (style/render status-style s) "\n"))
          (footer state))))
