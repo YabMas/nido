@@ -323,10 +323,7 @@
     [(assoc-in state [:modal-target :picker] lst) cmd]))
 
 (defn- rebuild-list [state items]
-  ;; Set :items BEFORE building the component so main-list-height can size the
-  ;; :workstream list to its session count.
-  (let [s (assoc state :items items)]
-    (assoc s :list (list-component s items))))
+  (assoc state :items items :list (list-component state items)))
 
 (defn- refresh-list
   "Update the list's items IN PLACE via `item-list/set-items`, preserving the
@@ -1097,14 +1094,20 @@
   (cond
     (msg/key-match? msg "escape") [(set-origin state (:origin state)) nil]
     (msg/key-match? msg "enter")
-    (with-environment state (fn [s p _ sn] (enter-session s p sn :home)))
+    (with-environment state
+      (fn [s p ws-id sn]
+        (if (work/reclaimed? p ws-id sn)
+          (rehydrate-and-enter s p ws-id sn)
+          (enter-session s p sn :home))))
     (msg/key-match? msg "w")
     (with-environment state (fn [s p _ sn] (enter-session s p sn :worktree)))
     (msg/key-match? msg "o")
     (with-environment state
       (fn [s p _ sn]
-        (open-browser! (:url (dev/session-dev-state p sn)))
-        [(assoc s :status (str "opening " sn " in browser…")) nil]))
+        (if-let [url (:url (dev/session-dev-state p sn))]
+          (do (open-browser! url)
+              [(assoc s :status (str "opening " sn " in browser…")) nil])
+          [(assoc s :status "(no app URL yet — start it first)") nil])))
     (msg/key-match? msg "u")
     (with-environment state
       (fn [s _ ws-id sn] (dev-start! (:project s) ws-id sn)

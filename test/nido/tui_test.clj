@@ -290,10 +290,58 @@
 
 (deftest workstream-enter-opens-the-environment-chat
   (with-redefs [nido.work/environment (fn [_ _] {:name "impl-br-1"})
+                nido.work/reclaimed? (fn [_ _ _] false)
                 nido.tui/enter-session (fn [s _ sn _] [(assoc s ::opened sn) nil])]
     (let [st (assoc (board-state :all) :screen :workstream :project "brian" :ws-id "w1")
           [s' _] (#'tui/update-workstream st (msg/key-press "enter"))]
       (is (= "impl-br-1" (::opened s')) "enter opens the resolved environment's chat"))))
+
+(deftest workstream-enter-rehydrates-a-reclaimed-environment
+  (with-redefs [nido.work/environment (fn [_ _] {:name "impl-br-1"})
+                nido.work/reclaimed? (fn [_ _ _] true)
+                nido.tui/rehydrate-and-enter (fn [s _ _ sn] [(assoc s ::rehydrated sn) nil])
+                nido.tui/enter-session (fn [s _ sn _] [(assoc s ::direct sn) nil])]
+    (let [st (assoc (board-state :all) :screen :workstream :project "brian" :ws-id "w1")
+          [s' _] (#'tui/update-workstream st (msg/key-press "enter"))]
+      (is (= "impl-br-1" (::rehydrated s')) "a reclaimed env is rehydrated, not entered directly")
+      (is (nil? (::direct s'))))))
+
+(deftest workstream-o-opens-browser-when-running
+  (let [opened (atom nil)]
+    (with-redefs [nido.work/environment (fn [_ _] {:name "impl-br-1"})
+                  nido.session.dev/session-dev-state (fn [_ _] {:state :running :url "http://localhost:3100"})
+                  nido.tui/open-browser! (fn [url] (reset! opened url))]
+      (let [st (assoc (board-state :all) :screen :workstream :project "brian" :ws-id "w1")
+            [s' _] (#'tui/update-workstream st (msg/key-press "o"))]
+        (is (= "http://localhost:3100" @opened) "o opens the dev URL")
+        (is (str/includes? (:status s') "opening"))))))
+
+(deftest workstream-o-hints-when-no-url
+  (let [opened (atom :not-called)]
+    (with-redefs [nido.work/environment (fn [_ _] {:name "impl-br-1"})
+                  nido.session.dev/session-dev-state (fn [_ _] {:state :down})
+                  nido.tui/open-browser! (fn [url] (reset! opened url))]
+      (let [st (assoc (board-state :all) :screen :workstream :project "brian" :ws-id "w1")
+            [s' _] (#'tui/update-workstream st (msg/key-press "o"))]
+        (is (= :not-called @opened) "o does not open the browser when the env is down")
+        (is (str/includes? (:status s') "no app URL"))))))
+
+(deftest workstream-d-stops-and-r-restarts-the-environment
+  (let [calls (atom [])]
+    (with-redefs [nido.work/environment (fn [_ _] {:name "impl-br-1"})
+                  nido.session.dev/dev-action! (fn [p w s a] (swap! calls conj [p w s a]) (future nil))]
+      (let [st (assoc (board-state :all) :screen :workstream :project "brian" :ws-id "w1")]
+        (#'tui/update-workstream st (msg/key-press "d"))
+        (#'tui/update-workstream st (msg/key-press "r"))
+        (is (= [["brian" "w1" "impl-br-1" "stop"] ["brian" "w1" "impl-br-1" "restart"]] @calls)
+            "d stops and r restarts the environment via dev-action")))))
+
+(deftest workstream-X-opens-destroy-confirm
+  (with-redefs [nido.work/environment (fn [_ _] {:name "impl-br-1"})]
+    (let [st (assoc (board-state :all) :screen :workstream :project "brian" :ws-id "w1")
+          [s' _] (#'tui/update-workstream st (msg/key-press "X"))]
+      (is (= :confirm-destroy (:modal s')) "X opens the destroy confirmation modal")
+      (is (= "impl-br-1" (-> s' :modal-target :session))))))
 
 (deftest workstream-u-starts-the-environment
   (let [calls (atom [])]
