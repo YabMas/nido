@@ -1,6 +1,6 @@
 ---
 name: squash
-description: Squash the current session's branch (main@origin..@) into one coherent commit with a synthesized conventional-commit subject + layered body, then — if a PR exists — regenerate the PR title/description from it. Mechanical — never halts, no push, no ledger events. Run from a session worktree. Usage: /squash
+description: Squash the current session's branch (main@origin..@) into one coherent commit with a synthesized conventional-commit subject + layered body, push the squashed branch, then — if a PR exists — regenerate the PR title/description from it. Mechanical — never halts, no ledger events. Run from a session worktree. Usage: /squash
 ---
 
 # /squash
@@ -12,10 +12,11 @@ description: Squash the current session's branch (main@origin..@) into one coher
 
 ## What this is
 
-Collapse the whole branch into **one** coherent commit and, if the branch has a
-PR, rewrite that PR's title and description to match. It is **mechanical** — it
-**never halts** and never touches the coordinator ledger. It **does not push**;
-the caller publishes (`/drive-home` does push/ready/enqueue after this).
+Collapse the whole branch into **one** coherent commit, **push it**, and, if the
+branch has a PR, rewrite that PR's title and description to match. It is
+**mechanical** — it **never halts** and never touches the coordinator ledger.
+Publishing to the merge queue (`gh pr ready` / `gh pr merge`) stays with the
+caller (`/drive-home`'s finish); the push itself is `/squash`'s job.
 
 ## Where to run it
 
@@ -69,7 +70,24 @@ MSG
 - **Already one coherent commit?** (single commit in `main@origin..@` with a real
   message) → the squash is a no-op; just refresh the description if needed.
 
-## 2. Regenerate the PR title + description (if a PR exists)
+## 2. Push the squashed branch
+
+```bash
+jj git push        # force-moves the bookmark to the squashed commit
+```
+
+The squash rewrote history, so this force-updates the branch on the remote —
+expected, and fine for a session's own branch. If the bookmark has never been
+pushed, `jj git push` reports nothing to do — publish it explicitly:
+
+```bash
+jj git push --allow-new -b <bookmark>
+```
+
+Push regardless of whether a PR exists — the squashed commit must land on the
+remote either way.
+
+## 3. Regenerate the PR title + description (if a PR exists)
 
 Discover the PR for the current branch:
 
@@ -77,8 +95,8 @@ Discover the PR for the current branch:
 gh pr view --json number,url 2>/dev/null
 ```
 
-- **No PR** (`gh` errors "no pull requests found") → the squash above is the whole
-  job; stop here.
+- **No PR** (`gh` errors "no pull requests found") → the squash + push above are
+  the whole job; stop here.
 - **PR exists** → regenerate its title/description:
 
 Replace the PR body **wholesale** — the quick body `prepare-draft-pr` wrote, plus
@@ -99,8 +117,9 @@ re-derives the same body — idempotent, no append-drift.
 
 ## What this skill does NOT do
 
-- **No push.** `jj git push` / `gh pr ready` / `gh pr merge` belong to the caller
-  (`/drive-home`'s finish). `gh pr edit` only sets PR metadata and needs no push.
+- **No `gh pr ready` / `gh pr merge`.** Flipping the PR ready and enqueueing it
+  belong to the caller (`/drive-home`'s finish). The `jj git push` itself is
+  `/squash`'s job (§2).
 - **No halt.** Commit-shaping is mechanical — always one commit, never a split,
   never a question. The layering lives in the commit *body*, not in separate
   commits.
@@ -112,7 +131,9 @@ re-derives the same body — idempotent, no append-drift.
   a real conventional-commit subject from the change.
 - **Splitting into multiple commits, or halting to ask about commit structure** —
   `/squash` always squashes to one.
-- **Proofreading/appending to the old PR body** — §2 is a full overwrite
+- **Proofreading/appending to the old PR body** — §3 is a full overwrite
   synthesized from the final state, not an edit of the existing text.
-- **Pushing** — not `/squash`'s job.
+- **Stopping without pushing** — the squashed commit must land on the remote;
+  §2's `jj git push` is part of the job. (`ready`/`merge` are still the
+  caller's.)
 - **Running from the session home** — `cd worktree` first.

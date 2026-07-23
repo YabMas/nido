@@ -109,8 +109,8 @@ failure) ⇒ record a `:blocker` and stop. CI is a slow Docker build, so trust
 ## 5. Squash + PR text — `/squash`
 
 Reached **only** on green CI with no unresolved conflicts. `cd worktree`, then
-invoke **`/squash`**. It squashes the branch into one coherent commit and
-regenerates the PR title/description. It is mechanical and never halts.
+invoke **`/squash`**. It squashes the branch into one coherent commit, pushes
+it, and regenerates the PR title/description. It is mechanical and never halts.
 
 ## 6. Finish — push, ready, enqueue
 
@@ -122,7 +122,8 @@ gh pr merge --auto                  # enable auto-merge → native merge queue
 
 The squash rewrote history, so `jj git push` moves the bookmark to a new commit
 (a force-update of the PR branch) — expected, and fine for a session's own PR
-branch.
+branch. `/squash` already pushed in §5, so this normally reports nothing to
+push — it's a safety net, not a failure.
 
 `gh pr merge --auto` takes **no** strategy flag on a merge-queue branch — the
 queue defines the strategy. It enables auto-merge if checks are pending, or adds
