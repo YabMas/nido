@@ -46,12 +46,12 @@ found), stop and tell the user to run it from the session home —
 
 ### 2. Run CI
 
-Warn the user this is a slow, full Docker rebuild. The `:ci` command forces it
-two ways, both for jj correctness: it passes `--no-cache` (brian's image cache
-key derives from `git HEAD`/`git diff`, which lags jj's working copy in a
-colocated repo, so a stale image can silently run old code), and it `docker
-image rm -f`s the floating `brian-ci:local` / `brian-playwright:local` tags
-first so no stale tag can be reused. Then run, capturing output:
+Image caching is ENABLED and jj-safe: brian keys the CI image cache on the
+working-tree CONTENTS (sha256 of the bytes that get COPY'd — brian PR #3380),
+so a cache hit always means "same source" regardless of the git/jj view.
+Expect a slow full Docker rebuild only when source changed since the last CI
+run; unchanged re-runs (flake re-runs, e2e right after unit) reuse the image.
+Do not pass `--no-cache` or warn about forced rebuilds. Run, capturing output:
 
 ```
 bb nido:run :project <project> <session> ci
@@ -121,7 +121,7 @@ doesn't matter.
 ### 2. Run CI and triage
 
 Run `bb nido:run :project <project> <session> ci` (see "### 2. Run CI" for the
-`--no-cache` / tag-`rm` rationale). Separate flake/infra from real regressions
+caching model). Separate flake/infra from real regressions
 exactly as in "### 4. Triage". Get the real error from logs; don't guess from the
 job name.
 
@@ -184,7 +184,8 @@ Starter map:
   sessions (`fix/add-delay`) span multiple segments; take everything after
   `/sessions/<project>/`.
 - Running `bb ci` directly in the worktree instead of `bb nido:run … ci` — skips
-  the centralized `:ci` config (the `--no-cache` flag lives there).
+  the centralized `:ci` config (the clean-worktree gate and the private-dep
+  token wiring live there).
 - Running `bb nido:session:up` first — unnecessary; brian's CI is self-contained.
 - Auto-fixing before approval (see The Approval Gate).
 - Looping CI to green — this skill does ONE run; re-run only after fixes, on request.
