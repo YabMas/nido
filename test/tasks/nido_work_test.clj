@@ -1,5 +1,6 @@
 (ns tasks.nido-work-test
   (:require
+   [clojure.string :as str]
    [clojure.test :refer [deftest is]]
    [babashka.fs :as fs]
    [nido.session.lifecycle :as lifecycle]
@@ -57,5 +58,29 @@
                  (->> cmd (drop-while #(not= % "--add-dir")) (take 2))))
           (is (some #{"mcp_servers.postgres.command=\"npx\""} cmd))
           (is (some #{"mcp_servers.postgres.args=[\"-y\",\"@modelcontextprotocol/server-postgres\",\"postgresql://u:p@localhost:5432/db\"]"} cmd))))
+      (finally
+        (fs/delete-tree tmp)))))
+
+(deftest codex-invocation-skips-http-mcp-servers
+  ;; The session .mcp.json can now carry http servers (betterstack and the
+  ;; like). They have no :command, and the -c overrides here only describe
+  ;; codex's stdio shape — emitting them yields `command=null`.
+  (let [tmp (fs/create-temp-dir)
+        mcp (str (fs/path tmp "mcp.json"))]
+    (try
+      (spit mcp (str "{\"mcpServers\":{"
+                     "\"betterstack\":{\"type\":\"http\",\"url\":\"https://mcp.betterstack.com\"},"
+                     "\"chiasmus\":{\"type\":\"stdio\",\"command\":\"npx\",\"args\":[\"-y\",\"chiasmus\"]}}}"))
+      (with-redefs [lifecycle/session-from-cwd
+                    (fn [] {:project "brian" :session "fix/x"
+                            :worktree "/Code/brian/.worktrees/fix/x"
+                            :instance-id "brian--x"})
+                    state/session-mcp-path (fn [_i] mcp)
+                    launcher/nido-add-dirs (fn [] ["/opt/nido"])]
+        (let [{:keys [cmd]} (work/work-cmd* {:agent :codex :codex-bin "codex"})]
+          (is (some #{"mcp_servers.chiasmus.command=\"npx\""} cmd)
+              "stdio servers are still translated")
+          (is (not-any? #(str/includes? % "betterstack") cmd)
+              "http servers are omitted rather than emitted with a null command")))
       (finally
         (fs/delete-tree tmp)))))

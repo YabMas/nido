@@ -17,7 +17,11 @@
 (defn- codex-mcp-config-args
   "Translate nido's rendered Claude-style MCP JSON into Codex CLI config
    overrides. Codex reads MCP servers from config.toml, and `-c key=value`
-   gives us a per-launch config layer without writing user/global config."
+   gives us a per-launch config layer without writing user/global config.
+
+   Only stdio servers translate — these overrides describe a command to spawn.
+   A server without one (an http/sse entry) is skipped rather than emitted as
+   `command=null`."
   [mcp-path]
   (when (fs/exists? mcp-path)
     (let [cfg (json/parse-string (slurp mcp-path) keyword)]
@@ -25,14 +29,15 @@
        (mapcat
         (fn [[server-name {:keys [command args env]}]]
           (let [prefix (str "mcp_servers." (name server-name))]
-            (concat
-             ["-c" (str prefix ".command=" (toml-value command))]
-             (when (seq args)
-               ["-c" (str prefix ".args=" (toml-value args))])
-             (mapcat
-              (fn [[k v]]
-                ["-c" (str prefix ".env." (name k) "=" (toml-value v))])
-              env))))
+            (when command
+              (concat
+               ["-c" (str prefix ".command=" (toml-value command))]
+               (when (seq args)
+                 ["-c" (str prefix ".args=" (toml-value args))])
+               (mapcat
+                (fn [[k v]]
+                  ["-c" (str prefix ".env." (name k) "=" (toml-value v))])
+                env)))))
         (:mcpServers cfg))))))
 
 (defn- session-from-cwd! []
