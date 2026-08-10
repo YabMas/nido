@@ -211,5 +211,17 @@
 (defn upsert-registry! [project-dir entry]
   (write-registry! (assoc (read-registry) project-dir entry)))
 
+(defn- prune-legacy-registry!
+  "Drop `k` from any legacy registry that still carries it. read-registry merges
+   those files UNDER the canonical one but write-registry! only rewrites the
+   canonical one — so without this, removing a legacy-only key is a no-op: the
+   next read merges it back in and the entry is immortal."
+  [k]
+  (doseq [path (legacy-registry-paths)]
+    (when-let [m (io/read-edn path)]
+      (when (contains? m k)
+        (io/write-edn! path (dissoc m k))))))
+
 (defn remove-from-registry! [project-dir]
+  (prune-legacy-registry! project-dir)
   (write-registry! (dissoc (read-registry) project-dir)))
