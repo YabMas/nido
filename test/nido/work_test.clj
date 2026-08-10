@@ -1183,6 +1183,23 @@
                   (is (some? @prepended) "deep prepends a callout")
                   (is (= :triaged (tickets/status :brian "BR-77"))))))))))))
 
+(deftest enriched-callout-splits-a-long-body-into-capped-runs
+  ;; The callout is best-effort, so an over-2000-char run only ever showed up as
+  ;; :warn — silently dropping the enrichment on the longest reports.
+  (let [prepended (atom nil)
+        desc      (apply str (repeat 700 "long body "))]   ; 7000 chars
+    (with-redefs [notion-client/retrieve-block-children
+                  (fn [_ _ _] {:results [{:type "callout"
+                                          :callout {:rich_text [{:text {:content "🤖 Enriched (triage BR-77)\nx"}}]}}]})
+                  notion-client/prepend-block-children!
+                  (fn [_pg children _tok] (reset! prepended children) {:ok true})]
+      (is (= :ok (#'work/prepend-enriched-callout! "pg-77" "BR-77" desc "tok")))
+      (let [runs (get-in (first @prepended) [:callout :rich_text])]
+        (is (< 1 (count runs)) "a 7000-char body must be split across runs")
+        (is (every? #(<= (count (get-in % [:text :content])) notion-client/rich-text-limit) runs))
+        (is (str/starts-with? (get-in (first runs) [:text :content]) "🤖 Enriched (triage BR-77)")
+            "the marker stays in the FIRST run — our-callout? idempotency reads it there")))))
+
 (deftest apply-routed-notion-failure-does-not-complete
   (with-tmp
     (fn [_]

@@ -261,19 +261,29 @@
    every block we build has to respect it."
   2000)
 
-(defn- split-at-limit
-  "`s` as a seq of ≤`limit`-char pieces, cutting at the last newline (else the
-   last space) inside each window so lines and words survive the break. Falls
-   back to a hard cut when the window holds neither, which also guarantees
-   progress and thus termination."
-  [s limit]
-  (loop [s s acc []]
-    (if (<= (count s) limit)
+(defn split-rich-text
+  "`text` as a vector of ≤`rich-text-limit` chunks, cutting at the last newline
+   (else the last space) inside each window so lines and words survive the break.
+   Falls back to a hard cut when the window holds neither, which also guarantees
+   progress and thus termination. Blank text yields [\"\"].
+
+   Every path that puts caller-supplied prose into Notion goes through here — one
+   block's rich_text, or one rich_text array split into runs."
+  [text]
+  (loop [s (or text "") acc []]
+    (if (<= (count s) rich-text-limit)
       (conj acc s)
-      (let [window (subs s 0 limit)
+      (let [window (subs s 0 rich-text-limit)
             cut    (or (str/last-index-of window "\n") (str/last-index-of window " "))
-            cut    (if (and cut (pos? cut)) cut limit)]
+            cut    (if (and cut (pos? cut)) cut rich-text-limit)]
         (recur (str/triml (subs s cut)) (conj acc (str/trimr (subs s 0 cut))))))))
+
+(defn rich-text-runs
+  "`text` as a rich_text array — one `{:type \"text\" …}` run per chunk, each within
+   the cap. Use when the content belongs to ONE block (a callout, a heading);
+   use `paragraph-blocks` when it should become several blocks."
+  [text]
+  (mapv (fn [chunk] {:type "text" :text {:content chunk}}) (split-rich-text text)))
 
 (defn paragraph-blocks
   "`text` as Notion paragraph blocks, each within `rich-text-limit`. Splits on
@@ -284,7 +294,7 @@
   (let [chunks (->> (str/split (or text "") #"\n{2,}")
                     (map str/trim)
                     (remove str/blank?)
-                    (mapcat #(split-at-limit % rich-text-limit)))]
+                    (mapcat split-rich-text))]
     (mapv (fn [chunk]
             {:object "block" :type "paragraph"
              :paragraph {:rich_text [{:text {:content chunk}}]}})

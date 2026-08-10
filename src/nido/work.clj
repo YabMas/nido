@@ -563,13 +563,18 @@
 
 (defn- prepend-enriched-callout!
   "Best-effort deep enrichment: delete our prior callout (idempotency), prepend a fresh
-   one, verify it landed at the top. Returns :ok | :warn. Never throws."
+   one, verify it landed at the top. Returns :ok | :warn. Never throws.
+
+   The callout body is split into capped rich_text runs — a single run over 2000
+   chars 400s the request, and since this leg is best-effort that failure showed
+   up only as a :warn, silently dropping the enrichment on the longest (i.e. most
+   valuable) reports."
   [page-id br desc token]
   (try
     (let [marker (str "🤖 Enriched (triage " br ")")
           block  {:object "block" :type "callout"
                   :callout {:icon {:type "emoji" :emoji "🤖"}
-                            :rich_text [{:type "text" :text {:content (str marker "\n" desc)}}]}}
+                            :rich_text (notion/rich-text-runs (str marker "\n" desc))}}
           first0 (-> (notion/retrieve-block-children page-id token {}) :results first)]
       (when (and first0 (our-callout? first0 marker))
         (notion/delete-block! (:id first0) token))
