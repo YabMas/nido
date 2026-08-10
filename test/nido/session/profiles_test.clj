@@ -33,6 +33,14 @@
           (is (= :symlink (-> p :worktree :strategy)))
           (is (= "/tmp/x" (-> p :worktree :target))))))))
 
+(deftest profile-weight-classifies-provisioning
+  (is (= :heavy (profiles/profile-weight {:services :all})))
+  (is (= :heavy (profiles/profile-weight {:services [:postgresql]})))
+  (is (= :light (profiles/profile-weight {:services []}))
+      "the :lite shape provisions nothing runnable")
+  (is (nil? (profiles/profile-weight nil))
+      "no persisted profile ⇒ provisioning UNKNOWN, never a guess"))
+
 (deftest resolve-unknown-profile-throws
   (with-tmp
     (fn [_]

@@ -21,6 +21,7 @@
    [nido.io :as io]
    [nido.session.agent-guidance :as agent-guidance]
    [nido.session.links :as links]
+   [nido.session.profiles :as profiles]
    [nido.session.state :as state]))
 
 (defn- run-workstream-context
@@ -249,13 +250,7 @@
            app-port app-url nrepl-port pg-port
            profile links project-briefing
            workstream-id br-id]}]
-  (let [;; Lite sessions have no services; :services is :all (full) or a
-        ;; vector allowlist ([] = lite). Default to "active" when profile
-        ;; is absent — legacy sessions predating profile.edn were all full.
-        svcs             (:services profile)
-        services-active? (or (nil? profile)
-                             (= :all svcs)
-                             (and (sequential? svcs) (seq svcs)))]
+  (let [services-active? (profiles/services-provisioned? profile)]
     (str
      "# Active nido session\n"
      "\n"

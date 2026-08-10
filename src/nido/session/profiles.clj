@@ -40,6 +40,31 @@
       (io/read-edn path)
       builtin-registry)))
 
+(defn services-provisioned?
+  "True when a resolved profile provisions services. `:services` is `:all`
+   (full) or a vector allowlist (`[]` = lite). A nil profile reads as
+   provisioned: legacy sessions predating profile.edn were all full."
+  [profile]
+  (let [svcs (:services profile)]
+    (or (nil? profile)
+        (= :all svcs)
+        (and (sequential? svcs) (seq svcs))
+        false)))
+
+(defn profile-weight
+  "The session `:weight` implied by a resolved profile — `:heavy` when it
+   provisions services (a runnable environment, the thing a workstream offers
+   as its dev environment), `:light` when it provisions none (the :lite shape:
+   symlinked worktree, no services).
+
+   nil when `profile` is nil: the provisioning is UNKNOWN (no profile.edn — a
+   legacy session, or one whose state dir was reclaimed). Callers must treat
+   that as 'no answer' rather than defaulting, so an unknown never overwrites a
+   stored weight with a guess."
+  [profile]
+  (when (some? profile)
+    (if (services-provisioned? profile) :heavy :light)))
+
 (defn resolve-profile
   "Resolve a profile keyword (e.g. :full, :lite) for a project."
   [project profile-kw]

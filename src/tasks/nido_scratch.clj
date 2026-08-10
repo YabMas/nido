@@ -2,7 +2,9 @@
   "One-time migration: give every pre-existing manual session a loose (scratch)
    workstream, so the universal-workstream model holds for sessions that predate
    it. Idempotent — `scratch/birth!` no-ops on sessions already owned by a
-   workstream (Notion, GitHub, or an earlier backfill)."
+   workstream (Notion, GitHub, or an earlier backfill), beyond reconciling a
+   stale `:weight` against what the session actually has provisioned. That makes
+   a re-run the repair for records stamped before weight was derived."
   (:require
    [clojure.string :as str]
    [nido.coordinator.scratch :as scratch]
@@ -30,7 +32,8 @@
         {:keys [sessions]} (lifecycle/list-all-data {:project project})
         {runs true manual false} (group-by (comp coordinator-run? :name) sessions)]
     (doseq [{:keys [name]} manual]
-      (let [ws-id (scratch/birth! (keyword project) name)]
+      (let [ws-id (scratch/birth! (keyword project) name
+                                  (lifecycle/session-weight name {:project project}))]
         (println (format "  %-40s → %s" name ws-id))))
     (when (seq runs)
       (println (format "Skipped %d coordinator run(s)" (count runs))))

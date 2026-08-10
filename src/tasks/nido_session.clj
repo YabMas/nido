@@ -64,7 +64,9 @@
         project (require-project opts)
         session (require-session-name pos)]
     (lifecycle/up! session opts)
-    (scratch/birth! (keyword project) session)
+    ;; Weight is read back AFTER up! — up! persists the resolved profile, so the
+    ;; record describes what was really provisioned, not what was requested.
+    (scratch/birth! (keyword project) session (lifecycle/session-weight session opts))
     (let [home (state/session-home-dir project session)]
       (println)
       (println (str "Session ready: " project "/" session))

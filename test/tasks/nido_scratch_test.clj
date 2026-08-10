@@ -8,10 +8,11 @@
 (deftest backfill-births-one-loose-workstream-per-session
   (let [births (atom [])]
     (with-redefs [lifecycle/list-all-data (fn [_] {:sessions [{:name "a"} {:name "b"}]})
-                  scratch/birth!          (fn [p n] (swap! births conj [p n]) "ws-x")]
+                  lifecycle/session-weight (fn [n _] (if (= "a" n) :heavy :light))
+                  scratch/birth!          (fn [p n w] (swap! births conj [p n w]) "ws-x")]
       (task/backfill ":project" "brian")
-      (is (= [[:brian "a"] [:brian "b"]] @births)
-          "one idempotent birth! per existing session, keyword project"))))
+      (is (= [[:brian "a" :heavy] [:brian "b" :light]] @births)
+          "one idempotent birth! per existing session, carrying its provisioned weight"))))
 
 (deftest backfill-skips-coordinator-run-worktrees
   ;; Coordinator runs name their worktrees `run-<project>-<trigger>-<suffix>`
@@ -23,7 +24,8 @@
                   (fn [_] {:sessions [{:name "refshot"}
                                       {:name "run-brian-triage-teacher-bugs-a4d06d94"}
                                       {:name "feat/course-materials-tab"}]})
-                  scratch/birth! (fn [p n] (swap! births conj [p n]) "ws-x")]
+                  lifecycle/session-weight (constantly :heavy)
+                  scratch/birth! (fn [p n _w] (swap! births conj [p n]) "ws-x")]
       (task/backfill ":project" "brian")
       (is (= [[:brian "refshot"] [:brian "feat/course-materials-tab"]] @births)
           "run-* (coordinator) worktrees are skipped; manual one-offs are backfilled"))))

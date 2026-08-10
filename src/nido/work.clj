@@ -666,8 +666,10 @@
    ref-less workstream + human session. Idempotent on an existing session name.
    Returns the ws-id. `project` may be a keyword or string."
   [project session-name]
-  (lifecycle/up! session-name {:project (name project)})
-  (scratch/birth! (keyword (name project)) session-name))
+  (let [opts {:project (name project)}]
+    (lifecycle/up! session-name opts)
+    (scratch/birth! (keyword (name project)) session-name
+                    (lifecycle/session-weight session-name opts))))
 
 (defn open-target
   "Where `open` lands for a workstream: the most-recently-active LIVE session,
@@ -837,7 +839,8 @@
   (let [orphans (sort (orphan-live-sessions (live-session-names project)
                                             (owned-session-names project)))]
     (doseq [n orphans]
-      (scratch/birth! (keyword (name project)) n))
+      (scratch/birth! (keyword (name project)) n
+                      (lifecycle/session-weight n {:project (name project)})))
     {:adopted (vec orphans)
      :yielded (yield-duplicate-scratch! project)}))
 

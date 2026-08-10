@@ -28,17 +28,35 @@
                            (session/list-sessions project ws-id))
                  ws-id)))))
 
+(defn- reconcile-weight!
+  "Rewrite an owned session's `:weight` when it disagrees with what is actually
+   provisioned. No-op when `weight` is nil (provisioning unknown — never
+   overwrite a stored weight with a guess) or already correct."
+  [project ws-id session-name weight]
+  (when weight
+    (when-let [s (session/read-session project ws-id session-name)]
+      (when (not= weight (:weight s))
+        (session/write! (assoc s :weight weight))))))
+
 (defn birth!
-  "Ensure a loose workstream owns a human session named `session-name`.
+  "Ensure a loose workstream owns a human session named `session-name`, carrying
+   `weight` — the weight of what was actually provisioned for it
+   (`lifecycle/session-weight`), or nil when that is unknown.
+
    Idempotent: if any workstream already owns that session, returns its ws-id
-   unchanged. Otherwise mints a ref-less :scratch-stage workstream and a live
-   human session (autonomy nil). Returns the ws-id."
-  [project session-name]
-  (or (find-ws-for-session project session-name)
-      (let [w (workstream/create! project {:stage :scratch :external-refs []})]
-        (session/create! project (:id w)
-                         {:name session-name :weight :light :autonomy nil})
-        (:id w))))
+   unchanged — but still reconciles a stale `:weight`, since this is the only
+   point every path (manual up, TUI, the orphan sweep) re-runs against a live
+   session. Otherwise mints a ref-less :scratch-stage workstream and a live human
+   session (autonomy nil). An unknown weight births :light, the conservative
+   read. Returns the ws-id."
+  [project session-name weight]
+  (if-let [ws-id (find-ws-for-session project session-name)]
+    (do (reconcile-weight! project ws-id session-name weight)
+        ws-id)
+    (let [w (workstream/create! project {:stage :scratch :external-refs []})]
+      (session/create! project (:id w)
+                       {:name session-name :weight (or weight :light) :autonomy nil})
+      (:id w))))
 
 (defn reap!
   "Delete the loose workstream owning `session-name` when it is safe to discard:

@@ -442,3 +442,50 @@
     (is (= {:wt-path "/Code/brian/.worktrees/feat/screen-capture"
             :instance-id "brian--screen-capture"}
            (lifecycle/session-coords "feat/screen-capture" {:project "brian"})))))
+
+(deftest session-weight-reads-what-was-actually-provisioned
+  ;; The weight stamped on a session record must describe the environment that
+  ;; `up!` really built, not the profile someone assumed. profile.edn is that
+  ;; record; absent, the answer is "unknown" (nil) rather than a guess.
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [nido.core/nido-home        (constantly (str tmp))
+                    lifecycle/resolve-project  (fn [_] ["brian" {:directory (str tmp)}])
+                    lifecycle/worktrees-dir    (fn [_ _] (str (fs/path tmp "worktrees")))]
+        (let [wt (str (fs/path tmp "worktrees" "impl-x"))]
+          (is (nil? (lifecycle/session-weight "impl-x" {:project "brian"}))
+              "no profile.edn and no worktree ⇒ unknown")
+          (fs/create-dirs wt)
+          (engine/write-profile-for-session!
+           wt {:services :all :worktree {:strategy :git-worktree}})
+          (is (= :heavy (lifecycle/session-weight "impl-x" {:project "brian"})))
+          (engine/write-profile-for-session!
+           wt {:services [] :worktree {:strategy :symlink :target "/tmp/x"}})
+          (is (= :light (lifecycle/session-weight "impl-x" {:project "brian"})))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest session-weight-falls-back-to-the-worktree-shape
+  ;; Most long-running sessions have no profile.edn — reclaim deletes the state
+  ;; dir it lives in. The worktree outlives that, and its shape IS the profile's
+  ;; worktree strategy: :lite symlinks the project checkout, full builds a real
+  ;; worktree. Without this the panel stays empty for every such session.
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [nido.core/nido-home        (constantly (str tmp))
+                    lifecycle/resolve-project  (fn [_] ["brian" {:directory (str tmp)}])
+                    lifecycle/worktrees-dir    (fn [_ _] (str (fs/path tmp "worktrees")))]
+        (let [real   (str (fs/path tmp "worktrees" "impl-x"))
+              linked (str (fs/path tmp "worktrees" "run-triage"))
+              target (str (fs/create-dirs (str (fs/path tmp "checkout"))))]
+          (fs/create-dirs real)
+          (fs/create-sym-link linked target)
+          (is (= :heavy (lifecycle/session-weight "impl-x" {:project "brian"}))
+              "a real worktree ⇒ a full session, even with no profile snapshot")
+          (is (= :light (lifecycle/session-weight "run-triage" {:project "brian"}))
+              "a symlinked worktree is the :lite shape")))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest session-weight-answers-unknown-rather-than-throwing
+  ;; The daemon's orphan sweep calls this per live session. An unresolvable
+  ;; project must degrade to "unknown", not abort the adoption invariant.
+  (is (nil? (lifecycle/session-weight "whatever" {:project "no-such-project"}))))

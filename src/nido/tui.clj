@@ -521,7 +521,8 @@
 ;; belongs to one), destroy reaps it (spares ref-carrying workstreams).
 ;; `:add` uses create-workstream! which delegates to work/new! (already bundles
 ;; lifecycle/up! + scratch/birth!) — no :after needed for that verb.
-(defn- birth-scratch!   [p sn] (scratch/birth! (keyword p) sn))
+(defn- birth-scratch!   [p sn] (scratch/birth! (keyword p) sn
+                                               (lifecycle/session-weight sn {:project p})))
 (defn- reap-scratch!    [p sn] (scratch/reap!  (keyword p) sn))
 
 (defn- create-workstream!

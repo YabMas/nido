@@ -31,18 +31,20 @@
 
 (deftest add-births-a-scratch-workstream
   (let [calls (atom [])]
-    (with-redefs [lifecycle/up!  (fn [sn opts] (swap! calls conj [:up sn opts]))
-                  scratch/birth! (fn [p sn] (swap! calls conj [:birth p sn]))]
+    (with-redefs [lifecycle/up!            (fn [sn opts] (swap! calls conj [:up sn opts]))
+                  lifecycle/session-weight (constantly :heavy)
+                  scratch/birth!           (fn [p sn w] (swap! calls conj [:birth p sn w]))]
       (#'tui/run-session-action! :add "brian" "refshot")
-      (is (= [[:up "refshot" {:project "brian"}] [:birth :brian "refshot"]] @calls)
-          "up! first, then a keyword-project birth!"))))
+      (is (= [[:up "refshot" {:project "brian"}] [:birth :brian "refshot" :heavy]] @calls)
+          "up! first, then a keyword-project birth! carrying the provisioned weight"))))
 
 (deftest up-births-a-scratch-workstream
   (let [calls (atom [])]
-    (with-redefs [lifecycle/up!  (fn [sn opts] (swap! calls conj [:up sn opts]))
-                  scratch/birth! (fn [p sn] (swap! calls conj [:birth p sn]))]
+    (with-redefs [lifecycle/up!            (fn [sn opts] (swap! calls conj [:up sn opts]))
+                  lifecycle/session-weight (constantly :heavy)
+                  scratch/birth!           (fn [p sn w] (swap! calls conj [:birth p sn w]))]
       (#'tui/run-session-action! :up "brian" "refshot")
-      (is (= [[:up "refshot" {:project "brian"}] [:birth :brian "refshot"]] @calls)))))
+      (is (= [[:up "refshot" {:project "brian"}] [:birth :brian "refshot" :heavy]] @calls)))))
 
 (deftest destroy-reaps-the-scratch-workstream
   (let [calls (atom [])]
@@ -71,7 +73,7 @@
 (deftest down-touches-no-workstream
   (let [calls (atom [])]
     (with-redefs [lifecycle/down! (fn [sn opts] (swap! calls conj [:down sn opts]))
-                  scratch/birth!  (fn [_ _] (swap! calls conj :birth))
+                  scratch/birth!  (fn [_ _ _] (swap! calls conj :birth))
                   scratch/reap!   (fn [_ _] (swap! calls conj :reap))]
       (#'tui/run-session-action! :down "brian" "refshot")
       (is (= [[:down "refshot" {:project "brian"}]] @calls)

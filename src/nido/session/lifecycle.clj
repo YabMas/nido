@@ -410,6 +410,39 @@
   (let [{:keys [wt-path instance-id]} (with-context name opts)]
     {:wt-path wt-path :instance-id instance-id}))
 
+(defn- weight-from-worktree
+  "Fallback reading of provisioned weight for a session whose profile snapshot
+   did not survive — its state dir was reclaimed, or it predates profile.edn.
+   The worktree SHAPE is the profile's `:worktree :strategy` made durable: the
+   :lite strategy symlinks the project's own checkout, the full strategy builds a
+   real worktree. nil when there is no worktree left to read."
+  [wt-path]
+  (cond
+    (fs/sym-link? wt-path)  :light
+    (fs/directory? wt-path) :heavy
+    :else                   nil))
+
+(defn session-weight
+  "The `:weight` a named session's record should carry, read back from what
+   `up!` actually provisioned rather than from what a caller assumed: the
+   profile snapshot in its state dir, else the worktree shape. nil when neither
+   survives — the provisioning is unknown, and the caller must not guess.
+
+   This is the seam that keeps a session record honest: a full session (services
+   + real worktree) is a workstream's runnable environment (`work/environment`
+   selects on :heavy), a :lite one is not.
+
+   Never throws. An unresolvable project or unreadable state dir is just another
+   way of not knowing, and the daemon's every-5-minutes orphan sweep calls this
+   per session — a throw there would take down the adoption invariant to get a
+   display detail wrong."
+  [name opts]
+  (try
+    (let [{:keys [wt-path]} (session-coords name opts)]
+      (or (profiles/profile-weight (engine/read-profile-for-session wt-path))
+          (weight-from-worktree wt-path)))
+    (catch Exception _ nil)))
+
 (defn up!
   "Bring the named session up: create its worktree if missing, then start
    PG + JVM + app. Idempotent — running on an existing live session is a
