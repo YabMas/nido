@@ -311,6 +311,25 @@
           services)
     services))
 
+(defn- start-failure-report
+  "The message logged when a service fails to start and the session rolls back.
+   A :process service attaches the tail of its own log to the exception, and
+   that is where the real cause lives — a classpath error, a port already
+   bound. Append it instead of printing the bare ex-message and leaving the
+   operator to go find ~/.nido/state/<instance>/logs/<service>.log by hand."
+  [e started-count]
+  (let [{:keys [log-tail log-path]} (ex-data e)
+        headline (str "Session start failed: " (ex-message e)
+                      " — rolling back " started-count " started service(s)")]
+    (if (str/blank? log-tail)
+      headline
+      (str headline
+           "\n  last output from the failed service:\n"
+           (->> (str/split-lines (str/trim log-tail))
+                (map (fn [line] (str "    " line)))
+                (str/join "\n"))
+           (when log-path (str "\n  full log: " log-path))))))
+
 (defn- start-services! [project-dir project-name instance-id session-edn opts]
   (core/log-step (str "Starting session " instance-id " (" project-dir ")"))
   (let [profile  (:profile opts)
@@ -349,10 +368,7 @@
                   {:ctx init-ctx :service-states {}}
                   services)
                  (catch Exception e
-                   (let [n (count @started)]
-                     (core/log-step
-                      (str "Session start failed: " (ex-message e)
-                           " — rolling back " n " started service(s)")))
+                   (core/log-step (start-failure-report e (count @started)))
                    (doseq [{:keys [resolved-def state]} (reverse @started)]
                      (let [svc-name (:name resolved-def)]
                        (try
