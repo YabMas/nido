@@ -18,6 +18,7 @@
    [nido.notion.views :as views]
    [nido.slack.client :as slack-client]
    [nido.project]
+   [nido.process]
    [nido.session.lifecycle]
    [nido.work :as work]))
 
@@ -1259,13 +1260,31 @@
           "drop would otherwise throw Workstream-not-found")
       (is (= {:decision :no-workstream} (work/dismiss! :brian "pg-bare"))))))
 
-(deftest live-session-names-are-the-ones-with-ports
-  ;; Mirrors the TUI test of the same name — the oracle now lives in work.
+(deftest live-session-names-probe-ports-rather-than-trusting-the-registry
+  ;; The registry is only cleaned by a graceful down!; a reboot or a crash leaves
+  ;; an entry with its port numbers intact forever. Liveness therefore has to be
+  ;; measured, not read.
   (with-redefs [nido.session.lifecycle/list-all-data
-                (fn [_] {:sessions [{:name "up1" :pg-port 5501}
-                                    {:name "up2" :app-port 3101}
-                                    {:name "down" :pg-port nil :app-port nil :nrepl-port nil}]})]
-    (is (= #{"up1" "up2"} (work/live-session-names "p")))))
+                (fn [_] {:sessions [{:name "app-up"    :app-port 3101 :nrepl-port nil  :pg-port nil}
+                                    {:name "repl-up"   :app-port nil  :nrepl-port 5601 :pg-port nil}
+                                    {:name "crashed"   :app-port 3102 :nrepl-port 5602 :pg-port nil}
+                                    {:name "shared-pg" :app-port nil  :nrepl-port nil  :pg-port 6145}
+                                    {:name "down"      :app-port nil  :nrepl-port nil  :pg-port nil}]})
+                nido.process/tcp-open? (fn [port] (contains? #{3101 5601 6145} port))]
+    (is (= #{"app-up" "repl-up"} (work/live-session-names "p")))
+    (is (not (contains? (work/live-session-names "p") "crashed"))
+        "recorded ports that no longer answer are not liveness")
+    (is (not (contains? (work/live-session-names "p") "shared-pg"))
+        "pg is never a signal — the shared cluster answers for every session at once")))
+
+(deftest session-live?-reads-app-or-nrepl-only
+  (with-redefs [nido.process/tcp-open? (fn [port] (= 4000 port))]
+    (is (true?  (work/session-live? {:app-port 4000})))
+    (is (true?  (work/session-live? {:nrepl-port 4000})))
+    (is (false? (work/session-live? {:app-port 4001 :nrepl-port 4002})))
+    (is (false? (work/session-live? {:pg-port 4000}))  "pg excluded")
+    (is (false? (work/session-live? {:repl-pid 12345})) "pid excluded — PIDs get recycled")
+    (is (false? (work/session-live? {})))))
 
 (deftest machine-facts-keyed-by-session-name
   (with-redefs [work/machine-rows

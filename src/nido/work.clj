@@ -778,14 +778,30 @@
              (boolean (some #(= v %) vals))))))
    facet-filter))
 
+(defn session-live?
+  "Does this registry-shaped session map hold a port RIGHT NOW? Probes the
+   recorded app/nREPL ports rather than trusting that they were recorded — the
+   registry is only cleaned on a graceful `down!` (engine/stop-session! →
+   state/remove-from-registry!), so a reboot, a JVM crash or a `kill` leaves an
+   entry with its port numbers intact indefinitely.
+
+   `:pg-port` is deliberately not a signal: most sessions point at the project's
+   SHARED cluster, which answers whenever any one session is up. `:repl-pid` is
+   not a signal either: PIDs are recycled, so a months-old entry whose PID was
+   reused would read as live forever."
+  [s]
+  (boolean (or (and (pos-int? (:app-port s))   (proc/tcp-open? (:app-port s)))
+               (and (pos-int? (:nrepl-port s)) (proc/tcp-open? (:nrepl-port s))))))
+
 (defn live-session-names
-  "Set of session names for `project` that are actually up — i.e. hold a pg/app/
-   nrepl port in the registry. THE liveness oracle: the TUI board, the web
+  "Set of session names for `project` that are actually up — i.e. hold an open
+   app/nREPL port right now. THE liveness oracle: the TUI board, the web
    grouping, the adopter, and the winding-down band all read this one fn."
   [project]
   (->> (lifecycle/list-all-data {:project (name project)})
        :sessions
-       (keep (fn [s] (when (or (:pg-port s) (:app-port s) (:nrepl-port s)) (:name s))))
+       (filter session-live?)
+       (map :name)
        set))
 
 (defn bring-down!
