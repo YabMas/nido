@@ -20,6 +20,7 @@
    [nido.project]
    [nido.process]
    [nido.session.lifecycle]
+   [nido.session.state]
    [nido.work :as work]))
 
 (defn- with-tmp [f]
@@ -1347,3 +1348,42 @@
             (is (= 1 (count yielded)))
             (is (= [(:id real)]
                    (map :id (keep #(workstream/read-ws :p %) (workstream/list-ids :p)))))))))))
+
+(deftest prune-dead-registry-drops-only-dead-and-old-entries
+  (let [now     1000000000000
+        recent  (java.time.Instant/ofEpochMilli (- now 60000))       ; 1 min old
+        ancient (java.time.Instant/ofEpochMilli (- now 86400000))    ; 1 day old
+        removed (atom nil)]
+    (with-redefs [nido.session.state/read-registry
+                  (constantly {"/wt/live"    {:instance-id "p--live"    :app-port 3000
+                                              :created-at (str ancient)}
+                               "/wt/dead"    {:instance-id "p--dead"    :app-port 3001
+                                              :created-at (str ancient)}
+                               "/wt/young"   {:instance-id "p--young"   :app-port 3002
+                                              :created-at (str recent)}
+                               "/wt/no-ts"   {:instance-id "p--no-ts"   :app-port 3003}
+                               ;; :lite session: :services [] means the engine never recorded a
+                               ;; port at all — never a prune candidate (prunable?), else it would
+                               ;; be pruned mid-use and reclaim would delete its state dir.
+                               "/wt/lite"    {:instance-id "p--lite"    :created-at (str ancient)}
+                               ;; dead port, but the JVM is still up — prune-veto? keeps it (a
+                               ;; false "dead" here costs a PGDATA via reclaim).
+                               "/wt/repl-up" {:instance-id "p--repl-up" :app-port 3004 :repl-pid 4242
+                                              :created-at (str ancient)}
+                               ;; malformed :created-at: entry-age-ms swallows the parse failure
+                               ;; and returns nil, which reads as "old enough" — pruned.
+                               "/wt/bad-ts"  {:instance-id "p--bad-ts"  :app-port 3005
+                                              :created-at "not-a-timestamp"}})
+                  nido.session.state/remove-many-from-registry!
+                  (fn [ks] (reset! removed (set ks)))
+                  nido.process/tcp-open? (fn [port] (= 3000 port))
+                  nido.process/process-alive? (fn [pid] (= 4242 pid))]
+      (let [pruned (work/prune-dead-registry! now)]
+        (is (= #{"/wt/dead" "/wt/no-ts" "/wt/bad-ts"} @removed)
+            "dead + old is pruned; no timestamp or a malformed one reads as old and is pruned")
+        (is (not (contains? @removed "/wt/live"))    "a listening session survives")
+        (is (not (contains? @removed "/wt/young"))   "inside the grace window it survives")
+        (is (not (contains? @removed "/wt/lite"))    "a lite session with no recorded port is never a prune candidate")
+        (is (not (contains? @removed "/wt/repl-up")) "a dead port but a live repl-pid vetoes the delete")
+        (is (= #{"p--dead" "p--no-ts" "p--bad-ts"} (set pruned))
+            "returns instance-ids for the coordinator's log line")))))

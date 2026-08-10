@@ -10,7 +10,8 @@
    [nido.coordinator.runs :as runs]
    [nido.coordinator.state :as cstate]
    [nido.io :as io]
-   [nido.project :as project]))
+   [nido.project :as project]
+   [nido.work :as work]))
 
 (defn- reset-executor! [f]
   (executor/configure! {:global-cap 4})
@@ -41,6 +42,10 @@
         sid     (atom nil)]   ; capture the session-id run-blocking! generates + passes to launch!
     (try
       (with-redefs [cstate/nido-root         (constantly tmp-str)
+                    ;; core/tick! reaches maybe-adopt! -> work/prune-dead-registry! for real,
+                    ;; which would read/probe/delete from the developer's actual
+                    ;; ~/.nido/state/sessions.edn — stub it out so this test stays hermetic.
+                    work/prune-dead-registry! (constantly [])
                     ;; stub project listing — real shape is {project-name {...}}
                     project/list-projects    (constantly {"brian" {:directory "/tmp"}})
                     ;; stub session spawn — write a minimal session-home tree so
@@ -103,6 +108,8 @@
         no-session  (fn [_run] {})]
     (try
       (with-redefs [cstate/nido-root            (constantly (str tmp))
+                    ;; see manual-trigger-end-to-end above — same core/tick! -> real-prune exposure.
+                    work/prune-dead-registry!   (constantly [])
                     project/list-projects       (constantly {"brian" {:directory "/tmp"}})
                     runs/spawn-session-for-run! no-session
                     ;; stub launch-context — avoids real I/O (jj/git) that would

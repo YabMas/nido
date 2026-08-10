@@ -735,9 +735,20 @@
 (deftest maybe-adopt!-throttles-and-sweeps-all-projects
   (let [calls (atom [])]
     (with-redefs [nido.work/adopt-orphans! (fn [p] (swap! calls conj p) {:adopted [] :yielded []})
+                  nido.work/prune-dead-registry! (constantly [])
                   nido.project/list-projects (constantly {"brian" {:directory "/x"}})]
       ;; private fn + private atom: test through the var
       (#'nido.coordinator.core/reset-adopt-throttle!)
       (#'nido.coordinator.core/maybe-adopt! 1000000)
       (#'nido.coordinator.core/maybe-adopt! 1001000)   ; 1s later — throttled
       (is (= [:brian] @calls)))))
+
+(deftest adoption-sweep-prunes-the-dead-registry-first
+  (let [calls (atom [])]
+    (with-redefs [nido.work/prune-dead-registry! (fn [] (swap! calls conj :pruned) ["p--ghost"])
+                  nido.work/adopt-orphans!       (fn [_] (swap! calls conj :adopted) {})
+                  nido.coordinator.core/registered-projects (constantly [:brian])]
+      (reset! @#'core/!last-adopt-ms 0)
+      (#'core/maybe-adopt! (* 10 60 1000))
+      (is (= [:pruned :adopted] @calls)
+          "the registry is cleaned before adoption reads it, in the same sweep"))))

@@ -225,3 +225,15 @@
 (defn remove-from-registry! [project-dir]
   (prune-legacy-registry! project-dir)
   (write-registry! (dissoc (read-registry) project-dir)))
+
+(defn remove-many-from-registry!
+  "Remove several keys in ONE canonical write, still pruning each from the
+   legacy registries. The per-key remove-from-registry! re-reads and rewrites
+   for every key, so a concurrent upsert-registry! landing between one key's
+   read and its write is silently dropped — losing a just-registered session,
+   which then reads as dead and becomes reclaimable. One write shrinks that
+   window from N to 1."
+  [ks]
+  (when (seq ks)
+    (doseq [k ks] (prune-legacy-registry! k))
+    (write-registry! (apply dissoc (read-registry) ks))))

@@ -162,12 +162,25 @@
   (mapv keyword (keys (project/list-projects))))
 
 (defn- maybe-adopt!
-  "Throttled invariant sweep: at most once per :adopt-interval-ms, adopt live
-   orphan sessions into scratch workstreams and yield claimed duplicates
-   (work/adopt-orphans!). Never throws into the tick loop."
+  "Throttled invariant sweep: at most once per :adopt-interval-ms, prune registry
+   entries for sessions that are no longer up, then adopt live orphan sessions
+   into scratch workstreams and yield claimed duplicates (work/adopt-orphans!).
+   The prune runs first so adoption reads a registry that matches reality.
+   Never throws into the tick loop."
   [now-ms]
   (when (>= (- now-ms @!last-adopt-ms) (:adopt-interval-ms defaults))
     (reset! !last-adopt-ms now-ms)
+    (try
+      (let [pruned (work/prune-dead-registry!)]
+        (when (seq pruned)
+          (println (str "nido coordinator: pruned " (count pruned)
+                        " dead session registry entr"
+                        (if (= 1 (count pruned)) "y" "ies") ": "
+                        (str/join ", " pruned)))))
+      (catch Throwable t
+        (binding [*err* *err*]
+          (.println ^java.io.PrintWriter *err*
+                    (str "WARN: registry prune threw — " (ex-message t))))))
     (doseq [project (registered-projects)]
       (try
         (let [{:keys [adopted yielded]} (work/adopt-orphans! project)]

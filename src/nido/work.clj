@@ -804,6 +804,74 @@
        (map :name)
        set))
 
+(def ^:private registry-prune-grace-ms
+  "Never prune an entry younger than this. `:created-at` is restamped on every
+   `up!` (engine/start-session!), so this only ever shields a session that just
+   started — belt and braces on top of the fact that the entry is written AFTER
+   its services are listening."
+  (* 10 60 1000))
+
+(defn- entry-age-ms
+  "Milliseconds since the entry was (re)registered, or nil when it carries no
+   parseable `:created-at` — a pre-timestamp entry is by definition old."
+  [entry now-ms]
+  (when-let [ts (:created-at entry)]
+    (try (- now-ms (.toEpochMilli (java.time.Instant/parse ts)))
+         (catch Exception _ nil))))
+
+(defn- prunable?
+  "Only an entry that once recorded a probeable port is a prune candidate. An
+   entry that never had one — a `:lite` session (`:services []`, so the engine
+   records :app-port/:nrepl-port nil) — was never `live` under session-live?'s
+   definition, so judging it dead on liveness grounds is a category error: it
+   would be pruned while in active use, and reclaim/orphan-instance-dirs would
+   then delete its state dir."
+  [entry]
+  (or (pos-int? (:app-port entry)) (pos-int? (:nrepl-port entry))))
+
+(defn- prune-veto?
+  "Keep an entry whose ports do not answer but whose JVM is still running.
+   `session-live?` ignores :repl-pid on purpose — a recycled PID would make a
+   dead session read live forever, the wrong failure for the ORACLE. Deleting is
+   the opposite trade: a false `dead` costs a PGDATA via reclaim, a recycled PID
+   costs only a delayed prune. So a live PID vetoes the DELETE without ever
+   making the oracle report `live`."
+  [entry]
+  (boolean (and (pos-int? (:repl-pid entry))
+                (proc/process-alive? (:repl-pid entry)))))
+
+(defn prune-dead-registry!
+  "Drop every registry entry whose session no longer holds a port, and return
+   their instance-ids. The registry is otherwise only cleaned by a graceful
+   `down!` (engine/stop-session! → state/remove-from-registry!), so a reboot, a
+   JVM crash or a `kill` leaves an entry — and its phantom Winding-down row —
+   behind forever. Entries inside the grace window are left alone.
+
+   Two extra guards keep this DELETE path safe, distinct from session-live?'s
+   ORACLE contract (a false `live` there is the expensive mistake — see
+   session-live?'s docstring; that fn is untouched):
+     prunable?    — an entry with no recorded port (a `:lite` session) is never
+                    a candidate; it was never `live` and judging it dead would
+                    be a category error, not a liveness result.
+     prune-veto?  — an entry whose :repl-pid is still running is kept even
+                    though its ports don't answer; a false `dead` here costs a
+                    PGDATA via reclaim, so the JVM's liveness (not just its
+                    ports) gets a say before deletion.
+
+   Registry-global, not per-project: one call covers every project."
+  ([] (prune-dead-registry! (System/currentTimeMillis)))
+  ([now-ms]
+   (let [dead (->> (sstate/read-registry)
+                   (remove (fn [[_ entry]]
+                             (or (not (prunable? entry))
+                                 (session-live? entry)
+                                 (prune-veto? entry)
+                                 (when-let [age (entry-age-ms entry now-ms)]
+                                   (< age registry-prune-grace-ms)))))
+                   vec)]
+     (sstate/remove-many-from-registry! (map first dead))
+     (mapv (fn [[k entry]] (or (:instance-id entry) k)) dead))))
+
 (defn bring-down!
   "Down every live session of a workstream — the winding-down band's one action.
    Synchronous and slow (lifecycle/down! per session); callers own async + UI
