@@ -121,25 +121,71 @@
 (defn worktree-link [project-name session-name]
   (str (fs/path (state/session-home-dir project-name session-name) "worktree")))
 
-(defn- mcp-config [pg-svc pg-port]
-  (let [{:keys [db-name db-user db-password]} pg-svc
-        url (format "postgresql://%s:%s@localhost:%s/%s"
-                    db-user db-password pg-port db-name)]
-    {:mcpServers
-     {:postgres
-      {:type    "stdio"
-       :command "npx"
-       :args    ["-y" "@modelcontextprotocol/server-postgres" url]
-       :env     {}}}}))
+(defn- postgres-server
+  "This session's postgres MCP entry, keyed for merging. nil when the session
+   runs without a database."
+  [pg-svc pg-port]
+  (when (and pg-svc pg-port)
+    (let [{:keys [db-name db-user db-password]} pg-svc
+          url (format "postgresql://%s:%s@localhost:%s/%s"
+                      db-user db-password pg-port db-name)]
+      {:postgres
+       {:type    "stdio"
+        :command "npx"
+        :args    ["-y" "@modelcontextprotocol/server-postgres" url]
+        :env     {}}})))
+
+(defn- repo-mcp-servers
+  "MCP servers the project repo commits in `<worktree>/.mcp.json`. Read
+   best-effort: a missing or malformed file yields no servers rather than
+   failing session:up over a file nido doesn't own. `postgres` is dropped —
+   the repo's entry points at the shared template port, and this session
+   synthesises its own."
+  [worktree]
+  (when worktree
+    (let [path (str (fs/path worktree ".mcp.json"))]
+      (try
+        (-> (io/read-json path) :mcpServers (dissoc :postgres))
+        (catch Exception e
+          (core/log-step (str "warning: unreadable " path " — its MCP servers "
+                              "are omitted from this session: " (ex-message e)))
+          nil)))))
+
+(defn- registry-mcp-servers
+  "MCP servers declared for a project in projects.edn under `:mcp-servers`.
+   The home for servers that can't live in the project repo — host-local
+   tooling, or anything whose config would pollute an unrelated branch."
+  [project-name]
+  (some-> (config/read-projects)
+          (get project-name)
+          :mcp-servers))
+
+(defn- mcp-config
+  "Compose the session's MCP config. Three layers, later wins:
+
+     1. servers the project repo commits in `<worktree>/.mcp.json`
+     2. servers projects.edn declares for the project (`:mcp-servers`)
+     3. postgres, synthesised against this session's port
+
+   Returns nil when no layer contributed a server, so callers can skip the
+   write entirely. Claude Code resolves MCP servers per-cwd, and a nido
+   session home is a cwd the user never registered anything against — so
+   whatever a session should see has to be written here."
+  [project-name worktree pg-svc pg-port]
+  (let [servers (merge (repo-mcp-servers worktree)
+                       (registry-mcp-servers project-name)
+                       (postgres-server pg-svc pg-port))]
+    (when (seq servers)
+      {:mcpServers servers})))
 
 (defn write-session-mcp!
-  "Render the postgres MCP config and write it to the instance-state dir as a
-   launch input. Returns the path, or nil when the session has no postgres."
-  [instance-id pg-svc pg-port]
-  (when (and pg-svc pg-port)
+  "Render the session's MCP config and write it to the instance-state dir as a
+   launch input. Returns the path, or nil when no server is configured."
+  [instance-id project-name worktree pg-svc pg-port]
+  (when-let [doc (mcp-config project-name worktree pg-svc pg-port)]
     (let [path (state/session-mcp-path instance-id)]
       (fs/create-dirs (fs/parent path))
-      (io/write-json! path (mcp-config pg-svc pg-port))
+      (io/write-json! path doc)
       path)))
 
 (defn- render-link-line
@@ -433,13 +479,14 @@
                                                :links            link-entries
                                                :project-briefing (read-project-briefing project-name)}
                                               ws-ctx))
-          mcp-doc      (when (and pg-svc pg-port) (mcp-config pg-svc pg-port))]
+          mcp-doc      (mcp-config project-name worktree pg-svc pg-port)]
       (fs/create-dirs home)
       (when mcp-doc
         (let [path (mcp-path project-name session-name)]
           (io/write-json! path mcp-doc)
           (core/log-step (str "Wrote " path))))
-      (when-let [svc-mcp-path (write-session-mcp! (get-in ctx [:session :instance-id]) pg-svc pg-port)]
+      (when-let [svc-mcp-path (write-session-mcp! (get-in ctx [:session :instance-id])
+                                                 project-name worktree pg-svc pg-port)]
         (core/log-step (str "Wrote " svc-mcp-path)))
       (doseq [path [(claude-md-path project-name session-name)
                     (agents-md-path project-name session-name)]]

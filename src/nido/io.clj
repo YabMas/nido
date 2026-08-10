@@ -23,6 +23,14 @@
     (spit tmp (str (pr-str data) "\n"))
     (fs/move tmp path-s {:replace-existing true})))
 
+(defn read-json
+  "Read a JSON file into keyword-keyed maps, returning nil if it doesn't exist.
+  Throws on malformed JSON — callers that read files they don't own should
+  guard."
+  [path]
+  (when (fs/exists? path)
+    (json/parse-string (slurp (str path)) keyword)))
+
 (defn write-json!
   "Write data as JSON to path, creating parent dirs."
   [path data]

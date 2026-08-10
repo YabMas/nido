@@ -4,6 +4,7 @@
    [cheshire.core :as json]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
+   [nido.config :as config]
    [nido.core :as core]
    [nido.session.launcher :as launcher]
    [nido.session.links :as links]
@@ -226,22 +227,138 @@
       (is (not (str/includes? doc "workstream:"))
           "no workstream line should appear when workstream-id is nil"))))
 
+;; ---------------------------------------------------------------------------
+;; .mcp.json composition: repo-declared + registry-declared + session postgres
+;; ---------------------------------------------------------------------------
+
+(defn- write-worktree-mcp!
+  "Materialise a `<worktree>/.mcp.json` and return the worktree path."
+  [wt servers]
+  (fs/create-dirs wt)
+  (spit (str (fs/path wt ".mcp.json"))
+        (json/generate-string {:mcpServers servers}))
+  (str wt))
+
+(def ^:private chiasmus-entry
+  {:chiasmus {:type "stdio" :command "npx" :args ["-y" "chiasmus"]}})
+
+(defn- with-registry
+  "Run f with projects.edn stubbed to a single project carrying `extra`."
+  [extra f]
+  (with-redefs [config/read-projects
+                (constantly {"brian" (merge {:directory "/tmp/src"} extra)})]
+    (f)))
+
+(deftest mcp-config-merges-repo-registry-and-session-postgres
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (let [wt (write-worktree-mcp!
+                (fs/path tmp "wt")
+                {:chrome-devtools {:command "npx" :args ["-y" "chrome-devtools-mcp@latest"]}
+                 ;; the repo's postgres points at the shared template port
+                 :postgres        {:command "npx" :args ["-y" "pg" "postgresql://u:p@localhost:5433/brian"]}})]
+        (with-registry
+          {:mcp-servers chiasmus-entry}
+          (fn []
+            (let [servers (:mcpServers (@#'launcher/mcp-config
+                                        "brian" wt
+                                        {:db-name "d" :db-user "u" :db-password "p"} 6145))]
+              (testing "servers the repo commits pass through"
+                (is (= "npx" (get-in servers [:chrome-devtools :command]))))
+              (testing "servers the nido registry declares are added"
+                (is (= ["-y" "chiasmus"] (get-in servers [:chiasmus :args]))))
+              (testing "the repo's stale postgres is replaced by this session's"
+                (is (re-find #"localhost:6145/d"
+                             (last (get-in servers [:postgres :args])))))))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest mcp-config-keeps-other-servers-when-session-has-no-postgres
+  ;; A lite/no-DB session used to get no .mcp.json at all, losing every server.
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (let [wt (write-worktree-mcp! (fs/path tmp "wt")
+                                    {:chrome-devtools {:command "npx"}})]
+        (with-registry
+          {:mcp-servers chiasmus-entry}
+          (fn []
+            (let [servers (:mcpServers (@#'launcher/mcp-config "brian" wt nil nil))]
+              (is (contains? servers :chiasmus))
+              (is (contains? servers :chrome-devtools))
+              (testing "no postgres entry is invented without a port"
+                (is (not (contains? servers :postgres))))))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest mcp-config-nil-when-no-server-is-declared
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (fs/create-dirs (fs/path tmp "wt"))
+      (with-registry {} (fn []
+                          (is (nil? (@#'launcher/mcp-config
+                                     "brian" (str (fs/path tmp "wt")) nil nil)))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest mcp-config-survives-a-malformed-repo-mcp-json
+  ;; session:up must not die because the project repo shipped broken JSON.
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (let [wt (fs/path tmp "wt")]
+        (fs/create-dirs wt)
+        (spit (str (fs/path wt ".mcp.json")) "{not json")
+        (with-registry
+          {:mcp-servers chiasmus-entry}
+          (fn []
+            (let [servers (:mcpServers (@#'launcher/mcp-config "brian" (str wt) nil nil))]
+              (is (= #{:chiasmus} (set (keys servers))))))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest mcp-config-registry-wins-over-repo-on-name-clash
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (let [wt (write-worktree-mcp! (fs/path tmp "wt")
+                                    {:chiasmus {:command "stale"}})]
+        (with-registry
+          {:mcp-servers chiasmus-entry}
+          (fn []
+            (let [servers (:mcpServers (@#'launcher/mcp-config "brian" wt nil nil))]
+              (is (= "npx" (get-in servers [:chiasmus :command])))))))
+      (finally (fs/delete-tree tmp)))))
+
 (deftest write-session-mcp-writes-to-state-dir
   (let [tmp (str (fs/create-temp-dir))]
     (with-redefs [state/instance-state-dir (fn [_id] tmp)]
-      (let [path (launcher/write-session-mcp!
-                  "proj--sess"
-                  {:db-name "d" :db-user "u" :db-password "p"} 5599)]
-        (is (= (state/session-mcp-path "proj--sess") path))
-        (is (fs/exists? path))
-        (let [cfg (json/parse-string (slurp path) keyword)
-              conn (-> cfg :mcpServers :postgres :args last)]
-          (is (re-find #"localhost:5599/d" conn)))))))
+      (with-registry
+        {}
+        (fn []
+          (let [path (launcher/write-session-mcp!
+                      "proj--sess" "brian" "/nonexistent-wt"
+                      {:db-name "d" :db-user "u" :db-password "p"} 5599)]
+            (is (= (state/session-mcp-path "proj--sess") path))
+            (is (fs/exists? path))
+            (let [cfg  (json/parse-string (slurp path) keyword)
+                  conn (-> cfg :mcpServers :postgres :args last)]
+              (is (re-find #"localhost:5599/d" conn)))))))))
 
-(deftest write-session-mcp-noop-without-pg
+(deftest write-session-mcp-writes-registry-servers-without-pg
+  (let [tmp (str (fs/create-temp-dir))]
+    (with-redefs [state/instance-state-dir (fn [_id] tmp)]
+      (with-registry
+        {:mcp-servers chiasmus-entry}
+        (fn []
+          (let [path (launcher/write-session-mcp!
+                      "proj--sess" "brian" "/nonexistent-wt" nil nil)]
+            (is (some? path) "a DB-less session still needs its other servers")
+            (let [cfg (json/parse-string (slurp path) keyword)]
+              (is (contains? (:mcpServers cfg) :chiasmus)))))))))
+
+(deftest write-session-mcp-noop-when-nothing-to-write
   (with-redefs [state/instance-state-dir (fn [_id] "/never")]
-    (is (nil? (launcher/write-session-mcp! "x--y" nil nil)))
-    (is (nil? (launcher/write-session-mcp! "x--y" {:db-name "d"} nil)))))
+    (with-registry
+      {}
+      (fn []
+        (is (nil? (launcher/write-session-mcp!
+                   "x--y" "brian" "/nonexistent-wt" nil nil)))
+        (is (nil? (launcher/write-session-mcp!
+                   "x--y" "brian" "/nonexistent-wt" {:db-name "d"} nil)))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Worktree-native briefing prose + session-briefing extraction
