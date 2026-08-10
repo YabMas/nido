@@ -255,14 +255,50 @@
            ;; checks top-level first, then :properties).
            props-kw)))
 
+(def rich-text-limit
+  "Notion's hard cap on one rich_text `text.content`, in characters. Exceeding it
+   fails the WHOLE request with a 400 validation_error — no partial write — so
+   every block we build has to respect it."
+  2000)
+
+(defn- split-at-limit
+  "`s` as a seq of ≤`limit`-char pieces, cutting at the last newline (else the
+   last space) inside each window so lines and words survive the break. Falls
+   back to a hard cut when the window holds neither, which also guarantees
+   progress and thus termination."
+  [s limit]
+  (loop [s s acc []]
+    (if (<= (count s) limit)
+      (conj acc s)
+      (let [window (subs s 0 limit)
+            cut    (or (str/last-index-of window "\n") (str/last-index-of window " "))
+            cut    (if (and cut (pos? cut)) cut limit)]
+        (recur (str/triml (subs s cut)) (conj acc (str/trimr (subs s 0 cut))))))))
+
+(defn paragraph-blocks
+  "`text` as Notion paragraph blocks, each within `rich-text-limit`. Splits on
+   blank lines first so the source's own paragraph structure becomes real Notion
+   paragraphs, then splits any single paragraph still over the cap. Blank text
+   yields one empty paragraph, preserving the shape callers used to get."
+  [text]
+  (let [chunks (->> (str/split (or text "") #"\n{2,}")
+                    (map str/trim)
+                    (remove str/blank?)
+                    (mapcat #(split-at-limit % rich-text-limit)))]
+    (mapv (fn [chunk]
+            {:object "block" :type "paragraph"
+             :paragraph {:rich_text [{:text {:content chunk}}]}})
+          (if (seq chunks) chunks [""]))))
+
 (defn create-page!
   "POST /v1/pages creating a page in the data source `data-source-id`. `fields`:
      {:title s :description s :type s :status s :priority s-or-nil}
    Builds the Notion property payload (title = \"Task result\", status = \"Status\",
-   type = \"Type\", priority = \"Priority\" when non-blank) plus a single paragraph
-   block holding :description, and returns the created page via `normalise-page`
-   (so the caller reads back :id = the auto-assigned BR-####, :page-id, :url).
-   Returns {:error :kw} on failure; never throws."
+   type = \"Type\", priority = \"Priority\" when non-blank) plus `:description` as
+   paragraph blocks (see `paragraph-blocks` — one block per source paragraph, each
+   under Notion's 2000-char rich_text cap), and returns the created page via
+   `normalise-page` (so the caller reads back :id = the auto-assigned BR-####,
+   :page-id, :url). Returns {:error :kw} on failure; never throws."
   [data-source-id token {:keys [title description type status priority]}]
   (let [props (cond-> {"Task result" {:title [{:text {:content title}}]}
                        "Status"      {:status {:name status}}
@@ -270,8 +306,7 @@
                 (not (str/blank? priority)) (assoc "Priority" {:select {:name priority}}))
         body  {:parent     {:type "data_source_id" :data_source_id data-source-id}
                :properties props
-               :children   [{:object "block" :type "paragraph"
-                             :paragraph {:rich_text [{:text {:content (or description "")}}]}}]}
+               :children   (paragraph-blocks description)}
         resp  (try
                 (http-request
                   :post "https://api.notion.com/v1/pages"

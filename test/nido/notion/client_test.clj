@@ -320,6 +320,60 @@
           (is (= {"name" "bug"} (get-in b ["properties" "Type" "select"])))
           (is (= {"name" "2 - Should"} (get-in b ["properties" "Priority" "select"]))))))))
 
+(deftest paragraph-blocks-splits-on-blank-lines
+  (let [blocks (notion/paragraph-blocks "first para\nsecond line\n\nthird para")]
+    (is (= 2 (count blocks))
+        "blank lines become block boundaries, single newlines do not")
+    (is (= ["first para\nsecond line" "third para"]
+           (mapv #(get-in % [:paragraph :rich_text 0 :text :content]) blocks)))))
+
+(deftest paragraph-blocks-keeps-every-block-under-the-rich-text-cap
+  ;; One paragraph of 2159 chars — the exact shape that 400'd a real Apply.
+  (let [para   (apply str (repeat 300 "abcdefg "))   ; 2400 chars, space-separated
+        blocks (notion/paragraph-blocks para)]
+    (is (< 1 (count blocks))
+        "an over-cap paragraph must be split, not sent whole")
+    (is (every? #(<= (count (get-in % [:paragraph :rich_text 0 :text :content]))
+                     notion/rich-text-limit)
+                blocks)
+        "every emitted block respects Notion's 2000-char rich_text cap")
+    (is (= (apply str (repeat 300 "abcdefg"))
+           (->> blocks
+                (map #(get-in % [:paragraph :rich_text 0 :text :content]))
+                (apply str)
+                (remove #{\space \newline})
+                (apply str)))
+        "no content is dropped across the split")))
+
+(deftest paragraph-blocks-splits-a-word-with-no-break-point
+  (let [blocks (notion/paragraph-blocks (apply str (repeat 5000 "x")))]
+    (is (= [2000 2000 1000]
+           (mapv #(count (get-in % [:paragraph :rich_text 0 :text :content])) blocks))
+        "a break-less run is hard-cut at the cap rather than looping forever")))
+
+(deftest paragraph-blocks-yields-one-empty-block-for-blank-text
+  (is (= [{:object "block" :type "paragraph"
+           :paragraph {:rich_text [{:text {:content ""}}]}}]
+         (notion/paragraph-blocks nil)
+         (notion/paragraph-blocks "   "))))
+
+(deftest create-page!-sends-description-as-capped-paragraph-blocks
+  (let [captured (atom nil)
+        long-desc (str "intro\n\n" (apply str (repeat 400 "word ")))]
+    (with-redefs [notion/http-request
+                  (fn [_ _ opts]
+                    (reset! captured (cheshire.core/parse-string (:body opts) false))
+                    {:status 200 :body (cheshire.core/generate-string
+                                         {:id "p" :url "u" :properties {}})})]
+      (notion/create-page! "ds-1" "tok" {:title "t" :description long-desc
+                                         :type "bug" :status "Not started"})
+      (let [children (get @captured "children")]
+        (is (< 1 (count children)))
+        (is (every? #(<= (count (get-in % ["paragraph" "rich_text" 0 "text" "content"]))
+                         notion/rich-text-limit)
+                    children)
+            "a >2000-char description must not go out as one block — Notion 400s the whole request")))))
+
 (deftest create-page!-omits-priority-when-nil
   (with-redefs [notion/http-request
                 (fn [_ _ opts]
