@@ -520,7 +520,10 @@
                                     :status      "Not started"
                                     :priority    (:priority proposal)})]
         (if (:error created)
-          {:decision :error :error (:error created)}
+          ;; Carry :status through — an :http error is only actionable with the code
+          ;; (a 400 is a payload we built wrong; a 404 is a sharing/permission problem).
+          (cond-> {:decision :error :error (:error created)}
+            (:status created) (assoc :status (:status created)))
           (let [br (:id created)]
             (cws/add-ref! project ws-id {:adapter :notion :id br
                                          :page-id (:page-id created) :url (:url created)})

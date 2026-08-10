@@ -65,12 +65,15 @@
        (map key)
        set))
 
-(defn failed-winddown-errors
-  "Map of \"<project>/<ws-id>\" -> error message for winddown attempts whose
-   state is :failed. Fed into derive-screen so a failed bring-down! renders on
-   the row instead of vanishing silently (nothing else reads :failed for
-   winddown keys). Clicking the row's Bring down button again sets :stopping,
-   which overwrites this entry — retry self-clears the error."
+(defn failed-ws-errors
+  "Map of \"<project>/<ws-id>\" -> error message for every workstream-scoped
+   action that ended :failed — a bring-down! AND a gate resolve (Apply/Reply),
+   which share this key space. Fed into derive-screen so the failure renders on
+   the row / gate / pane instead of vanishing silently: nothing else reads
+   :failed for ws keys, and `pending-resolve-keys` deliberately drops :failed to
+   keep the action retryable, so without this a failed Apply looked like the
+   click did nothing at all. Re-clicking sets :resolving/:stopping, which
+   overwrites the entry — retry self-clears the error."
   []
   (->> @app-states
        (filter (fn [[k v]] (and (string? k) (str/includes? k "/")

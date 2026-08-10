@@ -2,6 +2,7 @@
   (:require [clojure.test :refer [deftest is]]
             [clojure.string :as str]
             [nido.ui.server :as server]
+            [nido.ui.views :as views]
             [nido.coordinator.breakers]
             [nido.coordinator.halt]
             [nido.coordinator.triggers]
@@ -159,6 +160,45 @@
       (is (= {:state :failed :error-msg "Apply failed: server"}
              (dev/current-app-state "brian/ws-notion-fail")))
       (finally (dev/clear-app-state! "brian/ws-notion-fail")))))
+
+(deftest gate-resolve-includes-the-http-status-in-the-failure-message
+  ;; ":error :http" alone is unactionable — a 400 is a payload we built wrong,
+  ;; a 404 is a sharing problem. The status has to reach the user.
+  (with-redefs [nido.work/resolve-gate! (fn [& _] {:decision :error :error :http :status 400})]
+    (try
+      (#'server/gate-resolve! "brian" "ws-http-fail" :apply nil)
+      (Thread/sleep 50)
+      (is (= {:state :failed :error-msg "Apply failed: http 400"}
+             (dev/current-app-state "brian/ws-http-fail")))
+      (finally (dev/clear-app-state! "brian/ws-http-fail")))))
+
+(deftest derive-screen-attaches-a-failed-resolve-to-its-gate
+  ;; The regression this guards: a failed Apply was written to the app-states atom
+  ;; and read by nothing, so the click looked like a no-op. pending-resolve-keys
+  ;; drops :failed (to keep the action retryable), so the gate must carry the
+  ;; reason instead.
+  (with-redefs [nido.work/all-gates (fn [] [{:ws-id "ws-1" :project "brian" :origin :slack
+                                             :stage :triage :label "L" :report nil
+                                             :actions [] :session nil}])
+                nido.work/all-grouped (fn [] [])
+                nido.session.dev/pending-resolve-keys (fn [] #{})
+                nido.session.dev/failed-ws-errors (fn [] {"brian/ws-1" "Apply failed: http 400"})]
+    (let [gate (first (:gates (server/derive-screen {:scope "all" :surface :needs})))]
+      (is (= "Apply failed: http 400" (:error-msg gate)))
+      (is (str/includes? (views/gate-pane (assoc gate :actions [{:id :apply :label "Apply"
+                                                                 :kind :mutation}]))
+                         "Apply failed: http 400")
+          "the pane renders it, and keeps the Apply button clickable to retry"))))
+
+(deftest derive-screen-hides-a-stale-error-on-a-gate-that-is-working-again
+  (with-redefs [nido.work/all-gates (fn [] [{:ws-id "ws-1" :project "brian" :origin :slack
+                                             :stage :triage :label "L" :report nil
+                                             :actions [] :session nil}])
+                nido.work/all-grouped (fn [] [])
+                nido.session.dev/pending-resolve-keys (fn [] #{"brian/ws-1"})
+                nido.session.dev/failed-ws-errors (fn [] {"brian/ws-1" "Apply failed: http 400"})]
+    (is (nil? (:error-msg (first (:gates (server/derive-screen {:scope "all" :surface :needs})))))
+        "a retry in flight supersedes the previous failure")))
 
 (deftest gate-resolve-clears-on-success-decision
   (with-redefs [nido.work/resolve-gate! (fn [& _] {:decision :applied})]

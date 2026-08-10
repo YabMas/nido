@@ -257,6 +257,23 @@
     (is (str/includes? html "boom: port never opened"))
     (is (str/includes? html "/workstreams/brian/ws-1/sessions/me/dev/start"))))   ; retry POSTs to start
 
+(deftest workstream-pane-shows-a-failed-gate-action-above-the-buttons
+  ;; A gate resolve fails asynchronously, and this 3s-polled pane is what replaces
+  ;; the optimistic confirm fragment — so it must carry the reason, or the click
+  ;; reads as a no-op.
+  (let [html (views/workstream-pane
+              (assoc sample-ws :error-msg "Apply failed: http 400") {})]
+    (is (str/includes? html "Apply failed: http 400"))
+    (is (str/includes? html "action-err"))
+    (is (str/includes? html "/workstreams/brian/ws-1/gate/apply")
+        "the Apply button stays clickable — the failure is retryable")))
+
+(deftest workstream-pane-hides-a-gate-error-on-a-read-back-entry
+  (let [html (views/workstream-pane
+              (assoc sample-ws :error-msg "Apply failed: http 400" :on-latest? false) {})]
+    (is (not (str/includes? html "Apply failed: http 400"))
+        "older ledger entries are read-back — no live action, so no live error")))
+
 (deftest workstream-pane-no-dev-env-card
   ;; the standalone weight-gated card is gone
   (let [html (views/workstream-pane sample-ws {})]

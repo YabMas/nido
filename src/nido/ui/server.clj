@@ -81,16 +81,28 @@
                              :pending          (dev/pending-resolve-keys)
                              :winddown-pending (dev/pending-winddown-keys)})
         sel (:selection view-state)
-        winddown-errors (dev/failed-winddown-errors)]
+        ws-errors (dev/failed-ws-errors)]
     (-> screen
         (assoc :selection
                (when sel
                  (let [ws (when (= :workstreams (:surface view-state))
                             (work/workstream (:project sel) (:ws-id sel) (:entry view-state)))]
                    (cond-> {:project (:project sel) :ws-id (:ws-id sel)}
-                     ws (assoc :ws ws
+                     ws (assoc :ws (cond-> ws
+                                     (get ws-errors (str (:project sel) "/" (:ws-id sel)))
+                                     (assoc :error-msg (get ws-errors (str (:project sel) "/" (:ws-id sel)))))
                                :dev-states (dev/ws-session-dev-states (:project sel) ws)
                                :machine (work/machine-facts (:project sel) (map :name (:sessions ws))))))))
+        ;; A gate whose Apply/Reply failed keeps its buttons (it stays retryable) and
+        ;; carries the reason — the resolve is async, so this is the only place the
+        ;; user ever learns the click did something and that something went wrong.
+        (update :gates
+                (fn [gates]
+                  (mapv (fn [g]
+                          (let [err (get ws-errors (str (:project g) "/" (:ws-id g)))]
+                            (cond-> g
+                              (and err (not (:pending? g))) (assoc :error-msg err))))
+                        gates)))
         (update :groups
                 (fn [groups]
                   (mapv (fn [{:keys [project] :as g}]
@@ -102,7 +114,7 @@
                                                                 (mapcat (juxt :repl-rss :pg-rss))
                                                                 (remove nil?)
                                                                 (reduce + 0))
-                                                     err   (get winddown-errors
+                                                     err   (get ws-errors
                                                                 (str project "/" (:ws-id row)))]
                                                  (cond-> row
                                                    (pos? total) (assoc :rss-str (proc/human-bytes total))
@@ -165,13 +177,17 @@
 
 (defn- ws-pane-fragment-response
   "SSE that patches #ws-pane with a freshly-rendered workstream pane (ws detail +
-   per-session dev-env state). `entry` selects which ledger entry's report to show."
+   per-session dev-env state). `entry` selects which ledger entry's report to show.
+   A failed gate action rides along as :error-msg — this poll is what replaces the
+   optimistic confirm fragment, so it has to carry the bad news too."
   ([project ws-id] (ws-pane-fragment-response project ws-id nil))
   ([project ws-id entry]
-   (let [ws (work/workstream project ws-id entry)]
+   (let [ws  (work/workstream project ws-id entry)
+         err (get (dev/failed-ws-errors) (str project "/" ws-id))]
      (sse-response
       (sse-fragment
-       (views/workstream-pane ws (dev/ws-session-dev-states project ws)
+       (views/workstream-pane (cond-> ws err (assoc :error-msg err))
+                              (dev/ws-session-dev-states project ws)
                               (work/machine-facts project (map :name (:sessions ws)))))))))
 
 (defn- parse-json-body
@@ -206,9 +222,11 @@
     (dev/set-app-state! k (if (= :reply action-id) :resuming :resolving))
     (future
       (try
-        (let [{:keys [decision error]} (work/resolve-gate! project ws-id action-id input)]
+        (let [{:keys [decision error status]} (work/resolve-gate! project ws-id action-id input)]
           (if (contains? #{:notion-failed :error} decision)
-            (dev/set-app-state! k :failed (str "Apply failed" (when error (str ": " (name error)))))
+            (dev/set-app-state! k :failed (str "Apply failed"
+                                               (when error (str ": " (name error)))
+                                               (when status (str " " status))))
             (dev/clear-app-state! k)))
         (catch Exception e
           (dev/set-app-state! k :failed (or (:reason (ex-data e)) (ex-message e))))))))

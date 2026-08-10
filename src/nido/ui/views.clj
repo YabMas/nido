@@ -53,6 +53,9 @@
         .error-msg { color: #f87171; font-size: 11px; margin-top: 4px;
                      max-width: 420px; overflow: hidden; text-overflow: ellipsis;
                      white-space: nowrap; }
+        .action-err { color: #f87171; background: #2a1616; border: 1px solid #4a2020;
+                      border-radius: 4px; padding: 8px 10px; margin-top: 16px;
+                      font-size: 12px; }
         .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
         .badge { display:inline-flex; align-items:center; justify-content:center;
                  width:18px; height:18px; border-radius:4px; font-size:11px; font-weight:bold; }
@@ -333,8 +336,10 @@
 (defn- gate-card
   "One inbox row; links to the gate pane. `sel?` highlights the open gate. `href`
    carries the view-state so selecting a gate preserves scope + selection. A
-   `:pending?` gate (its agent was resumed / is mid-resolve) shows 'working…'."
-  [{:keys [project origin stage label report session resume-error pending?]} sel? href]
+   `:pending?` gate (its agent was resumed / is mid-resolve) shows 'working…'.
+   `:error-msg` (a gate action that came back failed) renders on the row — the
+   resolve is async, so this is the only trace a failed Apply leaves."
+  [{:keys [project origin stage label report session resume-error pending? error-msg]} sel? href]
   [:a {:class (str "gate-card" (when sel? " sel"))
        :href  href}
    [:div.gate-top (origin-badge origin) [:span.lbl label] [:span.needs {:title "needs you"}]]
@@ -346,7 +351,8 @@
                        "—")]
    (when resume-error
      [:div.gate-err "⚠ resume failed: " (or (:message resume-error)
-                                            (name (:reason resume-error)))])])
+                                            (name (:reason resume-error)))])
+   (when error-msg [:div.gate-err "⚠ " error-msg])])
 
 (defn needs-fragment
   "The needs-you queue column — initial render + SSE refresh. Renders from the
@@ -514,8 +520,9 @@
   "The detail pane: rendered report + follow-actions. nil -> calm placeholder.
    A `:pending?` gate (its agent is running after Apply/Reply) shows 'working…'
    and no action buttons — deriving action availability from the agent's live
-   phase, so a poll can't flip it back to a fresh Apply button."
-  [{:keys [ws-id project origin label report actions session pending?] :as gate}]
+   phase, so a poll can't flip it back to a fresh Apply button. `:error-msg` (a
+   failed action) renders above the buttons, which stay clickable to retry."
+  [{:keys [ws-id project origin label report actions session pending? error-msg] :as gate}]
   (str
    (h/html
     (if-not gate
@@ -526,7 +533,8 @@
        (report-body report)
        (if pending?
          [:div.actions {:style "margin-top:16px"} [:span.meta "working… the agent is running."]]
-         (action-bar project ws-id actions session))]))))
+         (list (when error-msg [:div.action-err "⚠ " error-msg])
+               (action-bar project ws-id actions session)))]))))
 
 (defn needs-page
   "Home: the needs-you master-detail inside the shell, rendered from the screen.
@@ -762,9 +770,11 @@
    is a map of session-name → {:state … :url :error-msg} (the view does no IO).
    `machine-facts` is a map of session-name → {:pg-port :nrepl-port :app-port
    :repl-rss :pg-rss :heap-max} (also no IO — a projection the caller injects).
+   `:error-msg` on the ws (a gate action that came back failed) renders above the
+   action bar, whose buttons stay clickable to retry.
    Polls its own fragment so transient dev-env states (starting…) self-advance."
   ([ws session-dev-states] (workstream-pane ws session-dev-states {}))
-  ([{:keys [project ws-id origin stage label ledger report entries selected-seq sessions environment on-latest?]
+  ([{:keys [project ws-id origin stage label ledger report entries selected-seq sessions environment on-latest? error-msg]
      :or {on-latest? true}} session-dev-states machine-facts]
    (str
     (h/html
@@ -781,6 +791,8 @@
            " · " (:report-count ledger) " report(s)"])
         (ledger-browser project ws-id entries selected-seq report)
         ;; Live actions only on the current ledger entry — older entries are read-back.
+        (when (and on-latest? error-msg)
+          [:div.action-err "⚠ " error-msg])
         (when on-latest? (pane-action-bar project ws-id origin stage sessions))
         (when (= :done stage) (file-findings-form project ws-id))
         [:h2 "Environment"]
