@@ -26,6 +26,45 @@
   [ws]
   (some #(when (= :github-issue (:adapter %)) %) (:external-refs ws)))
 
+(def ^:private ref-adapter-order
+  "Display order for external-ref adapters in the UI's links row. An adapter not
+   listed here sorts last, in stored order."
+  [:notion :github-issue :github :slack-message])
+
+(def ^:private ref-adapter-labels
+  "Human key each adapter renders under. Unlisted adapters fall back to their name."
+  {:notion        "notion"
+   :github-issue  "GitHub issue"
+   :github        "PR"
+   :slack-message "slack"})
+
+(defn- ref-url
+  "Followable URL for one external ref, or nil. A :notion ref persisted before
+   :url was carried on the ref falls back to a URL built from its :page-id."
+  [{:keys [adapter url page-id]}]
+  (or (not-empty url)
+      (when (and (= :notion adapter) (not-empty page-id))
+        (str "https://www.notion.so/" (str/replace page-id "-" "")))))
+
+(defn ref-links
+  "The workstream's followable external refs, display-ordered:
+   [{:adapter :label :id :title :url} …]. A ref with no resolvable URL is dropped
+   — there is nothing to follow. Pure and nil-safe; never returns nil."
+  [ws]
+  (let [rank      (into {} (map-indexed (fn [i a] [a i])) ref-adapter-order)
+        last-rank (count ref-adapter-order)]
+    (->> (:external-refs ws)
+         (keep (fn [{:keys [adapter id title] :as ref}]
+                 (when-let [url (ref-url ref)]
+                   {:adapter adapter
+                    :label   (get ref-adapter-labels adapter (name adapter))
+                    :id      id
+                    :title   (not-empty title)
+                    :url     url})))
+         ;; sort-by is stable, so same-rank refs keep their stored order
+         (sort-by #(get rank (:adapter %) last-rank))
+         vec)))
+
 (defn ledger-ref
   "The external-ref whose :id keys the per-ticket ledger (`bb nido:ticket:*` :br):
    the :notion ref (BR-####) or the :slack-message ref (slack-<channel>-<ts>).
@@ -160,6 +199,7 @@
       :promote-id      (or (:id (notion-ref ws))
                            (some #(when (= :github-issue (:adapter %)) (:id %)) (:external-refs ws)))
       :label           (label ws sessions)
+      :links           (ref-links ws)
       :source          (ws-source ws)
       :stage           (:stage proj)
       :needs-you       (:needs-you proj)
@@ -198,6 +238,10 @@
      :br-id           br
      :promote-id      br
      :label           (or title br "(untitled)")
+     :links           (ref-links {:external-refs [{:adapter :notion
+                                                   :id      (or br page-id)
+                                                   :title   title
+                                                   :page-id page-id}]})
      :source          :notion
      :stage           (session/notion-stage status triaged?)
      :needs-you       false

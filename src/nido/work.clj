@@ -357,6 +357,7 @@
         :origin       (classify-origin w)
         :stage        (:stage row)
         :label        (:label row)
+        :links        (:links row)
         :ledger       (ledger-summary project (:br-id row))
         :entries      index
         :selected-seq sel
@@ -411,6 +412,7 @@
      :origin       (:origin row)
      :stage        (:stage row)
      :label        (:label row)
+     :links        (:links row)
      :report       (latest-report project (:ws-id row))
      :actions      (gate-actions (:stage row) parked? (:origin row))
      :session      (:name psess)

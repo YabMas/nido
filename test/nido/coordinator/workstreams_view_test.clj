@@ -590,3 +590,59 @@
     (is (= ["a"] (map :ws-id (get-in g [:triage :queued])))
         "dismissed rows are not in the triage band")))
 
+
+;; ---------------------------------------------------------------------------
+;; ref-links — followable external refs
+;; ---------------------------------------------------------------------------
+
+(deftest ref-links-orders-adapters-and-labels-them
+  (let [ws {:external-refs
+            [{:adapter :slack-message :id "slack-C1-1.2" :url "https://slack.example/x"}
+             {:adapter :github :id "o/r#1" :url "https://github.com/o/r/pull/1"}
+             {:adapter :notion :id "BR-7" :title "Fix drift"
+              :url "https://app.notion.com/p/Fix-drift-abc"}
+             {:adapter :github-issue :id "o/r#2" :url "https://github.com/o/r/issues/2"}]}]
+    (is (= [["notion" "BR-7"]
+            ["GitHub issue" "o/r#2"]
+            ["PR" "o/r#1"]
+            ["slack" "slack-C1-1.2"]]
+           (map (juxt :label :id) (wsv/ref-links ws))))))
+
+(deftest ref-links-falls-back-to-page-id-for-a-urlless-notion-ref
+  (let [ws {:external-refs [{:adapter :notion :id "BR-7"
+                             :page-id "31efca9f-403c-80a3-9401-c534aaaabbbb"}]}]
+    (is (= ["https://www.notion.so/31efca9f403c80a39401c534aaaabbbb"]
+           (map :url (wsv/ref-links ws))))))
+
+(deftest ref-links-drops-a-ref-with-nothing-to-follow
+  (let [ws {:external-refs [{:adapter :notion :id "BR-7"}
+                            {:adapter :github :id "o/r#1"
+                             :url "https://github.com/o/r/pull/1"}]}]
+    (is (= ["o/r#1"] (map :id (wsv/ref-links ws))))))
+
+(deftest ref-links-empty-when-there-is-nothing-to-project
+  (is (= [] (wsv/ref-links {:external-refs []})))
+  (is (= [] (wsv/ref-links nil))))
+
+(deftest ref-links-labels-an-unknown-adapter-by-its-name
+  (let [ws {:external-refs [{:adapter :linear :id "LIN-1" :url "https://linear.example/1"}]}]
+    (is (= ["linear"] (map :label (wsv/ref-links ws))))))
+
+(deftest workstream-row-carries-ref-links
+  (with-tmp
+    (fn [_]
+      (let [w   (make-ws! :brian {:external-refs
+                                  [{:adapter :notion :id "BR-7"
+                                    :url "https://app.notion.com/p/x"}]})
+            row (wsv/workstream-row :brian (workstream/read-ws :brian (:id w)))]
+        (is (= ["https://app.notion.com/p/x"] (map :url (:links row))))))))
+
+(deftest bare-row-links-to-its-notion-page
+  (with-tmp
+    (fn [_]
+      (let [row (wsv/bare-row :brian "31efca9f-403c-80a3-9401-c534aaaabbbb"
+                              {:status "Not started" :priority 1
+                               :title "Orphan ticket" :br "BR-9"})]
+        (is (= ["https://www.notion.so/31efca9f403c80a39401c534aaaabbbb"]
+               (map :url (:links row))))
+        (is (= ["BR-9"] (map :id (:links row))))))))
