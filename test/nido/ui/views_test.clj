@@ -605,3 +605,54 @@
   ;; user-facing evidence for the branch's entire guarantee.
   (is (str/includes? (views/gate-action-confirm-fragment :dismiss "brian" "ws-9")
                      "Nothing written to Notion")))
+
+;; ---------------------------------------------------------------------------
+;; Followable external links
+;; ---------------------------------------------------------------------------
+
+(def ^:private sample-links
+  [{:adapter :notion :label "notion" :id "BR-7" :title "checkout off by a cent"
+    :url "https://app.notion.com/p/checkout-abc"}
+   {:adapter :github :label "PR" :id "o/r#12" :title "fix rounding"
+    :url "https://github.com/o/r/pull/12"}])
+
+(deftest gate-pane-lists-external-refs
+  (let [html (views/gate-pane (assoc sample-gate :links sample-links))]
+    (is (str/includes? html "href=\"https://app.notion.com/p/checkout-abc\""))
+    (is (str/includes? html "href=\"https://github.com/o/r/pull/12\""))
+    (is (str/includes? html "target=\"_blank\""))
+    (is (str/includes? html "o/r#12"))
+    (is (str/includes? html "link-k"))))
+
+(deftest gate-pane-heading-links-to-the-primary-ref
+  ;; the primary (first) ref's url appears twice: on the heading label and in the links row
+  (let [html (views/gate-pane (assoc sample-gate :links sample-links))]
+    (is (= 2 (count (re-seq #"https://app\.notion\.com/p/checkout-abc" html))))))
+
+(deftest gate-pane-without-links-renders-a-plain-heading
+  ;; ↗ is emitted only by pane-heading and links-row, and gate-pane renders no
+  ;; environment block — so its absence proves both stayed plain.
+  (doseq [[what gate] [["empty links" (assoc sample-gate :links [])]
+                       ["absent links" sample-gate]]]
+    (let [html (views/gate-pane gate)]
+      (is (not (str/includes? html "link-k")) (str what ": no links row"))
+      (is (not (str/includes? html "↗")) (str what ": heading label is not an anchor")))))
+
+(deftest workstream-pane-lists-external-refs
+  (let [html (views/workstream-pane (assoc sample-ws :links sample-links) {})]
+    (is (str/includes? html "href=\"https://app.notion.com/p/checkout-abc\""))
+    (is (str/includes? html "href=\"https://github.com/o/r/pull/12\""))
+    (is (str/includes? html "link-k"))))
+
+(deftest workstream-pane-heading-links-to-the-primary-ref
+  (let [html (views/workstream-pane (assoc sample-ws :links sample-links) {})]
+    (is (= 2 (count (re-seq #"https://app\.notion\.com/p/checkout-abc" html))))))
+
+(deftest workstream-pane-without-links-renders-a-plain-heading
+  ;; sample-ws carries no :environment, so the "Open app ↗" button is not rendered
+  ;; either — ↗ is again unique to pane-heading and links-row here.
+  (doseq [[what ws] [["empty links" (assoc sample-ws :links [])]
+                     ["absent links" sample-ws]]]
+    (let [html (views/workstream-pane ws {})]
+      (is (not (str/includes? html "link-k")) (str what ": no links row"))
+      (is (not (str/includes? html "↗")) (str what ": heading label is not an anchor")))))

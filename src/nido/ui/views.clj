@@ -116,7 +116,12 @@
         .md code { background:#1c1c33; padding:1px 5px; border-radius:3px; color:#aee0ff; }
         .reply { margin-top:16px; border:1px solid #2a2a4a; border-radius:6px; background:#13132a; padding:12px 14px; }
         .reply textarea { width:100%; min-height:62px; background:#0f0f1e; border:1px solid #2a2a4a;
-                          border-radius:4px; color:#e0e0e0; font:inherit; font-size:13px; padding:9px 11px; }"
+                          border-radius:4px; color:#e0e0e0; font:inherit; font-size:13px; padding:9px 11px; }
+        .links { margin:6px 0 14px; }
+        .link-row { display:flex; gap:10px; align-items:baseline; font-size:12px;
+                    line-height:1.9; }
+        .link-k { color:#666; font-size:11px; text-transform:uppercase;
+                  letter-spacing:0.04em; min-width:82px; }"
    ;; rail + content-area chrome
    " body { margin:0; padding:0; display:grid; grid-template-columns:180px 1fr; min-height:100vh; }
      .content { padding:20px 28px; overflow:auto; }
@@ -316,6 +321,29 @@
 
 (defn- chip [stage]
   [:span {:class (str "chip c-" (name stage))} (name stage)])
+
+(defn- links-row
+  "The workstream's followable external refs under a pane heading — one anchor per
+   ref, keyed by its adapter label. Renders nothing when there are none, so a
+   ref-less workstream gets no empty box."
+  [links]
+  (when (seq links)
+    [:div.links
+     (for [{:keys [label id title url]} links]
+       [:div.link-row
+        [:span.link-k label]
+        [:a {:href url :target "_blank" :title title} (or id url) " ↗"]])]))
+
+(defn- pane-heading
+  "A detail pane's <h1>: origin badge + label, with the label linking out to the
+   primary (first) external ref when there is one. The badge stays outside the
+   anchor so only the title is clickable."
+  [origin label links]
+  (let [primary (:url (first links))]
+    [:h1 (origin-badge origin) " "
+     (if primary
+       [:a {:href primary :target "_blank"} label " ↗"]
+       label)]))
 
 (defn- screen-query
   "Query string (leading ?) rebuilding the active scope + tab from the screen,
@@ -523,13 +551,14 @@
    and no action buttons — deriving action availability from the agent's live
    phase, so a poll can't flip it back to a fresh Apply button. `:error-msg` (a
    failed action) renders above the buttons, which stay clickable to retry."
-  [{:keys [ws-id project origin label report actions session pending? error-msg] :as gate}]
+  [{:keys [ws-id project origin label links report actions session pending? error-msg] :as gate}]
   (str
    (h/html
     (if-not gate
       [:div {:id "gate-pane"} [:p.empty "Nothing needs you right now."]]
       [:div {:id "gate-pane"}
-       [:h1 (origin-badge origin) " " label]
+       (pane-heading origin label links)
+       (links-row links)
        (when report [:div.meta (some-> report :format name) " · " (:at report)])
        (report-body report)
        (if pending?
@@ -801,7 +830,7 @@
    action bar, whose buttons stay clickable to retry.
    Polls its own fragment so transient dev-env states (starting…) self-advance."
   ([ws session-dev-states] (workstream-pane ws session-dev-states {}))
-  ([{:keys [project ws-id origin stage label ledger report entries selected-seq sessions environment on-latest? error-msg]
+  ([{:keys [project ws-id origin stage label links ledger report entries selected-seq sessions environment on-latest? error-msg]
      :or {on-latest? true}} session-dev-states machine-facts]
    (str
     (h/html
@@ -811,8 +840,9 @@
               :data-on-interval__duration.3s
               (str "@get('/_fragment/workstream/" project "/" ws-id
                    (when selected-seq (str "?entry=" selected-seq)) "')")}
-        [:h1 (origin-badge origin) " " label]
+        (pane-heading origin label links)
         [:p.meta (name stage)]
+        (links-row links)
         (when ledger
           [:div.card [:strong "ledger "] (:key ledger) " · " (some-> ledger :status name)
            " · " (:report-count ledger) " report(s)"])
