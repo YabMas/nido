@@ -172,6 +172,20 @@
              (dev/current-app-state "brian/ws-http-fail")))
       (finally (dev/clear-app-state! "brian/ws-http-fail")))))
 
+(deftest gate-resolve-surfaces-a-no-workstream-decision
+  ;; :no-workstream means the click landed on a row with nothing behind it — the
+  ;; resolver did nothing at all. Clearing the state on that leaves the optimistic
+  ;; "✓ Restored — back in the triage queue." toast as the last word the user ever
+  ;; sees, which is the band lying about its one guarantee.
+  (with-redefs [nido.work/resolve-gate! (fn [& _] {:decision :no-workstream})]
+    (try
+      (#'server/gate-resolve! "brian" "pg-orphan" :restore nil)
+      (Thread/sleep 50)
+      (is (= {:state :failed
+              :error-msg "Nothing happened — no workstream or ticket behind this row."}
+             (dev/current-app-state "brian/pg-orphan")))
+      (finally (dev/clear-app-state! "brian/pg-orphan")))))
+
 (deftest derive-screen-attaches-a-failed-resolve-to-its-gate
   ;; The regression this guards: a failed Apply was written to the app-states atom
   ;; and read by nothing, so the click looked like a no-op. pending-resolve-keys

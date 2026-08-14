@@ -51,10 +51,17 @@
 
    These are nido's two jobs. The backlog (:ready) and the archive (:done) live
    in Notion and are never emitted by grouped-by-stage, so they are not bands
-   here. Their union is every row `grouped-rows` emits — a workstream is always
-   reachable from exactly one tab, which is the guarantee that nothing can be
-   hidden by default (a source filter defaulting to :notion once hid every
-   :in-progress row). An unrecognized `tab` reads as :intake.
+   here. :dismissed IS a band — the nido-side veto has no Notion archive to
+   fall into, so hiding it would be the silent loss this guarantee exists to
+   prevent. It trails :intake exactly as :winding-down trails :active. Their
+   union is every row `grouped-rows` emits — a workstream is always reachable
+   from at least one tab, which is the guarantee that nothing can be hidden by
+   default (a source filter defaulting to :notion once hid every :in-progress
+   row). Exactly one, with one transient exception: a dismissed workstream still
+   holding a live session is BOTH :dismissed (projected from its row) and
+   :winding-down (computed from raw records), until the daemon's sweep tears the
+   session down. Double-reachable is the harmless direction — both bands' actions
+   are sane — and it self-heals. An unrecognized `tab` reads as :intake.
 
    :active's trailing band is :winding-down — closed workstreams still holding
    live resources (bring-down! is their one action)."
@@ -65,37 +72,43 @@
                   [:winding-down (:winding-down grouped)]]
          [[:triage   (concat (-> grouped :triage :in-flight)
                              (-> grouped :triage :queued))]
-          [:incoming (:incoming grouped)]])
+          [:incoming (:incoming grouped)]
+          [:dismissed (:dismissed grouped)]])
        (into [] (keep (fn [[stage rows]] (when (seq rows) [stage (vec rows)]))))))
 
 (defn gate-actions
-  "Follow-actions for a gate, derived from its spine `stage`, whether a session is
-   `parked?`, and its `origin`. Dismiss is retired for :notion triage rows by design —
-   Notion owns their lifecycle, so a local dismiss would be a no-op; it is kept only
-   for Slack triage (ledger-only, where it works).
-   Each is a descriptor {:id :label :kind :style (:input)}:
+  "Follow-actions for a gate, derived from its spine `stage` and whether a session is
+   `parked?`. Each is a descriptor {:id :label :kind :style (:input)}:
      :kind :mutation -> one-click button, resolved nido-side (resolve-gate! on :id).
      :kind :resume   -> resume the parked agent. With :input it renders a one-click
                         button carrying that canned input (e.g. Apply -> \"apply\");
                         without :input it renders the free-text reply textarea.
-   :style is a render hint (:primary | :danger | :default)."
+   :style is a render hint (:primary | :danger | :default).
+
+   `origin` is accepted and ignored — it once fenced Dismiss off Notion triage rows
+   (2026-07-17-triage-routing-model-design.md §5, on the grounds that a local dismiss
+   was a no-op there). It is no longer: to-spine's :dismissed stamp makes the veto
+   stick, and the Dismissed band + Restore make it reversible instead of silent.
+   The arg stays for call-site compatibility."
   ([stage parked?] (gate-actions stage parked? nil))
-  ([stage parked? origin]
+  ([stage parked? _origin]
    (case stage
      :incoming    [{:id :promote :label "Promote" :kind :mutation :style :primary}
                    {:id :drop    :label "Dismiss" :kind :mutation :style :danger}]
-     :triage      (let [dismiss  {:id :dismiss :label "Dismiss" :kind :mutation :style :danger}
-                        dismiss? (not= :notion origin)]
+     :triage      (let [dismiss {:id :dismiss :label "Dismiss" :kind :mutation :style :danger}]
                     ;; Apply executes the routed verdict to Notion nido-side (Ball Holder +
                     ;; App Domain, deep properties/callout — apply-routed!, no conversation),
                     ;; falling back to nido-only ticket:complete for legacy/Slack reports;
-                    ;; Reply (free-text overrides/redo) resumes the agent; Dismiss takes
-                    ;; it off the radar nido-side (dropped for Notion — Notion drives it).
+                    ;; Reply (free-text overrides/redo) resumes the agent; Dismiss takes it
+                    ;; off the radar nido-side, writing nothing to Notion.
                     (if parked?
-                      (into [{:id :apply :label "Apply" :kind :mutation :style :primary}]
-                            (concat (when dismiss? [dismiss])
-                                    [{:id :reply :label "Reply" :kind :resume :style :default}]))
-                      (if dismiss? [dismiss] [])))
+                      [{:id :apply :label "Apply" :kind :mutation :style :primary}
+                       dismiss
+                       {:id :reply :label "Reply" :kind :resume :style :default}]
+                      [dismiss]))
+     ;; The nido-side veto, reversible: Restore clears the ticket status so the row
+     ;; rejoins the triage queue and the auto-triage gate can pick it up again.
+     :dismissed   [{:id :restore :label "Restore" :kind :mutation :style :default}]
      :ready       [{:id :promote :label "Promote" :kind :mutation :style :primary}
                    {:id :drop    :label "Drop"    :kind :mutation :style :danger}]
      :in-progress (if parked?
@@ -120,10 +133,22 @@
 
 (defn- to-spine
   "Project one wsv row onto the single spine: rename :source→:origin, fold a
-   scratch workstream to :in-progress, and a settled (closed) one to :done."
+   scratch workstream to :in-progress, and a settled (closed) one to :done.
+
+   :dismissed? is checked FIRST and wins over every fold. It is the nido-side
+   dismiss veto, and it is deliberately outside both stage projections: a
+   dismissed row's Notion lifecycle is unchanged (Notion still says whatever it
+   said), so :dismissed is a BOARD BAND, not a lifecycle position. Order matters —
+   dismiss settles the workstream, so a ledger-driven row reads :settled and would
+   fold to :done, which is a band on neither tab.
+
+   This is the one function BOTH row paths pass through — list-workstreams (the
+   board list) and work/workstream (the detail pane) — so the stamp reaches the
+   band key, gate-actions, and the pane's stage line from here alone."
   [row]
   (let [origin (:source row)
         stage  (cond
+                 (:dismissed? row)              :dismissed
                  (= :settled (:engagement row)) :done
                  (= :scratch origin)            :in-progress
                  :else                          (:stage row))]
@@ -395,11 +420,17 @@
 (defn gates
   "A project's gates: workstreams that want you now (needs-you), each hydrated
    with its report + follow-actions. A SETTLED (closed) workstream is never a gate,
-   even if a stale stage-override still projects :needs-you. `live-names` threads
-   into the engagement projection (pass it so a downed one-off reads idle)."
+   even if a stale stage-override still projects :needs-you.
+   A DISMISSED row is never a gate either — and the filter is load-bearing, not
+   cosmetic: Notion-driven rows ignore nido :closed for engagement, and the parked
+   session is torn down asynchronously by review/sweep-resolved!, so without this a
+   just-dismissed row keeps its :needs-you until the daemon next ticks.
+   `live-names` threads into the engagement projection (pass it so a downed
+   one-off reads idle)."
   ([project] (gates project nil))
   ([project live-names]
    (->> (list-workstreams project live-names)
+        (remove #(= :dismissed (:stage %)))
         (filter :needs-you)
         (remove #(= :settled (:engagement %)))
         (mapv #(->gate project %)))))
@@ -465,18 +496,68 @@
 
 (defn dismiss!
   "Take a workstream off the triage radar: record a :dismissed disposition on its
-   ticket (so auto-re-triage skips it) and settle the workstream (:dropped, which
-   frees its trigger's in-flight slot and removes it from the board). A ref-less
-   workstream just closes. A workstream-less ws-id (e.g. a bare watched-view row)
-   is a no-op: {:decision :no-workstream}. Returns {:decision :dismissed} otherwise."
+   ticket (so auto-re-triage skips it) and settle the workstream :dismissed (which
+   frees its trigger's in-flight slot and removes it from the queue).
+
+   BOTH writes carry the veto, because neither alone covers every row. The ticket
+   record needs a ledger ref (notion-or-slack), which a ref-less coordinator
+   workstream has not got; the :closed outcome is ignored outright by the
+   notion-driven projection. Closing :dismissed rather than :dropped is safe
+   because nothing branches on the outcome value — every other reader tests
+   :closed for presence or renders (name outcome).
+
+   A workstream-less ws-id (e.g. a bare watched-view row) is a no-op:
+   {:decision :no-workstream}. Returns {:decision :dismissed} otherwise."
   [project ws-id]
   (if-let [w (cws/read-ws project ws-id)]
     (do
       (when-let [br (:id (wsv/ledger-ref w))]
         (tickets/dismiss! project br))
-      (cws/close! project ws-id :dropped)
+      (cws/close! project ws-id :dismissed)
       {:decision :dismissed})
     {:decision :no-workstream}))
+
+(defn- bare-row-br
+  "The BR-#### behind a bare watched-view row, whose synthetic ws-id IS the Notion
+   page-id (workstreams-view/bare-row). nil when the page is not in the project's
+   watched-view cache, or carries no unique-id."
+  [project page-id]
+  (get-in (notion-cache/project-page-facts project) [page-id :br]))
+
+(defn restore!
+  "Undo a dismiss: clear the ticket's status so it is re-triable and reopen the
+   workstream. The inverse of dismiss!, with one deliberate asymmetry — the
+   pre-dismiss status is NOT restored. Dismiss lets the daemon sweep tear the
+   parked triage session down, so putting :awaiting-input back would name a
+   conversation that no longer exists; a status-less ticket is honest and lets the
+   auto-triage gate pick it up fresh. The ledger (and its triage report) survive
+   untouched.
+
+   Reopens at :triaging, NOT :triage, even though :triage is where the row lands.
+   :triage is a member of session/lifecycle-stages, so storing it makes
+   stage-projection treat it as a manual override on the now-open workstream and
+   stop deriving from the ticket status forever — the row would pin at :triage,
+   never reach :ready, never be promotable again. :triaging is the create! default,
+   deliberately absent from lifecycle-stages precisely so it never overrides, and
+   derive-stage on the status-less ticket yields :triage anyway. Do not 'correct'
+   this to :triage.
+
+   A ws-id with no workstream is a bare watched-view row: its Restore button is
+   real (bare-row stamps :dismissed?, so a `bb nido:ticket:dismiss` orphan lands in
+   the band), and clearing the ticket status IS the whole undo there — the row has
+   no nido state beyond it. Only a row whose page carries no BR is a genuine no-op:
+   {:decision :no-workstream}."
+  [project ws-id]
+  (if-let [w (cws/read-ws project ws-id)]
+    (do
+      (when-let [br (:id (wsv/ledger-ref w))]
+        (tickets/clear-status! project br))
+      (cws/reopen! project ws-id :triaging)
+      {:decision :restored})
+    (if-let [br (bare-row-br project ws-id)]
+      (do (tickets/clear-status! project br)
+          {:decision :restored})
+      {:decision :no-workstream})))
 
 (defn- slack-ref-of
   "The workstream's :slack-message external-ref map, or nil."
@@ -649,15 +730,23 @@
 
 (defn resolve-gate!
   "Apply a gate follow-action, dispatching on `action-id`. A workstream-less ws-id
-   (e.g. a bare watched-view row) is a no-op: {:decision :no-workstream}.
-     :promote -> set-stage! :in-progress   :dismiss -> off-radar (ticket :dismissed + :dropped)
+   (e.g. a bare watched-view row) is a no-op — {:decision :no-workstream} — for
+   every action but :restore, which such a row legitimately offers (see restore!).
+     :promote -> set-stage! :in-progress   :dismiss -> off-radar (ticket + ws :dismissed)
      :drop    -> close! :dropped            :done    -> set-stage! :done
      :apply   -> apply! (ticket:complete)   :reply   -> resume! the parked agent with `input`
+     :restore -> restore! (clear ticket status + reopen at :triaging)
    Returns the resolver's result map."
   ([project ws-id action-id] (resolve-gate! project ws-id action-id nil))
   ([project ws-id action-id input]
-   (if (nil? (cws/read-ws project ws-id))
-     {:decision :no-workstream}
+   (cond
+     ;; :restore is the ONE action meaningful without a workstream: a bare
+     ;; watched-view row lands in the Dismissed band and renders Restore, so the
+     ;; guard would make the band's only action a silent no-op. restore! carries
+     ;; its own workstream-less branch (and its own :no-workstream refusal).
+     (= :restore action-id)             (restore! project ws-id)
+     (nil? (cws/read-ws project ws-id)) {:decision :no-workstream}
+     :else
      (case action-id
        :promote (set-stage! project ws-id :in-progress)
        :done    (set-stage! project ws-id :done)
@@ -744,7 +833,8 @@
           (get-in grouped [:triage :queued])
           (:in-progress grouped)
           (:shipping grouped)
-          (:winding-down grouped)))
+          (:winding-down grouped)
+          (:dismissed grouped)))
 
 (defn- facet-row-values
   "The value(s) a row carries for facet `k`, as a seq (vector facets expand to

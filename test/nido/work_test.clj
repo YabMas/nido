@@ -11,6 +11,7 @@
    [nido.coordinator.resume]
    [nido.coordinator.runs :as runs]
    [nido.coordinator.session :as session]
+   [nido.coordinator.sources.state]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.tickets :as tickets]
    [nido.coordinator.workstream :as workstream]
@@ -56,7 +57,8 @@
                  :triage {:in-flight [{:ws-id "tf"}] :queued [{:ws-id "tq"}]}
                  :in-progress [{:ws-id "p"}]
                  :shipping [{:ws-id "s"}]
-                 :winding-down [{:ws-id "w"}]}
+                 :winding-down [{:ws-id "w"}]
+                 :dismissed [{:ws-id "d"}]}
         rows-of (fn [tab] (mapcat second (work/tab-bands tab grouped)))
         intake  (set (map :ws-id (rows-of :intake)))
         active  (set (map :ws-id (rows-of :active)))]
@@ -65,6 +67,17 @@
         "union of both tabs = every row grouped-rows emits")
     (is (empty? (set/intersection intake active))
         "and no row appears in both tabs")))
+
+(deftest tab-bands-intake-appends-dismissed
+  (let [grouped {:incoming [{:ws-id "i"}]
+                 :triage {:in-flight [{:ws-id "tf"}] :queued []}
+                 :dismissed [{:ws-id "d"}]}]
+    (is (= [[:triage ["tf"]] [:incoming ["i"]] [:dismissed ["d"]]]
+           (for [[stage rows] (work/tab-bands :intake grouped)]
+             [stage (mapv :ws-id rows)]))
+        "dismissed is the trailing band on intake")
+    (is (= [] (work/tab-bands :intake {:dismissed []}))
+        "an empty dismissed band is dropped like any other")))
 
 (deftest winding-down-lists-closed-ws-with-live-sessions
   (with-tmp
@@ -173,6 +186,30 @@
       (let [row (first (work/list-workstreams :brian))]
         (is (= :notion (:origin row)))
         (is (= :ready (:stage row)) "a triaged notion ticket projects to :ready, unchanged")))))
+
+(deftest dismissed-rows-project-to-the-dismissed-stage
+  (with-tmp
+    (fn [_]
+      ;; Slack-origin: derive-stage would fold :dismissed to :done, and the
+      ;; closed ws reads :settled — the :dismissed? clause must beat both.
+      (let [w (workstream/create! :brian
+                {:stage :triage
+                 :external-refs [{:adapter :slack-message :id "slack-C1-1.2" :title "t"}]})]
+        (tickets/open! :brian "slack-C1-1.2" {:title "t"})
+        (tickets/dismiss! :brian "slack-C1-1.2")
+        (workstream/close! :brian (:id w) :dropped)
+        (is (= [:dismissed] (map :stage (work/list-workstreams :brian)))
+            "dismissed beats both the :settled fold and derive-stage's :done")))))
+
+(deftest undismissed-rows-are-unaffected
+  (with-tmp
+    (fn [_]
+      (workstream/create! :brian
+        {:stage :triage
+         :external-refs [{:adapter :slack-message :id "slack-C1-9.9" :title "t"}]})
+      (tickets/open! :brian "slack-C1-9.9" {:title "t"})
+      (tickets/set-status! :brian "slack-C1-9.9" :awaiting-input)
+      (is (= [:triage] (map :stage (work/list-workstreams :brian)))))))
 
 (deftest grouped-folds-scratch-into-in-progress-group
   (with-tmp
@@ -427,8 +464,8 @@
           (is (= :notion (:origin g)))
           (is (= :triage (:stage g)))
           (is (= "auto" (:session g)) "the parked session a :reply would resume")
-          (is (= [:apply :reply] (map :id (:actions g)))
-              "Notion origin: Dismiss dropped from the parked triage action bar")
+          (is (= [:apply :dismiss :reply] (map :id (:actions g)))
+              "Notion origin: Dismiss offered same as any other origin")
           (is (= :markdown (-> g :report :format)))
           (is (= "Verdict" (-> g :report :title)))
           (is (= "# Verdict\n\nbug — reproduced." (-> g :report :markdown))))))))
@@ -455,8 +492,8 @@
           (is (= :triage (:stage g)))
           (is (false? (:working? g))
               "a live-but-:failed session is NOT in flight ⇒ no stranded 'working…'")
-          (is (= [:apply :reply] (map :id (:actions g)))
-              "gate actions stay actionable (Notion origin: Dismiss dropped)"))))))
+          (is (= [:apply :dismiss :reply] (map :id (:actions g)))
+              "gate actions stay actionable (Notion origin: Dismiss offered)"))))))
 
 (deftest gate-working-when-session-actively-running
   ;; The honest positive case: a parked triage gate whose agent you resumed is now
@@ -573,13 +610,15 @@
           (is (= {:decision :promote} (work/resolve-gate! :brian (:id w) :promote)))
           (is (= [[:brian (:id w)]] @calls)))))))
 
-(deftest resolve-gate-dismiss-settles-dropped-and-marks-ticket
+(deftest resolve-gate-dismiss-settles-dismissed-and-marks-ticket
   (with-tmp
     (fn [_]
       (let [w (workstream/create! :brian {:stage :triaging
                                           :external-refs [{:adapter :notion :id "BR-42"}]})]
         (is (= {:decision :dismissed} (work/resolve-gate! :brian (:id w) :dismiss)))
-        (is (= :dropped (:outcome (:closed (workstream/read-ws :brian (:id w))))))
+        (is (= :dismissed (:outcome (:closed (workstream/read-ws :brian (:id w)))))
+            "closed :dismissed, not :dropped — the outcome is a veto carrier in its
+             own right, for rows with no ledger ref to stamp")
         (is (= :dismissed (tickets/status :brian "BR-42"))
             "dismiss records the off-radar disposition so auto-re-triage skips it")))))
 
@@ -608,6 +647,27 @@
         (is (= :dismissed (tickets/status :brian slack-id))
             "dismiss stamps the slack-keyed ticket, not just notion ones")
         (is (some? (:closed (workstream/read-ws :brian (:id w)))))))))
+
+(deftest dismissing-a-ref-less-workstream-still-reaches-the-dismissed-band
+  ;; ledger-ref is notion-or-slack only, so a ref-less coordinator workstream has
+  ;; no ticket record for the veto to live on. If :closed doesn't carry it, the
+  ;; :settled fold takes over and projects :done — a band on NEITHER tab — so the
+  ;; row leaves every surface with no Restore, while the toast promises the
+  ;; opposite. That is exactly the silent loss this whole band exists to prevent.
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :triage :external-refs []})]
+        (is (= [:triage] (map :stage (work/list-workstreams :brian))))
+        (is (= {:decision :dismissed} (work/dismiss! :brian (:id w))))
+        (is (= [:dismissed] (map :stage (work/list-workstreams :brian)))
+            "with no ledger key the :closed outcome is the veto's only carrier")
+        (is (= [[:dismissed [(:id w)]]]
+               (for [[stage rows] (work/tab-bands :intake (work/grouped :brian))]
+                 [stage (mapv :ws-id rows)]))
+            "and it is reachable as the Intake tab's trailing band")
+        (is (= {:decision :restored} (work/restore! :brian (:id w))))
+        (is (= [:triage] (map :stage (work/list-workstreams :brian)))
+            "Restore is the way back, with no ticket record involved either")))))
 
 (deftest resolve-gate-done-closes-done
   (with-tmp
@@ -992,17 +1052,27 @@
     (is (= ["brian"] (map :project (:groups s))))
     (is (= ["r1"] (map :ws-id (:gates s))))))
 
-(deftest triage-dismiss-dropped-for-notion-kept-for-slack
-  (is (not (some #{:dismiss} (map :id (work/gate-actions :triage true :notion))))
-      "Notion parked triage: no Dismiss")
+(deftest triage-dismiss-offered-for-every-origin
+  ;; Reverses the retirement in 2026-07-17-triage-routing-model-design.md §5.
+  ;; Dismiss is a nido-side veto now, made safe by the Dismissed band + Restore
+  ;; rather than by refusing the action.
+  (is (some #{:dismiss} (map :id (work/gate-actions :triage true :notion)))
+      "Notion parked triage: Dismiss offered")
   (is (some #{:dismiss} (map :id (work/gate-actions :triage true :slack)))
-      "Slack parked triage: Dismiss kept")
-  (is (= [] (work/gate-actions :triage false :notion))
-      "Notion unparked triage: no actions")
+      "Slack parked triage: Dismiss offered")
+  (is (= [:dismiss] (map :id (work/gate-actions :triage false :notion)))
+      "Notion unparked triage: Dismiss is the only action")
   (is (= [:dismiss] (map :id (work/gate-actions :triage false :slack)))
-      "Slack unparked triage: Dismiss")
-  (is (some #{:dismiss} (map :id (work/gate-actions :triage true)))
-      "2-arity (origin nil) unchanged: Dismiss present"))
+      "Slack unparked triage: same")
+  (is (= (work/gate-actions :triage true :notion) (work/gate-actions :triage true))
+      "origin no longer changes the result"))
+
+(deftest dismissed-stage-offers-only-restore
+  (let [restore [{:id :restore :label "Restore" :kind :mutation :style :default}]]
+    (is (= restore (work/gate-actions :dismissed false)))
+    (is (= restore (work/gate-actions :dismissed true))
+        "a dismissed row offers Restore whether or not a session is still parked")
+    (is (= restore (work/gate-actions :dismissed false :notion)))))
 
 (def ^:private proposed-ticket-edn
   "Valid ProposedTicket EDN for the Slack-approval path."
@@ -1387,3 +1457,112 @@
         (is (not (contains? @removed "/wt/repl-up")) "a dead port but a live repl-pid vetoes the delete")
         (is (= #{"p--dead" "p--no-ts" "p--bad-ts"} (set pruned))
             "returns instance-ids for the coordinator's log line")))))
+
+(deftest restore-clears-the-status-and-reopens-the-workstream
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian
+                {:stage :triage
+                 :external-refs [{:adapter :notion :id "BR-77" :page-id "pg" :url "u"}]})]
+        (tickets/open! :brian "BR-77" {:title "t"})
+        (workstream/append-entry! :brian (:id w) {:kind :impl} "# Verdict\n\nneeds-info.")
+        (is (= {:decision :dismissed} (work/dismiss! :brian (:id w))))
+        (is (= :dismissed (tickets/status :brian "BR-77")))
+
+        (is (= {:decision :restored} (work/restore! :brian (:id w))))
+        (is (nil? (tickets/status :brian "BR-77"))
+            "status cleared → the auto-triage gate treats it as never-triaged")
+        (is (nil? (:closed (workstream/read-ws :brian (:id w))))
+            "workstream reopened")
+        (is (= :triaging (:stage (workstream/read-ws :brian (:id w))))
+            "stored OUTSIDE lifecycle-stages so it never becomes a manual override")))))
+
+(deftest restore-leaves-the-row-free-to-progress-past-triage
+  ;; stage-projection honors a stored lifecycle stage as a manual override on any
+  ;; open workstream, and :triage IS one — so reopening there stops the projection
+  ;; deriving from the ticket status for the rest of the workstream's life. A
+  ;; restored legacy/Slack row would pin at :triage forever: never :ready, never
+  ;; promotable. :triaging is the create! default, deliberately absent from
+  ;; lifecycle-stages, and still derives to :triage on a status-less ticket.
+  (with-tmp
+    (fn [_]
+      (let [slack-id "slack-C1-3.3"
+            w (workstream/create! :brian
+                {:stage :triage
+                 :external-refs [{:adapter :slack-message :id slack-id :title "t"}]})]
+        (tickets/open! :brian slack-id {:title "t"})
+        (work/dismiss! :brian (:id w))
+        (work/restore! :brian (:id w))
+        (is (= [:triage] (map :stage (work/list-workstreams :brian)))
+            "restore still lands in the triage queue")
+        (tickets/complete! :brian slack-id :triaged :routed)
+        (is (= [:ready] (map :stage (work/list-workstreams :brian)))
+            "and triaging it afterwards reaches :ready — i.e. it is promotable again")))))
+
+(deftest restore-is-a-no-op-without-a-workstream
+  (with-tmp
+    (fn [_]
+      (is (= {:decision :no-workstream} (work/restore! :brian "nope"))))))
+
+(deftest restore-clears-the-ticket-status-of-a-bare-watched-view-row
+  ;; bare-row stamps :dismissed?, so a ticket dismissed via `bb nido:ticket:dismiss`
+  ;; with no covering workstream lands in the band and renders Restore. That click
+  ;; has to actually restore it — reporting "✓ Restored" while nothing happened is
+  ;; the band lying about the one guarantee it exists to make. A bare row's
+  ;; synthetic ws-id IS its Notion page-id, so the BR is recoverable from the
+  ;; watched-view cache the row was synthesized from.
+  (with-tmp
+    (fn [_]
+      (nido.coordinator.sources.state/write-state! "v1"
+        {:type :notion-view :source-config {:project :brian}
+         :pages {"pg-orphan" {:status "Needs verification" :priority nil :ball-ids #{}
+                              :title "t" :br "BR-500"}}})
+      (tickets/open! :brian "BR-500" {:title "t"})
+      (tickets/dismiss! :brian "BR-500")
+      (is (= [:dismissed] (map :stage (work/list-workstreams :brian)))
+          "the orphan ticket is visible in the band")
+      (is (= {:decision :restored} (work/resolve-gate! :brian "pg-orphan" :restore)))
+      (is (nil? (tickets/status :brian "BR-500"))
+          "status cleared → re-triable, which is the whole undo for a bare row")
+      (is (= [:triage] (map :stage (work/list-workstreams :brian)))
+          "and the row leaves the band"))))
+
+(deftest resolve-gate-dispatches-restore
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian
+                {:stage :triage
+                 :external-refs [{:adapter :notion :id "BR-78" :page-id "pg" :url "u"}]})]
+        (tickets/open! :brian "BR-78" {:title "t"})
+        (work/dismiss! :brian (:id w))
+        (is (= {:decision :restored} (work/resolve-gate! :brian (:id w) :restore)))))))
+
+(deftest gates-exclude-a-dismissed-row-with-a-parked-session
+  (with-tmp
+    (fn [_]
+      ;; Seed the Notion page-facts cache so this row is notion-driven (page "pg"
+      ;; in-cache with a non-terminal status). That's the branch the new filter is
+      ;; load-bearing for: notion-stage-projection ignores the local ticket status
+      ;; entirely for :needs-you, and engagement-state is fed nil instead of
+      ;; :closed — so dismiss! (which only touches the ticket + :closed) leaves
+      ;; :needs-you true and :engagement :parked-at-gate even after the workstream
+      ;; is closed. Without seeding the cache the row takes the legacy path, whose
+      ;; :closed → :done fold already drops :needs-you on its own, and the
+      ;; assertion below would pass whether or not the new filter exists.
+      (nido.coordinator.sources.state/write-state! "v1"
+        {:type :notion-view :source-config {:project :brian}
+         :pages {"pg" {:status "Needs verification" :priority nil :ball-ids #{}
+                       :title "t" :br "BR-79"}}})
+      (let [w (workstream/create! :brian
+                {:stage :triage
+                 :external-refs [{:adapter :notion :id "BR-79" :page-id "pg" :url "u"}]})]
+        (tickets/open! :brian "BR-79" {:title "t"})
+        (tickets/set-status! :brian "BR-79" :awaiting-input)
+        (session/create! :brian (:id w)
+                         {:name "auto" :weight :heavy
+                          :autonomy (assoc autonomy-running :phase :parked)})
+        (is (= 1 (count (work/gates :brian))) "parked triage is a gate")
+        (work/dismiss! :brian (:id w))
+        (is (= [] (work/gates :brian))
+            "dismiss removes it from Needs-you immediately, before the daemon
+             sweep tears the session down")))))

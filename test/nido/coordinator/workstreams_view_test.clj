@@ -543,3 +543,50 @@
     (is (contains? g :triage))
     (is (contains? g :in-progress))))
 
+;; ---------------------------------------------------------------------------
+;; :dismissed? — the local dismiss veto carried onto every row
+;; ---------------------------------------------------------------------------
+
+(deftest workstream-row-flags-a-dismissed-ticket
+  (with-tmp
+    (fn [_]
+      (let [w (make-ws! :brian {:external-refs [{:adapter :notion :id "BR-1"
+                                                 :page-id "pg-1" :url "u"}]})]
+        (tickets/open! :brian "BR-1" {:title "t"})
+        (tickets/dismiss! :brian "BR-1")
+        (is (true? (:dismissed? (wsv/workstream-row :brian w nil
+                                                    {"pg-1" {:status "Needs verification"}})))
+            "a :dismissed ticket flags its row")))))
+
+(deftest workstream-row-not-dismissed-by-default
+  (with-tmp
+    (fn [_]
+      (let [w (make-ws! :brian {:external-refs [{:adapter :notion :id "BR-2"
+                                                 :page-id "pg-2" :url "u"}]})]
+        (tickets/open! :brian "BR-2" {:title "t"})
+        (tickets/set-status! :brian "BR-2" :awaiting-input)
+        (is (false? (:dismissed? (wsv/workstream-row :brian w nil
+                                                     {"pg-2" {:status "Needs verification"}}))))))))
+
+(deftest bare-row-flags-a-dismissed-ticket
+  (with-tmp
+    (fn [_]
+      (tickets/open! :brian "BR-3" {:title "t"})
+      (tickets/dismiss! :brian "BR-3")
+      (is (true? (:dismissed? (wsv/bare-row :brian "pg-3"
+                                            {:status "Needs verification" :br "BR-3"})))
+          "a CLI-dismissed orphan ticket stays hidden")
+      (is (false? (:dismissed? (wsv/bare-row :brian "pg-4"
+                                             {:status "Needs verification" :br nil})))
+          "no ledger ref → not dismissed"))))
+
+(deftest grouped-by-stage-collects-a-dismissed-band
+  (let [rows [{:ws-id "a" :stage :triage     :needs-you false :last-activity "2026-01-01"}
+              {:ws-id "d1" :stage :dismissed :needs-you false :last-activity "2026-01-01"}
+              {:ws-id "d2" :stage :dismissed :needs-you false :last-activity "2026-03-01"}]
+        g    (wsv/grouped-by-stage rows)]
+    (is (= ["d2" "d1"] (map :ws-id (:dismissed g)))
+        "newest-activity first")
+    (is (= ["a"] (map :ws-id (get-in g [:triage :queued])))
+        "dismissed rows are not in the triage band")))
+
