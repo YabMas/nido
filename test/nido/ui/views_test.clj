@@ -522,15 +522,15 @@
 ;; ---------------------------------------------------------------------------
 
 (deftest workstream-pane-renders-stage-actions-for-the-current-entry
-  ;; sample-ws is :triage (origin :notion) with a parked "auto" session → Apply / Reply,
-  ;; all POSTing to the pane-scoped resolve route (patches #ws-pane). Dismiss is dropped
-  ;; for Notion-origin rows — Notion drives the board.
+  ;; sample-ws is :triage (origin :notion) with a parked "auto" session → Apply /
+  ;; Dismiss / Reply, all POSTing to the pane-scoped resolve route (patches #ws-pane).
+  ;; Dismiss is offered for Notion-origin rows same as any other origin.
   (let [html (views/workstream-pane (assoc sample-ws :on-latest? true) {})]
     (is (str/includes? html "Apply"))
-    (is (not (str/includes? html "Dismiss")) "Notion origin: Dismiss dropped")
+    (is (str/includes? html "Dismiss") "Notion origin: Dismiss offered")
     (is (str/includes? html "Send &amp; resume"))                       ; free-text reply
     (is (str/includes? html "/workstreams/brian/ws-1/gate/apply"))
-    (is (not (str/includes? html "/workstreams/brian/ws-1/gate/dismiss")))
+    (is (str/includes? html "/workstreams/brian/ws-1/gate/dismiss"))
     (is (str/includes? html "/workstreams/brian/ws-1/gate/reply"))
     (is (not (str/includes? html "/gate/brian/ws-1/apply"))
         "pane actions go through the pane route, not the home gate")))
@@ -549,12 +549,12 @@
     (is (str/includes? html "/workstreams/brian/ws-1/gate/drop"))
     (is (not (str/includes? html "/gate/apply")) ":ready offers no Apply")))
 
-(deftest workstream-pane-unparked-notion-triage-offers-no-actions
-  ;; :triage (origin :notion) with no parked session → Dismiss is dropped for Notion,
-  ;; so the action bar renders nothing (Notion drives the board).
+(deftest workstream-pane-unparked-notion-triage-offers-only-dismiss
+  ;; :triage (origin :notion) with no parked session → just the off-radar Dismiss,
+  ;; same as any other origin — Notion no longer fences it off.
   (let [html (views/workstream-pane
               (assoc sample-ws :stage :triage :sessions [] :on-latest? true) {})]
-    (is (not (str/includes? html "/workstreams/brian/ws-1/gate/dismiss")))
+    (is (str/includes? html "/workstreams/brian/ws-1/gate/dismiss"))
     (is (not (str/includes? html "/gate/apply")))
     (is (not (str/includes? html "Send &amp; resume")))))
 
@@ -578,3 +578,30 @@
     (is (str/includes? html "Dismiss"))
     (is (str/includes? html "/workstreams/brian/ws-1/gate/promote"))
     (is (str/includes? html "/workstreams/brian/ws-1/gate/drop"))))
+
+;; ---------------------------------------------------------------------------
+;; Dismissed band (Intake tab) — muted rows, collapsed by default, Restore
+;; ---------------------------------------------------------------------------
+
+(deftest dismissed-band-renders-a-restore-button
+  (let [screen {:scope "all" :tab :intake :selection nil
+                :groups [{:project "brian"
+                          :grouped {:dismissed [{:ws-id "ws-9" :origin :notion
+                                                 :label "BR-5711 · New Bug (Description)"
+                                                 :last-activity "2026-08-14T09:00:00Z"}]}}]}
+        html   (views/workstreams-fragment screen)]
+    (is (str/includes? html "Restore"))
+    (is (str/includes? html "/workstreams/brian/ws-9/gate/restore")
+        "posts to the generic pane gate route")
+    (is (str/includes? html "BR-5711 · New Bug (Description)"))
+    (is (str/includes? html "gate-card dismissed")
+        "muted card class")))
+
+(deftest confirm-fragment-covers-dismiss-and-restore
+  (is (str/includes? (views/gate-action-confirm-fragment :restore "brian" "ws-9")
+                     "Restored"))
+  ;; Pin the safety claim itself, not the word "Dismissed" — the OLD copy already
+  ;; contained that, so asserting it tested nothing. This sentence is the
+  ;; user-facing evidence for the branch's entire guarantee.
+  (is (str/includes? (views/gate-action-confirm-fragment :dismiss "brian" "ws-9")
+                     "Nothing written to Notion")))

@@ -163,6 +163,16 @@
       :source          (ws-source ws)
       :stage           (:stage proj)
       :needs-you       (:needs-you proj)
+      ;; The local dismiss veto. Notion-driven rows ignore nido :closed AND the
+      ;; :dismissed disposition in their projection, so this flag is the ONLY
+      ;; carrier of a nido-side dismiss to the board. work/to-spine reads it.
+      ;; TWO carriers, because neither alone covers every row: the ticket status
+      ;; needs a ledger ref (notion-or-slack) that a ref-less coordinator
+      ;; workstream doesn't have, and the :closed outcome is ignored outright by
+      ;; the notion-driven projection. reopen! clears :closed, so restore! undoes
+      ;; both halves without a second write.
+      :dismissed?      (or (= :dismissed local-status)
+                           (= :dismissed (get-in ws [:closed :outcome])))
       ;; Notion-driven rows ignore nido :closed for engagement too — else a
       ;; reopened-in-Notion ticket reads :settled and to-spine folds it to :done.
       :engagement      (session/engagement-state (when-not notion-driven? (:closed ws)) eng-sessions)
@@ -181,7 +191,8 @@
    the Notion page-id (stable + unique). Notion-driven stage; no sessions → engagement
    :idle, needs-you false. Read-only: mutations guard on the missing workstream."
   [project page-id {:keys [status priority title br]}]
-  (let [triaged? (= :triaged (when br (tickets/status project br)))]
+  (let [tstatus  (when br (tickets/status project br))
+        triaged? (= :triaged tstatus)]
     {:ws-id           page-id
      :project         project
      :br-id           br
@@ -198,6 +209,7 @@
      :facets          nil
      :ship-substate   nil
      :open-findings   0
+     :dismissed?      (= :dismissed tstatus)
      :bare?           true}))
 
 (defn workstream-rows
@@ -219,13 +231,17 @@
                        (mapv (fn [[page-id fct]] (bare-row project page-id fct))))]
      (into ws-rows bare))))
 
-(defn- by-needs-then-newest
-  "needs-you rows first, newest-activity first within each band. ISO strings
-   sort lexically = chronologically."
+(defn- by-newest
+  "Newest-activity first. ISO strings sort lexically = chronologically; a nil
+   :last-activity sorts last."
   [rows]
-  (let [newest (fn [rs] (sort-by :last-activity #(compare %2 %1) rs))]
-    (vec (concat (newest (filter :needs-you rows))
-                 (newest (remove :needs-you rows))))))
+  (vec (sort-by :last-activity #(compare %2 %1) rows)))
+
+(defn- by-needs-then-newest
+  "needs-you rows first, newest-activity first within each band."
+  [rows]
+  (vec (concat (by-newest (filter :needs-you rows))
+               (by-newest (remove :needs-you rows)))))
 
 (defn- by-severity
   "Highest priority (severity) first; ties broken by longest-waiting (oldest
@@ -264,15 +280,21 @@
 
 (defn grouped-by-stage
   "Partition rows by lifecycle stage for the two-surface board — Intake
-   (:triage/:incoming) and Active (:in-progress/:shipping). :done and :ready are
-   omitted: :done is done; :ready (triaged, awaiting pickup) is the backlog, which
-   lives in Notion, not on the nido board."
+   (:triage/:incoming/:dismissed) and Active (:in-progress/:shipping). :done and
+   :ready are omitted: :done is done; :ready (triaged, awaiting pickup) is the
+   backlog, which lives in Notion, not on the nido board.
+
+   :dismissed needs no special-casing here — work/to-spine has already stamped
+   the stage, so a plain group-by collects the band for every origin. It is
+   ordered newest-first rather than needs-first because :needs-you is always
+   false there."
   [rows]
   (let [by (group-by :stage rows)]
     {:incoming    (by-needs-then-newest (:incoming by []))
      :in-progress (by-needs-then-newest (:in-progress by []))
      :shipping    (by-needs-then-newest (:shipping by []))
-     :triage      (triage-split (:triage by []))}))
+     :triage      (triage-split (:triage by []))
+     :dismissed   (by-newest (:dismissed by []))}))
 
 (def ^:private live-engagements
   "Engagement states where a session is present/working/awaiting you — the
@@ -283,10 +305,9 @@
   "Group scratch rows by liveness for the Scratch view (no lifecycle stage).
    {:active [...] :idle [...]}, each newest-activity first."
   [rows]
-  (let [newest (fn [rs] (sort-by :last-activity #(compare %2 %1) rs))
-        live?  #(contains? live-engagements (:engagement %))]
-    {:active (newest (filter live? rows))
-     :idle   (newest (remove live? rows))}))
+  (let [live? #(contains? live-engagements (:engagement %))]
+    {:active (by-newest (filter live? rows))
+     :idle   (by-newest (remove live? rows))}))
 
 (defn session-rows
   "Display rows for one workstream's coordinator-sessions, ordered most-recently-

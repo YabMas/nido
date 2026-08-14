@@ -34,9 +34,14 @@
    [:external-refs [:vector ExternalRef]]
    [:stage         keyword?]
    [:stage-history [:vector [:map [:at string?] [:stage keyword?]]]]
+   ;; :dismissed is the nido-side veto (work/dismiss!). It is a distinct outcome
+   ;; rather than :dropped because it is the ONLY carrier of the veto on a
+   ;; workstream with no ledger ref — there is no ticket record to stamp, so
+   ;; without it the row folds to :done and leaves every board band. Widening is
+   ;; backward-compatible: stored records only ever carry :done/:dropped.
    [:closed        [:maybe [:map
                             [:at      string?]
-                            [:outcome [:enum :done :dropped]]]]]
+                            [:outcome [:enum :done :dropped :dismissed]]]]]
    [:created-at    string?]
    [:entries       [:vector [:map-of keyword? any?]]]
    [:intake        {:optional true} [:maybe IntakePayload]]
@@ -120,8 +125,11 @@
     (write! (if (seq facets) (assoc w :facets facets) (dissoc w :facets)))))
 
 (defn close!
-  "Settle a workstream terminally. `outcome` is :done or :dropped. Idempotent
-   write of :closed. Returns the updated record."
+  "Settle a workstream terminally. `outcome` is :done, :dropped or :dismissed.
+   No consumer branches on the value — every reader tests :closed for presence
+   (engagement, the notion-sync/facets candidate sets) or renders (name outcome);
+   the one exception is workstreams-view/workstream-row, which reads :dismissed
+   as the board veto. Idempotent write of :closed. Returns the updated record."
   [project ws-id outcome]
   (let [w (or (read-ws project ws-id)
               (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))]

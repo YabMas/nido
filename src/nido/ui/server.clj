@@ -214,6 +214,23 @@
                           :severity (if (valid-severities sev-kw) sev-kw :tweak)}
                    (not-empty area) (assoc :area area)))))))
 
+(defn resolve-failure-msg
+  "Error message for a work/resolve-gate! result that did NOT do what the
+   optimistic confirmation toast promised, or nil when it settled fine. These
+   resolvers signal failure by VALUE (a :decision), not by throwing, so this is
+   the only place the difference is drawn.
+
+   :no-workstream counts as a failure: the resolver matched no workstream and no
+   recoverable ticket, so the click did literally nothing — clearing the state on
+   that leaves the '✓ Restored'/'✓ Dismissed' toast standing as the last word."
+  [{:keys [decision error status]}]
+  (case decision
+    :no-workstream          "Nothing happened — no workstream or ticket behind this row."
+    (:notion-failed :error) (str "Apply failed"
+                                 (when error (str ": " (name error)))
+                                 (when status (str " " status)))
+    nil))
+
 (defn- gate-resolve!
   "Run work/resolve-gate! on a background thread, tracking optimistic state per
    (project,ws-id) so the inbox/pane reflect 'working…' until it settles."
@@ -222,12 +239,9 @@
     (dev/set-app-state! k (if (= :reply action-id) :resuming :resolving))
     (future
       (try
-        (let [{:keys [decision error status]} (work/resolve-gate! project ws-id action-id input)]
-          (if (contains? #{:notion-failed :error} decision)
-            (dev/set-app-state! k :failed (str "Apply failed"
-                                               (when error (str ": " (name error)))
-                                               (when status (str " " status))))
-            (dev/clear-app-state! k)))
+        (if-let [msg (resolve-failure-msg (work/resolve-gate! project ws-id action-id input))]
+          (dev/set-app-state! k :failed msg)
+          (dev/clear-app-state! k))
         (catch Exception e
           (dev/set-app-state! k :failed (or (:reason (ex-data e)) (ex-message e))))))))
 

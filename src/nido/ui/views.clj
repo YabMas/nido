@@ -168,7 +168,7 @@
      .ws-section-rows { overflow:hidden; max-height:0; opacity:0;
                         transition:max-height .28s ease, opacity .2s ease; }
      .ws-section-rows.ws-open { max-height:4000px; opacity:1; }
-     .winddown { opacity: 0.65; }"))
+     .winddown, .dismissed { opacity: 0.65; }"))
 
 ;; ---------------------------------------------------------------------------
 ;; Shell (persistent rail + content area) — replaces per-page headers.
@@ -380,7 +380,8 @@
    (let [msg (case action-id
                :promote "Promoting…"
                :apply   "Applying… resuming the agent to write the verdict."
-               :dismiss "✓ Dismissed — off your radar, won't be re-triaged."
+               :dismiss "✓ Dismissed — off your radar. Nothing written to Notion; restore it from the Dismissed band."
+               :restore "✓ Restored — back in the triage queue."
                :drop    "✓ Dropped — not pursued."
                :done    "✓ Marked done."
                :reply   "Resuming… re-hydrating the session if needed, then resuming the conversation."
@@ -568,7 +569,8 @@
    [:in-progress "InProgress"]
    [:winding-down "WindingDown"]
    [:triage      "Triage"]
-   [:incoming    "Incoming"]])
+   [:incoming    "Incoming"]
+   [:dismissed   "Dismissed"]])
 
 (defn- ws-fold-signal
   "Collapsed-flag signal name for a stage, e.g. :in-progress → \"wsFoldInProgress\"."
@@ -577,17 +579,25 @@
 
 (def ^:private ws-fold-storage-key "nidoWsFold")
 
+(def ^:private ws-fold-default-collapsed
+  "Bands that start COLLAPSED when localStorage has no opinion. Dismissed is the
+   archive of your own vetoes — reachable on purpose, but not something to scroll
+   past on every visit."
+  #{"Dismissed"})
+
 (def ^:private ws-fold-signals-init
   "data-signals__ifmissing expression for the persistent chrome: seed each stage's
    collapsed flag from localStorage on load. `===true` coerces a missing/false key
-   to expanded (the default), and __ifmissing makes the whole thing a no-op once
-   the signals exist — so a full-page reload restores state without clobbering it."
+   to expanded (the default); a band in ws-fold-default-collapsed inverts that with
+   `!==false`. __ifmissing makes the whole thing a no-op once the signals exist — so
+   a full-page reload restores state without clobbering it."
   (str "{"
        (str/join ", "
                  (for [[_ suf] ws-fold-stages]
                    (str "wsFold" suf
                         ": (JSON.parse(localStorage.getItem('" ws-fold-storage-key
-                        "')||'{}')." suf ")===true")))
+                        "')||'{}')." suf ")"
+                        (if (contains? ws-fold-default-collapsed suf) "!==false" "===true"))))
        "}"))
 
 (def ^:private ws-fold-persist-js
@@ -651,6 +661,22 @@
         {"data-on:click" (str "@post('/workstreams/" project "/" ws-id "/winddown" q "')")}
         "Bring down"]))]])
 
+(defn- dismissed-row
+  "One dismissed row: taken off the radar nido-side, with NOTHING written to Notion —
+   which is exactly why this band exists. The upstream ticket is still open wherever
+   it lives, so hiding these outright would be silent loss. Muted, one action:
+   Restore clears the ticket status and puts it back in the triage queue.
+   POSTs to the generic pane gate route, so no dedicated endpoint is needed."
+  [{:keys [project ws-id origin label last-activity]}]
+  [:div.gate-card.dismissed
+   [:div.gate-top (origin-badge origin) [:span.lbl label]]
+   [:div.gate-sub
+    [:span project]
+    (when last-activity [:span.meta last-activity])
+    [:button.btn
+     {"data-on:click" (str "@post('/workstreams/" project "/" ws-id "/gate/restore')")}
+     "Restore"]]])
+
 (defn workstreams-fragment
   "The selected tab's stage-grouped selectable list across projects, rendered
    from the screen. Selection is threaded from the screen so a poll refresh keeps
@@ -684,8 +710,9 @@
             ;; the class in the same task before paint, so it never re-animates.
             [:div.ws-section-rows {:data-class (str "{'ws-open': !$" sig "}")}
              (for [r rows]
-               (if (= :winding-down stage)
-                 (winddown-row (assoc r :project project) wd-q)
+               (case stage
+                 :winding-down (winddown-row (assoc r :project project) wd-q)
+                 :dismissed    (dismissed-row (assoc r :project project))
                  (ws-list-row screen sel-id project r)))]]))]))))
 
 (defn- session-dev-cell
@@ -737,8 +764,8 @@
 (defn- pane-action-bar
   "Stage-appropriate gate actions rendered below the reader pane, driven by
    `work/gate-actions` (different stages → different actions; a parked triage adds
-   Apply/Reply). Takes `origin` so Notion `:triage` rows drop Dismiss (kept for
-   Slack). Buttons POST to the pane-scoped route. Shown only for the CURRENT
+   Apply/Reply). Takes `origin` for call-site compatibility; it no longer changes
+   the action set. Buttons POST to the pane-scoped route. Shown only for the CURRENT
    ledger entry — callers gate on :on-latest?. Renders nothing when the stage offers
    no actions."
   [project ws-id origin stage sessions]
