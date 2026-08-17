@@ -13,16 +13,20 @@
    [clojure.set :as set]
    [clojure.string :as str]
    [nido.config :as config]
+   [nido.coordinator.clock :as clock]
    [nido.coordinator.facets :as facets]
    [nido.coordinator.notion-cache :as notion-cache]
+   [nido.coordinator.pickup :as pickup]
    [nido.coordinator.promote :as promote]
    [nido.coordinator.report :as report]
    [nido.coordinator.resume :as resume]
    [nido.coordinator.runs :as runs]
    [nido.coordinator.scratch :as scratch]
    [nido.coordinator.session :as csession]
+   [nido.coordinator.spawn :as spawn]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.tickets :as tickets]
+   [nido.coordinator.triggers :as triggers]
    [nido.io :as io]
    [nido.coordinator.workstream :as cws]
    [nido.coordinator.workstreams-view :as wsv]
@@ -89,9 +93,14 @@
    (2026-07-17-triage-routing-model-design.md §5, on the grounds that a local dismiss
    was a no-op there). It is no longer: to-spine's :dismissed stamp makes the veto
    stick, and the Dismissed band + Restore make it reversible instead of silent.
-   The arg stays for call-site compatibility."
-  ([stage parked?] (gate-actions stage parked? nil))
-  ([stage parked? _origin]
+   The arg stays for call-site compatibility.
+
+   `{:bare? true}` marks a row with no workstream behind it (wsv/bare-row). On
+   :triage that swaps Apply/Reply — which need an agent — for :start-triage.
+   Other stages ignore it."
+  ([stage parked?] (gate-actions stage parked? nil nil))
+  ([stage parked? origin] (gate-actions stage parked? origin nil))
+  ([stage parked? _origin {:keys [bare?]}]
    (case stage
      :incoming    [{:id :promote :label "Promote" :kind :mutation :style :primary}
                    {:id :drop    :label "Dismiss" :kind :mutation :style :danger}]
@@ -101,11 +110,17 @@
                     ;; falling back to nido-only ticket:complete for legacy/Slack reports;
                     ;; Reply (free-text overrides/redo) resumes the agent; Dismiss takes it
                     ;; off the radar nido-side, writing nothing to Notion.
-                    (if parked?
-                      [{:id :apply :label "Apply" :kind :mutation :style :primary}
-                       dismiss
-                       {:id :reply :label "Reply" :kind :resume :style :default}]
-                      [dismiss]))
+                    (cond
+                      ;; A bare row has no workstream and therefore no agent to Apply or
+                      ;; Reply to — the only forward move is to start the triage that
+                      ;; never ran.
+                      bare?   [{:id :start-triage :label "Start triage"
+                                :kind :mutation :style :primary}
+                               dismiss]
+                      parked? [{:id :apply :label "Apply" :kind :mutation :style :primary}
+                               dismiss
+                               {:id :reply :label "Reply" :kind :resume :style :default}]
+                      :else   [dismiss]))
      ;; The nido-side veto, reversible: Restore clears the ticket status so the row
      ;; rejoins the triage queue and the auto-triage gate can pick it up again.
      :dismissed   [{:id :restore :label "Restore" :kind :mutation :style :default}]
@@ -787,18 +802,81 @@
    workstream of its own, only a Notion page and a ticket record. Each carries its
    own workstream-less branch AND its own :no-workstream refusal, so the read-ws
    guard in resolve-gate! must route them BEFORE it, or the only actions such a
-   row offers become silent no-ops."
-  #{:restore :dismiss})
+   row offers become silent no-ops.
+   :start-triage — the Notion page is exactly what it spawns from."
+  #{:restore :dismiss :start-triage})
+
+(defn- triage-trigger
+  "The project's triage trigger: the first in triggers.edn whose :skill is
+   :triage-bug, or nil. On brian that is :triage-new — :smoke-new-reports watches
+   the same Notion view but carries :skill :investigate-bug, so it is never
+   selected. First-wins if a project ever configures two."
+  [project]
+  (->> (triggers/load-for-project project)
+       (filter #(= :triage-bug (:skill %)))
+       first))
+
+(defn start-triage-page!
+  "Force-start a triage for a bare watched-view row, whose ws-id IS the Notion
+   page-id. The triage that should have run never did (the page predates the
+   watcher, or its trigger was skipping), so there is no workstream and no ledger
+   — this is the one action that creates them.
+
+   Resolves the page FRESH from Notion (pickup/resolve-ref) rather than
+   synthesising the payload from the cache: the cache carries no :url, and the
+   trigger's own template needs {{event/title}} and {{event/page-id}}, so the
+   payload has to look exactly like a poller emit.
+
+   FORCE, deliberately: this calls spawn-and-submit! directly, bypassing the
+   whole routing pipeline coordinator.core/process-envelope! normally applies
+   before a spawn — trigger :filter, breaker, :dry-run?, :intake queue mode,
+   and tickets/gate-decision — and reproducing only its
+   ref-has-pending-session? dedup. One ticket, one deliberate click. A
+   :triage-bug trigger configured with any of those other checks would still
+   fire here, unfiltered.
+
+   ref-has-pending-session? only suppresses a REPEAT click once a first spawn
+   has already persisted its session — it is not a race guard: a bare row has
+   no workstream on click #1 (nothing for find-by-ref to resolve), so two
+   clicks landing inside spawn-records!'s own ensure-workstream! →
+   create-session-for-run! window can both spawn.
+
+   Does network I/O — callers run it off the render thread (ui.server/gate-resolve!
+   already resolves gate actions on a future). Returns {:decision :triaging} |
+   {:decision :no-trigger} | {:decision :already-in-flight} |
+   {:decision :unresolved :error <kw>}."
+  [project ws-id]
+  (if-let [t (triage-trigger project)]
+    (let [ref (pickup/resolve-ref project ws-id (notion/keychain-token))]
+      (if (:error ref)
+        {:decision :unresolved :error (:error ref)}
+        (let [;; Same six-key contract create-run! expects (runs.clj:233) —
+              ;; promote/start-triage! (promote.clj:90-98) builds this
+              ;; identical map from the same contract; change both together.
+              routed {:project         project
+                      :trigger         t
+                      :payload         ref
+                      :priority        (or (:priority t) 0)
+                      :session-profile (:session-profile t)
+                      :uncapped?       (boolean (:uncapped? t))}]
+          (if (spawn/ref-has-pending-session? routed)
+            {:decision :already-in-flight}
+            (do (cstate/ensure-dirs!)
+                (spawn/spawn-and-submit! routed {:fired-at (clock/now-iso)
+                                                 :fired-by "board"})
+                {:decision :triaging})))))
+    {:decision :no-trigger}))
 
 (defn resolve-gate!
   "Apply a gate follow-action, dispatching on `action-id`. A workstream-less ws-id
    (e.g. a bare watched-view row) is a no-op — {:decision :no-workstream} — for
-   every action but :restore and :dismiss, which such a row legitimately offers
-   (see workstream-less-actions).
+   every action but :restore, :dismiss and :start-triage, which such a row
+   legitimately offers (see workstream-less-actions).
      :promote -> set-stage! :in-progress   :dismiss -> off-radar (ticket + ws :dismissed)
      :drop    -> close! :dropped            :done    -> set-stage! :done
      :apply   -> apply! (ticket:complete)   :reply   -> resume! the parked agent with `input`
      :restore -> restore! (clear ticket status + reopen at :triaging)
+     :start-triage -> start-triage-page! (force-spawn the triage trigger)
    Returns the resolver's result map."
   ([project ws-id action-id] (resolve-gate! project ws-id action-id nil))
   ([project ws-id action-id input]
@@ -806,8 +884,9 @@
      ;; Bare-row-capable actions run before the guard (see workstream-less-actions).
      (contains? workstream-less-actions action-id)
      (case action-id
-       :restore (restore! project ws-id)
-       :dismiss (dismiss! project ws-id))
+       :restore      (restore! project ws-id)
+       :dismiss      (dismiss! project ws-id)
+       :start-triage (start-triage-page! project ws-id))
 
      (nil? (cws/read-ws project ws-id)) {:decision :no-workstream}
      :else

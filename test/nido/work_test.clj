@@ -1654,3 +1654,78 @@
           "the nil-read-ws guard must not swallow :dismiss")
       (is (= {:decision :no-workstream} (work/resolve-gate! :brian "pg-bare" :done))
           "an action with no bare meaning is still refused"))))
+
+(deftest gate-actions-offers-start-triage-only-on-a-bare-triage-row
+  (is (= [:start-triage :dismiss]
+         (mapv :id (work/gate-actions :triage false nil {:bare? true})))
+      "bare :triage → force-start plus the off-radar veto")
+  (is (= [:dismiss] (mapv :id (work/gate-actions :triage false nil {:bare? false})))
+      "a real unparked triage row is unchanged")
+  (is (= [:dismiss] (mapv :id (work/gate-actions :triage false nil)))
+      "3-arity call sites keep their old behaviour")
+  (is (= [] (mapv :id (work/gate-actions :in-progress false nil {:bare? true})))
+      "a bare :in-progress row gets no Start triage — it is not a triage"))
+
+(deftest start-triage-page-refuses-a-project-with-no-triage-trigger
+  (with-tmp
+    (fn [_]
+      (with-redefs [nido.coordinator.triggers/load-for-project (fn [_] [])]
+        (is (= {:decision :no-trigger} (work/start-triage-page! :brian "pg-bare")))))))
+
+(deftest start-triage-page-force-spawns-the-triage-trigger
+  (with-tmp
+    (fn [_]
+      (let [spawned (atom nil)]
+        (with-redefs [nido.coordinator.triggers/load-for-project
+                      (fn [_] [{:name :smoke :skill :investigate-bug}
+                               {:name :triage-new :skill :triage-bug :priority 10
+                                :session-profile :lite :uncapped? true}])
+                      nido.notion.client/keychain-token (constantly "tok")
+                      nido.coordinator.pickup/resolve-ref
+                      (fn [_ input _] {:id "BR-9" :page-id input
+                                       :url "https://notion.so/pg-bare" :title "Move Licences"})
+                      nido.coordinator.spawn/ref-has-pending-session? (constantly false)
+                      nido.coordinator.spawn/spawn-and-submit!
+                      (fn [routed _] (reset! spawned routed))]
+          (is (= {:decision :triaging} (work/start-triage-page! :brian "pg-bare")))
+          (is (= :triage-new (-> @spawned :trigger :name))
+              "picks the :triage-bug trigger, not the :investigate-bug one")
+          (is (= "BR-9" (-> @spawned :payload :id)))
+          (is (= "pg-bare" (-> @spawned :payload :page-id))
+              "page-id rides the payload — the trigger template needs it")
+          (is (= 10 (:priority @spawned)))
+          (is (= :lite (:session-profile @spawned)))
+          (is (true? (:uncapped? @spawned))))))))
+
+(deftest start-triage-page-reports-an-unresolvable-page
+  (with-tmp
+    (fn [_]
+      (with-redefs [nido.coordinator.triggers/load-for-project
+                    (fn [_] [{:name :triage-new :skill :triage-bug}])
+                    nido.notion.client/keychain-token (constantly "")
+                    nido.coordinator.pickup/resolve-ref (fn [_ _ _] {:error :no-token})]
+        (is (= {:decision :unresolved :error :no-token}
+               (work/start-triage-page! :brian "pg-bare")))))))
+
+(deftest start-triage-page-does-not-double-spawn
+  (with-tmp
+    (fn [_]
+      (with-redefs [nido.coordinator.triggers/load-for-project
+                    (fn [_] [{:name :triage-new :skill :triage-bug}])
+                    nido.notion.client/keychain-token (constantly "tok")
+                    nido.coordinator.pickup/resolve-ref
+                    (fn [_ _ _] {:id "BR-9" :page-id "pg-bare" :url "u" :title "t"})
+                    nido.coordinator.spawn/ref-has-pending-session? (constantly true)
+                    nido.coordinator.spawn/spawn-and-submit!
+                    (fn [_ _] (throw (ex-info "must not spawn" {})))]
+        (is (= {:decision :already-in-flight}
+               (work/start-triage-page! :brian "pg-bare"))
+            "a second click while one is in flight is a no-op, not a duplicate")))))
+
+(deftest resolve-gate-lets-start-triage-past-the-workstream-less-guard
+  (with-tmp
+    (fn [_]
+      (with-redefs [nido.coordinator.triggers/load-for-project (fn [_] [])]
+        (is (= {:decision :no-trigger}
+               (work/resolve-gate! :brian "pg-bare" :start-triage))
+            "reaches start-triage-page! rather than the guard's :no-workstream")))))
