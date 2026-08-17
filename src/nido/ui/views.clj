@@ -398,31 +398,50 @@
                       (str "/" (screen-query screen {:sel (str (:project g) ":" (:ws-id g))}))))]
         [:div {:id "needs"} [:p.empty "Nothing needs you right now."]])))))
 
+(defn- gate-action-fragment
+  "Shared shape for the immediate, action-keyed gate-action pane fragment:
+   headline `msg` over ws-id + the follow-it links. `pane-id` is the element it
+   patches — \"gate-pane\" on the Needs-you page, \"ws-pane\" on the overview."
+  [msg project ws-id pane-id]
+  (str
+   (h/html
+    [:div {:id pane-id}
+     [:h1 msg]
+     [:p.meta "ws " ws-id]
+     [:p "Follow it: "
+      [:a {:href (str "/workstreams/" project "/" ws-id)} "open workstream →"]
+      " · "
+      [:a {:href "/workstreams"} "workstreams →"]]])))
+
 (defn gate-action-confirm-fragment
-  "Immediate, action-keyed confirmation toast. `pane-id` is the element it
-   patches — \"gate-pane\" on the Needs-you page, \"ws-pane\" on the overview.
+  "Immediate, action-keyed confirmation toast for an action that actually ran.
    :promote is intentionally destination-neutral: a :ready ticket provisions the
    work session, an :incoming Slack report starts triage."
   ([action-id project ws-id] (gate-action-confirm-fragment action-id project ws-id "gate-pane"))
   ([action-id project ws-id pane-id]
-   (let [msg (case action-id
-               :promote "Promoting…"
-               :apply   "Applying… resuming the agent to write the verdict."
-               :dismiss "✓ Dismissed — off your radar. Nothing written to Notion; restore it from the Dismissed band."
-               :restore "✓ Restored — back in the triage queue."
-               :drop    "✓ Dropped — not pursued."
-               :done    "✓ Marked done."
-               :reply   "Resuming… re-hydrating the session if needed, then resuming the conversation."
-               "Done.")]
-     (str
-      (h/html
-       [:div {:id pane-id}
-        [:h1 msg]
-        [:p.meta "ws " ws-id]
-        [:p "Follow it: "
-         [:a {:href (str "/workstreams/" project "/" ws-id)} "open workstream →"]
-         " · "
-         [:a {:href "/workstreams"} "workstreams →"]]])))))
+   (gate-action-fragment
+    (case action-id
+      :promote "Promoting…"
+      :apply   "Applying… resuming the agent to write the verdict."
+      :dismiss "✓ Dismissed — off your radar. Nothing written to Notion; restore it from the Dismissed band."
+      :restore "✓ Restored — back in the triage queue."
+      :start-triage "Starting triage… spawning the agent to investigate."
+      :drop    "✓ Dropped — not pursued."
+      :done    "✓ Marked done."
+      :reply   "Resuming… re-hydrating the session if needed, then resuming the conversation."
+      "Done.")
+    project ws-id pane-id)))
+
+(defn gate-action-skip-fragment
+  "Rendered instead of gate-action-confirm-fragment when the gate action did NOT
+   actually run — e.g. server/gate-resolve!'s in-flight guard dropped a
+   cross-action click. Same shape as the confirm toast, but `msg` is the
+   caller-supplied honest copy (server/resolve-failure-msg's :already-in-flight
+   sentence) rather than a per-action success claim about something that never
+   happened."
+  ([msg project ws-id] (gate-action-skip-fragment msg project ws-id "gate-pane"))
+  ([msg project ws-id pane-id]
+   (gate-action-fragment msg project ws-id pane-id)))
 
 (defn- style-class [style]
   (case style :primary "btn btn-primary" :danger "btn btn-danger" "btn"))
@@ -796,7 +815,11 @@
    Apply/Reply). Takes `origin` for call-site compatibility; it no longer changes
    the action set. Buttons POST to the pane-scoped route. Shown only for the CURRENT
    ledger entry — callers gate on :on-latest?. Renders nothing when the stage offers
-   no actions."
+   no actions.
+
+   Only ever called for a real (non-bare) workstream — bare-pane-body computes its
+   own action set via work/gate-actions directly and calls action-bar itself, so
+   its copy and its buttons read off the same value and can never disagree."
   [project ws-id origin stage sessions]
   (let [parked? (boolean (some :parked? sessions))
         session (:name (first (filter :parked? sessions)))]
@@ -819,10 +842,59 @@
              "data-on:click" (str "@post('/workstreams/" project "/" ws-id "/findings')")}
     "File findings & reopen"]])
 
+(defn- bare-pane-body
+  "The pane for a bare watched-view row: a page in a watched Notion view that no
+   nido workstream covers, so there is no ledger, report, session or environment
+   to render. A bare row's :stage can be :triage, :ready, :in-progress, :done —
+   session/notion-stage's range — OR :dismissed, the nido-side veto to-spine
+   folds in ahead of that range (work/bare-pane). Not just :triage, the only
+   stage the board ever offers Start-triage/Dismiss for, and not just :dismissed,
+   the only stage that offers Restore. work/gate-actions is computed ONCE here
+   and threaded to both the copy and the action bar, so the two can never
+   disagree: a stage with no workstream-less action (e.g. bare :ready, whose
+   normal Promote/Drop would only ever no-op — see workstream-less-actions) gets
+   an explicit 'nothing to do' line instead of a card that promises an action no
+   button beneath it can perform, while a stage with a live action set outside
+   Start-triage/Dismiss (:dismissed's [:restore]) gets neither canned line —
+   just the action bar itself.
+
+   Keeps the 3s poll for two reasons: it is what carries :error-msg back from a
+   failed action, and it is what upgrades this pane to the full one once Start
+   triage's workstream exists (work/workstream resolves the page to it)."
+  [{:keys [project ws-id origin label stage br-id notion-status error-msg]}]
+  (let [actions       (work/gate-actions stage false origin {:bare? true})
+        start-triage? (some #(= :start-triage (:id %)) actions)]
+    [:div {:id "ws-pane"
+           :data-on-interval__duration.3s
+           (str "@get('/_fragment/workstream/" project "/" ws-id "')")}
+     [:h1 (origin-badge origin) " " label]
+     [:p.meta (str/join " · " (keep identity [(name stage) br-id
+                                              (when notion-status
+                                                (str "notion: " notion-status))]))]
+     [:div.card
+      [:strong "No nido workstream yet"]
+      (if (= :triage stage)
+        [:p "This ticket is in the watched Notion view but nido has never triaged it."]
+        [:p (str "Notion has this ticket at " (or notion-status "an unrecorded status")
+                 " — nido never picked it up.")])
+      ;; Gated separately: start-triage? describes the Start-triage/Dismiss buttons
+      ;; specifically, while "nothing to do" must describe the action set as a
+      ;; whole — else a non-empty, non-start-triage set (e.g. :dismissed's
+      ;; [:restore]) reads as "nothing to do" while a live button sits right below.
+      (cond
+        start-triage?    [:p.meta "Start triage spawns the triage agent now. Dismiss takes it off the "
+                           "board without writing anything to Notion."]
+        (empty? actions) [:p.meta "Nothing to do from here — the ticket is tracked in Notion, not nido."]
+        :else            nil)]
+     (when error-msg [:div.action-err "⚠ " error-msg])
+     (action-bar project ws-id actions nil pane-route)]))
+
 (defn workstream-pane
   "Read-only ledger pane: header · stage · ledger summary · report · the one
    ENVIRONMENT block (the workstream's `:environment` session — dev-env controls,
-   URL, ports, mem/heap facts), or 'no runnable version yet'. `session-dev-states`
+   URL, ports, mem/heap facts), or 'no runnable version yet'. A `:bare?` ws (a
+   watched Notion page with no workstream) renders bare-pane-body instead; a
+   label-less ws renders the empty placeholder. `session-dev-states`
    is a map of session-name → {:state … :url :error-msg} (the view does no IO).
    `machine-facts` is a map of session-name → {:pg-port :nrepl-port :app-port
    :repl-rss :pg-rss :heap-max} (also no IO — a projection the caller injects).
@@ -830,43 +902,47 @@
    action bar, whose buttons stay clickable to retry.
    Polls its own fragment so transient dev-env states (starting…) self-advance."
   ([ws session-dev-states] (workstream-pane ws session-dev-states {}))
-  ([{:keys [project ws-id origin stage label links ledger report entries selected-seq sessions environment on-latest? error-msg]
+  ([{:keys [project ws-id origin stage label links ledger report entries selected-seq sessions environment on-latest? error-msg bare? br-id notion-status]
      :or {on-latest? true}} session-dev-states machine-facts]
    (str
     (h/html
      (if-not label
        [:div {:id "ws-pane"} [:p.empty "Select a workstream."]]
-       [:div {:id "ws-pane"
-              :data-on-interval__duration.3s
-              (str "@get('/_fragment/workstream/" project "/" ws-id
-                   (when selected-seq (str "?entry=" selected-seq)) "')")}
-        (pane-heading origin label links)
-        [:p.meta (name stage)]
-        (links-row links)
-        (when ledger
-          [:div.card [:strong "ledger "] (:key ledger) " · " (some-> ledger :status name)
-           " · " (:report-count ledger) " report(s)"])
-        (ledger-browser project ws-id entries selected-seq report)
-        ;; Live actions only on the current ledger entry — older entries are read-back.
-        (when (and on-latest? error-msg)
-          [:div.action-err "⚠ " error-msg])
-        (when on-latest? (pane-action-bar project ws-id origin stage sessions))
-        (when (= :done stage) (file-findings-form project ws-id))
-        [:h2 "Environment"]
-        (if-let [env-name (:name environment)]
-          (let [dev (get session-dev-states env-name)
-                {:keys [pg-port nrepl-port app-port repl-rss pg-rss heap-max]}
-                (get machine-facts env-name)]
-            [:div.card.env
-             [:div.env-head [:strong env-name] " " (session-dev-cell project ws-id env-name dev)]
-             (when-let [url (:url dev)]
-               [:div [:a {:href url :target "_blank"} url]])
-             [:div.mono (str/join " · " (keep (fn [[l p]] (when p (str l " " p)))
-                                              [["pg" pg-port] ["repl" nrepl-port] ["app" app-port]]))]
-             [:div.meta (list (when repl-rss (str "jvm " (process/human-bytes repl-rss) " "))
-                              (when pg-rss (str "pg " (process/human-bytes pg-rss) " "))
-                              (when heap-max (str "max " heap-max)))]])
-          [:p.empty "no runnable version yet"])])))))
+       (if bare?
+         (bare-pane-body {:project project :ws-id ws-id :origin origin :label label
+                          :stage stage :br-id br-id :notion-status notion-status
+                          :error-msg error-msg})
+         [:div {:id "ws-pane"
+                :data-on-interval__duration.3s
+                (str "@get('/_fragment/workstream/" project "/" ws-id
+                     (when selected-seq (str "?entry=" selected-seq)) "')")}
+          (pane-heading origin label links)
+          [:p.meta (name stage)]
+          (links-row links)
+          (when ledger
+            [:div.card [:strong "ledger "] (:key ledger) " · " (some-> ledger :status name)
+             " · " (:report-count ledger) " report(s)"])
+          (ledger-browser project ws-id entries selected-seq report)
+          ;; Live actions only on the current ledger entry — older entries are read-back.
+          (when (and on-latest? error-msg)
+            [:div.action-err "⚠ " error-msg])
+          (when on-latest? (pane-action-bar project ws-id origin stage sessions))
+          (when (= :done stage) (file-findings-form project ws-id))
+          [:h2 "Environment"]
+          (if-let [env-name (:name environment)]
+            (let [dev (get session-dev-states env-name)
+                  {:keys [pg-port nrepl-port app-port repl-rss pg-rss heap-max]}
+                  (get machine-facts env-name)]
+              [:div.card.env
+               [:div.env-head [:strong env-name] " " (session-dev-cell project ws-id env-name dev)]
+               (when-let [url (:url dev)]
+                 [:div [:a {:href url :target "_blank"} url]])
+               [:div.mono (str/join " · " (keep (fn [[l p]] (when p (str l " " p)))
+                                                [["pg" pg-port] ["repl" nrepl-port] ["app" app-port]]))]
+               [:div.meta (list (when repl-rss (str "jvm " (process/human-bytes repl-rss) " "))
+                                (when pg-rss (str "pg " (process/human-bytes pg-rss) " "))
+                                (when heap-max (str "max " heap-max)))]])
+            [:p.empty "no runnable version yet"])]))))))
 
 (defn- tab-row
   "The board's two tabs — Intake | Active. A tab selects BANDS, not rows: every

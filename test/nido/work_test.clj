@@ -7,13 +7,16 @@
    [clojure.test :refer [deftest is]]
    [nido.config]
    [nido.coordinator.facets]
+   [nido.coordinator.pickup]
    [nido.coordinator.promote]
    [nido.coordinator.resume]
    [nido.coordinator.runs :as runs]
    [nido.coordinator.session :as session]
    [nido.coordinator.sources.state]
+   [nido.coordinator.spawn]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.tickets :as tickets]
+   [nido.coordinator.triggers]
    [nido.coordinator.workstream :as workstream]
    [nido.notion.client :as notion-client]
    [nido.notion.views :as views]
@@ -1566,3 +1569,199 @@
         (is (= [] (work/gates :brian))
             "dismiss removes it from Needs-you immediately, before the daemon
              sweep tears the session down")))))
+
+;; ---------------------------------------------------------------------------
+;; Bare watched-view rows — a Notion page with no workstream of its own.
+;; Its synthetic ws-id IS the page-id (wsv/bare-row), so read-ws always misses.
+;; ---------------------------------------------------------------------------
+
+(defn- seed-page! [pages]
+  (nido.coordinator.sources.state/write-state! "v1"
+    {:type :notion-view :source-config {:project :brian} :pages pages}))
+
+(deftest workstream-falls-back-to-a-bare-pane-for-an-uncovered-page
+  (with-tmp
+    (fn [_]
+      (seed-page! {"pg-bare" {:status "Needs verification" :priority 1 :ball-ids #{}
+                              :title "Move Licences" :br "BR-9"}})
+      (let [d (work/workstream :brian "pg-bare")]
+        (is (true? (:bare? d)))
+        (is (= "pg-bare" (:ws-id d)))
+        (is (= "BR-9" (:br-id d)))
+        (is (= "Move Licences" (:label d)))
+        (is (= :triage (:stage d)) "untriaged Needs-verification → triage")
+        (is (= :notion (:origin d)))
+        (is (= "Needs verification" (:notion-status d)))
+        (is (nil? (:report d)))
+        (is (nil? (:environment d)))
+        (is (nil? (:ledger d)))
+        (is (empty? (:sessions d)))))))
+
+(deftest workstream-is-nil-for-a-page-id-that-is-not-in-the-cache
+  (with-tmp
+    (fn [_]
+      (seed-page! {"pg-other" {:status "Not started" :priority nil :ball-ids #{}
+                               :title "Other" :br "BR-1"}})
+      (is (nil? (work/workstream :brian "pg-unknown"))
+          "an unknown id is still nil — the bare branch must not invent a pane"))))
+
+(deftest workstream-follows-the-handoff-once-the-page-has-a-workstream
+  (with-tmp
+    (fn [_]
+      ;; Start triage mints a workstream under a FRESH nido ws-id while the URL
+      ;; still says ?sel=brian:pg-bare. Selecting by page-id must resolve to it.
+      (seed-page! {"pg-bare" {:status "Needs verification" :priority 1 :ball-ids #{}
+                              :title "Move Licences" :br "BR-9"}})
+      (let [w (workstream/create! :brian
+                {:stage :triaging
+                 :external-refs [{:adapter :notion :id "BR-9" :page-id "pg-bare"}]})
+            d (work/workstream :brian "pg-bare")]
+        (is (= (:id w) (:ws-id d)) "resolves to the real workstream, not the page-id")
+        (is (not (:bare? d)) "and it is no longer a bare pane")))))
+
+(deftest dismiss-a-bare-row-stamps-the-ticket-status
+  (with-tmp
+    (fn [_]
+      ;; No workstream to close, so the ticket stamp IS the whole veto. bare-row
+      ;; reads :dismissed? off ticket status, which moves the row to the
+      ;; Dismissed band where Restore (already bare-aware) undoes it.
+      (seed-page! {"pg-bare" {:status "Needs verification" :priority 1 :ball-ids #{}
+                              :title "Move Licences" :br "BR-9"}})
+      (is (= {:decision :dismissed} (work/dismiss! :brian "pg-bare")))
+      (is (= :dismissed (tickets/status :brian "BR-9"))
+          "ticket record created and stamped, though it never existed before"))))
+
+(deftest dismiss-refuses-a-page-with-no-br
+  (with-tmp
+    (fn [_]
+      (seed-page! {"pg-nobr" {:status "Needs verification" :priority nil
+                              :ball-ids #{} :title "No id" :br nil}})
+      (is (= {:decision :no-workstream} (work/dismiss! :brian "pg-nobr"))
+          "nothing to stamp and nothing to close — a genuine no-op"))))
+
+(deftest dismiss-round-trips-through-restore-on-a-bare-row
+  (with-tmp
+    (fn [_]
+      (seed-page! {"pg-bare" {:status "Needs verification" :priority 1 :ball-ids #{}
+                              :title "Move Licences" :br "BR-9"}})
+      (work/dismiss! :brian "pg-bare")
+      (is (= {:decision :restored} (work/restore! :brian "pg-bare")))
+      (is (nil? (tickets/status :brian "BR-9")) "status cleared — re-triable again"))))
+
+(deftest resolve-gate-lets-dismiss-past-the-workstream-less-guard
+  (with-tmp
+    (fn [_]
+      (seed-page! {"pg-bare" {:status "Needs verification" :priority 1 :ball-ids #{}
+                              :title "Move Licences" :br "BR-9"}})
+      (is (= {:decision :dismissed} (work/resolve-gate! :brian "pg-bare" :dismiss))
+          "the nil-read-ws guard must not swallow :dismiss")
+      (is (= {:decision :no-workstream} (work/resolve-gate! :brian "pg-bare" :done))
+          "an action with no bare meaning is still refused"))))
+
+(deftest gate-actions-offers-start-triage-only-on-a-bare-triage-row
+  (is (= [:start-triage :dismiss]
+         (mapv :id (work/gate-actions :triage false nil {:bare? true})))
+      "bare :triage → force-start plus the off-radar veto")
+  (is (= [:dismiss] (mapv :id (work/gate-actions :triage false nil {:bare? false})))
+      "a real unparked triage row is unchanged")
+  (is (= [:dismiss] (mapv :id (work/gate-actions :triage false nil)))
+      "3-arity call sites keep their old behaviour")
+  (is (= [] (mapv :id (work/gate-actions :in-progress false nil {:bare? true})))
+      "a bare :in-progress row gets no Start triage — it is not a triage"))
+
+;; Review finding: a bare row's :stage is not always :triage — session/notion-stage
+;; also yields :ready, and gate-actions' :ready branch (Promote/Drop) assumes a
+;; workstream to promote or drop, which a bare row does not have. Without this
+;; filter those buttons render and can only ever return {:decision :no-workstream}.
+(deftest gate-actions-narrows-a-bare-ready-row-to-nothing
+  (is (= [] (mapv :id (work/gate-actions :ready false nil {:bare? true})))
+      "Promote/Drop would only ever no-op with no workstream behind the row")
+  (is (= [:promote :drop] (mapv :id (work/gate-actions :ready false nil)))
+      "the non-bare 3-arity is unaffected — this narrows only the bare path"))
+
+;; Fix: bare-pane used to read bare-row's raw :stage instead of routing it
+;; through to-spine (the fold both list-workstreams and work/workstream apply),
+;; so a dismissed bare row's PANE still said :triage — offering Dismiss and
+;; Start-triage again and no Restore — while the board LIST already said
+;; :dismissed. Assert the two can never disagree, which is the invariant.
+(deftest dismissed-bare-row-pane-agrees-with-the-board-list
+  (with-tmp
+    (fn [_]
+      (seed-page! {"pg-bare" {:status "Needs verification" :priority 1 :ball-ids #{}
+                              :title "Move Licences" :br "BR-9"}})
+      (work/dismiss! :brian "pg-bare")
+      (let [pane     (work/workstream :brian "pg-bare")
+            list-row (first (filter #(= "pg-bare" (:ws-id %))
+                                    (work/list-workstreams :brian)))]
+        (is (true? (:bare? pane)))
+        (is (= :dismissed (:stage pane))
+            "the pane must show the same :dismissed the board list shows")
+        (is (= (:stage list-row) (:stage pane))
+            "pane and list must never disagree about stage")
+        (is (= [:restore]
+               (mapv :id (work/gate-actions (:stage pane) false nil {:bare? true})))
+            "a dismissed bare pane offers Restore, not a re-hidden Dismiss/Start-triage")))))
+
+(deftest start-triage-page-refuses-a-project-with-no-triage-trigger
+  (with-tmp
+    (fn [_]
+      (with-redefs [nido.coordinator.triggers/load-for-project (fn [_] [])]
+        (is (= {:decision :no-trigger} (work/start-triage-page! :brian "pg-bare")))))))
+
+(deftest start-triage-page-force-spawns-the-triage-trigger
+  (with-tmp
+    (fn [_]
+      (let [spawned (atom nil)]
+        (with-redefs [nido.coordinator.triggers/load-for-project
+                      (fn [_] [{:name :smoke :skill :investigate-bug}
+                               {:name :triage-new :skill :triage-bug :priority 10
+                                :session-profile :lite :uncapped? true}])
+                      nido.notion.client/keychain-token (constantly "tok")
+                      nido.coordinator.pickup/resolve-ref
+                      (fn [_ input _] {:id "BR-9" :page-id input
+                                       :url "https://notion.so/pg-bare" :title "Move Licences"})
+                      nido.coordinator.spawn/ref-has-pending-session? (constantly false)
+                      nido.coordinator.spawn/spawn-and-submit!
+                      (fn [routed _] (reset! spawned routed))]
+          (is (= {:decision :triaging} (work/start-triage-page! :brian "pg-bare")))
+          (is (= :triage-new (-> @spawned :trigger :name))
+              "picks the :triage-bug trigger, not the :investigate-bug one")
+          (is (= "BR-9" (-> @spawned :payload :id)))
+          (is (= "pg-bare" (-> @spawned :payload :page-id))
+              "page-id rides the payload — the trigger template needs it")
+          (is (= 10 (:priority @spawned)))
+          (is (= :lite (:session-profile @spawned)))
+          (is (true? (:uncapped? @spawned))))))))
+
+(deftest start-triage-page-reports-an-unresolvable-page
+  (with-tmp
+    (fn [_]
+      (with-redefs [nido.coordinator.triggers/load-for-project
+                    (fn [_] [{:name :triage-new :skill :triage-bug}])
+                    nido.notion.client/keychain-token (constantly "")
+                    nido.coordinator.pickup/resolve-ref (fn [_ _ _] {:error :no-token})]
+        (is (= {:decision :unresolved :error :no-token}
+               (work/start-triage-page! :brian "pg-bare")))))))
+
+(deftest start-triage-page-does-not-double-spawn
+  (with-tmp
+    (fn [_]
+      (with-redefs [nido.coordinator.triggers/load-for-project
+                    (fn [_] [{:name :triage-new :skill :triage-bug}])
+                    nido.notion.client/keychain-token (constantly "tok")
+                    nido.coordinator.pickup/resolve-ref
+                    (fn [_ _ _] {:id "BR-9" :page-id "pg-bare" :url "u" :title "t"})
+                    nido.coordinator.spawn/ref-has-pending-session? (constantly true)
+                    nido.coordinator.spawn/spawn-and-submit!
+                    (fn [_ _] (throw (ex-info "must not spawn" {})))]
+        (is (= {:decision :already-in-flight}
+               (work/start-triage-page! :brian "pg-bare"))
+            "a second click while one is in flight is a no-op, not a duplicate")))))
+
+(deftest resolve-gate-lets-start-triage-past-the-workstream-less-guard
+  (with-tmp
+    (fn [_]
+      (with-redefs [nido.coordinator.triggers/load-for-project (fn [_] [])]
+        (is (= {:decision :no-trigger}
+               (work/resolve-gate! :brian "pg-bare" :start-triage))
+            "reaches start-triage-page! rather than the guard's :no-workstream")))))

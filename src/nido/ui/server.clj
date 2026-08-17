@@ -222,10 +222,16 @@
 
    :no-workstream counts as a failure: the resolver matched no workstream and no
    recoverable ticket, so the click did literally nothing — clearing the state on
-   that leaves the '✓ Restored'/'✓ Dismissed' toast standing as the last word."
+   that leaves the '✓ Restored'/'✓ Dismissed' toast standing as the last word.
+   :already-in-flight counts as a failure for the same reason — the click added
+   nothing, so the '✓' toast must not stand as the last word."
   [{:keys [decision error status]}]
   (case decision
     :no-workstream          "Nothing happened — no workstream or ticket behind this row."
+    :no-trigger             "No triage trigger configured for this project."
+    :already-in-flight      "Skipped — a session for this ticket is already in flight."
+    :unresolved             (str "Couldn't resolve the ticket in Notion"
+                                 (when error (str ": " (name error))))
     (:notion-failed :error) (str "Apply failed"
                                  (when error (str ": " (name error)))
                                  (when status (str " " status)))
@@ -233,17 +239,49 @@
 
 (defn- gate-resolve!
   "Run work/resolve-gate! on a background thread, tracking optimistic state per
-   (project,ws-id) so the inbox/pane reflect 'working…' until it settles."
+   (project,ws-id) so the inbox/pane reflect 'working…' until it settles.
+   Returns true if it actually started a resolve, false if the guard dropped it.
+
+   A key already mid-flight is dropped rather than resolved again. This is what
+   stops a double-clicked Start triage from spawning two triage sessions on one
+   ticket: work/start-triage-page!'s own ref-dedup guard cannot fire on a bare
+   row's first click (it resolves through ws/find-by-ref, and a bare row has no
+   workstream), and spawn-records! persists the workstream before the session, so
+   a second click inside that window would spawn again. Note the honest limit —
+   set-app-state! is a plain atom write, not a lock, so this closes the
+   human-double-click window (tens of ms), not a genuine concurrent race.
+
+   The guard is keyed per WORKSTREAM, not per action — deliberately, since the
+   key space is shared with bring-down! (session.dev/pending-winddown-keys reads
+   the same \"<project>/<ws-id>\" shape). A caller that returns false must not
+   render the per-action success toast: the click landed while a DIFFERENT
+   action was in flight and this one never ran (see resolve-failure-msg's
+   :already-in-flight case)."
   [project ws-id action-id input]
   (let [k (str project "/" ws-id)]
-    (dev/set-app-state! k (if (= :reply action-id) :resuming :resolving))
-    (future
-      (try
-        (if-let [msg (resolve-failure-msg (work/resolve-gate! project ws-id action-id input))]
-          (dev/set-app-state! k :failed msg)
-          (dev/clear-app-state! k))
-        (catch Exception e
-          (dev/set-app-state! k :failed (or (:reason (ex-data e)) (ex-message e))))))))
+    (if (contains? (dev/pending-resolve-keys) k)
+      false
+      (do
+        (dev/set-app-state! k (if (= :reply action-id) :resuming :resolving))
+        (future
+          (try
+            (if-let [msg (resolve-failure-msg (work/resolve-gate! project ws-id action-id input))]
+              (dev/set-app-state! k :failed msg)
+              (dev/clear-app-state! k))
+            (catch Exception e
+              (dev/set-app-state! k :failed (or (:reason (ex-data e)) (ex-message e))))))
+        true))))
+
+(defn- gate-action-response-fragment
+  "The pane/gate fragment for a POST'd gate action: the per-action success toast
+   when `started?` (gate-resolve! actually kicked off the resolve), else the
+   honest :already-in-flight copy — reusing resolve-failure-msg so that sentence
+   has one source of truth, not a second copy written at the call site."
+  [started? action-id project ws-id pane-id]
+  (if started?
+    (views/gate-action-confirm-fragment action-id project ws-id pane-id)
+    (views/gate-action-skip-fragment
+     (resolve-failure-msg {:decision :already-in-flight}) project ws-id pane-id)))
 
 (defn- handle-post [{:keys [uri body] :as req}]
   (let [segs (parse-path uri)]
@@ -253,9 +291,10 @@
       (let [project   (nth segs 1)
             ws-id     (nth segs 2)
             action-id (keyword (nth segs 3))
-            input     (when (= :reply action-id) (:reply (parse-json-body body)))]
-        (gate-resolve! project ws-id action-id input)
-        (sse-response (sse-fragment (views/gate-action-confirm-fragment action-id project ws-id))))
+            input     (when (= :reply action-id) (:reply (parse-json-body body)))
+            started?  (gate-resolve! project ws-id action-id input)]
+        (sse-response (sse-fragment
+                       (gate-action-response-fragment started? action-id project ws-id "gate-pane"))))
 
       ;; POST /workstreams/:project/:ws-id/gate/:action — resolve a gate action from
       ;; the overview/detail pane (the stage-appropriate action bar below the reader).
@@ -265,9 +304,10 @@
       (let [project   (nth segs 1)
             ws-id     (nth segs 2)
             action-id (keyword (nth segs 4))
-            input     (when (= :reply action-id) (:reply (parse-json-body body)))]
-        (gate-resolve! project ws-id action-id input)
-        (sse-response (sse-fragment (views/gate-action-confirm-fragment action-id project ws-id "ws-pane"))))
+            input     (when (= :reply action-id) (:reply (parse-json-body body)))
+            started?  (gate-resolve! project ws-id action-id input)]
+        (sse-response (sse-fragment
+                       (gate-action-response-fragment started? action-id project ws-id "ws-pane"))))
 
       ;; POST /workstreams/:project/:ws-id/sessions/:session/dev/:action
       (and (= 7 (count segs)) (= "workstreams" (first segs))

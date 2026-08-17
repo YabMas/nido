@@ -607,6 +607,92 @@
                      "Nothing written to Notion")))
 
 ;; ---------------------------------------------------------------------------
+;; Bare pane — a watched Notion page with no workstream behind it
+;; ---------------------------------------------------------------------------
+
+(def ^:private bare-ws
+  {:project "brian" :ws-id "pg-bare" :origin :notion :bare? true
+   :stage :triage :label "Move Licences to Brian from Attio"
+   :br-id "BR-5569" :notion-status "Needs verification"
+   :ledger nil :entries nil :report nil :environment nil :sessions []
+   :on-latest? true})
+
+(deftest bare-pane-explains-itself-and-offers-both-actions
+  (let [html (views/workstream-pane bare-ws {})]
+    (is (str/includes? html "Move Licences to Brian from Attio"))
+    (is (str/includes? html "BR-5569"))
+    (is (str/includes? html "Needs verification"))
+    (is (str/includes? html "No nido workstream yet"))
+    (is (str/includes? html "Start triage"))
+    (is (str/includes? html "/workstreams/brian/pg-bare/gate/start-triage"))
+    (is (str/includes? html "Dismiss"))
+    (is (str/includes? html "/workstreams/brian/pg-bare/gate/dismiss"))))
+
+(deftest bare-pane-renders-no-ledger-or-environment
+  (let [html (views/workstream-pane bare-ws {})]
+    (is (not (str/includes? html "Environment"))
+        "no session behind it, so no environment block")
+    (is (not (str/includes? html "report(s)")) "no ledger summary")
+    (is (not (str/includes? html "Send &amp; resume")) "no agent to reply to")
+    (is (not (str/includes? html "Apply")) "nothing has been triaged to apply")))
+
+(deftest bare-pane-keeps-polling-and-shows-a-failed-action
+  (let [html (views/workstream-pane (assoc bare-ws :error-msg "No triage trigger") {})]
+    (is (str/includes? html "/_fragment/workstream/brian/pg-bare")
+        "keeps the 3s poll — it carries errors back and upgrades the pane")
+    (is (str/includes? html "No triage trigger"))))
+
+(deftest bare-pane-does-not-shadow-the-empty-placeholder
+  (is (str/includes? (views/workstream-pane nil nil) "Select a workstream")))
+
+;; Regression test for the review finding: a bare row's :stage is not always
+;; :triage (session/notion-stage yields :done/:in-progress/:ready/:triage), and
+;; the card used to claim "Start triage spawns the triage agent now" regardless
+;; of stage — with zero buttons beneath it on every stage but :triage. The copy
+;; must follow the actual computed action set, never promise one it can't offer.
+(deftest bare-pane-in-progress-has-no-actions-and-says-so
+  (let [html (views/workstream-pane (assoc bare-ws :stage :in-progress) {})]
+    (is (not (str/includes? html "/workstreams/brian/pg-bare/gate/start-triage"))
+        "no agent to start — the triage already ran, Notion just says in-progress")
+    (is (not (str/includes? html "/workstreams/brian/pg-bare/gate/dismiss")))
+    (is (not (str/includes? html "Start triage spawns the triage agent now"))
+        "must not promise an action the pane offers no button for")
+    (is (str/includes? html "Nothing to do from here")
+        "an empty action set must say so explicitly, not leave the card silent")))
+
+(deftest bare-pane-ready-offers-no-lying-promote-or-drop
+  (let [html (views/workstream-pane (assoc bare-ws :stage :ready) {})]
+    (is (not (str/includes? html "/workstreams/brian/pg-bare/gate/promote"))
+        "Promote would only ever no-op — a bare row has no workstream to promote")
+    (is (not (str/includes? html "/workstreams/brian/pg-bare/gate/drop")))
+    (is (not (str/includes? html "/workstreams/brian/pg-bare/gate/start-triage")))
+    (is (str/includes? html "Nothing to do from here"))))
+
+;; :done is squarely inside session/notion-stage's range too — same "nothing to
+;; do" shape as :in-progress: empty action set, the explicit line, no routes.
+(deftest bare-pane-done-has-no-actions-and-says-so
+  (let [html (views/workstream-pane (assoc bare-ws :stage :done) {})]
+    (is (not (str/includes? html "/workstreams/brian/pg-bare/gate/start-triage")))
+    (is (not (str/includes? html "/workstreams/brian/pg-bare/gate/dismiss")))
+    (is (str/includes? html "Nothing to do from here"))))
+
+;; Fix: the pane used to gate "Nothing to do from here" on whether the action
+;; set contained :start-triage, which was only ever safe while :dismissed was
+;; unreachable as a bare stage. Now that a dismissed bare row's action set is
+;; [:restore] (Fix 1), that proxy would render a live Restore button underneath
+;; a card that claims there is nothing to do.
+(deftest bare-pane-dismissed-offers-restore-not-nothing-to-do
+  (let [html (views/workstream-pane (assoc bare-ws :stage :dismissed) {})]
+    (is (str/includes? html "/workstreams/brian/pg-bare/gate/restore")
+        "a dismissed bare row's Restore is real and reachable")
+    (is (not (str/includes? html "Nothing to do from here"))
+        "there IS something to do — Restore — so the card must not claim otherwise")))
+
+(deftest confirm-fragment-covers-start-triage
+  (is (str/includes? (views/gate-action-confirm-fragment :start-triage "brian" "pg-bare")
+                     "Starting triage")))
+
+;; ---------------------------------------------------------------------------
 ;; Followable external links
 ;; ---------------------------------------------------------------------------
 
