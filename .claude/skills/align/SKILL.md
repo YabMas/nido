@@ -34,19 +34,27 @@ From the worktree:
 
 ```bash
 jj git fetch
-jj rebase -b @ -d main@origin
+jj rebase -b @ -d 'trunk()'
 ```
 
 `-b @` rebases the whole branch containing the working copy onto the freshly
-fetched trunk — no bookmark name needed. If the branch is already on top of
-`main@origin`, jj reports "Nothing changed" — that's fine, continue.
+fetched trunk — no bookmark name needed. `trunk()` resolves to the remote trunk
+whatever the default branch is called, so nothing here hardcodes `main`. If the
+branch is already on top of it, jj reports "Nothing changed" — that's fine,
+continue.
 
 Then check for conflicts:
 
 ```bash
-jj resolve --list   # empty output ⇒ no conflicts
+jj resolve --list   # lists conflicted files; see below on the clean case
 jj st               # also flags "There are unresolved conflicts"
 ```
+
+**Read the listing, not the exit code.** When there are no conflicts,
+`jj resolve --list` *errors*: exit 2, `Error: No conflicts found at this
+revision`, empty stdout. That is the **success** case. An agent branching on exit
+status here reads a clean rebase as a failure. `jj st` is the unambiguous
+cross-check: it prints "There are unresolved conflicts" only when there are.
 
 ## Conflict policy — auto-resolve trivial, HALT on semantic
 
@@ -76,9 +84,9 @@ When the session is a stack, name the layer that conflicted, not just the file.
 carry conflicts, with the `conflicts()` revset:
 
 ```bash
-jj log -r 'main@origin..@ & conflicts()' --no-graph \
+jj log -r 'trunk()..@ & conflicts()' --no-graph \
   -T 'change_id.short() ++ " " ++ bookmarks ++ " | " ++ description.first_line() ++ "\n"'
-jj log -r 'main@origin..@' --no-graph -T 'change_id.short() ++ " " ++ bookmarks ++ " | " ++ description.first_line() ++ "\n"'
+jj log -r 'trunk()..@' --no-graph -T 'change_id.short() ++ " " ++ bookmarks ++ " | " ++ description.first_line() ++ "\n"'
 jj resolve --list   # the conflicted files, within the conflicted change
 ```
 
@@ -91,7 +99,8 @@ usually means the stack needs reshaping, not just a merge resolution — the
 foundation moved under the layers above it.
 
 After resolving trivial conflicts (`jj resolve` or editing the files), confirm
-`jj resolve --list` is empty before continuing.
+`jj resolve --list` lists nothing before continuing — which, once everything is
+resolved, means it exits 2 with `Error: No conflicts found at this revision`.
 
 ## What this skill does NOT do
 
@@ -105,6 +114,9 @@ After resolving trivial conflicts (`jj resolve` or editing the files), confirm
 ## Common mistakes
 
 - **Auto-resolving a semantic conflict** — guessing at logic. Halt instead.
+- **Treating `jj resolve --list`'s non-zero exit as a failure** — the clean case
+  exits 2 with `Error: No conflicts found at this revision`. Read the listing.
+- **Hardcoding `main@origin`** — use the `trunk()` revset.
 - **Running from the session home** — it's not git-colocated; `cd worktree` first.
 - **Committing the resolution** — `/align` never commits; leave the worktree for
   the next phase.

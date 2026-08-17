@@ -278,7 +278,24 @@
          "- diff a file across revs:    `jj diff --from <a> --to <b> <path>`\n"
          "- changes vs main:            `jj diff -r 'main..@'`\n"
          "- blame:                      `jj file annotate <path>`\n"
-         "- push / fetch:               `jj git push` / `jj git fetch`\n")
+         "- push / fetch:               `jj git push` / `jj git fetch`\n"
+         "\n"
+         "**Bare `gh` cannot resolve the repo here either** — no git repository\n"
+         "means `failed to run git: not a git repository`. Derive the slug and\n"
+         "pass `-R \"$SLUG\"` to every `gh` call:\n"
+         "\n"
+         "```bash\n"
+         "SLUG=$(jj git remote list | awk '/^origin/{print $2}' \\\n"
+         "        | sed -E 's#^git@github\\.com:##; s#^https://github\\.com/##; s#\\.git$##')\n"
+         "```\n"
+         "\n"
+         "`-R` alone is not enough for the PR-*resolving* subcommands\n"
+         "(`view`/`edit`/`ready`/`merge`): they need `-R` **and an explicit PR\n"
+         "number**, or they exit `argument required when using the --repo flag`.\n"
+         "Only `gh pr create` and `gh pr list` work on `-R` alone.\n"
+         "\n"
+         "Shell variables do not persist between commands — each call is a fresh\n"
+         "shell, so re-derive `$SLUG` in every block that uses it.\n")
 
     :jj-source-git-worktree
     (str "You are working through the nido orchestrator. This session was created\n"

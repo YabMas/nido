@@ -39,7 +39,7 @@ poller needs to react when the PR later merges.
 
    ```bash
    cd worktree
-   jj log -r 'main@origin..@' --no-graph -T 'change_id.short() ++ " " ++ description.first_line() ++ "\n"'
+   jj log -r 'trunk()..@' --no-graph -T 'change_id.short() ++ " " ++ description.first_line() ++ "\n"'
    jj bookmark list -T 'if(remote, "", name ++ "\n")' | grep "^<session>--"
    ```
 
@@ -65,18 +65,25 @@ poller needs to react when the PR later merges.
    cd worktree
    SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
            | sed -E 's#^git@github\.com:##; s#^https://github\.com/##; s#\.git$##')
-   jj git push --allow-new -b '<session>'
+   jj git push -b '<session>'
    # reuse check, keyed on the head branch — no current branch needed
    gh pr list -R "$SLUG" --head '<session>' --state open --json number,url
    ```
 
+   **Not `--allow-new`** — jj 0.42 removed the flag, and a command carrying it
+   exits `error: unexpected argument '--allow-new' found` without pushing
+   anything. `-b` implies it: an untracked bookmark is tracked automatically on
+   its first push.
+
    If that reports a PR, reuse it. If it reports `[]`, create one — re-derive
-   `$SLUG` here, since it does not survive from the block above:
+   `$SLUG` here, since it does not survive from the block above, and read the
+   trunk branch rather than hardcoding `main`:
 
    ```bash
    SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
            | sed -E 's#^git@github\.com:##; s#^https://github\.com/##; s#\.git$##')
-   gh pr create -R "$SLUG" --base main --head '<session>' --draft \
+   TRUNK=$(gh repo view -R "$SLUG" --json defaultBranchRef -q '.defaultBranchRef.name')
+   gh pr create -R "$SLUG" --base "$TRUNK" --head '<session>' --draft \
      --title "<title>" --body "<body>"
    ```
 
@@ -167,16 +174,22 @@ otherwise `-R "$SLUG"` goes out as `-R ""`.
 ### 2. Push every layer bookmark
 
 ```bash
-jj git push --allow-new -b 'glob:<session>--*'
+jj git push -b 'glob:<session>--*'
 ```
 
 Only `<session>--*` bookmarks go up. The session bookmark itself stays local.
 
+**No `--allow-new`** — jj 0.42 removed it; the command would exit `unexpected
+argument` and push nothing, taking the whole publish flow down at step one. `-b`
+already tracks a bookmark that isn't tracking anything yet.
+
 ### 3. Open one PR per layer, bottom to top
 
 **First, check what already exists.** This step is re-run whenever `/drive-home`
-finds no stack, so it must reuse rather than duplicate. Run the shared discovery
-primitive (`/stack` §4) and note which layers already have an open PR:
+finds no stack, so it must reuse rather than duplicate. Use `gh pr list` here —
+**this is the case the stacks endpoint cannot serve** (`/stack` §4): the PRs
+this step creates are not linked into a stack until §4, so `gh api …/stacks`
+returns `[]` for exactly the state this guard has to see:
 
 ```bash
 SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
@@ -197,14 +210,16 @@ Without this guard, a re-run makes `gh pr create` fail on every layer that
 already has a PR — while `/drive-home` promises "PR or stack already exists →
 reuse (don't create a second)". The single-PR path above has the same guard.
 
-Each layer's base is the layer beneath it; the bottom layer's base is `main`.
-`-R` means no local git is needed. Title is `[n/N] <the layer commit's subject>`;
-body is generated from that commit's message body and its review brief.
+Each layer's base is the layer beneath it; the bottom layer's base is the trunk
+branch, read from the repo rather than hardcoded. `-R` means no local git is
+needed. Title is `[n/N] <the layer commit's subject>`; body is generated from
+that commit's message body and its review brief.
 
 ```bash
 SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
         | sed -E 's#^git@github\.com:##; s#^https://github\.com/##; s#\.git$##')
-gh pr create -R "$SLUG" --base main              --head <session>--<l1> --draft \
+TRUNK=$(gh repo view -R "$SLUG" --json defaultBranchRef -q '.defaultBranchRef.name')
+gh pr create -R "$SLUG" --base "$TRUNK"          --head <session>--<l1> --draft \
   --title "[1/3] <subject>" --body "<generated body>"
 gh pr create -R "$SLUG" --base <session>--<l1>   --head <session>--<l2> --draft \
   --title "[2/3] <subject>" --body "<generated body>"
@@ -219,26 +234,37 @@ Every body must carry the brief's four fields — **Claims**, **Verify**, **Lane
 
 ```bash
 SRC=$(cd .jj && cd "$(dirname "$(cat repo)")/.." && pwd)
-(cd "$SRC" && gh stack link <n1> <n2> <n3>)
+(cd "$SRC" && gh stack link <n1> <n2> <n3> 2>&1); echo "EXIT=$?"
 ```
 
 Bottom to top, using the numbers §3 just created. **PR numbers are right for this
-*initial* link** — every PR exists already, so nothing needs reusing or chaining,
-and numbers skip `gh stack link`'s automatic branch push, which §2's
-`jj git push` already did.
+*initial* link** — every PR exists already, so nothing needs creating, and
+numbers skip `gh stack link`'s automatic branch push, which §2's `jj git push`
+already did.
 
-**Not because the source repo lacks the branches — it has them.** jj exports
-every bookmark to the colocated repo's `refs/heads/*`, so `git branch --list`
-there shows one branch per layer. Branch arguments are safe here; the automatic
-push is merely redundant. Say it that way — the "no local branches" reasoning is
-false and, left standing, gets "corrected" back into the wrong command.
+**Redirect `2>&1` and check the exit code.** `gh stack link` writes its progress
+and success lines — `Checking existing stacks…`, `✓ Created stack with 3 PRs
+(stack #8)` — to **stderr**; stdout is empty, so `$(...)` or `| tee` captures
+nothing. It exits **5** on a partial failure, and it is **not atomic**: a failed
+call can leave a PR created and orphaned outside the stack. Report a non-zero
+exit with the stderr text rather than re-running blindly.
+
+**Branch arguments would also work here — but not for the reason an earlier
+version of this skill gave.** It claimed jj exports every bookmark into the
+colocated repo's `refs/heads/*`; **that is false from a non-colocated
+workspace**, where jj only exports when a jj command runs in the colocated repo
+itself (measured: `git branch --list` in `$SRC` empty, `git ls-remote` showing
+every layer). Branch names are safe because `gh stack link` resolves them
+**server-side** through the GitHub API. Numbers stay the choice here because they
+are already in hand.
 
 **A later re-link passes branch names, not numbers** (`/stack` §4, §6): only
-branch arguments make `gh stack link` create the PR an inserted layer needs and
-re-chain every base. That path is `/squash` §2's, not this skill's.
+branch arguments make `gh stack link` create the PR an inserted layer needs. That
+path is `/squash` §2's, not this skill's — and if the layer was inserted *below
+the top*, it needs `/stack` §6 case B's unstack-then-link, because GitHub locks
+the base of a stacked PR.
 
-`gh stack link` is incremental: re-running after a shape change updates the stack
-and never removes PRs.
+`gh stack link` never removes PRs; re-running an identical link is a clean no-op.
 
 ### 5. Stamp one `:github` ref per PR
 
@@ -305,6 +331,13 @@ the fix is a **new** PR — not an edit of the merged one:
   are already in hand and the branches are already pushed. (A *re-link* is the
   opposite: branch names, `/stack` §6.)
 - **Passing layers to `gh stack link` top-first** — arguments run bottom to top.
+- **`jj git push --allow-new`** — the flag does not exist in jj 0.42; the command
+  exits `unexpected argument` and pushes nothing, so nothing downstream can work.
+  `-b` implies it (step 3, §2).
+- **Capturing `gh stack link`'s stdout, or ignoring its exit code** — it prints
+  to **stderr** and exits 5 on a partial, non-rolled-back failure (§4).
+- **Hardcoding `--base main`** — read the default branch into `$TRUNK` (step 3,
+  §3).
 - **Thinking `-R "$SLUG"` is enough for every `gh pr` command** — it is not for
   any subcommand that resolves a PR (`view`/`edit`/`ready`/`merge`). Those need
   `-R` **and** an explicit PR number, or they exit `argument required when using

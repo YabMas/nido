@@ -403,6 +403,23 @@
       (is (re-find #"jj file show -r <rev> <path>" s))
       (is (re-find #"NOT `git show <rev>:<path>`" s)))))
 
+(deftest jj-workspace-briefing-warns-off-bare-gh-and-derives-the-slug
+  ;; Bare `gh` fails from a non-colocated jj workspace the same way bare `git`
+  ;; does, and nido has no env-injection point for a spawned agent — so the
+  ;; briefing is where an ad-hoc `gh` call gets taught to pass -R.
+  (let [s (@#'launcher/render-edit-location :jj-workspace "/wt")]
+    (testing "names the failure mode"
+      (is (re-find #"(?i)bare `?gh`?" s))
+      (is (re-find #"not a git repository" s)))
+    (testing "gives the slug derivation and the -R rule"
+      (is (re-find #"jj git remote list" s))
+      (is (str/includes? s "-R \"$SLUG\"")))
+    (testing "warns that PR-resolving subcommands also need an explicit number"
+      (is (re-find #"view.*edit.*ready.*merge" s))
+      (is (re-find #"argument required when using the --repo flag" s)))
+    (testing "repeats that shell variables do not persist between commands"
+      (is (re-find #"(?i)do not persist between commands" s)))))
+
 (deftest session-briefing-returns-rendered-string
   ;; session-briefing wires persisted state -> render-context. Stub the reads
   ;; it actually uses, matched to the real session.edn structure that
