@@ -1615,3 +1615,42 @@
             d (work/workstream :brian "pg-bare")]
         (is (= (:id w) (:ws-id d)) "resolves to the real workstream, not the page-id")
         (is (not (:bare? d)) "and it is no longer a bare pane")))))
+
+(deftest dismiss-a-bare-row-stamps-the-ticket-status
+  (with-tmp
+    (fn [_]
+      ;; No workstream to close, so the ticket stamp IS the whole veto. bare-row
+      ;; reads :dismissed? off ticket status, which moves the row to the
+      ;; Dismissed band where Restore (already bare-aware) undoes it.
+      (seed-page! {"pg-bare" {:status "Needs verification" :priority 1 :ball-ids #{}
+                              :title "Move Licences" :br "BR-9"}})
+      (is (= {:decision :dismissed} (work/dismiss! :brian "pg-bare")))
+      (is (= :dismissed (tickets/status :brian "BR-9"))
+          "ticket record created and stamped, though it never existed before"))))
+
+(deftest dismiss-refuses-a-page-with-no-br
+  (with-tmp
+    (fn [_]
+      (seed-page! {"pg-nobr" {:status "Needs verification" :priority nil
+                              :ball-ids #{} :title "No id" :br nil}})
+      (is (= {:decision :no-workstream} (work/dismiss! :brian "pg-nobr"))
+          "nothing to stamp and nothing to close — a genuine no-op"))))
+
+(deftest dismiss-round-trips-through-restore-on-a-bare-row
+  (with-tmp
+    (fn [_]
+      (seed-page! {"pg-bare" {:status "Needs verification" :priority 1 :ball-ids #{}
+                              :title "Move Licences" :br "BR-9"}})
+      (work/dismiss! :brian "pg-bare")
+      (is (= {:decision :restored} (work/restore! :brian "pg-bare")))
+      (is (nil? (tickets/status :brian "BR-9")) "status cleared — re-triable again"))))
+
+(deftest resolve-gate-lets-dismiss-past-the-workstream-less-guard
+  (with-tmp
+    (fn [_]
+      (seed-page! {"pg-bare" {:status "Needs verification" :priority 1 :ball-ids #{}
+                              :title "Move Licences" :br "BR-9"}})
+      (is (= {:decision :dismissed} (work/resolve-gate! :brian "pg-bare" :dismiss))
+          "the nil-read-ws guard must not swallow :dismiss")
+      (is (= {:decision :no-workstream} (work/resolve-gate! :brian "pg-bare" :done))
+          "an action with no bare meaning is still refused"))))

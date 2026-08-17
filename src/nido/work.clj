@@ -539,6 +539,13 @@
       :done        (do (cws/close! project ws-id :done) {:decision :done})
       (do (cws/advance-stage! project ws-id target) {:decision :advanced}))))
 
+(defn- bare-row-br
+  "The BR-#### behind a bare watched-view row, whose synthetic ws-id IS the Notion
+   page-id (workstreams-view/bare-row). nil when the page is not in the project's
+   watched-view cache, or carries no unique-id."
+  [project page-id]
+  (get-in (notion-cache/project-page-facts project) [page-id :br]))
+
 (defn dismiss!
   "Take a workstream off the triage radar: record a :dismissed disposition on its
    ticket (so auto-re-triage skips it) and settle the workstream :dismissed (which
@@ -551,8 +558,9 @@
    because nothing branches on the outcome value — every other reader tests
    :closed for presence or renders (name outcome).
 
-   A workstream-less ws-id (e.g. a bare watched-view row) is a no-op:
-   {:decision :no-workstream}. Returns {:decision :dismissed} otherwise."
+   A workstream-less ws-id is a bare watched-view row: the ticket stamp alone
+   carries the veto there, and only a page with no BR is a genuine no-op
+   ({:decision :no-workstream}). Returns {:decision :dismissed} otherwise."
   [project ws-id]
   (if-let [w (cws/read-ws project ws-id)]
     (do
@@ -560,14 +568,15 @@
         (tickets/dismiss! project br))
       (cws/close! project ws-id :dismissed)
       {:decision :dismissed})
-    {:decision :no-workstream}))
-
-(defn- bare-row-br
-  "The BR-#### behind a bare watched-view row, whose synthetic ws-id IS the Notion
-   page-id (workstreams-view/bare-row). nil when the page is not in the project's
-   watched-view cache, or carries no unique-id."
-  [project page-id]
-  (get-in (notion-cache/project-page-facts project) [page-id :br]))
+    ;; Bare watched-view row: no workstream to close, so the ticket stamp IS the
+    ;; whole veto — bare-row reads :dismissed? straight off ticket status, which
+    ;; lands the row in the Dismissed band where Restore already works.
+    ;; tickets/dismiss! creates the record when absent, so a never-triaged page
+    ;; is dismissable. Exactly mirrors restore!'s bare branch. Only a page with
+    ;; no BR is a genuine no-op.
+    (if-let [br (bare-row-br project ws-id)]
+      (do (tickets/dismiss! project br) {:decision :dismissed})
+      {:decision :no-workstream})))
 
 (defn restore!
   "Undo a dismiss: clear the ticket's status so it is re-triable and reopen the
@@ -773,10 +782,19 @@
           {:decision :applied})))
     {:decision :applied}))
 
+(def ^:private workstream-less-actions
+  "Gate actions that are meaningful on a bare watched-view row — one with no
+   workstream of its own, only a Notion page and a ticket record. Each carries its
+   own workstream-less branch AND its own :no-workstream refusal, so the read-ws
+   guard in resolve-gate! must route them BEFORE it, or the only actions such a
+   row offers become silent no-ops."
+  #{:restore :dismiss})
+
 (defn resolve-gate!
   "Apply a gate follow-action, dispatching on `action-id`. A workstream-less ws-id
    (e.g. a bare watched-view row) is a no-op — {:decision :no-workstream} — for
-   every action but :restore, which such a row legitimately offers (see restore!).
+   every action but :restore and :dismiss, which such a row legitimately offers
+   (see workstream-less-actions).
      :promote -> set-stage! :in-progress   :dismiss -> off-radar (ticket + ws :dismissed)
      :drop    -> close! :dropped            :done    -> set-stage! :done
      :apply   -> apply! (ticket:complete)   :reply   -> resume! the parked agent with `input`
@@ -785,17 +803,17 @@
   ([project ws-id action-id] (resolve-gate! project ws-id action-id nil))
   ([project ws-id action-id input]
    (cond
-     ;; :restore is the ONE action meaningful without a workstream: a bare
-     ;; watched-view row lands in the Dismissed band and renders Restore, so the
-     ;; guard would make the band's only action a silent no-op. restore! carries
-     ;; its own workstream-less branch (and its own :no-workstream refusal).
-     (= :restore action-id)             (restore! project ws-id)
+     ;; Bare-row-capable actions run before the guard (see workstream-less-actions).
+     (contains? workstream-less-actions action-id)
+     (case action-id
+       :restore (restore! project ws-id)
+       :dismiss (dismiss! project ws-id))
+
      (nil? (cws/read-ws project ws-id)) {:decision :no-workstream}
      :else
      (case action-id
        :promote (set-stage! project ws-id :in-progress)
        :done    (set-stage! project ws-id :done)
-       :dismiss (dismiss! project ws-id)
        :drop    (do (cws/close! project ws-id :dropped) {:decision :dropped})
        :apply   (apply! project ws-id)
        :reply   (resume/resume! project ws-id input)
