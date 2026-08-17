@@ -38,16 +38,47 @@ never halt.** Layer structure is settled by the time `/squash` runs: it was
 decided at planning time and may have been reshaped during the work. Squash only
 tidies *within* boundaries that already exist.
 
-Read the stack:
+Read the stack. **Scope the bookmark list to this session** — `jj bookmark list`
+covers the whole shared jj repo, which holds every other workspace's bookmarks
+too. Derive `<session>` from cwd (`/stack` §4, "Deriving `<session>`") and grep on
+the prefix, anchored:
 
 ```bash
 jj log -r 'main@origin..@' --no-graph
-jj bookmark list | grep -- '--'
+jj bookmark list -T 'name ++ "\n"' | grep "^<session>--"
 ```
 
-For each layer bookmark, fold that layer's range into one commit and set its
-description to the layer commit format (`/stack` §5) — subject, body, `Layer:`
-trailer, and the four review-brief fields:
+An unanchored `grep -- '--'` matches other sessions' layer bookmarks — this repo
+has a dozen live workspaces — and would make `/squash` fold and publish another
+session's layers. It also matches a `--` inside a commit's first line, which the
+default template prints; `-T 'name ++ "\n"'` prints names only.
+
+Bookmarks are listed bottom to top by `jj log` order, not by the grep's output
+order; take the ordering from `jj log -r 'main@origin..@'`.
+
+### The fold, per layer
+
+A layer's range is `<lower>..<this-bookmark>`, where `<lower>` is the bookmark of
+the layer beneath it — and `main@origin` for the bottom layer. Squash everything
+in that range into its lowest commit:
+
+```bash
+LOW=main@origin                 # or <session>--<slug-of-layer-beneath>
+TIP=<session>--<slug>
+BASE=$(jj log -r "roots($LOW..$TIP)" --no-graph -T 'change_id.short()')
+jj squash --from "$LOW..$TIP ~ $BASE" --into "$BASE"
+```
+
+The layer bookmark follows onto the folded commit, and the layers above rebase
+automatically — so work bottom to top and each layer's `$LOW` is already folded
+when you reach it. If the layer is already one commit, `jj squash` reports
+`Nothing changed.` and exits 0, so the fold is a safe no-op and the whole step is
+re-runnable.
+
+Then set the surviving commit's description to the layer commit format
+(`/stack` §5) — subject, body, `Layer:` trailer, and the four review-brief
+fields. (The fold leaves it carrying the *lowest* commit's message, which is
+usually not the message the layer wants.)
 
 ```bash
 jj describe -r <the-one-commit> -m "$(cat <<'MSG'
@@ -78,41 +109,64 @@ MSG
 ## 2. Push the whole stack
 
 ```bash
-jj git push
-```
-
-Bare `jj git push` pushes tracked bookmarks — every layer bookmark, and never the
-session bookmark. The fold rewrote history, so this force-updates each layer's
-branch on the remote. Expected, and fine for a session's own branches.
-
-If a layer bookmark has never been pushed:
-
-```bash
 jj git push --allow-new -b 'glob:<session>--*'
 ```
 
+**Always scope the push with `-b 'glob:<session>--*'`.** Bare `jj git push` pushes
+every *tracked* bookmark, and the session bookmark `<session>` is tracked in any
+session that ran the single-PR `/prepare-draft-pr` — several such sessions exist
+in this repo. There, a bare push also force-updates `refs/heads/<session>`,
+republishing the whole stack as one branch beside the layers and contradicting
+`/prepare-draft-pr`'s "only `<session>--*` goes up". The glob is what makes the
+invariant hold regardless of what is tracked; it matches `/prepare-draft-pr` §2.
+
+`--allow-new` covers a layer bookmark that has never been pushed. The fold
+rewrote history, so this force-updates each layer's branch on the remote —
+expected, and fine for a session's own branches.
+
 Then re-link, in case the shape changed since publish. `gh stack` needs the
-colocated source repo — it cannot run in this worktree:
+colocated source repo — it cannot run in this worktree. Re-derive `$SRC` here:
+**shell variables do not survive between commands** (`/stack` §4).
 
 ```bash
 SRC=$(cd .jj && cd "$(dirname "$(cat repo)")/.." && pwd)
-(cd "$SRC" && gh stack link <n1> <n2> <n3>)
+(cd "$SRC" && gh stack link <session>--<l1> <session>--<l2> <session>--<l3>)
 ```
 
-Bottom to top, by **PR number**. `gh stack link` is incremental and never removes
-PRs. Push regardless of whether PRs exist.
+Bottom to top, listing **every** layer, **by branch name**. Branch names are the
+re-link form: `gh stack link` reuses the open PR for a branch that has one,
+creates one for a branch that doesn't, and re-chains every base — which is what
+makes this correct after a layer was inserted, split, or reordered during the
+work. PR numbers cannot do the first two, and nothing else in this flow rewires a
+base (`/stack` §4). Push and re-link regardless of whether PRs exist.
+
+`gh stack link` is incremental and never removes PRs. Note the stack number it
+reports — `/drive-home` §6 merges by it.
 
 ## 3. Regenerate every PR's title + description
+
+First discover the PRs. This is the shared discovery primitive from `/stack` §4 —
+**not** `gh stack view`, which takes no arguments, always resolves the current
+branch, and therefore always fails in a jj-colocated repo. It runs in the
+worktree; it needs no git repo and no current branch:
 
 ```bash
 SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
         | sed -E 's#^git@github\.com:##; s#^https://github\.com/##; s#\.git$##')
-SRC=$(cd .jj && cd "$(dirname "$(cat repo)")/.." && pwd)
-(cd "$SRC" && gh stack view --json)
+gh pr list -R "$SLUG" --state open --limit 50 \
+  --json number,url,headRefName,baseRefName,isDraft \
+  --jq '.[] | select(.headRefName | startswith("<session>--"))'
 ```
 
-- **No stack / no PRs** → §1 and §2 were the whole job; stop here.
-- **Stack exists** → regenerate each layer's PR from its folded commit.
+Order the results bottom to top by walking the `baseRefName` chain (bottom layer:
+`baseRefName == "main"`), or by matching `headRefName` against the `jj log` order
+from §1. **That ordered list of `number`s is what the `gh pr edit` calls below
+consume** — nothing else produces them, so this step is not optional.
+
+- **Empty result** → nothing is published yet; §1 and §2 were the whole job; stop
+  here. (Empty means "not published", not "discovery failed" — an error from `gh`
+  is a different thing and should be reported.)
+- **PRs found** → regenerate each layer's PR from its folded commit.
 
 For each layer, replace the PR body **wholesale** — the quick body
 `prepare-draft-pr` wrote plus anything hand-typed — with one synthesized from the
@@ -120,8 +174,16 @@ folded commit (subject, body, `Layer:` trailer, review brief), that layer's diff
 and the ticket:
 
 ```bash
+SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
+        | sed -E 's#^git@github\.com:##; s#^https://github\.com/##; s#\.git$##')
 gh pr edit <number> -R "$SLUG" --title "[<n>/<N>] <subject>" --body "<regenerated body>"
 ```
+
+`<number>` is the layer's `number` from the discovery above. Both `-R` **and** an
+explicit number are required: with `-R` and no number, `gh pr edit` exits
+`argument required when using the --repo flag`; with a number and no `-R`, it
+cannot resolve the repo from this worktree. And re-derive `$SLUG` in this block —
+it does not survive from the discovery block.
 
 `<n>` is the layer's position bottom-to-top and `<N>` the stack depth — both read
 fresh from `jj log`, so an inserted or removed layer renumbers every title
@@ -156,9 +218,22 @@ re-derives the same bodies — idempotent, no append-drift.
 - **Hand-computing `[n/N]`** — read position and depth fresh from `jj log`, so
   inserted layers renumber correctly.
 - **Running `gh stack` in the worktree** — it needs a git repository. Run it from
-  `$SRC`.
-- **Omitting `-R "$SLUG"` from `gh pr edit`** — bare `gh` cannot resolve a repo
-  from a non-colocated worktree.
+  `$SRC`. (`gh pr list`/`gh pr edit` need neither and run here.)
+- **Reading the stack with `gh stack view`** — it has no positional arguments, so
+  it always resolves the current branch and always fails here. Use §3's
+  `gh pr list` discovery.
+- **Calling `gh pr edit` with `-R "$SLUG"` but no PR number** — `-R` alone is not
+  enough for any `gh pr` subcommand that resolves a PR; it then exits `argument
+  required when using the --repo flag`. Pass `-R` **and** the number from
+  discovery.
+- **Assuming `$SLUG`/`$SRC` carry between commands** — each Bash call is a fresh
+  shell. Re-derive them in every block, or inline the values.
+- **Bare `jj git push`** — it also pushes the session bookmark when that bookmark
+  is tracked. Always scope with `-b 'glob:<session>--*'` (§2).
+- **`jj bookmark list | grep -- '--'`** — that is repo-global and matches other
+  sessions' layers. Anchor it: `grep "^<session>--"` (§1).
+- **Re-linking with PR numbers** — a re-link passes branch names, so a layer
+  inserted during the work gets its PR and every base gets re-chained (§2).
 - **Proofreading/appending to the old PR body** — §3 is a full overwrite
   synthesized from the final state, not an edit of the existing text.
 - **Stopping without pushing** — the folded commits must land on the remote;

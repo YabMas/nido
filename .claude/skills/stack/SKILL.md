@@ -91,6 +91,9 @@ to the same specialist?* Project review lanes are real subject boundaries.
   yield.
 - **Independent correctness.** The build passes and tests are green at every
   layer, not only the top. Stopping after any layer leaves a working system.
+  This is an **authoring obligation on you, checked by review — not
+  machine-verified.** No gate enforces it; CI runs on the merged tip. Don't go
+  looking for the check, and don't treat its absence as permission to skip it.
 - **Size exemptions.** Pure deletions and generated files count toward nothing.
   A 2,000-line supersede layer is a one-minute review.
 
@@ -143,6 +146,55 @@ SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
 SRC=$(cd .jj && cd "$(dirname "$(cat repo)")/.." && pwd)
 ```
 
+> **Shell variables do not survive between commands.** Each Bash call in this
+> harness is a fresh shell — the working directory persists, the environment does
+> not. **Re-derive `$SLUG`/`$SRC` in every block that uses them**, or inline the
+> literal values. A block that references `$SLUG` without deriving it in the same
+> block sends `-R ""` and fails. Every sibling skill repeats this derivation for
+> that reason; the repetition is deliberate.
+
+### Deriving `<session>`
+
+Layer bookmarks are prefixed with the session name, so several steps need it.
+Derive it from cwd rather than from `bb nido:session:link:list`, whose echoed
+name mis-resolves slash-namespaced sessions (`feat/x/y` → `feat`): a session home
+is `…/.nido/sessions/<project>/<session>/`, so split the path on `/sessions/` —
+the **first** segment after it is `<project>`, and the **rest** (slashes and all)
+is `<session>`.
+
+### Stack discovery — the one way to read a published stack
+
+**`gh stack view` cannot be used here.** It takes no positional arguments
+(`Usage: gh stack view [flags]`; the only flags are `--json/--short/-h`), so it
+always resolves the *current branch* — which a jj-colocated repo does not have.
+In `$SRC` it fails with `✗ failed to get current branch: … not on any branch`,
+unconditionally.
+
+Read a published stack with `gh pr list` instead. It needs no git repository and
+no current branch, so it runs **in the worktree**:
+
+```bash
+SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
+        | sed -E 's#^git@github\.com:##; s#^https://github\.com/##; s#\.git$##')
+gh pr list -R "$SLUG" --state open --limit 50 \
+  --json number,url,headRefName,baseRefName,isDraft \
+  --jq '.[] | select(.headRefName | startswith("<session>--"))'
+```
+
+Substitute the derived `<session>` into the `startswith` filter — the prefix is
+what scopes the result to *this* session's layers.
+
+**Order the layers bottom to top** by walking the `baseRefName` chain: the bottom
+layer is the one whose `baseRefName` is `main`; the next is the one whose
+`baseRefName` is the bottom layer's `headRefName`; and so on. (Equivalently,
+match `headRefName` against the bookmark order read from `jj log`.) That ordered
+list of `number`s is what every `gh pr edit`/`gh stack link` step below consumes.
+
+**Empty result** means the stack is not published yet, not that discovery failed.
+
+`/prepare-draft-pr`, `/squash`, and `/drive-home` all read the stack this way.
+There is one primitive; do not hand-roll a second.
+
 ### Publish / push / re-link
 
 ```bash
@@ -160,9 +212,27 @@ gh pr create -R "$SLUG" --base <session>--<l2>   --head <session>--<l3> --draft 
 
 Arguments run **bottom to top**, in the order read from `jj log`.
 
-**PR numbers, not branch names.** Numbers skip `gh stack link`'s automatic branch
-push, which would otherwise need local git branches the colocated source repo
-does not have checked out — jj already pushed them in step 1.
+### Numbers for the initial link, branch names for a re-link
+
+`gh stack link` accepts branch names, PR numbers, or PR URLs, and behaves
+differently for each — pick by what the call has to do.
+
+- **Initial link — pass PR numbers.** Step 2 just created the PRs, so the numbers
+  are in hand and nothing needs reusing or chaining. Numbers also skip
+  `gh stack link`'s automatic branch push, which step 1's `jj git push` already
+  did.
+- **Re-link after a reshape — pass branch names** (`<session>--<l1>
+  <session>--<l2> …`). This is the only form that repairs the stack in one call:
+  *"For branches that already have open PRs, those PRs are used. For branches
+  without PRs, new PRs are created automatically with the correct base branch
+  chaining."* Numbers cannot create the PR a newly-inserted layer needs, and
+  nothing else in this skill rewires an existing PR's base — see §6.
+
+**The source repo does have the branches.** An earlier version of this skill
+justified numbers by claiming the colocated source repo has no local git branches
+— that is false. jj exports every bookmark to the colocated repo's
+`refs/heads/*`, so `git branch --list` there shows one branch per layer. Branch
+arguments are safe; the automatic push is redundant, not broken.
 
 `gh stack link` is incremental: re-running after a shape change extends or
 updates the stack and never removes PRs.
@@ -170,19 +240,32 @@ updates the stack and never removes PRs.
 ### Ready and merge — also from the source repo
 
 ```bash
-(cd "$SRC" && gh stack link <n1> <n2> <n3> --open)   # draft → ready, all layers
-(cd "$SRC" && gh stack merge <n_top> --yes)
+(cd "$SRC" && gh stack link <session>--<l1> <session>--<l2> <session>--<l3> --open)
+(cd "$SRC" && gh stack merge <stack-number> --yes)
 ```
+
+`--open` flips new and existing PRs from draft to ready for review.
+
+**Merge by stack number, not PR number.** `gh stack merge`'s argument is
+ambiguous: *"A bare number is treated first as a **stack number**, then as a pull
+request number."* Once the repo has as many stacks as PRs are numbered, passing a
+PR number silently merges **someone else's stack** — non-interactively, with
+`--yes`, from a headless run. `gh stack link` prints the stack number it created
+or updated; capture it from that output and merge by it. If you genuinely only
+have a PR number, confirm no stack carries that number before passing it.
 
 `gh stack merge` is atomic and all-or-nothing; if any layer cannot merge, none
 do. It hands the stack to the merge queue natively when the base branch has one.
 
-### Every `gh stack` argument must be explicit
+### `gh stack link` and `gh stack merge` need explicit arguments
 
-With no arguments these commands look up the current branch, which a jj-colocated
-repo does not have (it sits in detached HEAD) — `gh stack view` there fails with
-`✗ failed to get current branch: … not on any branch`. With explicit arguments
-the lookup never happens.
+With no arguments they look up the current branch, which a jj-colocated repo does
+not have (it sits in detached HEAD). With explicit arguments the lookup never
+happens.
+
+**This does not rescue `gh stack view`** — it has no positional arguments to make
+explicit, so it always resolves the current branch and always fails here. Use the
+`gh pr list` discovery primitive above instead.
 
 ## 5. Layer commit format
 
@@ -223,22 +306,62 @@ follow.
 **Split one layer into two:**
 
 ```bash
-jj split -r <change-id>        # interactively choose what stays below
+jj split -r <change-id>        # interactively choose what goes in the LOWER half
 jj bookmark create <session>--<new-slug> -r <the-new-lower-change>
 ```
 
-Then re-describe both halves with their own trailer and brief (§5), and re-run
-the publish sequence (§4) — `gh stack link` will insert the new PR in place.
+**The original bookmark stays on the UPPER half — so the existing PR keeps the
+upper half's diff, and the new lower half needs a new bookmark and a new PR.**
+Verified against jj 0.42: `jj split` puts the *selected* changes in the lower
+commit and the *remaining* changes in the upper one, and moves any bookmark that
+pointed at the split commit to the **upper** half. Get this backwards and an open
+PR silently repoints at a different diff than the one already reviewed.
+
+One trap: the **lower** half inherits the *original change id*; the upper half
+gets a fresh one. So the bookmark is not on the change id you started with. Read
+the two halves back before naming them:
+
+```bash
+jj log -r 'main@origin..@' -T 'change_id.short() ++ " " ++ bookmarks ++ " | " ++ description.first_line() ++ "\n"'
+```
+
+If you wanted the *lower* half to keep the existing PR, move the bookmarks
+explicitly (`jj bookmark set <session>--<old-slug> -r <lower>` and create the new
+one on the upper half) — and say so in your report, since the open PR's diff
+changes underneath its reviewer.
+
+Then re-describe both halves with their own trailer and brief (§5), and re-link
+(below).
 
 **Insert a new layer below an existing one:**
 
 ```bash
-jj new <parent-of-target>      # new change between parent and target
+jj new --insert-before <target-change-id>   # new change between target and its parent
 # ...make the edits...
 jj bookmark create <session>--<new-slug> -r @
 ```
 
-Descendants rebase automatically.
+Descendants rebase automatically. **`--insert-before` (or the equivalent
+`jj new -A <parent-of-target>`) is required.** Bare `jj new <parent-of-target>`
+creates a **sibling** of the target, not a link in the chain: the stack silently
+forks into two heads, `main@origin..@` stops containing the upper layers,
+`/squash` folds the wrong set, and `/align` rebases only the fork. Verified
+against jj 0.42 — only the `--insert-*` forms relocate children.
+
+**Land a fixup on a lower layer** (the review loop: fix, then fold at ship time):
+
+```bash
+jj new --insert-after <layer-tip-change-id>   # fixup lands on that layer
+# ...make the fix...
+jj bookmark set <session>--<slug> -r @         # REQUIRED
+```
+
+**The `jj bookmark set` is not optional.** jj moves a bookmark when the commit it
+points at is *rewritten*, not when a *child* is added — so after `--insert-after`
+the layer bookmark still points at the old tip. Skip it and the push publishes
+nothing for that layer: the reviewer sees an unchanged PR and the fixup rides up
+into the next layer's PR instead. `/squash` folds the fixup into the layer commit
+later; until then it is a normal commit on that layer.
 
 **Reorder two layers:**
 
@@ -250,18 +373,45 @@ Check for conflicts afterward with `jj resolve --list`; a non-empty list means
 the reorder was not legal — the layers have a real dependency and the original
 order was right.
 
-**After any reshape:** re-run the publish sequence from §4. `gh stack link` is
-incremental and never removes PRs.
+**After any reshape — re-link by BRANCH NAME:**
+
+```bash
+SRC=$(cd .jj && cd "$(dirname "$(cat repo)")/.." && pwd)
+jj git push --allow-new -b 'glob:<session>--*'
+(cd "$SRC" && gh stack link <session>--<l1> <session>--<l2> <session>--<l3>)
+```
+
+Bottom to top, **every** layer listed, including unchanged ones — that is how the
+bases get re-chained.
+
+Do **not** "re-run §4" literally: §4 step 2 is N × `gh pr create`, which errors
+for every layer that already has a PR. Branch arguments are the re-link path
+because `gh stack link` reuses the open PR for a branch that has one, creates a
+PR for a branch that doesn't, and rewires every base in the chain — the last of
+which nothing else here does. Insert a layer between L1 and L2 without it and
+L2's PR keeps `--base <session>--<l1>`, so L2's diff silently swallows the
+inserted layer's commits, destroying the bounded review the stack exists for.
 
 ## Common mistakes
 
 - **Running `gh stack` in the worktree** — it needs a git repository; a
-  non-colocated jj workspace has none. Run it from `$SRC` (§4).
-- **Calling `gh stack` with no arguments** — it then looks up the current
-  branch, which a jj-colocated repo does not have. Always pass explicit
-  arguments.
-- **Passing branch names to `gh stack link`** — pass PR numbers, so it does not
-  try to push branches the source repo has not checked out.
+  non-colocated jj workspace has none. Run it from `$SRC` (§4). (`gh pr list`,
+  the discovery primitive, needs neither and runs in the worktree.)
+- **Using `gh stack view` at all** — it takes no arguments, so it always resolves
+  the current branch and always fails in a jj-colocated repo. Read a published
+  stack with the `gh pr list` primitive (§4).
+- **Calling `gh stack link`/`gh stack merge` with no arguments** — they then look
+  up the current branch, which a jj-colocated repo does not have. Always pass
+  explicit arguments.
+- **Passing a PR number to `gh stack merge`** — a bare number is read as a
+  *stack* number first. Merge by the stack number `gh stack link` reported.
+- **Passing PR numbers to `gh stack link` on a re-link** — numbers cannot create
+  the PR an inserted layer needs, nor re-chain bases. Numbers are for the initial
+  link only; a re-link passes branch names (§4, §6).
+- **Inserting a layer with bare `jj new <parent>`** — that makes a sibling and
+  forks the stack. Use `jj new --insert-before <target>` (§6).
+- **Landing a fixup with `--insert-after` and not running `jj bookmark set`** —
+  the bookmark stays on the old tip and the layer's PR never updates (§6).
 - **Using `/` in a layer bookmark name** — it appears to work locally and breaks
   once the session bookmark reaches the remote. Use `--`.
 - **Numbering branch names** — insertions then force a rename, which orphans

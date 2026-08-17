@@ -68,24 +68,44 @@ SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
 SRC=$(cd .jj && cd "$(dirname "$(cat repo)")/.." && pwd)
 ```
 
-Then read the stack rather than a single PR:
+**Shell variables do not survive between commands** — each Bash call is a fresh
+shell (cwd persists, the environment does not). Re-derive `$SLUG`/`$SRC` in every
+block below that uses them, or inline the values; `-R ""` is what you get
+otherwise.
+
+Then read the stack with the shared discovery primitive (`/stack` §4), using the
+`<session>` derived in §1:
 
 ```bash
-(cd "$SRC" && gh stack view --json) 2>/dev/null \
-  || gh pr view -R "$SLUG" --json number,url,state,isDraft,headRefName,mergeStateStatus
+gh pr list -R "$SLUG" --state open --limit 50 \
+  --json number,url,headRefName,baseRefName,isDraft,mergeStateStatus \
+  --jq '.[] | select(.headRefName == "<session>" or (.headRefName | startswith("<session>--")))'
 ```
 
-- **Stack exists** → keep every layer's number and URL, bottom to top.
-- **Single PR exists** → today's path, unchanged.
-- **Neither** → run the **`/prepare-draft-pr` skill** now; it publishes the stack
+**Not `gh stack view`.** It takes no positional arguments, so it always resolves
+the *current branch* — which a jj-colocated repo does not have. In `$SRC` it
+fails unconditionally with `✗ failed to get current branch: … not on any branch`,
+which would make this step conclude "neither" on every stack and re-invoke
+`/prepare-draft-pr` against PRs that already exist. `gh pr list` needs no git
+repo and no current branch, so it runs here in the worktree.
+
+Classify the result:
+
+- **Layers found** (`headRefName`s of the form `<session>--*`) → a stack. **Keep
+  every layer's `number` and `url`, ordered bottom to top** by walking the
+  `baseRefName` chain from the layer whose base is `main`. §6 needs those numbers
+  and nothing else produces them.
+- **One PR whose `headRefName` is exactly `<session>`** → today's single-PR path,
+  unchanged. Keep its number and URL.
+- **Empty** → run the **`/prepare-draft-pr` skill** now; it publishes the stack
   (or the single PR) and wires the correlation links the merge poller needs. Then
   re-read as above.
 
-> Discovery uses `gh pr view` (not the session `:pr` link): it asks GitHub for the
-> current branch's PR directly, so it's correct on idempotent re-runs and doesn't
-> depend on nido's link bookkeeping — which can mis-resolve slash-namespaced
-> sessions. The `:pr` / `:github` links are stamped by `/prepare-draft-pr` for the
-> merge poller; they aren't needed for discovery here.
+> Discovery asks GitHub directly rather than reading the session `:pr` link, so
+> it's correct on idempotent re-runs and doesn't depend on nido's link
+> bookkeeping — which can mis-resolve slash-namespaced sessions. The `:pr` /
+> `:github` links are stamped by `/prepare-draft-pr` for the merge poller; they
+> aren't needed for discovery here.
 
 Never hand-roll `gh pr create` or `gh stack link` here — delegate to
 `/prepare-draft-pr` so the poller bookkeeping is correct.
@@ -125,30 +145,59 @@ title/description. It is mechanical and never halts.
 ## 6. Finish — push, ready, enqueue
 
 ```bash
-jj git push                  # force-moves every layer bookmark to its folded commit
+jj git push -b 'glob:<session>--*'   # layer bookmarks only
 ```
+
+`/squash` §2 already pushed, so this **normally reports nothing to push** — that
+is the expected outcome, a safety net rather than a failure. Do not treat "no
+bookmarks to push" as a problem.
+
+Scope the push with `-b 'glob:<session>--*'`. Bare `jj git push` pushes every
+*tracked* bookmark, and the session bookmark is tracked in any session that ran
+the single-PR `/prepare-draft-pr` — there it would also force-update
+`refs/heads/<session>`, republishing the whole stack as one branch beside the
+layers. (Single-PR session: that branch **is** the PR's head, so push it —
+`jj git push -b '<session>'`.)
 
 Mark every layer ready. For a stack:
 
 ```bash
-(cd "$SRC" && gh stack link <n1> <n2> <n3> --open)
+SRC=$(cd .jj && cd "$(dirname "$(cat repo)")/.." && pwd)
+(cd "$SRC" && gh stack link <session>--<l1> <session>--<l2> <session>--<l3> --open)
 ```
 
-`--open` flips new and existing PRs from draft to ready for review. For a
-single-PR session, `gh pr ready -R "$SLUG"` as today.
+`--open` flips new and existing PRs from draft to ready for review. Pass **branch
+names** here, bottom to top, listing every layer: that form also re-chains bases
+and picks up any layer inserted during the work (`/stack` §4).
+
+For a single-PR session, `gh pr ready <number> -R "$SLUG"` — **both** the number
+(from §2's discovery) and `-R`. `-R` alone is not enough: `gh pr ready -R <slug>`
+exits `argument required when using the --repo flag`, and bare `gh pr ready`
+cannot resolve a repo from this worktree.
 
 Then merge:
 
 ```bash
-(cd "$SRC" && gh stack merge <n_top> --yes)
+SRC=$(cd .jj && cd "$(dirname "$(cat repo)")/.." && pwd)
+(cd "$SRC" && gh stack merge <stack-number> --yes)
 ```
+
+**Merge by the stack number, not a PR number.** `gh stack merge`'s argument is
+ambiguous — *"A bare number is treated first as a stack number, then as a pull
+request number."* Once this repo has as many stacks as the PR number you would
+pass, `gh stack merge 7 --yes` merges **stack 7**, not PR 7, non-interactively
+from a headless run. The stack number is what `gh stack link` reported in §5
+(`/squash` §2) or at publish time (`/prepare-draft-pr` §4); carry it forward. If
+you have only a PR number, verify no stack shares it before passing it.
 
 `gh stack merge` is all-or-nothing: if any layer cannot merge, none do. When the
 base branch uses a merge queue, the stack is added to the queue and lands when
 the queue processes it — so this **replaces** `gh pr merge --auto` entirely; do
 not call both.
 
-For a single-PR session, `gh pr merge -R "$SLUG" --auto` as today.
+For a single-PR session, `gh pr merge <number> -R "$SLUG" --auto` — again both
+the number and `-R`. **No strategy flag** (`--squash`/`--merge`/`--rebase`): on a
+merge-queue branch `gh pr merge --auto` takes none, and passing one is rejected.
 
 ## 7. Record completion on the ticket ledger
 
@@ -203,9 +252,10 @@ continues rather than redoing:
   no-op.
 - PR description regen is a deterministic overwrite from the final state → safe to
   repeat (no append-drift).
-- PR already `isDraft:false` → skip `gh pr ready`.
-- Auto-merge already enabled (`gh pr view --json autoMergeRequest`) → skip
-  `gh pr merge --auto`.
+- PR already `isDraft:false` (§2's discovery reports it) → skip `gh pr ready`.
+- Auto-merge already enabled → skip `gh pr merge --auto`. Check it with **both**
+  `-R` and the number: `gh pr view <number> -R "$SLUG" --json autoMergeRequest`.
+  Without the number it exits `argument required when using the --repo flag`.
 - Stack already linked → `gh stack link` updates rather than duplicating.
 - All layers already `isDraft:false` → skip the `--open` re-link.
 - Stack already merged or queued → `gh stack merge` reports it; no second merge.
@@ -251,13 +301,25 @@ stops and makes no `ready`/`merge` calls.
 - **Proceeding to `/squash` before `/local-ci auto` reports green** — `/squash`
   (squash + PR text) is the last phase, after green CI. Commit-shaping itself
   lives in `/squash`; drive-home never splits or reshapes commits here.
-- **Calling `gh pr merge --auto` on a stack** — use `gh stack merge <n> --yes`;
-  calling both double-enqueues.
+- **Calling `gh pr merge --auto` on a stack** — use
+  `gh stack merge <stack-number> --yes`; calling both double-enqueues.
+- **Passing a PR number to `gh stack merge`** — a bare number is read as a
+  *stack* number first, so it can merge someone else's stack (§6).
 - **Marking only the top PR ready** — every layer must be ready or the stack
   merge refuses.
 - **Merging layer-by-layer with `gh pr merge`** — that abandons atomicity;
   `gh stack merge` lands the whole stack or none of it.
 - **Running `gh stack` in the worktree** — it needs a git repository. Run it from
-  `$SRC`.
-- **Omitting `-R "$SLUG"` from `gh pr` commands** — bare `gh` cannot resolve a
-  repo from a non-colocated worktree.
+  `$SRC`. (`gh pr list`, §2's discovery, needs none and runs in the worktree.)
+- **Reading the stack with `gh stack view`** — it has no positional arguments, so
+  it always resolves the current branch and always fails here; the run then
+  concludes "no stack" and re-publishes existing PRs. Use §2's `gh pr list`.
+- **Thinking `-R "$SLUG"` alone fixes bare `gh`** — it does not for any `gh pr`
+  subcommand that resolves a PR (`view`/`ready`/`merge`/`edit`). Those need `-R`
+  **and** an explicit PR number from §2's discovery, or they exit `argument
+  required when using the --repo flag`. Only `gh pr create` and `gh pr list` work
+  on `-R` alone.
+- **Assuming `$SLUG`/`$SRC` carry between commands** — each Bash call is a fresh
+  shell. Re-derive them in every block (§2).
+- **Bare `jj git push` on a stack** — it also pushes the session bookmark when
+  that bookmark is tracked. Scope it: `-b 'glob:<session>--*'` (§6).

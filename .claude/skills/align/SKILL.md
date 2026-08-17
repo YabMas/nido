@@ -70,15 +70,23 @@ in ways CI won't catch — when unsure, halt. Never guess at logic.
 
 ### Reporting a conflict in a stack
 
-When the session is a stack, name the layer that conflicted, not just the file:
+When the session is a stack, name the layer that conflicted, not just the file.
+`jj resolve --list` lists conflicted **files** in one commit — it never says
+*which* commit, so it cannot on its own tell you the layer. Ask jj which changes
+carry conflicts, with the `conflicts()` revset:
 
 ```bash
-jj resolve --list
-jj log -r 'main@origin..@' --no-graph -T 'change_id.short() ++ " " ++ description.first_line() ++ "\n"'
+jj log -r 'main@origin..@ & conflicts()' --no-graph \
+  -T 'change_id.short() ++ " " ++ bookmarks ++ " | " ++ description.first_line() ++ "\n"'
+jj log -r 'main@origin..@' --no-graph -T 'change_id.short() ++ " " ++ bookmarks ++ " | " ++ description.first_line() ++ "\n"'
+jj resolve --list   # the conflicted files, within the conflicted change
 ```
 
-Match the conflicted change against the layer list and report
-"layer `<slug>` (`[n/N]`) conflicts in `<file>`". A conflict in a lower layer
+The first command names the conflicted change(s) — with the layer bookmark, when
+one sits there. The second gives the full layer list, so you can compute the
+layer's `[n/N]` position. The third gives the files.
+
+Report "layer `<slug>` (`[n/N]`) conflicts in `<file>`". A conflict in a lower layer
 usually means the stack needs reshaping, not just a merge resolution — the
 foundation moved under the layers above it.
 
