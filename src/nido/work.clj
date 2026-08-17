@@ -331,6 +331,34 @@
        (sort-by :created-at)
        last))
 
+(defn- bare-pane
+  "Pane detail for a bare watched-view row — a page in the project's Notion cache
+   that no workstream covers (wsv/bare-row). Derived FROM bare-row rather than
+   rebuilt, so the pane can never disagree with the board list about stage or
+   label — the same reason `workstream` routes through wsv/workstream-row.
+
+   Carries explicit nils for the ledger/report/environment keys the full pane
+   renders: there is nothing behind any of them, and the pane's :bare? branch
+   skips those blocks outright. `fct` is the cache entry, passed in so the caller
+   reads project-page-facts once."
+  [project page-id fct]
+  (let [row (wsv/bare-row project page-id fct)]
+    {:ws-id         page-id
+     :project       project
+     :origin        :notion
+     :bare?         true
+     :label         (:label row)
+     :br-id         (:br-id row)
+     :stage         (:stage row)
+     :notion-status (:status fct)
+     :ledger        nil
+     :entries       nil
+     :selected-seq  nil
+     :on-latest?    true
+     :report        nil
+     :environment   nil
+     :sessions      []}))
+
 (defn workstream
   "Full detail for one workstream: origin, spine stage, label, a light ledger
    facet, a newest-first entry INDEX (nil when ≤1 entry), the SELECTED entry's
@@ -340,7 +368,7 @@
    on the autonomy axis. nil when the workstream is absent."
   ([project ws-id] (workstream project ws-id nil))
   ([project ws-id selected-seq]
-   (when-let [w (cws/read-ws project ws-id)]
+   (if-let [w (cws/read-ws project ws-id)]
      (let [sessions (csession/list-sessions project ws-id)
            ;; Pass the Notion cache so the pane derives stage exactly like the board
            ;; list (workstream-rows) — else the pane goes Notion-driven vs legacy and
@@ -369,7 +397,22 @@
                         (report-at base-dir entries sel)
                         (latest-report project ws-id))
         :environment  (environment project ws-id)
-        :sessions     (mapv session-facet sessions)}))))
+        :sessions     (mapv session-facet sessions)})
+     ;; No workstream at this id. For a bare watched-view row the ws-id IS the
+     ;; Notion page-id, so read-ws always misses and there are two live cases:
+     ;;   1. a workstream now covers the page — Start triage minted one under a
+     ;;      FRESH nido ws-id while the URL still names the page-id. Resolve to it,
+     ;;      or the pane stays bare forever after starting a triage.
+     ;;   2. still uncovered — render the bare pane.
+     ;; A genuinely unknown ws-id falls through both and stays nil.
+     ;; find-by-ref-id is O(workstreams), but only runs on a read-ws miss — i.e.
+     ;; only for a bare-row selection, never on the hot path.
+     (let [fct (get (notion-cache/project-page-facts project) ws-id)
+           now (when-let [br (:br fct)] (cws/find-by-ref-id project br))]
+       (cond
+         now (workstream project (:id now) selected-seq)
+         fct (bare-pane project ws-id fct)
+         :else nil)))))
 
 (defn- parked-session
   "The first parked autonomous session under a workstream, or nil — the session a

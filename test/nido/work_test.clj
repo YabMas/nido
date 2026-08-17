@@ -1566,3 +1566,52 @@
         (is (= [] (work/gates :brian))
             "dismiss removes it from Needs-you immediately, before the daemon
              sweep tears the session down")))))
+
+;; ---------------------------------------------------------------------------
+;; Bare watched-view rows — a Notion page with no workstream of its own.
+;; Its synthetic ws-id IS the page-id (wsv/bare-row), so read-ws always misses.
+;; ---------------------------------------------------------------------------
+
+(defn- seed-page! [pages]
+  (nido.coordinator.sources.state/write-state! "v1"
+    {:type :notion-view :source-config {:project :brian} :pages pages}))
+
+(deftest workstream-falls-back-to-a-bare-pane-for-an-uncovered-page
+  (with-tmp
+    (fn [_]
+      (seed-page! {"pg-bare" {:status "Needs verification" :priority 1 :ball-ids #{}
+                              :title "Move Licences" :br "BR-9"}})
+      (let [d (work/workstream :brian "pg-bare")]
+        (is (true? (:bare? d)))
+        (is (= "pg-bare" (:ws-id d)))
+        (is (= "BR-9" (:br-id d)))
+        (is (= "Move Licences" (:label d)))
+        (is (= :triage (:stage d)) "untriaged Needs-verification → triage")
+        (is (= :notion (:origin d)))
+        (is (= "Needs verification" (:notion-status d)))
+        (is (nil? (:report d)))
+        (is (nil? (:environment d)))
+        (is (nil? (:ledger d)))
+        (is (empty? (:sessions d)))))))
+
+(deftest workstream-is-nil-for-a-page-id-that-is-not-in-the-cache
+  (with-tmp
+    (fn [_]
+      (seed-page! {"pg-other" {:status "Not started" :priority nil :ball-ids #{}
+                               :title "Other" :br "BR-1"}})
+      (is (nil? (work/workstream :brian "pg-unknown"))
+          "an unknown id is still nil — the bare branch must not invent a pane"))))
+
+(deftest workstream-follows-the-handoff-once-the-page-has-a-workstream
+  (with-tmp
+    (fn [_]
+      ;; Start triage mints a workstream under a FRESH nido ws-id while the URL
+      ;; still says ?sel=brian:pg-bare. Selecting by page-id must resolve to it.
+      (seed-page! {"pg-bare" {:status "Needs verification" :priority 1 :ball-ids #{}
+                              :title "Move Licences" :br "BR-9"}})
+      (let [w (workstream/create! :brian
+                {:stage :triaging
+                 :external-refs [{:adapter :notion :id "BR-9" :page-id "pg-bare"}]})
+            d (work/workstream :brian "pg-bare")]
+        (is (= (:id w) (:ws-id d)) "resolves to the real workstream, not the page-id")
+        (is (not (:bare? d)) "and it is no longer a bare pane")))))
