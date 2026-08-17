@@ -179,10 +179,18 @@ walk, and nothing a mis-based PR can confuse:
 SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
         | sed -E 's#^git@github\.com:##; s#^https://github\.com/##; s#\.git$##')
 gh api repos/"$SLUG"/stacks \
-  --jq '.[] | select(any(.pull_requests[]; .head.ref | startswith("<session>--")))
+  --jq '.[] | select(.open) | select(any(.pull_requests[]; .head.ref | startswith("<session>--")))
             | "stack #\(.number) base=\(.base.ref) prs=\([.pull_requests[].number])"'
 # → stack #12 base=main prs=[5,9,6,7,11]
 ```
+
+**Filter on `.open`.** A merged (or otherwise closed) stack stays listed by this
+endpoint forever, with `open:false` — there is no way to delete a merged stack
+record. Without the filter, a session whose stack already shipped still "has a
+stack" by this query, and every caller that branches on that result (this
+skill's own callers, `/squash` §3, `/drive-home` §2) does pointless work
+against a stack that is already done. Verified: a merged stack's object
+persists with `open:false` and the same PR numbers.
 
 The full objects carry per-PR `number`, `state`, `draft`, and `head.ref`, so one
 call answers "which layers, in what order, and are they still drafts". The
@@ -261,10 +269,22 @@ gh pr create -R "$SLUG" --base <session>--<l1>   --head <session>--<l2> --draft 
 gh pr create -R "$SLUG" --base <session>--<l2>   --head <session>--<l3> --draft --title … --body …
 
 # 3. link by PR NUMBER, from the colocated source repo
-(cd "$SRC" && gh stack link <n1> <n2> <n3> 2>&1); echo "EXIT=$?"
+(cd "$SRC" && gh stack link --base "$TRUNK" <n1> <n2> <n3> 2>&1); echo "EXIT=$?"
 ```
 
 Arguments run **bottom to top**, in the order read from `jj log`.
+
+**Always pass `--base "$TRUNK"`.** Without it, `gh stack link` silently
+force-resets the bottom PR's base to the repository default branch — observed,
+verified: `gh stack link 13 14` on a PR deliberately created against a
+non-trunk base printed `✓ Updated base branch for PR #13 to main`, unasked.
+`gh stack link --help` explains why: `--base string   Base branch for the
+bottom of the stack (defaults to the repository default branch)` — the bottom
+PR's base is overwritten on **every** call, never read from the PR. For nido
+today the bottom layer's base already equals `$TRUNK`, so passing it is a
+no-op — but it stops being one the moment any stack is based on something
+other than trunk, and the silent retarget lands on the one branch this whole
+design is careful never to touch.
 
 **No `--allow-new` on the push.** jj 0.42 removed the flag — `jj git push
 --allow-new -b …` exits with `error: unexpected argument '--allow-new' found`,
@@ -322,15 +342,25 @@ belongs to a stack, so the call fails (exit 5,
 
 ### Ready and merge — also from the source repo
 
-Derive `$SRC` in this block too — it does not survive from an earlier one:
+Derive `$SLUG`/`$SRC`/`$TRUNK` in this block too — they do not survive from an
+earlier one:
 
 ```bash
+SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
+        | sed -E 's#^git@github\.com:##; s#^https://github\.com/##; s#\.git$##')
 SRC=$(cd .jj && cd "$(dirname "$(cat repo)")/.." && pwd)
-(cd "$SRC" && gh stack link <session>--<l1> <session>--<l2> <session>--<l3> --open 2>&1); echo "EXIT=$?"
-(cd "$SRC" && gh stack merge <top-pr-number> --yes)
+TRUNK=$(gh repo view -R "$SLUG" --json defaultBranchRef -q '.defaultBranchRef.name')
+(cd "$SRC" && gh stack link --base "$TRUNK" <session>--<l1> <session>--<l2> <session>--<l3> --open 2>&1); echo "EXIT=$?"
+(cd "$SRC" && gh stack merge <top-pr-number> --yes --rebase)
 ```
 
-`--open` flips new and existing PRs from draft to ready for review.
+`--open` flips new and existing PRs from draft to ready for review. Verified:
+it flips **both** newly-created and pre-existing PRs, with an explicit
+per-PR confirmation line (`✓ Marked PR #13 as ready for review`), and branch
+names resolve server-side with no local ref needed.
+
+`--base "$TRUNK"` on this link is the same guard as §4's initial link — see
+above; it is required here too, not just at publish time.
 
 **Do not merge if the `--open` link exited non-zero** — the stack shape on GitHub
 is wrong, and `gh stack merge` would land a mid-stack PR carrying the layer below
@@ -349,7 +379,29 @@ this flow takes.
 convenience, not a workaround for a number nobody can get.
 
 `gh stack merge` is atomic and all-or-nothing; if any layer cannot merge, none
-do. It hands the stack to the merge queue natively when the base branch has one.
+do. Verified: a real two-layer merge landed both PRs one second apart from a
+single invocation, with the base branch's final history showing both layer
+commits in order, linear, no merge commits, each carrying exactly its own
+layer's files.
+
+**Always pass `--rebase`.** With no method flag, `gh stack merge --yes` uses
+*"your last-used merge method"* (`gh stack merge --help`) — mutable,
+per-machine state, not a guaranteed default. Observed: an unflagged call
+merged *"via rebase"* only because that happened to be this machine's
+last-used method. `--rebase` is what a stack wants — `/squash` leaves exactly
+one commit per layer, and rebase lands exactly one commit per layer on
+trunk — but nothing guarantees the next machine, or this one after someone
+runs `gh stack merge --squash` once, picks it. A stray `--squash` would
+collapse a later stack's layers into one commit and destroy the layering the
+whole design exists to produce. Pinning it removes the dependency on that
+state.
+
+Per `gh stack merge --help`: *"If the base branch uses a merge queue, the
+stack is added to the queue and merges once the queue processes it; otherwise
+it is merged directly."* **This is vendor-documented, not independently
+verified** — `YabMas/nido` has no rulesets and no branch protection, so no
+merge queue exists here to exercise; only the direct-merge half has been
+observed.
 
 ### `gh stack link` and `gh stack merge` need explicit arguments
 
@@ -504,9 +556,12 @@ creates a PR for a branch that doesn't.
 Link incrementally. No unstacking; this path is verified to extend a live stack:
 
 ```bash
+SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
+        | sed -E 's#^git@github\.com:##; s#^https://github\.com/##; s#\.git$##')
 SRC=$(cd .jj && cd "$(dirname "$(cat repo)")/.." && pwd)
+TRUNK=$(gh repo view -R "$SLUG" --json defaultBranchRef -q '.defaultBranchRef.name')
 jj git push -b 'glob:<session>--*'
-(cd "$SRC" && gh stack link <session>--<l1> <session>--<l2> <session>--<l3> 2>&1); echo "EXIT=$?"
+(cd "$SRC" && gh stack link --base "$TRUNK" <session>--<l1> <session>--<l2> <session>--<l3> 2>&1); echo "EXIT=$?"
 ```
 
 Bottom to top, **every** layer listed, including unchanged ones.
@@ -534,6 +589,7 @@ Dissolving the stack object releases the base lock, and then a **single**
 SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
         | sed -E 's#^git@github\.com:##; s#^https://github\.com/##; s#\.git$##')
 SRC=$(cd .jj && cd "$(dirname "$(cat repo)")/.." && pwd)
+TRUNK=$(gh repo view -R "$SLUG" --json defaultBranchRef -q '.defaultBranchRef.name')
 jj git push -b 'glob:<session>--*'
 # scope to THIS session's stack — the repo holds other sessions' stacks too
 STACKNUM=$(gh api repos/"$SLUG"/stacks \
@@ -549,7 +605,7 @@ if [ -n "$STACKNUM" ]; then
 else
   echo "no stack for this session — skip the unstack, link directly"
 fi
-(cd "$SRC" && gh stack link <session>--<l1> <session>--<l2> … <session>--<lN> 2>&1); echo "EXIT=$?"
+(cd "$SRC" && gh stack link --base "$TRUNK" <session>--<l1> <session>--<l2> … <session>--<lN> 2>&1); echo "EXIT=$?"
 ```
 
 Bottom to top, **every** layer listed. Verified against a stack whose bases had
@@ -610,6 +666,25 @@ Renumber the other layers' titles too — an insertion changes every `[n/N]` abo
 it. `/squash` §3 regenerates all of them from `jj log` at ship time; do it here as
 well if the stack is being handed to a reviewer before then.
 
+#### After a stack merges — cleaning up the base branch needs a fetch first
+
+`gh stack merge` advances the base branch on the remote as part of the merge.
+If you then try to delete that branch bookmark from the worktree the normal
+way, it fails on stale info:
+
+```
+$ jj git push -b 'glob:<session>--*'
+Warning: The following references unexpectedly moved on the remote:
+  refs/heads/<base-branch> (reason: stale info)
+Error: Failed to push some bookmarks
+```
+
+(Verified: the two *layer* branches deleted fine in the same call — only the
+branch the merge itself moved was rejected.) `jj git fetch` resurrects the
+bookmark, but in a **conflicted** state; a second delete-and-push after that
+succeeds. Not something to design around, just an expected extra step when
+cleaning up a merged stack's branches.
+
 ## Common mistakes
 
 - **Running `gh stack` in the worktree** — it needs a git repository; a
@@ -622,6 +697,20 @@ well if the stack is being handed to a reviewer before then.
 - **Calling `gh stack link`/`gh stack merge` with no arguments** — they then look
   up the current branch, which a jj-colocated repo does not have. Always pass
   explicit arguments.
+- **Omitting `--base "$TRUNK"` on `gh stack link`** — every call, without
+  exception, force-resets the bottom PR's base to the repository default
+  branch (`gh stack link --help`). Observed retargeting a PR at `main` when it
+  had deliberately been created against another base, with no prompt. Harmless
+  today only because the bottom layer's base already is `$TRUNK`; pass it
+  explicitly anyway so the failure mode can't reappear later (§4).
+- **Omitting `--rebase` on `gh stack merge`** — with no method flag it uses
+  whatever method was last used on that machine, which is state, not a
+  guarantee. A stray `--squash` on any machine would collapse a stack's
+  layers into one commit (§4).
+- **Trusting stacks-API discovery without `select(.open)`** — a merged stack
+  stays listed forever with `open:false`; unfiltered discovery treats a
+  shipped stack as still live and does pointless (though harmless) work
+  against it (§4).
 - **Passing `--allow-new` to `jj git push`** — the flag does not exist in jj
   0.42; the command exits `unexpected argument` and nothing is pushed at all.
   `-b` implies it (§4).

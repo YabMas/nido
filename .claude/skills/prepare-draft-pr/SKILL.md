@@ -240,9 +240,18 @@ Every body must carry the brief's four fields — **Claims**, **Verify**, **Lane
 ### 4. Link them into a stack, by PR number
 
 ```bash
+SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
+        | sed -E 's#^git@github\.com:##; s#^https://github\.com/##; s#\.git$##')
 SRC=$(cd .jj && cd "$(dirname "$(cat repo)")/.." && pwd)
-(cd "$SRC" && gh stack link <n1> <n2> <n3> 2>&1); echo "EXIT=$?"
+TRUNK=$(gh repo view -R "$SLUG" --json defaultBranchRef -q '.defaultBranchRef.name')
+(cd "$SRC" && gh stack link --base "$TRUNK" <n1> <n2> <n3> 2>&1); echo "EXIT=$?"
 ```
+
+**Always pass `--base "$TRUNK"`.** Every `gh stack link` call force-resets the
+bottom PR's base to the repository default branch unless told otherwise —
+observed retargeting a deliberately non-trunk-based PR at `main`, unasked
+(`/stack` §4). No-op for nido today; removes the failure mode structurally for
+whenever it isn't.
 
 Bottom to top, using the numbers §3 just created. **PR numbers are right for this
 *initial* link** — every PR exists already, so nothing needs creating, and
@@ -337,6 +346,9 @@ the fix is a **new** PR — not an edit of the merged one:
 - **Passing branch names to `gh stack link` on the initial link** — the numbers
   are already in hand and the branches are already pushed. (A *re-link* is the
   opposite: branch names, `/stack` §6.)
+- **Omitting `--base "$TRUNK"` on `gh stack link`** — force-resets the bottom
+  PR's base to the repo default branch unless given explicitly; observed doing
+  this unasked against a non-trunk base (§4, `/stack` §4).
 - **Passing layers to `gh stack link` top-first** — arguments run bottom to top.
 - **`jj git push --allow-new`** — the flag does not exist in jj 0.42; the command
   exits `unexpected argument` and pushes nothing, so nothing downstream can work.

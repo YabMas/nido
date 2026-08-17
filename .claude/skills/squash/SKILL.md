@@ -142,9 +142,18 @@ colocated source repo — it cannot run in this worktree. Re-derive `$SRC` here:
 **shell variables do not survive between commands** (`/stack` §4).
 
 ```bash
+SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
+        | sed -E 's#^git@github\.com:##; s#^https://github\.com/##; s#\.git$##')
 SRC=$(cd .jj && cd "$(dirname "$(cat repo)")/.." && pwd)
-(cd "$SRC" && gh stack link <session>--<l1> <session>--<l2> <session>--<l3> 2>&1); echo "EXIT=$?"
+TRUNK=$(gh repo view -R "$SLUG" --json defaultBranchRef -q '.defaultBranchRef.name')
+(cd "$SRC" && gh stack link --base "$TRUNK" <session>--<l1> <session>--<l2> <session>--<l3> 2>&1); echo "EXIT=$?"
 ```
+
+**Always pass `--base "$TRUNK"`.** Every `gh stack link` call — this re-link
+included — force-resets the bottom PR's base to the repository default branch
+unless told otherwise (`/stack` §4; observed retargeting a PR at `main`
+unasked). It's a no-op for nido today but removes the failure mode
+structurally, the same reasoning as `--` over `/` in bookmark names.
 
 Bottom to top, listing **every** layer, **by branch name**. Branch names are the
 re-link form: `gh stack link` reuses the open PR for a branch that has one and
@@ -183,7 +192,7 @@ current branch:
 SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
         | sed -E 's#^git@github\.com:##; s#^https://github\.com/##; s#\.git$##')
 gh api repos/"$SLUG"/stacks \
-  --jq '.[] | select(any(.pull_requests[]; .head.ref | startswith("<session>--")))
+  --jq '.[] | select(.open) | select(any(.pull_requests[]; .head.ref | startswith("<session>--")))
             | "stack #\(.number) base=\(.base.ref) prs=\([.pull_requests[] | {number, ref: .head.ref}])"'
 ```
 
@@ -191,6 +200,10 @@ gh api repos/"$SLUG"/stacks \
 in the repo, and this repo runs a dozen sessions at once — unfiltered, `/squash`
 would regenerate another session's PR bodies. Same rule as §1's anchored
 `grep "^<session>--"`.
+
+**Keep `select(.open)` too.** A merged stack stays listed with `open:false`
+forever; without the filter a re-run against an already-shipped stack would
+still "find" it and attempt to regenerate PR text on PRs that already merged.
 
 **That list's `{number, ref}` pairs are what the `gh pr edit` calls below
 consume** — nothing else produces them, so this step is not optional. Match
@@ -303,6 +316,13 @@ re-derives the same bodies — idempotent, no append-drift.
   sessions' layers. Anchor it: `grep "^<session>--"` (§1).
 - **Re-linking with PR numbers** — a re-link passes branch names, so a layer
   inserted during the work gets a PR at all (§2).
+- **Omitting `--base "$TRUNK"` on the re-link** — `gh stack link` force-resets
+  the bottom PR's base to the repo default branch on every call unless told
+  otherwise; harmless today, live the moment a stack isn't based on trunk (§2,
+  `/stack` §4).
+- **Discovering the stack without `select(.open)`** — a merged stack stays
+  listed forever; without the filter a re-run regenerates PR text against an
+  already-shipped stack (§3).
 - **Proofreading/appending to the old PR body** — §3 is a full overwrite
   synthesized from the final state, not an edit of the existing text.
 - **Stopping without pushing** — the folded commits must land on the remote;

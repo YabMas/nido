@@ -82,13 +82,19 @@ confuse it. Re-derive `$SLUG` here; it does not survive from the block above:
 SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
         | sed -E 's#^git@github\.com:##; s#^https://github\.com/##; s#\.git$##')
 gh api repos/"$SLUG"/stacks \
-  --jq '.[] | select(any(.pull_requests[]; .head.ref | startswith("<session>--")))
+  --jq '.[] | select(.open) | select(any(.pull_requests[]; .head.ref | startswith("<session>--")))
             | "stack #\(.number) base=\(.base.ref) prs=\([.pull_requests[].number])"'
 ```
 
 **Keep the `startswith("<session>--")` filter** — the endpoint returns every
 stack in the repo, and this repo runs a dozen sessions at once. Unfiltered, this
 step would drive another session's stack to the merge queue.
+
+**Keep `select(.open)` too.** A merged stack stays listed by this endpoint
+forever, with `open:false` — there is no way to delete a merged stack record.
+Without the filter, a session whose stack already shipped still "has a stack"
+here, and this step re-runs §3–§6 for no reason (harmless — §6's merge is
+verified idempotent — but pointless, and confusing to reason about).
 
 Empty means *this session* has no stack object — which is also the state of a
 single-PR session, and of layers created but never linked. Fall back to
@@ -191,13 +197,26 @@ layers. (Single-PR session: that branch **is** the PR's head, so push it —
 Mark every layer ready. For a stack:
 
 ```bash
+SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
+        | sed -E 's#^git@github\.com:##; s#^https://github\.com/##; s#\.git$##')
 SRC=$(cd .jj && cd "$(dirname "$(cat repo)")/.." && pwd)
-(cd "$SRC" && gh stack link <session>--<l1> <session>--<l2> <session>--<l3> --open 2>&1); echo "EXIT=$?"
+TRUNK=$(gh repo view -R "$SLUG" --json defaultBranchRef -q '.defaultBranchRef.name')
+(cd "$SRC" && gh stack link --base "$TRUNK" <session>--<l1> <session>--<l2> <session>--<l3> --open 2>&1); echo "EXIT=$?"
 ```
 
-`--open` flips new and existing PRs from draft to ready for review. Pass **branch
-names** here, bottom to top, listing every layer: that form also picks up any
-layer that still has no PR (`/stack` §4).
+`--open` flips new and existing PRs from draft to ready for review — verified
+against both a newly-created and a pre-existing draft PR, each with an
+explicit per-PR confirmation line. Pass **branch names** here, bottom to top,
+listing every layer: that form also picks up any layer that still has no PR
+(`/stack` §4).
+
+**Always pass `--base "$TRUNK"`.** Every `gh stack link` call, this one
+included, force-resets the bottom PR's base to the repository default branch
+unless told otherwise — observed, on a PR deliberately created against a
+non-trunk base: `✓ Updated base branch for PR #13 to main`, unasked. No-op for
+nido today since the bottom layer's base already is `$TRUNK`; still pass it,
+since the silent retarget lands on the branch this whole design exists to
+protect (`/stack` §4).
 
 **Redirect `2>&1` and check the exit code.** `gh stack link` prints everything to
 **stderr** — stdout is empty — and exits **5** on a partial failure that it does
@@ -217,7 +236,7 @@ Then merge:
 
 ```bash
 SRC=$(cd .jj && cd "$(dirname "$(cat repo)")/.." && pwd)
-(cd "$SRC" && gh stack merge <top-pr-number> --yes)
+(cd "$SRC" && gh stack merge <top-pr-number> --yes --rebase)
 ```
 
 **Merge by the top layer's PR number.** `gh stack link --help` states the
@@ -230,10 +249,25 @@ the one this flow takes. (The stack number is obtainable too — §2's
 `gh api repos/"$SLUG"/stacks` returns it — but nothing here needs it except
 `/stack` §6's repair.)
 
-`gh stack merge` is all-or-nothing: if any layer cannot merge, none do. When the
-base branch uses a merge queue, the stack is added to the queue and lands when
-the queue processes it — so this **replaces** `gh pr merge --auto` entirely; do
-not call both.
+`gh stack merge` is all-or-nothing: if any layer cannot merge, none do —
+verified against a real two-layer merge, both landed one second apart from a
+single invocation, base branch history clean and linear afterward.
+
+**Always pass `--rebase`.** With no method flag, `--yes` uses *"your
+last-used merge method"* (`gh stack merge --help`) — mutable, per-machine
+state, not a guarantee. Observed: an unflagged call merged *"via rebase"*
+only because that was this machine's last-used method. `--rebase` is what a
+stack wants — `/squash` leaves one commit per layer, and rebase lands exactly
+one commit per layer on trunk — but a stray `--squash` on any machine would
+collapse a later stack's layers into a single commit and destroy the
+layering. Pin it rather than rely on machine state.
+
+Per `gh stack merge --help`, when the base branch uses a merge queue, the
+stack is added to the queue and lands when the queue processes it; otherwise
+it is merged directly. **This is vendor-documented, not independently
+verified** — `YabMas/nido` has no rulesets or branch protection, so no merge
+queue exists here to exercise; only the direct-merge path has been observed.
+Either way this **replaces** `gh pr merge --auto` entirely; do not call both.
 
 For a single-PR session, `gh pr merge <number> -R "$SLUG" --auto` — again both
 the number and `-R`. **No strategy flag** (`--squash`/`--merge`/`--rebase`): on a
@@ -349,9 +383,22 @@ stops and makes no `ready`/`merge` calls.
   `Error: No conflicts found at this revision`, which would record a `:blocker`
   on every successful rebase (§3).
 - **Marking only the top PR ready** — every layer must be ready or the stack
-  merge refuses.
+  merge refuses. Observed: with only the top of a two-layer stack marked
+  ready, `gh stack merge 14 --yes` exits 5, `✗ pull request #14 cannot be
+  merged yet: #13 below it is a draft`. The refusal is a clean halt — nothing
+  merges — not damage.
 - **Merging layer-by-layer with `gh pr merge`** — that abandons atomicity;
   `gh stack merge` lands the whole stack or none of it.
+- **Omitting `--base "$TRUNK"` on the §6 `gh stack link --open` re-link** —
+  force-resets the bottom PR's base to the repo default branch unless given
+  explicitly; observed doing this unasked against a non-trunk base (§6,
+  `/stack` §4).
+- **Omitting `--rebase` on `gh stack merge`** — the method otherwise falls
+  back to whatever was last used on this machine; a stray `--squash` there
+  would collapse the stack's layers into one commit (§6).
+- **Trusting §2's discovery without `select(.open)`** — a merged stack stays
+  listed forever with `open:false`; without the filter, a session whose stack
+  already shipped still looks like it needs driving home (§2).
 - **Running `gh stack` in the worktree** — it needs a git repository. Run it from
   `$SRC`. (§2's discovery calls, `gh api …/stacks` and `gh pr list`, need none
   and run in the worktree.)
