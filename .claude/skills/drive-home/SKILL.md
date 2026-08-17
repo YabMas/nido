@@ -1,6 +1,6 @@
 ---
 name: drive-home
-description: Take the current nido session's branch home by composing /align (rebase + trivial-conflict resolution), /local-ci auto (CI + autonomous mechanical fix), and /squash (fold to one commit + regenerate the PR title/description), then mark the PR ready and put it on the merge queue. Halts for human judgement on semantic conflicts or non-mechanical CI failures. Usage: /drive-home
+description: Take the current nido session's stack home by composing /align (rebase + trivial-conflict resolution), /local-ci auto (CI + autonomous mechanical fix), and /squash (fold each layer to one commit + regenerate every PR title/description), then mark every layer ready and merge the stack atomically. Halts for human judgement on semantic conflicts or non-mechanical CI failures. Usage: /drive-home
 ---
 
 # drive-home
@@ -12,21 +12,23 @@ description: Take the current nido session's branch home by composing /align (re
 
 ## What this is
 
-One command that drives the **current session's** branch from "work written" to
+One command that drives the **current session's** stack from "work written" to
 "on the merge queue" by composing three sibling skills:
 
 1. `/align` — rebase on a fresh `origin/main`, auto-resolve only trivial
    conflicts (halt on anything semantic),
 2. `/local-ci auto` — run CI and auto-fix only the mechanical class (halt on
    anything needing judgement),
-3. `/squash` — squash the whole branch into one coherent commit and regenerate
-   the PR title/description from it,
-4. mark the draft PR ready and enable auto-merge (native merge queue).
+3. `/squash` — fold each layer into one coherent commit and regenerate every
+   layer's PR title/description from it,
+4. mark every layer's PR ready and merge the stack atomically (a single-PR
+   session marks the one PR ready and enables auto-merge, same as today).
 
 It is **autonomous within a safe boundary** and **stops for a human** the moment
-real judgement is required. It assumes the nido 1:1 invariant — one session, one
-branch, one PR — so it takes **no arguments**. (Splitting a session into several
-PRs is a separate, out-of-scope concern; spin a sibling session per branch.)
+real judgement is required. It assumes the nido invariant — **one session, one
+stack** — so it takes no arguments. A stack may be one layer (exactly today's
+single-PR flow) or several; every step below forks on layer count, never on a
+flag.
 
 ## Invoked headless by the merge lane
 
@@ -54,23 +56,30 @@ slash-namespaced sessions — it can mis-resolve (`feat/x/y` → `feat`). Derive
 If cwd is not a session home, stop and tell the user to run it from one
 (`bb nido:session:enter :project <p> <session>` lands there).
 
-## 2. Acquire the PR
+## 2. Acquire the stack
 
-All `gh`/`git`/`jj` work happens **inside the worktree** — `cd worktree` from the
-session home first (the session home itself is not git-colocated). Read the
-current branch's PR:
+All `gh`/`jj` work happens **inside the worktree** — `cd worktree` from the
+session home first. Derive the two values the `gh` calls need:
 
 ```bash
 cd worktree
-gh pr view --json number,url,state,isDraft,headRefName,mergeStateStatus
+SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
+        | sed -E 's#^git@github\.com:##; s#^https://github\.com/##; s#\.git$##')
+SRC=$(cd .jj && cd "$(dirname "$(cat repo)")/.." && pwd)
 ```
 
-- **PR exists** → keep its `number`, `url`, `headRefName` (the branch). Reuse it.
-- **No PR** (`gh` errors "no pull requests found for branch") → create one by
-  running the **`/prepare-draft-pr` skill** now (it opens the draft PR *and* wires
-  the three correlation links the merge poller needs: session `:pr`, workstream
-  `:github`, Notion `GitHub PR`). Then re-run the `gh pr view` above to read back
-  the canonical PR identity.
+Then read the stack rather than a single PR:
+
+```bash
+(cd "$SRC" && gh stack view --json) 2>/dev/null \
+  || gh pr view -R "$SLUG" --json number,url,state,isDraft,headRefName,mergeStateStatus
+```
+
+- **Stack exists** → keep every layer's number and URL, bottom to top.
+- **Single PR exists** → today's path, unchanged.
+- **Neither** → run the **`/prepare-draft-pr` skill** now; it publishes the stack
+  (or the single PR) and wires the correlation links the merge poller needs. Then
+  re-read as above.
 
 > Discovery uses `gh pr view` (not the session `:pr` link): it asks GitHub for the
 > current branch's PR directly, so it's correct on idempotent re-runs and doesn't
@@ -78,8 +87,8 @@ gh pr view --json number,url,state,isDraft,headRefName,mergeStateStatus
 > sessions. The `:pr` / `:github` links are stamped by `/prepare-draft-pr` for the
 > merge poller; they aren't needed for discovery here.
 
-Never hand-roll `gh pr create` here — delegate to `/prepare-draft-pr` so the
-poller bookkeeping is correct.
+Never hand-roll `gh pr create` or `gh stack link` here — delegate to
+`/prepare-draft-pr` so the poller bookkeeping is correct.
 
 ## 3. Rebase — `/align`
 
@@ -109,25 +118,37 @@ failure) ⇒ record a `:blocker` and stop. CI is a slow Docker build, so trust
 ## 5. Squash + PR text — `/squash`
 
 Reached **only** on green CI with no unresolved conflicts. `cd worktree`, then
-invoke **`/squash`**. It squashes the branch into one coherent commit, pushes
-it, and regenerates the PR title/description. It is mechanical and never halts.
+invoke **`/squash`**. It folds each layer of the stack into one coherent
+commit, pushes the whole stack, and regenerates every layer's PR
+title/description. It is mechanical and never halts.
 
 ## 6. Finish — push, ready, enqueue
 
 ```bash
-jj git push                         # force-moves the bookmark to the squashed commit
-gh pr ready                         # draft → ready for review
-gh pr merge --auto                  # enable auto-merge → native merge queue
+jj git push                  # force-moves every layer bookmark to its folded commit
 ```
 
-The squash rewrote history, so `jj git push` moves the bookmark to a new commit
-(a force-update of the PR branch) — expected, and fine for a session's own PR
-branch. `/squash` already pushed in §5, so this normally reports nothing to
-push — it's a safety net, not a failure.
+Mark every layer ready. For a stack:
 
-`gh pr merge --auto` takes **no** strategy flag on a merge-queue branch — the
-queue defines the strategy. It enables auto-merge if checks are pending, or adds
-the PR to the queue if they've passed.
+```bash
+(cd "$SRC" && gh stack link <n1> <n2> <n3> --open)
+```
+
+`--open` flips new and existing PRs from draft to ready for review. For a
+single-PR session, `gh pr ready -R "$SLUG"` as today.
+
+Then merge:
+
+```bash
+(cd "$SRC" && gh stack merge <n_top> --yes)
+```
+
+`gh stack merge` is all-or-nothing: if any layer cannot merge, none do. When the
+base branch uses a merge queue, the stack is added to the queue and lands when
+the queue processes it — so this **replaces** `gh pr merge --auto` entirely; do
+not call both.
+
+For a single-PR session, `gh pr merge -R "$SLUG" --auto` as today.
 
 ## 7. Record completion on the ticket ledger
 
@@ -146,32 +167,51 @@ bb nido:ticket:append :project <project> :br <BR-####> :kind implementation-comp
   :file /tmp/impl-completed.edn
 ```
 
+For a stack, list every layer's PR as an artifact so the report timeline shows
+the whole shipment:
+
+```bash
+cat > /tmp/impl-completed.edn <<'EDN'
+{:format    :implementation-completed
+ :summary   "<one-line: what shipped; N layers; CI green; stack on the merge queue>"
+ :artifacts [{:kind :pr :ref "<owner>/<repo>#<n1>" :url "<pr-url-1>"}
+             {:kind :pr :ref "<owner>/<repo>#<n2>" :url "<pr-url-2>"}
+             {:kind :pr :ref "<owner>/<repo>#<n3>" :url "<pr-url-3>"}]}
+EDN
+bb nido:ticket:append :project <project> :br <BR-####> :kind implementation-completed \
+  :file /tmp/impl-completed.edn
+```
+
 (Validated against `ImplementationCompleted`; `:artifacts []` :kind is one of
 `:commit :pr :branch`.)
 
-Report: the PR URL, what was rebased/auto-fixed, that the branch was squashed to
-one commit and the description regenerated, and that it's on the merge queue. The
-coordinator's `github-merge` poller closes the workstream and nudges Notion when
-it lands — nothing further to do here.
+Report: the PR URL(s), what was rebased/auto-fixed, that the stack was folded
+(one commit per layer) with every PR description regenerated, and that it's on
+the merge queue. The coordinator's `github-merge` poller closes the workstream
+and nudges Notion when it lands — nothing further to do here.
 
 ## Idempotency (safe to re-run)
 
 Every step checks its own precondition, so re-running after a halt-and-fix
 continues rather than redoing:
 
-- PR already exists → reuse (don't create a second).
+- PR or stack already exists → reuse (don't create a second).
 - Branch already on `main@origin` → `jj rebase` is a no-op; continue.
 - CI already green → skip fixing.
-- Branch already a single coherent commit (`main@origin..@` has one commit with a
-  real message) → the squash is a no-op.
+- Each layer already a single coherent commit (single-PR session:
+  `main@origin..@` has one commit with a real message) → the squash fold is a
+  no-op.
 - PR description regen is a deterministic overwrite from the final state → safe to
   repeat (no append-drift).
 - PR already `isDraft:false` → skip `gh pr ready`.
 - Auto-merge already enabled (`gh pr view --json autoMergeRequest`) → skip
   `gh pr merge --auto`.
+- Stack already linked → `gh stack link` updates rather than duplicating.
+- All layers already `isDraft:false` → skip the `--open` re-link.
+- Stack already merged or queued → `gh stack merge` reports it; no second merge.
 
 This makes drive-home loop-ready: a future `/loop` wrapper can re-invoke it until
-the PR merges. (No watcher is built here.)
+the PR (or stack) merges. (No watcher is built here.)
 
 ## When it halts
 
@@ -211,3 +251,13 @@ stops and makes no `ready`/`merge` calls.
 - **Proceeding to `/squash` before `/local-ci auto` reports green** — `/squash`
   (squash + PR text) is the last phase, after green CI. Commit-shaping itself
   lives in `/squash`; drive-home never splits or reshapes commits here.
+- **Calling `gh pr merge --auto` on a stack** — use `gh stack merge <n> --yes`;
+  calling both double-enqueues.
+- **Marking only the top PR ready** — every layer must be ready or the stack
+  merge refuses.
+- **Merging layer-by-layer with `gh pr merge`** — that abandons atomicity;
+  `gh stack merge` lands the whole stack or none of it.
+- **Running `gh stack` in the worktree** — it needs a git repository. Run it from
+  `$SRC`.
+- **Omitting `-R "$SLUG"` from `gh pr` commands** — bare `gh` cannot resolve a
+  repo from a non-colocated worktree.

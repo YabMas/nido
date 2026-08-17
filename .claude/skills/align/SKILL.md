@@ -68,6 +68,20 @@ conflicted files and which regions are semantic, and tell the user to resolve
 them and re-run `/align` (or `/drive-home`). A wrong auto-resolution silently corrupts behavior
 in ways CI won't catch — when unsure, halt. Never guess at logic.
 
+### Reporting a conflict in a stack
+
+When the session is a stack, name the layer that conflicted, not just the file:
+
+```bash
+jj resolve --list
+jj log -r 'main@origin..@' --no-graph -T 'change_id.short() ++ " " ++ description.first_line() ++ "\n"'
+```
+
+Match the conflicted change against the layer list and report
+"layer `<slug>` (`[n/N]`) conflicts in `<file>`". A conflict in a lower layer
+usually means the stack needs reshaping, not just a merge resolution — the
+foundation moved under the layers above it.
+
 After resolving trivial conflicts (`jj resolve` or editing the files), confirm
 `jj resolve --list` is empty before continuing.
 
