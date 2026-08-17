@@ -7,13 +7,16 @@
    [clojure.test :refer [deftest is]]
    [nido.config]
    [nido.coordinator.facets]
+   [nido.coordinator.pickup]
    [nido.coordinator.promote]
    [nido.coordinator.resume]
    [nido.coordinator.runs :as runs]
    [nido.coordinator.session :as session]
    [nido.coordinator.sources.state]
+   [nido.coordinator.spawn]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.tickets :as tickets]
+   [nido.coordinator.triggers]
    [nido.coordinator.workstream :as workstream]
    [nido.notion.client :as notion-client]
    [nido.notion.views :as views]
@@ -1665,6 +1668,39 @@
       "3-arity call sites keep their old behaviour")
   (is (= [] (mapv :id (work/gate-actions :in-progress false nil {:bare? true})))
       "a bare :in-progress row gets no Start triage — it is not a triage"))
+
+;; Review finding: a bare row's :stage is not always :triage — session/notion-stage
+;; also yields :ready, and gate-actions' :ready branch (Promote/Drop) assumes a
+;; workstream to promote or drop, which a bare row does not have. Without this
+;; filter those buttons render and can only ever return {:decision :no-workstream}.
+(deftest gate-actions-narrows-a-bare-ready-row-to-nothing
+  (is (= [] (mapv :id (work/gate-actions :ready false nil {:bare? true})))
+      "Promote/Drop would only ever no-op with no workstream behind the row")
+  (is (= [:promote :drop] (mapv :id (work/gate-actions :ready false nil)))
+      "the non-bare 3-arity is unaffected — this narrows only the bare path"))
+
+;; Fix: bare-pane used to read bare-row's raw :stage instead of routing it
+;; through to-spine (the fold both list-workstreams and work/workstream apply),
+;; so a dismissed bare row's PANE still said :triage — offering Dismiss and
+;; Start-triage again and no Restore — while the board LIST already said
+;; :dismissed. Assert the two can never disagree, which is the invariant.
+(deftest dismissed-bare-row-pane-agrees-with-the-board-list
+  (with-tmp
+    (fn [_]
+      (seed-page! {"pg-bare" {:status "Needs verification" :priority 1 :ball-ids #{}
+                              :title "Move Licences" :br "BR-9"}})
+      (work/dismiss! :brian "pg-bare")
+      (let [pane     (work/workstream :brian "pg-bare")
+            list-row (first (filter #(= "pg-bare" (:ws-id %))
+                                    (work/list-workstreams :brian)))]
+        (is (true? (:bare? pane)))
+        (is (= :dismissed (:stage pane))
+            "the pane must show the same :dismissed the board list shows")
+        (is (= (:stage list-row) (:stage pane))
+            "pane and list must never disagree about stage")
+        (is (= [:restore]
+               (mapv :id (work/gate-actions (:stage pane) false nil {:bare? true})))
+            "a dismissed bare pane offers Restore, not a re-hidden Dismiss/Start-triage")))))
 
 (deftest start-triage-page-refuses-a-project-with-no-triage-trigger
   (with-tmp

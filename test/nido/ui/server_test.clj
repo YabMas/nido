@@ -511,3 +511,83 @@
         (Thread/sleep 50)
         (is (= [["brian" "ws-1" :reply "do the fix"]] @calls)
             "pane Reply resumes the parked agent with the textarea input")))))
+
+(deftest pane-fragment-renders-a-bare-pane
+  ;; Pins the /_fragment/workstream route (ws-pane-fragment-response, which calls
+  ;; work/workstream directly, not derive-screen): given a bare-shaped
+  ;; work/workstream result it renders the bare pane body instead of blanking.
+  ;; It stubs work/workstream itself, so it would pass identically whether the
+  ;; bare fallback lived here or in derive-screen — that seam (the page-id →
+  ;; bare-pane fallback in work/workstream) is covered instead by
+  ;; nido.work-test/workstream-falls-back-to-a-bare-pane-for-an-uncovered-page.
+  (with-redefs [nido.work/workstream
+                (fn [_ _ & _] {:project "brian" :ws-id "pg-bare" :origin :notion
+                               :bare? true :stage :triage :label "Move Licences"
+                               :br-id "BR-5569" :notion-status "Needs verification"
+                               :ledger nil :entries nil :report nil
+                               :environment nil :sessions [] :on-latest? true})
+                nido.session.dev/failed-ws-errors (fn [] {})]
+    (let [resp (server/handle-request
+                {:request-method :get :uri "/_fragment/workstream/brian/pg-bare"})]
+      (is (= 200 (:status resp)))
+      (is (str/includes? (:body resp) "No nido workstream yet"))
+      (is (str/includes? (:body resp) "/workstreams/brian/pg-bare/gate/start-triage")))))
+
+(deftest gate-resolve-drops-a-key-already-in-flight
+  ;; The double-click guard. Task 3's ref-dedup cannot fire on a bare row's first
+  ;; click, so this is what prevents two triage sessions on one ticket.
+  (let [calls (atom 0)]
+    (with-redefs [nido.session.dev/pending-resolve-keys (fn [] #{"brian/pg-bare"})
+                  nido.work/resolve-gate! (fn [& _] (swap! calls inc) {:decision :triaging})]
+      (let [resp (server/handle-request
+                  {:request-method :post
+                   :uri "/workstreams/brian/pg-bare/gate/start-triage"})]
+        (Thread/sleep 50)
+        (is (= 200 (:status resp)) "still answers the POST")
+        (is (zero? @calls) "but does not resolve a second time while one is in flight")))))
+
+(deftest gate-resolve-runs-when-no-key-is-in-flight
+  ;; The guard must not deadlock the normal path.
+  (let [calls (atom 0)]
+    (with-redefs [nido.session.dev/pending-resolve-keys (fn [] #{})
+                  nido.work/resolve-gate! (fn [& _] (swap! calls inc) {:decision :triaging})]
+      (server/handle-request {:request-method :post
+                              :uri "/workstreams/brian/pg-bare/gate/start-triage"})
+      (Thread/sleep 50)
+      (is (= 1 @calls)))))
+
+;; Fix 3: the in-flight guard is keyed per WORKSTREAM, not per action, so a
+;; second click for a DIFFERENT action while one is in flight must not resolve
+;; again — but handle-post used to render the success toast unconditionally
+;; regardless of whether gate-resolve! actually started anything, so the click
+;; looked like it worked when it did nothing at all.
+(deftest post-gate-action-while-another-is-in-flight-shows-skip-not-success
+  (with-redefs [nido.session.dev/pending-resolve-keys (fn [] #{"brian/pg-bare"})
+                nido.work/resolve-gate! (fn [& _] {:decision :dismissed})]
+    (let [resp (server/handle-request
+                {:request-method :post
+                 :uri "/workstreams/brian/pg-bare/gate/dismiss"})]
+      (is (= 200 (:status resp)))
+      (is (str/includes? (:body resp) "already in flight")
+          "the honest already-in-flight copy, not the per-action success toast")
+      (is (not (str/includes? (:body resp) "Dismissed — off your radar"))
+          "must not claim the dismiss succeeded when it never ran"))))
+
+(deftest post-gate-action-with-nothing-in-flight-still-shows-success
+  (with-redefs [nido.session.dev/pending-resolve-keys (fn [] #{})
+                nido.work/resolve-gate! (fn [& _] {:decision :dismissed})]
+    (let [resp (server/handle-request
+                {:request-method :post
+                 :uri "/workstreams/brian/pg-bare/gate/dismiss"})]
+      (Thread/sleep 50)
+      (is (= 200 (:status resp)))
+      (is (str/includes? (:body resp) "Dismissed — off your radar")
+          "the normal path still shows the success confirmation"))))
+
+(deftest resolve-failure-msg-covers-the-start-triage-decisions
+  (is (nil? (server/resolve-failure-msg {:decision :triaging})))
+  (is (str/includes? (server/resolve-failure-msg {:decision :no-trigger}) "trigger"))
+  (is (str/includes? (server/resolve-failure-msg {:decision :already-in-flight})
+                     "already"))
+  (is (str/includes? (server/resolve-failure-msg {:decision :unresolved :error :no-token})
+                     "no-token")))

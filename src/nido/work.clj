@@ -80,6 +80,26 @@
           [:dismissed (:dismissed grouped)]])
        (into [] (keep (fn [[stage rows]] (when (seq rows) [stage (vec rows)]))))))
 
+(def ^:private workstream-less-actions
+  "Gate actions that are meaningful on a bare watched-view row — one with no
+   workstream of its own, only a Notion page and a ticket record. Each carries its
+   own workstream-less branch AND its own :no-workstream refusal, so the read-ws
+   guard in resolve-gate! must route them BEFORE it, or the only actions such a
+   row offers become silent no-ops.
+   :start-triage — the Notion page is exactly what it spawns from.
+
+   Also the filter gate-actions applies to a bare row's per-stage action set:
+   anything outside this set (:promote, :drop, :done, :apply, :reply) routes to
+   set-stage!/apply!/resume! and hits resolve-gate!'s read-ws guard, so offering
+   it would be a button that can only ever no-op.
+
+   The membership is read in both directions, so adding an id here has TWO
+   effects at once: it lets resolve-gate! route the action before the guard,
+   AND it silently starts OFFERING that action on every bare-row stage whose
+   per-stage case emits it (gate-actions' filter) — so it needs its own
+   workstream-less branch and :no-workstream refusal before it is added."
+  #{:restore :dismiss :start-triage})
+
 (defn gate-actions
   "Follow-actions for a gate, derived from its spine `stage` and whether a session is
    `parked?`. Each is a descriptor {:id :label :kind :style (:input)}:
@@ -96,48 +116,60 @@
    The arg stays for call-site compatibility.
 
    `{:bare? true}` marks a row with no workstream behind it (wsv/bare-row). On
-   :triage that swaps Apply/Reply — which need an agent — for :start-triage.
-   Other stages ignore it."
+   :triage that swaps Apply/Reply — which need an agent — for :start-triage. Then,
+   for EVERY stage, a bare row's action set is filtered down to
+   workstream-less-actions — the ids resolve-gate! can actually act on without a
+   workstream. A bare row reaches :triage, :ready, :in-progress or :done
+   (session/notion-stage's range) — OR :dismissed, folded in ahead of that range
+   by to-spine's :dismissed? check (not by notion-stage) once the ticket is
+   vetoed; without this filter a bare :ready row would offer Promote/Drop, both
+   of which can only return {:decision :no-workstream}. Filtering the existing
+   per-stage result (rather than adding a bare branch to every stage) keeps this
+   correct automatically if the action sets change."
   ([stage parked?] (gate-actions stage parked? nil nil))
   ([stage parked? origin] (gate-actions stage parked? origin nil))
   ([stage parked? _origin {:keys [bare?]}]
-   (case stage
-     :incoming    [{:id :promote :label "Promote" :kind :mutation :style :primary}
-                   {:id :drop    :label "Dismiss" :kind :mutation :style :danger}]
-     :triage      (let [dismiss {:id :dismiss :label "Dismiss" :kind :mutation :style :danger}]
-                    ;; Apply executes the routed verdict to Notion nido-side (Ball Holder +
-                    ;; App Domain, deep properties/callout — apply-routed!, no conversation),
-                    ;; falling back to nido-only ticket:complete for legacy/Slack reports;
-                    ;; Reply (free-text overrides/redo) resumes the agent; Dismiss takes it
-                    ;; off the radar nido-side, writing nothing to Notion.
-                    (cond
-                      ;; A bare row has no workstream and therefore no agent to Apply or
-                      ;; Reply to — the only forward move is to start the triage that
-                      ;; never ran.
-                      bare?   [{:id :start-triage :label "Start triage"
-                                :kind :mutation :style :primary}
-                               dismiss]
-                      parked? [{:id :apply :label "Apply" :kind :mutation :style :primary}
-                               dismiss
-                               {:id :reply :label "Reply" :kind :resume :style :default}]
-                      :else   [dismiss]))
-     ;; The nido-side veto, reversible: Restore clears the ticket status so the row
-     ;; rejoins the triage queue and the auto-triage gate can pick it up again.
-     :dismissed   [{:id :restore :label "Restore" :kind :mutation :style :default}]
-     :ready       [{:id :promote :label "Promote" :kind :mutation :style :primary}
-                   {:id :drop    :label "Drop"    :kind :mutation :style :danger}]
-     :in-progress (if parked?
-                    [{:id :reply :label "Reply" :kind :resume :style :default}
-                     {:id :done  :label "Done"  :kind :mutation :style :primary}]
-                    [])
-     :shipping    (if parked?
-                    ;; Blocked in the merge lane: Reply resumes the agent with a
-                    ;; note; Drop takes it off the queue (back to :in-progress).
-                    ;; The usual path is to fix in the worktree and `nido ship` again.
-                    [{:id :reply :label "Reply" :kind :resume                :style :default}
-                     {:id :drop  :label "Drop"  :kind :mutation              :style :danger}]
-                    [])
-     [])))
+   (let [actions
+         (case stage
+           :incoming    [{:id :promote :label "Promote" :kind :mutation :style :primary}
+                         {:id :drop    :label "Dismiss" :kind :mutation :style :danger}]
+           :triage      (let [dismiss {:id :dismiss :label "Dismiss" :kind :mutation :style :danger}]
+                          ;; Apply executes the routed verdict to Notion nido-side (Ball Holder +
+                          ;; App Domain, deep properties/callout — apply-routed!, no conversation),
+                          ;; falling back to nido-only ticket:complete for legacy/Slack reports;
+                          ;; Reply (free-text overrides/redo) resumes the agent; Dismiss takes it
+                          ;; off the radar nido-side, writing nothing to Notion.
+                          (cond
+                            ;; A bare row has no workstream and therefore no agent to Apply or
+                            ;; Reply to — the only forward move is to start the triage that
+                            ;; never ran.
+                            bare?   [{:id :start-triage :label "Start triage"
+                                      :kind :mutation :style :primary}
+                                     dismiss]
+                            parked? [{:id :apply :label "Apply" :kind :mutation :style :primary}
+                                     dismiss
+                                     {:id :reply :label "Reply" :kind :resume :style :default}]
+                            :else   [dismiss]))
+           ;; The nido-side veto, reversible: Restore clears the ticket status so the row
+           ;; rejoins the triage queue and the auto-triage gate can pick it up again.
+           :dismissed   [{:id :restore :label "Restore" :kind :mutation :style :default}]
+           :ready       [{:id :promote :label "Promote" :kind :mutation :style :primary}
+                         {:id :drop    :label "Drop"    :kind :mutation :style :danger}]
+           :in-progress (if parked?
+                          [{:id :reply :label "Reply" :kind :resume :style :default}
+                           {:id :done  :label "Done"  :kind :mutation :style :primary}]
+                          [])
+           :shipping    (if parked?
+                          ;; Blocked in the merge lane: Reply resumes the agent with a
+                          ;; note; Drop takes it off the queue (back to :in-progress).
+                          ;; The usual path is to fix in the worktree and `nido ship` again.
+                          [{:id :reply :label "Reply" :kind :resume                :style :default}
+                           {:id :drop  :label "Drop"  :kind :mutation              :style :danger}]
+                          [])
+           [])]
+     (if bare?
+       (filterv #(contains? workstream-less-actions (:id %)) actions)
+       actions))))
 
 (defn classify-origin
   "Origin of a workstream from its RAW record: :notion :github :slack :scratch.
@@ -348,19 +380,20 @@
 
 (defn- bare-pane
   "Pane detail for a bare watched-view row — a page in the project's Notion cache
-   that no workstream covers (wsv/bare-row). Derived FROM bare-row rather than
-   rebuilt, so the pane can never disagree with the board list about stage or
-   label — the same reason `workstream` routes through wsv/workstream-row.
+   that no workstream covers (wsv/bare-row). Routes the row through to-spine —
+   the same fold list-workstreams and work/workstream apply to every other
+   row — so the pane's :stage can never disagree with the board list's band,
+   including the :dismissed fold a raw bare-row read would miss.
 
    Carries explicit nils for the ledger/report/environment keys the full pane
    renders: there is nothing behind any of them, and the pane's :bare? branch
    skips those blocks outright. `fct` is the cache entry, passed in so the caller
    reads project-page-facts once."
   [project page-id fct]
-  (let [row (wsv/bare-row project page-id fct)]
+  (let [row (to-spine (wsv/bare-row project page-id fct))]
     {:ws-id         page-id
      :project       project
-     :origin        :notion
+     :origin        (:origin row)
      :bare?         true
      :label         (:label row)
      :br-id         (:br-id row)
@@ -796,15 +829,6 @@
                  (catch Throwable _ nil)))
           {:decision :applied})))
     {:decision :applied}))
-
-(def ^:private workstream-less-actions
-  "Gate actions that are meaningful on a bare watched-view row — one with no
-   workstream of its own, only a Notion page and a ticket record. Each carries its
-   own workstream-less branch AND its own :no-workstream refusal, so the read-ws
-   guard in resolve-gate! must route them BEFORE it, or the only actions such a
-   row offers become silent no-ops.
-   :start-triage — the Notion page is exactly what it spawns from."
-  #{:restore :dismiss :start-triage})
 
 (defn- triage-trigger
   "The project's triage trigger: the first in triggers.edn whose :skill is
