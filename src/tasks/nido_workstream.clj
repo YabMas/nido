@@ -49,7 +49,11 @@
             (println (format "  %2d  %-24s %s" seq (name kind) (or title "")))))
         (println)
         (println "── latest entry ──")
-        (println (report/report->markdown (:report w)))))))
+        ;; Asked for by name rather than taken off `w`: the pane opens no entry
+        ;; unless its reader picks one (work/workstream), but this command's whole
+        ;; contract is "the ledger, then the newest entry" — there is no reader here
+        ;; to pick, so it names what it wants.
+        (println (report/report->markdown (work/latest-report p ws-id)))))))
 
 (defn- run* [f args]
   (let [[_ opts] (task-args/split-args args)]

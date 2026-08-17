@@ -453,29 +453,57 @@
     (is (re-find #"/workstreams\?scope=brian&amp;tab=active" html)
         "on workstreams, a scope link preserves the active tab")))
 
-(deftest workstream-pane-shows-ledger-index-and-selected-report
+(def ^:private ledger-entries
+  [{:seq 2 :kind :impl   :at "2026-06-19T00:00:00Z" :title "Draft PR"}
+   {:seq 1 :kind :triage :at "2026-06-18T00:00:00Z" :title "Verdict"}])
+
+(deftest workstream-pane-shows-the-ledger-with-nothing-open
+  ;; The pane's resting state: the ledger, whole, and no viewer. work/workstream
+  ;; hands over no :report unless the reader asked for one.
+  (let [html (views/workstream-pane (assoc sample-ws :entries ledger-entries) {})]
+    (is (str/includes? html "ledger-index"))
+    (is (str/includes? html "Draft PR"))
+    (is (str/includes? html "Verdict"))
+    (is (str/includes? html "?entry=1") "every row is a click target…")
+    (is (str/includes? html "?entry=2") "…including the newest")
+    (is (not (str/includes? html "ledger-row sel")) "no row is highlighted")
+    (is (not (str/includes? html "viewer-bar")) "and no viewer is open")))
+
+(deftest workstream-pane-indexes-a-single-entry-ledger-too
+  ;; Nothing opens itself, so the index is the only way in — skipping it for a
+  ;; one-entry ledger would strand that entry.
+  (let [html (views/workstream-pane
+              (assoc sample-ws :entries [{:seq 1 :kind :impl :at "t" :title "Solo"}]) {})]
+    (is (str/includes? html "ledger-index"))
+    (is (str/includes? html "Solo"))))
+
+(deftest workstream-pane-opens-a-report-in-a-closable-viewer
   (let [ws   (assoc sample-ws
                     :selected-seq 2
-                    :entries [{:seq 2 :kind :impl   :at "2026-06-19T00:00:00Z" :title "Draft PR"}
-                              {:seq 1 :kind :triage :at "2026-06-18T00:00:00Z" :title "Verdict"}]
+                    :entries ledger-entries
                     :report {:format :markdown :kind :impl :at "t" :title "Draft PR"
                              :markdown "# Draft PR\n\nopened it."})
         html (views/workstream-pane ws {})]
-    (is (str/includes? html "ledger-index"))
-    (is (str/includes? html "Draft PR"))                      ; row + report title
-    (is (str/includes? html "Verdict"))                       ; other row
-    (is (str/includes? html "?entry=1"))                      ; click target for the unselected row
-    (is (str/includes? html "ledger-row sel"))                ; seq 2 highlighted
-    (is (str/includes? html "opened it."))))                  ; selected report body rendered
+    (is (str/includes? html "ledger-index") "the ledger stays put under the viewer")
+    (is (str/includes? html "ledger-row sel") "seq 2 highlighted")
+    (is (str/includes? html "viewer-bar"))
+    (is (str/includes? html "opened it.") "the open report's body")
+    (is (str/includes? html "viewer-close"))
+    (is (str/includes? html "@get(&apos;/_fragment/workstream/brian/ws-1&apos;)")
+        "closing @gets the pane with no ?entry — back to the ledger alone")))
 
-(deftest workstream-pane-poll-url-carries-selected-entry
-  (let [ws   (assoc sample-ws
-                    :selected-seq 2
-                    :entries [{:seq 2 :kind :impl :at "t" :title "a"}
-                              {:seq 1 :kind :triage :at "t" :title "b"}])
+(deftest workstream-pane-poll-url-carries-the-reading-position
+  (let [ws   (assoc sample-ws :selected-seq 2 :open-rounds #{3 1} :entries ledger-entries)
         html (views/workstream-pane ws {})]
-    (is (str/includes? html "/_fragment/workstream/brian/ws-1?entry=2")
-        "self-poll re-requests the same selected entry so it survives the refresh")))
+    (is (str/includes? html "/_fragment/workstream/brian/ws-1?entry=2&amp;rounds=1,3")
+        "the 3s self-poll re-requests the reader's exact position, so the refresh
+         lands them back on the entry they opened with the rounds they unfolded")))
+
+(deftest workstream-pane-at-rest-polls-the-bare-url
+  (let [html (views/workstream-pane (assoc sample-ws :entries ledger-entries) {})]
+    (is (str/includes? html
+                       "data-on-interval__duration.3s=\"@get(&apos;/_fragment/workstream/brian/ws-1&apos;)\"")
+        "nothing open → nothing in the poll's query string")))
 
 (deftest workstream-pane-renders-implementation-plan-card
   (let [ws   (assoc sample-ws :report {:format :implementation-plan :summary "Round on the total."

@@ -88,7 +88,7 @@
                  (let [ws (when (= :workstreams (:surface view-state))
                             (work/workstream (:project sel) (:ws-id sel) (:entry view-state)))]
                    (cond-> {:project (:project sel) :ws-id (:ws-id sel)}
-                     ws (assoc :ws (cond-> ws
+                     ws (assoc :ws (cond-> (assoc ws :open-rounds (:rounds view-state))
                                      (get ws-errors (str (:project sel) "/" (:ws-id sel)))
                                      (assoc :error-msg (get ws-errors (str (:project sel) "/" (:ws-id sel)))))
                                :dev-states (dev/ws-session-dev-states (:project sel) ws)
@@ -177,16 +177,20 @@
 
 (defn- ws-pane-fragment-response
   "SSE that patches #ws-pane with a freshly-rendered workstream pane (ws detail +
-   per-session dev-env state). `entry` selects which ledger entry's report to show.
-   A failed gate action rides along as :error-msg — this poll is what replaces the
+   per-session dev-env state). `pos` is the reader's position in the pane, straight
+   off the query string: `:entry` is the ledger entry open in the viewer (nil — the
+   default — opens nothing), `:rounds` the review rounds unfolded inside it. A
+   failed gate action rides along as :error-msg — this poll is what replaces the
    optimistic confirm fragment, so it has to carry the bad news too."
   ([project ws-id] (ws-pane-fragment-response project ws-id nil))
-  ([project ws-id entry]
+  ([project ws-id {:keys [entry rounds]}]
    (let [ws  (work/workstream project ws-id entry)
          err (get (dev/failed-ws-errors) (str project "/" ws-id))]
      (sse-response
       (sse-fragment
-       (views/workstream-pane (cond-> ws err (assoc :error-msg err))
+       (views/workstream-pane (cond-> ws
+                                rounds (assoc :open-rounds rounds)
+                                err    (assoc :error-msg err))
                               (dev/ws-session-dev-states project ws)
                               (work/machine-facts project (map :name (:sessions ws)))))))))
 
@@ -430,7 +434,7 @@
       (cond
         ;; GET /_fragment/workstream/:project/:ws-id — SSE pane refresh (patches #ws-pane)
         (and (= 4 (count segments)) (= "_fragment" (first segments)) (= "workstream" (nth segments 1)))
-        (ws-pane-fragment-response (nth segments 2) (nth segments 3) (:entry (view-state/parse req)))
+        (ws-pane-fragment-response (nth segments 2) (nth segments 3) (view-state/parse req))
 
         ;; GET /workstreams/:project/:ws-id — legacy deep link → canonical selection
         (and (= 3 (count segments)) (= "workstreams" (first segments)))

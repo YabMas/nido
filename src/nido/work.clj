@@ -349,11 +349,13 @@
                 (name (:kind entry)))}))
 
 (defn- report-at
-  "The entry whose :seq is `seq` (else the latest), rendered via entry->report and
-   hydrated with whatever detail it points at."
+  "The entry whose :seq is `seq`, rendered via entry->report and hydrated with
+   whatever detail it points at. Callers select `seq` from the entries themselves,
+   so a miss means the ledger changed under the read — nil, not the latest entry
+   silently swapped in."
   [base-dir entries seq]
   (let [by-seq (into {} (map (juxt :seq identity)) entries)]
-    (hydrate (entry->report base-dir (or (get by-seq seq) (last entries))))))
+    (some->> (get by-seq seq) (entry->report base-dir) hydrate)))
 
 (defn- active-ledger
   "The workstream's own ledger — the single event store. {:base-dir <string|nil>
@@ -432,11 +434,18 @@
 
 (defn workstream
   "Full detail for one workstream: origin, spine stage, label, a light ledger
-   facet, a newest-first entry INDEX (nil when ≤1 entry), the SELECTED entry's
-   report (`selected-seq`, default latest, out-of-range → latest), `:on-latest?`
-   (is the selected entry the current one — gates the pane's live actions),
-   `:environment` (the one current session — `work/environment`), and its sessions
-   on the autonomy axis. nil when the workstream is absent."
+   facet, a newest-first entry INDEX, the report of the entry `selected-seq` names
+   (nil — nothing open — unless it names one), `:on-latest?` (is the open entry the
+   current one — gates the pane's live actions), `:environment` (the one current
+   session — `work/environment`), and its sessions on the autonomy axis. nil when
+   the workstream is absent.
+
+   Nothing is selected by default: the ledger index is the pane's resting state and
+   opening an entry is the reader's choice, so `selected-seq` nil (and a seq no
+   entry carries — a stale link, or one the ledger has since dropped) both read as
+   'nothing open' rather than quietly falling back to the newest entry. For the
+   same reason the index renders whenever there ARE entries, single-entry ledgers
+   included — it is the only way to reach one."
   ([project ws-id] (workstream project ws-id nil))
   ([project ws-id selected-seq]
    (if-let [w (cws/read-ws project ws-id)]
@@ -446,10 +455,8 @@
            ;; they disagree (e.g. a promoted ticket: list :ready, pane :in-progress).
            row      (to-spine (wsv/workstream-row project w nil (notion-cache/project-page-facts project)))
            {:keys [base-dir entries]} (active-ledger project ws-id)
-           sel      (when (seq entries)
-                      (or ((set (map :seq entries)) selected-seq)
-                          (:seq (last entries))))
-           index    (when (> (count entries) 1)
+           sel      ((set (map :seq entries)) selected-seq)
+           index    (when (seq entries)
                       (vec (reverse (mapv #(index-row base-dir %) entries))))]
        {:ws-id        ws-id
         :project      project
@@ -460,12 +467,15 @@
         :ledger       (ledger-summary project (:br-id row))
         :entries      index
         :selected-seq sel
-        ;; The selected entry is the CURRENT one (newest, or there are none).
-        ;; Live actions are offered only on the current entry — older entries are
-        ;; an immutable read-back, not something you act on.
-        :on-latest?   (or (empty? entries) (= sel (:seq (last entries))))
+        ;; Nothing open, or the open entry is the CURRENT one. Live actions are
+        ;; offered only on the current entry — older entries are an immutable
+        ;; read-back, not something you act on — and the resting pane, which is
+        ;; reading nothing at all, acts on the workstream as it stands.
+        :on-latest?   (or (nil? sel) (= sel (:seq (last entries))))
+        ;; A ledger renders only what the reader opened. With no ledger at all,
+        ;; the intake text is the pane's only content, so it stands in unasked.
         :report       (if (seq entries)
-                        (report-at base-dir entries sel)
+                        (when sel (report-at base-dir entries sel))
                         (latest-report project ws-id))
         :environment  (environment project ws-id)
         :sessions     (mapv session-facet sessions)})

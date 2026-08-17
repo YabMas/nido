@@ -130,6 +130,17 @@
         .ledger-row .lk { font-size:11px; text-transform:uppercase; color:#8a8ab0; min-width:54px; }
         .ledger-row .meta { min-width:78px; }
         .ledger-row .lt { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#e8e8e8; }
+        .viewer { margin:12px 0 8px; border:1px solid #2a2a4a; border-radius:6px;
+                  background:#0f0f1e; overflow:hidden; }
+        .viewer-bar { display:flex; gap:10px; align-items:baseline; padding:8px 12px;
+                      background:#16162c; border-bottom:1px solid #2a2a4a; }
+        .viewer-bar .lk { font-size:11px; text-transform:uppercase; color:#8a8ab0; }
+        .viewer-bar .lt { flex:1; min-width:0; white-space:nowrap; overflow:hidden;
+                          text-overflow:ellipsis; color:#e8e8e8; }
+        .viewer-close { background:none; border:none; color:#8a8ab0; cursor:pointer;
+                        font-size:13px; padding:0 2px; line-height:1; }
+        .viewer-close:hover { color:#e8e8e8; }
+        .viewer > .md { border:none; border-radius:0; background:none; }
         .md { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
               font-size:13.5px; line-height:1.7; color:#cdcde0; background:#0f0f1e;
               border:1px solid #2a2a4a; border-radius:6px; padding:16px 18px; }
@@ -380,6 +391,32 @@
                 (and tb (not= view-state/default-tab tb)) (conj (str "tab=" (name tb)))
                 sel (conj (str "sel=" sel)))]
     (if (seq pairs) (str "?" (str/join "&" pairs)) "")))
+
+;; The workstream pane's READING POSITION — {:project :ws-id :entry :rounds} —
+;; and the one expression that navigates to it. Everything the reader can move
+;; is in that map: which ledger entry is open (nil = none, the resting state)
+;; and which of its review rounds are unfolded. Every affordance in the pane
+;; (an index row, a round's fold, the viewer's close, the 3s poll) is the same
+;; position with one field changed, so none of them can disagree about where the
+;; reader is — and the poll, which re-renders the whole pane, lands them back
+;; exactly where they were rather than resetting the fold under their cursor.
+
+(defn- pane-fragment
+  "`@get(…)` expression for the pane fragment at reading position `pos`. Omits
+   whatever is at rest, so a pane nobody has opened anything in polls the bare
+   URL."
+  [{:keys [project ws-id entry rounds]}]
+  (let [ps (cond-> []
+             entry        (conj (str "entry=" entry))
+             (seq rounds) (conj (str "rounds=" (str/join "," (sort rounds)))))]
+    (str "@get('/_fragment/workstream/" project "/" ws-id
+         (when (seq ps) (str "?" (str/join "&" ps))) "')")))
+
+(defn- at-entry
+  "`pos` with ledger entry `seq` open (nil closes the viewer). Clears the round
+   folds either way: they index into the report being closed."
+  [pos seq]
+  (assoc pos :entry seq :rounds nil))
 
 (defn- gate-card
   "One inbox row; links to the gate pane. `sel?` highlights the open gate. `href`
@@ -927,22 +964,52 @@
       ;; :down or nil
       [:button.btn.btn-primary {"data-on:click" (act "start")} "start"])))
 
+(defn- day [at] (when at (let [s (str at)] (subs s 0 (min 10 (count s))))))
+
+(defn- ledger-index
+  "The workstream's ledger: every entry, newest first. A row @gets the pane with
+   ?entry=<seq>, which OPENS that entry in the viewer below — the ledger itself
+   stays put, whole, whether or not something is open. It renders for a
+   single-entry ledger too: nothing opens by default now, so the index is the only
+   way to reach the one entry there is."
+  [pos entries]
+  (into [:div.ledger-index]
+        (for [{:keys [seq kind at title]} entries]
+          [:a {:class (str "ledger-row" (when (= seq (:entry pos)) " sel"))
+               "data-on:click" (pane-fragment (at-entry pos seq))}
+           [:span.lk (clojure.core/name kind)]
+           [:span.meta (day at)]
+           [:span.lt title]])))
+
+(defn- report-viewer
+  "The reader for ONE ledger entry — opened from the index, and closable again.
+   Separate from the ledger by design: reading an entry is optional, so the viewer
+   is a panel that appears over the pane's resting state rather than a permanent
+   half of it. Its ✕ @gets the pane with no ?entry, i.e. back to rest.
+
+   `entry` is the index row the viewer is showing, for the title bar; nil when the
+   report is the intake fallback (no ledger to have a row in), which is not
+   closable — there is nothing to close back to."
+  [pos entry report]
+  [:div.viewer
+   (when entry
+     [:div.viewer-bar
+      [:span.lk (clojure.core/name (:kind entry))]
+      [:span.meta (day (:at entry))]
+      [:span.lt (:title entry)]
+      [:button.viewer-close {"data-on:click" (pane-fragment (at-entry pos nil))
+                             :title "close"} "✕"]])
+   (report-body report)])
+
 (defn- ledger-browser
-  "The entry index (only when >1 entry) above the selected entry's report. Rows
-   @get the pane fragment with ?entry=<seq>, patching #ws-pane. `entries` is the
-   newest-first index; `report` is the already-selected report."
-  [project ws-id entries selected-seq report]
+  "The ledger, then — only once the reader opens one — the entry they opened.
+   `entries` is the newest-first index; `report` is the open entry's report, nil
+   when nothing is open."
+  [pos entries report]
   [:div
-   (when (and (seq entries) (> (count entries) 1))
-     (into [:div.ledger-index]
-           (for [{:keys [seq kind at title]} entries]
-             [:a {:class (str "ledger-row" (when (= seq selected-seq) " sel"))
-                  "data-on:click"
-                  (str "@get('/_fragment/workstream/" project "/" ws-id "?entry=" seq "')")}
-              [:span.lk (clojure.core/name kind)]
-              [:span.meta (when at (let [s (str at)] (subs s 0 (min 10 (count s)))))]
-              [:span.lt title]])))
-   (when report (report-body report))])
+   (when (seq entries) (ledger-index pos entries))
+   (when report
+     (report-viewer pos (first (filter #(= (:entry pos) (:seq %)) entries)) report))])
 
 (defn- pane-route
   "POST target for the pane-scoped resolve route — responses patch #ws-pane so the
@@ -1041,49 +1108,49 @@
    :repl-rss :pg-rss :heap-max} (also no IO — a projection the caller injects).
    `:error-msg` on the ws (a gate action that came back failed) renders above the
    action bar, whose buttons stay clickable to retry.
-   Polls its own fragment so transient dev-env states (starting…) self-advance."
+   Polls its own fragment AT THE READER'S POSITION (`:selected-seq` + `:open-rounds`
+   — see pane-fragment), so transient dev-env states (starting…) self-advance
+   without the refresh closing whatever the reader has open."
   ([ws session-dev-states] (workstream-pane ws session-dev-states {}))
-  ([{:keys [project ws-id origin stage label links ledger report entries selected-seq sessions environment on-latest? error-msg bare? br-id notion-status]
+  ([{:keys [project ws-id origin stage label links ledger report entries selected-seq open-rounds sessions environment on-latest? error-msg bare? br-id notion-status]
      :or {on-latest? true}} session-dev-states machine-facts]
-   (str
-    (h/html
-     (if-not label
-       [:div {:id "ws-pane"} [:p.empty "Select a workstream."]]
-       (if bare?
-         (bare-pane-body {:project project :ws-id ws-id :origin origin :label label
-                          :stage stage :br-id br-id :notion-status notion-status
-                          :error-msg error-msg})
-         [:div {:id "ws-pane"
-                :data-on-interval__duration.3s
-                (str "@get('/_fragment/workstream/" project "/" ws-id
-                     (when selected-seq (str "?entry=" selected-seq)) "')")}
-          (pane-heading origin label links)
-          [:p.meta (name stage)]
-          (links-row links)
-          (when ledger
-            [:div.card [:strong "ledger "] (:key ledger) " · " (some-> ledger :status name)
-             " · " (:report-count ledger) " report(s)"])
-          (ledger-browser project ws-id entries selected-seq report)
-          ;; Live actions only on the current ledger entry — older entries are read-back.
-          (when (and on-latest? error-msg)
-            [:div.action-err "⚠ " error-msg])
-          (when on-latest? (pane-action-bar project ws-id origin stage sessions))
-          (when (= :done stage) (file-findings-form project ws-id))
-          [:h2 "Environment"]
-          (if-let [env-name (:name environment)]
-            (let [dev (get session-dev-states env-name)
-                  {:keys [pg-port nrepl-port app-port repl-rss pg-rss heap-max]}
-                  (get machine-facts env-name)]
-              [:div.card.env
-               [:div.env-head [:strong env-name] " " (session-dev-cell project ws-id env-name dev)]
-               (when-let [url (:url dev)]
-                 [:div [:a {:href url :target "_blank"} url]])
-               [:div.mono (str/join " · " (keep (fn [[l p]] (when p (str l " " p)))
-                                                [["pg" pg-port] ["repl" nrepl-port] ["app" app-port]]))]
-               [:div.meta (list (when repl-rss (str "jvm " (process/human-bytes repl-rss) " "))
-                                (when pg-rss (str "pg " (process/human-bytes pg-rss) " "))
-                                (when heap-max (str "max " heap-max)))]])
-            [:p.empty "no runnable version yet"])]))))))
+   (let [pos {:project project :ws-id ws-id :entry selected-seq :rounds open-rounds}]
+     (str
+      (h/html
+       (if-not label
+         [:div {:id "ws-pane"} [:p.empty "Select a workstream."]]
+         (if bare?
+           (bare-pane-body {:project project :ws-id ws-id :origin origin :label label
+                            :stage stage :br-id br-id :notion-status notion-status
+                            :error-msg error-msg})
+           [:div {:id "ws-pane" :data-on-interval__duration.3s (pane-fragment pos)}
+            (pane-heading origin label links)
+            [:p.meta (name stage)]
+            (links-row links)
+            (when ledger
+              [:div.card [:strong "ledger "] (:key ledger) " · " (some-> ledger :status name)
+               " · " (:report-count ledger) " report(s)"])
+            (ledger-browser pos entries report)
+            ;; Live actions only on the current ledger entry — older entries are read-back.
+            (when (and on-latest? error-msg)
+              [:div.action-err "⚠ " error-msg])
+            (when on-latest? (pane-action-bar project ws-id origin stage sessions))
+            (when (= :done stage) (file-findings-form project ws-id))
+            [:h2 "Environment"]
+            (if-let [env-name (:name environment)]
+              (let [dev (get session-dev-states env-name)
+                    {:keys [pg-port nrepl-port app-port repl-rss pg-rss heap-max]}
+                    (get machine-facts env-name)]
+                [:div.card.env
+                 [:div.env-head [:strong env-name] " " (session-dev-cell project ws-id env-name dev)]
+                 (when-let [url (:url dev)]
+                   [:div [:a {:href url :target "_blank"} url]])
+                 [:div.mono (str/join " · " (keep (fn [[l p]] (when p (str l " " p)))
+                                                  [["pg" pg-port] ["repl" nrepl-port] ["app" app-port]]))]
+                 [:div.meta (list (when repl-rss (str "jvm " (process/human-bytes repl-rss) " "))
+                                  (when pg-rss (str "pg " (process/human-bytes pg-rss) " "))
+                                  (when heap-max (str "max " heap-max)))]])
+              [:p.empty "no runnable version yet"])])))))))
 
 (defn- tab-row
   "The board's two tabs — Intake | Active. A tab selects BANDS, not rows: every

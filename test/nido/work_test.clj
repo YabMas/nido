@@ -272,10 +272,11 @@
             id (:id w)]
         (workstream/append-entry! :brian id {:kind :note} "first")
         (workstream/append-entry! :brian id {:kind :note} "second")
-        ;; default selection lands on the newest entry (seq 2) and is :on-latest?
+        ;; nothing open by default — the pane at rest acts on the workstream as it
+        ;; stands, so it is trivially :on-latest?
         (let [d (work/workstream :brian id)]
-          (is (= 2 (:selected-seq d)))
-          (is (true? (:on-latest? d)) "no explicit selection → viewing the current entry"))
+          (is (nil? (:selected-seq d)) "no entry opens itself")
+          (is (true? (:on-latest? d)) "nothing open → the pane's live actions stand"))
         ;; explicitly viewing the older entry (seq 1) is NOT the current entry
         (is (false? (:on-latest? (work/workstream :brian id 1)))
             "an older ledger entry is not the current entry")
@@ -890,7 +891,7 @@
         (tickets/open! :brian "BR-1" {:title "t"})       ; status record, no entries
         (tickets/set-status! :brian "BR-1" :triaged)
         (workstream/append-to-ref! :brian "BR-1" {:kind :note} "plan")
-        (let [d (work/workstream :brian (:id w))]
+        (let [d (work/workstream :brian (:id w) 1)]
           (is (= :triaged (:status (:ledger d))) "status still from the ticket meta")
           (is (= 1 (:report-count (:ledger d))) "count from the workstream ledger")
           (is (some? (:report d)) "the workstream entry renders"))))))
@@ -906,8 +907,8 @@
           (is (= [3 2 1] (mapv :seq (:entries d))) "index is newest-first")
           (is (= ["Three" "Two" "One"] (mapv :title (:entries d))) "titles from headings")
           (is (= [:impl :impl :impl] (mapv :kind (:entries d))) "kinds carried")
-          (is (= 3 (:selected-seq d)) "defaults to the latest entry")
-          (is (str/includes? (:markdown (:report d)) "third") "report is the selected entry"))))))
+          (is (nil? (:selected-seq d)) "the index alone — nothing opens itself")
+          (is (nil? (:report d)) "and no report until the reader opens one"))))))
 
 (deftest workstream-selects-requested-entry
   (with-tmp
@@ -919,17 +920,18 @@
           (is (= 1 (:selected-seq picked)))
           (is (str/includes? (:markdown (:report picked)) "first")))
         (let [oob (work/workstream :brian id 99)]
-          (is (= 2 (:selected-seq oob)) "out-of-range seq → latest")
-          (is (str/includes? (:markdown (:report oob)) "second")))))))
+          (is (nil? (:selected-seq oob)) "a seq no entry carries opens nothing")
+          (is (nil? (:report oob)) "…rather than silently substituting another entry"))))))
 
-(deftest workstream-single-entry-has-no-index
+(deftest workstream-single-entry-still-gets-an-index
+  ;; Nothing opens by default, so the index is the ONLY way to reach an entry — a
+  ;; single-entry ledger that skipped it would be unreadable.
   (with-tmp
     (fn [_]
       (let [id (:id (workstream/create! :brian {:stage :scratch :external-refs []}))]
         (workstream/append-entry! :brian id {:kind :impl} "# Solo\n\nonly")
-        (let [d (work/workstream :brian id)]
-          (is (nil? (seq (:entries d))) "a single-entry ledger has no index list")
-          (is (str/includes? (:markdown (:report d)) "only")))))))
+        (is (= ["Solo"] (mapv :title (:entries (work/workstream :brian id)))))
+        (is (str/includes? (:markdown (:report (work/workstream :brian id 1))) "only"))))))
 
 (deftest workstream-index-title-falls-back-to-first-line
   (with-tmp
@@ -978,7 +980,7 @@
             id   (:id (workstream/create! :brian {:stage :scratch :external-refs []}))]
         (nido-io/write-json! path review-report-json)
         (workstream/append-entry! :brian id {:kind :review} (review-event path))
-        (let [r (:report (work/workstream :brian id))]
+        (let [r (:report (work/workstream :brian id 1))]
           (is (= :review-report (:format r)))
           (is (= 1 (count (get-in r [:detail :rounds]))) "rounds come from report.json")
           (is (= "Off by one"
@@ -993,7 +995,7 @@
       (let [id (:id (workstream/create! :brian {:stage :scratch :external-refs []}))]
         (workstream/append-entry! :brian id {:kind :review}
                                   (review-event (str (fs/path tmp "gone.json"))))
-        (let [r (:report (work/workstream :brian id))]
+        (let [r (:report (work/workstream :brian id 1))]
           (is (= :converged (:status r)) "the verdict survives")
           (is (nil? (:detail r)) "a missing report.json hydrates to nil, not a throw"))))))
 
@@ -1007,9 +1009,10 @@
         (spit path "{not json")
         (workstream/append-entry! :brian id {:kind :impl} "# One\n\nx")
         (workstream/append-entry! :brian id {:kind :review} (review-event path))
-        (let [d (work/workstream :brian id)]
-          (is (= ["Review: converged" "One"] (mapv :title (:entries d))))
-          (is (nil? (:detail (:report d))) "unparseable report.json → no detail"))))))
+        (is (= ["Review: converged" "One"] (mapv :title (:entries (work/workstream :brian id))))
+            "the index reads titles off the events themselves, never report.json")
+        (is (nil? (:detail (:report (work/workstream :brian id 2))))
+            "and opening the entry survives an unparseable report.json — no detail")))))
 
 (deftest screen-overview-and-detail-groups-are-identical
   ;; The same view-state must produce the same :groups regardless of whether a

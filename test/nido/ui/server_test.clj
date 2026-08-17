@@ -401,7 +401,27 @@
       (is (str/includes? (:body resp) "sel=5") "fragment route honours entry too"))
     (let [resp (server/handle-request {:request-method :get
                                        :uri "/workstreams/brian/ws-1"})]
-      (is (str/includes? (:body resp) "sel=nil") "absent entry → nil → latest"))))
+      (is (str/includes? (:body resp) "sel=nil") "absent entry → nil → nothing open"))))
+
+(deftest workstream-route-threads-the-unfolded-rounds-to-the-pane
+  ;; ?rounds= is the other half of the reader's position. work/workstream never
+  ;; sees it (it changes no data — only how the open report renders), so the route
+  ;; has to hand it to the view itself, on BOTH render paths.
+  (with-redefs [nido.work/grouped (fn [_] {:triage {:in-flight [] :queued []}
+                                           :ready [] :in-progress [] :incoming []})
+                project/list-projects (fn [] {"brian" {:directory "/x"}})
+                nido.work/all-gates (fn [] [])
+                nido.work/workstream
+                (fn [_ _ sel] {:ws-id "ws-1" :project "brian" :origin :notion
+                               :stage :triage :label "BR-7" :ledger nil
+                               :selected-seq sel :entries nil :sessions []})
+                nido.ui.server/read-rail-daemon (fn [] {:state :up})]
+    ;; the pane's self-poll URL is where the position surfaces verbatim
+    (doseq [uri ["/workstreams/brian/ws-1" "/_fragment/workstream/brian/ws-1"]]
+      (let [resp (server/handle-request {:request-method :get :uri uri
+                                         :query-string "entry=2&rounds=3,1"})]
+        (is (str/includes? (:body resp) "/_fragment/workstream/brian/ws-1?entry=2&amp;rounds=1,3")
+            (str uri " carries the whole reading position into the pane"))))))
 
 ;; ---------------------------------------------------------------------------
 ;; POST /workstreams/:project/:ws-id/gate/:action — pane-scoped resolve route

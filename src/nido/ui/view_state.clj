@@ -36,12 +36,22 @@
   "The tab /workstreams opens on when none is selected — the first one."
   (first tabs))
 
+(defn- rounds
+  "`?rounds=1,3` -> #{1 3}: which review rounds the workstream pane has unfolded
+   inside the open ledger entry. Non-numeric members are dropped rather than
+   failing the parse — the whole param is a reading position, not an argument, and
+   a mangled one should cost the reader a fold, not the page."
+  [ps]
+  (when-let [raw (some (fn [[k v]] (when (= k "rounds") v)) ps)]
+    (not-empty (into #{} (keep parse-long) (str/split (decode raw) #",")))))
+
 (defn parse
   "Request map -> view-state:
      {:surface :needs|:workstreams|:other
       :scope   \"all\"|<project>
       :selection {:project _ :ws-id _}|nil
       :entry   <long>|nil
+      :rounds  #{<long>}|nil
       :tab     :intake|:active}
 
    No source/facet filtering: the board shows every origin, and its tabs select
@@ -53,5 +63,6 @@
      :scope     (or (some (fn [[k v]] (when (= k "scope") v)) ps) "all")
      :selection (selection ps)
      :entry     (some (fn [[k v]] (when (= k "entry") (parse-long v))) ps)
+     :rounds    (rounds ps)
      :tab       (let [t (some (fn [[k v]] (when (= k "tab") (keyword v))) ps)]
                   (if (some #{t} tabs) t default-tab))}))

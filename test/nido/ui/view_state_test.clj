@@ -7,7 +7,8 @@
     (is (= :workstreams (:surface v)))
     (is (= "all" (:scope v)))
     (is (nil? (:selection v)))
-    (is (nil? (:entry v)))
+    (is (nil? (:entry v)) "no ledger entry opens itself")
+    (is (nil? (:rounds v)) "and no review round is unfolded")
     (is (not (contains? v :source)) "no source filter — the board shows every origin")
     (is (not (contains? v :facets)) "no facet filter")))
 
@@ -20,6 +21,16 @@
     (is (= "brian" (:scope v)))
     (is (= {:project "brian" :ws-id "ws-1"} (:selection v)))
     (is (= 3 (:entry v)))))
+
+(deftest parse-reading-position-in-the-pane
+  (let [v (vs/parse {:uri "/workstreams" :query-string "entry=3&rounds=1,3"})]
+    (is (= 3 (:entry v)) "the ledger entry the viewer has open")
+    (is (= #{1 3} (:rounds v)) "the review rounds unfolded inside it")))
+
+(deftest parse-tolerates-a-mangled-rounds-param
+  ;; A reading position is not an argument — a bad one costs a fold, not the page.
+  (is (= #{2} (:rounds (vs/parse {:uri "/workstreams" :query-string "rounds=2,x,"}))))
+  (is (nil? (:rounds (vs/parse {:uri "/workstreams" :query-string "rounds=nope"})))))
 
 (deftest parse-ignores-a-legacy-filter-bookmark
   ;; An old ?source=/facet bookmark must parse cleanly and filter nothing.
