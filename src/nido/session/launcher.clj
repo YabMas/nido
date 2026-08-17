@@ -228,6 +228,33 @@
        "`nido session:link:list`. Existing entries are listed under\n"
        "\"Relevant links\" above (when any).\n"))
 
+(def ^:private stacked-development-instructions
+  (str "## Stacked development\n"
+       "\n"
+       "Large changes ship as a **stack of layered PRs**, not one fat PR.\n"
+       "Invoke the `/stack` skill **at planning time** — layers are planned\n"
+       "before they are built, and a doctrine read only at ship time cannot\n"
+       "produce layered commits.\n"
+       "\n"
+       "The rules you need while committing:\n"
+       "\n"
+       "- **Order by dependency.** If code in layer A depends on layer B, B is\n"
+       "  in the same layer or lower. Common shape: foundation → core → wiring\n"
+       "  → supersede (supersede always on top).\n"
+       "- **One review mode per layer.** Mechanical or judgment, never mixed.\n"
+       "- **One bookmark per layer**, named `<session>--<slug>`. Double dash,\n"
+       "  content-named, never numbered. Never push the session bookmark.\n"
+       "- **Every layer commit carries a `Layer:` trailer** — exactly one of\n"
+       "  `mechanical`, `structural`, `behavioral` — plus a review brief\n"
+       "  (Claims / Verify / Lane / Out of scope).\n"
+       "- **One-sentence PR titles, no \"and\".** Needing \"and\" means it is\n"
+       "  two layers.\n"
+       "- **Don't stack small changes.** Under ~200 lines with no dependency\n"
+       "  seam, ship one plain PR.\n"
+       "\n"
+       "See the `/stack` skill for the full doctrine, the mechanics, and the\n"
+       "restack recipes.\n"))
+
 (defn- render-edit-location
   "The 'where do edits land' paragraph, conditioned on vcs-mode so the
    briefing tells the truth for legacy git-worktree sessions inside a
@@ -315,6 +342,8 @@
        "## Services are already running\n\nThe REPL, app server, and database for this worktree are managed by\nnido. Don't run project-local scripts that spin up a REPL/app/DB —\nconnect to what's already live. The postgres MCP is preconfigured to\nthis session's DB.\n\n"
        "## Lite session\n\nThis is a lite session with no background services. The worktree is a\nread-only symlink to the project source directory.\n\n")
      (when-not (str/blank? project-briefing) (str project-briefing "\n"))
+     stacked-development-instructions
+     "\n"
      "## Lifecycle\n"
      "\n"
      "Manage this session with nido (the session name is shown above):\n"

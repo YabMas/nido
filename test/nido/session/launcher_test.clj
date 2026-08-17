@@ -52,6 +52,25 @@
         (is (< services-idx briefing-idx tracker-idx)
             "briefing should land after services and before link tracker")))))
 
+(deftest render-context-includes-stacked-development-doctrine
+  (let [doc (@#'launcher/render-context base-ctx)]
+    (testing "the condensed doctrine is present"
+      (is (str/includes? doc "## Stacked development"))
+      (is (str/includes? doc "/stack")
+          "should point at the full skill")
+      (is (str/includes? doc "Layer:")
+          "should name the trailer so commits carry it"))
+    (testing "the trailer vocabulary is spelled out"
+      (is (str/includes? doc "mechanical"))
+      (is (str/includes? doc "structural"))
+      (is (str/includes? doc "behavioral")))
+    (testing "ordering: doctrine sits before the lifecycle section"
+      (let [doctrine-idx  (str/index-of doc "## Stacked development")
+            lifecycle-idx (str/index-of doc "## Lifecycle")]
+        (is (and doctrine-idx lifecycle-idx))
+        (is (< doctrine-idx lifecycle-idx)
+            "doctrine must precede lifecycle")))))
+
 (deftest render-context-omits-section-when-briefing-absent
   (let [doc (@#'launcher/render-context (assoc base-ctx :project-briefing nil))]
     (is (not (str/includes? doc "## Project: brian"))

@@ -58,3 +58,21 @@ environment — do NOT start a fresh JVM, Kaocha runner, or
 - `~/Code/brian/docs/reference/repl.md`
 - `~/Code/brian/docs/guidelines/testing-requirements.md`
 - `~/Code/brian/docs/reference/notion-context.md`
+
+## Layer boundaries and review lanes
+
+When cutting a change into stacked layers (see `/stack`), brian's review lanes
+are the concrete tiebreaker for "would these go to the same specialist?":
+
+| lane | owns |
+|---|---|
+| `lane-db-deploy` | Flyway migrations, schema-touching code, env config |
+| `lane-malli` | schemas, validators, transformers, registry |
+| `lane-authz` | routes, middleware, `authz/check` call sites |
+| `lane-datastar` | `hc/compile`, signals, `patch-elements!`, chassis HTML |
+| `lane-missionary` | `m/sp`, `m/ap`, supervision, backpressure |
+| `lane-statechart` | charts, `rt/process-event!`, working memory |
+
+A migration stratum is a `lane-db-deploy` layer; a substantial-UI stratum is a
+`lane-datastar` layer. Name the lane in each layer's review brief so per-layer
+review can dispatch the right specialist.
