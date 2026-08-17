@@ -197,7 +197,13 @@ There is one primitive; do not hand-roll a second.
 
 ### Publish / push / re-link
 
+Derive `$SLUG`/`$SRC` in this block — they do not survive from any earlier one:
+
 ```bash
+SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
+        | sed -E 's#^git@github\.com:##; s#^https://github\.com/##; s#\.git$##')
+SRC=$(cd .jj && cd "$(dirname "$(cat repo)")/.." && pwd)
+
 # 1. jj pushes the layers (from the worktree)
 jj git push --allow-new -b 'glob:<session>--*'
 
@@ -239,20 +245,25 @@ updates the stack and never removes PRs.
 
 ### Ready and merge — also from the source repo
 
+Derive `$SRC` in this block too — it does not survive from an earlier one:
+
 ```bash
+SRC=$(cd .jj && cd "$(dirname "$(cat repo)")/.." && pwd)
 (cd "$SRC" && gh stack link <session>--<l1> <session>--<l2> <session>--<l3> --open)
-(cd "$SRC" && gh stack merge <stack-number> --yes)
+(cd "$SRC" && gh stack merge <top-pr-number> --yes)
 ```
 
 `--open` flips new and existing PRs from draft to ready for review.
 
-**Merge by stack number, not PR number.** `gh stack merge`'s argument is
-ambiguous: *"A bare number is treated first as a **stack number**, then as a pull
-request number."* Once the repo has as many stacks as PRs are numbered, passing a
-PR number silently merges **someone else's stack** — non-interactively, with
-`--yes`, from a headless run. `gh stack link` prints the stack number it created
-or updated; capture it from that output and merge by it. If you genuinely only
-have a PR number, confirm no stack carries that number before passing it.
+**Merge by the top layer's PR number.** `gh stack link --help` states the
+guarantee directly: *"Because stack and PR numbers never overlap, a numeric
+first argument is treated as a stack only when it matches an existing stack."*
+A PR number can therefore never collide with a stack number, so `gh stack merge
+<top-pr-number>` is unambiguous. `<top-pr-number>` is the top layer's PR number,
+already in hand from the discovery above (§4) — nothing else in this flow
+supplies a stack number: `gh stack view` is banned, and `gh stack link`'s stack
+number is printed only to its own output, never captured or threaded through
+here.
 
 `gh stack merge` is atomic and all-or-nothing; if any layer cannot merge, none
 do. It hands the stack to the merge queue natively when the base branch has one.
@@ -403,8 +414,10 @@ inserted layer's commits, destroying the bounded review the stack exists for.
 - **Calling `gh stack link`/`gh stack merge` with no arguments** — they then look
   up the current branch, which a jj-colocated repo does not have. Always pass
   explicit arguments.
-- **Passing a PR number to `gh stack merge`** — a bare number is read as a
-  *stack* number first. Merge by the stack number `gh stack link` reported.
+- **Hunting for a stack number to merge by** — nothing here captures one:
+  `gh stack view` is banned and `gh stack link`'s stack number is never
+  threaded through. Merge by the top layer's PR number instead — `gh stack
+  link --help` guarantees stack and PR numbers never collide (§4).
 - **Passing PR numbers to `gh stack link` on a re-link** — numbers cannot create
   the PR an inserted layer needs, nor re-chain bases. Numbers are for the initial
   link only; a re-link passes branch names (§4, §6).

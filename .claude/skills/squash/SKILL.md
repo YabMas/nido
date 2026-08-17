@@ -45,7 +45,7 @@ the prefix, anchored:
 
 ```bash
 jj log -r 'main@origin..@' --no-graph
-jj bookmark list -T 'name ++ "\n"' | grep "^<session>--"
+jj bookmark list -T 'if(remote, "", name ++ "\n")' | grep "^<session>--"
 ```
 
 An unanchored `grep -- '--'` matches other sessions' layer bookmarks — this repo
@@ -66,8 +66,18 @@ in that range into its lowest commit:
 LOW=main@origin                 # or <session>--<slug-of-layer-beneath>
 TIP=<session>--<slug>
 BASE=$(jj log -r "roots($LOW..$TIP)" --no-graph -T 'change_id.short()')
-jj squash --from "$LOW..$TIP ~ $BASE" --into "$BASE"
+jj squash -u --from "$LOW..$TIP ~ $BASE" --into "$BASE"
 ```
+
+**`-u` is required, not optional polish.** Folding two or more non-empty
+descriptions into a non-empty destination makes plain `jj squash` open an
+**editor** to merge the messages. `/squash` runs headless under `claude -p` in
+the coordinator daemon, where nothing can answer that prompt — the command hangs
+forever, with no output and no typed ledger event for the lane to classify, which
+is worse than a halt. `-u` (`--use-destination-message`) skips the prompt by
+keeping the destination's message, which is fine here because the very next step
+re-describes the surviving commit anyway. **Do not remove `-u` as a "cleanup"** —
+without it this step reintroduces the headless hang.
 
 The layer bookmark follows onto the folded commit, and the layers above rebase
 automatically — so work bottom to top and each layer's `$LOW` is already folded
@@ -140,8 +150,7 @@ makes this correct after a layer was inserted, split, or reordered during the
 work. PR numbers cannot do the first two, and nothing else in this flow rewires a
 base (`/stack` §4). Push and re-link regardless of whether PRs exist.
 
-`gh stack link` is incremental and never removes PRs. Note the stack number it
-reports — `/drive-home` §6 merges by it.
+`gh stack link` is incremental and never removes PRs.
 
 ## 3. Regenerate every PR's title + description
 

@@ -74,9 +74,12 @@ block below that uses them, or inline the values; `-R ""` is what you get
 otherwise.
 
 Then read the stack with the shared discovery primitive (`/stack` §4), using the
-`<session>` derived in §1:
+`<session>` derived in §1. Re-derive `$SLUG` here — it does not survive from the
+block above:
 
 ```bash
+SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
+        | sed -E 's#^git@github\.com:##; s#^https://github\.com/##; s#\.git$##')
 gh pr list -R "$SLUG" --state open --limit 50 \
   --json number,url,headRefName,baseRefName,isDraft,mergeStateStatus \
   --jq '.[] | select(.headRefName == "<session>" or (.headRefName | startswith("<session>--")))'
@@ -179,16 +182,18 @@ Then merge:
 
 ```bash
 SRC=$(cd .jj && cd "$(dirname "$(cat repo)")/.." && pwd)
-(cd "$SRC" && gh stack merge <stack-number> --yes)
+(cd "$SRC" && gh stack merge <top-pr-number> --yes)
 ```
 
-**Merge by the stack number, not a PR number.** `gh stack merge`'s argument is
-ambiguous — *"A bare number is treated first as a stack number, then as a pull
-request number."* Once this repo has as many stacks as the PR number you would
-pass, `gh stack merge 7 --yes` merges **stack 7**, not PR 7, non-interactively
-from a headless run. The stack number is what `gh stack link` reported in §5
-(`/squash` §2) or at publish time (`/prepare-draft-pr` §4); carry it forward. If
-you have only a PR number, verify no stack shares it before passing it.
+**Merge by the top layer's PR number.** `gh stack link --help` states the
+guarantee directly: *"Because stack and PR numbers never overlap, a numeric
+first argument is treated as a stack only when it matches an existing stack."*
+A PR number can therefore never collide with a stack number, so passing one is
+safe. `<top-pr-number>` is the top layer's `number`, already in hand from §2's
+discovery (the last entry in the bottom-to-top order) — nothing else in this
+flow can supply a stack number: `gh stack view` is banned (`/stack` §4), and
+`gh stack link`'s stack number is printed only to its own output, never
+captured or threaded through here.
 
 `gh stack merge` is all-or-nothing: if any layer cannot merge, none do. When the
 base branch uses a merge queue, the stack is added to the queue and lands when
@@ -302,9 +307,11 @@ stops and makes no `ready`/`merge` calls.
   (squash + PR text) is the last phase, after green CI. Commit-shaping itself
   lives in `/squash`; drive-home never splits or reshapes commits here.
 - **Calling `gh pr merge --auto` on a stack** — use
-  `gh stack merge <stack-number> --yes`; calling both double-enqueues.
-- **Passing a PR number to `gh stack merge`** — a bare number is read as a
-  *stack* number first, so it can merge someone else's stack (§6).
+  `gh stack merge <top-pr-number> --yes`; calling both double-enqueues.
+- **Hunting for a stack number to merge by** — nothing in this flow captures
+  one: `gh stack view` is banned (`/stack` §4) and `gh stack link`'s stack
+  number is never threaded through. Pass the top layer's PR number instead;
+  `gh stack link --help` guarantees stack and PR numbers never collide (§6).
 - **Marking only the top PR ready** — every layer must be ready or the stack
   merge refuses.
 - **Merging layer-by-layer with `gh pr merge`** — that abandons atomicity;

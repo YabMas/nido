@@ -40,7 +40,7 @@ poller needs to react when the PR later merges.
    ```bash
    cd worktree
    jj log -r 'main@origin..@' --no-graph -T 'change_id.short() ++ " " ++ description.first_line() ++ "\n"'
-   jj bookmark list -T 'name ++ "\n"' | grep "^<session>--"
+   jj bookmark list -T 'if(remote, "", name ++ "\n")' | grep "^<session>--"
    ```
 
    `jj bookmark list` covers the **whole shared jj repo**, which holds every
@@ -70,9 +70,12 @@ poller needs to react when the PR later merges.
    gh pr list -R "$SLUG" --head '<session>' --state open --json number,url
    ```
 
-   If that reports a PR, reuse it. If it reports `[]`, create one:
+   If that reports a PR, reuse it. If it reports `[]`, create one — re-derive
+   `$SLUG` here, since it does not survive from the block above:
 
    ```bash
+   SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
+           | sed -E 's#^git@github\.com:##; s#^https://github\.com/##; s#\.git$##')
    gh pr create -R "$SLUG" --base main --head '<session>' --draft \
      --title "<title>" --body "<body>"
    ```
@@ -235,9 +238,7 @@ branch arguments make `gh stack link` create the PR an inserted layer needs and
 re-chain every base. That path is `/squash` §2's, not this skill's.
 
 `gh stack link` is incremental: re-running after a shape change updates the stack
-and never removes PRs. **Note the stack number it reports** — `/drive-home` §6
-merges by it, because `gh stack merge` reads a bare number as a *stack* number
-before trying it as a PR number.
+and never removes PRs.
 
 ### 5. Stamp one `:github` ref per PR
 
