@@ -52,20 +52,30 @@
         (is (< services-idx briefing-idx tracker-idx)
             "briefing should land after services and before link tracker")))))
 
-(deftest render-context-includes-stacked-development-doctrine
+(deftest render-context-includes-shipping-doctrine
   (let [doc (@#'launcher/render-context base-ctx)]
     (testing "the condensed doctrine is present"
-      (is (str/includes? doc "## Stacked development"))
-      (is (str/includes? doc "/stack")
-          "should point at the full skill")
+      (is (str/includes? doc "## Shipping doctrine"))
+      (is (str/includes? doc "one claim")
+          "should state the unit a batch asserts")
       (is (str/includes? doc "Layer:")
           "should name the trailer so commits carry it"))
+    (testing "both axes point at their skill"
+      (is (str/includes? doc "/stack")
+          "vertical axis should cite /stack")
+      (is (str/includes? doc "/spin-out")
+          "horizontal axis should cite /spin-out"))
     (testing "the trailer vocabulary is spelled out"
       (is (str/includes? doc "mechanical"))
       (is (str/includes? doc "structural"))
       (is (str/includes? doc "behavioral")))
+    (testing "all four destinations are named"
+      (is (str/includes? doc "this layer"))
+      (is (str/includes? doc "another layer"))
+      (is (str/includes? doc "spun out"))
+      (is (str/includes? doc "declined")))
     (testing "ordering: doctrine sits before the lifecycle section"
-      (let [doctrine-idx  (str/index-of doc "## Stacked development")
+      (let [doctrine-idx  (str/index-of doc "## Shipping doctrine")
             lifecycle-idx (str/index-of doc "## Lifecycle")]
         (is (and doctrine-idx lifecycle-idx))
         (is (< doctrine-idx lifecycle-idx)
