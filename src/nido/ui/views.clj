@@ -109,6 +109,12 @@
         .rv-round { border:1px solid #20203a; border-radius:6px; background:#12122a;
                     padding:10px 12px; margin:8px 0; }
         .rv-round-head { display:flex; gap:8px; align-items:baseline; margin-bottom:4px; }
+        .rv-round-head .meta { flex:1; min-width:0; white-space:nowrap; overflow:hidden;
+                               text-overflow:ellipsis; }
+        .rv-foldable { cursor:pointer; user-select:none; }
+        .rv-foldable:hover .rv-mark, .rv-foldable:hover strong { color:#fff; }
+        .rv-mark { display:inline-block; width:10px; color:#666; font-size:11px; }
+        .rv-finding-line { padding:2px 0; }
         .rv-phase { padding:3px 0; }
         .rv-phase-head { display:flex; gap:8px; align-items:baseline; }
         .rv-glyph { width:12px; color:#7eb8da; text-align:center; }
@@ -418,6 +424,14 @@
   [pos seq]
   (assoc pos :entry seq :rounds nil))
 
+(defn- toggle-round
+  "`pos` with review round `n` flipped between folded and not. Rounds are numbered
+   within the open entry's report, so this only ever means anything alongside an
+   :entry — which is the only place the fold is rendered."
+  [pos n]
+  (let [open (set (:rounds pos))]
+    (assoc pos :rounds (if (open n) (disj open n) (conj open n)))))
+
 (defn- gate-card
   "One inbox row; links to the gate pane. `sel?` highlights the open gate. `href`
    carries the view-state so selecting a gate preserves scope + selection. A
@@ -657,19 +671,27 @@
                (= "ok" status)   "no changes")
     nil))
 
-(defn- review-finding
-  "One codex finding: priority + title on the row, its location and its body under
-   it. Codex repeats the priority as a `[P2] ` title prefix; the chip already says
-   it, so the prefix is dropped rather than printed twice.
+(defn- finding-title
+  "A codex finding's title. Codex repeats the priority as a `[P2] ` prefix; the
+   chip beside it already says that, so the prefix is dropped rather than printed
+   twice."
+  [title]
+  (str/replace (str title) #"^\[P\d\]\s*" ""))
 
-   The body renders INLINE rather than behind a <details> fold: #ws-pane re-renders
-   itself every 3s, and a morph drops the `open` attribute the reader just set — a
-   fold here would snap shut mid-sentence. The pane scrolls; that is the trade."
+(defn- finding-chip [priority]
+  [:span {:class (str "chip c-p" (min 3 (or priority 3)))} "P" (if priority priority "?")])
+
+(defn- review-finding-line
+  "A finding at a glance: severity + title, one line. This is all a folded round
+   shows — the shape of what the review found, without its argument."
+  [{:keys [title priority]}]
+  [:li.rv-finding-line (finding-chip priority) " " [:strong (finding-title title)]])
+
+(defn- review-finding
+  "One codex finding in full: severity + title, then where it is and what it says."
   [cwd {:keys [title body priority file line-start line-end]}]
   [:li.rv-finding
-   [:div [:span {:class (str "chip c-p" (min 3 (or priority 3)))}
-          "P" (if priority priority "?")]
-    " " [:strong (str/replace (str title) #"^\[P\d\]\s*" "")]]
+   [:div (finding-chip priority) " " [:strong (finding-title title)]]
    (when file
      [:div.rv-loc (rel-path cwd file) ":" line-start
       (when (and line-end (not= line-end line-start)) (str "-" line-end))])
@@ -678,7 +700,8 @@
 
 (defn- review-phase
   "One phase of a round: its line, then what it produced — the review's findings,
-   the judge's reasoning. Both inline, for the reason review-finding gives."
+   the judge's reasoning. Only ever rendered inside an unfolded round, so both
+   run inline: the reader asked for exactly this."
   [cwd {:keys [phase findings reason status error] :as ph}]
   [:div.rv-phase
    [:div.rv-phase-head
@@ -691,24 +714,50 @@
      [:div.rv-prose (md/render reason)])
    (when error [:div.error-msg error])])
 
-(defn- review-round [cwd {:keys [round status phases]}]
-  [:div.rv-round
-   [:div.rv-round-head
-    [:strong "Round " round]
-    (review-chip (case status "clean" :ok "failed" :bad "running" :run :neutral)
-                 status)]
-   (into [:div] (map #(review-phase cwd %) phases))])
+(defn- review-round
+  "One round, folded or not.
+
+   FOLDED (the default) it is a summary: the round's status, its phases' outcomes
+   on one line — findings count, the judge's decision, the fix's commit — and its
+   findings as titles with their severity. That is the shape of the round; a
+   converged review is mostly rounds you never need to read past this.
+
+   UNFOLDED it is the phases in full, findings bodies and judge's reasoning
+   included. `toggle` is the @get that flips it, nil where the surface has no
+   position to navigate to (the gate pane) — there the round renders unfolded,
+   since a reader who cannot open it must not be shown the closed half."
+  [cwd open? toggle {:keys [round status phases]}]
+  (let [findings (mapcat :findings phases)]
+    [:div.rv-round
+     [:div (cond-> {:class (str "rv-round-head" (when toggle " rv-foldable"))}
+             toggle (assoc "data-on:click" toggle))
+      (when toggle [:span.rv-mark (if open? "▾" "▸")])
+      [:strong "Round " round]
+      (review-chip (case status "clean" :ok "failed" :bad "running" :run :neutral)
+                   status)
+      (when-not open?
+        [:span.meta (str/join " · " (keep review-phase-note phases))])]
+     (if open?
+       (into [:div] (map #(review-phase cwd %) phases))
+       (when (seq findings)
+         (into [:ul.rv-findings] (map review-finding-line findings))))]))
 
 (defn- review-card
   "Curated render of a `:review` ledger event: the verdict + counts the event
    itself carries, then the per-round detail (review · judge · fix, each round's
    findings under it) once `:detail` is hydrated. Degrades to the verdict alone
-   when the run dir that held report.json is gone."
+   when the run dir that held report.json is gone.
+
+   Rounds start FOLDED — see review-round — and unfold through `pos`, the pane's
+   reading position, so the 3s poll re-renders them exactly as the reader left
+   them. A nil `pos` (the gate pane, which has no such position) renders every
+   round unfolded: with nothing to click, the detail has to be on the page."
   [{:keys [status base base-rev rounds findings-fixed findings-remaining
-           report-path summary detail]}]
+           report-path summary detail]} pos]
   (let [cwd    (get-in detail [:target :cwd])
         files  (get-in detail [:target :files])
-        rounds* (:rounds detail)]
+        rounds* (:rounds detail)
+        open   (set (:rounds pos))]
     [:div.md
      [:h2 "Review"]
      [:div.report-meta
@@ -721,7 +770,13 @@
                              (when (not= 1 (count files)) "s") " changed"))]
      (when summary (md/render summary))
      (if (seq rounds*)
-       (into [:div.rv-rounds] (map #(review-round cwd %) rounds*))
+       (into [:div.rv-rounds]
+             (map (fn [{:keys [round] :as r}]
+                    (review-round cwd
+                                  (or (nil? pos) (contains? open round))
+                                  (when pos (pane-fragment (toggle-round pos round)))
+                                  r))
+                  rounds*))
        [:p.empty (if (str/blank? (str report-path))
                    "No round detail — this event recorded no report path."
                    "Round detail is no longer on disk (the run dir was cleaned).")])
@@ -729,18 +784,21 @@
 
 (defn- report-body
   "Dispatch a gate/ledger report on :format — each typed event gets its curated card,
-   markdown reports render through md/render."
-  [report]
-  (case (:format report)
-    :triage-report            (triage-report-card report)
-    :implementation-plan      (plan-card report)
-    :implementation-completed (completed-card report)
-    :blocker                  (blocker-card report)
-    :pr-opened                (pr-opened-card report)
-    :review-report            (review-card report)
-    :findings                 (md/render (report/report->markdown report))
-    :proposed-ticket          (md/render (report/report->markdown report))
-    (md/render (:markdown report))))
+   markdown reports render through md/render. `pos` is the workstream pane's reading
+   position, for the one card that folds (review — see review-card); the gate pane,
+   which has no position of its own, omits it."
+  ([report] (report-body report nil))
+  ([report pos]
+   (case (:format report)
+     :triage-report            (triage-report-card report)
+     :implementation-plan      (plan-card report)
+     :implementation-completed (completed-card report)
+     :blocker                  (blocker-card report)
+     :pr-opened                (pr-opened-card report)
+     :review-report            (review-card report pos)
+     :findings                 (md/render (report/report->markdown report))
+     :proposed-ticket          (md/render (report/report->markdown report))
+     (md/render (:markdown report)))))
 
 (defn gate-pane
   "The detail pane: rendered report + follow-actions. nil -> calm placeholder.
@@ -999,7 +1057,7 @@
       [:span.lt (:title entry)]
       [:button.viewer-close {"data-on:click" (pane-fragment (at-entry pos nil))
                              :title "close"} "✕"]])
-   (report-body report)])
+   (report-body report pos)])
 
 (defn- ledger-browser
   "The ledger, then — only once the reader opens one — the entry they opened.

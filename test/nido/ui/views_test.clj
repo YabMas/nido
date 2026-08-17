@@ -538,24 +538,55 @@
                                 :overall-correctness "correct" :findings []}
                                {:phase "judge" :status "ok" :decision "stop"}]}]}})
 
-(deftest workstream-pane-renders-review-rounds
-  (let [html (views/workstream-pane (assoc sample-ws :report review-report) {})]
+(defn- review-pane
+  "The pane with `review-report` open at ledger entry 7, `rounds` unfolded."
+  [rounds]
+  (views/workstream-pane (assoc sample-ws :report review-report :selected-seq 7
+                                :open-rounds rounds
+                                :entries [{:seq 7 :kind :review :at "t" :title "Review"}])
+                         {}))
+
+(deftest workstream-pane-renders-review-rounds-folded
+  (let [html (review-pane nil)]
     (is (str/includes? html "converged") "the verdict chip")
     (is (str/includes? html "2 rounds · 1 fixed · 0 remaining"))
     (is (str/includes? html "be771a41f567") "base-rev, abbreviated")
     (is (str/includes? html "2 files changed") "target file count from the report")
     (is (str/includes? html "Round 1"))
     (is (str/includes? html "Round 2"))
-    (is (str/includes? html "Backfill races the deploy") "the finding")
+    ;; a folded round is its shape: what it found, and how it came out
+    (is (str/includes? html "Backfill races the deploy") "the finding's title")
     (is (not (str/includes? html "[P1] Backfill"))
         "the priority prefix codex repeats in the title is dropped — the chip says it")
+    (is (str/includes? html "1 finding · incorrect · → continue (fix 0) · commit 553c4779 · 1 fixed")
+        "the round's phases, summarised on one line")
+    ;; …and not its argument
+    (is (not (str/includes? html "the one-shot update runs early")) "no finding body")
+    (is (not (str/includes? html "a real correctness risk")) "no judge reasoning")
+    (is (not (str/includes? html "src/a.clj:32-35")) "no locations")
+    (is (str/includes? html "?entry=7&amp;rounds=1") "clicking Round 1 unfolds it")
+    (is (str/includes? html "/runs/review-1/report.json") "where the full report lives")))
+
+(deftest workstream-pane-unfolds-the-rounds-the-reader-asked-for
+  (let [html (review-pane #{1})]
     (is (str/includes? html "src/a.clj:32-35") "location, relative to the reviewed worktree")
-    (is (str/includes? html "the one-shot update runs early")
-        "the finding body renders inline — the pane's 3s poll would close a fold")
-    (is (str/includes? html "a real correctness risk") "the judge's reasoning, also inline")
+    (is (str/includes? html "the one-shot update runs early") "the finding body")
+    (is (str/includes? html "a real correctness risk") "the judge's reasoning")
     (is (str/includes? html "→ continue (fix 0)"))
     (is (str/includes? html "commit 553c4779"))
-    (is (str/includes? html "/runs/review-1/report.json") "where the full report lives")))
+    (is (str/includes? html "?entry=7&amp;rounds=1,2")
+        "round 2 is still folded — clicking it ADDS it, leaving round 1 open")
+    (is (str/includes? html "@get(&apos;/_fragment/workstream/brian/ws-1?entry=7&apos;)")
+        "and clicking round 1 again folds it back, leaving the entry open")))
+
+(deftest gate-pane-renders-review-rounds-unfolded
+  ;; The gate pane has no reading position to navigate, so there is nothing to
+  ;; click — a folded round there would hide its detail with no way to reach it.
+  (let [html (views/gate-pane {:ws-id "ws-1" :project "brian" :origin :notion
+                               :label "BR-7" :report review-report :actions []})]
+    (is (str/includes? html "the one-shot update runs early") "bodies render")
+    (is (str/includes? html "a real correctness risk") "reasoning renders")
+    (is (not (str/includes? html "rv-foldable")) "and no round offers a fold")))
 
 (deftest workstream-pane-review-without-detail-still-shows-the-verdict
   ;; Run dirs get cleaned; the event's own counts must still render, and the pane
