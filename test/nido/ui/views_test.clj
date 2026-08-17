@@ -487,6 +487,58 @@
     (is (str/includes? html "Steps"))
     (is (str/includes? html "fix the calc"))))
 
+(def ^:private review-report
+  "A :review ledger event as work/hydrate hands it to the view: the verdict + counts
+   the event carries, plus the :detail read back from the report.json it points at."
+  {:format :review-report :at "2026-08-10T12:00:00Z" :status :converged
+   :base "main" :base-rev "be771a41f567abcdef" :rounds 2 :findings-fixed 1
+   :findings-remaining 0 :report-path "/runs/review-1/report.json"
+   :detail {:target {:cwd "/w" :base "main" :files ["src/a.clj" "src/b.clj"]}
+            :rounds [{:round 1 :status "continued"
+                      :phases [{:phase "review" :status "ok"
+                                :overall-correctness "incorrect"
+                                :findings [{:title "[P1] Backfill races the deploy"
+                                            :body "the one-shot update runs early"
+                                            :priority 1 :file "/w/src/a.clj"
+                                            :line-start 32 :line-end 35}]}
+                               {:phase "judge" :status "ok" :decision "continue"
+                                :reason "a real correctness risk" :fix-findings [0]}
+                               {:phase "fix" :status "ok" :commit "553c4779beef"
+                                :fixed-count 1}]}
+                     {:round 2 :status "clean"
+                      :phases [{:phase "review" :status "ok"
+                                :overall-correctness "correct" :findings []}
+                               {:phase "judge" :status "ok" :decision "stop"}]}]}})
+
+(deftest workstream-pane-renders-review-rounds
+  (let [html (views/workstream-pane (assoc sample-ws :report review-report) {})]
+    (is (str/includes? html "converged") "the verdict chip")
+    (is (str/includes? html "2 rounds · 1 fixed · 0 remaining"))
+    (is (str/includes? html "be771a41f567") "base-rev, abbreviated")
+    (is (str/includes? html "2 files changed") "target file count from the report")
+    (is (str/includes? html "Round 1"))
+    (is (str/includes? html "Round 2"))
+    (is (str/includes? html "Backfill races the deploy") "the finding")
+    (is (not (str/includes? html "[P1] Backfill"))
+        "the priority prefix codex repeats in the title is dropped — the chip says it")
+    (is (str/includes? html "src/a.clj:32-35") "location, relative to the reviewed worktree")
+    (is (str/includes? html "the one-shot update runs early")
+        "the finding body renders inline — the pane's 3s poll would close a fold")
+    (is (str/includes? html "a real correctness risk") "the judge's reasoning, also inline")
+    (is (str/includes? html "→ continue (fix 0)"))
+    (is (str/includes? html "commit 553c4779"))
+    (is (str/includes? html "/runs/review-1/report.json") "where the full report lives")))
+
+(deftest workstream-pane-review-without-detail-still-shows-the-verdict
+  ;; Run dirs get cleaned; the event's own counts must still render, and the pane
+  ;; must say why there are no rounds rather than going blank.
+  (let [html (views/workstream-pane
+              (assoc sample-ws :report (dissoc review-report :detail)) {})]
+    (is (str/includes? html "converged"))
+    (is (str/includes? html "2 rounds · 1 fixed · 0 remaining"))
+    (is (str/includes? html "no longer on disk"))
+    (is (not (str/includes? html "Round 1")))))
+
 (deftest workstream-pane-renders-blocker-completed-pr-cards
   (let [pane (fn [report] (views/workstream-pane (assoc sample-ws :report report) {}))]
     (is (str/includes? (pane {:format :blocker :summary "Waiting." :needs "Stripe key"}) "Blocker"))

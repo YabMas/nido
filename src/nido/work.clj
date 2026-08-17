@@ -305,6 +305,28 @@
            :title    (first-heading md)
            :markdown md}))))
 
+(defn- review-detail
+  "The review-loop's own report.json — target, rounds, per-round phases and their
+   findings — for a `:review-report` event. The ledger event carries the verdict
+   and the counts and POINTS at the report (report/ReviewReport, deliberately: the
+   rounds are too big to embed), so a surface that wants the rounds hydrates them
+   at read time. nil when the event points nowhere, the run dir has since been
+   cleaned, or the file won't parse — the reader then shows the counts alone."
+  [{:keys [report-path]}]
+  (when-not (str/blank? report-path)
+    (try (io/read-json report-path)
+         (catch Throwable _ nil))))
+
+(defn- hydrate
+  "Attach the read-time detail a typed event points at but does not embed. Only
+   `:review-report` has any today; every other format passes through untouched.
+   Applied where ONE report is rendered (report-at / latest-report), never in
+   index-row — an index needs titles, not every round of every review."
+  [report]
+  (if (= :review-report (:format report))
+    (assoc report :detail (review-detail report))
+    report))
+
 (defn- first-line
   "First non-blank line of `s`, trimmed, or nil."
   [s]
@@ -327,10 +349,11 @@
                 (name (:kind entry)))}))
 
 (defn- report-at
-  "The entry whose :seq is `seq` (else the latest), rendered via entry->report."
+  "The entry whose :seq is `seq` (else the latest), rendered via entry->report and
+   hydrated with whatever detail it points at."
   [base-dir entries seq]
   (let [by-seq (into {} (map (juxt :seq identity)) entries)]
-    (entry->report base-dir (or (get by-seq seq) (last entries)))))
+    (hydrate (entry->report base-dir (or (get by-seq seq) (last entries))))))
 
 (defn- active-ledger
   "The workstream's own ledger — the single event store. {:base-dir <string|nil>
@@ -362,7 +385,7 @@
   [project ws-id]
   (let [{:keys [base-dir entries]} (active-ledger project ws-id)]
     (if (seq entries)
-      (entry->report base-dir (last entries))
+      (hydrate (entry->report base-dir (last entries)))
       (intake-fallback project ws-id))))
 
 (defn environment

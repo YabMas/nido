@@ -18,6 +18,7 @@
    [nido.coordinator.tickets :as tickets]
    [nido.coordinator.triggers]
    [nido.coordinator.workstream :as workstream]
+   [nido.io :as nido-io]
    [nido.notion.client :as notion-client]
    [nido.notion.views :as views]
    [nido.slack.client :as slack-client]
@@ -951,6 +952,64 @@
         (let [d (work/workstream :brian id)]
           (is (= ["Second needs" "First direction"] (mapv :title (:entries d)))
               "index titles come from each event's fields via report/report-title"))))))
+
+(defn- review-event
+  "A :review ledger event pointing at `path` (the review-loop's report.json)."
+  [path]
+  (pr-str {:format :review-report :status :converged :base "main" :base-rev "abc123"
+           :rounds 2 :findings-fixed 1 :findings-remaining 0 :report-path path}))
+
+(def ^:private review-report-json
+  {:schema 1 :run-id "review-1" :status "converged"
+   :target {:cwd "/w" :base "main" :base-rev "abc123" :files ["src/a.clj"]}
+   :rounds [{:round 1 :status "continued"
+             :phases [{:phase "review" :status "ok" :overall-correctness "incorrect"
+                       :findings [{:title "[P2] Off by one" :body "the loop runs once too many"
+                                   :priority 2 :file "/w/src/a.clj"
+                                   :line-start 10 :line-end 12}]}
+                      {:phase "fix" :status "ok" :commit "deadbeefcafe" :fixed-count 1}]}]})
+
+(deftest review-entry-hydrates-its-rounds-from-the-report-it-points-at
+  ;; The ledger event carries the verdict + counts and POINTS at report.json; the
+  ;; reader hydrates the rounds so a surface can show what the review found.
+  (with-tmp
+    (fn [tmp]
+      (let [path (str (fs/path tmp "report.json"))
+            id   (:id (workstream/create! :brian {:stage :scratch :external-refs []}))]
+        (nido-io/write-json! path review-report-json)
+        (workstream/append-entry! :brian id {:kind :review} (review-event path))
+        (let [r (:report (work/workstream :brian id))]
+          (is (= :review-report (:format r)))
+          (is (= 1 (count (get-in r [:detail :rounds]))) "rounds come from report.json")
+          (is (= "Off by one"
+                 (-> r :detail :rounds first :phases first :findings first :title
+                     (str/replace #"^\[P\d\]\s*" "")))
+              "findings ride along with their round"))))))
+
+(deftest review-entry-degrades-when-the-report-is-gone
+  ;; Run dirs get cleaned; the event must still render its verdict.
+  (with-tmp
+    (fn [tmp]
+      (let [id (:id (workstream/create! :brian {:stage :scratch :external-refs []}))]
+        (workstream/append-entry! :brian id {:kind :review}
+                                  (review-event (str (fs/path tmp "gone.json"))))
+        (let [r (:report (work/workstream :brian id))]
+          (is (= :converged (:status r)) "the verdict survives")
+          (is (nil? (:detail r)) "a missing report.json hydrates to nil, not a throw"))))))
+
+(deftest review-index-row-does-not-hydrate
+  ;; The index needs titles, not every round of every review — a corrupt or absent
+  ;; report.json must not cost the index anything.
+  (with-tmp
+    (fn [tmp]
+      (let [path (str (fs/path tmp "broken.json"))
+            id   (:id (workstream/create! :brian {:stage :scratch :external-refs []}))]
+        (spit path "{not json")
+        (workstream/append-entry! :brian id {:kind :impl} "# One\n\nx")
+        (workstream/append-entry! :brian id {:kind :review} (review-event path))
+        (let [d (work/workstream :brian id)]
+          (is (= ["Review: converged" "One"] (mapv :title (:entries d))))
+          (is (nil? (:detail (:report d))) "unparseable report.json → no detail"))))))
 
 (deftest screen-overview-and-detail-groups-are-identical
   ;; The same view-state must produce the same :groups regardless of whether a

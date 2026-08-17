@@ -100,6 +100,26 @@
         .c-det-needs-info{ background:#1a2a3a; color:#7eb8da; }
         .report-meta { margin:0 0 10px; display:flex; gap:6px; flex-wrap:wrap; }
         details.trail { margin-top:14px; } details.trail summary { cursor:pointer; color:#888; font-size:12px; }
+        .c-rv-ok{ background:#1a3a2a; color:#4ade80; } .c-rv-warn{ background:#2a2a1a; color:#facc15; }
+        .c-rv-bad{ background:#3a1a1a; color:#f87171; } .c-rv-run{ background:#1a2a3a; color:#7eb8da; }
+        .c-rv-neutral{ background:#22223a; color:#9a9ac0; }
+        .c-p0, .c-p1 { background:#3a1a1a; color:#f87171; } .c-p2 { background:#2a2a1a; color:#facc15; }
+        .c-p3 { background:#22223a; color:#9a9ac0; }
+        .rv-rounds { margin-top:14px; }
+        .rv-round { border:1px solid #20203a; border-radius:6px; background:#12122a;
+                    padding:10px 12px; margin:8px 0; }
+        .rv-round-head { display:flex; gap:8px; align-items:baseline; margin-bottom:4px; }
+        .rv-phase { padding:3px 0; }
+        .rv-phase-head { display:flex; gap:8px; align-items:baseline; }
+        .rv-glyph { width:12px; color:#7eb8da; text-align:center; }
+        .rv-label { color:#cdcde0; min-width:52px; font-size:12.5px; }
+        .rv-findings { margin:4px 0 6px 20px; padding-left:14px; }
+        .rv-finding { padding:3px 0; }
+        .rv-loc { color:#8a8ab0; font-size:11.5px; margin-left:26px; }
+        .rv-prose { margin:3px 0 6px 26px; }
+        .rv-prose .md { background:none; border:none; padding:0; color:#9a9ac0;
+                        font-size:12.5px; line-height:1.6; }
+        .rv-prose .md p { margin:3px 0; }
         .pane { padding:18px 24px; overflow:auto; }
         .ledger-index { margin:14px 0 8px; border:1px solid #20203a; border-radius:6px; overflow:hidden; }
         .ledger-row { display:flex; gap:10px; align-items:baseline; padding:7px 12px;
@@ -550,6 +570,126 @@
    [:p [:strong title] " — " [:a {:href url :target "_blank"} url]]
    (when summary (md/render summary))])
 
+;; --- review report ---------------------------------------------------------
+;; The ledger event carries the verdict + counts; work/hydrate attaches `:detail`
+;; — the review-loop's own report.json (target, rounds, phases, findings) — when
+;; the run dir still holds it. The card reads top-down like the terminal frontend:
+;; verdict, then one block per round, each round three phase lines deep.
+
+(def ^:private review-status-tone
+  "Terminal review status → chip tone. Only :review-failed is an error; the rest
+   of the non-clean statuses stopped short of converging, which is a result, not a
+   failure (mirrors nido.review's own reading — see tasks.nido-review/exit-code)."
+  {:converged :ok :clean :ok :dry-run :ok :review-failed :bad})
+
+(defn- review-chip [tone text]
+  [:span {:class (str "chip c-rv-" (name tone))} text])
+
+(defn- review-glyph
+  "Phase status → its mark. Same vocabulary as the terminal render (review/render)
+   so a review reads identically in the pane and in the loop that produced it."
+  [status]
+  (case status "ok" "✓" "error" "✗" "running" "…" "·"))
+
+(defn- rel-path
+  "`file` relative to the reviewed worktree — findings carry absolute paths, and
+   the worktree prefix is noise the reader already knows. Unchanged when it sits
+   outside `cwd` (or `cwd` is unknown)."
+  [cwd file]
+  (let [f (str file)]
+    (if (and (not (str/blank? (str cwd))) (str/starts-with? f (str cwd "/")))
+      (subs f (inc (count (str cwd))))
+      f)))
+
+(defn- review-phase-note
+  "The one-line outcome of a phase: findings count for review, decision for judge,
+   commit for fix. nil while it is still running."
+  [{:keys [phase findings overall-correctness decision fix-findings commit
+           fixed-count status]}]
+  (case phase
+    "review" (when (= "ok" status)
+               (str (count findings) " finding" (when (not= 1 (count findings)) "s")
+                    (when overall-correctness (str " · " overall-correctness))))
+    "judge"  (when decision
+               (str "→ " decision
+                    (when (seq fix-findings)
+                      (str " (fix " (str/join "," fix-findings) ")"))))
+    "fix"    (cond
+               commit            (str "commit " (subs commit 0 (min 8 (count commit)))
+                                      (when fixed-count (str " · " fixed-count " fixed")))
+               (= "ok" status)   "no changes")
+    nil))
+
+(defn- review-finding
+  "One codex finding: priority + title on the row, its location and its body under
+   it. Codex repeats the priority as a `[P2] ` title prefix; the chip already says
+   it, so the prefix is dropped rather than printed twice.
+
+   The body renders INLINE rather than behind a <details> fold: #ws-pane re-renders
+   itself every 3s, and a morph drops the `open` attribute the reader just set — a
+   fold here would snap shut mid-sentence. The pane scrolls; that is the trade."
+  [cwd {:keys [title body priority file line-start line-end]}]
+  [:li.rv-finding
+   [:div [:span {:class (str "chip c-p" (min 3 (or priority 3)))}
+          "P" (if priority priority "?")]
+    " " [:strong (str/replace (str title) #"^\[P\d\]\s*" "")]]
+   (when file
+     [:div.rv-loc (rel-path cwd file) ":" line-start
+      (when (and line-end (not= line-end line-start)) (str "-" line-end))])
+   (when-not (str/blank? body)
+     [:div.rv-prose (md/render body)])])
+
+(defn- review-phase
+  "One phase of a round: its line, then what it produced — the review's findings,
+   the judge's reasoning. Both inline, for the reason review-finding gives."
+  [cwd {:keys [phase findings reason status error] :as ph}]
+  [:div.rv-phase
+   [:div.rv-phase-head
+    [:span.rv-glyph (review-glyph status)]
+    [:span.rv-label phase]
+    [:span.meta (review-phase-note ph)]]
+   (when (seq findings)
+     (into [:ul.rv-findings] (map #(review-finding cwd %) findings)))
+   (when-not (str/blank? reason)
+     [:div.rv-prose (md/render reason)])
+   (when error [:div.error-msg error])])
+
+(defn- review-round [cwd {:keys [round status phases]}]
+  [:div.rv-round
+   [:div.rv-round-head
+    [:strong "Round " round]
+    (review-chip (case status "clean" :ok "failed" :bad "running" :run :neutral)
+                 status)]
+   (into [:div] (map #(review-phase cwd %) phases))])
+
+(defn- review-card
+  "Curated render of a `:review` ledger event: the verdict + counts the event
+   itself carries, then the per-round detail (review · judge · fix, each round's
+   findings under it) once `:detail` is hydrated. Degrades to the verdict alone
+   when the run dir that held report.json is gone."
+  [{:keys [status base base-rev rounds findings-fixed findings-remaining
+           report-path summary detail]}]
+  (let [cwd    (get-in detail [:target :cwd])
+        files  (get-in detail [:target :files])
+        rounds* (:rounds detail)]
+    [:div.md
+     [:h2 "Review"]
+     [:div.report-meta
+      (review-chip (get review-status-tone status :warn) (name status))
+      [:span.meta rounds " round" (when (not= 1 rounds) "s")
+       " · " findings-fixed " fixed · " findings-remaining " remaining"]]
+     [:p.meta "base " base
+      (when base-rev (str " @ " (subs base-rev 0 (min 12 (count base-rev)))))
+      (when (seq files) (str " · " (count files) " file"
+                             (when (not= 1 (count files)) "s") " changed"))]
+     (when summary (md/render summary))
+     (if (seq rounds*)
+       (into [:div.rv-rounds] (map #(review-round cwd %) rounds*))
+       [:p.empty (if (str/blank? (str report-path))
+                   "No round detail — this event recorded no report path."
+                   "Round detail is no longer on disk (the run dir was cleaned).")])
+     (when report-path [:p.meta "full report → " [:code report-path]])]))
+
 (defn- report-body
   "Dispatch a gate/ledger report on :format — each typed event gets its curated card,
    markdown reports render through md/render."
@@ -560,6 +700,7 @@
     :implementation-completed (completed-card report)
     :blocker                  (blocker-card report)
     :pr-opened                (pr-opened-card report)
+    :review-report            (review-card report)
     :findings                 (md/render (report/report->markdown report))
     :proposed-ticket          (md/render (report/report->markdown report))
     (md/render (:markdown report))))
