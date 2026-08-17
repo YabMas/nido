@@ -593,7 +593,7 @@ TRUNK=$(gh repo view -R "$SLUG" --json defaultBranchRef -q '.defaultBranchRef.na
 jj git push -b 'glob:<session>--*'
 # scope to THIS session's stack — the repo holds other sessions' stacks too
 STACKNUM=$(gh api repos/"$SLUG"/stacks \
-  --jq '[.[] | select(any(.pull_requests[]; .head.ref | startswith("<session>--")))][0].number // empty')
+  --jq '[.[] | select(.open) | select(any(.pull_requests[]; .head.ref | startswith("<session>--")))][0].number // empty')
 if [ -n "$STACKNUM" ]; then
   (cd "$SRC" && gh stack unstack "$STACKNUM")
   # confirm the stack is actually gone before linking — see below for why
@@ -621,6 +621,14 @@ scoped to the session before they are acted on. An empty `$STACKNUM` means this
 session has no stack — the `if`/`else` above branches on that rather than
 running the unstack anyway. (`// empty` is what makes the check work: without it
 `--jq` prints the string `null`, which `[ -n … ]` reads as set.)
+
+**Also filter to `select(.open)`**, same as the discovery queries above. The
+endpoint keeps a merged stack listed indefinitely with `open:false`. Without
+this filter, re-running this recipe after the session's stack has already
+merged — which `/drive-home` documents as safe — would match the merged stack,
+fail to unstack it, and then have the `STILL` check below misreport that as a
+PR queued for merge or with auto-merge enabled, blocking a re-run that has
+nothing left to do.
 
 `gh stack unstack` takes the stack number **positionally** and, per its own help,
 *"works from anywhere in the repository, whether or not the stack is checked out
