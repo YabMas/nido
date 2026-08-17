@@ -184,7 +184,7 @@ SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
         | sed -E 's#^git@github\.com:##; s#^https://github\.com/##; s#\.git$##')
 gh api repos/"$SLUG"/stacks \
   --jq '.[] | select(any(.pull_requests[]; .head.ref | startswith("<session>--")))
-            | "stack #\(.number) base=\(.base.ref) prs=\([.pull_requests[].number])"'
+            | "stack #\(.number) base=\(.base.ref) prs=\([.pull_requests[] | {number, ref: .head.ref}])"'
 ```
 
 **Keep the `startswith("<session>--")` filter.** The endpoint returns every stack
@@ -192,10 +192,17 @@ in the repo, and this repo runs a dozen sessions at once — unfiltered, `/squas
 would regenerate another session's PR bodies. Same rule as §1's anchored
 `grep "^<session>--"`.
 
-**That ordered list of `number`s is what the `gh pr edit` calls below consume** —
-nothing else produces them, so this step is not optional. Taking the order from
-the stack object rather than walking `baseRefName` also means a mis-based PR
-(§2's non-zero exit) cannot silently mis-order the renumbering.
+**That list's `{number, ref}` pairs are what the `gh pr edit` calls below
+consume** — nothing else produces them, so this step is not optional. Match
+`<number>` to each layer **by `ref` (the branch name), never by position in the
+list.** `/stack` §6 already notes the stacks endpoint's objects carry
+`head.ref`; that's why it's pulled out here instead of just `number`. §2
+explicitly does not halt on a non-zero exit, so this step can run against a
+stack an orphaned PR has shifted — every PR from that point down sits one
+position off from where a clean stack would put it. A positional match (`n`-th
+list entry ↔ `n`-th layer in `jj log`) would silently pair each of those PRs
+with the wrong layer's body. Build a branch-name → number map from this list
+first, then look up each layer's `<session>--<slug>` bookmark in it.
 
 If the endpoint returns `[]` — no stack object, e.g. a single-layer session, or
 PRs created but never linked — fall back to `gh pr list` and order by matching
@@ -206,8 +213,16 @@ SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
         | sed -E 's#^git@github\.com:##; s#^https://github\.com/##; s#\.git$##')
 gh pr list -R "$SLUG" --state open --limit 50 \
   --json number,url,headRefName,baseRefName,isDraft \
-  --jq '.[] | select(.headRefName | startswith("<session>--"))'
+  --jq '.[] | select(.headRefName == "<session>" or (.headRefName | startswith("<session>--")))'
 ```
+
+**Keep the `.headRefName == "<session>"` half of the filter.** A single-layer
+session's PR head is exactly `<session>`, with no `--<slug>` suffix — the
+`startswith("<session>--")` half alone never matches it, so today's default
+single-PR flow would fall through as "nothing published" and silently skip
+PR-text regeneration here. `/drive-home` already gets this right (its §2
+discovery uses the same `== "<session>" or startswith("<session>--")` shape);
+this mirrors it.
 
 - **Both empty** → nothing is published yet; §1 and §2 were the whole job; stop
   here. (Empty means "not published", not "discovery failed" — an error from `gh`
@@ -225,11 +240,12 @@ SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
 gh pr edit <number> -R "$SLUG" --title "[<n>/<N>] <subject>" --body "<regenerated body>"
 ```
 
-`<number>` is the layer's `number` from the discovery above. Both `-R` **and** an
-explicit number are required: with `-R` and no number, `gh pr edit` exits
-`argument required when using the --repo flag`; with a number and no `-R`, it
-cannot resolve the repo from this worktree. And re-derive `$SLUG` in this block —
-it does not survive from the discovery block.
+`<number>` is looked up from the discovery above **by matching this layer's
+branch name against `ref`/`headRefName`** — never taken by position. Both `-R`
+**and** an explicit number are required: with `-R` and no number, `gh pr edit`
+exits `argument required when using the --repo flag`; with a number and no
+`-R`, it cannot resolve the repo from this worktree. And re-derive `$SLUG` in
+this block — it does not survive from the discovery block.
 
 `<n>` is the layer's position bottom-to-top and `<N>` the stack depth — both read
 fresh from `jj log`, so an inserted or removed layer renumbers every title

@@ -203,8 +203,15 @@ For each layer, branch on whether its bookmark appears as a `headRefName`:
 
 - **No open PR for that `headRefName`** → `gh pr create` it (below).
 - **An open PR already exists** → **do not create a second.** Update it instead:
-  `gh pr edit <number> -R "$SLUG" --title … --body …`, and fix its base if the
-  shape moved: `gh pr edit <number> -R "$SLUG" --base <layer-beneath>`.
+  `gh pr edit <number> -R "$SLUG" --title … --body …`. If the shape moved and the
+  base needs to change, check first whether the PRs are already linked into a
+  stack (`gh api repos/"$SLUG"/stacks`) — this step is exactly the re-run/repair
+  path, so a stack from an earlier `/stack` §6 reshape is likely to already
+  exist. Against a stacked PR, `gh pr edit <number> -R "$SLUG" --base
+  <layer-beneath>` fails: `GraphQL: Cannot change the base branch because the
+  pull request is part of a stack.` GitHub locks a stacked PR's base, so it
+  cannot be edited directly. If a stack exists, point at `/stack` §6 case B
+  (unstack, confirm it's gone, then one link) instead of editing the base.
 
 Without this guard, a re-run makes `gh pr create` fail on every layer that
 already has a PR — while `/drive-home` promises "PR or stack already exists →

@@ -401,19 +401,27 @@ follow.
 **Split one layer into two:**
 
 ```bash
-jj split -r <change-id> <paths…>   # the listed paths go in the LOWER half
+jj split -r <change-id> -m "<subject for the lower half>" <paths…>   # the listed paths go in the LOWER half
 jj bookmark create <session>--<new-slug> -r <the-new-lower-change>
 ```
 
-**Name the paths; never run bare `jj split -r <rev>`.** With no filesets jj opens
-the builtin diff editor — an interactive TUI — and a headless run (`claude -p`
-under the coordinator daemon) hangs there forever with no output and no typed
-event, the same failure class as the `jj squash` message-editor hang `/squash`
-§1 guards against. `jj split [OPTIONS] [FILESETS]...` selects non-interactively:
-*"Files matching any of these filesets are put in the selected changes"*, and the
-selected changes are the lower half. Split by file when you can; when a single
-file must be divided, that genuinely needs a human — say so rather than opening
-an editor nothing can close.
+**Name the paths, and always pass `-m`; never run bare `jj split -r <rev>`.**
+With no filesets jj opens the builtin diff editor — an interactive TUI — and a
+headless run (`claude -p` under the coordinator daemon) hangs there forever with
+no output and no typed event, the same failure class as the `jj squash`
+message-editor hang `/squash` §1 guards against. Filesets fix only that half of
+it: `jj split [OPTIONS] [FILESETS]...` selects non-interactively — *"Files
+matching any of these filesets are put in the selected changes"*, and the
+selected changes are the lower half — but every layer commit carries a
+description by mandate (§5), and per `jj split --help`, *"If the change you
+split had a description, you will be asked to enter a change description for
+each commit."* Filesets alone still hit that second, description editor and
+hang just the same. `-m` is what suppresses it: *"The change description to use
+for the selected changes (don't open editor)... The other revision will keep
+its original description, if any."* (Don't reach for `--editor` instead — it
+*forces* an editor open even when `-m` is given.) Split by file when you can;
+when a single file must be divided, that genuinely needs a human — say so
+rather than opening an editor nothing can close.
 
 **The original bookmark stays on the UPPER half — so the existing PR keeps the
 upper half's diff, and the new lower half needs a new bookmark and a new PR.**
@@ -435,8 +443,10 @@ explicitly (`jj bookmark set <session>--<old-slug> -r <lower>` and create the ne
 one on the upper half) — and say so in your report, since the open PR's diff
 changes underneath its reviewer.
 
-Then re-describe both halves with their own trailer and brief (§5), and re-link
-(below).
+Then re-describe both halves with their own trailer and brief (§5) — the `-m`
+subject above is only enough to clear the split without hanging, not a real
+brief, and the upper half keeps whatever description the layer had before the
+split, which is now stale — and re-link (below).
 
 **Insert a new layer below an existing one:**
 
@@ -528,8 +538,17 @@ jj git push -b 'glob:<session>--*'
 # scope to THIS session's stack — the repo holds other sessions' stacks too
 STACKNUM=$(gh api repos/"$SLUG"/stacks \
   --jq '[.[] | select(any(.pull_requests[]; .head.ref | startswith("<session>--")))][0].number // empty')
-[ -n "$STACKNUM" ] || echo "no stack for this session — skip the unstack, link directly"
-(cd "$SRC" && gh stack unstack "$STACKNUM")
+if [ -n "$STACKNUM" ]; then
+  (cd "$SRC" && gh stack unstack "$STACKNUM")
+  # confirm the stack is actually gone before linking — see below for why
+  STILL=$(gh api repos/"$SLUG"/stacks --jq "[.[] | select(.number == $STACKNUM)] | length")
+  if [ "$STILL" != "0" ]; then
+    echo "stack $STACKNUM still exists after unstack — a PR in it is queued for merge or has auto-merge enabled; resolve that before linking" >&2
+    exit 1
+  fi
+else
+  echo "no stack for this session — skip the unstack, link directly"
+fi
 (cd "$SRC" && gh stack link <session>--<l1> <session>--<l2> … <session>--<lN> 2>&1); echo "EXIT=$?"
 ```
 
@@ -543,15 +562,25 @@ returns *every* stack in the repo, and this repo runs a dozen sessions at once �
 `.[0]` would happily unstack somebody else's. Same lesson as the anchored
 `grep "^<session>--"` on `jj bookmark list` (§4): repo-wide listings must be
 scoped to the session before they are acted on. An empty `$STACKNUM` means this
-session has no stack; `gh stack unstack ""` is not a no-op, so branch on it
-rather than running the command anyway. (`// empty` is what makes the guard work:
-without it `--jq` prints the string `null`, which `[ -n … ]` reads as set.)
+session has no stack — the `if`/`else` above branches on that rather than
+running the unstack anyway. (`// empty` is what makes the check work: without it
+`--jq` prints the string `null`, which `[ -n … ]` reads as set.)
 
 `gh stack unstack` takes the stack number **positionally** and, per its own help,
 *"works from anywhere in the repository, whether or not the stack is checked out
-locally"* — it needs no current branch, so it is safe in `$SRC`. Unstacking
-removes only the stack object; the PRs and their bases survive, and the following
-link puts both back.
+locally"* — it needs no current branch, so it is safe in `$SRC`. In the clean
+case it removes only the stack object — the PRs and their bases survive, and the
+following link puts both back — but per its own help it is not guaranteed to be
+a clean case: *"PRs that are queued for merge or have auto-merge enabled are
+left stacked. When some pull requests remain stacked, the stack is kept (and
+local tracking, if any, is unchanged)."* A queued or auto-merge PR mid-stack
+makes the unstack a partial no-op described as a kept stack, not a hard
+failure — nothing in its own help promises a non-zero exit for that case — so a
+bare exit-code check isn't enough, and
+linking straight into a base lock that never actually released reproduces the
+exact half-mutation this recipe exists to prevent (the two failures quoted
+above). That's why the block above re-queries `repos/"$SLUG"/stacks` for stack
+`$STACKNUM` after unstacking and refuses to link until it's confirmed gone.
 
 **If there is no stack yet** (`gh api repos/"$SLUG"/stacks` returns `[]`), skip
 the unstack — there is no base lock to release. Link directly.
