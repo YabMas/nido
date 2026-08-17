@@ -49,6 +49,10 @@
             ["nido:facets:refresh"     "Re-sync workstream classification facets"]
             ["nido:shared:pg:status"   "Shared Postgres cluster status"]]}
 
+   {:title "Follow-ups  (work spun out of a branch — see /spin-out)"
+    :tasks [["nido:followup:add"       ":title :kind :reason :decay :cold-start [:effort :origin]"]
+            ["nido:followup:list"      "Open follow-ups, worst-decay first"]]}
+
    {:title "UI"
     :tasks [["nido:ui" "[:port 8800] — start the nido dashboard"]]}
 

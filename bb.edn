@@ -411,6 +411,21 @@
    :doc "Mark findings items resolved by a PR/commit ref."
    :task (apply nido-findings/resolve-cmd *command-line-args*)}
 
+  nido:followup:add
+  {:requires ([tasks.nido-followup :as nido-followup])
+   :doc "Spin work out to the personal follow-up DB: :title :kind :reason :decay :cold-start [:effort :origin :description]"
+   :task (apply nido-followup/add *command-line-args*)}
+
+  nido:followup:list
+  {:requires ([tasks.nido-followup :as nido-followup])
+   :doc "List open follow-ups, worst-decay first ([:status Open|Promoted|Declined|Done])."
+   :task (apply nido-followup/list-cmd *command-line-args*)}
+
+  nido:followup:check
+  {:requires ([tasks.nido-followup :as nido-followup])
+   :doc "Validate the follow-up DB's configured property names against its live schema."
+   :task (apply nido-followup/check-cmd *command-line-args*)}
+
   nido:facets:refresh
   {:requires ([tasks.nido-facets :as nido-facets])
    :doc "Re-read Notion and rewrite workstream classification facets (:project <p> [:ws <id>])."
