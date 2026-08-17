@@ -300,22 +300,21 @@
              :paragraph {:rich_text [{:text {:content chunk}}]}})
           (if (seq chunks) chunks [""]))))
 
-(defn create-page!
-  "POST /v1/pages creating a page in the data source `data-source-id`. `fields`:
-     {:title s :description s :type s :status s :priority s-or-nil}
-   Builds the Notion property payload (title = \"Task result\", status = \"Status\",
-   type = \"Type\", priority = \"Priority\" when non-blank) plus `:description` as
-   paragraph blocks (see `paragraph-blocks` — one block per source paragraph, each
-   under Notion's 2000-char rich_text cap), and returns the created page via
-   `normalise-page` (so the caller reads back :id = the auto-assigned BR-####,
-   :page-id, :url). Returns {:error :kw} on failure; never throws."
-  [data-source-id token {:keys [title description type status priority]}]
-  (let [props (cond-> {"Task result" {:title [{:text {:content title}}]}
-                       "Status"      {:status {:name status}}
-                       "Type"        {:select {:name type}}}
-                (not (str/blank? priority)) (assoc "Priority" {:select {:name priority}}))
-        body  {:parent     {:type "data_source_id" :data_source_id data-source-id}
-               :properties props
+(defn create-page-with-properties!
+  "POST /v1/pages creating a page in the data source `data-source-id` from an
+   already-built Notion `properties` payload (display-name → typed value map,
+   exactly as the API expects it) plus `description` rendered as paragraph
+   blocks (see `paragraph-blocks` — one block per source paragraph, each under
+   Notion's 2000-char rich_text cap).
+
+   Property display-names are the *caller's* concern: this fn is shared by
+   databases with different schemas, so nothing about a particular DB's naming
+   is encoded here. Returns the created page via `normalise-page` (so the caller
+   reads back :id = the DB's auto-assigned unique-id, :page-id, :url), or
+   {:error :kw} on failure; never throws."
+  [data-source-id token properties description]
+  (let [body  {:parent     {:type "data_source_id" :data_source_id data-source-id}
+               :properties properties
                :children   (paragraph-blocks description)}
         resp  (try
                 (http-request
@@ -333,6 +332,19 @@
       (>= (or status 0) 500) {:error :server}
       (= status 0)   {:error :network}
       :else          {:error :http :status status})))
+
+(defn create-page!
+  "Create a page in brian's Task DB. `fields`:
+     {:title s :description s :type s :status s :priority s-or-nil}
+   Builds that DB's property payload (title = \"Task result\", status = \"Status\",
+   type = \"Type\", priority = \"Priority\" when non-blank) and delegates to
+   `create-page-with-properties!`. Returns {:error :kw} on failure; never throws."
+  [data-source-id token {:keys [title description type status priority]}]
+  (let [props (cond-> {"Task result" {:title [{:text {:content title}}]}
+                       "Status"      {:status {:name status}}
+                       "Type"        {:select {:name type}}}
+                (not (str/blank? priority)) (assoc "Priority" {:select {:name priority}}))]
+    (create-page-with-properties! data-source-id token props description)))
 
 (defn retrieve-block-children
   "GET /v1/blocks/<block-id>/children. Single page; pass `:start-cursor`
