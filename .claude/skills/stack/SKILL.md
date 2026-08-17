@@ -34,6 +34,13 @@ Target **3–5 layers**. Past ~7, say so: the ticket is probably two tickets.
 Record the decision in the plan. A one-layer stack is exactly today's flow,
 which is why every sibling skill forks on **layer count**, not on a flag.
 
+**This skill is the vertical cut only** — same story, ordered by dependency.
+Deciding what belongs to a *different* story, and does not ship in this branch
+at all, is the horizontal cut: see **`/spin-out`**. Both are the same operation
+(routing a unit of work to a destination) and both cut along claim identity, so
+plan them together — a layer you were about to build and a follow-up you were
+about to file are the same question with different answers.
+
 ## 1. Ordering — dependency direction
 
 One hard rule: **if code in layer A depends on code in layer B, B is in the same
@@ -439,7 +446,9 @@ lifts this into the PR body; `/squash` regenerates it.
 - **Verify** — concrete checks, never "review this".
 - **Lane** — which specialism applies; also how a reviewer agent is picked.
 - **Out of scope** — what this layer's reviewer should *not* flag, and where it
-  lives instead.
+  lives instead: a layer above, a spun-out ref (`spun out as FU-12`, see
+  `/spin-out`), or an explicit decline with its reason. All three are legal; a
+  bare "later" is not.
 
 **Out of scope is the field that makes bounded review work.** Without it, every
 reviewer re-derives the whole change and the stack's benefit is lost.
