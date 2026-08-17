@@ -1,6 +1,6 @@
 ---
 name: squash
-description: Squash the current session's branch (main@origin..@) into one coherent commit with a synthesized conventional-commit subject + layered body, push the squashed branch, then — if a PR exists — regenerate the PR title/description from it. Mechanical — never halts, no ledger events. Run from a session worktree. Usage: /squash
+description: Fold the current session's stack so each layer is exactly one coherent commit, push the whole stack, and regenerate every PR's title and description. Mechanical — never halts, no ledger events. Run from a session worktree. Usage: /squash
 ---
 
 # /squash
@@ -12,11 +12,11 @@ description: Squash the current session's branch (main@origin..@) into one coher
 
 ## What this is
 
-Collapse the whole branch into **one** coherent commit, **push it**, and, if the
-branch has a PR, rewrite that PR's title and description to match. It is
-**mechanical** — it **never halts** and never touches the coordinator ledger.
-Publishing to the merge queue (`gh pr ready` / `gh pr merge`) stays with the
-caller (`/drive-home`'s finish); the push itself is `/squash`'s job.
+Fold each layer of the session's stack into **one** coherent commit, **push the
+whole stack**, and regenerate every layer's PR title and description to match.
+It is **mechanical** — it **never halts** and never touches the coordinator
+ledger. Publishing to the merge queue (`gh pr ready` / `gh pr merge`) stays with
+the caller (`/drive-home`'s finish); the push itself is `/squash`'s job.
 
 ## Where to run it
 
@@ -27,113 +27,141 @@ home, `cd worktree` first. Sanity-check:
 jj root   # errors if not a jj repo → stop; run from the worktree
 ```
 
-## 1. Squash the branch into one coherent commit
+## 1. Fold each layer into one coherent commit
 
-Collapse the whole branch — the original work commits **plus** the throwaway
-`chore(ci): …` rebase/fix commits — into a **single** commit. Squashing
-happens last and rewrites only history, not the tree, so the CI that just passed
-still describes the committed state.
+Collapse each layer's work commits — the original commits **plus** the throwaway
+`chore(ci): …` rebase/fix commits that landed on that layer — into a **single**
+commit per layer.
 
-**Always one commit. No splitting, no regrouping, no halt** — commit-shaping is
-mechanical here and introduces no new judgement gate. (Producing *separate*
-commits per concern is explicitly **not** what this does; the layering lives in
-the commit body instead — see below.)
+**Always one commit per layer. Never fold across layers, never split a layer,
+never halt.** Layer structure is settled by the time `/squash` runs: it was
+decided at planning time and may have been reshaped during the work. Squash only
+tidies *within* boundaries that already exist.
 
-The branch is the linear stack `main@origin..@`. Fold it into one commit and set
-its description:
+Read the stack:
 
 ```bash
-jj log -r 'main@origin..@' --no-graph    # inspect the stack you're about to squash
-# fold the whole stack into a single commit (e.g. squash each child into its
-# parent until one remains, or squash the range into the base), then set its
-# description with `jj describe`:
+jj log -r 'main@origin..@' --no-graph
+jj bookmark list | grep -- '--'
+```
+
+For each layer bookmark, fold that layer's range into one commit and set its
+description to the layer commit format (`/stack` §5) — subject, body, `Layer:`
+trailer, and the four review-brief fields:
+
+```bash
 jj describe -r <the-one-commit> -m "$(cat <<'MSG'
-<type>(<scope>): <coherent subject>
+<type>(<scope>): <one sentence, no "and">
 
-<one-line summary of the change>
+<what this layer does>
 
-- <layer 1 — e.g. refactor X to make Y possible>
-- <layer 2 — add the Y feature>
-- <layer 3 — wire Y into Z; add tests>
+Layer: <mechanical | structural | behavioral>
+
+Claims: <what this layer asserts about itself>
+Verify: <concrete checks>
+Lane: <specialism>
+Out of scope: <what this layer's reviewer should not flag, and where it lives>
 
 Refs BR-####
 MSG
 )"
 ```
 
-- **Subject:** a coherent conventional-commit line. Synthesize the type/scope
-  from the diff + ticket + the existing commit messages — do not just reuse a
-  throwaway `chore(ci)` message.
-- **Body — narrate the layers:** the logical pieces the author built up (refactor
-  → feature → wiring → tests) survive as bullets/short paragraphs in the body,
-  **not** as separate commits. This is the whole point of squash-to-one here.
-- **Already one coherent commit?** (single commit in `main@origin..@` with a real
-  message) → the squash is a no-op; just refresh the description if needed.
+- **Preserve the existing trailer and brief** where the layer already has them —
+  they were authored when the layer was written, which is when the author knew
+  most. Refresh only what the fold changed.
+- **Already one coherent commit?** The fold is a no-op for that layer; refresh
+  the description if needed.
+- **Single-layer session?** This is exactly the old behaviour — one commit, one
+  PR — and the `Layer:` trailer is optional.
 
-## 2. Push the squashed branch
-
-```bash
-jj git push        # force-moves the bookmark to the squashed commit
-```
-
-The squash rewrote history, so this force-updates the branch on the remote —
-expected, and fine for a session's own branch. If the bookmark has never been
-pushed, `jj git push` reports nothing to do — publish it explicitly:
+## 2. Push the whole stack
 
 ```bash
-jj git push --allow-new -b <bookmark>
+jj git push
 ```
 
-Push regardless of whether a PR exists — the squashed commit must land on the
-remote either way.
+Bare `jj git push` pushes tracked bookmarks — every layer bookmark, and never the
+session bookmark. The fold rewrote history, so this force-updates each layer's
+branch on the remote. Expected, and fine for a session's own branches.
 
-## 3. Regenerate the PR title + description (if a PR exists)
-
-Discover the PR for the current branch:
+If a layer bookmark has never been pushed:
 
 ```bash
-gh pr view --json number,url 2>/dev/null
+jj git push --allow-new -b 'glob:<session>--*'
 ```
 
-- **No PR** (`gh` errors "no pull requests found") → the squash + push above are
-  the whole job; stop here.
-- **PR exists** → regenerate its title/description:
-
-Replace the PR body **wholesale** — the quick body `prepare-draft-pr` wrote, plus
-anything hand-typed into the draft — with one synthesized from the **final
-squashed commit (subject + layered body) + the diff + the Notion ticket**. Set
-the title from the squashed commit's subject so title, commit, and body tell one
-story.
+Then re-link, in case the shape changed since publish. `gh stack` needs the
+colocated source repo — it cannot run in this worktree:
 
 ```bash
-ls .github/PULL_REQUEST_TEMPLATE* .github/pull_request_template* 2>/dev/null
-# if a template exists, fill ITS structure; otherwise use a default
-# summary / what-changed / refs shape.
-gh pr edit --title "<squashed commit subject>" --body "<regenerated body>"
+SRC=$(cd .jj && cd "$(dirname "$(cat repo)")/.." && pwd)
+(cd "$SRC" && gh stack link <n1> <n2> <n3>)
 ```
 
-This is a deterministic overwrite derived from the final state, so re-running
-re-derives the same body — idempotent, no append-drift.
+Bottom to top, by **PR number**. `gh stack link` is incremental and never removes
+PRs. Push regardless of whether PRs exist.
+
+## 3. Regenerate every PR's title + description
+
+```bash
+SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
+        | sed -E 's#^git@github\.com:##; s#^https://github\.com/##; s#\.git$##')
+SRC=$(cd .jj && cd "$(dirname "$(cat repo)")/.." && pwd)
+(cd "$SRC" && gh stack view --json)
+```
+
+- **No stack / no PRs** → §1 and §2 were the whole job; stop here.
+- **Stack exists** → regenerate each layer's PR from its folded commit.
+
+For each layer, replace the PR body **wholesale** — the quick body
+`prepare-draft-pr` wrote plus anything hand-typed — with one synthesized from the
+folded commit (subject, body, `Layer:` trailer, review brief), that layer's diff,
+and the ticket:
+
+```bash
+gh pr edit <number> -R "$SLUG" --title "[<n>/<N>] <subject>" --body "<regenerated body>"
+```
+
+`<n>` is the layer's position bottom-to-top and `<N>` the stack depth — both read
+fresh from `jj log`, so an inserted or removed layer renumbers every title
+correctly.
+
+Every body must carry **Claims / Verify / Lane / Out of scope**; that is what
+makes per-layer review bounded.
+
+This is a deterministic overwrite derived from final state, so re-running
+re-derives the same bodies — idempotent, no append-drift.
 
 ## What this skill does NOT do
 
 - **No `gh pr ready` / `gh pr merge`.** Flipping the PR ready and enqueueing it
   belong to the caller (`/drive-home`'s finish). The `jj git push` itself is
   `/squash`'s job (§2).
-- **No halt.** Commit-shaping is mechanical — always one commit, never a split,
-  never a question. The layering lives in the commit *body*, not in separate
-  commits.
+- **No halt.** Commit-shaping is mechanical — always one commit per layer, never
+  a fold across layers, never a split, never a question. If a layer looks
+  mis-cut, **report it and fold it anyway**; reshaping is `/stack`'s job during
+  the work, not `/squash`'s at the end.
 - **No ledger events.**
 
 ## Common mistakes
 
 - **Leaving the squashed commit's subject as a `chore(ci)` message** — synthesize
   a real conventional-commit subject from the change.
-- **Splitting into multiple commits, or halting to ask about commit structure** —
-  `/squash` always squashes to one.
+- **Folding the whole stack into one commit** — that destroys the layering. One
+  commit *per layer*.
+- **Halting because a layer looks mis-cut** — report it, fold anyway.
+- **Dropping the `Layer:` trailer or review brief when re-describing** — the PR
+  bodies are generated from them.
+- **Hand-computing `[n/N]`** — read position and depth fresh from `jj log`, so
+  inserted layers renumber correctly.
+- **Running `gh stack` in the worktree** — it needs a git repository. Run it from
+  `$SRC`.
+- **Omitting `-R "$SLUG"` from `gh pr edit`** — bare `gh` cannot resolve a repo
+  from a non-colocated worktree.
 - **Proofreading/appending to the old PR body** — §3 is a full overwrite
   synthesized from the final state, not an edit of the existing text.
-- **Stopping without pushing** — the squashed commit must land on the remote;
+- **Stopping without pushing** — the folded commits must land on the remote;
   §2's `jj git push` is part of the job. (`ready`/`merge` are still the
   caller's.)
 - **Running from the session home** — `cd worktree` first.
