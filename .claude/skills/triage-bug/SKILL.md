@@ -246,7 +246,7 @@ Notes:
   `:notion-writes` as below. See Routing / Depth above.
 - `:notion-writes` is **nil for Slack runs** — there are no Notion writes.
 - There is **no dismiss-recommendation field**. If the report isn't worth pursuing, say so in chat and `dismiss` — don't encode it in the report (Slack runs only; a Notion report is always routed, never dismissed).
-- **`:squirrel` is the joker** — use it for `:effort` when the implementation direction is genuinely ambiguous and sizing should defer to the implementation-plan stage. When you use it, set `:defer-note` explaining why; `/continue-ticket` resolves it into a concrete effort later.
+- **`:squirrel` is the joker** — use it for `:effort` when the implementation direction is genuinely ambiguous and sizing should defer to the design stage. When you use it, set `:defer-note` explaining why; `/continue-ticket` resolves it into a concrete effort when it authors the design record — sizing follows from the design, not the other way round.
 - After appending, print the report into chat with `bb nido:ticket:report :project brian :br <key>` (renders the stored report as markdown) so the user sees it on `nido enter`.
 
 ## Step 3 — Confirmation (chat, liberal parsing)

@@ -64,25 +64,45 @@ Advance the ticket to the stage you're starting. This also tells nido's coordina
 bb nido:ticket:status :project brian :br <BR-####> :status implementing
 ```
 
-Then record the implementation plan as a typed ledger event — this resolves any
-triage `:squirrel` (deferred sizing) into a concrete direction + effort, and is
-what the report browser shows for the impl stage. Write the EDN to a temp file:
+Then author the **design record** — a typed `:design` ledger event, and the one
+durable artifact this session produces before any code. It states what the change
+commits to in design terms, and it resolves any triage `:squirrel` into a concrete
+effort: sizing follows from the design, not the other way round.
+
+**Read `/design` for the doctrine** — what belongs in the record, what does not,
+and how to infer the current design safely. The short version: claims about
+structure, not a plan of action. There is no step list; the schema rejects one.
+
+Start from the triage entry — its `:directions` and its `:trail`. The deepdive
+already read the area, so `:assumes` is where you carry that inference forward
+rather than re-deriving it cold.
 
 ```bash
-cat > /tmp/impl-plan.edn <<'EDN'
-{:format    :implementation-plan
- :summary   "<2-4 sentences: the plan you're about to execute>"
- :direction "<the chosen solution direction, concretely>"
- :effort    :M           ; concrete :XS :S :M :L :XL — resolve a triage :squirrel here
- :steps     ["<step 1>" "<step 2>"]}   ; optional
+cat > /tmp/design.edn <<'EDN'
+{:format     :design
+ :summary    "<2–4 sentences: what this change makes true of the system>"
+ :shape      "<the structural claim: which parts exist, where the boundaries
+                fall, what crosses them>"
+ :invariants ["<what must hold once this lands — checkable; at least one>"]
+ :standing   {:relation :conforms}   ; :extends / :challenges MUST carry :note
+ :assumes    [{:about "<the area's current design, as you inferred it>"
+               :read  ["<file you read to infer it>"]
+               :drift "<where that departs from the stance>"}]      ; optional
+ :rejected   [{:alternative "<…>" :why-not "<…>"}]                  ; optional
+ :layers     [{:claim "<one sentence, no \"and\">" :mode :judgment}]  ; optional
+ :effort     :M}          ; concrete :XS :S :M :L :XL — resolve a :squirrel here
 EDN
-bb nido:ticket:append :project brian :br <BR-####> :kind implementation-plan \
-  :session <session> :run-id <run-id> :file /tmp/impl-plan.edn
+bb nido:ticket:append :project brian :br <BR-####> :kind design \
+  :session <session> :run-id <run-id> :file /tmp/design.edn
 ```
 
-The append validates against nido's `ImplementationPlan` schema and rejects a
-malformed report (non-zero exit + explain) — fix and retry. Derive
-`<session>`/`<run-id>` from the cwd and the `./run-link/` symlink target.
+The append validates against nido's `DesignVision` schema and rejects a malformed
+record (non-zero exit + explain) — fix and retry. Derive `<session>`/`<run-id>`
+from the cwd and the `./run-link/` symlink target.
+
+If you cannot yet state the shape or name an invariant, that is a finding rather
+than a formality — the design question triage deferred is still open. Put it in
+`:open` and raise it with the user before writing code.
 
 ## Step 4 — Do the work (the harness owns the *how*)
 
@@ -92,6 +112,8 @@ Session reminders:
 - **Edit in `./worktree`**, not in nido's tree. The REPL / app / DB are nido-managed — connect to the running services, don't start your own.
 - **Don't touch Notion** — nido already set the ticket's Notion status when this session was provisioned; the triage stage owns the Notion contract, not this one.
 - If what you find contradicts the prior stage's findings (the bug doesn't reproduce, the root cause is elsewhere), say so plainly and reorient with the user rather than forcing the earlier hypothesis.
+
+  Check which layer the contradiction is at. If the code merely differs from what triage expected, amend your design record and carry on. If it invalidates the *design* — the shape you committed to cannot hold — supersede the record rather than editing it (`/design` §5), and treat the open question as a blocker below.
 
   When you reorient, record it as a typed `:blocker` event so the parked
   workstream's ledger shows *why* it stalled:
