@@ -10,6 +10,7 @@
    [nido.review.frontend :as frontend]
    [nido.review.loop :as rloop]
    [nido.review.report :as report]
+   [nido.review.verdict :as verdict]
    [nido.session.lifecycle :as lifecycle]
    [nido.task-args :as task-args])
   (:import
@@ -52,6 +53,52 @@
                       (ex-message e))))
       nil)))
 
+(defn verdict-worth-running?
+  "The verdict pass judges findings against the design, so it needs findings.
+   A failed review has nothing to judge; a dry run made no changes; a review that
+   never surfaced anything has no evidence either way — and paying for an agent to
+   conclude nothing would make the verdict noise rather than signal."
+  [status final]
+  (and (not (#{:review-failed :dry-run} status))
+       (boolean (or (seq (:findings final)) (seq (:history final))))))
+
+(defn append-design-verdict!
+  "Run the design verdict and append it as a ledger event. Best-effort throughout,
+   for the same reason append-review-entry! is: a completed review must not turn
+   into a failure because a side record could not be written. Returns the verdict
+   map, or nil when it did not run or produced no answer."
+  [cwd final report config]
+  (try
+    (when (verdict-worth-running? (:status final) final)
+      (when-let [v (verdict/run! {:cwd cwd
+                                  :run-id (:run-id config)
+                                  :budget (:budget config)
+                                  :final final
+                                  :report report})]
+        (when-let [{:keys [project session]} (lifecycle/session-from-cwd cwd)]
+          (when-let [ws-id (csession/workstream-id-for (keyword project) session)]
+            (ws/append-entry! (keyword project) ws-id {:kind :design-verdict}
+                              (pr-str v))))
+        v))
+    (catch Exception e
+      (binding [*out* *err*]
+        (println (str "review-loop: design verdict skipped — " (ex-message e))))
+      nil)))
+
+(defn- print-verdict!
+  "Report the verdict on the terminal. An :invalidated / :standing-challenged
+   verdict is a decision for the human, and `nido review:loop` is human-invoked —
+   they are sitting in front of this — so it is stated loudly rather than filed
+   somewhere they might not look."
+  [v]
+  (when v
+    (println (str "review-loop: design verdict — " (name (:verdict v))))
+    (println (str "  " (:reason v)))
+    (when (verdict/decision? v)
+      (println "  ⚠ this is a decision, not a fix — the design itself is in question")
+      (when-let [n (:needs v)] (println (str "  needs: " n)))
+      (println "  → supersede the design record (/design §5) or accept it explicitly"))))
+
 (defn loop-cmd* [{:keys [cwd base max-iters dry-run?]}]
   (let [cwd        (or cwd
                        (lifecycle/worktree-from-cwd)
@@ -73,6 +120,7 @@
         status (:status final)]
     (append-review-entry! cwd final @report-atom report-path)
     (println (str "review-loop: " (name status) " · report " report-path))
+    (print-verdict! (append-design-verdict! cwd final @report-atom config))
     status))
 
 (defn loop-cmd [& args]

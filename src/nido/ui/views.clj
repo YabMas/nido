@@ -846,6 +846,32 @@
                    "Round detail is no longer on disk (the run dir was cleaned).")])
      (when report-path [:p.meta "full report → " [:code report-path]])]))
 
+(defn- design-verdict-card
+  [{:keys [verdict round reason invariants-held invariants-broken
+           findings-classified needs]}]
+  [:div.md
+   [:h2 "Design verdict"]
+   [:div.report-meta
+    [:span {:class (str "chip c-verdict-" (name verdict))} (name verdict)]
+    [:span.meta "after round " round]]
+   (md/render reason)
+   (when (seq invariants-held)
+     [:div [:h3 "Confirmed this round"]
+      (into [:ul] (for [i invariants-held] [:li i]))])
+   (when (seq invariants-broken)
+     [:div [:h3 "Contradicted"]
+      (into [:ul]
+            (for [{:keys [invariant finding]} invariants-broken]
+              [:li invariant [:div.meta "by: " finding]]))])
+   (when (seq findings-classified)
+     [:details.trail
+      [:summary "Findings by layer (" (count findings-classified) ")"]
+      (into [:ul]
+            (for [{:keys [finding as]} findings-classified]
+              [:li [:span.meta "[" (name as) "] "] finding]))])
+   (when needs
+     [:div [:h3 "Needs a decision"] [:p needs]])])
+
 (defn- report-body
   "Dispatch a gate/ledger report on :format — each typed event gets its curated card,
    markdown reports render through md/render. `pos` is the workstream pane's reading
@@ -860,6 +886,7 @@
      :implementation-completed (completed-card report)
      :blocker                  (blocker-card report)
      :pr-opened                (pr-opened-card report)
+     :design-verdict           (design-verdict-card report)
      :review-report            (review-card report pos)
      :findings                 (md/render (report/report->markdown report))
      :proposed-ticket          (md/render (report/report->markdown report))

@@ -278,6 +278,60 @@
    ;; Kept for a future emitter wanting a one-line human note on the timeline card.
    [:summary            {:optional true} string?]])
 
+(def ClassifiedFinding
+  [:map {:closed true}
+   [:finding string?]
+   [:as      [:enum :implementation :design :stance]]])
+
+(def BrokenInvariant
+  [:map {:closed true}
+   [:invariant string?]
+   [:finding   string?]])
+
+(def DesignVerdict
+  "Whether a review round's findings were the ironing-out of implementation
+   details of a sound design, or evidence the design itself is wrong. Emitted
+   after the rounds terminate, judged against the workstream's :design record.
+
+   :sound is the expected case and names the invariants this round CONFIRMED —
+   trust accumulating, rather than a clean run evaporating. :strained exists so
+   the gap between fine and wrong isn't rounded to fine every time, which is how
+   a design decays with nobody deciding to let it. :invalidated and
+   :standing-challenged are decisions, not fixes, so both require :needs — the
+   question put to the human."
+  [:multi {:dispatch :verdict}
+   [:sound
+    [:map {:closed true}
+     [:format [:= :design-verdict]] [:verdict [:= :sound]]
+     [:round int?] [:design-seq {:optional true} [:maybe int?]]
+     [:reason string?]
+     [:invariants-held {:optional true} [:vector string?]]
+     [:findings-classified {:optional true} [:vector ClassifiedFinding]]]]
+   [:strained
+    [:map {:closed true}
+     [:format [:= :design-verdict]] [:verdict [:= :strained]]
+     [:round int?] [:design-seq {:optional true} [:maybe int?]]
+     [:reason string?]
+     [:invariants-held {:optional true} [:vector string?]]
+     [:invariants-broken {:optional true} [:vector BrokenInvariant]]
+     [:findings-classified {:optional true} [:vector ClassifiedFinding]]]]
+   [:invalidated
+    [:map {:closed true}
+     [:format [:= :design-verdict]] [:verdict [:= :invalidated]]
+     [:round int?] [:design-seq {:optional true} [:maybe int?]]
+     [:reason string?]
+     [:invariants-broken [:vector {:min 1} BrokenInvariant]]
+     [:findings-classified {:optional true} [:vector ClassifiedFinding]]
+     [:needs string?]]]
+   [:standing-challenged
+    [:map {:closed true}
+     [:format [:= :design-verdict]] [:verdict [:= :standing-challenged]]
+     [:round int?] [:design-seq {:optional true} [:maybe int?]]
+     [:reason string?]
+     [:invariants-broken {:optional true} [:vector BrokenInvariant]]
+     [:findings-classified {:optional true} [:vector ClassifiedFinding]]
+     [:needs string?]]]])
+
 (def FindingItem
   [:map {:closed true}
    [:id       string?]
@@ -307,6 +361,7 @@
    :blocker                  Blocker
    :pr-opened                PrOpened
    :review                   ReviewReport
+   :design-verdict           DesignVerdict
    :findings                 FindingsRound
    :proposed-ticket          ProposedTicket})
 
@@ -461,6 +516,29 @@
        (when summary (str "\n" summary))
        (when report-path (str "\nfull report → " report-path))])))
 
+(defn- design-verdict->markdown
+  [{:keys [verdict round reason invariants-held invariants-broken
+           findings-classified needs]}]
+  (str/join
+   "\n"
+   (remove nil?
+     (concat
+      [(str "# Design verdict: " (name verdict))
+       (str "after round " round)
+       "" reason]
+      (when (seq invariants-held)
+        (cons "\n## Invariants this round confirmed"
+              (for [i invariants-held] (str "- " i))))
+      (when (seq invariants-broken)
+        (cons "\n## Invariants contradicted"
+              (for [{:keys [invariant finding]} invariants-broken]
+                (str "- " invariant "\n  - by: " finding))))
+      (when (seq findings-classified)
+        (cons "\n## Findings by layer"
+              (for [{:keys [finding as]} findings-classified]
+                (str "- [" (name as) "] " finding))))
+      (when needs ["\n## Needs a decision" needs])))))
+
 (defn- findings->markdown [{:keys [round staging-ref note items]}]
   (str/join "\n"
     (remove nil?
@@ -512,6 +590,7 @@
     :blocker                  (blocker->markdown report)
     :pr-opened                (pr-opened->markdown report)
     :review-report            (review->markdown report)
+    :design-verdict           (design-verdict->markdown report)
     :findings                 (findings->markdown report)
     :proposed-ticket          (proposed-ticket->markdown report)
     ""))
@@ -527,6 +606,7 @@
     :implementation-completed (first-line (:summary report))
     :blocker                  (or (:needs report) (first-line (:summary report)))
     :review-report            (str "Review: " (name (:status report)))
+    :design-verdict           (str "Design verdict: " (name (:verdict report)))
     :findings                 (str "Findings round " (:round report)
                                    " (" (count (:items report)) " items)")
     nil))
