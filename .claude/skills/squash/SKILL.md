@@ -98,10 +98,13 @@ jj describe -r <the-one-commit> -m "$(cat <<'MSG'
 
 Layer: <mechanical | structural | behavioral>
 
-Claims: <what this layer asserts about itself>
+Claims: <what this layer asserts about itself — the :claim from the design
+  record's :layers, verbatim or close to it>
 Verify: <concrete checks>
 Lane: <specialism>
-Out of scope: <what this layer's reviewer should not flag, and where it lives>
+Out of scope: <what this layer's reviewer should not flag, and where it lives:
+  a layer above, a spun-out ref, an explicit decline, or a citation of the
+  design — "the record puts this behind the X boundary">
 
 Refs BR-####
 MSG
@@ -111,6 +114,10 @@ MSG
 - **Preserve the existing trailer and brief** where the layer already has them —
   they were authored when the layer was written, which is when the author knew
   most. Refresh only what the fold changed.
+- **A fold that changes what a layer claims is a signal, not a formality.** If
+  the surviving commit asserts something the design record's `:layers` does not,
+  the squash moved a decision — either the record needs amending or the fold was
+  wrong. Say which; do not paper over it in the brief.
 - **Already one coherent commit?** The fold is a no-op for that layer; refresh
   the description if needed.
 - **Single-layer session?** This is exactly the old behaviour — one commit, one
@@ -264,8 +271,9 @@ this block — it does not survive from the discovery block.
 fresh from `jj log`, so an inserted or removed layer renumbers every title
 correctly.
 
-Every body must carry **Claims / Verify / Lane / Out of scope**; that is what
-makes per-layer review bounded.
+Every body must carry **Claims / Verify / Lane / Out of scope** (`/stack` §5 for
+what each field means — Claims traces to the design record, Out of scope may cite
+it); that is what makes per-layer review bounded.
 
 This is a deterministic overwrite derived from final state, so re-running
 re-derives the same bodies — idempotent, no append-drift.
