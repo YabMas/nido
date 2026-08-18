@@ -284,11 +284,39 @@ is the `:event-payload :id` in `./run-link/run.edn` (run from the session home;
 cat > /tmp/impl-completed.edn <<'EDN'
 {:format    :implementation-completed
  :summary   "<one-line: what shipped; CI green; on the merge queue>"
- :artifacts [{:kind :pr :ref "<owner>/<repo>#<number>" :url "<pr-url>"}]}
+ :artifacts [{:kind :pr :ref "<owner>/<repo>#<number>" :url "<pr-url>"}]
+ :design-delta {:held? true}}
 EDN
 bb nido:ticket:append :project <project> :br <BR-####> :kind implementation-completed \
   :file /tmp/impl-completed.edn
 ```
+
+### `:design-delta` — did what landed match what we said?
+
+**Only when the workstream has a `:design` record** (`bb nido:workstream:show`);
+omit the key entirely when there is none, which is normal for scratch work.
+
+This is the one moment the question is cheap. You are holding the whole change
+right now; a week from now answering it costs a full re-read. And it is what
+stops the record aging into fiction — the next change in this area will infer
+its assumptions from *code* and declare `:conforms` against a stance nobody
+re-checked, so an unrecorded drift enters silently right here.
+
+- **It held** → `{:held? true}`. One word, no ceremony. That is the expected
+  answer and it should stay free.
+- **It held, with deviations** → `{:held? true :deviations ["…"]}`. The boundary
+  landed slightly elsewhere, an invariant needed a caveat. Name each concretely
+  — a file, a boundary, an invariant. This is the amendment signal for whoever
+  touches the area next.
+- **It did not hold** → `{:held? false :deviations ["…"]}` (deviations are
+  required here; the schema rejects a bare `false`). Say so plainly. It also
+  means the design should have been superseded *during* the work and was not —
+  worth a line in your report, because that is a process finding, not a
+  footnote.
+
+**Do not answer this from the commit messages.** A vague deviation ("some things
+moved") is worse than `{:held? true}`, because it reads as diligence while
+saying nothing. If you cannot name what deviated, it held.
 
 For a stack, list every layer's PR as an artifact so the report timeline shows
 the whole shipment:
@@ -299,7 +327,8 @@ cat > /tmp/impl-completed.edn <<'EDN'
  :summary   "<one-line: what shipped; N layers; CI green; stack on the merge queue>"
  :artifacts [{:kind :pr :ref "<owner>/<repo>#<n1>" :url "<pr-url-1>"}
              {:kind :pr :ref "<owner>/<repo>#<n2>" :url "<pr-url-2>"}
-             {:kind :pr :ref "<owner>/<repo>#<n3>" :url "<pr-url-3>"}]}
+             {:kind :pr :ref "<owner>/<repo>#<n3>" :url "<pr-url-3>"}]
+ :design-delta {:held? true}}
 EDN
 bb nido:ticket:append :project <project> :br <BR-####> :kind implementation-completed \
   :file /tmp/impl-completed.edn
@@ -307,6 +336,12 @@ bb nido:ticket:append :project <project> :br <BR-####> :kind implementation-comp
 
 (Validated against `ImplementationCompleted`; `:artifacts []` :kind is one of
 `:commit :pr :branch`.)
+
+**`:design-delta` is a field on this event, never its own ledger entry.** The
+merge lane classifies a Run by the *latest* ledger kind
+(`nido.coordinator.ship/classify-outcome`), so appending a separate entry after
+this one would hide the `:implementation-completed` fingerprint and park a
+perfectly healthy branch as blocked.
 
 Report: the PR URL(s), what was rebased/auto-fixed, that the stack was folded
 (one commit per layer) with every PR description regenerated, and that it's on

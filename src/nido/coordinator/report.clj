@@ -237,15 +237,39 @@
    [:effort    Effort]
    [:steps     {:optional true} [:vector string?]]])
 
+(def DesignDelta
+  "Did what landed match what the design record said? Asked once, at ship time,
+   while the author still holds the whole change — a week later it costs a re-read.
+
+   :held? false REQUIRES :deviations: a design that didn't hold, with nothing
+   named, records only that someone felt uneasy. The point of the field is that
+   the record stops aging into fiction — the next change in this area infers its
+   :assumes from code, and declares :conforms against a stance nobody re-checked."
+  [:multi {:dispatch :held?}
+   [true  [:map {:closed true}
+           [:held? [:= true]]
+           [:deviations {:optional true} [:vector string?]]
+           [:note {:optional true} string?]]]
+   [false [:map {:closed true}
+           [:held? [:= false]]
+           [:deviations [:vector {:min 1} string?]]
+           [:note {:optional true} string?]]]])
+
 (def ImplementationCompleted
+  "NOTE: :design-delta is a FIELD here, deliberately, not a ledger kind of its
+   own. nido.coordinator.ship/classify-outcome routes a merge Run by
+   latest-ledger-kind — a separate :design-delta entry would become the latest
+   entry, miss the :implementation-completed case, and misroute shipping
+   branches to :blocked."
   [:map {:closed true}
-   [:format    [:= :implementation-completed]]
-   [:summary   string?]
-   [:artifacts [:vector [:map {:closed true}
-                         [:kind [:enum :commit :pr :branch]]
-                         [:ref  string?]
-                         [:url  {:optional true} string?]]]]
-   [:open      {:optional true} [:vector string?]]])
+   [:format       [:= :implementation-completed]]
+   [:summary      string?]
+   [:artifacts    [:vector [:map {:closed true}
+                            [:kind [:enum :commit :pr :branch]]
+                            [:ref  string?]
+                            [:url  {:optional true} string?]]]]
+   [:design-delta {:optional true} DesignDelta]
+   [:open         {:optional true} [:vector string?]]])
 
 (def Blocker
   [:map {:closed true}
@@ -490,12 +514,20 @@
       "" summary]
      (when (seq steps) (concat ["" "## Steps"] (for [s steps] (str "- " s)))))))
 
-(defn- completed->markdown [{:keys [summary artifacts open]}]
+(defn- completed->markdown [{:keys [summary artifacts design-delta open]}]
   (str/join "\n"
     (concat
      ["# Implementation completed" "" summary "" "## Artifacts"]
      (for [{:keys [kind ref url]} artifacts]
        (str "- " (name kind) " `" ref "`" (when url (str " — " url))))
+     (when design-delta
+       (let [{:keys [held? deviations note]} design-delta]
+         (concat
+          ["" (str "## Design " (if held? "held" "did NOT hold"))]
+          (when note [note])
+          (when (seq deviations)
+            (cons "Deviations from the record:"
+                  (for [d deviations] (str "- " d)))))))
      (when (seq open) (concat ["" "## Still open"] (for [o open] (str "- " o)))))))
 
 (defn- blocker->markdown [{:keys [summary needs]}]

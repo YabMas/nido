@@ -660,7 +660,7 @@
    (when (seq steps)
      [:div [:h3 "Steps"] (into [:ul] (for [s steps] [:li s]))])])
 
-(defn- completed-card [{:keys [summary artifacts open]}]
+(defn- completed-card [{:keys [summary artifacts design-delta open]}]
   [:div.md
    [:h2 "Implementation completed"]
    (md/render summary)
@@ -669,6 +669,14 @@
          (for [{:keys [kind ref url]} artifacts]
            [:li [:strong (name kind)] " " [:code ref]
             (when url [:span " — " [:a {:href url :target "_blank"} url]])]))
+   (when design-delta
+     (let [{:keys [held? deviations note]} design-delta]
+       [:div
+        [:h3 "Design " [:span {:class (str "chip c-held-" (if held? "yes" "no"))}
+                        (if held? "held" "did not hold")]]
+        (when note [:p note])
+        (when (seq deviations)
+          (into [:ul] (for [d deviations] [:li d])))]))
    (when (seq open)
      [:div [:h3 "Still open"] (into [:ul] (for [o open] [:li o]))])])
 

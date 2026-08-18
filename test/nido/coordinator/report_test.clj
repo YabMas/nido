@@ -208,6 +208,46 @@
    :artifacts [{:kind :pr :ref "org/repo#42" :url "https://github.com/org/repo/pull/42"}]
    :open ["mark PR ready"]})
 
+(deftest completed-accepts-a-design-delta-that-held
+  (is (report/validate-event
+       :implementation-completed
+       (assoc valid-completed :design-delta {:held? true}))
+      "the honest default must be free — one word, no ceremony"))
+
+(deftest a-design-that-did-not-hold-must-name-what-deviated
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event
+                :implementation-completed
+                (assoc valid-completed :design-delta {:held? false})))
+      "held? false with nothing named records only that someone felt uneasy")
+  (is (report/validate-event
+       :implementation-completed
+       (assoc valid-completed :design-delta
+              {:held? false :deviations ["the rounding boundary moved to the line item"]}))))
+
+(deftest completed-without-a-delta-still-validates
+  (is (= valid-completed (report/validate-event :implementation-completed valid-completed))
+      "pre-spine completions, and workstreams with no design record, stay valid"))
+
+(deftest design-delta-is-a-field-not-a-ledger-kind
+  (is (nil? (get report/event-schemas :design-delta))
+      "ship/classify-outcome routes on latest-ledger-kind — a separate :design-delta
+       entry would become the latest entry and misroute shipping branches to :blocked")
+  (is (some? (get report/event-schemas :implementation-completed))))
+
+(deftest completed-renders-the-delta-both-ways
+  (let [held (report/report->markdown
+              (assoc valid-completed :design-delta
+                     {:held? true :note "boundary landed where the record said"}))
+        broke (report/report->markdown
+               (assoc valid-completed :design-delta
+                      {:held? false :deviations ["rounding moved to the line item"]}))]
+    (is (str/includes? held "## Design held"))
+    (is (str/includes? held "boundary landed where the record said"))
+    (is (str/includes? broke "## Design did NOT hold"))
+    (is (str/includes? broke "Deviations from the record:"))
+    (is (str/includes? broke "rounding moved to the line item"))))
+
 (def ^:private valid-blocker
   {:format :blocker :summary "Waiting on a Stripe test key." :needs "Stripe test key from ops"})
 
