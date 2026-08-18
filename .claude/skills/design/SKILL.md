@@ -185,7 +185,48 @@ The superseded record stays in the ledger. That is the point: the failure mode i
 a design that stayed "true" only because nobody updated it, and the second worst
 is one that was quietly rewritten so the reasoning that failed is unrecoverable.
 
-## 6. Mechanics
+## 6. Noticing mid-work
+
+The record is written at hour zero. The most valuable design thoughts arrive at
+hour three, from inside the code — *this boundary is in the wrong place*, *these
+two things are the same thing*, *the record assumed something that isn't true*.
+They arrive as interruptions, and evaluating one properly means stopping the
+work, so in practice they get dropped.
+
+`/spin-out` §1 already solved this shape for work that might leave the branch:
+**noticing is free, deciding is batched.** Same move here — append one line and
+carry on:
+
+```bash
+echo "- <what you noticed> (<file:line>)" \
+  >> ~/.nido/sessions/<project>/<session>/design-notes.md
+```
+
+The session home, **not** the worktree: the buffer must not be able to ride along
+in a commit. A separate file from `spin-outs.md` because the two route
+differently — a spin-out asks *where does this work go*, a design noticing asks
+*is what we said still true*.
+
+Sweep it before you ship, and route every line:
+
+| The noticing is | Destination |
+|---|---|
+| a fact about the area the record didn't have | `:assumes` — amend the record |
+| a question the record can't answer yet | `:open` — amend the record |
+| incompleteness you are choosing to leave | `:seams` — amend, and say what makes it visible |
+| the shape you committed to cannot hold | **supersede** the record (§5) |
+| a different story altogether | `/spin-out` — file it, with a ref |
+| true, and not worth acting on | decline it in the layer's brief, with the reason |
+
+Nothing is lost and nothing is smuggled — the same discipline the shipping
+doctrine applies to work, applied to what you learned about the design while
+doing it.
+
+**A buffer that sweeps to nothing is itself a signal.** Zero design noticings
+across a substantial change usually means the record was written once and never
+looked at again — which is exactly how a design stays "true" (principle 9).
+
+## 7. Mechanics
 
 Write the EDN to a temp file, then append it. The ledger key is the `BR-####`
 (or the slack `:id` for a Slack-sourced workstream):
@@ -223,6 +264,11 @@ Read back what is there with `bb nido:workstream:show :project <p> :ref <ref>`.
 - **Codifying drift as intent** — "this is how it is done here" derived from a
   majority vote of what is there. Say it is drift, in `:drift`.
 - **Editing a design that turned out wrong** instead of superseding it (§5).
+- **Deciding at the moment of noticing** — that is the interrupt §6 exists to
+  prevent. Capture the line; sweep at ship time.
+- **Sweeping a design noticing into the code and not the record** — the fix
+  lands, the record still describes a system that no longer exists.
+- **Keeping the buffer in the worktree**, where it can ride along in a commit.
 - **A design longer than its diff.** It is a plan; cut it back to claims.
 - **Layers that do not appear in the record** — either the design is incomplete
   or the layer is smuggling a decision nobody stated (`/stack` §2).

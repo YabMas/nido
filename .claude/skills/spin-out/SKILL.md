@@ -64,6 +64,12 @@ echo "- <what you noticed> (<file:line>)" >> ~/.nido/sessions/<project>/<session
 The session home, **not** the worktree — the buffer must not be able to pollute
 the repo or ride along in a commit. **Noticing is free; deciding is batched.**
 
+`/design` §6 keeps a sibling buffer, `design-notes.md`, for the other kind of
+noticing: not *this work might belong elsewhere* but *what we said about the
+design may no longer be true*. Same discipline, different routing — if you catch
+yourself unsure which buffer a line belongs in, ask who acts on it. Someone
+picking up a ticket → this one. Someone amending the record → that one.
+
 **Ship time.** Sweep the buffer, read your own diff for what it reveals, then
 route every item (§2–§5) and file what leaves (§6). An item you cannot decide
 is an item you keep — the branch is what you understand best right now.
