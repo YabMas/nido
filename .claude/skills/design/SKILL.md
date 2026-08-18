@@ -39,10 +39,24 @@ most common way this goes wrong.
 
 | layer | what it is | where it lives | can a diff violate it? |
 |---|---|---|---|
-| **the stance** | the project's durable architectural convictions — what the system is *for* | the target project's repo (brian: `Domain Modeling & System Design`) | no — it primes reasoning, it is not a checklist |
+| **the stance** | the project's durable architectural convictions — what the system is *for* | `.claude/skills/design/stances/<project>.md` (see below) | no — it primes reasoning, it is not a checklist |
 | **the current design** | what the system actually *is* right now | **nowhere — inferred per change** (§4) | no — it is a description, and a partial one |
 | **the checkable layer** | concrete, citable rules | `.claude/agents/lane-*.md`, `docs/reference/` | **yes — this is the only one that can be cited against a line** |
 | **the change design** | what *this* change commits to | the ledger, as a `:design` event | yes — by its own `:invariants` |
+
+**Read the stance before you write the record.** It ships with this skill, so it
+resolves from any session:
+
+```bash
+cat .claude/skills/design/stances/brian.md
+```
+
+Housing it here is interim. A stance belongs in the repo whose architecture it
+describes — nido's own rule is that per-project knowledge is borrowed on demand,
+never restated in the harness. It sits here because it needs to reach a session
+today, and `.claude/skills/` is what the launcher already injects. When it moves,
+this path is the only thing that changes. A project with no stance file yet is
+not blocked: write the record, and leave `:standing :principles` out.
 
 Two rules fall straight out of the table:
 
