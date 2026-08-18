@@ -51,6 +51,7 @@ comes *after* the latest recorded entry:
 | latest entry | your stage | what to do |
 |---|---|---|
 | `:triage` (status `:planning`) | **implementation** | Read the latest `:triage` entry file (`~/.nido/projects/brian/tickets/<BR-####>/entries/NNNN-triage.md`) — the enriched brief, its `:design-frame`, the solution direction(s), and the `file:line` leads it found. The frame says whether this stage is a fix or a decision (Step 3). Start on those findings. |
+| `:proposed-ticket` (Slack-sourced) | **implementation, with no triage behind it** | This workstream came in through `/triage-slack`, whose approved proposal creates the Notion ticket at `Status = Not started` — past the view that fires `/triage-bug`. So there is **no `:design-frame`, and there never will be**. Read the proposal's `:fix` / `:proposed-change` as a *proposal*, not a decision: it was scoped in twenty minutes by an agent that had not read the design. Infer the area yourself (`/design` §4) before committing to a shape, and take `:watch-out` seriously — a boundary-moving flag there is the design question, raised and unanswered. |
 | `:findings` with open items | **address findings round N** | This workstream shipped, was reviewed on staging, and reopened. `bb nido:workstream:show` prints the round's items and the ws-id. Work the open items (severity `:blocker` first). Mark each resolved **the moment its fix lands**: `bb nido:findings:resolve :project brian :ws <ws-id> :items [<id>] :by <commit-or-PR>`. Then open a **follow-up PR** — see `/prepare-draft-pr` (its "Follow-up PR on a reopened workstream" section) — and ship with `nido ship` / `/drive-home`. |
 
 If the ledger state is ambiguous (no entries, an unexpected status), say so and
@@ -80,7 +81,7 @@ Start from the triage entry's `:design-frame`, then its `:directions` and
 |---|---|
 | `:implementation` | the design is right, the code doesn't honour it — a **fix**. `:shape` restates the design the code should have had; the invariants are the ones it already broke. |
 | `:design` | the code faithfully implements a design that is wrong — a **decision**. This is where a `:squirrel` came from. Say what the new shape is and why, and check whether it needs `:extends` or `:challenges`. |
-| `:unknown` / absent | triage didn't root-cause. Infer the area yourself before committing to a shape (`/design` §4), and put what you find in `:assumes`. |
+| `:unknown` / absent | triage didn't root-cause — or never ran, which is the normal case for a Slack-sourced workstream (see Step 2). Infer the area yourself before committing to a shape (`/design` §4), and put what you find in `:assumes`. |
 
 The deepdive already read the area, so `:assumes` carries that inference forward
 rather than re-deriving it cold — and `:violated` names rules you are now on the

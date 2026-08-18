@@ -62,10 +62,46 @@ bb nido:ticket:status :project brian :br <slack-id> :status investigating
    - When genuinely borderline (e.g. "this is confusing" could be a UX bug or a feature ask), make the call and record the uncertainty in `:watch-out` rather than stalling on the label.
 5. Determine, for the report:
    - Is this actually reproducible / a real bug worth a ticket (bug case), or a real, scoped ask (improvement case)? (If clearly not worth a ticket, say so plainly in the proposal body and let the human `dismiss` — see "Resume behaviour".)
+   - **Is this a local fix, or does it move a boundary?** See "The design reading" below.
    - **For a `"bug"`:** what part of the system is affected, and what's the likely root cause?
    - **For an `"improvement"`:** don't manufacture a root cause — instead *scope the change*: locate where it would land, assess its rough size, and note the touchpoints.
    - A concise, enriched title.
    - A Notion Priority guess, or `nil` if unsure (see "Priority guidance" below).
+
+### The design reading
+
+**Read the stance before you scope anything:**
+
+```bash
+cat .claude/skills/design/stances/brian.md
+```
+
+Two things make this matter more here than it looks.
+
+**This path skips triage.** An approved proposal creates its Notion ticket at
+`Status = Not started`, past the `Needs verification` view that fires
+`/triage-bug` — so nothing downstream will ever give this work a design reading.
+The next thing to touch it is the implementer. Whatever design context the
+ticket carries is the context it will ever have.
+
+**And `:proposed-change` / `:fix` are design proposals in miniature.** "Change
+shape + rough size + concrete file:line touchpoints" is a commitment about where
+something belongs, written after twenty minutes in the code, which a human then
+approves with one click — and that click reads as endorsement of the shape.
+
+So make the one distinction, and put it in `:watch-out` when it is the second:
+
+- **A local fix** — the intended shape is clear from the surrounding code and
+  this restores it. Most bugs. Nothing to add.
+- **It moves a boundary** — the change is really about where something lives,
+  what owns a piece of state, or whether two things should be one. Say so in
+  `:watch-out`, plainly: *this moves the X boundary; worth a design call before
+  implementing.* That is what `:watch-out` is for, and it is what lets the human
+  approve the ticket without also, silently, approving the shape.
+
+Do not add fields or prose sections for this. One clause in `:watch-out` when it
+applies, nothing when it doesn't. A proposal that flags every change as
+boundary-moving is as useless as one that flags none.
 
 ## Step 2 — Propose (compose + append + park)
 
@@ -83,7 +119,7 @@ The schema is a **closed, `:ticket-type`-dispatched multi-schema with no default
  :problem     "1-2 lines: what's wrong + who it affects. No prose sections."
  :root-cause  "1-2 lines: the cause + evidence — cite the root-cause commit and say 'verified live in REPL' when you confirmed it there."
  :fix         "1-2 lines: fix shape + rough size (e.g. 'revert-shaped, small') + the CONCRETE file:line targets. This is the only field carrying file:line refs — it must be actionable."
- :watch-out   "optional: a real caveat / scope question (e.g. the reporter may mean a different screen). nil when there is none."}
+ :watch-out   "optional: a real caveat / scope question (e.g. the reporter may mean a different screen), or the boundary-moving flag from The design reading. nil when there is none."}
 
 ;; ── if ticket-type "improvement" (a request for new/better behavior; feature requests too) ──
 {:format          :proposed-ticket
@@ -94,7 +130,7 @@ The schema is a **closed, `:ticket-type`-dispatched multi-schema with no default
  :request         "1-2 lines: what's being asked for + the current gap."
  :proposed-change "1-2 lines: the change shape + rough size + CONCRETE file:line touchpoints (the actionable field — where the scoped-in-Step-1 change would land)."
  :rationale       "1-2 lines: why it's worth doing / who benefits."
- :watch-out       "optional: a real caveat / scope question. nil when there is none."}
+ :watch-out       "optional: a real caveat / scope question, or the boundary-moving flag from The design reading — an improvement that moves a boundary should say so here. nil when there is none."}
 ```
 
 The **only** accepted `:ticket-type` values are `"bug"` and `"improvement"` — any other value (including `"feature"`) is rejected by `append`, so label feature requests `"improvement"`. Emitting the wrong body fields for the chosen type (e.g. `:root-cause` on an `"improvement"`, or `:request` on a `"bug"`) also fails validation — both shapes are closed maps, so stray/extra keys are rejected too; fix and retry.
