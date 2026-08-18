@@ -20,6 +20,12 @@ targeted feedback.
 before they are built. A doctrine read only when shipping cannot produce layered
 commits — by then the work is a heap.
 
+**And invoke `/design` before this.** Layers are a decomposition of *decisions*,
+so you cannot cut them before you have said what the decisions are. The design
+record's `:layers` is where the intended cut is stated; this skill is how it gets
+built. If the record has no `:layers`, the design is not decomposed yet — go back
+and finish it rather than inventing a cut here.
+
 ## 0. Should this be a stack at all?
 
 **No stack** when the change is under ~200 lines total, or has no real
@@ -62,13 +68,19 @@ the change. The common shape:
   **Always on top**: you can only delete the old thing once the new one is wired.
 
 This is a common shape, not a schema. The test for whether something earns its
-own stratum:
+own stratum is a design question first:
 
-> Does it carry its own design decisions, and does reviewing it require a
-> different mindset?
+> **Does it carry its own design decision?** And, confirming that: does reviewing
+> it require a different mindset?
+
+The first half decides; the second checks the first. A stratum is where a
+separable decision lives — which is why the cut is stated in the design record
+before it is cut in jj. Two things that share a decision belong in one layer
+however differently they read; two things that carry different decisions are two
+layers however similar the code looks.
 
 New components: yes. Wiring existing components to new functionality: no — that
-is wiring.
+is wiring, and it carries no decision of its own.
 
 ## 2. Subdivision — one review mode per layer
 
@@ -96,6 +108,11 @@ to the same specialist?* Project review lanes are real subject boundaries.
 - **One-sentence title test.** Every layer's PR title is one sentence containing
   no "and". Needing "and" means it is two layers. Cheapest check here, highest
   yield.
+- **Every layer's claim traces to the design record.** A layer whose `Claims:`
+  is not a line in `:layers` is a signal, and a useful one in both directions:
+  either the design is incomplete, or the layer is smuggling a decision nobody
+  stated. Cheap to check, and it catches the failure §2 warns about — a real
+  decision hidden in a diff the reviewer was about to skim.
 - **Independent correctness.** The build passes and tests are green at every
   layer, not only the top. Stopping after any layer leaves a working system.
   This is an **authoring obligation on you, checked by review — not
@@ -442,13 +459,19 @@ lifts this into the PR body; `/squash` regenerates it.
 
 ### The four brief fields
 
-- **Claims** — what this layer asserts about itself.
+- **Claims** — what this layer asserts about itself. It should be the `:claim`
+  from the design record's `:layers`, verbatim or close to it; if you find
+  yourself writing something the record doesn't contain, one of the two is
+  wrong.
 - **Verify** — concrete checks, never "review this".
 - **Lane** — which specialism applies; also how a reviewer agent is picked.
 - **Out of scope** — what this layer's reviewer should *not* flag, and where it
   lives instead: a layer above, a spun-out ref (`spun out as FU-12`, see
-  `/spin-out`), or an explicit decline with its reason. All three are legal; a
-  bare "later" is not.
+  `/spin-out`), an explicit decline with its reason, or — the strongest form —
+  a citation of the design: *the record puts this behind the X boundary*. All
+  four are legal; a bare "later" is not. The design citation is worth reaching
+  for, because it is the only one the reviewer can check rather than take on
+  trust.
 
 **Out of scope is the field that makes bounded review work.** Without it, every
 reviewer re-derives the whole change and the stack's benefit is lost.

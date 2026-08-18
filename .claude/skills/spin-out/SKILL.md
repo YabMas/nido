@@ -25,6 +25,11 @@ review-mode test, and "does it carry its own design decisions" are all
 **Invoke this at planning time and again at ship time.** In between, capture
 without deciding (§1).
 
+**`/design` comes before both.** Claim identity is what these axes cut along,
+and the design record is where the claim is written down — its `:invariants` are
+what makes §3's veto checkable instead of a matter of nerve, and its `:seams`
+are where a deliberate deferral is declared.
+
 ## 0. What is being optimised
 
 **Change landed per unit of reviewer attention, at constant-or-rising trust.**
@@ -87,6 +92,13 @@ your current context, not by whether it feels separate.
 **Never defer what would leave the branch untrue.** Everything else in this
 skill is a judgment call; this one is not.
 
+**And it has a concrete list.** The branch's design record names its
+`:invariants` — that is what "untrue" means here, in this branch, written down
+before the work started. Walk them: *does deferring this break one?* Yes → veto,
+no argument, no weighing against the other axes. That question is answerable in
+seconds, which is the point; a veto that depends on remembering to be principled
+is a veto that fires when you are fresh and not when you are tired.
+
 A NOT NULL one writer doesn't honour. An invariant enforced on the new path
 only. A documented rule with silent exceptions. An abstraction with two call
 sites migrated and eight not.
@@ -97,6 +109,11 @@ see there are two worlds — and toxic when it is **invisibly** incomplete, wher
 a future reader reads the inconsistency as intentional. This is `/stack`'s
 independent-correctness rule applied to the ship boundary instead of the layer
 boundary.
+
+**Visible incompleteness is a design decision, so declare it as one.** A seam you
+are deliberately leaving goes in the design record's `:seams`, with what makes it
+visible to a reader. That is the difference between a seam and a defect: the
+defect is the one nobody wrote down.
 
 ## 4. The reasoning axes
 
@@ -202,7 +219,10 @@ carry *why* is a shrug, and `decay`/`cold-start` are what make the band
 drainable. Out-of-vocabulary values are rejected locally, before any HTTP call.
 
 **Then name the ref in the layer's brief**, or you pay the review cost without
-collecting the benefit — the reviewer flags what they cannot see was decided:
+collecting the benefit — the reviewer flags what they cannot see was decided.
+When the reason the work leaves is a design one, say that instead of paraphrasing
+it — *the record puts this behind the X boundary* is checkable, "out of scope for
+this PR" is not:
 
 ```
 Out of scope: the compat shim in work.clj — spun out as FU-12.
@@ -223,7 +243,9 @@ explicitly. A DB full of never is what makes the real items invisible.
 
 **Past ~3 spin-outs from one branch, the ticket was mis-scoped** — or you are
 strip-mining. Same shape as `/stack`'s "past ~7 layers, it is two tickets": stop
-and revisit the decomposition rather than filing a fourth.
+and revisit the decomposition rather than filing a fourth. Both counts are
+symptoms with the same usual cause — a design boundary in the wrong place — and
+the record is where you can see that, so re-read it before you re-cut.
 
 **Zero spin-outs off a large change is also a signal** — either genuinely tight,
 or nobody looked.
@@ -236,6 +258,11 @@ oversight.
 
 - **Deferring something that leaves the branch untrue** — a half-applied
   invariant is a veto, not a trade-off (§3).
+- **Running the veto from memory** — the design record lists the invariants; read
+  them rather than recalling them (§3).
+- **Leaving a seam without declaring it** — an undeclared seam is
+  indistinguishable from a defect, which is exactly how a later reader reads it
+  (§3).
 - **Filing what should have been a layer** — if you are picking it up next while
   the context is hot, it is `/stack`'s axis, not this one (§2).
 - **Filing instead of declining** — "someone might want this someday" fills the

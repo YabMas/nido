@@ -58,8 +58,29 @@ poller needs to react when the PR later merges.
    never on a flag.
 
 3. **Push the branch and open the draft PR** from the worktree. Author a clear
-   title and body (summarize the change; reference the `BR-####`). If a PR
-   already exists for this branch, reuse it instead of creating a second one:
+   title and body, and **lead the body with a Design section** — the diff is
+   already in the PR, so re-describing it spends the reviewer's attention on what
+   they can already see. What they cannot reconstruct is the intent. Read the
+   workstream's design record (`bb nido:workstream:show :project <p> :ref <ref>`)
+   and lift from it:
+
+   ```markdown
+   ## Design
+
+   <the record's :shape, in a sentence or two>
+
+   **Holds:** <each :invariant — what a reviewer can check this against>
+   **Considered and rejected:** <each :rejected alternative, with why not>
+   **Deliberately left:** <each :seam, and what makes it visible>
+
+   <then the usual summary; reference the BR-####>
+   ```
+
+   Omit any line the record doesn't carry rather than padding it. The rejected
+   alternatives are the highest-value part: they are what stops a reviewer
+   proposing something you already weighed, and they turn that exchange into
+   *here is why not* instead of a round trip. If a PR already exists for this
+   branch, reuse it instead of creating a second one:
 
    ```bash
    cd worktree
@@ -133,7 +154,8 @@ poller needs to react when the PR later merges.
    {:format  :pr-opened
     :url     "<pr-url>"
     :title   "<pr-title>"
-    :summary "<one-line: what this PR does, refs BR-####>"}
+    :summary "<one line, in design terms: what this makes true of the system —
+               the record's :summary, not a restatement of the diff. Refs BR-####>"}
    EDN
    bb nido:ticket:append :project <project> :br <BR-####> :kind pr-opened \
      :file /tmp/pr-opened.edn
@@ -236,6 +258,18 @@ gh pr create -R "$SLUG" --base <session>--<l2>   --head <session>--<l3> --draft 
 
 Every body must carry the brief's four fields — **Claims**, **Verify**, **Lane**,
 **Out of scope**. That is what makes per-layer review bounded.
+
+**The bottom layer's body additionally carries the Design section** (step 3's
+template), since it is the entry point a reviewer reads first and the design
+covers the whole stack, not one layer. Layers above it reference it rather than
+repeating it.
+
+**Say what the layering claims, not just what order it is in.** A cover note that
+lists dependency order tells a reviewer something jj already told them. State the
+decomposition as the design decision it is — *these are the separable decisions,
+and here is the one each layer carries* — which is exactly the design record's
+`:layers`. A reviewer who knows which decision a layer owns can accept or reject
+that layer on its own, which is the entire point of stacking it.
 
 ### 4. Link them into a stack, by PR number
 
