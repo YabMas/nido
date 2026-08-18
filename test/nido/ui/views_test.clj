@@ -505,6 +505,28 @@
                        "data-on-interval__duration.3s=\"@get(&apos;/_fragment/workstream/brian/ws-1&apos;)\"")
         "nothing open → nothing in the poll's query string")))
 
+(deftest workstream-pane-renders-design-card
+  (let [ws   (assoc sample-ws :report
+                    {:format     :design
+                     :summary    "Rounding moves to a single point."
+                     :shape      "One rounding boundary at the order aggregate."
+                     :invariants ["a total is rounded exactly once"]
+                     :standing   {:relation :challenges :note "money math needs an accumulator"}
+                     :assumes    [{:about "line totals computed per-item"
+                                   :read ["src/order/calc.clj"]
+                                   :drift "per-line rounding was copied, never decided"}]
+                     :layers     [{:claim "extract the total aggregate" :mode :judgment}]
+                     :effort     :M})
+        html (views/workstream-pane ws {})]
+    (is (str/includes? html "Design"))
+    (is (str/includes? html "challenges"))
+    (is (str/includes? html "money math needs an accumulator"))
+    (is (str/includes? html "Invariants"))
+    (is (str/includes? html "a total is rounded exactly once"))
+    (is (str/includes? html "Intended layers"))
+    (is (str/includes? html "src/order/calc.clj") "the captured inference is present, if collapsed")
+    (is (str/includes? html "drift from the stance:"))))
+
 (deftest workstream-pane-renders-implementation-plan-card
   (let [ws   (assoc sample-ws :report {:format :implementation-plan :summary "Round on the total."
                                        :direction "Round once on the order total" :effort :M

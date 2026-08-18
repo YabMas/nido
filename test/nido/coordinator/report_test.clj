@@ -67,10 +67,104 @@
     (is (not (re-find #"- Effort:[^\n]*\n\n- Title:" md))
         "no spurious blank line between Effort and Title")))
 
+(def ^:private valid-design
+  {:format     :design
+   :summary    "Rounding moves to a single point on the order total."
+   :shape      "One rounding boundary at the order aggregate; line items stay exact."
+   :invariants ["a total is rounded exactly once"
+                "no line item carries a rounded amount"]
+   :standing   {:relation :conforms :principles ["shape of the data is the design"]}
+   :assumes    [{:about "line totals are computed per-item in order/calc"
+                 :read  ["src/order/calc.clj"]
+                 :drift "rounding is applied per line — copied, never decided"}]
+   :rejected   [{:alternative "round at render time"
+                 :why-not     "moves money math into the view layer"}]
+   :layers     [{:claim "extract the total aggregate" :mode :judgment}
+                {:claim "drop per-line rounding at all 12 call sites" :mode :mechanical}]
+   :seams      [{:what "the legacy per-line path stays for invoices"
+                 :visible-how "old fn kept, marked deprecated, both callers listed"}]
+   :open       ["whether invoices should follow in the same arc"]
+   :effort     :M})
+
+(deftest validate-event-accepts-a-design
+  (is (= valid-design (report/validate-event :design valid-design))))
+
+(deftest design-requires-at-least-one-invariant
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event :design (assoc valid-design :invariants [])))))
+
+(deftest design-conforms-needs-no-note
+  (is (report/validate-event :design (assoc valid-design :standing {:relation :conforms}))))
+
+(deftest design-extends-and-challenges-require-a-note
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event :design (assoc valid-design :standing {:relation :extends}))))
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event :design (assoc valid-design :standing {:relation :challenges}))))
+  (is (report/validate-event
+       :design (assoc valid-design :standing {:relation :challenges
+                                              :note "money math needs a mutable accumulator here"}))))
+
+(deftest design-rejects-a-step-list
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event :design (assoc valid-design :steps ["do the thing"])))
+      "steps are working memory — the ledger holds what survives the session"))
+
+(deftest design-rejects-squirrel-effort
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event :design (assoc valid-design :effort :squirrel)))
+      "the design is where a triage :squirrel resolves into a concrete size"))
+
+(deftest report->markdown-design-has-its-sections
+  (let [md (report/report->markdown valid-design)]
+    (is (str/includes? md "# Design"))
+    (is (str/includes? md "**Stance:** conforms"))
+    (is (str/includes? md "## Invariants"))
+    (is (str/includes? md "a total is rounded exactly once"))
+    (is (str/includes? md "## Assumes"))
+    (is (str/includes? md "drift from the stance:"))
+    (is (str/includes? md "## Rejected"))
+    (is (str/includes? md "## Intended layers"))
+    (is (str/includes? md "*(mechanical)*"))
+    (is (str/includes? md "## Seams"))
+    (is (str/includes? md "## Open"))))
+
+(deftest report->markdown-design-omits-empty-optional-sections
+  (let [md (report/report->markdown
+            (dissoc valid-design :assumes :rejected :layers :seams :open))]
+    (is (str/includes? md "## Invariants"))
+    (is (not (str/includes? md "## Assumes")))
+    (is (not (str/includes? md "## Rejected")))
+    (is (not (str/includes? md "## Intended layers")))
+    (is (not (str/includes? md "## Seams")))
+    (is (not (str/includes? md "## Open")))))
+
+(deftest report->markdown-design-shows-note-and-supersedes
+  (let [md (report/report->markdown
+            (assoc valid-design
+                   :standing {:relation :extends :note "adds a rounding boundary"}
+                   :supersedes {:seq 4 :why "review showed line-level rounding is load-bearing"}))]
+    (is (str/includes? md "> adds a rounding boundary"))
+    (is (str/includes? md "Supersedes entry 4"))))
+
+(deftest report-title-for-design-is-the-shape
+  (is (= "One rounding boundary at the order aggregate; line items stay exact."
+         (report/report-title valid-design))))
+
+(deftest entry-payload-accepts-design
+  (let [[ext payload] (report/entry-payload :design (pr-str valid-design))]
+    (is (= "edn" ext))
+    (is (str/includes? payload ":design"))
+    (is (= valid-design (edn/read-string payload)))))
+
 (def ^:private valid-plan
   {:format :implementation-plan :summary "Round on the total."
    :direction "Round once on the order total" :effort :M
    :steps ["add a render test" "fix the calc"]})
+
+(deftest implementation-plan-stays-readable-after-the-cutover
+  (is (= valid-plan (report/validate-event :implementation-plan valid-plan))
+      "legacy ledgers must still read as typed events"))
 
 (def ^:private valid-completed
   {:format :implementation-completed :summary "Shipped the fix."

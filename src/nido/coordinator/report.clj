@@ -118,9 +118,92 @@
    ["bug"         BugProposal]
    ["improvement" ChangeProposal]])
 
+(def ^:private standing-principles
+  [:principles {:optional true} [:vector string?]])
+
+(def Standing
+  "How this change relates to the project's stance (its durable architectural
+   convictions). :extends and :challenges MUST carry the note: a commitment added
+   or contradicted without saying why is exactly the silent-erosion case the
+   relation exists to prevent. :conforms is the normal case and needs no note."
+  [:multi {:dispatch :relation}
+   [:conforms   [:map {:closed true}
+                 [:relation [:= :conforms]]
+                 standing-principles]]
+   [:extends    [:map {:closed true}
+                 [:relation [:= :extends]]
+                 standing-principles
+                 [:note string?]]]
+   [:challenges [:map {:closed true}
+                 [:relation [:= :challenges]]
+                 standing-principles
+                 [:note string?]]]])
+
+(def Assumption
+  "One inferred fact about the area's *current* design, plus what it was read
+   from. The current design is deliberately unwritten — each change infers the
+   slice it needs — so this is where that inference is captured rather than lost
+   with the session. :drift names where the current design departs from the
+   stance: is-vs-ought, stated instead of silently codified."
+  [:map {:closed true}
+   [:about string?]
+   [:read  [:vector string?]]
+   [:drift {:optional true} string?]])
+
+(def Rejected
+  [:map {:closed true}
+   [:alternative string?]
+   [:why-not     string?]])
+
+(def Layer
+  "One intended layer of the vertical cut — claim + review mode only. Bookmarks,
+   slugs and ordering are /stack's mechanics, not the design's claim."
+  [:map {:closed true}
+   [:claim string?]
+   [:mode  [:enum :mechanical :judgment]]])
+
+(def Seam
+  "Deliberate, visible incompleteness. /spin-out's veto turns on this: invisibly
+   incomplete is a defect, visibly incomplete is a decision — so say how a reader
+   sees it."
+  [:map {:closed true}
+   [:what        string?]
+   [:visible-how string?]])
+
+(def Supersedes
+  "Set when this record amends one the review found wrong. The superseded entry
+   stays in the ledger — a design is amended and cited, never silently rewritten."
+  [:map {:closed true}
+   [:seq int?]
+   [:why string?]])
+
+(def DesignVision
+  "The high-level design one workstream commits to — authored by triage (obvious)
+   or the impl session (deferred); resolves a triage :squirrel into a concrete
+   effort. Replaces ImplementationPlan, and drops its :steps: a step list is
+   working memory, and the ledger holds what survives the session.
+
+   :invariants is required and non-empty on purpose. It is what the review judge
+   checks findings against; a design that names none is unfalsifiable, and every
+   finding against it becomes a matter of taste."
+  [:map {:closed true}
+   [:format     [:= :design]]
+   [:summary    string?]
+   [:shape      string?]
+   [:invariants [:vector {:min 1} string?]]
+   [:standing   Standing]
+   [:assumes    {:optional true} [:vector Assumption]]
+   [:rejected   {:optional true} [:vector Rejected]]
+   [:layers     {:optional true} [:vector Layer]]
+   [:seams      {:optional true} [:vector Seam]]
+   [:open       {:optional true} [:vector string?]]
+   [:supersedes {:optional true} Supersedes]
+   [:effort     Effort]])
+
 (def ImplementationPlan
-  "A high-level implementation plan — authored by triage (obvious) or the impl
-   session (deferred); resolves a triage :squirrel into a concrete direction + effort."
+  "LEGACY — superseded by DesignVision (:design). Kept registered so ledgers
+   written before the cutover still read + render as typed events; nothing emits
+   this kind any more."
   [:map {:closed true}
    [:format    [:= :implementation-plan]]
    [:summary   string?]
@@ -192,6 +275,7 @@
   "Entry :kind → its Malli schema. Drives ledger-boundary validation + rendering.
    A :kind absent here is stored as verbatim markdown (legacy / freeform)."
   {:triage                   TriageReport
+   :design                   DesignVision
    :implementation-plan      ImplementationPlan
    :implementation-completed ImplementationCompleted
    :blocker                  Blocker
@@ -265,6 +349,45 @@
   "First non-blank, trimmed line of `s`, or nil."
   [s]
   (some->> (some-> s str/split-lines) (map str/trim) (some not-empty)))
+
+(defn- design->markdown
+  [{:keys [summary shape invariants standing assumes rejected layers seams open
+           supersedes effort]}]
+  (str/join
+   "\n"
+   (concat
+    ["# Design"
+     (str "**Stance:** " (name (:relation standing))
+          (when-let [ps (seq (:principles standing))]
+            (str " — " (str/join ", " ps)))
+          "  ·  **Effort:** " (name effort))]
+    (when-let [n (:note standing)] [(str "> " n)])
+    (when supersedes
+      [(str "*Supersedes entry " (:seq supersedes) " — " (:why supersedes) "*")])
+    ["" summary "" "## Shape" shape "" "## Invariants"]
+    (for [i invariants] (str "- " i))
+    (when (seq assumes)
+      (cons "\n## Assumes — the current design, as inferred"
+            (for [{:keys [about read drift]} assumes]
+              (str "- " about
+                   (when (seq read)
+                     (str " — read: " (str/join ", " (map #(str "`" % "`") read))))
+                   (when drift (str "\n  - drift from the stance: " drift))))))
+    (when (seq rejected)
+      (cons "\n## Rejected"
+            (for [{:keys [alternative why-not]} rejected]
+              (str "- **" alternative "** — " why-not))))
+    (when (seq layers)
+      (cons "\n## Intended layers"
+            (map-indexed (fn [i {:keys [claim mode]}]
+                           (str (inc i) ". " claim " *(" (name mode) ")*"))
+                         layers)))
+    (when (seq seams)
+      (cons "\n## Seams"
+            (for [{:keys [what visible-how]} seams]
+              (str "- " what " — visible as: " visible-how))))
+    (when (seq open)
+      (cons "\n## Open" (for [o open] (str "- " o)))))))
 
 (defn- plan->markdown [{:keys [summary direction effort steps]}]
   (str/join "\n"
@@ -345,6 +468,7 @@
   (case (:format report)
     :markdown                 (or (:markdown report) "")
     :triage-report            (triage->markdown report)
+    :design                   (design->markdown report)
     :implementation-plan      (plan->markdown report)
     :implementation-completed (completed->markdown report)
     :blocker                  (blocker->markdown report)
@@ -355,11 +479,12 @@
     ""))
 
 (defn report-title
-  "Index title for the typed events that carry no top-level :title — plan / completed
-   / blocker. nil otherwise (triage, pr-opened and markdown carry a usable :title that
+  "Index title for the typed events that carry no top-level :title — design / plan
+   / completed / blocker. nil otherwise (triage, pr-opened and markdown carry a usable :title that
    the caller falls back to)."
   [report]
   (case (:format report)
+    :design                   (first-line (:shape report))
     :implementation-plan      (:direction report)
     :implementation-completed (first-line (:summary report))
     :blocker                  (or (:needs report) (first-line (:summary report)))

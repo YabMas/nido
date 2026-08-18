@@ -588,6 +588,56 @@
             (for [{:keys [ref note]} trail]
               [:li [:code ref] " — " note]))])])
 
+(defn- design-card
+  "Curated render of a typed design record: stance + effort chips, the shape and
+   its invariants (always shown — they are what review checks against), then the
+   optional sections. `assumes` is collapsed: it is the captured inference, useful
+   when a design is questioned and noise the rest of the time."
+  [{:keys [summary shape invariants standing assumes rejected layers seams open
+           supersedes effort]}]
+  [:div.md
+   [:h2 "Design"]
+   [:div.report-meta
+    [:span {:class (str "chip c-rel-" (name (:relation standing)))}
+     (name (:relation standing))]
+    [:span.meta "Effort: " (name effort)]
+    (when-let [ps (seq (:principles standing))]
+      [:span.meta " · " (str/join ", " ps)])]
+   (when-let [n (:note standing)] [:blockquote n])
+   (when supersedes
+     [:p.meta "Supersedes entry " (:seq supersedes) " — " (:why supersedes)])
+   (md/render summary)
+   [:h3 "Shape"]
+   (md/render shape)
+   [:h3 "Invariants"]
+   (into [:ul] (for [i invariants] [:li i]))
+   (when (seq layers)
+     [:div [:h3 "Intended layers"]
+      (into [:ol]
+            (for [{:keys [claim mode]} layers]
+              [:li claim " " [:span.meta "(" (name mode) ")"]]))])
+   (when (seq rejected)
+     [:div [:h3 "Rejected"]
+      (into [:ul]
+            (for [{:keys [alternative why-not]} rejected]
+              [:li [:strong alternative] " — " why-not]))])
+   (when (seq seams)
+     [:div [:h3 "Seams"]
+      (into [:ul]
+            (for [{:keys [what visible-how]} seams]
+              [:li what " — visible as: " visible-how]))])
+   (when (seq open)
+     [:div [:h3 "Open"] (into [:ul] (for [o open] [:li o]))])
+   (when (seq assumes)
+     [:details.trail
+      [:summary "Assumes — current design, as inferred (" (count assumes) ")"]
+      (into [:ul]
+            (for [{:keys [about read drift]} assumes]
+              [:li about
+               (when (seq read)
+                 [:span.meta " — read: " (str/join ", " read)])
+               (when drift [:div.meta "drift from the stance: " drift])]))])])
+
 (defn- plan-card [{:keys [summary direction effort steps]}]
   [:div.md
    [:h2 "Implementation plan"]
@@ -791,6 +841,7 @@
   ([report pos]
    (case (:format report)
      :triage-report            (triage-report-card report)
+     :design                   (design-card report)
      :implementation-plan      (plan-card report)
      :implementation-completed (completed-card report)
      :blocker                  (blocker-card report)
