@@ -558,14 +558,28 @@
 (defn- triage-report-card
   "Curated render of a typed triage report: determination + confidence chips, summary,
    directions, an On-apply block, and a collapsed investigation trail (§5)."
-  [{:keys [title determination summary confidence directions notion-writes trail]}]
+  [{:keys [title determination summary confidence design-frame directions
+           notion-writes trail]}]
   [:div.md
    (when title [:h2 title])
    [:div.report-meta
     [:span {:class (str "chip c-det-" (name determination))} (name determination)]
     (conf-chip confidence)
+    (when-let [layer (:defect-layer design-frame)]
+      [:span {:class (str "chip c-layer-" (name layer))} (name layer) " defect"])
     [:span.meta (:reason confidence)]]
    (md/render summary)
+   (when design-frame
+     (let [{:keys [governing violated note]} design-frame]
+       [:div
+        [:h3 "Design frame"]
+        (when note [:p note])
+        (when (seq governing)
+          [:p.meta "Governed by: " (str/join ", " governing)])
+        (when (seq violated)
+          (into [:ul]
+                (for [{:keys [rule source evidence]} violated]
+                  [:li rule " " [:span.meta "(" source ")"] " — " [:code evidence]])))]))
    [:h3 "Solution directions"]
    (into [:ul]
          (for [{:keys [label shape effort confidence]} directions]

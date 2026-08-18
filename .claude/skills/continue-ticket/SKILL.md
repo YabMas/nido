@@ -50,7 +50,7 @@ comes *after* the latest recorded entry:
 
 | latest entry | your stage | what to do |
 |---|---|---|
-| `:triage` (status `:planning`) | **implementation** | Read the latest `:triage` entry file (`~/.nido/projects/brian/tickets/<BR-####>/entries/NNNN-triage.md`) — the enriched brief, solution direction(s), and the `file:line` leads it found. Start the implementation on those findings. |
+| `:triage` (status `:planning`) | **implementation** | Read the latest `:triage` entry file (`~/.nido/projects/brian/tickets/<BR-####>/entries/NNNN-triage.md`) — the enriched brief, its `:design-frame`, the solution direction(s), and the `file:line` leads it found. The frame says whether this stage is a fix or a decision (Step 3). Start on those findings. |
 | `:findings` with open items | **address findings round N** | This workstream shipped, was reviewed on staging, and reopened. `bb nido:workstream:show` prints the round's items and the ws-id. Work the open items (severity `:blocker` first). Mark each resolved **the moment its fix lands**: `bb nido:findings:resolve :project brian :ws <ws-id> :items [<id>] :by <commit-or-PR>`. Then open a **follow-up PR** — see `/prepare-draft-pr` (its "Follow-up PR on a reopened workstream" section) — and ship with `nido ship` / `/drive-home`. |
 
 If the ledger state is ambiguous (no entries, an unexpected status), say so and
@@ -73,9 +73,18 @@ effort: sizing follows from the design, not the other way round.
 and how to infer the current design safely. The short version: claims about
 structure, not a plan of action. There is no step list; the schema rejects one.
 
-Start from the triage entry — its `:directions` and its `:trail`. The deepdive
-already read the area, so `:assumes` is where you carry that inference forward
-rather than re-deriving it cold.
+Start from the triage entry's `:design-frame`, then its `:directions` and
+`:trail`. The frame's `:defect-layer` tells you which job this is:
+
+| `:defect-layer` | what you are doing |
+|---|---|
+| `:implementation` | the design is right, the code doesn't honour it — a **fix**. `:shape` restates the design the code should have had; the invariants are the ones it already broke. |
+| `:design` | the code faithfully implements a design that is wrong — a **decision**. This is where a `:squirrel` came from. Say what the new shape is and why, and check whether it needs `:extends` or `:challenges`. |
+| `:unknown` / absent | triage didn't root-cause. Infer the area yourself before committing to a shape (`/design` §4), and put what you find in `:assumes`. |
+
+The deepdive already read the area, so `:assumes` carries that inference forward
+rather than re-deriving it cold — and `:violated` names rules you are now on the
+hook for, so they usually belong in `:invariants`.
 
 ```bash
 cat > /tmp/design.edn <<'EDN'

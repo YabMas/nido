@@ -117,6 +117,36 @@ actionable bug.
 Either way, HITL is unchanged: propose, halt at `:awaiting-input`, and wait for the
 human to `apply`. Shallow routes still pass the human — every routing is acked.
 
+### The design reading
+
+The deepdive tells you what the code *does*. The report has to say what that means
+for the design — one bit, and it routes everything downstream:
+
+> Is this an **implementation defect** — the design is right and the code doesn't
+> honour it — or a **design defect** — the code faithfully implements a design that
+> is wrong?
+
+An implementation defect is a fix. A design defect is a decision, and sizing a
+decision before it is made is exactly what `:squirrel` exists for.
+
+**Read the stance first** — `cat .claude/skills/design/stances/brian.md`. It is what
+makes the question answerable at all: which register the data is in, whether a
+boundary is carrying its weight, whether what you are reading is intent or drift. It
+primes the reading. It is never something you cite against a line of code.
+
+**The two citations are not interchangeable.** `:governing` names the stance that
+frames the area. `:violated` names concrete rules from the **checkable** layer — a
+review lane (`.claude/agents/lane-*.md`) or `docs/reference/` — each with the
+`file:line` that breaks it. That layer is the only one a diff can actually violate.
+A bug that breaks a stated rule is a categorically better finding than one that
+merely looks wrong: higher-confidence, and the rule names its own blast radius.
+
+**Don't manufacture a frame you didn't earn.** A shallow route doesn't root-cause,
+so it emits `{:defect-layer :unknown}` and nothing else. `:unknown` is also the
+honest answer on a deep route where you genuinely can't tell — say why in `:note`.
+Guessing here is worse than declining: the implementer reads this bit to decide
+whether they are fixing something or deciding something.
+
 ## Lifecycle: ticket status
 
 **One terminal outcome for a Notion report: `apply` (route it).** Every new report is
@@ -196,6 +226,7 @@ video.
 5. Determine, for the report:
    - Is this actually a bug? (vs feature request, vs duplicate, vs noise — `:determination`)
    - If a bug: what part of the system is affected? what's the likely root cause?
+   - **Is the defect at the implementation layer or the design layer?** See "The design reading" above — this is `:design-frame`, and it is what tells the next session whether it is fixing something or deciding something.
    - What are 1–3 candidate solution directions? T-shirt effort per direction.
 6. Compose the report EDN (schema in Step 2 below) to a temp `.edn` file, then append it to the nido record as a `triage` entry:
 
@@ -226,6 +257,12 @@ report (non-zero exit + an explain dump) — fix and retry until it's accepted.
  :routing       {:owner :jaap        ; :ataberk | :eric | :jaap
                  :app-domain "Teacher" ; "Student" | "Teacher" | "Backend" | "Misc"
                  :depth :deep}         ; :deep ONLY for :determination :bug routed to Jaap; :shallow otherwise (Ataberk/Eric always, or any not-a-bug/needs-info report)
+ :design-frame  {:defect-layer :design    ; :implementation | :design | :unknown
+                 :governing    ["stance that frames this area"]      ; optional
+                 :violated     [{:rule "the rule this breaks"        ; optional
+                                 :source "docs/reference/malli.md"   ; lane or reference doc
+                                 :evidence "src/order/calc.clj:88"}]
+                 :note         "why, or why you can't tell"}         ; optional
  :directions    [{:label "A" :shape "1 sentence"
                   :effort :M    ; :XS :S :M :L :XL — or :squirrel to defer sizing
                   :confidence {:level :medium :reason "one line"}}]
@@ -246,7 +283,8 @@ Notes:
   `:notion-writes` as below. See Routing / Depth above.
 - `:notion-writes` is **nil for Slack runs** — there are no Notion writes.
 - There is **no dismiss-recommendation field**. If the report isn't worth pursuing, say so in chat and `dismiss` — don't encode it in the report (Slack runs only; a Notion report is always routed, never dismissed).
-- **`:squirrel` is the joker** — use it for `:effort` when the implementation direction is genuinely ambiguous and sizing should defer to the design stage. When you use it, set `:defer-note` explaining why; `/continue-ticket` resolves it into a concrete effort when it authors the design record — sizing follows from the design, not the other way round.
+- **`:design-frame` is optional but expected on a deep route.** A shallow route emits `{:defect-layer :unknown}`; omit the key entirely only when you did no investigation at all. Pre-spine reports have no frame, which is why the schema still accepts its absence.
+- **`:squirrel` is the joker** — use it for `:effort` when sizing genuinely depends on an unmade decision, which in practice means `:defect-layer :design`. When you use it, set `:defer-note` explaining why; `/continue-ticket` resolves it into a concrete effort when it authors the design record — sizing follows from the design, not the other way round.
 - After appending, print the report into chat with `bb nido:ticket:report :project brian :br <key>` (renders the stored report as markdown) so the user sees it on `nido enter`.
 
 ## Step 3 — Confirmation (chat, liberal parsing)

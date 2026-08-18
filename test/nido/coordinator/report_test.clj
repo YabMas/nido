@@ -67,6 +67,43 @@
     (is (not (re-find #"- Effort:[^\n]*\n\n- Title:" md))
         "no spurious blank line between Effort and Title")))
 
+(def ^:private frame
+  {:defect-layer :design
+   :governing    ["two registers of data — values in motion vs state at rest"]
+   :violated     [{:rule "closed maps for domain entities"
+                   :source "docs/reference/malli.md"
+                   :evidence "src/order/calc.clj:88"}]
+   :note "the row shape reaches domain logic unparsed"})
+
+(deftest triage-accepts-a-design-frame
+  (is (report/validate (assoc valid-report :design-frame frame))))
+
+(deftest triage-without-a-design-frame-still-validates
+  (is (report/validate valid-report)
+      "pre-spine reports must keep reading as typed events"))
+
+(deftest triage-rejects-an-unknown-defect-layer
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate (assoc valid-report :design-frame
+                                       (assoc frame :defect-layer :architectural))))))
+
+(deftest triage-design-frame-renders-with-its-citations
+  (let [md (report/report->markdown (assoc valid-report :design-frame frame))]
+    (is (str/includes? md "## Design frame"))
+    (is (str/includes? md "**Defect layer:** design"))
+    (is (str/includes? md "the row shape reaches domain logic unparsed"))
+    (is (str/includes? md "Governed by:"))
+    (is (str/includes? md "Violates:"))
+    (is (str/includes? md "docs/reference/malli.md"))
+    (is (str/includes? md "src/order/calc.clj:88"))))
+
+(deftest triage-without-a-frame-renders-no-frame-section
+  (is (not (str/includes? (report/report->markdown valid-report) "Design frame"))))
+
+(deftest triage-shallow-frame-needs-only-the-layer
+  (is (report/validate (assoc valid-report :design-frame {:defect-layer :unknown}))
+      "a shallow route does not root-cause, so it cites nothing"))
+
 (def ^:private valid-design
   {:format     :design
    :summary    "Rounding moves to a single point on the order total."

@@ -62,6 +62,31 @@
    [:title              string?]
    [:description-prepend string?]])
 
+(def Violation
+  "A concrete rule this behaviour breaks, with where the rule is written and the
+   evidence. Cites the *checkable* layer — a lane or a reference doc — never the
+   stance: a priming document cannot adjudicate a line, and asking it to produces
+   confabulated specificity."
+  [:map {:closed true}
+   [:rule     string?]
+   [:source   string?]      ; e.g. "docs/reference/malli.md" / "lane-malli"
+   [:evidence string?]])    ; file:line
+
+(def DesignFrame
+  "The design reading of a triage deepdive. :defect-layer is the bit that routes
+   the work: :implementation means the design is right and the code doesn't honour
+   it (a fix), :design means the code faithfully implements a design that is wrong
+   (a decision). :unknown is honest for a shallow route, which does not root-cause.
+
+   :governing cites the stance — what frames this area — because that is what makes
+   :defect-layer answerable at all. :violated cites the checkable layer, because
+   that is the only layer a diff can actually break."
+  [:map {:closed true}
+   [:defect-layer [:enum :implementation :design :unknown]]
+   [:governing    {:optional true} [:vector string?]]
+   [:violated     {:optional true} [:vector Violation]]
+   [:note         {:optional true} string?]])
+
 (def TriageReport
   "The §1–3 + §5 report. No §4 field — the dismiss recommendation is dropped at the
    schema level. `:at` is NOT here: the ledger stamps it at read time."
@@ -73,6 +98,7 @@
    [:summary       string?]          ; §1 enriched description (markdown text)
    [:confidence    Confidence]       ; §1
    [:routing       {:optional true} [:maybe Routing]] ; §2 — absent on pre-routing reports, nil for Slack
+   [:design-frame  {:optional true} DesignFrame] ; absent on pre-design-spine reports
    [:directions    [:vector Direction]]   ; §2
    [:notion-writes [:maybe NotionWrites]] ; §3 — nil for slack
    [:defer-note    {:optional true} string?]   ; why the plan was deferred (paired with :squirrel)
@@ -317,7 +343,7 @@
   {:ataberk "Ataberk" :eric "Eric" :jaap "Jaap"})
 
 (defn- triage->markdown [{:keys [title determination summary confidence
-                                 routing directions notion-writes trail]}]
+                                 routing design-frame directions notion-writes trail]}]
   (str/join
    "\n"
    (concat
@@ -328,6 +354,18 @@
       [(str "**Routing:** " (owner-display (:owner routing) (name (:owner routing)))
             " · " (:app-domain routing) " · " (name (:depth routing)))])
     ["" summary ""]
+    (when-let [{:keys [defect-layer governing violated note]} design-frame]
+      (concat
+       ["## Design frame"
+        (str "**Defect layer:** " (name defect-layer)
+             (when note (str " — " note)))]
+       (when (seq governing)
+         [(str "Governed by: " (str/join ", " governing))])
+       (when (seq violated)
+         (cons "Violates:"
+               (for [{:keys [rule source evidence]} violated]
+                 (str "- " rule " (" source ") — `" evidence "`"))))
+       [""]))
     (when (seq directions)
       (cons "## Solution directions"
             (for [{:keys [label shape effort confidence]} directions]
