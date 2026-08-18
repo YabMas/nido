@@ -1,32 +1,73 @@
 {
   "type": "object",
   "additionalProperties": false,
-  "required": ["findings", "overall_correctness"],
+  "required": [
+    "findings",
+    "overall_correctness"
+  ],
   "properties": {
     "findings": {
       "type": "array",
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["title", "body", "confidence_score", "priority", "code_location"],
+        "required": [
+          "title",
+          "body",
+          "confidence_score",
+          "priority",
+          "layer",
+          "code_location"
+        ],
         "properties": {
-          "title": {"type": "string"},
-          "body": {"type": "string"},
-          "confidence_score": {"type": "number"},
-          "priority": {"type": ["integer", "null"]},
+          "title": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "confidence_score": {
+            "type": "number"
+          },
+          "priority": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "layer": {
+            "type": "string",
+            "enum": [
+              "local",
+              "structural",
+              "unclear"
+            ]
+          },
           "code_location": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["absolute_file_path", "line_range"],
+            "required": [
+              "absolute_file_path",
+              "line_range"
+            ],
             "properties": {
-              "absolute_file_path": {"type": "string"},
+              "absolute_file_path": {
+                "type": "string"
+              },
               "line_range": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["start", "end"],
+                "required": [
+                  "start",
+                  "end"
+                ],
                 "properties": {
-                  "start": {"type": "integer"},
-                  "end": {"type": "integer"}
+                  "start": {
+                    "type": "integer"
+                  },
+                  "end": {
+                    "type": "integer"
+                  }
                 }
               }
             }
@@ -34,6 +75,8 @@
         }
       }
     },
-    "overall_correctness": {"type": "string"}
+    "overall_correctness": {
+      "type": "string"
+    }
   }
 }

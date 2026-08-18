@@ -50,11 +50,16 @@
           "finding:\n" stance "\n\n"))
    "Rounds run: " rounds "\n"
    "Round history (findings + what was fixed):\n" (pr-str history) "\n\n"
-   "Findings still open at the end:\n"
+   "Findings still open at the end. Each carries the layer the reviewer assigned:\n"
+   "local (a defect inside the current design), structural (about where a\n"
+   "boundary sits — the reviewer saw shape without intent), or unclear. The\n"
+   "structural ones are what you are really here to adjudicate: the reviewer\n"
+   "could not see the design, and you can.\n"
    (if (seq findings)
      (->> findings
-          (map-indexed (fn [i f] (str i ": [P" (:priority f) "] " (:title f)
-                                      " — " (:body f))))
+          (map-indexed (fn [i f] (str i ": [P" (:priority f) "/"
+                                      (name (or (:layer f) :unclear)) "] "
+                                      (:title f) " — " (:body f))))
           (str/join "\n"))
      "(none)")
    "\n\n"

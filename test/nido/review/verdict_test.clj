@@ -69,3 +69,10 @@
       "a clean review produced no evidence either way")
   (is (not (nido-review/verdict-worth-running? :review-failed {:findings [{:title "x"}]})))
   (is (not (nido-review/verdict-worth-running? :dry-run {:findings [{:title "x"}]}))))
+
+(deftest verdict-prompt-foregrounds-structural-findings
+  (let [p (verdict/build-prompt
+           {:design design :findings [{:priority 1 :title "t" :body "b" :layer :structural}]
+            :history [] :rounds 1})]
+    (is (str/includes? p "[P1/structural] t"))
+    (is (str/includes? p "the reviewer\ncould not see the design, and you can"))))

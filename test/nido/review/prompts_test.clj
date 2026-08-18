@@ -47,3 +47,16 @@
 (deftest judge-prompt-omits-the-stance-block-when-absent
   (let [out (prompts/judge-prompt {:findings findings :history [] :design design})]
     (is (not (str/includes? out "PROJECT STANCE")))))
+
+(deftest judge-prompt-tags-findings-with-their-layer
+  (let [out (prompts/judge-prompt
+             {:findings [{:priority 1 :title "t" :body "b" :layer :structural}
+                         {:priority 2 :title "u" :body "c"}]
+              :history [] :design design})]
+    (is (str/includes? out "0: [P1/structural] t"))
+    (is (str/includes? out "1: [P2/unclear] u") "an unlabelled finding is unclear, not local")))
+
+(deftest judge-is-told-not-to-patch-a-structural-finding-away
+  (let [out (prompts/judge-prompt {:findings findings :history [] :design design})]
+    (is (str/includes? out "Leave such findings\nout of fix_findings and escalate instead"))
+    (is (str/includes? out "patching a design\nquestion makes it disappear without anyone deciding it"))))

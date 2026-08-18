@@ -70,6 +70,13 @@
    "- escalate: the findings CONTRADICT A NAMED INVARIANT of the design below —\n"
    "  the design is in question, not its execution. Name the invariant in your\n"
    "  reason. Do not escalate because findings merely feel fundamental.\n\n"
+   "Each finding carries a layer the reviewer assigned: local (a defect inside\n"
+   "the current design), structural (about where a boundary sits — the reviewer\n"
+   "could see shape but not intent), or unclear. It is not a severity.\n"
+   "A structural finding is where escalate lives, and it is the one you must NOT\n"
+   "hand to the fixer when it contradicts an invariant below: patching a design\n"
+   "question makes it disappear without anyone deciding it. Leave such findings\n"
+   "out of fix_findings and escalate instead.\n\n"
    (if design
      (str (design-block design) "\n")
      (str "No design record on this workstream. Judge the findings on their own\n"
@@ -78,8 +85,10 @@
    (when stance (str (stance-block stance) "\n"))
    "History of prior rounds (findings + what was fixed):\n"
    (pr-str history) "\n\n"
-   "This round's findings (index: [priority] title — body):\n"
+   "This round's findings (index: [priority/layer] title — body):\n"
    (->> findings
         (map-indexed (fn [i f]
-                       (str i ": [P" (:priority f) "] " (:title f) " — " (:body f))))
+                       (str i ": [P" (:priority f) "/"
+                            (name (or (:layer f) :unclear)) "] "
+                            (:title f) " — " (:body f))))
         (str/join "\n"))))
