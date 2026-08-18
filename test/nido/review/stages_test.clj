@@ -1,6 +1,7 @@
 ;; test/nido/review/stages_test.clj
 (ns nido.review.stages-test
   (:require
+   [clojure.string :as str]
    [clojure.test :refer [deftest is]]
    [nido.coordinator.agent :as agent]
    [nido.review.codex :as codex]
@@ -42,15 +43,53 @@
 (deftest judge-stage-continue
   (with-redefs [agent/launch! (fn [_] {:num-turns 3 :result-error? false
                                        :result-text "```json\n{\"decision\":\"continue\",\"reason\":\"r\",\"fix_findings\":[0]}\n```"})
-                stages/discover-design-doc (fn [_] nil)]
+                stages/discover-design-record (fn [_] nil)
+                stages/project+ws-from-cwd (fn [_] nil)]
     (let [ctx ((:run stages/judge-stage)
                {:config {:cwd "/w" :run-id "r1"} :iter 1 :findings [{:title "x"}]})]
       (is (= :continue (:control ctx)))
       (is (= [0] (-> ctx :judge :fix-findings))))))
 
+(deftest judge-prompt-uses-the-design-record-as-its-yardstick
+  (let [captured (atom nil)]
+    (with-redefs [agent/launch! (fn [{:keys [first-message]}]
+                                  (reset! captured first-message)
+                                  {:num-turns 1 :result-error? false
+                                   :result-text "```json\n{\"decision\":\"stop\",\"reason\":\"r\"}\n```"})
+                  stages/discover-design-record
+                  (fn [_] {:shape "one rounding boundary at the aggregate"
+                           :invariants ["a total is rounded exactly once"]
+                           :rejected [{:alternative "round at render time"
+                                       :why-not "money math in the view"}]
+                           :standing {:relation :conforms}})
+                  stages/project+ws-from-cwd (fn [_] [:brian "ws-1"])
+                  stages/read-stance (fn [_] "the shape of the data is the design")]
+      ((:run stages/judge-stage)
+       {:config {:cwd "/w" :run-id "r1"} :iter 1 :findings [{:title "x"}]})
+      (let [p @captured]
+        (is (str/includes? p "a total is rounded exactly once"))
+        (is (str/includes? p "round at render time") "rejected alternatives reach the judge")
+        (is (str/includes? p "ANSWERED, not new"))
+        (is (str/includes? p "the shape of the data is the design"))
+        (is (str/includes? p "never cite it against a specific finding"))))))
+
+(deftest judge-without-a-design-record-is-told-not-to-escalate
+  (let [captured (atom nil)]
+    (with-redefs [agent/launch! (fn [{:keys [first-message]}]
+                                  (reset! captured first-message)
+                                  {:num-turns 1 :result-error? false
+                                   :result-text "```json\n{\"decision\":\"stop\",\"reason\":\"r\"}\n```"})
+                  stages/discover-design-record (fn [_] nil)
+                  stages/project+ws-from-cwd (fn [_] nil)]
+      ((:run stages/judge-stage)
+       {:config {:cwd "/w" :run-id "r1"} :iter 1 :findings [{:title "x"}]})
+      (is (str/includes? @captured "do NOT escalate")
+          "with no stated invariant there is nothing for a finding to contradict"))))
+
 (deftest judge-stage-noop-is-indeterminate
   (with-redefs [agent/launch! (fn [_] {:num-turns 0 :result-error? false :result-text ""})
-                stages/discover-design-doc (fn [_] nil)]
+                stages/discover-design-record (fn [_] nil)
+                stages/project+ws-from-cwd (fn [_] nil)]
     (let [ctx ((:run stages/judge-stage)
                {:config {:cwd "/w" :run-id "r1"} :iter 1 :findings []})]
       (is (= :stop (:control ctx)))

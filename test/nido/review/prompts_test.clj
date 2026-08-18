@@ -4,15 +4,46 @@
    [clojure.test :refer [deftest is]]
    [nido.review.prompts :as prompts]))
 
-(deftest judge-prompt-inlines-design-doc-content
-  (let [out (prompts/judge-prompt {:findings [{:priority 1 :title "t" :body "b"}]
-                                   :history []
-                                   :design-doc-content "SPEC BODY LINE ONE"})]
-    (is (str/includes? out "SPEC BODY LINE ONE") "inlines the design-doc content")
-    (is (not (str/includes? out "Design doc for context: ")) "no path-handoff line")))
+(def ^:private findings [{:priority 1 :title "t" :body "b"}])
 
-(deftest judge-prompt-omits-design-block-when-no-content
-  (let [out (prompts/judge-prompt {:findings [{:priority 1 :title "t" :body "b"}]
-                                   :history []
-                                   :design-doc-content nil})]
-    (is (not (str/includes? out "Design doc")) "no design-doc block when content is nil")))
+(def ^:private design
+  {:shape      "one rounding boundary at the order aggregate"
+   :invariants ["a total is rounded exactly once"]
+   :rejected   [{:alternative "round at render time" :why-not "money math in the view"}]
+   :standing   {:relation :challenges :note "money math needs an accumulator"}})
+
+(deftest judge-prompt-inlines-the-design-record
+  (let [out (prompts/judge-prompt {:findings findings :history [] :design design})]
+    (is (str/includes? out "one rounding boundary at the order aggregate"))
+    (is (str/includes? out "a total is rounded exactly once"))
+    (is (str/includes? out "challenges — money math needs an accumulator"))
+    (is (not (str/includes? out "Design doc")) "no path-handoff, no glob'd spec")))
+
+(deftest judge-prompt-carries-rejected-alternatives-as-answered
+  (let [out (prompts/judge-prompt {:findings findings :history [] :design design})]
+    (is (str/includes? out "round at render time"))
+    (is (str/includes? out "rejected because money math in the view"))
+    (is (str/includes? out "ANSWERED, not new")
+        "a finding re-proposing a rejected alternative is answered, not a new problem")))
+
+(deftest judge-prompt-ties-escalate-to-a-named-invariant
+  (let [out (prompts/judge-prompt {:findings findings :history [] :design design})]
+    (is (str/includes? out "CONTRADICT A NAMED INVARIANT"))
+    (is (str/includes? out "Do not escalate because findings merely feel fundamental"))))
+
+(deftest judge-prompt-without-a-design-record-forbids-escalation
+  (let [out (prompts/judge-prompt {:findings findings :history [] :design nil})]
+    (is (str/includes? out "No design record on this workstream"))
+    (is (str/includes? out "do NOT escalate"))
+    (is (not (str/includes? out "Invariants:")))))
+
+(deftest judge-prompt-marks-the-stance-as-framing-not-checklist
+  (let [out (prompts/judge-prompt {:findings findings :history [] :design design
+                                   :stance "the shape of the data is the design"})]
+    (is (str/includes? out "the shape of the data is the design"))
+    (is (str/includes? out "NOT a checklist"))
+    (is (str/includes? out "never cite it against a specific finding"))))
+
+(deftest judge-prompt-omits-the-stance-block-when-absent
+  (let [out (prompts/judge-prompt {:findings findings :history [] :design design})]
+    (is (not (str/includes? out "PROJECT STANCE")))))

@@ -174,6 +174,22 @@
                     (assoc entry :seq seq-n :at (clock/now-iso) :file rel)))
     abs))
 
+(defn latest-entry
+  "The most recent typed entry of `kind` on this workstream — parsed, validated,
+   and stamped with its :seq and :at — or nil. Degrades to nil on a missing,
+   unreadable, or schema-failing payload: a reader asking for the design record
+   must be able to find none without the caller crashing."
+  [project ws-id kind]
+  (when-let [w (read-ws project ws-id)]
+    (when-let [e (->> (:entries w)
+                      (filter #(= kind (:kind %)))
+                      (sort-by :seq)
+                      last)]
+      (let [f (str (fs/path (cstate/workstream-dir project ws-id) (:file e)))]
+        (try (-> (report/validate-event kind (io/read-edn f))
+                 (assoc :seq (:seq e) :at (:at e)))
+             (catch Throwable _ nil))))))
+
 (defn list-ids
   "Vector of ws-ids under a project's workstreams dir; [] if none."
   [project]

@@ -8,9 +8,13 @@
    [cheshire.core :as json]
    [clojure.string :as str]
    [nido.coordinator.agent :as agent]
+   [nido.coordinator.session :as csession]
    [nido.coordinator.state :as cstate]
+   [nido.coordinator.workstream :as ws]
+   [nido.core :as core]
    [nido.review.codex :as codex]
    [nido.review.prompts :as prompts]
+   [nido.session.lifecycle :as lifecycle]
    [nido.vsdd.jj :as jj]))
 
 (def ^:private fenced-json-re #"(?s)```json\s*(\{.*?\})\s*```")
@@ -43,31 +47,46 @@
                       :base-rev (:base-rev res)
                       :manifest (:manifest res)))))})
 
-(defn discover-design-doc
-  "Newest docs/superpowers/specs/*-design.md under cwd, or nil."
+(defn project+ws-from-cwd
+  "Resolve cwd → [project ws-id] via the session, or nil. The same path
+   tasks.nido-review/append-review-entry! takes to find where to write."
   [cwd]
-  (let [dir (fs/path cwd "docs" "superpowers" "specs")]
-    (when (fs/exists? dir)
-      (some->> (fs/glob dir "*-design.md")
-               seq
-               (sort-by #(str (fs/file-name %)))
-               last
-               str))))
+  (try
+    (when-let [{:keys [project session]} (lifecycle/session-from-cwd cwd)]
+      (when-let [ws-id (csession/workstream-id-for (keyword project) session)]
+        [(keyword project) ws-id]))
+    (catch Throwable _ nil)))
 
-(def ^:private design-doc-char-cap 12000)
+(defn discover-design-record
+  "This workstream's latest :design record, or nil.
 
-(defn- read-design-doc
-  "Slurp a design-doc path, capped so it can't blow up the judge prompt.
-   nil path -> nil. Read failures degrade to nil rather than aborting the
-   (headless) review run — a missing design doc is recoverable, a crash isn't."
-  [path]
-  (when path
+   Replaces a glob for the newest `docs/superpowers/specs/*-design.md`, which
+   picked a file by filename order — in a project with a specs directory that is
+   almost never the design of the change under review. The yardstick has to be the
+   design *this* change committed to, and the ledger is where that lives."
+  [cwd]
+  (when-let [[project ws-id] (project+ws-from-cwd cwd)]
+    (ws/latest-entry project ws-id :design)))
+
+(def ^:private stance-char-cap 12000)
+
+(defn read-stance
+  "The project's stance text, from nido's own tree, capped so it can't blow up the
+   judge prompt. Read from the source dir rather than cwd: the review runs in the
+   worktree, and the stance ships with the /design skill in nido's `.claude`, which
+   the worktree does not carry. Missing or unreadable degrades to nil — a headless
+   review must not die for want of framing."
+  [project]
+  (when project
     (try
-      (let [s (slurp path)]
-        (if (> (count s) design-doc-char-cap)
-          (str (subs s 0 design-doc-char-cap) "\n\n…[design doc truncated]")
-          s))
-      (catch java.io.IOException _ nil))))
+      (let [f (fs/path (core/nido-source-dir) ".claude" "skills" "design"
+                       "stances" (str (name project) ".md"))]
+        (when (fs/exists? f)
+          (let [s (slurp (str f))]
+            (if (> (count s) stance-char-cap)
+              (str (subs s 0 stance-char-cap) "\n\n…[stance truncated]")
+              s))))
+      (catch Throwable _ nil))))
 
 (def judge-stage
   {:name :judge
@@ -76,7 +95,8 @@
                  prompt (prompts/judge-prompt
                          {:findings (:findings ctx)
                           :history (mapv #(dissoc % :findings) (:history ctx))
-                          :design-doc-content (read-design-doc (discover-design-doc cwd))})
+                          :design  (discover-design-record cwd)
+                          :stance  (read-stance (first (project+ws-from-cwd cwd)))})
                  {:keys [num-turns result-error? result-text]}
                  (agent/launch! {:run-id run-id :cwd cwd
                                  :first-message prompt :budget budget
