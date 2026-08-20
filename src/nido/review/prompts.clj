@@ -125,10 +125,14 @@
    (when stance (str (stance-block stance) "\n"))
    "History of prior rounds (findings + what was fixed):\n"
    (pr-str history) "\n\n"
-   "This round's findings (index: [priority/reach] title — body):\n"
+   "This round's findings (index: [priority/reach @reported-by] title — body).\n"
+   "@reported-by is the layer whose review surfaced it, or `stack` for the pass\n"
+   "over the whole change. It is where the finding was SEEN, which is not\n"
+   "necessarily the layer that caused it.\n"
    (->> findings
         (map-indexed (fn [i f]
                        (str i ": [P" (:priority f) "/"
-                            (name (or (:reach f) :unclear)) "] "
+                            (name (or (:reach f) :unclear))
+                            (when-let [l (:from-layer f)] (str " @" l)) "] "
                             (:title f) " — " (:body f))))
         (str/join "\n"))))

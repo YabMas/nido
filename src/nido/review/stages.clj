@@ -35,19 +35,116 @@
           {:decision :indeterminate :reason (str "unparseable: " (ex-message e))}))
       {:decision :indeterminate :reason "no json decision block"})))
 
+(defn session-stack
+  "This session's layers, bottom→top, or [] when cwd resolves to no session (a
+   review run outside a nido worktree still has to work — it just has no stack
+   to land on)."
+  [cwd base]
+  (try
+    (if-let [session (:session (lifecycle/session-from-cwd cwd))]
+      (layers/stack cwd session (or base "main"))
+      [])
+    (catch Throwable _ [])))
+
+(def ^:private max-concurrent-reviews
+  "Reviews are codex processes that spend their life waiting on an API, so they
+   are cheap to hold open — but not free, and a wide stack should not open a
+   dozen at once."
+  6)
+
+(defn in-parallel
+  "Run each thunk, at most `n` at a time, preserving order.
+
+   An exception in any thunk propagates carrying its ORIGINAL ex-data: a bare
+   future deref wraps it in ExecutionException, which would hide the
+   :review-failed reason the engine branches on and turn a failed review into an
+   unhandled crash."
+  [n thunks]
+  (into []
+        (mapcat (fn [chunk]
+                  (let [futs (mapv #(future (%)) chunk)]
+                    (mapv (fn [f]
+                            (try @f
+                                 (catch java.util.concurrent.ExecutionException e
+                                   (throw (or (.getCause e) e)))))
+                          futs))))
+        (partition-all n thunks)))
+
+(defn review-targets
+  "What this round reviews: one target per layer, bounded by that layer's brief,
+   plus one over the whole stack.
+
+   The whole-stack target is what finds a defect that exists only in the
+   COMPOSITION of two layers — something no layer reviewer can see, since each
+   one is shown a diff in which the other layer does not appear. It is therefore
+   only worth running when there are at least two layers to compose; below that
+   it is the same diff twice, and the stack target is the only one."
+  [cwd base]
+  (let [base-rev (codex/merge-base cwd base)
+        stack    (session-stack cwd base)
+        whole    {:label "stack" :from base-rev :to "@" :brief nil :stack? true}]
+    (if (< (count stack) 2)
+      [whole]
+      (conj (mapv (fn [r] {:label (or (:slug r) (:bookmark r))
+                           :layer r
+                           :from  (:from r)
+                           :to    (:to r)
+                           :brief (layers/brief cwd (:tip r))})
+                  (layers/ranges stack base-rev))
+            whole))))
+
+(defn- collect-findings
+  "Flatten every target's findings, stamping each with the target that reported
+   it, and drop exact repeats.
+
+   A finding seen at the same file, line and title by two targets is one
+   finding — the layer reviewer's copy wins because layer targets come first and
+   its view is the more specific one. This is only the mechanical case; deciding
+   that two DIFFERENTLY worded findings are the same defect needs a view across
+   layers, which is the arbiter's job."
+  [results]
+  (->> results
+       (mapcat (fn [{:keys [target] :as r}]
+                 (map #(assoc % :from-layer (:label target)) (:findings r))))
+       (reduce (fn [{:keys [seen out] :as acc} f]
+                 (let [k [(:file f) (:line-start f) (:title f)]]
+                   (if (contains? seen k)
+                     acc
+                     {:seen (conj seen k) :out (conj out f)})))
+               {:seen #{} :out []})
+       :out))
+
 (def review-stage
+  "Every layer and the whole stack, reviewed in one round.
+
+   Reviews are read-only and independent — that independence is exactly what a
+   layer's `Out of scope` buys — so they fan out in parallel. Nothing here
+   touches the working copy, and file content is read at each target's own
+   revision, so concurrent reviews cannot see each other's state."
   {:name :review
    :run  (fn [ctx]
            (let [{:keys [cwd base run-id]} (:config ctx)
-                 res (codex/review! {:cwd cwd :run-id run-id :iter (:iter ctx)
-                                     :from (codex/merge-base cwd base) :to "@"})]
-             (if (= :clean (:status res))
-               (assoc ctx :findings [] :control :stop :status :clean)
+                 targets (review-targets cwd base)
+                 results (in-parallel
+                          max-concurrent-reviews
+                          (map (fn [t]
+                                 #(assoc (codex/review!
+                                          {:cwd cwd :run-id run-id :iter (:iter ctx)
+                                           :from (:from t) :to (:to t)
+                                           :label (:label t) :brief (:brief t)})
+                                         :target t))
+                               targets))
+                 whole    (or (first (filter #(:stack? (:target %)) results))
+                              (first results))
+                 findings (collect-findings results)]
+             (if (empty? findings)
+               (assoc ctx :findings [] :reviews results :control :stop :status :clean)
                (assoc ctx
-                      :findings (:findings res)
-                      :overall-correctness (:overall-correctness res)
-                      :base-rev (:base-rev res)
-                      :manifest (:manifest res)))))})
+                      :findings findings
+                      :reviews results
+                      :overall-correctness (:overall-correctness whole)
+                      :base-rev (:base-rev whole)
+                      :manifest (:manifest whole)))))})
 
 (defn project+ws-from-cwd
   "Resolve cwd → [project ws-id] via the session, or nil. The same path
@@ -119,17 +216,6 @@
 (defn- select-findings
   [findings idxs]
   (if (seq idxs) (into [] (keep #(nth findings % nil)) idxs) findings))
-
-(defn session-stack
-  "This session's layers, bottom→top, or [] when cwd resolves to no session (a
-   review run outside a nido worktree still has to work — it just has no stack
-   to land on)."
-  [cwd base]
-  (try
-    (if-let [session (:session (lifecycle/session-from-cwd cwd))]
-      (layers/stack cwd session (or base "main"))
-      [])
-    (catch Throwable _ [])))
 
 (def fix-stage
   "Fixes land INSIDE the stack, on the layer that owns them.

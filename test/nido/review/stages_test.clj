@@ -5,6 +5,7 @@
    [clojure.test :refer [deftest is]]
    [nido.coordinator.agent :as agent]
    [nido.review.codex :as codex]
+   [nido.review.layers :as layers]
    [nido.review.stages :as stages]
    [nido.vsdd.jj :as jj]))
 
@@ -30,7 +31,8 @@
                                        :overall-correctness "incorrect"})]
     (let [ctx ((:run stages/review-stage)
                {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 1})]
-      (is (= [{:title "x"}] (:findings ctx)))
+      (is (= [{:title "x" :from-layer "stack"}] (:findings ctx))
+          "an unstacked branch is one whole-stack target")
       (is (= "incorrect" (:overall-correctness ctx)))
       (is (nil? (:control ctx))))))
 
@@ -214,3 +216,73 @@
       ((:run stages/review-stage) {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 1})
       (is (= "FORK-OF-main" (:from @seen)))
       (is (= "@" (:to @seen))))))
+
+;; ---- fan-out: every layer plus the whole stack ---------------------------
+
+(deftest in-parallel-preserves-order
+  (is (= [1 2 3 4 5] (stages/in-parallel 2 (map (fn [n] #(do (Thread/sleep (- 20 (* 3 n))) n))
+                                                [1 2 3 4 5])))))
+
+(deftest in-parallel-propagates-the-original-ex-data
+  ;; A bare future deref wraps in ExecutionException, which would hide the
+  ;; :review-failed reason the engine branches on.
+  (is (= :review-failed
+         (try (stages/in-parallel 2 [#(throw (ex-info "boom" {:reason :review-failed}))
+                                     (fn [] :ok)])
+              nil
+              (catch clojure.lang.ExceptionInfo e (:reason (ex-data e)))))))
+
+(deftest review-targets-cover-each-layer-and-the-whole-stack
+  (with-redefs [codex/merge-base    (fn [& _] "FORK")
+                stages/session-stack (fn [& _] [{:bookmark "s--a" :slug "a" :tip "cA"}
+                                                {:bookmark "s--b" :slug "b" :tip "cB"}])
+                layers/brief         (fn [_ rev] {:claims (str "claim of " rev)})]
+    (let [ts (stages/review-targets "/w" "main")]
+      (is (= ["a" "b" "stack"] (map :label ts)))
+      (is (= [["FORK" "cA"] ["cA" "cB"] ["FORK" "@"]] (map (juxt :from :to) ts)))
+      (is (= "claim of cA" (:claims (:brief (first ts)))) "each layer carries its own brief")
+      (is (nil? (:brief (last ts))) "the whole-stack pass is deliberately unbounded"))))
+
+(deftest review-targets-skip-the-stack-pass-below-two-layers
+  ;; A composition defect needs two layers to compose. With one layer the stack
+  ;; pass is the same diff twice.
+  (with-redefs [codex/merge-base     (fn [& _] "FORK")
+                stages/session-stack (fn [& _] [{:bookmark "s" :slug nil :tip "cA"}])
+                layers/brief         (fn [& _] nil)]
+    (is (= ["stack"] (map :label (stages/review-targets "/w" "main")))))
+  (with-redefs [codex/merge-base     (fn [& _] "FORK")
+                stages/session-stack (fn [& _] [])]
+    (is (= ["stack"] (map :label (stages/review-targets "/w" "main"))))))
+
+(deftest review-stage-stamps-each-finding-with-the-layer-that-reported-it
+  (with-redefs [codex/merge-base     (fn [& _] "FORK")
+                stages/session-stack (fn [& _] [{:bookmark "s--a" :slug "a" :tip "cA"}
+                                                {:bookmark "s--b" :slug "b" :tip "cB"}])
+                layers/brief         (fn [& _] nil)
+                codex/review!        (fn [{:keys [label]}]
+                                       {:status nil
+                                        :findings [{:title (str "f-" label) :file "x.clj"
+                                                    :line-start 1}]})]
+    (let [ctx ((:run stages/review-stage) {:config {:cwd "/w" :base "main" :run-id "r"} :iter 1})]
+      (is (= #{"a" "b" "stack"} (set (map :from-layer (:findings ctx))))))))
+
+(deftest review-stage-drops-a-finding-two-targets-report-identically
+  (with-redefs [codex/merge-base     (fn [& _] "FORK")
+                stages/session-stack (fn [& _] [{:bookmark "s--a" :slug "a" :tip "cA"}
+                                                {:bookmark "s--b" :slug "b" :tip "cB"}])
+                layers/brief         (fn [& _] nil)
+                codex/review!        (fn [_] {:status nil
+                                              :findings [{:title "same" :file "x.clj"
+                                                          :line-start 7}]})]
+    (let [ctx ((:run stages/review-stage) {:config {:cwd "/w" :base "main" :run-id "r"} :iter 1})]
+      (is (= 1 (count (:findings ctx))))
+      (is (= "a" (:from-layer (first (:findings ctx))))
+          "the layer reviewer's copy wins over the whole-stack copy"))))
+
+(deftest review-stage-is-clean-only-when-no-target-found-anything
+  (with-redefs [codex/merge-base     (fn [& _] "FORK")
+                stages/session-stack (fn [& _] [])
+                codex/review!        (fn [_] {:status :clean :findings []})]
+    (let [ctx ((:run stages/review-stage) {:config {:cwd "/w" :base "main" :run-id "r"} :iter 1})]
+      (is (= :clean (:status ctx)))
+      (is (= :stop (:control ctx))))))
