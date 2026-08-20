@@ -27,14 +27,14 @@
   [round]
   (let [phases (:phases round)
         ph     (fn [n] (last (filter #(= n (:phase %)) phases)))
-        review (ph "review") judge (ph "judge") fix (ph "fix")]
+        review (ph "review") arbiter (ph "arbiter") fix (ph "fix")]
     (cond
       (some #(= "error" (:status %)) phases)                       "failed"
       (and review (= "ok" (:status review))
-           (empty? (:findings review)) (nil? judge))              "clean"
-      (= "escalate" (:decision judge))                            "escalated"
+           (empty? (:findings review)) (nil? arbiter))              "clean"
+      (= "escalate" (:decision arbiter))                            "escalated"
       (and fix (:commit fix))                                     "continued"
-      (= "stop" (:decision judge))                                "stopped"
+      (= "stop" (:decision arbiter))                                "stopped"
       :else                                                       "ended")))
 
 (defn- close-current-round
@@ -77,7 +77,7 @@
     (case phase
       :review (assoc ph :overall-correctness (:overall-correctness ctx)
                         :findings (vec (:findings ctx)))
-      :judge  (let [j (:judge ctx)]
+      :arbiter  (let [j (:arbiter ctx)]
                 (assoc ph :decision (some-> (:decision j) name)
                           :reason (:reason j)
                           :fix-findings (:fix-findings j)))

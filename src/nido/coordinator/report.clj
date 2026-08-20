@@ -209,7 +209,7 @@
    effort. Replaces ImplementationPlan, and drops its :steps: a step list is
    working memory, and the ledger holds what survives the session.
 
-   :invariants is required and non-empty on purpose. It is what the review judge
+   :invariants is required and non-empty on purpose. It is what the review arbiter
    checks findings against; a design that names none is unfalsifiable, and every
    finding against it becomes a matter of taste."
   [:map {:closed true}
@@ -318,7 +318,9 @@
    [:format             [:= :review-report]]
    [:status             [:enum :converged :escalated :clean :no-progress
                                :max-iters :review-failed :dry-run
-                               :fix-noop :judge-indeterminate]]
+                               :fix-noop :arbiter-indeterminate
+                               ;; pre-rename ledger entries stay readable
+                               :judge-indeterminate]]
    [:base               string?]
    [:base-rev           [:maybe string?]]
    [:rounds             int?]

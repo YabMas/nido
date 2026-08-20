@@ -39,24 +39,24 @@
     (is (= "BASE" (:base-rev (:target r))))
     (is (= ["src/a.clj" "src/b.clj"] (:files (:target r))))))
 
-(deftest judge-and-fix-fill-in-the-round
+(deftest arbiter-and-fix-fill-in-the-round
   (let [r (drive
            [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
             {:event :phase-started :iter 1 :phase :review :at "t1"}
             {:event :phase-finished :iter 1 :phase :review :at "t2"
              :ctx {:findings [{:title "b"}] :overall-correctness "x"
                    :base-rev "B" :manifest "a"}}
-            {:event :phase-started :iter 1 :phase :judge :at "t3"}
-            {:event :phase-finished :iter 1 :phase :judge :at "t4"
-             :ctx {:judge {:decision :continue :reason "real" :fix-findings [0]}}}
+            {:event :phase-started :iter 1 :phase :arbiter :at "t3"}
+            {:event :phase-finished :iter 1 :phase :arbiter :at "t4"
+             :ctx {:arbiter {:decision :continue :reason "real" :fix-findings [0]}}}
             {:event :phase-started :iter 1 :phase :fix :at "t5"}
             {:event :phase-finished :iter 1 :phase :fix :at "t6"
              :ctx {:history [{:iter 1 :commit "abc1234567" :fixed-count 1}]}}])
         phases (:phases (first (:rounds r)))
-        judge  (some #(when (= "judge" (:phase %)) %) phases)
+        arbiter  (some #(when (= "arbiter" (:phase %)) %) phases)
         fix    (some #(when (= "fix" (:phase %)) %) phases)]
-    (is (= "continue" (:decision judge)))
-    (is (= [0] (:fix-findings judge)))
+    (is (= "continue" (:decision arbiter)))
+    (is (= [0] (:fix-findings arbiter)))
     (is (= "abc1234567" (:commit fix)))
     (is (= 1 (:fixed-count fix)))))
 

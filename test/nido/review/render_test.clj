@@ -17,7 +17,7 @@
                        :overall-correctness "incorrect"
                        :findings [{:title "bug" :file "src/a.clj"
                                    :line-start 5 :line-end 6 :priority 1}]}
-                      {:phase "judge" :status "running"
+                      {:phase "arbiter" :status "running"
                        :started-at "2026-06-30T14:00:30Z"}]}]
    :summary nil})
 
@@ -27,13 +27,13 @@
     (is (str/includes? s "reviewing"))
     (is (str/includes? s "2 files"))
     (is (str/includes? s "1 finding"))      ; review done summary
-    (is (str/includes? s "judging"))
-    (is (str/includes? s "00:12"))          ; judge elapsed: 14:00:42 - 14:00:30
+    (is (str/includes? s "arbitrating"))
+    (is (str/includes? s "00:12"))          ; arbiter elapsed: 14:00:42 - 14:00:30
     (is (str/includes? s "✓"))))            ; review ok glyph
 
-(deftest frame-shows-judge-decision-when-done
+(deftest frame-shows-arbiter-decision-when-done
   (let [r (assoc-in running-report [:rounds 0 :phases 1]
-                    {:phase "judge" :status "ok" :decision "continue"
+                    {:phase "arbiter" :status "ok" :decision "continue"
                      :fix-findings [0 2]})
         s (render/frame r now)]
     (is (str/includes? s "continue"))

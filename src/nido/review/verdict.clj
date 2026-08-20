@@ -4,7 +4,7 @@
    the findings were the ironing-out of implementation details of a sound design,
    or evidence the design itself is wrong.
 
-   Distinct from the in-loop judge in two ways. The judge decides whether to spend
+   Distinct from the in-loop arbiter in two ways. The arbiter decides whether to spend
    another fix round and is report-only (`:tools \"\"`), so it cannot read code —
    it reasons purely from what the record says. This pass is asked whether the
    design survived contact with the code, which cannot be answered without looking
@@ -50,7 +50,7 @@
           "finding:\n" stance "\n\n"))
    "Rounds run: " rounds "\n"
    "Round history (findings + what was fixed):\n" (pr-str history) "\n\n"
-   "Findings still open at the end. Each carries the layer the reviewer assigned:\n"
+   "Findings still open at the end. Each carries the reach the reviewer assigned:\n"
    "local (a defect inside the current design), structural (about where a\n"
    "boundary sits — the reviewer saw shape without intent), or unclear. The\n"
    "structural ones are what you are really here to adjudicate: the reviewer\n"
@@ -58,7 +58,7 @@
    (if (seq findings)
      (->> findings
           (map-indexed (fn [i f] (str i ": [P" (:priority f) "/"
-                                      (name (or (:layer f) :unclear)) "] "
+                                      (name (or (:reach f) :unclear)) "] "
                                       (:title f) " — " (:body f))))
           (str/join "\n"))
      "(none)")

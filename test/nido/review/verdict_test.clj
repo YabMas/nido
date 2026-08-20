@@ -72,7 +72,7 @@
 
 (deftest verdict-prompt-foregrounds-structural-findings
   (let [p (verdict/build-prompt
-           {:design design :findings [{:priority 1 :title "t" :body "b" :layer :structural}]
+           {:design design :findings [{:priority 1 :title "t" :body "b" :reach :structural}]
             :history [] :rounds 1})]
     (is (str/includes? p "[P1/structural] t"))
     (is (str/includes? p "the reviewer\ncould not see the design, and you can"))))

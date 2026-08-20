@@ -20,7 +20,7 @@
     {:title      (:title raw)
      :body       (:body raw)
      :priority   (:priority raw)
-     :layer      (some-> (:layer raw) keyword)
+     :reach      (some-> (:reach raw) keyword)
      :confidence (:confidence_score raw)
      :file       (:absolute_file_path loc)
      :line-start (:start lr)

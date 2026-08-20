@@ -32,7 +32,7 @@
 (def sample-output
   (str "{\"findings\":[{\"title\":\"[P1] Remove the extra accumulation\","
        "\"body\":\"Overcharges every payment.\",\"confidence_score\":0.9,"
-       "\"priority\":1,\"layer\":\"structural\","
+       "\"priority\":1,\"reach\":\"structural\","
        "\"code_location\":{\"absolute_file_path\":\"/w/pay.js\","
        "\"line_range\":{\"start\":4,\"end\":4}}}],"
        "\"overall_correctness\":\"incorrect\"}"))
@@ -43,7 +43,7 @@
     (is (= 1 (count findings)))
     (is (= {:title "[P1] Remove the extra accumulation"
             :body "Overcharges every payment."
-            :priority 1 :layer :structural :confidence 0.9
+            :priority 1 :reach :structural :confidence 0.9
             :file "/w/pay.js" :line-start 4 :line-end 4}
            (first findings)))))
 
@@ -178,12 +178,12 @@
       (is (re-find #"MERGEBASE123" @captured)
           "codex prompt points codex at the merge base for its exploration"))))
 
-(deftest parse-output-tolerates-a-finding-with-no-layer
+(deftest parse-output-tolerates-a-finding-with-no-reach
   (let [out (str "{\"findings\":[{\"title\":\"t\",\"body\":\"b\","
                  "\"confidence_score\":0.5,\"priority\":2,"
                  "\"code_location\":{\"absolute_file_path\":\"/w/a.clj\","
                  "\"line_range\":{\"start\":1,\"end\":2}}}],"
                  "\"overall_correctness\":\"correct\"}")
         f   (first (:findings (codex/parse-output out)))]
-    (is (nil? (:layer f))
+    (is (nil? (:reach f))
         "the schema requires it, but a stale or hand-made payload must still parse")))

@@ -6,7 +6,7 @@ Ignore trivial style, formatting, typos, and documentation nits. Prefer outputti
 
 Begin each finding title with a priority tag: [P0] drop-everything/blocking, [P1] urgent, [P2] normal, [P3] low/nice-to-have. Set the numeric "priority" field to 0/1/2/3 accordingly (or null if undetermined). The body is one Markdown paragraph explaining why it is a problem, citing files/lines; keep line ranges tight. Set "confidence_score" between 0.0 and 1.0. Set "overall_correctness" to "correct" when the patch is free of blocking issues, else "incorrect".
 
-Set "layer" on every finding. This is you saying how far your view reaches — it is NOT a severity and it does not change priority:
+Set "reach" on every finding. This is you saying how far your view reaches — it is NOT a severity and it does not change priority:
 
 - "local" — the defect sits inside the current design. The intended shape is clear from the surrounding code and this violates it. Most findings are local.
 - "structural" — you can see the shape is off but not whether it is wrong. The finding is really about where a boundary sits, what owns a piece of state, or whether two things should be one thing. You are reading structure without the intent behind it.

@@ -16,7 +16,7 @@
           "body",
           "confidence_score",
           "priority",
-          "layer",
+          "reach",
           "code_location"
         ],
         "properties": {
@@ -35,7 +35,7 @@
               "null"
             ]
           },
-          "layer": {
+          "reach": {
             "type": "string",
             "enum": [
               "local",

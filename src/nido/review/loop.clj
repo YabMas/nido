@@ -9,7 +9,7 @@
   (:import
    [java.time Instant]))
 
-(def default-pipeline [stages/review-stage stages/judge-stage stages/fix-stage])
+(def default-pipeline [stages/review-stage stages/arbiter-stage stages/fix-stage])
 
 (defn- finding-key [f] [(:file f) (:line-start f) (:title f)])
 

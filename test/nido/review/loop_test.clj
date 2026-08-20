@@ -10,12 +10,12 @@
   (let [events (atom [])]
     [events (fn [e] (swap! events conj e))]))
 
-(deftest stops-when-judge-says-stop
+(deftest stops-when-arbiter-says-stop
   (let [calls (atom [])
         [_ emit] (capturing)
         pipe [(stage :review (fn [c] (swap! calls conj :review)
                                (assoc c :findings [{:title "x"}])))
-              (stage :judge  (fn [c] (swap! calls conj :judge)
+              (stage :arbiter  (fn [c] (swap! calls conj :arbiter)
                                (assoc c :control :stop)))
               (stage :fix    (fn [c] (swap! calls conj :fix) c))]
         out (rloop/run-loop {:run-id "r1" :max-iters 5 :pipeline pipe :emit emit})]
@@ -25,8 +25,8 @@
 (deftest escalate-is-terminal
   (let [[_ emit] (capturing)
         pipe [(stage :review (fn [c] (assoc c :findings [{:title "x"}])))
-              (stage :judge  (fn [c] (assoc c :control :escalate
-                                            :judge {:reason "redesign"})))
+              (stage :arbiter  (fn [c] (assoc c :control :escalate
+                                            :arbiter {:reason "redesign"})))
               (stage :fix    (fn [c] c))]
         out (rloop/run-loop {:run-id "r1" :max-iters 5 :pipeline pipe :emit emit})]
     (is (= :escalated (:status out)))))
@@ -34,7 +34,7 @@
 (deftest caps-at-max-iters
   (let [[_ emit] (capturing)
         pipe [(stage :review (fn [c] (assoc c :findings [{:title (str (:iter c))}])))
-              (stage :judge  (fn [c] (assoc c :control :continue :judge {:fix-findings nil})))
+              (stage :arbiter  (fn [c] (assoc c :control :continue :arbiter {:fix-findings nil})))
               (stage :fix    (fn [c] (update c :history (fnil conj []) {:iter (:iter c)})))]
         out (rloop/run-loop {:run-id "r1" :max-iters 3 :pipeline pipe :emit emit})]
     (is (= :max-iters (:status out)))
@@ -43,7 +43,7 @@
 (deftest stops-on-no-progress
   (let [[_ emit] (capturing)
         pipe [(stage :review (fn [c] (assoc c :findings [{:title "same"}])))
-              (stage :judge  (fn [c] (assoc c :control :continue :judge {:fix-findings nil})))
+              (stage :arbiter  (fn [c] (assoc c :control :continue :arbiter {:fix-findings nil})))
               (stage :fix    (fn [c] (update c :history (fnil conj []) {:iter (:iter c)})))]
         out (rloop/run-loop {:run-id "r1" :max-iters 10 :pipeline pipe :emit emit})]
     (is (= :no-progress (:status out)))))
@@ -51,7 +51,7 @@
 (deftest review-clean-terminates
   (let [[_ emit] (capturing)
         pipe [(stage :review (fn [c] (assoc c :findings [] :control :stop :status :clean)))
-              (stage :judge  (fn [c] c))
+              (stage :arbiter  (fn [c] c))
               (stage :fix    (fn [c] c))]
         out (rloop/run-loop {:run-id "r1" :max-iters 5 :pipeline pipe :emit emit})]
     (is (= :clean (:status out)))))
@@ -59,7 +59,7 @@
 (deftest review-failed-is-terminal
   (let [[_ emit] (capturing)
         pipe [(stage :review (fn [_] (throw (ex-info "codex review failed" {:reason :review-failed}))))
-              (stage :judge (fn [c] c))
+              (stage :arbiter (fn [c] c))
               (stage :fix (fn [c] c))]
         out (rloop/run-loop {:run-id "r1" :max-iters 3 :pipeline pipe :emit emit})]
     (is (= :review-failed (:status out)))))
@@ -67,7 +67,7 @@
 (deftest emit-narrates-the-lifecycle
   (let [[events emit] (capturing)
         pipe [(stage :review (fn [c] (assoc c :findings [{:title "x"}])))
-              (stage :judge  (fn [c] (assoc c :control :stop :judge {:decision :stop})))
+              (stage :arbiter  (fn [c] (assoc c :control :stop :arbiter {:decision :stop})))
               (stage :fix    (fn [c] c))]
         _ (rloop/run-loop {:run-id "r1" :max-iters 5 :pipeline pipe :emit emit
                            :cwd "/w" :base "main"})

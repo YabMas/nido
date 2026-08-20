@@ -29,7 +29,8 @@
     "review" (str "reviewing"
                   (when (seq (:files target))
                     (str " diff (" (count (:files target)) " files)")))
-    "judge"  "judging"
+    ;; "judge" — report.json written before the rename
+    ("arbiter" "judge") "arbitrating"
     "fix"    "fixing"
     (:phase ph)))
 
@@ -38,7 +39,7 @@
     "review" (when (= "ok" (:status ph))
                (let [n (count (:findings ph))]
                  (str n " finding" (when (not= 1 n) "s"))))
-    "judge"  (when (:decision ph)
+    ("arbiter" "judge") (when (:decision ph)
                (str "→ " (:decision ph)
                     (when (seq (:fix-findings ph))
                       (str " (fix " (str/join "," (:fix-findings ph)) ")"))))

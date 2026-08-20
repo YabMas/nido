@@ -1,7 +1,7 @@
 ;; src/nido/review/stages.clj
 (ns nido.review.stages
-  "The review loop's three stages (review/judge/fix) as {:name :run} maps,
-   plus the judge-decision parser. Stages only transform the iteration
+  "The review loop's three stages (review/arbiter/fix) as {:name :run} maps,
+   plus the arbiter-decision parser. Stages only transform the iteration
    context; the engine owns flow."
   (:require
    [babashka.fs :as fs]
@@ -20,7 +20,7 @@
 
 (def ^:private fenced-json-re #"(?s)```json\s*(\{.*?\})\s*```")
 
-(defn parse-judge-decision
+(defn parse-arbiter-decision
   "Last fenced ```json block in `text` -> decision map. Unparseable -> indeterminate."
   [text]
   (let [block (when (string? text) (last (re-seq fenced-json-re text)))]
@@ -73,7 +73,7 @@
 
 (defn read-stance
   "The project's stance text, from nido's own tree, capped so it can't blow up the
-   judge prompt. Read from the source dir rather than cwd: the review runs in the
+   arbiter prompt. Read from the source dir rather than cwd: the review runs in the
    worktree, and the stance ships with the /design skill in nido's `.claude`, which
    the worktree does not carry. Missing or unreadable degrades to nil — a headless
    review must not die for want of framing."
@@ -89,11 +89,11 @@
               s))))
       (catch Throwable _ nil))))
 
-(def judge-stage
-  {:name :judge
+(def arbiter-stage
+  {:name :arbiter
    :run  (fn [ctx]
            (let [{:keys [cwd run-id budget]} (:config ctx)
-                 prompt (prompts/judge-prompt
+                 prompt (prompts/arbiter-prompt
                          {:findings (:findings ctx)
                           :history (mapv #(dissoc % :findings) (:history ctx))
                           :design  (discover-design-record cwd)
@@ -103,12 +103,12 @@
                                  :first-message prompt :budget budget
                                  :tools ""
                                  :err-file (str (fs/path (cstate/run-dir run-id) "agent.err.log"))})
-                 decision (parse-judge-decision result-text)]
+                 decision (parse-arbiter-decision result-text)]
              (if (or (zero? (or num-turns 0)) result-error?
                      (= :indeterminate (:decision decision)))
-               (assoc ctx :judge decision :control :stop
-                      :status :judge-indeterminate)
-               (assoc ctx :judge decision :control (:decision decision)))))})
+               (assoc ctx :arbiter decision :control :stop
+                      :status :arbiter-indeterminate)
+               (assoc ctx :arbiter decision :control (:decision decision)))))})
 
 (defn working-copy-dirty?
   "True when jj reports working-copy changes in cwd."
@@ -150,7 +150,7 @@
                    _       (layers/position-for-fix! cwd target)
                    resume? (boolean (seq (:history ctx)))
                    to-fix (select-findings (:findings ctx)
-                                           (-> ctx :judge :fix-findings))
+                                           (-> ctx :arbiter :fix-findings))
                    {:keys [num-turns]}
                    (agent/launch! {:run-id run-id :cwd cwd
                                    :first-message (prompts/fix-prompt {:findings to-fix})
@@ -167,5 +167,5 @@
                    (update ctx :history (fnil conj [])
                            {:iter (:iter ctx) :commit cid :fixed-count (count to-fix)
                             :layer (:bookmark target)
-                            :findings (:findings ctx) :judge (:judge ctx)}))))))})
+                            :findings (:findings ctx) :arbiter (:arbiter ctx)}))))))})
 

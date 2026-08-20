@@ -2,7 +2,7 @@
   "Prompt text for the review loop's codex + claude stages."
   (:require
    [clojure.java.io :as io]
-   [clojure.string :as str]))   ; used by judge-prompt / fix-prompt (Tasks 5–6)
+   [clojure.string :as str]))   ; used by arbiter-prompt / fix-prompt (Tasks 5–6)
 
 (def review-prompt
   "codex review-guidelines prompt (lifted from codex's review template)."
@@ -24,7 +24,7 @@
 (defn- bullets [xs] (str/join "\n" (map #(str "- " %) xs)))
 
 (defn- design-block
-  "The design record, rendered for the judge. This is the yardstick: findings are
+  "The design record, rendered for the arbiter. This is the yardstick: findings are
    judged against these invariants and nothing else. :rejected is included because
    a finding that re-proposes a rejected alternative is *answered* rather than new."
   [{:keys [shape invariants rejected standing]}]
@@ -44,7 +44,7 @@
 
 (defn- stance-block
   "The project's stance, as framing only. It primes reasoning about boundaries and
-   registers; it cannot be violated by a line of code, and a judge that cites it
+   registers; it cannot be violated by a line of code, and an arbiter that cites it
    against one is inventing specificity it does not have."
   [stance]
   (str "PROJECT STANCE — background framing only. Use it to reason about whether a\n"
@@ -52,15 +52,15 @@
        "NOT a checklist: never cite it against a specific finding.\n"
        stance "\n"))
 
-(defn judge-prompt
-  "Build the judge prompt. findings: normalized findings this round.
+(defn arbiter-prompt
+  "Build the arbiter prompt. findings: normalized findings this round.
    history: prior rounds digest. design: this workstream's :design record (or nil).
-   stance: the project's stance text (or nil). The judge is report-only (no tools),
+   stance: the project's stance text (or nil). The arbiter is report-only (no tools),
    so everything it reasons from is inlined here — it cannot read the code, and in
    particular cannot infer the current design for itself."
   [{:keys [findings history design stance]}]
   (str
-   "You are the JUDGE in an automated code-review loop. Decide whether the\n"
+   "You are the ARBITER in an automated code-review loop. Decide whether the\n"
    "current review findings warrant another fix pass.\n\n"
    "Return EXACTLY one fenced ```json block, nothing after it, matching:\n"
    "{\"decision\": \"continue|stop|escalate\", \"reason\": \"...\", \"fix_findings\": [0,2]}\n\n"
@@ -70,7 +70,7 @@
    "- escalate: the findings CONTRADICT A NAMED INVARIANT of the design below —\n"
    "  the design is in question, not its execution. Name the invariant in your\n"
    "  reason. Do not escalate because findings merely feel fundamental.\n\n"
-   "Each finding carries a layer the reviewer assigned: local (a defect inside\n"
+   "Each finding carries a reach the reviewer assigned: local (a defect inside\n"
    "the current design), structural (about where a boundary sits — the reviewer\n"
    "could see shape but not intent), or unclear. It is not a severity.\n"
    "A structural finding is where escalate lives, and it is the one you must NOT\n"
@@ -85,10 +85,10 @@
    (when stance (str (stance-block stance) "\n"))
    "History of prior rounds (findings + what was fixed):\n"
    (pr-str history) "\n\n"
-   "This round's findings (index: [priority/layer] title — body):\n"
+   "This round's findings (index: [priority/reach] title — body):\n"
    (->> findings
         (map-indexed (fn [i f]
                        (str i ": [P" (:priority f) "/"
-                            (name (or (:layer f) :unclear)) "] "
+                            (name (or (:reach f) :unclear)) "] "
                             (:title f) " — " (:body f))))
         (str/join "\n"))))
