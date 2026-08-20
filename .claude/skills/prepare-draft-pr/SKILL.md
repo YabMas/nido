@@ -136,36 +136,21 @@ poller needs to react when the PR later merges.
    bb nido:session:link:add :type :pr :url "<pr-url>" :title "<pr-title>"
    ```
 
-6. **Stamp the workstream `:github` ref** (this is the key the poller matches on):
+6. **Stamp the workstream `:github` ref** — the key the merge poller matches on,
+   and the same call that files the `:pr-opened` event on the report timeline:
 
    ```bash
    bb nido:workstream:ref:add :project <project> :ws-id <workstream-id> \
-     :adapter github :id "<owner>/<repo>#<number>" :url "<pr-url>" :title "<pr-title>"
+     :adapter github :id "<owner>/<repo>#<number>" :url "<pr-url>" :title "<pr-title>" \
+     :summary "<one line, in design terms: what this makes true of the system —
+                the record's :summary, not a restatement of the diff. Refs BR-####>"
    ```
 
-7. **Record the PR on the ticket ledger** as a typed `:pr-opened` event so the
-   workstream's report timeline shows the PR (the report browser reads this). The
-   ledger key is the `BR-####` — read it from the run record
-   (`:event-payload :id` in `./run-link/run.edn`). Write the EDN to a temp file
-   and append it:
+   One fact, one call. `:summary` is the only part nido cannot write for itself,
+   which is why it rides here rather than in a second step you could forget — and
+   for a stack, only the first ref emits the event (see Publishing a stack).
 
-   ```bash
-   cat > /tmp/pr-opened.edn <<'EDN'
-   {:format  :pr-opened
-    :url     "<pr-url>"
-    :title   "<pr-title>"
-    :summary "<one line, in design terms: what this makes true of the system —
-               the record's :summary, not a restatement of the diff. Refs BR-####>"}
-   EDN
-   bb nido:ticket:append :project <project> :br <BR-####> :kind pr-opened \
-     :file /tmp/pr-opened.edn
-   ```
-
-   The append validates against nido's `PrOpened` schema and rejects a malformed
-   report (non-zero exit + an explain dump) — fix and retry. For a Slack-sourced
-   workstream with no `BR-####`, use the slack `:id` as `:br`.
-
-8. **Optional — record the PR on the Notion ticket.** If you have the ticket's
+7. **Optional — record the PR on the Notion ticket.** If you have the ticket's
    Notion page-id (from the `:notion` external-ref on the workstream, visible in
    the session briefing/CLAUDE.md), set its `GitHub PR` property (type `url`) to the
    PR URL with `notion page set <page-id> "GitHub PR=<pr-url>"`.
@@ -319,17 +304,21 @@ the base of a stacked PR.
 ### 5. Stamp one `:github` ref per PR
 
 The merge poller correlates by these and matches *any* ref on the workstream, so
-all N are needed:
+all N are needed. Stamp the **bottom PR first** and give that call the `:summary`
+— nido files one `:pr-opened` from the first `:github` ref a workstream receives
+and stays silent for the rest, so the timeline reads as one shipment rather than
+N while the refs keep the per-layer detail:
 
 ```bash
 cd ..
 bb nido:workstream:ref:add :project <project> :ws-id <workstream-id> \
-  :adapter github :id "<owner>/<repo>#<number>" :url "<pr-url>" :title "<pr-title>"
+  :adapter github :id "<owner>/<repo>#<bottom-number>" :url "<bottom-pr-url>" :title "<stack title>" \
+  :summary "<one line: what the stack does; N layers: <slug>, <slug>, <slug>; refs BR-####>"
 ```
 
-Repeat for every PR in the stack.
+Then repeat without `:summary` for every remaining PR in the stack.
 
-### 6. One session link and one ledger event for the whole stack
+### 6. One session link for the whole stack
 
 One session `:pr` link per PR would be noise — link the bottom PR, since GitHub's
 stack map is reachable from any member:
@@ -338,23 +327,10 @@ stack map is reachable from any member:
 bb nido:session:link:add :type :pr :url "<bottom-pr-url>" :title "<stack title>"
 ```
 
-Then **one** `:pr-opened` event listing all layers, so the report timeline reads
-as one shipment rather than N:
-
-```bash
-cat > /tmp/pr-opened.edn <<'EDN'
-{:format  :pr-opened
- :url     "<bottom-pr-url>"
- :title   "<stack title>"
- :summary "<one line: what the stack does; N layers: <slug>, <slug>, <slug>; refs BR-####>"}
-EDN
-bb nido:ticket:append :project <project> :br <BR-####> :kind pr-opened \
-  :file /tmp/pr-opened.edn
-```
-
 ## Done
 
-Report the PR URL and confirm the session link, workstream ref, and the :pr-opened ticket-ledger entry were written.
+Report the PR URL and confirm the session link and the workstream ref were
+written (the ref stamp files the :pr-opened ledger entry itself).
 When this PR merges, the coordinator's GitHub poller will close the workstream
 and move the Notion ticket to Code Review automatically.
 
@@ -402,7 +378,9 @@ the fix is a **new** PR — not an edit of the merged one:
 - **Assuming `$SLUG`/`$SRC` carry between commands** — each Bash call is a fresh
   shell. Re-derive them in every block.
 - **Stamping only one `:github` ref for a stack** — the poller needs one per PR.
-- **Emitting N `:pr-opened` events** — one event lists all layers.
+- **Stamping a stack's layers before its bottom PR** — the first `:github` ref
+  is the one that files `:pr-opened`, so the bottom PR (and its `:summary`) goes
+  first; the rest are silent.
 - **Publishing layers whose commits lack a `Layer:` trailer or review brief** —
   the PR bodies are generated from them; fix the descriptions first.
 - **Pushing the session bookmark** — only `<session>--*` goes up.

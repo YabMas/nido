@@ -28,11 +28,16 @@
 (defn close* [{:keys [project outcome] :as opts}]
   (ws/close! (keyword project) (resolve-ws-id opts) (keyword (or outcome "done"))))
 
-(defn ref-add* [{:keys [project adapter id url title] :as opts}]
+(defn ref-add*
+  "Stamp an external ref. For :adapter github this also files the :pr-opened
+   ledger event (nido.coordinator.workstream/add-ref!), so :summary — the design-
+   terms line nido cannot write for itself — belongs on this call."
+  [{:keys [project adapter id url title summary] :as opts}]
   (ws/add-ref! (keyword project) (resolve-ws-id opts)
                (cond-> {:adapter (keyword adapter) :id id}
                  url   (assoc :url url)
-                 title (assoc :title title))))
+                 title (assoc :title title))
+               {:summary summary}))
 
 (defn show* [{:keys [project] :as opts}]
   (let [p     (keyword project)

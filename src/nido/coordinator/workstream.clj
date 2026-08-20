@@ -198,16 +198,49 @@
       (->> (fs/list-dir d) (filter fs/directory?) (mapv #(str (fs/file-name %))))
       [])))
 
+(defn- record-pr-opened!
+  "Append the :pr-opened event for a freshly-stamped :github ref, unless this
+   workstream already carries one. Stacks stamp one ref per layer but ship once,
+   so the FIRST layer's ref is the shipment's mark on the timeline and the rest
+   are silent — the per-layer detail already lives in the refs themselves and in
+   :implementation-completed's :artifacts.
+
+   Skipped (loudly) without a :url and :title, which PrOpened requires. The ref
+   is already written by then: correlation is what the merge poller needs, and it
+   must never be lost to a malformed event."
+  [project w {:keys [url title]} summary]
+  (when-not (some #(= :pr-opened (:kind %)) (:entries w))
+    (if (or (str/blank? url) (str/blank? title))
+      (binding [*err* *err*]
+        (.println ^java.io.PrintWriter *err*
+                  (str "WARN: github ref on " (:id w)
+                       " carries no :url/:title; skipping the :pr-opened ledger event")))
+      (append-entry! project (:id w) {:kind :pr-opened}
+                     (pr-str (cond-> {:format :pr-opened :url url :title title}
+                               (not (str/blank? summary)) (assoc :summary summary)))))))
+
 (defn add-ref!
-  "Append an external ref, deduped on (adapter, id). Returns updated record."
-  [project ws-id ref]
-  (let [w (or (read-ws project ws-id)
-              (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))
-        dup? (some #(and (= (:adapter %) (:adapter ref)) (= (:id %) (:id ref)))
-                   (:external-refs w))]
-    (if dup?
-      w
-      (write! (update w :external-refs (fnil conj []) ref)))))
+  "Append an external ref, deduped on (adapter, id). Returns updated record.
+
+   A :github ref carries a second obligation: it is the PR, so stamping it also
+   files the :pr-opened event (see record-pr-opened!). The two used to be separate
+   steps in the prepare-draft-pr skill, and they diverged exactly as you would
+   expect — the ref is load-bearing (the merge poller correlates on it) so it
+   always landed, while the ledger event, being merely informative, was dropped on
+   more than half the PRs. One fact, one call, nothing left to remember. `opts`
+   may carry a :summary — the one part of the event nido cannot synthesize."
+  ([project ws-id ref] (add-ref! project ws-id ref nil))
+  ([project ws-id ref {:keys [summary]}]
+   (let [w (or (read-ws project ws-id)
+               (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))
+         dup? (some #(and (= (:adapter %) (:adapter ref)) (= (:id %) (:id ref)))
+                    (:external-refs w))]
+     (if dup?
+       w
+       (let [w' (write! (update w :external-refs (fnil conj []) ref))]
+         (when (= :github (:adapter ref))
+           (record-pr-opened! project w' ref summary))
+         w')))))
 
 (defn delete!
   "Remove a workstream's directory (and everything under it). Idempotent —

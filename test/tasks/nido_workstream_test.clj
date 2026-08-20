@@ -54,3 +54,44 @@
         (task/ref-add* {:project "brian" :ref "BR-9"
                         :adapter "github" :id "brian-study/brian#412"})
         (is (= 2 (count (:external-refs (ws/read-ws :brian (:id w))))))))))
+
+(deftest ref-add-files-the-pr-opened-event
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :in-progress
+                                  :external-refs [{:adapter :notion :id "BR-9"}]})]
+        (task/ref-add* {:project "brian" :ref "BR-9"
+                        :adapter "github" :id "brian-study/brian#412"
+                        :url "https://gh/412" :title "Fix X"
+                        :summary "collapses the two writers into one"})
+        (is (= {:format :pr-opened :url "https://gh/412" :title "Fix X"
+                :summary "collapses the two writers into one"}
+               (dissoc (ws/latest-entry :brian (:id w) :pr-opened) :seq :at)))
+        ;; the stack case: later layers stamp refs and stay silent
+        (task/ref-add* {:project "brian" :ref "BR-9"
+                        :adapter "github" :id "brian-study/brian#413"
+                        :url "https://gh/413" :title "layer 2"})
+        (is (= 1 (count (filter #(= :pr-opened (:kind %))
+                                (:entries (ws/read-ws :brian (:id w))))))
+            "one event per shipment, not one per layer")))))
+
+(deftest ref-add-without-url-still-stamps-the-ref
+  ;; PrOpened needs a :url and :title; correlation is what the merge poller
+  ;; needs, so a malformed event must never cost the ref.
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :in-progress
+                                  :external-refs [{:adapter :notion :id "BR-9"}]})]
+        (task/ref-add* {:project "brian" :ref "BR-9"
+                        :adapter "github" :id "brian-study/brian#414"})
+        (let [w' (ws/read-ws :brian (:id w))]
+          (is (some #(= "brian-study/brian#414" (:id %)) (:external-refs w')))
+          (is (empty? (filter #(= :pr-opened (:kind %)) (:entries w')))))))))
+
+(deftest ref-add-notion-files-nothing
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
+        (task/ref-add* {:project "brian" :ws-id (:id w)
+                        :adapter "notion" :id "BR-9" :url "https://notion/9" :title "t"})
+        (is (empty? (:entries (ws/read-ws :brian (:id w)))))))))
