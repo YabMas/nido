@@ -67,8 +67,9 @@
    session down. Double-reachable is the harmless direction — both bands' actions
    are sane — and it self-heals. An unrecognized `tab` reads as :intake.
 
-   :active's trailing band is :winding-down — closed workstreams still holding
-   live resources (bring-down! is their one action)."
+   :active's trailing band is :winding-down — finished workstreams still holding
+   live resources, whether nido settled them or Notion did (bring-down! is their
+   one action)."
   [tab grouped]
   (->> (case tab
          :active [[:shipping     (:shipping grouped)]
@@ -212,30 +213,45 @@
    (mapv to-spine (wsv/workstream-rows project live-names))))
 
 (defn winding-down
-  "Closed (:done/:dropped) workstreams of `project` still holding ≥1 live
-   session — resources you're paying for on finished work. Never gates
-   (:needs-you false); rendered as the Active tab's trailing band with one
-   action: bring-down!. Empty when live-names is empty/nil."
-  [project live-names]
-  (let [live (set live-names)]
-    (if (empty? live)
-      []
-      (->> (cws/list-ids project)
-           (keep #(cws/read-ws project %))
-           (filter :closed)
-           (keep (fn [w]
-                   (let [sessions (csession/list-sessions project (:id w))
-                         live-s   (filterv #(contains? live (:name %)) sessions)]
-                     (when (seq live-s)
-                       {:ws-id     (:id w)
-                        :project   (name project)
-                        :stage     :winding-down
-                        :origin    (classify-origin w)
-                        :label     (wsv/label w sessions)
-                        :outcome   (get-in w [:closed :outcome])
-                        :sessions  (mapv :name live-s)
-                        :needs-you false}))))
-           vec))))
+  "Workstreams of `project` that are FINISHED and still holding ≥1 live session —
+   resources you're paying for on work that is over. Never gates (:needs-you
+   false); rendered as the Active tab's trailing band with one action:
+   bring-down!. Empty when live-names is empty/nil.
+
+   Finished has two carriers, and both are needed. A :closed record is nido's own
+   settlement. `rows` (from list-workstreams) supplies the other: a row projecting
+   :done, which is where a Notion-driven workstream lands the moment its ticket
+   reaches a terminal status — Review included. That projection is stateless by
+   design (it self-heals if the ticket bounces back), so it never touches the
+   record, and keying this band on :closed alone would drop such a row off BOTH
+   tabs while its session still held ports. That is precisely the silent loss
+   tab-bands' reachability guarantee exists to prevent. Omit `rows` (or pass nil)
+   for the :closed-only projection.
+
+   A row surfaced by the projection has no :closed record to name an outcome, so
+   it reports :done — the stage the board put it in."
+  ([project live-names] (winding-down project live-names nil))
+  ([project live-names rows]
+   (let [live     (set live-names)
+         done-ids (into #{} (comp (filter #(= :done (:stage %))) (map :ws-id)) rows)]
+     (if (empty? live)
+       []
+       (->> (cws/list-ids project)
+            (keep #(cws/read-ws project %))
+            (filter #(or (:closed %) (contains? done-ids (:id %))))
+            (keep (fn [w]
+                    (let [sessions (csession/list-sessions project (:id w))
+                          live-s   (filterv #(contains? live (:name %)) sessions)]
+                      (when (seq live-s)
+                        {:ws-id     (:id w)
+                         :project   (name project)
+                         :stage     :winding-down
+                         :origin    (classify-origin w)
+                         :label     (wsv/label w sessions)
+                         :outcome   (or (get-in w [:closed :outcome]) :done)
+                         :sessions  (mapv :name live-s)
+                         :needs-you false}))))
+            vec)))))
 
 (defn grouped
   "Workstreams grouped along the single spine for the board:
@@ -244,8 +260,11 @@
    :done is omitted. The board renders these groups directly."
   ([project] (grouped project nil))
   ([project live-names]
-   (assoc (wsv/grouped-by-stage (list-workstreams project live-names))
-          :winding-down (winding-down project live-names))))
+   (let [rows (list-workstreams project live-names)]
+     (assoc (wsv/grouped-by-stage rows)
+            ;; rows, not just the records: a Notion-driven row can be finished
+            ;; without nido ever writing :closed (see winding-down).
+            :winding-down (winding-down project live-names rows)))))
 
 (defn- session-status
   "Unified status across the autonomy axis: an autonomous session reports its

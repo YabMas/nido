@@ -36,6 +36,16 @@
     (when (fs/exists? path)
       (some-> (io/read-edn path) :board-views set))))
 
+(defn board-poll
+  "Poll interval for board-views nido polls on its own behalf (`:board-poll` in
+   the registry, default 5m). These exist to keep the board's read of Notion
+   fresh, not to catch arriving work, so they are deliberately slower than an
+   intake source."
+  [project]
+  (let [path (registry-path project)]
+    (or (when (fs/exists? path) (:board-poll (io/read-edn path)))
+        "5m")))
+
 (defn resolve-view
   "Returns {:database <id> :filter <map>} for the given (project, view-kw).
    Throws on missing registry or unknown view."

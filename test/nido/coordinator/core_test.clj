@@ -5,6 +5,9 @@
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is use-fixtures]]
    [nido.coordinator.agent :as agent]
+   [nido.coordinator.events]
+   [nido.coordinator.sources.notion]
+   [nido.io]
    [nido.coordinator.clock :as clock]
    [nido.coordinator.core :as core]
    [nido.coordinator.executor :as executor]
@@ -60,6 +63,40 @@
    :uncapped? false :state :awaiting-review
    :state-history [{:at "2026-06-18T00:00:00Z" :state :queued}]
    :artifacts [] :error nil})
+
+(deftest board-views-are-polled-even-with-no-trigger
+  (with-tmp
+    (fn []
+      (fs/create-dirs (str (fs/path (cstate/nido-root) "projects" "brian")))
+      (nido.io/write-edn! (str (fs/path (cstate/nido-root) "projects" "brian" "notion-views.edn"))
+                          {:database "db" :board-views [:new-reports :in-review]
+                           :board-poll "5m"
+                           :views {:new-reports {} :in-review {} :open-bugs {}}})
+      (let [triggers {:brian [{:name :triage-new
+                               :source {:type :notion-view :view :new-reports :poll "2m"}}
+                              {:name :plan-bug :source {:type :manual}}]}
+            _        (nido.coordinator.sources.notion/register!)
+            configs  (#'core/discover-source-configs triggers)]
+        (is (= [{:type :notion-view :view :new-reports :poll "2m" :project :brian}]
+               (filter #(= :new-reports (:view %)) configs))
+            ":new-reports is already polled by a trigger — not polled twice")
+        (is (= [{:type :notion-view :view :in-review :project :brian :poll "5m"}]
+               (filter #(= :in-review (:view %)) configs))
+            "a board-view no trigger polls gets its own source")
+        (is (empty? (filter #(= :open-bugs (:view %)) configs))
+            "a watched view outside :board-views stays dark")))))
+
+(deftest board-view-broadcasts-route-to-nothing
+  ;; The board sources exist for their :pages snapshot. They emit like any other
+  ;; source, and by construction no trigger declares them — so nothing spawns.
+  (let [triggers {:brian [{:name :triage-new
+                           :source {:type :notion-view :view :new-reports :poll "2m"}}]}]
+    (is (empty? (nido.coordinator.events/route
+                  {:broadcast {:type :notion-view
+                               :source-config {:type :notion-view :view :in-review
+                                               :project :brian :poll "5m"}
+                               :payload {:page-id "p1"}}}
+                  triggers)))))
 
 (deftest envelope-drives-run-to-terminal-via-executor
   (let [tmp (fs/create-temp-dir)]

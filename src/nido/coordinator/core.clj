@@ -36,6 +36,7 @@
    [nido.coordinator.intake :as intake]
    [nido.coordinator.ship :as ship]
    [nido.github.config :as gh-config]
+   [nido.notion.views :as views]
    [nido.coordinator.triggers :as triggers]
    [nido.core :as nido-core]
    [nido.project :as project]
@@ -307,18 +308,47 @@
           (.println ^java.io.PrintWriter *err*
                     (str "WARN: notion-sync poll threw for " project " — " (ex-message t))))))))
 
+(defn- board-source-configs
+  "Source-configs for the :board-views a project declares that no trigger already
+   polls.
+
+   `:board-views` used to be a pure filter — it named which polled views feed the
+   board, but nothing made those views get polled. A view nobody had a trigger for
+   was therefore declared and dark, so the board never saw the live status of the
+   tickets it was already tracking, and the projection that reads that status
+   (session/notion-stage, where Review means nido's involvement is over) could not
+   fire. These configs close that: nido polls a board-view on its own behalf.
+
+   They emit like any other source, and route to nothing — route-broadcast matches
+   a broadcast against trigger :source configs, and by construction these have no
+   trigger. Nothing spawns; the poll's :pages snapshot is the whole point.
+
+   Projects come from `triggers-by-project` — the daemon's project universe. A
+   project with a views registry and no triggers at all is not polled."
+  [triggers-by-project]
+  (let [polled (into #{} (for [[project triggers] triggers-by-project, t triggers
+                               :when (= :notion-view (:type (:source t)))]
+                           [project (:view (:source t))]))]
+    (for [project (keys triggers-by-project)
+          view    (sort (views/board-views project))
+          :when   (not (contains? polled [project view]))]
+      {:type :notion-view :view view :project project :poll (views/board-poll project)})))
+
 (defn- discover-source-configs
   "Walk loaded triggers and return distinct source-configs whose type is
-   registered. Filters out :manual (the queue dir handles that).
+   registered, plus the board-view configs nido polls for itself (see
+   board-source-configs). Filters out :manual (the queue dir handles that).
    Merges :project from the trigger's owning project into each source-config
    so plugins that resolve per-project registry files (e.g. notion-views.edn)
    know which project they are serving."
   [triggers-by-project]
-  (->> (for [[project triggers] triggers-by-project, t triggers
-             :let [src (assoc (:source t) :project project)]
-             :when (and (not= :manual (:type src))
-                        (sources/lookup (:type src)))]
-         src)
+  (->> (concat
+         (for [[project triggers] triggers-by-project, t triggers
+               :let [src (assoc (:source t) :project project)]
+               :when (and (not= :manual (:type src))
+                          (sources/lookup (:type src)))]
+           src)
+         (board-source-configs triggers-by-project))
        distinct))
 
 (defn- start-source! [source-config]

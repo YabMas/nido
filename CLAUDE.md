@@ -337,6 +337,23 @@ is applied (`nido:ticket:complete`), and re-syncable on demand with
 `bb nido:facets:refresh :project <p> [:ws <id>]`. They are a pure organizational
 lens; the stage spine is unchanged.
 
+### Board views (`:board-views`)
+
+`:board-views` in `notion-views.edn` names the views whose cached pages the board
+reads live Notion status from — and nido **polls them itself**, at `:board-poll`
+(default 5m), for any view no trigger already covers. Such a source emits like any
+other and routes to nothing (no trigger declares it), so nothing spawns: the
+poll's page snapshot is the whole point.
+
+This is what makes Notion's own lifecycle visible to nido. A ticket whose status
+reaches a terminal value projects to the `:done` stage and leaves the Active band
+— **"Review" included**, since that is the handoff where nido's involvement ends.
+The projection is stateless (`nido.coordinator.session/notion-stage`): it writes
+nothing, so a ticket bounced back to In progress simply returns to the board.
+Keep the view narrow. Widening it to "Code Review" would put every merged-and-
+closed workstream back on the Active band, because a Notion-driven row ignores
+nido's own `:closed`.
+
 **Safety brakes (Stage 2):** per-Run wall-clock budget (`:limits.budget`, default 30m, SIGTERM→SIGKILL), per-trigger circuit breaker (`:limits.max-failures`, default 3), daemon-wide anomaly auto-halt, kill switch (`bb nido:halt` + `bb nido:coordinator:resume`). On the TUI, `s` opens the ops overlay: `h` halts, `c` clears a breaker, `f` fires a trigger.
 
 **Startup reconciliation (Stage 3):** when the daemon starts, any non-terminal Run on disk is forced to a terminal state from observable evidence (artifacts, `_run-status.edn`, agent.log). Crashed/orphaned Runs get marked `:failed :reason :orphaned-from-restart` so the dashboard stays honest.

@@ -105,6 +105,24 @@
         (session/create! :p (:id w) {:name "s1" :weight :light :autonomy nil})
         (is (= [] (work/winding-down :p #{"s1"})))))))
 
+(deftest winding-down-catches-a-row-notion-finished
+  ;; A ticket that reached Review (or Done) projects :done with no :closed record
+  ;; — stateless by design. Without the row carrier it lands on neither tab while
+  ;; its session still holds ports.
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :p {:stage :in-progress :external-refs []})]
+        (session/create! :p (:id w) {:name "s1" :weight :light :autonomy nil})
+        (is (= [] (work/winding-down :p #{"s1"} [{:ws-id (:id w) :stage :in-progress}]))
+            "still in flight → not winding down")
+        (let [[row :as rows] (work/winding-down :p #{"s1"} [{:ws-id (:id w) :stage :done}])]
+          (is (= 1 (count rows)))
+          (is (= (:id w) (:ws-id row)))
+          (is (= :done (:outcome row)) "no :closed record to name an outcome")
+          (is (= ["s1"] (:sessions row)))
+          (is (nil? (:closed (workstream/read-ws :p (:id w))))
+              "the band is a read — the projection must not settle the record"))))))
+
 (deftest bring-down!-downs-only-live-sessions
   (with-tmp
     (fn [_]
