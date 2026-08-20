@@ -9,7 +9,12 @@
   (:import
    [java.time Instant]))
 
-(def default-pipeline [stages/review-stage stages/arbiter-stage stages/fix-stage])
+(def default-pipeline
+  "review (fan out) -> warden (per layer) -> arbiter (fan in) -> fix (serial).
+   The arbiter is the round barrier: no fix runs until every finding has an
+   owner, so a fixer never starts against a layer the arbiter is about to
+   reassign work to."
+  [stages/review-stage stages/warden-stage stages/arbiter-stage stages/fix-stage])
 
 (defn- finding-key [f] [(:file f) (:line-start f) (:title f)])
 

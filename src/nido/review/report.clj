@@ -33,7 +33,7 @@
       (and review (= "ok" (:status review))
            (empty? (:findings review)) (nil? arbiter))              "clean"
       (= "escalate" (:decision arbiter))                            "escalated"
-      (and fix (:commit fix))                                     "continued"
+      (and fix (seq (:fixes fix)))                                "continued"
       (= "stop" (:decision arbiter))                                "stopped"
       :else                                                       "ended")))
 
@@ -77,12 +77,15 @@
     (case phase
       :review (assoc ph :overall-correctness (:overall-correctness ctx)
                         :findings (vec (:findings ctx)))
-      :arbiter  (let [j (:arbiter ctx)]
-                (assoc ph :decision (some-> (:decision j) name)
-                          :reason (:reason j)
-                          :fix-findings (:fix-findings j)))
+      :arbiter (let [a (:arbiter ctx)]
+                 (assoc ph :decision (some-> (:decision a) name)
+                        :reason (:reason a)
+                        :rulings (mapv #(select-keys % [:id :owner-layer :disposition
+                                                        :authority :of :because])
+                                       (:rulings a))))
+      :warden (assoc ph :dispositions (vec (:dispositions ctx)))
       :fix    (let [h (last (filter #(= (:iter ctx) (:iter %)) (:history ctx)))]
-                (assoc ph :commit (:commit h) :fixed-count (:fixed-count h)))
+                (assoc ph :fixes (vec (:fixes h)) :fixed-count (:fixed-count h)))
       ph)))
 
 (defn- patch-target

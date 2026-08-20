@@ -48,16 +48,18 @@
                    :base-rev "B" :manifest "a"}}
             {:event :phase-started :iter 1 :phase :arbiter :at "t3"}
             {:event :phase-finished :iter 1 :phase :arbiter :at "t4"
-             :ctx {:arbiter {:decision :continue :reason "real" :fix-findings [0]}}}
+             :ctx {:arbiter {:decision :continue :reason "real"
+                             :rulings [{:id "aa11" :owner-layer "a" :disposition :fix}]}}}
             {:event :phase-started :iter 1 :phase :fix :at "t5"}
             {:event :phase-finished :iter 1 :phase :fix :at "t6"
-             :ctx {:history [{:iter 1 :commit "abc1234567" :fixed-count 1}]}}])
+             :ctx {:history [{:iter 1 :fixes [{:layer "a" :commit "abc1234567"}]
+                            :fixed-count 1}]}}])
         phases (:phases (first (:rounds r)))
         arbiter  (some #(when (= "arbiter" (:phase %)) %) phases)
         fix    (some #(when (= "fix" (:phase %)) %) phases)]
     (is (= "continue" (:decision arbiter)))
-    (is (= [0] (:fix-findings arbiter)))
-    (is (= "abc1234567" (:commit fix)))
+    (is (= [{:id "aa11" :owner-layer "a" :disposition :fix}] (:rulings arbiter)))
+    (is (= [{:layer "a" :commit "abc1234567"}] (:fixes fix)))
     (is (= 1 (:fixed-count fix)))))
 
 (deftest new-round-closes-the-previous-as-continued
@@ -68,7 +70,7 @@
              :ctx {:findings [{:title "b"}] :base-rev "B" :manifest "a"}}
             {:event :phase-started :iter 1 :phase :fix :at "t3"}
             {:event :phase-finished :iter 1 :phase :fix :at "t4"
-             :ctx {:history [{:iter 1 :commit "c1" :fixed-count 1}]}}
+             :ctx {:history [{:iter 1 :fixes [{:layer nil :commit "c1"}] :fixed-count 1}]}}
             {:event :phase-started :iter 2 :phase :review :at "t5"}])]
     (is (= "continued" (:status (first (:rounds r)))))
     (is (= "t4" (:ended-at (first (:rounds r)))))

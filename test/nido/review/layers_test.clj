@@ -67,11 +67,14 @@
 
 ;; ---- positioning ---------------------------------------------------------
 
-(deftest position-for-fix-inserts-after-the-layer-tip
+(deftest position-for-fix-inserts-after-the-layer-bookmark
+  ;; By bookmark, not the tip read when the stack was enumerated: landing a fix
+  ;; on a lower layer rewrites every layer above, so those tips go stale within
+  ;; the round while the bookmark keeps naming the right commit.
   (let [calls (atom [])]
     (with-redefs [jj/jj! (stub-log "" calls)]
       (layers/position-for-fix! "/w" {:bookmark "sess--l1" :tip "c2"})
-      (is (= [["new" "--insert-after" "c2"]] @calls)))))
+      (is (= [["new" "--insert-after" "sess--l1"]] @calls)))))
 
 (deftest position-for-fix-is-a-noop-without-a-layer
   (let [calls (atom [])]

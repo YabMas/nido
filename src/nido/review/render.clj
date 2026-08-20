@@ -30,6 +30,7 @@
                   (when (seq (:files target))
                     (str " diff (" (count (:files target)) " files)")))
     ;; "judge" — report.json written before the rename
+    "warden" "checking layers"
     ("arbiter" "judge") "arbitrating"
     "fix"    "fixing"
     (:phase ph)))
@@ -41,10 +42,17 @@
                  (str n " finding" (when (not= 1 n) "s"))))
     ("arbiter" "judge") (when (:decision ph)
                (str "→ " (:decision ph)
-                    (when (seq (:fix-findings ph))
-                      (str " (fix " (str/join "," (:fix-findings ph)) ")"))))
+                    (when-let [n (seq (filter #(= "fix" (str (name (or (:disposition %) "")))) 
+                                              (:rulings ph)))]
+                      (str " (fix " (count n) ")"))))
+    "warden" (when (= "ok" (:status ph))
+               (let [n (count (:dispositions ph))]
+                 (str n " disposition" (when (not= 1 n) "s"))))
     "fix"    (cond
-               (:commit ph) (str "commit " (subs (:commit ph) 0 (min 8 (count (:commit ph)))))
+               (seq (:fixes ph))     (str/join ", " (map #(str (or (:layer %) "branch") " "
+                                                               (subs (str (:commit %)) 0
+                                                                     (min 8 (count (str (:commit %))))))
+                                                         (:fixes ph)))
                (= "ok" (:status ph)) "no changes")
     nil))
 

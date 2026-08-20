@@ -76,3 +76,12 @@
             :history [] :rounds 1})]
     (is (str/includes? p "[P1/structural] t"))
     (is (str/includes? p "the reviewer\ncould not see the design, and you can"))))
+
+(deftest still-open-drops-what-the-arbiter-closed
+  ;; A closed finding was decided, by a named authority. Handing it to the
+  ;; verdict as "still open" re-adjudicates a settled question.
+  (is (= ["b"] (map :title (verdict/still-open
+                            [{:title "a" :disposition :closed :authority "duplicate"}
+                             {:title "b" :disposition :fix}]))))
+  (is (= ["a"] (map :title (verdict/still-open [{:title "a"}])))
+      "a finding with no disposition at all is still open"))

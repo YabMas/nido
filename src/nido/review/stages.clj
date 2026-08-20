@@ -20,8 +20,24 @@
 
 (def ^:private fenced-json-re #"(?s)```json\s*(\{.*?\})\s*```")
 
+(def ^:private dispositions #{:fix :closed :deviation :park})
+
+(defn- ruling
+  "One per-finding ruling from the arbiter's JSON. A disposition outside the
+   four is read as :fix rather than dropped — the fail-safe direction, and the
+   one that keeps \"nothing is dropped\" true of a malformed answer."
+  [r]
+  (let [d (some-> (:disposition r) keyword)]
+    {:id          (:id r)
+     :owner-layer (:owner_layer r)
+     :disposition (if (contains? dispositions d) d :fix)
+     :authority   (:authority r)
+     :of          (:of r)
+     :because     (:because r)}))
+
 (defn parse-arbiter-decision
-  "Last fenced ```json block in `text` -> decision map. Unparseable -> indeterminate."
+  "Last fenced ```json block in `text` -> {:decision :reason :rulings}.
+   Unparseable -> indeterminate."
   [text]
   (let [block (when (string? text) (last (re-seq fenced-json-re text)))]
     (if-let [body (second block)]
@@ -29,7 +45,9 @@
         (let [m (json/parse-string body true)
               d (keyword (:decision m))]
           (if (contains? #{:continue :stop :escalate} d)
-            {:decision d :reason (:reason m) :fix-findings (:fix_findings m)}
+            {:decision d
+             :reason   (:reason m)
+             :rulings  (into [] (comp (filter :id) (map ruling)) (:findings m))}
             {:decision :indeterminate :reason (str "unknown decision: " (:decision m))}))
         (catch Exception e
           {:decision :indeterminate :reason (str "unparseable: " (ex-message e))}))
@@ -114,6 +132,20 @@
                {:seen #{} :out []})
        :out))
 
+(defn- build-toc
+  "The stack's table of contents — one entry per layer: what it claims and which
+   files it touches. This is what a warden gets INSTEAD of the other layers'
+   diffs, so it can attribute deliberately without re-deriving them."
+  [results]
+  (into []
+        (comp (remove #(:stack? (:target %)))
+              (map (fn [{:keys [target manifest]}]
+                     {:label (:label target)
+                      :claim (get-in target [:brief :claims])
+                      :files (vec (remove str/blank?
+                                          (str/split-lines (or manifest ""))))})))
+        results))
+
 (def review-stage
   "Every layer and the whole stack, reviewed in one round.
 
@@ -142,6 +174,7 @@
                (assoc ctx
                       :findings findings
                       :reviews results
+                      :toc (build-toc results)
                       :overall-correctness (:overall-correctness whole)
                       :base-rev (:base-rev whole)
                       :manifest (:manifest whole)))))})
@@ -187,15 +220,109 @@
               s))))
       (catch Throwable _ nil))))
 
+(defn parse-dispositions
+  "Last fenced ```json block -> the warden's dispositions. An unparseable or
+   absent answer is [], which the arbiter reads as \"this layer's warden said
+   nothing\" — it still rules on every finding itself, so a mute warden costs
+   bounded judgement, never a dropped finding."
+  [text]
+  (let [block (when (string? text) (last (re-seq fenced-json-re text)))]
+    (if-let [body (second block)]
+      (try
+        (->> (:dispositions (json/parse-string body true))
+             (keep (fn [d]
+                     (when (:id d)
+                       {:id          (:id d)
+                        :disposition (some-> (:disposition d) keyword)
+                        :authority   (:authority d)
+                        :owner-guess (:owner_guess d)
+                        :because     (:because d)})))
+             vec)
+        (catch Exception _ []))
+      [])))
+
+(defn- target-for
+  [ctx label]
+  (some #(when (= label (:label (:target %))) (:target %)) (:reviews ctx)))
+
+(def ^:private max-concurrent-wardens 6)
+
+(def warden-stage
+  "One warden per layer that has findings, in parallel.
+
+   A warden is bounded: it holds its own layer's brief and findings, plus the
+   stack's table of contents as a MAP. It disposes of what its brief answers and
+   escalates the rest — where escalate means \"above my pay grade\", not \"the
+   design is in question\". Report-only, like the arbiter, and fresh each round:
+   its whole input is in the prompt.
+
+   Findings from the whole-stack pass have no warden — they belong to no single
+   layer by construction, so they go straight to the arbiter."
+  {:name :warden
+   :run  (fn [ctx]
+           (let [{:keys [cwd run-id budget]} (:config ctx)
+                 by-layer (group-by :from-layer (:findings ctx))
+                 labels   (remove #(or (nil? %) (= "stack" %)) (keys by-layer))]
+             (if (empty? labels)
+               (assoc ctx :dispositions [])
+               (let [results
+                     (in-parallel
+                      max-concurrent-wardens
+                      (map (fn [label]
+                             #(let [prompt (prompts/warden-prompt
+                                            {:layer    label
+                                             :findings (get by-layer label)
+                                             :toc      (:toc ctx)
+                                             :brief    (:brief (target-for ctx label))})
+                                    {:keys [result-text]}
+                                    (agent/launch!
+                                     {:run-id run-id :cwd cwd
+                                      :first-message prompt :budget budget
+                                      :tools ""
+                                      :err-file (str (fs/path (cstate/run-dir run-id)
+                                                              (format "warden-%s-round-%d.err.log"
+                                                                      (codex/safe-label label)
+                                                                      (or (:iter ctx) 1))))})]
+                                (parse-dispositions result-text)))
+                           labels))]
+                 (assoc ctx :dispositions (vec (mapcat identity results)))))))})
+
+(defn apply-rulings
+  "Merge the arbiter's per-finding rulings onto the findings.
+
+   A finding the arbiter did not rule on defaults to :fix. That is the fail-safe
+   direction and it is what keeps \"nothing is dropped\" true of a malformed
+   answer: an omitted finding is worked on, never silently discarded."
+  [findings rulings]
+  (let [by-id (into {} (map (juxt :id identity)) rulings)]
+    (mapv (fn [f]
+            (let [r (get by-id (:id f))]
+              (merge f
+                     {:owner-layer (:owner-layer r)
+                      :disposition (or (:disposition r) :fix)
+                      :authority   (:authority r)
+                      :of          (:of r)
+                      :because     (or (:because r)
+                                       (when-not r "the arbiter did not rule on this finding"))})))
+          findings)))
+
 (def arbiter-stage
+  "The one reader with a view across layers, so attribution is its job.
+
+   Report-only and fully inlined, deliberately: it is the component that decides
+   to interrupt a human, and its inputs have to be reconstructable from the
+   report afterwards. What genuinely accumulates across rounds is carried as an
+   inspectable value (history, dispositions), never as a resumed conversation."
   {:name :arbiter
    :run  (fn [ctx]
            (let [{:keys [cwd run-id budget]} (:config ctx)
                  prompt (prompts/arbiter-prompt
-                         {:findings (:findings ctx)
-                          :history (mapv #(dissoc % :findings) (:history ctx))
-                          :design  (discover-design-record cwd)
-                          :stance  (read-stance (first (project+ws-from-cwd cwd)))})
+                         {:findings     (:findings ctx)
+                          :history      (mapv #(dissoc % :findings) (:history ctx))
+                          :design       (discover-design-record cwd)
+                          :stance       (read-stance (first (project+ws-from-cwd cwd)))
+                          :toc          (:toc ctx)
+                          :dispositions (:dispositions ctx)})
                  {:keys [num-turns result-error? result-text]}
                  (agent/launch! {:run-id run-id :cwd cwd
                                  :first-message prompt :budget budget
@@ -206,53 +333,113 @@
                      (= :indeterminate (:decision decision)))
                (assoc ctx :arbiter decision :control :stop
                       :status :arbiter-indeterminate)
-               (assoc ctx :arbiter decision :control (:decision decision)))))})
+               (assoc ctx
+                      :arbiter  decision
+                      :findings (apply-rulings (:findings ctx) (:rulings decision))
+                      :control  (:decision decision)))))})
 
 (defn working-copy-dirty?
   "True when jj reports working-copy changes in cwd."
   [cwd]
   (not (str/blank? (:out (jj/jj! cwd "diff" "--git")))))
 
-(defn- select-findings
-  [findings idxs]
-  (if (seq idxs) (into [] (keep #(nth findings % nil)) idxs) findings))
+(defn layer-label
+  [layer]
+  (or (:slug layer) (:bookmark layer)))
+
+(defn fix-plan
+  "Findings the arbiter dispositioned :fix, grouped by the layer that OWNS them,
+   ordered bottom→top.
+
+   Bottom-up is what makes the fixes cheap rather than what makes them correct:
+   landing a fix on a lower layer rewrites every layer above it, so doing the
+   lower one first means the upper fixer works against code that will not move
+   under it again this round.
+
+   A finding whose owner_layer names no layer of this stack falls to the top
+   layer — the same assign-to-highest rule the arbiter is told to use for a
+   composition defect, applied to an answer that named nothing usable."
+  [stack findings]
+  (let [to-fix (filter #(= :fix (:disposition %)) findings)]
+    (if (empty? stack)
+      (if (seq to-fix) [{:label nil :layer nil :findings (vec to-fix)}] [])
+      (let [labels (mapv layer-label stack)
+            known  (set labels)
+            top    (last labels)
+            by     (group-by #(let [o (:owner-layer %)]
+                                (if (contains? known o) o top))
+                             to-fix)]
+        (into []
+              (keep (fn [layer]
+                      (when-let [fs (seq (get by (layer-label layer)))]
+                        {:label (layer-label layer) :layer layer :findings (vec fs)})))
+              stack)))))
+
+(defn layer-fixer-session
+  "A stable claude session id per layer, derived from the run's own id so it is
+   the same across rounds without being carried in mutable state.
+
+   One session per LAYER, never one across layers: a fixer resumed across layers
+   would carry one layer's context into another, which is exactly the boundary
+   the stack exists to keep."
+  [impl-session-id label]
+  (str (java.util.UUID/nameUUIDFromBytes
+        (.getBytes (str impl-session-id "|" label) "UTF-8"))))
+
+(defn- fixed-before?
+  "Has this layer been fixed in an earlier round? Its fixer resumes only then —
+   a fresh layer starts a fresh session."
+  [history label]
+  (boolean (some (fn [h] (some #(= label (:layer %)) (:fixes h))) history)))
 
 (def fix-stage
-  "Fixes land INSIDE the stack, on the layer that owns them.
+  "Fixes run only after every finding has an owner, one layer at a time,
+   bottom→top.
 
-   The target is the top layer — the flat review covers the whole stack, so with
-   no per-finding attribution yet the highest layer is the only defensible
-   owner, and it is where a composition defect actually first exists.
-
-   Committing at `@` (what this did before there were layers) put the fix ABOVE
-   the top layer's bookmark, outside every layer's `<lower>..<bookmark>` fold
-   range — so `/squash` never folded it and no PR ever saw it."
+   Serial because fixers mutate the single working copy — the reviews before
+   them could fan out precisely because they do not. Each fix inserts onto its
+   own layer and moves that layer's bookmark, so it reaches that layer's PR
+   rather than riding up into the one above."
   {:name :fix
    :run  (fn [ctx]
            (if (:dry-run? (:config ctx))
              (assoc ctx :control :stop :status :dry-run)
              (let [{:keys [cwd base run-id budget impl-session-id]} (:config ctx)
-                   stack   (session-stack cwd base)
-                   target  (last stack)
-                   _       (layers/position-for-fix! cwd target)
-                   resume? (boolean (seq (:history ctx)))
-                   to-fix (select-findings (:findings ctx)
-                                           (-> ctx :arbiter :fix-findings))
-                   {:keys [num-turns]}
-                   (agent/launch! {:run-id run-id :cwd cwd
-                                   :first-message (prompts/fix-prompt {:findings to-fix})
-                                   :budget budget
-                                   :claude-session-id impl-session-id
-                                   :resume? resume?
-                                   :err-file (str (fs/path (cstate/run-dir run-id) "agent.err.log"))})]
-               (if (or (zero? (or num-turns 0)) (not (working-copy-dirty? cwd)))
-                 (do (layers/restore-top! cwd stack)
-                     (assoc ctx :control :stop :status :fix-noop))
-                 (let [msg (str "review-loop: iter " (:iter ctx) " fixes")
-                       cid (layers/land-fix! cwd target msg)]
-                   (layers/restore-top! cwd stack)
-                   (update ctx :history (fnil conj [])
-                           {:iter (:iter ctx) :commit cid :fixed-count (count to-fix)
-                            :layer (:bookmark target)
-                            :findings (:findings ctx) :arbiter (:arbiter ctx)}))))))})
-
+                   stack (session-stack cwd base)
+                   plan  (fix-plan stack (:findings ctx))]
+               (if (empty? plan)
+                 (assoc ctx :control :stop :status :fix-noop)
+                 (let [ctx'
+                       (reduce
+                        (fn [acc {:keys [label layer findings]}]
+                          (layers/position-for-fix! cwd layer)
+                          (let [{:keys [num-turns]}
+                                (agent/launch!
+                                 {:run-id run-id :cwd cwd
+                                  :first-message (prompts/fix-prompt {:findings findings})
+                                  :budget budget
+                                  :claude-session-id (layer-fixer-session impl-session-id label)
+                                  :resume? (fixed-before? (:history ctx) label)
+                                  :err-file (str (fs/path (cstate/run-dir run-id)
+                                                          (format "fix-%s-round-%d.err.log"
+                                                                  (codex/safe-label label)
+                                                                  (or (:iter ctx) 1))))})]
+                            (if (or (zero? (or num-turns 0)) (not (working-copy-dirty? cwd)))
+                              (do (layers/restore-top! cwd stack) acc)
+                              (let [cid (layers/land-fix!
+                                         cwd layer
+                                         (str "review-loop: iter " (:iter ctx) " fixes"
+                                              (when label (str " (" label ")"))))]
+                                (layers/restore-top! cwd stack)
+                                (update acc :fixes (fnil conj [])
+                                        {:layer label :commit cid
+                                         :fixed-count (count findings)})))))
+                        ctx plan)]
+                   (if (empty? (:fixes ctx'))
+                     (assoc ctx' :control :stop :status :fix-noop)
+                     (update ctx' :history (fnil conj [])
+                             {:iter (:iter ctx')
+                              :fixes (:fixes ctx')
+                              :fixed-count (reduce + 0 (map :fixed-count (:fixes ctx')))
+                              :findings (:findings ctx')
+                              :arbiter (:arbiter ctx')})))))))})

@@ -9,8 +9,17 @@
    [clojure.java.io :as io]
    [clojure.string :as str]
    [nido.coordinator.state :as cstate]
+   [nido.review.digest :as digest]
    [nido.review.prompts :as prompts]
    [nido.vsdd.jj :as jj]))
+
+(defn finding-id
+  "A finding's identity, derived from what it points at rather than from its
+   position in a list. Indices into \"this round's findings\" cannot survive
+   re-attribution across layers, and they make a report that says nothing about
+   WHY a finding was dropped — it is simply absent."
+  [{:keys [file line-start title]}]
+  (digest/short-id (str file "|" line-start "|" title)))
 
 (defn normalize-finding
   "Codex native finding (keyword keys) -> normalized finding."
@@ -26,12 +35,14 @@
      :line-start (:start lr)
      :line-end   (:end lr)}))
 
+(defn- with-id [f] (assoc f :id (finding-id f)))
+
 (defn parse-output
   "Parse codex --output-schema JSON string into
    {:findings [...] :overall-correctness <str>}."
   [json-str]
   (let [m (json/parse-string json-str true)]
-    {:findings            (mapv normalize-finding (:findings m))
+    {:findings            (mapv (comp with-id normalize-finding) (:findings m))
      :overall-correctness (:overall_correctness m)}))
 
 (defn codex-argv
@@ -75,13 +86,23 @@
                       {:reason :review-failed :exit exit :cwd cwd :base base :err err})))
     rev))
 
+(defn safe-label
+  "A label made safe to put in a filename. Layer labels come from bookmarks, and
+   an unstacked branch's bookmark is the session name — which contains a slash
+   (`feat/thing`) and would silently write the artifact into a subdirectory that
+   does not exist."
+  [label]
+  (if (str/blank? (str label))
+    "stack"
+    (str/replace (str label) #"[^A-Za-z0-9._-]" "-")))
+
 (defn- artifact-name
   "Per-review file name. `label` segments the run dir so concurrent reviews of
    different ranges never write over each other's schema, output, or log — with
    one shared name the last writer wins and every layer reports the same
    findings."
   [label iter suffix]
-  (format "%s-round-%d%s" (or label "stack") (or iter 1) suffix))
+  (format "%s-round-%d%s" (safe-label label) (or iter 1) suffix))
 
 (defn review!
   "Git-free codex review of ONE revision range. See ns doc.

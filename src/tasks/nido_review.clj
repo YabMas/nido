@@ -32,7 +32,7 @@
    :base-rev           (get-in report [:target :base-rev])
    :rounds             (or (get-in report [:summary :rounds]) 0)
    :findings-fixed     (or (get-in report [:summary :findings-fixed]) 0)
-   :findings-remaining (count (:findings final))
+   :findings-remaining (count (verdict/still-open (:findings final)))
    :report-path        report-path})
 
 (defn append-review-entry!

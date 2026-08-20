@@ -12,6 +12,14 @@
    :rejected   [{:alternative "round at render time" :why-not "money math in the view"}]
    :standing   {:relation :challenges :note "money math needs an accumulator"}})
 
+(def ^:private a-brief
+  {:subject "refactor(pay): fold the rounding into the aggregate"
+   :mode :mechanical
+   :claims "the rename is uniform across all 40 call sites."
+   :verify "confirm no call site got special handling."
+   :lane "lane-malli"
+   :out-of-scope "the new validation logic — that lands in the layer above."})
+
 (deftest arbiter-prompt-inlines-the-design-record
   (let [out (prompts/arbiter-prompt {:findings findings :history [] :design design})]
     (is (str/includes? out "one rounding boundary at the order aggregate"))
@@ -28,13 +36,13 @@
 
 (deftest arbiter-prompt-ties-escalate-to-a-named-invariant
   (let [out (prompts/arbiter-prompt {:findings findings :history [] :design design})]
-    (is (str/includes? out "CONTRADICT A NAMED INVARIANT"))
-    (is (str/includes? out "Do not escalate because findings merely feel fundamental"))))
+    (is (str/includes? out "CONTRADICTS A NAMED INVARIANT"))
+    (is (str/includes? out "Do not escalate because a finding merely feels fundamental"))))
 
 (deftest arbiter-prompt-without-a-design-record-forbids-escalation
   (let [out (prompts/arbiter-prompt {:findings findings :history [] :design nil})]
     (is (str/includes? out "No design record on this workstream"))
-    (is (str/includes? out "do NOT escalate"))
+    (is (str/includes? out "do NOT park anything"))
     (is (not (str/includes? out "Invariants:")))))
 
 (deftest arbiter-prompt-marks-the-stance-as-framing-not-checklist
@@ -48,26 +56,49 @@
   (let [out (prompts/arbiter-prompt {:findings findings :history [] :design design})]
     (is (not (str/includes? out "PROJECT STANCE")))))
 
-(deftest arbiter-prompt-tags-findings-with-their-layer
+(deftest arbiter-prompt-names-findings-by-id-and-shows-who-reported-them
   (let [out (prompts/arbiter-prompt
-             {:findings [{:priority 1 :title "t" :body "b" :reach :structural}
-                         {:priority 2 :title "u" :body "c"}]
+             {:findings [{:id "aa11" :priority 1 :title "t" :body "b"
+                          :reach :structural :from-layer "drop-legacy"}
+                         {:id "bb22" :priority 2 :title "u" :body "c"}]
               :history [] :design design})]
-    (is (str/includes? out "0: [P1/structural] t"))
-    (is (str/includes? out "1: [P2/unclear] u") "an unlabelled finding is unclear, not local")))
+    (is (str/includes? out "id aa11  [P1/structural] reported-by drop-legacy"))
+    (is (str/includes? out "id bb22  [P2/unclear]")
+        "an unlabelled finding is unclear, not local")))
+
+(deftest arbiter-prompt-requires-an-authority-for-every-non-fix
+  ;; A closed with no authority is a shrug, and is how a review quietly stops
+  ;; reviewing.
+  (let [out (prompts/arbiter-prompt {:findings findings :history [] :design design})]
+    (is (str/includes? out "Nothing is dropped"))
+    (is (str/includes? out "it is a shrug"))))
+
+(deftest arbiter-prompt-assigns-a-composition-finding-to-the-highest-layer
+  (let [out (prompts/arbiter-prompt {:findings findings :history [] :design design})]
+    (is (str/includes? out "assign it to the HIGHEST layer involved"))))
+
+(deftest toc-block-is-a-map-of-claims-and-files-not-diffs
+  (let [s (prompts/toc-block [{:label "a" :claim "the rename is uniform"
+                               :files ["src/x.clj"]}])]
+    (is (str/includes? s "the rename is uniform"))
+    (is (str/includes? s "src/x.clj"))
+    (is (str/includes? s "map only")))
+  (is (nil? (prompts/toc-block []))))
+
+(deftest warden-prompt-is-bounded-and-never-closes-without-an-authority
+  (let [s (prompts/warden-prompt {:layer "drop-legacy" :brief a-brief
+                                  :findings [{:id "aa11" :title "t" :body "b"}]
+                                  :toc [{:label "shape" :claim "c"}]})]
+    (is (str/includes? s "WARDEN of ONE layer"))
+    (is (str/includes? s "Never close a finding without an authority"))
+    (is (str/includes? s "whenever deciding would\nneed a view you do not have")
+        "escalate means it cannot see far enough, not that the design is wrong")
+    (is (str/includes? s "aa11"))))
 
 (deftest arbiter-is-told-not-to-patch-a-structural-finding-away
   (let [out (prompts/arbiter-prompt {:findings findings :history [] :design design})]
-    (is (str/includes? out "Leave such findings\nout of fix_findings and escalate instead"))
     (is (str/includes? out "patching a design\nquestion makes it disappear without anyone deciding it"))))
 
-(def ^:private a-brief
-  {:subject "refactor(pay): fold the rounding into the aggregate"
-   :mode :mechanical
-   :claims "the rename is uniform across all 40 call sites."
-   :verify "confirm no call site got special handling."
-   :lane "lane-malli"
-   :out-of-scope "the new validation logic — that lands in the layer above."})
 
 (deftest layer-brief-block-states-out-of-scope-as-a-prohibition
   ;; Given merely as context, a reviewer flags the item anyway and lets the

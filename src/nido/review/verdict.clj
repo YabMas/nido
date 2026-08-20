@@ -125,6 +125,14 @@
   [v]
   (boolean (#{:invalidated :standing-challenged} (:verdict v))))
 
+(defn still-open
+  "Findings that actually remain at the end — the arbiter closed the rest, by a
+   named authority. Handing a closed finding to the verdict as \"still open\"
+   would have it re-adjudicate something already decided, against a design it is
+   supposed to be checking."
+  [findings]
+  (into [] (remove #(= :closed (:disposition %))) findings))
+
 (defn run!
   "Run the verdict pass. Returns the verdict map, or nil when there is no design
    record to judge against, the agent no-ops, or the answer is unparseable — all
@@ -134,7 +142,7 @@
     (let [prompt (build-prompt
                   {:design design
                    :stance (stages/read-stance (first (stages/project+ws-from-cwd cwd)))
-                   :findings (:findings final)
+                   :findings (still-open (:findings final))
                    :history (mapv #(dissoc % :findings) (:history final))
                    :rounds (or (get-in report [:summary :rounds]) 0)})
           {:keys [num-turns result-error? result-text]}

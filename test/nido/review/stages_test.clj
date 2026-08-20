@@ -9,16 +9,27 @@
    [nido.review.stages :as stages]
    [nido.vsdd.jj :as jj]))
 
-(deftest parse-arbiter-decision-reads-fenced-json
+(deftest parse-arbiter-decision-reads-per-finding-rulings
   (let [txt (str "Here is my call.\n\n```json\n"
-                 "{\"decision\":\"continue\",\"reason\":\"2 real bugs\",\"fix_findings\":[0,2]}\n"
-                 "```\n")]
-    (is (= {:decision :continue :reason "2 real bugs" :fix-findings [0 2]}
-           (stages/parse-arbiter-decision txt)))))
+                 "{\"decision\":\"continue\",\"reason\":\"2 real bugs\","
+                 "\"findings\":[{\"id\":\"aa11\",\"owner_layer\":\"drop-legacy\","
+                 "\"disposition\":\"fix\",\"because\":\"real\"}]}\n"
+                 "```\n")
+        d   (stages/parse-arbiter-decision txt)]
+    (is (= :continue (:decision d)))
+    (is (= [{:id "aa11" :owner-layer "drop-legacy" :disposition :fix
+             :authority nil :of nil :because "real"}]
+           (:rulings d)))))
 
-(deftest parse-arbiter-decision-stop-without-fix-findings
+(deftest parse-arbiter-decision-reads-an-unknown-disposition-as-fix
+  ;; The fail-safe direction: an unrecognised ruling is worked on, never dropped.
+  (let [txt (str "```json\n{\"decision\":\"continue\",\"findings\":"
+                 "[{\"id\":\"aa11\",\"disposition\":\"whatever\"}]}\n```")]
+    (is (= :fix (:disposition (first (:rulings (stages/parse-arbiter-decision txt))))))))
+
+(deftest parse-arbiter-decision-stop-without-rulings
   (let [txt "```json\n{\"decision\":\"stop\",\"reason\":\"clean\"}\n```"]
-    (is (= {:decision :stop :reason "clean" :fix-findings nil}
+    (is (= {:decision :stop :reason "clean" :rulings []}
            (stages/parse-arbiter-decision txt)))))
 
 (deftest parse-arbiter-decision-malformed-is-indeterminate
@@ -46,13 +57,14 @@
 
 (deftest arbiter-stage-continue
   (with-redefs [agent/launch! (fn [_] {:num-turns 3 :result-error? false
-                                       :result-text "```json\n{\"decision\":\"continue\",\"reason\":\"r\",\"fix_findings\":[0]}\n```"})
+                                       :result-text "```json\n{\"decision\":\"continue\",\"reason\":\"r\",\"findings\":[{\"id\":\"aa11\",\"disposition\":\"fix\"}]}\n```"})
                 stages/discover-design-record (fn [_] nil)
                 stages/project+ws-from-cwd (fn [_] nil)]
     (let [ctx ((:run stages/arbiter-stage)
-               {:config {:cwd "/w" :run-id "r1"} :iter 1 :findings [{:title "x"}]})]
+               {:config {:cwd "/w" :run-id "r1"} :iter 1
+                :findings [{:id "aa11" :title "x"}]})]
       (is (= :continue (:control ctx)))
-      (is (= [0] (-> ctx :arbiter :fix-findings))))))
+      (is (= :fix (-> ctx :findings first :disposition))))))
 
 (deftest arbiter-prompt-uses-the-design-record-as-its-yardstick
   (let [captured (atom nil)]
@@ -87,7 +99,7 @@
                   stages/project+ws-from-cwd (fn [_] nil)]
       ((:run stages/arbiter-stage)
        {:config {:cwd "/w" :run-id "r1"} :iter 1 :findings [{:title "x"}]})
-      (is (str/includes? @captured "do NOT escalate")
+      (is (str/includes? @captured "do NOT park anything")
           "with no stated invariant there is nothing for a finding to contradict"))))
 
 (deftest arbiter-stage-noop-is-indeterminate
@@ -107,7 +119,7 @@
                            {:exit 0 :out "" :err ""})]
       (let [ctx ((:run stages/fix-stage)
                  {:config {:cwd "/w" :run-id "r1"} :iter 2
-                  :findings [{:title "x"}] :arbiter {:fix-findings nil}})]
+                  :findings [{:id "aa11" :title "x" :disposition :fix}]})]
         (is (= 1 (count (:history ctx))))
         (is (some #(= "commit" (first %)) @commits))
         (is (some #(= ["commit" "-m" "review-loop: iter 2 fixes"] %) @commits))
@@ -119,7 +131,7 @@
                 jj/jj! (fn [& _] {:exit 0 :out "" :err ""})]
     (let [ctx ((:run stages/fix-stage)
                {:config {:cwd "/w" :run-id "r1"} :iter 2
-                :findings [{:title "x"}] :arbiter {:fix-findings nil}})]
+                :findings [{:id "aa11" :title "x" :disposition :fix}]})]
       (is (= :stop (:control ctx)))
       (is (= :fix-noop (:status ctx))))))
 
@@ -129,7 +141,7 @@
                 jj/jj! (fn [& _] {:exit 0 :out "" :err ""})]
     (let [ctx ((:run stages/fix-stage)
                {:config {:cwd "/w" :run-id "r1"} :iter 2
-                :findings [{:title "x"}] :arbiter {:fix-findings nil}})]
+                :findings [{:id "aa11" :title "x" :disposition :fix}]})]
       (is (= :stop (:control ctx)))
       (is (= :fix-noop (:status ctx))))))
 
@@ -140,19 +152,39 @@
                   jj/jj! (fn [& _] {:exit 0 :out "" :err ""})]
       (let [ctx ((:run stages/fix-stage)
                  {:config {:cwd "/w" :run-id "r1" :dry-run? true} :iter 1
-                  :findings [{:title "x"}] :arbiter {:fix-findings nil}})]
+                  :findings [{:id "aa11" :title "x" :disposition :fix}]})]
         (is (= :stop (:control ctx)))
         (is (= :dry-run (:status ctx)))
         (is (false? @launched))))))
 
-(deftest fix-stage-tolerates-out-of-range-arbiter-indices
-  (with-redefs [agent/launch! (fn [_] {:num-turns 3 :result-error? false :result-text "done"})
-                stages/working-copy-dirty? (fn [_] true)
-                jj/jj! (fn [_ & _] {:exit 0 :out "" :err ""})]
-    (let [ctx ((:run stages/fix-stage)
-               {:config {:cwd "/w" :run-id "r1"} :iter 1
-                :findings [{:title "only"}] :arbiter {:fix-findings [0 99]}})]
-      (is (= 1 (count (:history ctx)))))))
+(deftest apply-rulings-defaults-an-unruled-finding-to-fix
+  ;; "Nothing is dropped" has to survive a malformed answer: a finding the
+  ;; arbiter forgot is worked on, not silently discarded.
+  (let [out (stages/apply-rulings [{:id "aa11" :title "t"} {:id "bb22" :title "u"}]
+                                  [{:id "aa11" :disposition :closed :authority "duplicate"}])]
+    (is (= :closed (:disposition (first out))))
+    (is (= :fix (:disposition (second out))))
+    (is (str/includes? (:because (second out)) "did not rule"))))
+
+(deftest fix-plan-groups-by-owner-and-orders-bottom-to-top
+  (let [stack [{:bookmark "s--a" :slug "a"} {:bookmark "s--b" :slug "b"}]
+        fs    [{:id "1" :disposition :fix :owner-layer "b"}
+               {:id "2" :disposition :fix :owner-layer "a"}
+               {:id "3" :disposition :closed :owner-layer "a"}]
+        plan  (stages/fix-plan stack fs)]
+    (is (= ["a" "b"] (map :label plan)) "bottom-up, so an upper fixer works against settled code")
+    (is (= ["2"] (map :id (:findings (first plan)))) "a closed finding is not handed to a fixer")))
+
+(deftest fix-plan-sends-an-unplaceable-owner-to-the-top-layer
+  (let [stack [{:bookmark "s--a" :slug "a"} {:bookmark "s--b" :slug "b"}]
+        plan  (stages/fix-plan stack [{:id "1" :disposition :fix :owner-layer "nope"}])]
+    (is (= ["b"] (map :label plan)))))
+
+(deftest layer-fixer-sessions-differ-per-layer-and-are-stable
+  ;; One session per layer, never one across layers: a resumed fixer would carry
+  ;; one layer's context into another.
+  (is (= (stages/layer-fixer-session "impl-1" "a") (stages/layer-fixer-session "impl-1" "a")))
+  (is (not= (stages/layer-fixer-session "impl-1" "a") (stages/layer-fixer-session "impl-1" "b"))))
 
 (deftest review-stage-surfaces-base-rev-and-manifest
   (with-redefs [codex/merge-base (fn [& _] "BASEREV")
@@ -172,8 +204,9 @@
                   jj/jj! (fn [& _] {:out "cid-1" :err "" :exit 0})]
       ((:run stages/fix-stage)
        {:config {:cwd "/w" :run-id "r1" :impl-session-id "impl-1"} :iter 1
-        :findings [{:title "x"}] :arbiter {:fix-findings nil}})
-      (is (= "impl-1" (:claude-session-id @seen)) "records under the implementer session id")
+        :findings [{:id "aa11" :title "x" :disposition :fix}]})
+      (is (= (stages/layer-fixer-session "impl-1" nil) (:claude-session-id @seen))
+          "records under this layer's own fixer session")
       (is (false? (:resume? @seen)) "first round (empty history) records, does not resume"))))
 
 (deftest fix-stage-resumes-implementer-session-later-rounds
@@ -184,10 +217,11 @@
                   jj/jj! (fn [& _] {:out "cid-2" :err "" :exit 0})]
       ((:run stages/fix-stage)
        {:config {:cwd "/w" :run-id "r1" :impl-session-id "impl-1"} :iter 2
-        :history [{:iter 1 :commit "cid-1"}]
-        :findings [{:title "x"}] :arbiter {:fix-findings nil}})
-      (is (= "impl-1" (:claude-session-id @seen)) "resumes the same implementer session id")
-      (is (true? (:resume? @seen)) "later round (non-empty history) resumes"))))
+        :history [{:iter 1 :fixes [{:layer nil :commit "cid-1"}]}]
+        :findings [{:id "aa11" :title "x" :disposition :fix}]})
+      (is (= (stages/layer-fixer-session "impl-1" nil) (:claude-session-id @seen))
+          "resumes this layer's own fixer session")
+      (is (true? (:resume? @seen)) "a layer fixed in an earlier round resumes"))))
 
 (deftest arbiter-stage-launches-report-only
   (let [seen (atom nil)]

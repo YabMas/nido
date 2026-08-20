@@ -155,10 +155,16 @@
    `--insert-after` is required, not a stylistic choice: a bare
    `jj new <layer-tip>` creates a SIBLING of the layers above rather than a link
    in the chain, which silently forks the stack — `<base>..@` then stops
-   containing the upper layers and `/squash` folds the wrong set."
+   containing the upper layers and `/squash` folds the wrong set.
+
+   Positions by BOOKMARK, not by the tip commit id read when the stack was
+   enumerated. Landing a fix on a lower layer rewrites every layer above it, so
+   those tips are stale by the time a second fix runs in the same round; the
+   bookmark still names the right commit because jj carries it along."
   [cwd layer]
   (when layer
-    (let [{:keys [exit err]} (jj/jj! cwd "new" "--insert-after" (:tip layer))]
+    (let [{:keys [exit err]} (jj/jj! cwd "new" "--insert-after"
+                                     (or (:bookmark layer) (:tip layer)))]
       (when-not (zero? exit)
         (throw (ex-info (str "could not position the working copy on layer "
                              (:bookmark layer) " — " err)

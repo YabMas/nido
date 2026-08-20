@@ -34,10 +34,11 @@
 (deftest frame-shows-arbiter-decision-when-done
   (let [r (assoc-in running-report [:rounds 0 :phases 1]
                     {:phase "arbiter" :status "ok" :decision "continue"
-                     :fix-findings [0 2]})
+                     :rulings [{:id "aa11" :disposition :fix}
+                               {:id "bb22" :disposition :closed}]})
         s (render/frame r now)]
     (is (str/includes? s "continue"))
-    (is (str/includes? s "fix 0,2"))))
+    (is (str/includes? s "fix 1") "only the findings actually handed to a fixer")))
 
 (deftest final-lists-findings-and-status
   (let [r (-> running-report

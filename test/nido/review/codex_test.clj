@@ -44,8 +44,17 @@
     (is (= {:title "[P1] Remove the extra accumulation"
             :body "Overcharges every payment."
             :priority 1 :reach :structural :confidence 0.9
-            :file "/w/pay.js" :line-start 4 :line-end 4}
+            :file "/w/pay.js" :line-start 4 :line-end 4
+            :id (codex/finding-id {:file "/w/pay.js" :line-start 4
+                                   :title "[P1] Remove the extra accumulation"})}
            (first findings)))))
+
+(deftest finding-id-is-stable-and-position-independent
+  ;; Indices into "this round's findings" cannot survive re-attribution across
+  ;; layers, and leave a report that cannot say WHY a finding was dropped.
+  (let [f {:file "a.clj" :line-start 3 :title "t"}]
+    (is (= (codex/finding-id f) (codex/finding-id (assoc f :body "different"))))
+    (is (not= (codex/finding-id f) (codex/finding-id (assoc f :line-start 4))))))
 
 (deftest parse-output-handles-no-findings
   (let [{:keys [findings overall-correctness]}
