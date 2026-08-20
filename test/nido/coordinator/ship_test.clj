@@ -48,6 +48,36 @@
         (let [[_rid _prio uncapped? trigger mif] (first @submitted)]
           (is (true? uncapped?)) (is (= :merge trigger)) (is (= 1 mif)))))))
 
+(deftest handle-ship-marks-the-shipment-on-the-ledger
+  (let [w (ws/create! :brian {:stage :in-progress
+                              :external-refs [{:adapter :notion :id "BR-42"}]})]
+    (with-redefs [ex/submit! (fn [& _] nil)]
+      (let [run (sut/handle-ship! {:type :ship :project :brian
+                                   :session "impl-br-42" :ws-id (:id w)})
+            e   (last (:entries (ws/read-ws :brian (:id w))))]
+        (is (= :ship-submitted (:kind e)))
+        (is (= "impl-br-42" (:session e)))
+        (is (= (:id run) (:run-id e)) "the entry names the merge Run it started")
+        (is (= {:format :ship-submitted :session "impl-br-42"}
+               (dissoc (ws/latest-entry :brian (:id w) :ship-submitted) :seq :at)))))))
+
+(deftest ship-submitted-resets-a-stale-success-fingerprint
+  ;; A halted ship leaves :implementation-completed as the ledger's last entry.
+  ;; Re-shipping appends :ship-submitted, so a drive-home that then files nothing
+  ;; cannot inherit the previous attempt's success — it falls back to run-status.
+  (let [w (ws/create! :brian {:stage :in-progress
+                              :external-refs [{:adapter :notion :id "BR-42"}]})]
+    (ws/append-entry! :brian (:id w) {:kind :implementation-completed}
+                      (pr-str {:format :implementation-completed
+                               :summary "landed" :artifacts []}))
+    (is (= :awaiting-merge (sut/classify-outcome :brian "BR-42" "r1" {:exit-code 0 :num-turns 3}))
+        "stale fingerprint reads as merged before the re-ship")
+    (with-redefs [ex/submit! (fn [& _] nil)]
+      (sut/handle-ship! {:type :ship :project :brian :session "impl-br-42" :ws-id (:id w)}))
+    (with-redefs [status-file/read-status (fn [_] nil)]
+      (is (= :blocked (sut/classify-outcome :brian "BR-42" "r1" {:exit-code 0 :num-turns 3}))
+          "after the re-ship the fingerprint is neutral and fail-safe wins"))))
+
 (deftest handle-ship-is-idempotent-while-in-flight
   (let [w (ws/create! :brian {:stage :in-progress
                               :external-refs [{:adapter :notion :id "BR-7"}]})]

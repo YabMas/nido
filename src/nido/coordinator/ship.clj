@@ -83,10 +83,26 @@
                    (contains? ship-blocking-states (:state %))))
        boolean))
 
+(defn- record-ship!
+  "Append the :ship-submitted event marking this shipment's start. Best-effort —
+   a ledger failure must not cost the ship — but it runs BEFORE executor/submit!
+   for a reason beyond the timeline: classify-outcome fingerprints the ledger's
+   LAST entry, so this is what stops a re-ship after a halt from inheriting the
+   previous attempt's :implementation-completed and reading as merged."
+  [project ws-id session run-id]
+  (try
+    (ws/append-entry! project ws-id {:kind :ship-submitted :session session :run-id run-id}
+                      (pr-str {:format :ship-submitted :session session}))
+    (catch Throwable t
+      (binding [*err* *err*]
+        (.println ^java.io.PrintWriter *err*
+                  (str "WARN: ship — ledger append failed for " ws-id " — " (.getMessage t)))))))
+
 (defn handle-ship!
   "Process a :ship envelope. Idempotent: no-op (nil) if a merge Run is already
    in flight for this workstream. Otherwise advance the workstream to :shipping,
-   create the merge Run, and submit it to the serial :merge lane."
+   create the merge Run, mark the shipment on the ledger, and submit it to the
+   serial :merge lane."
   [{:keys [project session ws-id]}]
   (let [project (keyword project)
         ws-id   (or ws-id (session/workstream-id-for project session))]
@@ -107,6 +123,7 @@
       (do
         (ws/advance-stage! project ws-id :shipping)
         (let [run (create-merge-run! project ws-id session)]
+          (record-ship! project ws-id session (:id run))
           (executor/submit! (:id run) (:priority run) true :merge 1)
           run)))))
 
@@ -148,7 +165,9 @@
     (case (latest-ledger-kind project br)
       :implementation-completed :awaiting-merge
       :blocker                  :blocked
-      ;; no/ambiguous ledger fingerprint → run-status fallback, else fail-safe
+      ;; No progress fingerprint — including the :ship-submitted this run's own
+      ;; handle-ship! wrote, which is what the ledger reads as when drive-home
+      ;; halts without filing anything. Fall back to run-status, else fail-safe.
       (case (:phase (status-file/read-status run-id))
         :complete :awaiting-merge
         :blocked))))

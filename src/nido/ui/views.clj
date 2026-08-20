@@ -693,6 +693,17 @@
    [:p [:strong title] " — " [:a {:href url :target "_blank"} url]]
    (when summary (md/render summary))])
 
+(defn- merged-card [{:keys [pr url title merged-at]}]
+  [:div.md
+   [:h2 "Merged"]
+   [:p [:strong title] " — " [:a {:href url :target "_blank"} url]]
+   [:p [:code pr] (when merged-at (str " · " merged-at))]])
+
+(defn- ship-submitted-card [{:keys [session]}]
+  [:div.md
+   [:h2 "Ship submitted"]
+   [:p [:code session] " handed to the merge lane."]])
+
 ;; --- review report ---------------------------------------------------------
 ;; The ledger event carries the verdict + counts; work/hydrate attaches `:detail`
 ;; — the review-loop's own report.json (target, rounds, phases, findings) — when
@@ -894,6 +905,8 @@
      :implementation-completed (completed-card report)
      :blocker                  (blocker-card report)
      :pr-opened                (pr-opened-card report)
+     :merged                   (merged-card report)
+     :ship-submitted           (ship-submitted-card report)
      :design-verdict           (design-verdict-card report)
      :review-report            (review-card report pos)
      :findings                 (md/render (report/report->markdown report))

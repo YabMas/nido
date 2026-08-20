@@ -312,6 +312,28 @@
 (deftest entry-payload-rejects-malformed-typed
   (is (thrown? clojure.lang.ExceptionInfo (report/entry-payload :blocker "not-an-edn-map"))))
 
+(deftest validate-merged-and-ship-submitted
+  (let [merged {:format :merged :pr "org/repo#42" :url "https://gh/42"
+                :title "Fix rounding" :merged-at "2026-08-20T10:00:00Z"}]
+    (is (= merged (report/validate-event :merged merged)))
+    (is (= (dissoc merged :merged-at) (report/validate-event :merged (dissoc merged :merged-at)))
+        ":merged-at is optional — gh can report it nil")
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (report/validate-event :merged (dissoc merged :pr)))
+        ":pr is the correlation key and is required"))
+  (let [ship {:format :ship-submitted :session "impl-br-42"}]
+    (is (= ship (report/validate-event :ship-submitted ship)))))
+
+(deftest merged-and-ship-submitted-render
+  (let [md (report/report->markdown {:format :merged :pr "org/repo#42" :url "https://gh/42"
+                                     :title "Fix rounding" :merged-at "2026-08-20T10:00:00Z"})]
+    (is (str/includes? md "# Merged"))
+    (is (str/includes? md "org/repo#42")))
+  ;; :merged carries a usable :title, so report-title leaves it to the caller;
+  ;; :ship-submitted carries none, so it must name itself in the index.
+  (is (nil? (report/report-title {:format :merged :pr "org/repo#42" :url "u" :title "t"})))
+  (is (= "Ship submitted" (report/report-title {:format :ship-submitted :session "s"}))))
+
 (deftest entry-payload-accepts-pr-opened
   (let [edn (pr-str {:format :pr-opened
                      :url "https://github.com/brian-study/brian/pull/412"

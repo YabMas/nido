@@ -1,7 +1,8 @@
 (ns nido.coordinator.github-merge
   "Coordinator housekeeping: poll a project's GitHub repo for merged PRs and
-   react (close the matching workstream, nudge its Notion ticket). No agent
-   session is spawned — this is a direct state mutation, parallel to reclaim.
+   react (close the matching workstream, append its terminal :merged ledger
+   event, nudge its Notion ticket). No agent session is spawned — this is a
+   direct state mutation, parallel to reclaim.
 
    Correlation is by the workstream's :github external-ref, stamped at
    PR-creation time by the prepare-draft-pr skill. Best-effort throughout."
@@ -81,9 +82,25 @@
                              (:external-refs w))
                    w))))))
 
+(defn- record-merge!
+  "Append the terminal :merged event to the workstream's ledger. Best-effort and
+   deliberately AFTER close! — a ledger write that fails must not cost the close
+   or the Notion nudge. Everything it needs came back from `gh pr list`, which is
+   why this is the one lifecycle event that cannot go missing."
+  [project ws-id id {:keys [url title merged-at]}]
+  (try
+    (ws/append-entry! project ws-id {:kind :merged}
+                      (pr-str {:format    :merged
+                               :pr        id
+                               :url       url
+                               :title     title
+                               :merged-at merged-at}))
+    (catch Throwable t
+      (warn (str "github-merge: ledger append failed for " ws-id " (" id ") — " (.getMessage t))))))
+
 (defn- react-to-merge!
   "Correlate one merged PR to a workstream and react. Returns nil."
-  [project on-merge repo {:keys [number]}]
+  [project on-merge repo {:keys [number] :as pr}]
   (let [id (pr-id repo number)
         w  (find-ws-by-github-id project id)]
     (cond
@@ -91,6 +108,7 @@
       (:closed w)   nil                                   ; idempotent no-op
       :else (do
               (ws/close! project (:id w) :done)
+              (record-merge! project (:id w) id pr)
               (let [page-id (some #(when (= :notion (:adapter %)) (:page-id %))
                                   (:external-refs w))]
                 (nudge-notion! page-id on-merge))))))

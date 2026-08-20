@@ -284,6 +284,33 @@
    [:title   string?]
    [:summary {:optional true} string?]])
 
+(def Merged
+  "The landing, appended by the GitHub poller at the moment it closes the
+   workstream (nido.coordinator.github-merge/react-to-merge!).
+
+   Nido-emitted, and every field is something the poller already holds — nothing
+   here needs judgement. That is the point: the events an agent has to remember
+   to write are the events that go missing (28 workstreams carried a PR ref and
+   13 carried the matching :pr-opened), so the one event that ends the timeline
+   is written by the code that ends the work."
+  [:map {:closed true}
+   [:format    [:= :merged]]
+   [:pr        string?]                      ; owner/repo#number — the correlation key
+   [:url       string?]
+   [:title     string?]
+   [:merged-at {:optional true} [:maybe string?]]])
+
+(def ShipSubmitted
+  "The branch handed to the merge lane by `nido ship`. Carries no judgement — the
+   session name is the whole fact — but it is load-bearing twice over: it marks
+   where a shipment began on the timeline, and it RESETS the ledger fingerprint
+   that nido.coordinator.ship/classify-outcome reads. Without it a re-ship after a
+   halt inherits the previous attempt's trailing :implementation-completed, and a
+   drive-home that writes nothing at all reads as success."
+  [:map {:closed true}
+   [:format  [:= :ship-submitted]]
+   [:session string?]])
+
 (def ReviewReport
   "The review-loop outcome as one terminal ledger event (verdict + counts). Points
    at the full report.json rather than embedding it. `:at` is stamped by the ledger."
@@ -384,6 +411,8 @@
    :implementation-completed ImplementationCompleted
    :blocker                  Blocker
    :pr-opened                PrOpened
+   :merged                   Merged
+   :ship-submitted           ShipSubmitted
    :review                   ReviewReport
    :design-verdict           DesignVerdict
    :findings                 FindingsRound
@@ -537,6 +566,15 @@
   (str/join "\n"
     (remove nil? ["# PR opened" (str "**" title "** — " url) (when summary (str "\n" summary))])))
 
+(defn- merged->markdown [{:keys [pr url title merged-at]}]
+  (str/join "\n"
+    (remove nil? ["# Merged"
+                  (str "**" title "** — " url)
+                  (str "`" pr "`" (when merged-at (str " · " merged-at)))])))
+
+(defn- ship-submitted->markdown [{:keys [session]}]
+  (str/join "\n" ["# Ship submitted" "" (str "`" session "` handed to the merge lane.")]))
+
 (defn- review->markdown [{:keys [status base base-rev rounds findings-fixed
                                  findings-remaining report-path summary]}]
   (str/join "\n"
@@ -621,6 +659,8 @@
     :implementation-completed (completed->markdown report)
     :blocker                  (blocker->markdown report)
     :pr-opened                (pr-opened->markdown report)
+    :merged                   (merged->markdown report)
+    :ship-submitted           (ship-submitted->markdown report)
     :review-report            (review->markdown report)
     :design-verdict           (design-verdict->markdown report)
     :findings                 (findings->markdown report)
@@ -629,7 +669,7 @@
 
 (defn report-title
   "Index title for the typed events that carry no top-level :title — design / plan
-   / completed / blocker. nil otherwise (triage, pr-opened and markdown carry a usable :title that
+   / completed / blocker. nil otherwise (triage, pr-opened, merged and markdown carry a usable :title that
    the caller falls back to)."
   [report]
   (case (:format report)
@@ -641,4 +681,5 @@
     :design-verdict           (str "Design verdict: " (name (:verdict report)))
     :findings                 (str "Findings round " (:round report)
                                    " (" (count (:items report)) " items)")
+    :ship-submitted           "Ship submitted"
     nil))

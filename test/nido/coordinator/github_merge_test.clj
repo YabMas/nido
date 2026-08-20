@@ -53,6 +53,52 @@
               "jaap removed from Ball Holder, other kept")
           (is (nil? (get-in @props [:props "Participants"])) "Participants untouched"))))))
 
+(deftest merge-appends-the-terminal-ledger-event
+  (with-tmp
+    (fn [_]
+      (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
+      (let [w (ws/create! :brian {:stage :in-progress
+                                  :external-refs [{:adapter :github :id "brian-study/brian#5"}]})]
+        (with-redefs [gh/list-merged-prs (fn [_] {:status :ok
+                                                  :prs [{:number 5 :url "https://gh/5"
+                                                         :title "Fix rounding" :merged-at "2026-08-20T10:00:00Z"}]})
+                      notion/keychain-token (constantly nil)]
+          (gm/poll-and-react! :brian cfg)
+          (is (= {:format :merged :pr "brian-study/brian#5" :url "https://gh/5"
+                  :title "Fix rounding" :merged-at "2026-08-20T10:00:00Z"}
+                 (dissoc (ws/latest-entry :brian (:id w) :merged) :seq :at))))))))
+
+(deftest a-stack-lands-one-merge-event
+  ;; N layer PRs merge; the first closes the workstream and the rest hit the
+  ;; already-closed no-op — so the timeline reads as one shipment, not N.
+  (with-tmp
+    (fn [_]
+      (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
+      (let [w (ws/create! :brian {:stage :in-progress
+                                  :external-refs [{:adapter :github :id "brian-study/brian#8"}
+                                                  {:adapter :github :id "brian-study/brian#9"}]})]
+        (with-redefs [gh/list-merged-prs (fn [_] {:status :ok
+                                                  :prs [{:number 8 :url "u8" :title "layer 1" :merged-at "z"}
+                                                        {:number 9 :url "u9" :title "layer 2" :merged-at "z"}]})
+                      notion/keychain-token (constantly nil)]
+          (gm/poll-and-react! :brian cfg)
+          (is (= 1 (count (filter #(= :merged (:kind %))
+                                  (:entries (ws/read-ws :brian (:id w))))))))))))
+
+(deftest ledger-failure-does-not-cost-the-close
+  (with-tmp
+    (fn [_]
+      (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
+      (let [w (ws/create! :brian {:stage :in-progress
+                                  :external-refs [{:adapter :github :id "brian-study/brian#6"}]})]
+        (with-redefs [gh/list-merged-prs (fn [_] {:status :ok
+                                                  :prs [{:number 6 :url "u6" :title "t6" :merged-at "y"}]})
+                      notion/keychain-token (constantly nil)
+                      ws/append-entry! (fn [& _] (throw (ex-info "disk full" {})))]
+          (gm/poll-and-react! :brian cfg)
+          (is (= :done (-> (ws/read-ws :brian (:id w)) :closed :outcome))
+              "the close is the important write; a failed append must not undo it"))))))
+
 (deftest already-closed-workstream-is-noop
   (with-tmp
     (fn [_]
