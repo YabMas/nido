@@ -8,3 +8,6 @@
 
 # superpowers brainstorm scratch (visual companion, plans/specs handled separately)
 .superpowers/
+
+# nido writes this into every session worktree (nido.session.agent-guidance)
+/AGENTS.override.md
