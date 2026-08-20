@@ -37,7 +37,8 @@
   (is (= :indeterminate (:decision (stages/parse-arbiter-decision nil)))))
 
 (deftest review-stage-sets-findings
-  (with-redefs [codex/merge-base (fn [& _] "BASEREV")
+  (with-redefs [layers/patch-hash (fn [& _] nil)
+                codex/merge-base (fn [& _] "BASEREV")
                 codex/review! (fn [_] {:status nil :findings [{:title "x"}]
                                        :overall-correctness "incorrect"})]
     (let [ctx ((:run stages/review-stage)
@@ -48,7 +49,8 @@
       (is (nil? (:control ctx))))))
 
 (deftest review-stage-clean-diff-stops
-  (with-redefs [codex/merge-base (fn [& _] "BASEREV")
+  (with-redefs [layers/patch-hash (fn [& _] nil)
+                codex/merge-base (fn [& _] "BASEREV")
                 codex/review! (fn [_] {:status :clean :findings []})]
     (let [ctx ((:run stages/review-stage)
                {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 1})]
@@ -187,7 +189,8 @@
   (is (not= (stages/layer-fixer-session "impl-1" "a") (stages/layer-fixer-session "impl-1" "b"))))
 
 (deftest review-stage-surfaces-base-rev-and-manifest
-  (with-redefs [codex/merge-base (fn [& _] "BASEREV")
+  (with-redefs [layers/patch-hash (fn [& _] nil)
+                codex/merge-base (fn [& _] "BASEREV")
                 codex/review! (fn [_] {:status nil :findings [{:title "x"}]
                                        :overall-correctness "incorrect"
                                        :base-rev "BASE" :manifest "src/a.clj\nsrc/b.clj"})]
@@ -234,7 +237,8 @@
 
 (deftest review-stage-passes-iter-to-codex
   (let [seen (atom nil)]
-    (with-redefs [codex/merge-base (fn [& _] "BASEREV")
+    (with-redefs [layers/patch-hash (fn [& _] nil)
+                  codex/merge-base (fn [& _] "BASEREV")
                   codex/review! (fn [opts] (reset! seen opts)
                                   {:status :clean :findings []})]
       ((:run stages/review-stage) {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 3})
@@ -244,7 +248,8 @@
   ;; review! is aimed by its caller now; the caller must still resolve the fork
   ;; point, or main's parallel work reappears as spurious deletions.
   (let [seen (atom nil)]
-    (with-redefs [codex/merge-base (fn [_cwd base] (str "FORK-OF-" base))
+    (with-redefs [layers/patch-hash (fn [& _] nil)
+                  codex/merge-base (fn [_cwd base] (str "FORK-OF-" base))
                   codex/review!    (fn [opts] (reset! seen opts)
                                      {:status nil :findings []})]
       ((:run stages/review-stage) {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 1})
@@ -267,7 +272,8 @@
               (catch clojure.lang.ExceptionInfo e (:reason (ex-data e)))))))
 
 (deftest review-targets-cover-each-layer-and-the-whole-stack
-  (with-redefs [codex/merge-base    (fn [& _] "FORK")
+  (with-redefs [layers/patch-hash (fn [& _] nil)
+                codex/merge-base    (fn [& _] "FORK")
                 stages/session-stack (fn [& _] [{:bookmark "s--a" :slug "a" :tip "cA"}
                                                 {:bookmark "s--b" :slug "b" :tip "cB"}])
                 layers/brief         (fn [_ rev] {:claims (str "claim of " rev)})]
@@ -280,16 +286,19 @@
 (deftest review-targets-skip-the-stack-pass-below-two-layers
   ;; A composition defect needs two layers to compose. With one layer the stack
   ;; pass is the same diff twice.
-  (with-redefs [codex/merge-base     (fn [& _] "FORK")
+  (with-redefs [layers/patch-hash (fn [& _] nil)
+                codex/merge-base     (fn [& _] "FORK")
                 stages/session-stack (fn [& _] [{:bookmark "s" :slug nil :tip "cA"}])
                 layers/brief         (fn [& _] nil)]
     (is (= ["stack"] (map :label (stages/review-targets "/w" "main")))))
-  (with-redefs [codex/merge-base     (fn [& _] "FORK")
+  (with-redefs [layers/patch-hash (fn [& _] nil)
+                codex/merge-base     (fn [& _] "FORK")
                 stages/session-stack (fn [& _] [])]
     (is (= ["stack"] (map :label (stages/review-targets "/w" "main"))))))
 
 (deftest review-stage-stamps-each-finding-with-the-layer-that-reported-it
-  (with-redefs [codex/merge-base     (fn [& _] "FORK")
+  (with-redefs [layers/patch-hash (fn [& _] nil)
+                codex/merge-base     (fn [& _] "FORK")
                 stages/session-stack (fn [& _] [{:bookmark "s--a" :slug "a" :tip "cA"}
                                                 {:bookmark "s--b" :slug "b" :tip "cB"}])
                 layers/brief         (fn [& _] nil)
@@ -301,7 +310,8 @@
       (is (= #{"a" "b" "stack"} (set (map :from-layer (:findings ctx))))))))
 
 (deftest review-stage-drops-a-finding-two-targets-report-identically
-  (with-redefs [codex/merge-base     (fn [& _] "FORK")
+  (with-redefs [layers/patch-hash (fn [& _] nil)
+                codex/merge-base     (fn [& _] "FORK")
                 stages/session-stack (fn [& _] [{:bookmark "s--a" :slug "a" :tip "cA"}
                                                 {:bookmark "s--b" :slug "b" :tip "cB"}])
                 layers/brief         (fn [& _] nil)
@@ -314,9 +324,47 @@
           "the layer reviewer's copy wins over the whole-stack copy"))))
 
 (deftest review-stage-is-clean-only-when-no-target-found-anything
-  (with-redefs [codex/merge-base     (fn [& _] "FORK")
+  (with-redefs [layers/patch-hash (fn [& _] nil)
+                codex/merge-base     (fn [& _] "FORK")
                 stages/session-stack (fn [& _] [])
                 codex/review!        (fn [_] {:status :clean :findings []})]
     (let [ctx ((:run stages/review-stage) {:config {:cwd "/w" :base "main" :run-id "r"} :iter 1})]
       (is (= :clean (:status ctx)))
       (is (= :stop (:control ctx))))))
+
+;; ---- convergence ---------------------------------------------------------
+
+(deftest to-review-skips-only-a-target-whose-exact-patch-converged
+  (let [cached {"h-a" {:status :converged}}
+        ts     [{:label "a" :patch-hash "h-a"} {:label "b" :patch-hash "h-b"}]
+        {:keys [review skipped]} (stages/to-review cached ts)]
+    (is (= ["b"] (map :label review)))
+    (is (= ["a"] (map :label skipped)))))
+
+(deftest to-review-always-reviews-a-target-with-no-hash
+  ;; jj could not produce the diff. Unknown content is reviewed content.
+  (let [{:keys [review]} (stages/to-review {"h" {:status :converged}}
+                                           [{:label "a" :patch-hash nil}])]
+    (is (= ["a"] (map :label review)))))
+
+(deftest converged-targets-turn-on-ownership-not-on-who-reported
+  (let [reviews [{:target {:label "a" :patch-hash "h-a"}}
+                 {:target {:label "b" :patch-hash "h-b"}}
+                 {:target {:label "stack" :patch-hash "h-s" :stack? true}}]
+        ;; reported by b, owned by a
+        findings [{:disposition :fix :from-layer "b" :owner-layer "a"}]]
+    (is (= ["b"] (map :label (stages/converged-targets reviews findings)))
+        "a owns the fix so it is not converged; b needs no change so it is")))
+
+(deftest converged-targets-include-the-stack-only-when-nothing-needs-fixing
+  (let [reviews [{:target {:label "stack" :patch-hash "h-s" :stack? true}}]]
+    (is (= ["stack"] (map :label (stages/converged-targets reviews []))))
+    (is (= [] (stages/converged-targets
+               reviews [{:disposition :fix :owner-layer "a"}])))))
+
+(deftest answered-for-carries-only-what-that-target-reported-and-lost
+  (is (= ["aa11"]
+         (map :id (stages/answered-for
+                   "a" [{:id "aa11" :from-layer "a" :disposition :closed :authority "design"}
+                        {:id "bb22" :from-layer "a" :disposition :fix}
+                        {:id "cc33" :from-layer "b" :disposition :closed}])))))

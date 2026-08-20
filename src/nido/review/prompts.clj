@@ -116,7 +116,7 @@
    Its `escalate` means \"above my pay grade\", NOT \"the design is in question\" —
    a warden cannot see far enough to make that call, and the arbiter can. That
    is a second, much more common use of a verb the engine already understands."
-  [{:keys [brief findings toc layer]}]
+  [{:keys [brief findings toc layer answered]}]
   (str
    "You are the WARDEN of ONE layer of a stacked change: **" layer "**.\n"
    "You hold this layer's brief and the findings its review produced. You do\n"
@@ -139,6 +139,17 @@
    "escalate.\n\n"
    (when-let [b (layer-brief-block brief)] (str b "\n"))
    (when-let [t (toc-block toc)] (str t "\n"))
+   (when (seq answered)
+     (str "ALREADY ANSWERED against this exact version of the layer. The reviewer\n"
+          "starts each round fresh, so it can report these again — that is not new\n"
+          "information. Close them the same way unless you can say why the answer\n"
+          "no longer holds:\n"
+          (->> answered
+               (map (fn [{:keys [id title authority because]}]
+                      (str "- " id " " title " → closed (" authority ")"
+                           (when because (str ": " because)))))
+               (str/join "\n"))
+          "\n\n"))
    "Findings from this layer's review:\n\n"
    (findings-list findings)))
 

@@ -20,6 +20,7 @@
    not to enumerating."
   (:require
    [clojure.string :as str]
+   [nido.review.digest :as digest]
    [nido.vsdd.jj :as jj]))
 
 (def ^:private row-template
@@ -93,6 +94,19 @@
                               :from (if (zero? i) base-rev (:tip (nth stack (dec i))))
                               :to   (:tip layer))))
         stack))
+
+(defn patch-hash
+  "The identity of what a range CONTRIBUTES, as against where it sits.
+
+   Hashes the range's git-format diff, so it is stable across everything the
+   ship path does to commit ids: a clean rebase preserves the patch, and folding
+   the range into one commit produces exactly the diff the range already had.
+   nil when jj cannot produce the diff — the caller must then review rather than
+   assume anything about it."
+  [cwd from to]
+  (let [{:keys [exit out]} (jj/jj! cwd "diff" "--git" "--from" from "--to" (or to "@"))]
+    (when (zero? exit)
+      (digest/sha256-hex out))))
 
 (defn description
   "A revision's full commit message, or nil."

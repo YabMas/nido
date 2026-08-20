@@ -12,6 +12,7 @@
    [nido.coordinator.state :as cstate]
    [nido.coordinator.workstream :as ws]
    [nido.core :as core]
+   [nido.review.cache :as cache]
    [nido.review.codex :as codex]
    [nido.review.layers :as layers]
    [nido.review.prompts :as prompts]
@@ -52,6 +53,16 @@
         (catch Exception e
           {:decision :indeterminate :reason (str "unparseable: " (ex-message e))}))
       {:decision :indeterminate :reason "no json decision block"})))
+
+(defn project+ws-from-cwd
+  "Resolve cwd → [project ws-id] via the session, or nil. The same path
+   tasks.nido-review/append-review-entry! takes to find where to write."
+  [cwd]
+  (try
+    (when-let [{:keys [project session]} (lifecycle/session-from-cwd cwd)]
+      (when-let [ws-id (csession/workstream-id-for (keyword project) session)]
+        [(keyword project) ws-id]))
+    (catch Throwable _ nil)))
 
 (defn session-stack
   "This session's layers, bottom→top, or [] when cwd resolves to no session (a
@@ -111,6 +122,22 @@
                   (layers/ranges stack base-rev))
             whole))))
 
+(defn with-patch-hashes
+  "Stamp each target with the hash of the patch it contributes — its identity
+   for the cache. A target whose hash cannot be computed keeps nil and is
+   therefore never skipped."
+  [cwd targets]
+  (mapv #(assoc % :patch-hash (layers/patch-hash cwd (:from %) (:to %))) targets))
+
+(defn to-review
+  "Split targets into those this round must review and those already converged
+   at exactly this patch. A target with no hash is always reviewed: unknown
+   content is reviewed content."
+  [cache targets]
+  (let [skip? (fn [t] (and (:patch-hash t) (cache/converged? cache (:patch-hash t))))]
+    {:review (into [] (remove skip?) targets)
+     :skipped (into [] (filter skip?) targets)}))
+
 (defn- collect-findings
   "Flatten every target's findings, stamping each with the target that reported
    it, and drop exact repeats.
@@ -156,7 +183,11 @@
   {:name :review
    :run  (fn [ctx]
            (let [{:keys [cwd base run-id]} (:config ctx)
-                 targets (review-targets cwd base)
+                 [project ws-id] (project+ws-from-cwd cwd)
+                 cached  (if ws-id (cache/read-cache project ws-id) {})
+                 all     (with-patch-hashes cwd (review-targets cwd base))
+                 {:keys [review skipped]} (to-review cached all)
+                 targets review
                  results (in-parallel
                           max-concurrent-reviews
                           (map (fn [t]
@@ -170,24 +201,17 @@
                               (first results))
                  findings (collect-findings results)]
              (if (empty? findings)
-               (assoc ctx :findings [] :reviews results :control :stop :status :clean)
+               (assoc ctx :findings [] :reviews results :skipped skipped
+                      :control :stop :status :clean)
                (assoc ctx
                       :findings findings
                       :reviews results
+                      :skipped skipped
+                      :cache cached
                       :toc (build-toc results)
                       :overall-correctness (:overall-correctness whole)
                       :base-rev (:base-rev whole)
                       :manifest (:manifest whole)))))})
-
-(defn project+ws-from-cwd
-  "Resolve cwd → [project ws-id] via the session, or nil. The same path
-   tasks.nido-review/append-review-entry! takes to find where to write."
-  [cwd]
-  (try
-    (when-let [{:keys [project session]} (lifecycle/session-from-cwd cwd)]
-      (when-let [ws-id (csession/workstream-id-for (keyword project) session)]
-        [(keyword project) ws-id]))
-    (catch Throwable _ nil)))
 
 (defn discover-design-record
   "This workstream's latest :design record, or nil.
@@ -269,11 +293,14 @@
                      (in-parallel
                       max-concurrent-wardens
                       (map (fn [label]
-                             #(let [prompt (prompts/warden-prompt
+                             #(let [t (target-for ctx label)
+                                    prompt (prompts/warden-prompt
                                             {:layer    label
                                              :findings (get by-layer label)
                                              :toc      (:toc ctx)
-                                             :brief    (:brief (target-for ctx label))})
+                                             :brief    (:brief t)
+                                             :answered (cache/answered (:cache ctx)
+                                                                       (:patch-hash t))})
                                     {:keys [result-text]}
                                     (agent/launch!
                                      {:run-id run-id :cwd cwd
@@ -286,6 +313,63 @@
                                 (parse-dispositions result-text)))
                            labels))]
                  (assoc ctx :dispositions (vec (mapcat identity results)))))))})
+
+(defn converged-targets
+  "Pure: the targets this round left with nothing to fix, paired with the patch
+   they were reviewed at.
+
+   A target converged when no :fix finding is OWNED by it — not when none was
+   reported by it. A finding an upper layer reported but a lower one owns leaves
+   the upper layer converged, correctly: nothing about it needs changing. The
+   whole-stack target converges only when nothing anywhere needs fixing, and any
+   fix that does land changes the patch of every layer above it, so its hash
+   stops matching on its own."
+  [reviews findings]
+  (let [owners (into #{} (comp (filter #(= :fix (:disposition %)))
+                               (map :owner-layer))
+                     findings)]
+    (into []
+          (comp (map :target)
+                (filter (fn [t]
+                          (and (:patch-hash t)
+                               (if (:stack? t)
+                                 (empty? owners)
+                                 (not (contains? owners (:label t))))))))
+          reviews)))
+
+(defn answered-for
+  "What this target reported and the arbiter closed. Carried forward under the
+   patch hash so next round's fresh reviewer, reporting the same thing, gets
+   answered rather than re-adjudicated."
+  [label findings]
+  (into []
+        (comp (filter #(and (= label (:from-layer %)) (= :closed (:disposition %))))
+              (map #(select-keys % [:id :title :authority :because])))
+        findings))
+
+(defn record-convergence!
+  "Write what converged this round into the workstream's cache.
+
+   This lives in the arbiter stage rather than in a stage of its own because the
+   engine short-circuits the moment the arbiter says stop — and a round that
+   stops because nothing needs fixing is exactly the round whose convergence is
+   worth remembering. Best-effort: a cache that cannot be written costs the next
+   run some duplicated review and nothing else."
+  [cwd ctx]
+  (when-let [[project ws-id] (project+ws-from-cwd cwd)]
+    (let [converged (converged-targets (:reviews ctx) (:findings ctx))]
+      (when (seq converged)
+        (let [now (str (java.time.Instant/now))
+              c   (reduce (fn [c t]
+                            (cache/record c (:patch-hash t)
+                                          {:status   :converged
+                                           :label    (:label t)
+                                           :round    (:iter ctx)
+                                           :at       now
+                                           :answered (answered-for (:label t) (:findings ctx))}))
+                          (or (:cache ctx) (cache/read-cache project ws-id))
+                          converged)]
+          (cache/write! project ws-id c))))))
 
 (defn apply-rulings
   "Merge the arbiter's per-finding rulings onto the findings.
@@ -333,10 +417,12 @@
                      (= :indeterminate (:decision decision)))
                (assoc ctx :arbiter decision :control :stop
                       :status :arbiter-indeterminate)
-               (assoc ctx
-                      :arbiter  decision
-                      :findings (apply-rulings (:findings ctx) (:rulings decision))
-                      :control  (:decision decision)))))})
+               (let [ctx' (assoc ctx
+                                 :arbiter  decision
+                                 :findings (apply-rulings (:findings ctx) (:rulings decision))
+                                 :control  (:decision decision))]
+                 (record-convergence! cwd ctx')
+                 ctx'))))})
 
 (defn working-copy-dirty?
   "True when jj reports working-copy changes in cwd."
