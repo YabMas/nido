@@ -13,6 +13,7 @@
    [nido.coordinator.workstream :as ws]
    [nido.core :as core]
    [nido.review.codex :as codex]
+   [nido.review.layers :as layers]
    [nido.review.prompts :as prompts]
    [nido.session.lifecycle :as lifecycle]
    [nido.vsdd.jj :as jj]))
@@ -118,12 +119,35 @@
   [findings idxs]
   (if (seq idxs) (into [] (keep #(nth findings % nil)) idxs) findings))
 
+(defn session-stack
+  "This session's layers, bottom→top, or [] when cwd resolves to no session (a
+   review run outside a nido worktree still has to work — it just has no stack
+   to land on)."
+  [cwd base]
+  (try
+    (if-let [session (:session (lifecycle/session-from-cwd cwd))]
+      (layers/stack cwd session (or base "main"))
+      [])
+    (catch Throwable _ [])))
+
 (def fix-stage
+  "Fixes land INSIDE the stack, on the layer that owns them.
+
+   The target is the top layer — the flat review covers the whole stack, so with
+   no per-finding attribution yet the highest layer is the only defensible
+   owner, and it is where a composition defect actually first exists.
+
+   Committing at `@` (what this did before there were layers) put the fix ABOVE
+   the top layer's bookmark, outside every layer's `<lower>..<bookmark>` fold
+   range — so `/squash` never folded it and no PR ever saw it."
   {:name :fix
    :run  (fn [ctx]
            (if (:dry-run? (:config ctx))
              (assoc ctx :control :stop :status :dry-run)
-             (let [{:keys [cwd run-id budget impl-session-id]} (:config ctx)
+             (let [{:keys [cwd base run-id budget impl-session-id]} (:config ctx)
+                   stack   (session-stack cwd base)
+                   target  (last stack)
+                   _       (layers/position-for-fix! cwd target)
                    resume? (boolean (seq (:history ctx)))
                    to-fix (select-findings (:findings ctx)
                                            (-> ctx :judge :fix-findings))
@@ -135,11 +159,13 @@
                                    :resume? resume?
                                    :err-file (str (fs/path (cstate/run-dir run-id) "agent.err.log"))})]
                (if (or (zero? (or num-turns 0)) (not (working-copy-dirty? cwd)))
-                 (assoc ctx :control :stop :status :fix-noop)
+                 (do (layers/restore-top! cwd stack)
+                     (assoc ctx :control :stop :status :fix-noop))
                  (let [msg (str "review-loop: iter " (:iter ctx) " fixes")
-                       _   (jj/jj! cwd "commit" "-m" msg)
-                       cid (:out (jj/jj! cwd "log" "-r" "@-" "-T" "commit_id" "--no-graph"))]
+                       cid (layers/land-fix! cwd target msg)]
+                   (layers/restore-top! cwd stack)
                    (update ctx :history (fnil conj [])
                            {:iter (:iter ctx) :commit cid :fixed-count (count to-fix)
+                            :layer (:bookmark target)
                             :findings (:findings ctx) :judge (:judge ctx)}))))))})
 
