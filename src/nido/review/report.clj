@@ -71,29 +71,51 @@
         pidx   (last (keep-indexed (fn [i ph] (when (= phase-name (:phase ph)) i)) phases))]
     (if pidx (update-in report [:rounds ridx :phases pidx] f) report)))
 
+(defn review-layers
+  "One entry per review target this round: what it found, or that it was not
+   looked at because its patch had already converged. This is what makes the
+   round legible per layer instead of as one number."
+  [ctx]
+  (let [counts (frequencies (keep :from-layer (:findings ctx)))]
+    (into (mapv (fn [{:keys [target]}]
+                  {:label    (:label target)
+                   :status   "reviewed"
+                   :stack?   (boolean (:stack? target))
+                   :findings (get counts (:label target) 0)})
+                (:reviews ctx))
+          (mapv (fn [t] {:label  (:label t)
+                         :status "skipped"
+                         :stack? (boolean (:stack? t))})
+                (:skipped ctx)))))
+
 (defn- finish-phase
   [ph phase ctx at]
   (let [ph (assoc ph :status "ok" :ended-at at)]
     (case phase
       :review (assoc ph :overall-correctness (:overall-correctness ctx)
-                        :findings (vec (:findings ctx)))
+                        :findings (vec (:findings ctx))
+                        :layers (review-layers ctx))
       :arbiter (let [a (:arbiter ctx)]
                  (assoc ph :decision (some-> (:decision a) name)
                         :reason (:reason a)
                         :rulings (mapv #(select-keys % [:id :owner-layer :disposition
                                                         :authority :of :because])
                                        (:rulings a))))
-      :warden (assoc ph :dispositions (vec (:dispositions ctx)))
+      :warden (assoc ph :dispositions (vec (:dispositions ctx))
+                        :by-layer (frequencies (keep :from-layer (:findings ctx))))
       :fix    (let [h (last (filter #(= (:iter ctx) (:iter %)) (:history ctx)))]
                 (assoc ph :fixes (vec (:fixes h)) :fixed-count (:fixed-count h)))
       ph)))
 
 (defn- patch-target
-  "On the first review with a base-rev, populate target base-rev + files."
+  "On the first review with a base-rev, populate target base-rev + files + how
+   many layers the stack was cut into."
   [report ctx]
   (if (and (nil? (:base-rev (:target report))) (:base-rev ctx))
     (-> report
         (assoc-in [:target :base-rev] (:base-rev ctx))
+        (assoc-in [:target :layers]
+                  (count (remove :stack? (review-layers ctx))))
         (assoc-in [:target :files]
                   (vec (remove str/blank? (str/split-lines (or (:manifest ctx) ""))))))
     report))

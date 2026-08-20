@@ -56,3 +56,36 @@
                           {:event :phase-started :iter 1 :phase :review})
        "review"))
   (is (nil? (render/plain-line running-report {:event :run-started}))))
+
+(deftest frame-lists-every-layer-including-the-ones-it-skipped
+  ;; A reader who cannot see that a layer was passed over has to take on trust
+  ;; that passing over it was safe. Silent truncation reads as coverage.
+  (let [r {:target {:cwd "/x/feat/thing" :base "main" :layers 2 :files ["a"]}
+           :rounds [{:round 1
+                     :phases [{:phase "review" :status "ok" :started-at "2026-01-01T00:00:00Z"
+                               :findings [{} {}]
+                               :layers [{:label "drop-legacy" :status "reviewed" :findings 2}
+                                        {:label "widen" :status "skipped"}
+                                        {:label "stack" :status "reviewed" :findings 0
+                                         :stack? true}]}]}]}
+        s (render/frame r (java.time.Instant/parse "2026-01-01T00:00:10Z"))]
+    (is (str/includes? s "2 layers") "the header says how wide the stack is")
+    (is (str/includes? s "drop-legacy"))
+    (is (str/includes? s "widen"))
+    (is (str/includes? s "unchanged since it converged"))
+    (is (str/includes? s "1 skipped"))
+    (is (str/includes? s "composition") "the whole-stack pass is named for what it is")))
+
+(deftest final-says-what-was-decided-about-each-finding
+  (let [r {:target {:cwd "/x/feat/thing" :base "main"}
+           :status "converged" :started-at "2026-01-01T00:00:00Z"
+           :ended-at "2026-01-01T00:01:00Z"
+           :rounds [{:round 1
+                     :phases [{:phase "review" :status "ok" :started-at "2026-01-01T00:00:00Z"
+                               :findings [{:priority 1 :title "t" :file "a.clj" :line-start 1
+                                           :line-end 2 :disposition :closed :authority "out-of-scope"
+                                           :from-layer "widen" :owner-layer "drop-legacy"}]}]}]}
+        s (render/final r)]
+    (is (str/includes? s "→ closed"))
+    (is (str/includes? s "out-of-scope"))
+    (is (str/includes? s "reported by widen") "attribution is visible when it moved")))

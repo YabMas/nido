@@ -736,19 +736,35 @@
       f)))
 
 (defn- review-phase-note
-  "The one-line outcome of a phase: findings count for review, decision for the arbiter,
-   commit for fix. nil while it is still running."
-  [{:keys [phase findings overall-correctness decision fix-findings commit
-           fixed-count status]}]
+  "The one-line outcome of a phase: what each layer found for review, the
+   arbiter's decision, where each fix landed. nil while it is still running.
+
+   `fix-findings` and `commit` are read alongside their replacements so a
+   report.json written before layers existed still renders."
+  [{:keys [phase findings overall-correctness decision rulings fix-findings
+           commit fixes fixed-count dispositions layers status]}]
   (case phase
     "review" (when (= "ok" status)
-               (str (count findings) " finding" (when (not= 1 (count findings)) "s")
-                    (when overall-correctness (str " · " overall-correctness))))
+               (let [skipped (count (filter #(= "skipped" (:status %)) layers))]
+                 (str (count findings) " finding" (when (not= 1 (count findings)) "s")
+                      (when (pos? skipped) (str " · " skipped " layer"
+                                                (when (not= 1 skipped) "s") " skipped"))
+                      (when overall-correctness (str " · " overall-correctness)))))
+    "warden" (when (= "ok" status)
+               (str (count dispositions) " disposition"
+                    (when (not= 1 (count dispositions)) "s")))
     ("arbiter" "judge") (when decision
                (str "→ " decision
+                    (when-let [n (seq (filter #(= "fix" (name (or (:disposition %) ""))) rulings))]
+                      (str " (fix " (count n) ")"))
                     (when (seq fix-findings)
                       (str " (fix " (str/join "," fix-findings) ")"))))
     "fix"    (cond
+               (seq fixes)       (str/join " · "
+                                          (map #(str (or (:layer %) "branch") " "
+                                                     (subs (str (:commit %)) 0
+                                                           (min 8 (count (str (:commit %))))))
+                                               fixes))
                commit            (str "commit " (subs commit 0 (min 8 (count commit)))
                                       (when fixed-count (str " · " fixed-count " fixed")))
                (= "ok" status)   "no changes")
