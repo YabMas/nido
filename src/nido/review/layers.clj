@@ -73,6 +73,77 @@
                          :change   change}))))
             (remove str/blank? (str/split-lines out))))))
 
+;; ---- what each layer contributes ----------------------------------------
+
+(defn ranges
+  "Pair each layer with the revision range it contributes:
+     [{… :from <rev> :to <commit-id>} …]   bottom→top
+
+   A layer's range runs from the tip of the layer beneath it to its own tip —
+   the same `<lower>..<this-bookmark>` range `/squash` folds, which is why a
+   verdict about this range survives the fold.
+
+   The bottom layer's `from` is `base-rev`, which must be the FORK POINT and not
+   the tip of base (see `nido.review.codex/merge-base`): diffing from a base
+   that has moved on turns everything base gained into spurious deletions."
+  [stack base-rev]
+  (into []
+        (map-indexed (fn [i layer]
+                       (assoc layer
+                              :from (if (zero? i) base-rev (:tip (nth stack (dec i))))
+                              :to   (:tip layer))))
+        stack))
+
+(defn description
+  "A revision's full commit message, or nil."
+  [cwd rev]
+  (let [{:keys [exit out]} (jj/jj! cwd "log" "-r" rev "--no-graph" "-T" "description")]
+    (when (zero? exit) out)))
+
+(def ^:private brief-fields
+  {"Layer" :mode "Claims" :claims "Verify" :verify
+   "Lane" :lane "Out of scope" :out-of-scope})
+
+(def ^:private field-re #"^(Layer|Claims|Verify|Lane|Out of scope):\s*(.*)$")
+(def ^:private continuation-re #"^\s+\S.*$")
+
+(defn parse-brief
+  "A layer commit message → its `/stack` §5 review brief:
+     {:mode :claims :verify :lane :out-of-scope :subject :raw}
+
+   Fields the message doesn't carry come back nil. That is the normal case for
+   an ordinary commit written before the stack doctrine, and for a fixup commit
+   sitting on a layer — neither is an error, so this never throws. A field's
+   value continues onto following indented lines, which is how the four brief
+   fields are written."
+  [description]
+  (when-not (str/blank? description)
+    (let [lines  (str/split-lines description)
+          parsed (->> lines
+                      (reduce
+                       (fn [{:keys [current] :as st} line]
+                         (if-let [[_ k v] (re-matches field-re line)]
+                           (let [field (get brief-fields k)]
+                             (-> st (assoc :current field)
+                                 (assoc-in [:out field] [v])))
+                           (if (and current (re-matches continuation-re line))
+                             (update-in st [:out current] conj (str/trim line))
+                             (assoc st :current nil))))
+                       {:current nil :out {}})
+                      :out)
+          joined (into {} (map (fn [[k parts]]
+                                 [k (str/trim (str/join " " (remove str/blank? parts)))]))
+                       parsed)]
+      (cond-> (assoc joined
+                     :subject (first (remove str/blank? lines))
+                     :raw     (str/trim description))
+        (seq (:mode joined)) (update :mode #(keyword (str/lower-case (str/trim %))))))))
+
+(defn brief
+  "The review brief of the layer whose tip is `rev`, or nil."
+  [cwd rev]
+  (parse-brief (description cwd rev)))
+
 ;; ---- landing a fix on a layer -------------------------------------------
 
 (defn position-for-fix!

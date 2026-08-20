@@ -8,6 +8,46 @@
   "codex review-guidelines prompt (lifted from codex's review template)."
   (slurp (io/resource "review/review_prompt.md")))
 
+(defn- brief-field
+  [label v]
+  (when-not (str/blank? (str v))
+    (str label ": " v "\n")))
+
+(defn layer-brief-block
+  "The bounding preamble for a review aimed at ONE layer of a stack, built from
+   that layer's `/stack` §5 brief. nil when there is no brief — a whole-stack
+   review is not bounded by one, and saying nothing is better than saying
+   \"no brief\", which reads as an instruction to go wide.
+
+   `Out of scope` is the field that makes bounded review work: without it every
+   reviewer re-derives the whole change and the stack's benefit is lost. It is
+   stated as a prohibition here rather than as context, because a reviewer given
+   it as context flags the item anyway and lets the reader sort it out."
+  [{:keys [subject mode claims verify lane out-of-scope]}]
+  (when (or claims verify out-of-scope)
+    (str
+     "THIS REVIEW IS BOUNDED TO ONE LAYER OF A STACKED CHANGE.\n\n"
+     (brief-field "Layer" subject)
+     (brief-field "Review mode" (some-> mode name))
+     (brief-field "Claims" claims)
+     (brief-field "Verify" verify)
+     (brief-field "Lane" lane)
+     (brief-field "Out of scope" out-of-scope)
+     "\nHow to use this:\n"
+     "- Review ONLY what this layer changes. The range below is its whole diff.\n"
+     "- Out of scope is a PROHIBITION, not context. Do not flag those items —\n"
+     "  they belong to another layer or another ticket, and someone has already\n"
+     "  decided where. Flagging them re-derives the whole change, which is the\n"
+     "  cost this layering exists to avoid.\n"
+     "- Claims is what this layer asserts about itself. A finding that shows a\n"
+     "  claim is FALSE is the most valuable thing you can return — say plainly\n"
+     "  which claim, and what you saw that contradicts it.\n"
+     "- Verify names the concrete checks this layer should pass. Discharge them\n"
+     "  and report any that fail.\n"
+     "- A `mechanical` layer asserts uniformity: your job is to find the one\n"
+     "  place that got special handling, not to reopen the decision. A\n"
+     "  `judgment` layer owns a decision: weigh it.\n\n")))
+
 (defn fix-prompt
   "Instruction to fix the given findings. Do NOT commit — the engine commits."
   [{:keys [findings]}]

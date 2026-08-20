@@ -16,9 +16,10 @@ Mark "structural" honestly rather than forcing a call. You have not been given t
 
 This is a STATIC branch review under a read-only sandbox. The diff is NOT inlined — you are given the base branch and the list of changed files below, and you EXPLORE the working directory yourself:
 
-- See exactly what a file changed with: `jj --ignore-working-copy diff --git --from <base> --to @ -- <path>` — ALWAYS pass `--ignore-working-copy`, or jj tries to snapshot the working copy and the read-only sandbox denies the lock write.
+- See exactly what a file changed with: `jj --ignore-working-copy diff --git --from <base> --to <head> -- <path>` — ALWAYS pass `--ignore-working-copy`, or jj tries to snapshot the working copy and the read-only sandbox denies the lock write.
 - See a file's pre-change (base) version with: `jj --ignore-working-copy file show -r <base> -- <path>`.
-- Open any file in the working directory for context (callers, definitions, tests). This change may be deletion-heavy: for each removed definition, grep the worktree (`rg`) to check whether anything still references it — a flat diff cannot tell you that, and a dangling reference to deleted code is a [P0].
+- See a file AS THIS CHANGE LEAVES IT with: `jj --ignore-working-copy file show -r <head> -- <path>`. **Use this, never `cat`.** The working copy does not necessarily sit at `<head>` — when this review is bounded to one layer of a stack it sits above it — so `cat` can show you code this change never produced, and a finding written against it is fiction.
+- Use the working directory to FIND things (`rg`, `grep` for callers, definitions, tests) and then read what you found at `<head>` as above. This change may be deletion-heavy: for each removed definition, grep the worktree (`rg`) to check whether anything still references it — a flat diff cannot tell you that, and a dangling reference to deleted code is a [P0].
 - Do NOT run build, test, REPL, or network tools (`bb`, `clojure`, `clj-nrepl-eval`, `npm`, …) — they fail under the sandbox and waste effort. Explore with `jj` (always `--ignore-working-copy`), `rg`, `grep`, `sed`, and `cat` only.
 
 You MUST actually pull each changed file's diff before concluding. Then output findings per the schema.

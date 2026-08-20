@@ -60,3 +60,30 @@
   (let [out (prompts/arbiter-prompt {:findings findings :history [] :design design})]
     (is (str/includes? out "Leave such findings\nout of fix_findings and escalate instead"))
     (is (str/includes? out "patching a design\nquestion makes it disappear without anyone deciding it"))))
+
+(def ^:private a-brief
+  {:subject "refactor(pay): fold the rounding into the aggregate"
+   :mode :mechanical
+   :claims "the rename is uniform across all 40 call sites."
+   :verify "confirm no call site got special handling."
+   :lane "lane-malli"
+   :out-of-scope "the new validation logic — that lands in the layer above."})
+
+(deftest layer-brief-block-states-out-of-scope-as-a-prohibition
+  ;; Given merely as context, a reviewer flags the item anyway and lets the
+  ;; reader sort it out — which is the whole cost bounded review avoids.
+  (let [s (prompts/layer-brief-block a-brief)]
+    (is (str/includes? s "the new validation logic"))
+    (is (str/includes? s "PROHIBITION"))))
+
+(deftest layer-brief-block-carries-the-claims-and-the-review-mode
+  (let [s (prompts/layer-brief-block a-brief)]
+    (is (str/includes? s "uniform across all 40 call sites"))
+    (is (str/includes? s "mechanical"))
+    (is (str/includes? s "lane-malli"))))
+
+(deftest layer-brief-block-is-nil-for-a-whole-stack-review
+  ;; Saying "no brief" would read as an instruction to go wide; saying nothing
+  ;; leaves the unbounded pass unbounded, which is what it is for.
+  (is (nil? (prompts/layer-brief-block nil)))
+  (is (nil? (prompts/layer-brief-block {:subject "review-loop: iter 1 fixes"}))))

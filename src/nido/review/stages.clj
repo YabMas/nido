@@ -39,7 +39,8 @@
   {:name :review
    :run  (fn [ctx]
            (let [{:keys [cwd base run-id]} (:config ctx)
-                 res (codex/review! {:cwd cwd :base base :run-id run-id :iter (:iter ctx)})]
+                 res (codex/review! {:cwd cwd :run-id run-id :iter (:iter ctx)
+                                     :from (codex/merge-base cwd base) :to "@"})]
              (if (= :clean (:status res))
                (assoc ctx :findings [] :control :stop :status :clean)
                (assoc ctx

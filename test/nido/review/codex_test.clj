@@ -68,8 +68,8 @@
                          (if (= "diff" (first args))
                            {:exit 0 :out "" :err ""}            ; empty manifest
                            {:exit 0 :out "BASEREV\n" :err ""}))] ; merge-base
-    (is (= {:status :clean :findings []}
-           (codex/review! {:cwd "/w" :base "main" :run-id "r1"})))))
+    (is (= {:status :clean :findings [] :base-rev "BASEREV" :manifest ""}
+           (codex/review! {:cwd "/w" :from "BASEREV" :run-id "r1"})))))
 
 (deftest review!-parses-codex-output
   (let [tmp (str (fs/create-temp-dir))]
@@ -79,11 +79,11 @@
                                      {:exit 0 :out "BASEREV\n" :err ""}))  ; merge-base
                   cstate/run-dir (fn [_] tmp)
                   codex/run-codex! (fn [_opts]
-                                     (spit (str (fs/path tmp "review-out.json"))
+                                     (spit (str (fs/path tmp "stack-round-1-out.json"))
                                            sample-output)
                                      {:exit 0})]
       (let [{:keys [status findings overall-correctness]}
-            (codex/review! {:cwd "/w" :base "main" :run-id "r1"})]
+            (codex/review! {:cwd "/w" :from "BASEREV" :run-id "r1"})]
         (is (nil? status))
         (is (= 1 (count findings)))
         (is (= "incorrect" overall-correctness))))))
@@ -94,7 +94,7 @@
                   cstate/run-dir   (fn [_] tmp)
                   codex/run-codex! (fn [_] {:exit 1})]
       (is (thrown? clojure.lang.ExceptionInfo
-                   (codex/review! {:cwd "/w" :base "main" :run-id "r1"}))))))
+                   (codex/review! {:cwd "/w" :from "BASEREV" :run-id "r1"}))))))
 
 (deftest review!-fails-loud-on-jj-diff-error
   ;; A non-zero `jj diff` (e.g. cwd isn't a jj workspace, or a bad base) must
@@ -102,7 +102,7 @@
   ;; was never looked at. Fail loud as :review-failed instead.
   (with-redefs [jj/jj! (fn [& _]
                          {:exit 1 :out "" :err "Error: There is no jj repo in \".\""})]
-    (let [reason (try (codex/review! {:cwd "/not-a-repo" :base "main" :run-id "r1"})
+    (let [reason (try (codex/review! {:cwd "/not-a-repo" :from "BASEREV" :run-id "r1"})
                       nil
                       (catch clojure.lang.ExceptionInfo e (:reason (ex-data e))))]
       (is (= :review-failed reason)))))
@@ -141,42 +141,61 @@
                   cstate/run-dir   (fn [_] tmp)
                   codex/run-codex! (fn [opts]
                                      (reset! captured (:prompt opts))
-                                     (spit (str (fs/path tmp "review-out.json"))
+                                     (spit (str (fs/path tmp "stack-round-1-out.json"))
                                            sample-output)
                                      {:exit 0})]
-      (codex/review! {:cwd "/w" :base "main" :run-id "r1"})
+      (codex/review! {:cwd "/w" :from "BASEREV" :run-id "r1"})
       (is (re-find #"src/a\.clj" @captured) "changed files appear in the prompt")
       (is (re-find #"src/b\.clj" @captured)))))
 
-(deftest review!-diffs-from-merge-base-not-tip-of-base
+(deftest merge-base-resolves-the-fork-point
   ;; `jj diff --from main --to @` is a 2-way tree diff: when main has advanced
   ;; since the branch forked, all of main's parallel work shows up as spurious
-  ;; deletions (180 files instead of the PR's 29). Review must diff from the
-  ;; MERGE BASE (fork point) of @ and the base — matching the PR's "Files
-  ;; changed" — and tell codex to explore against that same revision.
-  (let [tmp       (str (fs/create-temp-dir))
-        diff-from (atom nil)
-        captured  (atom nil)]
+  ;; deletions (180 files instead of the PR's 29). The comparison point must be
+  ;; the MERGE BASE (fork point) of @ and the base — matching what the PR's
+  ;; "Files changed" shows. review! is now AIMED by its caller, so this is the
+  ;; fn the caller uses to aim it.
+  (let [revset (atom nil)]
+    (with-redefs [jj/jj! (fn [_dir & args]
+                           (reset! revset (second (drop-while #(not= "-r" %) args)))
+                           {:exit 0 :out "MERGEBASE123\n" :err ""})]
+      (is (= "MERGEBASE123" (codex/merge-base "/w" "main")))
+      (is (= "heads(::@ & ::main)" @revset)))))
+
+(deftest review!-aims-the-diff-and-the-prompt-at-the-given-range
+  (let [tmp      (str (fs/create-temp-dir))
+        diff-args (atom nil)
+        captured (atom nil)]
     (with-redefs [jj/jj!           (fn [_dir & args]
-                                     (cond
-                                       (= "log" (first args))    ; merge-base resolution
-                                       {:exit 0 :out "MERGEBASE123\n" :err ""}
-                                       (= "diff" (first args))
-                                       (do (reset! diff-from
-                                                   (second (drop-while #(not= "--from" %) args)))
-                                           {:exit 0 :out "src/a.clj" :err ""})
-                                       :else {:exit 0 :out "" :err ""}))
+                                     (reset! diff-args (vec args))
+                                     {:exit 0 :out "src/a.clj" :err ""})
                   cstate/run-dir   (fn [_] tmp)
                   codex/run-codex! (fn [opts]
                                      (reset! captured (:prompt opts))
-                                     (spit (str (fs/path tmp "review-out.json"))
+                                     (spit (str (fs/path tmp "drop-legacy-round-2-out.json"))
                                            sample-output)
                                      {:exit 0})]
-      (codex/review! {:cwd "/w" :base "main" :run-id "r1"})
-      (is (= "MERGEBASE123" @diff-from)
-          "manifest diffs from the resolved merge base, not the raw base bookmark")
-      (is (re-find #"MERGEBASE123" @captured)
-          "codex prompt points codex at the merge base for its exploration"))))
+      (codex/review! {:cwd "/w" :from "LOWTIP" :to "OWNTIP" :run-id "r1"
+                      :iter 2 :label "drop-legacy"})
+      (is (= "LOWTIP" (second (drop-while #(not= "--from" %) @diff-args))))
+      (is (= "OWNTIP" (second (drop-while #(not= "--to" %) @diff-args))))
+      (is (re-find #"Head revision \(use this exact value as <head>\): OWNTIP" @captured)
+          "codex is told which revision to read file content at"))))
+
+(deftest review!-scopes-its-artifacts-by-label-so-parallel-layers-cannot-collide
+  ;; With one shared out-path the last layer to finish wins and every layer
+  ;; reports its findings — silently, since nothing errors.
+  (let [tmp   (str (fs/create-temp-dir))
+        paths (atom [])]
+    (with-redefs [jj/jj!           (fn [& _] {:exit 0 :out "src/a.clj" :err ""})
+                  cstate/run-dir   (fn [_] tmp)
+                  codex/run-codex! (fn [opts]
+                                     (swap! paths conj (:out-path opts))
+                                     (spit (:out-path opts) sample-output)
+                                     {:exit 0})]
+      (codex/review! {:cwd "/w" :from "A" :to "B" :run-id "r" :iter 1 :label "l1"})
+      (codex/review! {:cwd "/w" :from "B" :to "C" :run-id "r" :iter 1 :label "l2"})
+      (is (= 2 (count (distinct @paths))) "each layer writes its own output file"))))
 
 (deftest parse-output-tolerates-a-finding-with-no-reach
   (let [out (str "{\"findings\":[{\"title\":\"t\",\"body\":\"b\","

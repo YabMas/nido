@@ -25,7 +25,8 @@
   (is (= :indeterminate (:decision (stages/parse-arbiter-decision nil)))))
 
 (deftest review-stage-sets-findings
-  (with-redefs [codex/review! (fn [_] {:status nil :findings [{:title "x"}]
+  (with-redefs [codex/merge-base (fn [& _] "BASEREV")
+                codex/review! (fn [_] {:status nil :findings [{:title "x"}]
                                        :overall-correctness "incorrect"})]
     (let [ctx ((:run stages/review-stage)
                {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 1})]
@@ -34,7 +35,8 @@
       (is (nil? (:control ctx))))))
 
 (deftest review-stage-clean-diff-stops
-  (with-redefs [codex/review! (fn [_] {:status :clean :findings []})]
+  (with-redefs [codex/merge-base (fn [& _] "BASEREV")
+                codex/review! (fn [_] {:status :clean :findings []})]
     (let [ctx ((:run stages/review-stage)
                {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 1})]
       (is (= :stop (:control ctx)))
@@ -151,7 +153,8 @@
       (is (= 1 (count (:history ctx)))))))
 
 (deftest review-stage-surfaces-base-rev-and-manifest
-  (with-redefs [codex/review! (fn [_] {:status nil :findings [{:title "x"}]
+  (with-redefs [codex/merge-base (fn [& _] "BASEREV")
+                codex/review! (fn [_] {:status nil :findings [{:title "x"}]
                                        :overall-correctness "incorrect"
                                        :base-rev "BASE" :manifest "src/a.clj\nsrc/b.clj"})]
     (let [ctx ((:run stages/review-stage)
@@ -195,7 +198,19 @@
 
 (deftest review-stage-passes-iter-to-codex
   (let [seen (atom nil)]
-    (with-redefs [codex/review! (fn [opts] (reset! seen opts)
+    (with-redefs [codex/merge-base (fn [& _] "BASEREV")
+                  codex/review! (fn [opts] (reset! seen opts)
                                   {:status :clean :findings []})]
       ((:run stages/review-stage) {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 3})
       (is (= 3 (:iter @seen)) "review! is told which round it is (for the log name)"))))
+
+(deftest review-stage-aims-the-review-at-the-merge-base-not-the-tip-of-base
+  ;; review! is aimed by its caller now; the caller must still resolve the fork
+  ;; point, or main's parallel work reappears as spurious deletions.
+  (let [seen (atom nil)]
+    (with-redefs [codex/merge-base (fn [_cwd base] (str "FORK-OF-" base))
+                  codex/review!    (fn [opts] (reset! seen opts)
+                                     {:status nil :findings []})]
+      ((:run stages/review-stage) {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 1})
+      (is (= "FORK-OF-main" (:from @seen)))
+      (is (= "@" (:to @seen))))))

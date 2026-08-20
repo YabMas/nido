@@ -75,37 +75,55 @@
                       {:reason :review-failed :exit exit :cwd cwd :base base :err err})))
     rev))
 
-(defn review!
-  "Git-free codex review of the branch change (merge-base(@,base)..@). See ns doc.
+(defn- artifact-name
+  "Per-review file name. `label` segments the run dir so concurrent reviews of
+   different ranges never write over each other's schema, output, or log — with
+   one shared name the last writer wins and every layer reports the same
+   findings."
+  [label iter suffix]
+  (format "%s-round-%d%s" (or label "stack") (or iter 1) suffix))
 
-   Diffs from the MERGE BASE of @ and `base`, not the tip of `base` (see
-   `merge-base`). The prompt carries a changed-file MANIFEST (`jj diff
-   --name-only`), not the inlined diff: the full concatenated diff overflows
-   codex's 1 MiB input limit. Codex pulls each file's diff itself (`jj
-   --ignore-working-copy diff …`) and explores the worktree for context — which
-   it must, since a flat patch can't answer \"is this deleted symbol still
-   referenced?\"."
-  [{:keys [cwd base run-id iter]}]
-  (let [base-rev (merge-base cwd base)
-        {:keys [exit out err]} (jj/jj! cwd "diff" "--name-only" "--from" base-rev "--to" "@")
+(defn review!
+  "Git-free codex review of ONE revision range. See ns doc.
+
+   `from`/`to` aim it: `merge-base(@,base)`→`@` for the whole stack, or a single
+   layer's `<lower-tip>`→`<own-tip>`. `from` must be a FORK POINT rather than the
+   tip of a branch (see `merge-base`) — diffing from a base that has moved on
+   turns everything base gained into spurious deletions.
+
+   `brief` is the layer's `/stack` §5 review brief, which bounds the review to
+   what that layer claims. Omit it for a whole-stack review: there is no single
+   brief for a composition, and inventing one would bound the pass that exists
+   precisely to be unbounded.
+
+   The prompt carries a changed-file MANIFEST (`jj diff --name-only`), not the
+   inlined diff: the full concatenated diff overflows codex's 1 MiB input limit.
+   Codex pulls each file's diff itself and reads file content AT `to` — never
+   from the working copy, which for a layer review sits at a different revision
+   than the one under review."
+  [{:keys [cwd from to run-id iter label brief]}]
+  (let [to       (or to "@")
+        {:keys [exit out err]} (jj/jj! cwd "diff" "--name-only" "--from" from "--to" to)
         _        (when-not (zero? exit)
-                   ;; A failed diff (cwd not a jj workspace, bad base, …) must not
+                   ;; A failed diff (cwd not a jj workspace, bad range, …) must not
                    ;; be mistaken for an empty diff — that would silently report a
                    ;; clean review of code nothing ever looked at.
                    (throw (ex-info "jj diff failed — cwd is not a reviewable workspace"
                                    {:reason :review-failed :exit exit
-                                    :cwd cwd :base base :base-rev base-rev :err err})))
+                                    :cwd cwd :from from :to to :err err})))
         manifest out]
     (if (str/blank? manifest)
-      {:status :clean :findings []}
+      {:status :clean :findings [] :base-rev from :manifest ""}
       (let [dir         (cstate/run-dir run-id)
             _           (fs/create-dirs dir)
-            schema-path (str (fs/path dir "findings_schema.json"))
-            out-path    (str (fs/path dir "review-out.json"))
-            log-path    (str (fs/path dir (format "codex-round-%d.log" (or iter 1))))
+            schema-path (str (fs/path dir (artifact-name label iter "-schema.json")))
+            out-path    (str (fs/path dir (artifact-name label iter "-out.json")))
+            log-path    (str (fs/path dir (artifact-name label iter ".log")))
             prompt      (str prompts/review-prompt
-                             "\n\nBase revision (use this exact value as <base> in the"
-                             " commands above): " base-rev "  (head: @)\n"
+                             "\n\n" (prompts/layer-brief-block brief)
+                             "\nBase revision (use this exact value as <base> in the"
+                             " commands above): " from "\n"
+                             "Head revision (use this exact value as <head>): " to "\n"
                              "Changed files:\n" (str/trim manifest))]
         (spit schema-path (slurp (io/resource "review/findings_schema.json")))
         (let [{:keys [exit]} (run-codex! {:cwd cwd :schema-path schema-path
@@ -113,6 +131,6 @@
                                           :prompt prompt})]
           (when (or (not (zero? exit)) (not (fs/exists? out-path)))
             (throw (ex-info "codex review failed"
-                            {:reason :review-failed :exit exit :cwd cwd})))
+                            {:reason :review-failed :exit exit :cwd cwd :label label})))
           (assoc (parse-output (slurp out-path))
-                 :status nil :manifest manifest :base-rev base-rev))))))
+                 :status nil :manifest manifest :base-rev from))))))

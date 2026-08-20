@@ -122,3 +122,63 @@
     (with-redefs [jj/jj! (stub-log "" calls)]
       (layers/restore-top! "/w" [])
       (is (= [] @calls)))))
+
+;; ---- ranges --------------------------------------------------------------
+
+(deftest ranges-run-from-the-layer-beneath-and-the-bottom-from-the-fork-point
+  (let [st [{:bookmark "s--a" :tip "cA"} {:bookmark "s--b" :tip "cB"}
+            {:bookmark "s--c" :tip "cC"}]]
+    (is (= [["FORK" "cA"] ["cA" "cB"] ["cB" "cC"]]
+           (map (juxt :from :to) (layers/ranges st "FORK"))))))
+
+(deftest ranges-of-an-empty-stack-are-empty
+  (is (= [] (layers/ranges [] "FORK"))))
+
+;; ---- the review brief ----------------------------------------------------
+
+(def ^:private layer-message
+  (str "refactor(pay): fold the rounding into the aggregate\n"
+       "\n"
+       "Body text that is not part of the brief.\n"
+       "\n"
+       "Layer: mechanical\n"
+       "\n"
+       "Claims: the rename is uniform across all 40 call sites.\n"
+       "Verify: confirm no call site got special handling;\n"
+       "  confirm no behavior changed alongside the rename.\n"
+       "Lane: lane-malli\n"
+       "Out of scope: the new validation logic — that lands in\n"
+       "  the layer above.\n"))
+
+(deftest parse-brief-reads-the-four-fields-and-the-mode
+  (let [b (layers/parse-brief layer-message)]
+    (is (= :mechanical (:mode b)))
+    (is (= "the rename is uniform across all 40 call sites." (:claims b)))
+    (is (= "lane-malli" (:lane b)))
+    (is (= "refactor(pay): fold the rounding into the aggregate" (:subject b)))))
+
+(deftest parse-brief-joins-a-fields-indented-continuation-lines
+  (let [b (layers/parse-brief layer-message)]
+    (is (= "confirm no call site got special handling; confirm no behavior changed alongside the rename."
+           (:verify b)))
+    (is (= "the new validation logic — that lands in the layer above."
+           (:out-of-scope b)))))
+
+(deftest parse-brief-tolerates-a-commit-with-no-brief
+  ;; A fixup on a layer, or any commit predating the doctrine. Not an error.
+  (let [b (layers/parse-brief "review-loop: iter 1 fixes")]
+    (is (nil? (:mode b)))
+    (is (nil? (:claims b)))
+    (is (= "review-loop: iter 1 fixes" (:subject b)))))
+
+(deftest parse-brief-of-nothing-is-nil
+  (is (nil? (layers/parse-brief nil)))
+  (is (nil? (layers/parse-brief "   "))))
+
+(deftest brief-reads-the-description-of-the-given-revision
+  (let [calls (atom [])]
+    (with-redefs [jj/jj! (fn [_dir & args]
+                           (swap! calls conj (vec args))
+                           {:exit 0 :out layer-message :err ""})]
+      (is (= :mechanical (:mode (layers/brief "/w" "cB"))))
+      (is (some #{"cB"} (first @calls))))))
