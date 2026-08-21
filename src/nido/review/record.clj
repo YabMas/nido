@@ -79,6 +79,31 @@
             (contains? #{:L :XL} (:effort design))
             (some #(not= :fix-here (:to %)) (:routes design))))))
 
+(defn discover-intent
+  "The intent the design CITED, projected to what a goal may contain. nil when
+   the design cites none — a pre-intent record — which the prompt states rather
+   than papering over.
+
+   A cited :triage entry projects its title and summary only. Its :directions
+   carry a proposed shape and an effort, and feeding those into the goal
+   yardstick would put the answer inside the question: goal-served exists to
+   catch a design that over-serves or that a smaller design would satisfy, and it
+   could never fail honestly against a goal that already names the solution.
+
+   Never throws. The prompt is built as an argument to run-round!, so anything
+   that throws here escapes the round's only catch and takes the task down
+   instead of degrading."
+  [cwd design]
+  (try
+    (when-let [n (get-in design [:intent :seq])]
+      (when-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
+        (let [e (ws/entry-at-seq project ws-id n)]
+          (case (:format e)
+            :intent        {:goal (:goal e) :done-when (:done-when e)}
+            :triage-report {:goal (:title e) :done-when [] :summary (:summary e)}
+            nil))))
+    (catch Throwable _ nil)))
+
 ;; ── Prompt construction ─────────────────────────────────────────────────────
 
 (defn- bullets [xs] (str/join "\n" (map #(str "- " %) xs)))
@@ -133,7 +158,7 @@
 
 (defn design-prompt
   "The decision prompt. Derives what can be derived; hands the rest over."
-  [{:keys [design baseline stance goals]}]
+  [{:keys [design baseline stance intent]}]
   (str
    "You are deciding whether a change should be EXECUTED, before any code is\n"
    "written. This is the last cheap moment to say it should not be.\n\n"
@@ -141,7 +166,18 @@
    "everything derivable so that what reaches them is only the judgement that\n"
    "cannot be derived — is this worth doing, now, at this cost.\n\n"
    "Read the code where you need to.\n\n"
-   (when goals (str "WHAT THE TASK IS FOR:\n" goals "\n\n"))
+   (if intent
+     (str "WHAT THE TASK IS FOR — stated before this was designed:\n"
+          (:goal intent) "\n"
+          (when-let [sm (:summary intent)] (str sm "\n"))
+          (when-let [d (seq (:done-when intent))]
+            (str "Done when:\n" (bullets d) "\n"))
+          "\n")
+     (str "NO STATED INTENT. This design cites none — it predates the intent\n"
+          "record. You cannot derive goal-served against a goal nobody wrote\n"
+          "down: report that check as UNDERIVABLE, say the record is missing,\n"
+          "and do NOT infer the goal from the design. An inferred goal is the\n"
+          "one the design serves, so the check could never fail.\n\n"))
    "THE DESIGN:\n"
    "Summary: " (:summary design) "\n"
    "Shape: " (:shape design) "\n"
@@ -252,9 +288,14 @@
                                   (let [k (keyword (str/replace (str (:check c)) "_" "-"))]
                                     (when (#{:relation-honest :goal-served
                                              :decomposable :routing-coherent} k)
-                                      {:check k
-                                       :held? (boolean (:held c))
-                                       :note  (str (:note c))}))))
+                                      {:check  k
+                                       :status (let [st (keyword (str (:status c)))]
+                                                 (if (#{:held :broken :underivable} st)
+                                                   st
+                                                   ;; a judge that answered in the
+                                                   ;; old shape is still answering
+                                                   (if (:held c) :held :broken)))
+                                       :note   (str (:note c))}))))
                        (:checks m))
           findings (normalize-findings (:findings m))
           asks     (str (:asks m))]
@@ -333,7 +374,7 @@
    the ledger record, or {:outcome <kw> :detail <str>} saying why there is none.
 
    Single-pass on purpose: it emits a decision, not findings to iterate on."
-  [{:keys [cwd run-id goals]}]
+  [{:keys [cwd run-id]}]
   (if-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
     (if-let [design (ws/latest-entry project ws-id :design)]
       (if (design-round-worth-running? design)
@@ -343,7 +384,7 @@
                            {:design   design
                             :baseline (stages/discover-baseline cwd design)
                             :stance   (stages/read-stance project)
-                            :goals    goals})})
+                            :intent   (discover-intent cwd design)})})
                 #(parse-design-decision % (:seq design)))
         {:outcome :not-worth-running
          :detail "the design declares :within on its baseline and :conforms on the stance at a modest effort, with nothing routed away from :fix-here"})

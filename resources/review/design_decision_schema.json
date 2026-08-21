@@ -1,28 +1,60 @@
 {
   "type": "object",
   "additionalProperties": false,
-  "required": ["recommend", "reason", "checks", "findings", "asks"],
+  "required": [
+    "recommend",
+    "reason",
+    "checks",
+    "findings",
+    "asks"
+  ],
   "properties": {
     "recommend": {
       "type": "string",
-      "enum": ["proceed", "amend", "recut", "resurvey"],
+      "enum": [
+        "proceed",
+        "amend",
+        "recut",
+        "resurvey"
+      ],
       "description": "proceed: nothing derivable blocks it. amend: a derivable defect in the record. recut: the decomposition does not hold. resurvey: the premise is wrong, not the commitment."
     },
-    "reason": { "type": "string" },
+    "reason": {
+      "type": "string"
+    },
     "checks": {
       "type": "array",
       "description": "The four derivations, each with what you found. Never empty.",
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["check", "held", "note"],
+        "required": [
+          "check",
+          "status",
+          "note"
+        ],
         "properties": {
           "check": {
             "type": "string",
-            "enum": ["relation_honest", "goal_served", "decomposable", "routing_coherent"]
+            "enum": [
+              "relation_honest",
+              "goal_served",
+              "decomposable",
+              "routing_coherent"
+            ]
           },
-          "held": { "type": "boolean" },
-          "note": { "type": "string" }
+          "status": {
+            "type": "string",
+            "enum": [
+              "held",
+              "broken",
+              "underivable"
+            ],
+            "description": "underivable means you could NOT derive this check \u2014 a missing yardstick, not a failed one. Never use broken for something you could not check."
+          },
+          "note": {
+            "type": "string"
+          }
         }
       }
     },
@@ -32,11 +64,27 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["cites", "claim", "evidence"],
+        "required": [
+          "cites",
+          "claim",
+          "evidence"
+        ],
         "properties": {
-          "cites": { "type": "array", "items": { "type": "string" } },
-          "claim": { "type": "string" },
-          "evidence": { "type": "array", "items": { "type": "string" } }
+          "cites": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "claim": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
         }
       }
     },

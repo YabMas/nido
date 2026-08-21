@@ -90,7 +90,8 @@
                            :layers [{:claim "extract the aggregate" :mode :judgment}])
             :baseline baseline
             :stance "two registers of data"
-            :goals "stop the checkout being off by a cent"})]
+            :intent {:goal "stop the checkout being off by a cent"
+                     :done-when ["a multi-line order's total equals its invoice"]}})]
     (is (str/includes? p "relation-honest"))
     (is (str/includes? p "goal-served"))
     (is (str/includes? p "decomposable"))
@@ -99,6 +100,7 @@
         "without the answer key the round re-proposes what was already rejected")
     (is (str/includes? p "round at render time"))
     (is (str/includes? p "stop the checkout being off by a cent"))
+    (is (str/includes? p "Done when:"))
     (is (str/includes? p "You do not make the decision"))
     (is (str/includes? p "Never answer it yourself"))))
 
@@ -181,16 +183,16 @@
   (let [r (record/parse-design-decision
            (json/generate-string
             {:recommend "proceed" :reason "nothing derivable blocks it"
-             :checks [{:check "relation_honest" :held true :note "within holds"}
-                      {:check "goal_served" :held true :note "no smaller design"}
-                      {:check "decomposable" :held true :note "two layers state cleanly"}
-                      {:check "routing_coherent" :held true :note "one story"}]
+             :checks [{:check "relation_honest" :status "held" :note "within holds"}
+                      {:check "goal_served" :status "held" :note "no smaller design"}
+                      {:check "decomposable" :status "held" :note "two layers state cleanly"}
+                      {:check "routing_coherent" :status "held" :note "one story"}]
              :findings []
              :asks "worth doing now, at M, given the invoice work queued behind it?"})
            4)]
     (is (= :proceed (:recommend r)))
     (is (= 4 (count (:checks r))))
-    (is (every? :held? (:checks r)))
+    (is (every? #(= :held (:status %)) (:checks r)))
     (is (str/includes? (:asks r) "worth doing now"))
     (is (= r (report/validate-event :design-decision r)))))
 
@@ -198,7 +200,7 @@
   (is (nil? (record/parse-design-decision
              (json/generate-string
               {:recommend "proceed" :reason "fine"
-               :checks [{:check "relation_honest" :held true :note "ok"}]
+               :checks [{:check "relation_honest" :status "held" :note "ok"}]
                :findings [] :asks ""})
              4))
       "the round prepares an approval; one that asks nothing has granted it"))
@@ -215,10 +217,54 @@
   (is (nil? (record/parse-design-decision
              (json/generate-string
               {:recommend "recut" :reason "feels wrong"
-               :checks [{:check "decomposable" :held false :note "cannot state layers"}]
+               :checks [{:check "decomposable" :status "broken" :note "cannot state layers"}]
                :findings [] :asks "recut?"})
              4))
       "saying the design is wrong without citing anything is the same theatre"))
+
+(deftest a-design-with-no-cited-intent-says-so-and-asks-for-underivable
+  (let [p (record/design-prompt {:design design})]
+    (is (str/includes? p "NO STATED INTENT"))
+    (is (str/includes? p "UNDERIVABLE"))
+    (is (str/includes? p "do NOT infer the goal from the design")
+        "an inferred goal is the one the design serves, so the check could
+         never fail")))
+
+(deftest a-triage-cited-as-intent-contributes-no-directions
+  ;; The projection happens in discover-intent; this pins what the PROMPT may
+  ;; contain once it has, since that is where the damage would be done.
+  (let [p (record/design-prompt
+           {:design design
+            :intent {:goal "Checkout off by a cent"
+                     :summary "Rounding applied per line."
+                     :done-when []}})]
+    (is (str/includes? p "Checkout off by a cent"))
+    (is (str/includes? p "Rounding applied per line."))
+    (is (not (str/includes? p "round once on the total"))
+        "a direction carries a proposed shape and an effort — in the goal
+         yardstick it puts the answer inside the question")))
+
+(deftest an-underivable-check-parses-and-is-not-a-failure
+  (let [r (record/parse-design-decision
+           (json/generate-string
+            {:recommend "proceed" :reason "nothing derivable blocks it"
+             :checks [{:check "goal_served" :status "underivable"
+                       :note "this design cites no intent record"}]
+             :findings [] :asks "worth doing without a stated goal?"})
+           4)]
+    (is (= :underivable (:status (first (:checks r)))))
+    (is (= r (report/validate-event :design-decision r)))))
+
+(deftest a-judge-answering-in-the-old-shape-is-still-answering
+  (let [r (record/parse-design-decision
+           (json/generate-string
+            {:recommend "proceed" :reason "r"
+             :checks [{:check "goal_served" :held true :note "n"}]
+             :findings [] :asks "a?"})
+           4)]
+    (is (= :held (:status (first (:checks r))))
+        "the schema moved; an answer in the previous shape is degraded rather
+         than discarded")))
 
 ;; ── A round that could not run is not a round that found nothing ───────────
 ;; The one confusion a judgment surface cannot afford. Silence from a judge is
@@ -242,7 +288,7 @@
     (let [r (record/parse-design-decision
              (json/generate-string
               {:recommend in :reason "…"
-               :checks [{:check "goal_served" :held false :note "a smaller design does"}]
+               :checks [{:check "goal_served" :status "broken" :note "a smaller design does"}]
                :findings [{:cites ["a total is rounded exactly once"]
                            :claim "the smaller design already satisfies it"
                            :evidence ["src/order/aggregate.clj:12"]}]

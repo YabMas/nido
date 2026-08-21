@@ -182,8 +182,9 @@
       :design-decision
       (do (println (str "design decision: " (name (:recommend record))))
           (println (str "  " (:reason record)))
-          (doseq [{:keys [check held? note]} (:checks record)]
-            (println (str "  " (if held? "✓" "✗") " " (name check) " — " note)))
+          (doseq [{:keys [check status note]} (:checks record)]
+            (println (str "  " (case status :held "✓" :broken "✗" :underivable "—")
+                          " " (name check) " — " note)))
           (doseq [{:keys [cites claim]} (:findings record)]
             (println (str "  ✗ " (str/join "; " cites)))
             (println (str "      " claim)))
@@ -198,13 +199,12 @@
       (println (str "recorded " (name (:format record)))))))
 
 (defn- record-round-cmd*
-  [round {:keys [cwd goals]}]
+  [round {:keys [cwd]}]
   (let [cwd    (or cwd (lifecycle/worktree-from-cwd) (System/getProperty "user.dir"))
         run-id (str (name round) "-" (random-uuid))
         record (case round
                  :baseline-review (record/baseline-review! {:cwd cwd :run-id run-id})
-                 :design-decision (record/design-decision! {:cwd cwd :run-id run-id
-                                                            :goals goals}))]
+                 :design-decision (record/design-decision! {:cwd cwd :run-id run-id}))]
     (record/append! cwd record)
     (print-record-round! record)
     record))

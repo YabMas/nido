@@ -954,9 +954,27 @@
                          approve yet
      :routing-coherent — the health routes make this two stories rather than one
 
+   :status has three values, not two. A round that COULD NOT derive a check is
+   not a round that derived it and found it wanting, and collapsing the two lets
+   an absent yardstick read as a failed one — the single confusion this whole
+   arc exists to prevent, applied to the check itself.
+
    :checks is required and non-empty. A decision round that derived nothing did
    not reduce anything, and handing a human an unreduced question is the rubber
    stamp this round exists to avoid."
+  [:map {:closed true}
+   [:check  [:enum :relation-honest :goal-served :decomposable :routing-coherent]]
+   [:status [:enum :held :broken :underivable]]
+   [:note   string?]])
+
+(def DerivedCheckPreUnderivable
+  "READ SHAPE — a check from before the third outcome existed, carrying :held?
+   as a boolean. Not writable.
+
+   The era exists because records in this shape are real: dogfooding a record
+   kind on the workstream that designs it writes immutable entries under an
+   unmerged contract, so \"nothing has merged, we can still change the shape\"
+   was false the first time a round ran."
   [:map {:closed true}
    [:check [:enum :relation-honest :goal-served :decomposable :routing-coherent]]
    [:held? boolean?]
@@ -991,6 +1009,33 @@
      [:amend    (shape :amend    [:findings [:vector {:min 1} RecordFinding]])]
      [:recut    (shape :recut    [:findings [:vector {:min 1} RecordFinding]])]
      [:resurvey (shape :resurvey [:findings [:vector {:min 1} RecordFinding]])]]))
+
+(def DesignDecisionPreUnderivable
+  "READ SHAPE for :design-decision — the same record with two-outcome checks.
+   Not writable; it keeps every decision already recorded readable after the
+   third outcome was added."
+  (let [common [[:format     [:= :design-decision]]
+                [:design-seq int?]
+                [:reason     string?]
+                [:checks     [:vector {:min 1} DerivedCheckPreUnderivable]]
+                [:asks       string?]]
+        shape  (fn [recommend & extra]
+                 (into [:map {:closed true}]
+                       (concat common [[:recommend [:= recommend]]] extra)))]
+    [:multi {:dispatch :recommend}
+     [:proceed  (shape :proceed)]
+     [:amend    (shape :amend    [:findings [:vector {:min 1} RecordFinding]])]
+     [:recut    (shape :recut    [:findings [:vector {:min 1} RecordFinding]])]
+     [:resurvey (shape :resurvey [:findings [:vector {:min 1} RecordFinding]])]]))
+
+(def DesignDecisionAny
+  "The READ contract for :design-decision — current shape first, so a record
+   satisfying both reads as current. Dispatches on the check shape actually
+   present rather than on the record, because that is what changed."
+  [:multi {:dispatch (fn [r] (if (some #(contains? % :status) (:checks r))
+                               :current :pre-underivable))}
+   [:current         DesignDecision]
+   [:pre-underivable DesignDecisionPreUnderivable]])
 
 (def FindingItem
   [:map {:closed true}
@@ -1045,7 +1090,11 @@
    ;; DesignVisionLegacy is the pre-baseline shape, which also carries the
    ;; :assumes the baseline event replaced. Then :intent became required, and
    ;; DesignVisionPreIntent is everything written between the two.
-   :design DesignVisionAny})
+   :design DesignVisionAny
+   ;; :status replaced :held? on a derived check, adding :underivable as a third
+   ;; outcome. Records in the two-outcome shape exist — a round writes them as
+   ;; soon as it runs, merged or not.
+   :design-decision DesignDecisionAny})
 
 (defn- validate-against
   [schema kind report]
@@ -1365,8 +1414,10 @@
        (str "of entry " design-seq)
        "" reason
        "\n## Derived — already ruled on, so you do not have to"]
-      (for [{:keys [check held? note]} checks]
-        (str "- " (if held? "✓" "✗") " " (name check) " — " note))
+      (for [{:keys [check status held? note]} checks]
+        (str "- " (case (or status (if held? :held :broken))
+                    :held "✓" :broken "✗" :underivable "—")
+             " " (name check) " — " note))
       (record-findings->markdown "What the derivation found" findings)
       ["\n## For you to decide" asks]))))
 

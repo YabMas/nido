@@ -524,7 +524,7 @@
 
   nido:review:design
   {:requires ([tasks.nido-review :as nido-review])
-   :doc "Decision round over the latest design record, before any code. [:goals \"...\"] [:cwd <dir>]"
+   :doc "Decision round over the latest design record, before any code. Intent comes from the record it cites. [:cwd <dir>]"
    :task (apply nido-review/design-cmd *command-line-args*)}
 
   nido:work

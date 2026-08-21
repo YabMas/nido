@@ -1068,8 +1068,10 @@
    (md/render reason)
    [:h3 "Derived — already ruled on"]
    (into [:ul]
-         (for [{:keys [check held? note]} checks]
-           [:li [:span.meta (if held? "✓ " "✗ ")] (name check)
+         (for [{:keys [check status held? note]} checks]
+           [:li [:span.meta (case (or status (if held? :held :broken))
+                              :held "✓ " :broken "✗ " :underivable "— ")]
+            (name check)
             [:div.meta note]]))
    (when (seq findings)
      [:div [:h3 "What the derivation found"] (record-findings-list findings)])
