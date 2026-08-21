@@ -488,7 +488,7 @@
 
   nido:workstream:entry:add
   {:requires ([tasks.nido-workstream :as nido-workstream])
-   :doc "Append an entry to a workstream ledger. :project <p> (:ws-id <id> | :ref <BR-####>) :kind <kw> :content <str>"
+   :doc "Append an entry to a workstream ledger. :project <p> (:ws-id <id> | :ref <BR-####>) :kind <kw> (:file <path> | :content <str>). A typed kind's body is EDN — pass it as :file."
    :task (apply nido-workstream/entry-add *command-line-args*)}
 
   nido:workstream:stage:advance

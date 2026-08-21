@@ -18,9 +18,21 @@
         (throw (ex-info "Cannot resolve workstream — pass :ws-id or a known :ref"
                         {:project project :ref ref})))))
 
-(defn entry-add* [{:keys [project kind content] :as opts}]
+(def ^:private raw-string-keys
+  "Kwarg keys whose values must reach us verbatim. An entry body for a typed
+   kind IS EDN, and parse-token would read it into a map — leaving entry-payload
+   holding a map where it expects the string it is about to parse. The symbol
+   carve-out rescues prose; nothing rescues a leading brace."
+  #{:content})
+
+(defn entry-add*
+  "Append one entry. The body comes from :file when given, else :content — the
+   same split nido:ticket:append makes, and for the same reason: a typed report
+   is EDN, which does not survive a shell argument intact at any useful size."
+  [{:keys [project kind content file] :as opts}]
   (ws/append-entry! (keyword project) (resolve-ws-id opts)
-                    {:kind (keyword (or kind "note"))} (or content "")))
+                    {:kind (keyword (or kind "note"))}
+                    (if file (slurp (str file)) (or content ""))))
 
 (defn stage-advance* [{:keys [project stage] :as opts}]
   (work/set-stage! (keyword project) (resolve-ws-id opts) (keyword stage)))
@@ -65,7 +77,21 @@
     (f opts)
     (println "ok")))
 
-(defn entry-add     [& args] (run* entry-add* args))
+(defn entry-add
+  "bb nido:workstream:entry:add :project <p> (:ws-id <id> | :ref BR-####)
+     :kind <kw> (:file <path> | :content <str>)
+   A typed kind's body is validated at the ledger boundary; a malformed one is
+   rejected with its explain dump and a non-zero exit, so the emitting skill can
+   fix and retry rather than reading a stack trace."
+  [& args]
+  (let [[_ opts] (task-args/split-args args raw-string-keys)]
+    (try
+      (println (entry-add* opts))
+      (catch Exception e
+        (binding [*out* *err*]
+          (println "append rejected:" (ex-message e))
+          (when-let [ex (:explain (ex-data e))] (println (pr-str ex))))
+        (System/exit 1)))))
 (defn stage-advance [& args] (run* stage-advance* args))
 (defn close-cmd     [& args] (run* close* args))
 (defn ref-add       [& args] (run* ref-add* args))
