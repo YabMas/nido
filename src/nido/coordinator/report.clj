@@ -482,9 +482,13 @@
    [:summary            {:optional true} string?]])
 
 (def ClassifiedFinding
+  "What KIND of thing a finding turned out to be. :baseline is the premise case —
+   the finding shows a property the survey claimed is simply not true of the code.
+   It matters that it is not :design: the remedy is to re-survey, and a sound
+   design resting on a wrong premise is a different failure from a wrong design."
   [:map {:closed true}
    [:finding string?]
-   [:as      [:enum :implementation :design :stance]]])
+   [:as      [:enum :implementation :design :stance :baseline]]])
 
 (def BrokenInvariant
   [:map {:closed true}
@@ -509,6 +513,7 @@
      [:round int?] [:design-seq {:optional true} [:maybe int?]]
      [:reason string?]
      [:invariants-held {:optional true} [:vector string?]]
+     [:load-bearing-held {:optional true} [:vector string?]]
      [:findings-classified {:optional true} [:vector ClassifiedFinding]]]]
    [:strained
     [:map {:closed true}
@@ -517,6 +522,8 @@
      [:reason string?]
      [:invariants-held {:optional true} [:vector string?]]
      [:invariants-broken {:optional true} [:vector BrokenInvariant]]
+     [:load-bearing-held {:optional true} [:vector string?]]
+     [:load-bearing-broken {:optional true} [:vector BrokenInvariant]]
      [:findings-classified {:optional true} [:vector ClassifiedFinding]]]]
    [:invalidated
     [:map {:closed true}
@@ -524,6 +531,8 @@
      [:round int?] [:design-seq {:optional true} [:maybe int?]]
      [:reason string?]
      [:invariants-broken [:vector {:min 1} BrokenInvariant]]
+     [:load-bearing-held {:optional true} [:vector string?]]
+     [:load-bearing-broken {:optional true} [:vector BrokenInvariant]]
      [:findings-classified {:optional true} [:vector ClassifiedFinding]]
      [:needs string?]]]
    [:standing-challenged
@@ -532,6 +541,8 @@
      [:round int?] [:design-seq {:optional true} [:maybe int?]]
      [:reason string?]
      [:invariants-broken {:optional true} [:vector BrokenInvariant]]
+     [:load-bearing-held {:optional true} [:vector string?]]
+     [:load-bearing-broken {:optional true} [:vector BrokenInvariant]]
      [:findings-classified {:optional true} [:vector ClassifiedFinding]]
      [:needs string?]]]])
 
@@ -814,7 +825,7 @@
 
 (defn- design-verdict->markdown
   [{:keys [verdict round reason invariants-held invariants-broken
-           findings-classified needs]}]
+           load-bearing-held load-bearing-broken findings-classified needs]}]
   (str/join
    "\n"
    (remove nil?
@@ -828,6 +839,13 @@
       (when (seq invariants-broken)
         (cons "\n## Invariants contradicted"
               (for [{:keys [invariant finding]} invariants-broken]
+                (str "- " invariant "\n  - by: " finding))))
+      (when (seq load-bearing-held)
+        (cons "\n## Load-bearing properties still standing"
+              (for [i load-bearing-held] (str "- " i))))
+      (when (seq load-bearing-broken)
+        (cons "\n## Load-bearing properties broken without being declared"
+              (for [{:keys [invariant finding]} load-bearing-broken]
                 (str "- " invariant "\n  - by: " finding))))
       (when (seq findings-classified)
         (cons "\n## Findings by layer"

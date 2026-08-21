@@ -89,11 +89,27 @@
   "Report the verdict on the terminal. An :invalidated / :standing-challenged
    verdict is a decision for the human, and `nido review:loop` is human-invoked —
    they are sitting in front of this — so it is stated loudly rather than filed
-   somewhere they might not look."
+   somewhere they might not look.
+
+   A verdict can now point at two different remedies, and saying the wrong one is
+   worse than saying nothing: a broken load-bearing property means the change did
+   not do what it said, while a finding classified :baseline means the survey was
+   wrong and the design may be fine. Redesign and re-survey are not the same
+   instruction."
   [v]
   (when v
     (println (str "review-loop: design verdict — " (name (:verdict v))))
     (println (str "  " (:reason v)))
+    (when-let [broken (seq (:load-bearing-broken v))]
+      (println "  ⚠ load-bearing properties broken without being declared:")
+      (doseq [{:keys [invariant finding]} broken]
+        (println (str "      " invariant))
+        (println (str "        by: " finding)))
+      (println "  → the change is not what the design said it was: either declare
+      the break (:relation :revisit, naming it in :breaks) or undo it"))
+    (when (some #(= :baseline (:as %)) (:findings-classified v))
+      (println "  ⚠ a finding says the BASELINE was wrong, not the design")
+      (println "  → re-survey the area; the design may be sound on a bad premise"))
     (when (verdict/decision? v)
       (println "  ⚠ this is a decision, not a fix — the design itself is in question")
       (when-let [n (:needs v)] (println (str "  needs: " n)))

@@ -429,3 +429,23 @@
                                        :file "entries/0001-design.edn"}]))
         (is (= old (dissoc (ws/latest-entry :brian (:id w) :design) :seq :at))
             "the pre-baseline record is still readable, :assumes and all")))))
+
+;; ── Following a citation ───────────────────────────────────────────────────
+
+(deftest entry-at-seq-follows-the-citation-not-the-latest
+  ;; A workstream may survey twice. The design was judged against ONE of them,
+  ;; and handing a later baseline to the review would check the change against a
+  ;; yardstick its author never saw.
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+        (ws/append-entry! :brian (:id w) {:kind :baseline} (pr-str a-baseline))
+        (ws/append-entry! :brian (:id w) {:kind :baseline}
+                          (pr-str (assoc a-baseline :area "a second, wider survey")))
+        (is (= "order totalling" (:area (ws/entry-at-seq :brian (:id w) 1))))
+        (is (= "a second, wider survey" (:area (ws/entry-at-seq :brian (:id w) 2))))
+        (is (= "a second, wider survey" (:area (ws/latest-entry :brian (:id w) :baseline)))
+            "latest and cited genuinely differ here — which is why the reader
+             following a :seq cannot be latest-entry")
+        (is (nil? (ws/entry-at-seq :brian (:id w) 9))
+            "a reader following a citation must find nothing without crashing")))))

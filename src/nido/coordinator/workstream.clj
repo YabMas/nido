@@ -245,6 +245,23 @@
                  (assoc :seq (:seq e) :at (:at e)))
              (catch Throwable _ nil))))))
 
+(defn entry-at-seq
+  "The typed entry at `seq-n` on this workstream, parsed through the READ contract
+   and stamped with :seq/:at — or nil. Same degrade-to-nil contract as
+   latest-entry: a reader following a citation must be able to find nothing
+   without the caller crashing.
+
+   Exists because a design record cites its baseline by :seq, and 'the latest
+   baseline' is not the same thing — a workstream may survey twice, and the
+   design was judged against one of them specifically."
+  [project ws-id seq-n]
+  (when-let [w (read-ws project ws-id)]
+    (when-let [e (->> (:entries w) (filter #(= seq-n (:seq %))) first)]
+      (let [f (str (fs/path (cstate/workstream-dir project ws-id) (:file e)))]
+        (try (-> (report/parse-event (:kind e) (io/read-edn f))
+                 (assoc :seq (:seq e) :at (:at e)))
+             (catch Throwable _ nil))))))
+
 (defn list-ids
   "Vector of ws-ids under a project's workstreams dir; [] if none."
   [project]

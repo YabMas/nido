@@ -23,10 +23,53 @@
 
 (defn- bullets [xs] (str/join "\n" (map #(str "- " %) xs)))
 
+(defn- baseline-section
+  "The second yardstick. `baseline` is the :baseline record the design cited (nil
+   for a pre-baseline design); `relation` is what the design declared about it.
+
+   Two different checks live here, and the prompt keeps them apart. Whether the
+   change RESPECTED its declared relation is a claim about the change: it said
+   :within, so every load-bearing property should still stand. Whether the
+   baseline was ACCURATE is a claim about the premise, and a design can be sound
+   while resting on a survey that was wrong — a different failure with a different
+   remedy, which is why it gets its own classification rather than being rounded
+   to the design being wrong."
+  [baseline relation]
+  (when baseline
+    (str "\nWHAT THE AREA ALREADY WAS — the baseline this change was judged\n"
+         "against, surveyed BEFORE the design was written. These are properties\n"
+         "the code relied on beforehand, with where they were read:\n"
+         (str/join "\n"
+                   (map #(str "- " (:property %)
+                              " [" (str/join ", " (:evidence %)) "]")
+                        (:load-bearing baseline)))
+         "\n\n"
+         "The change declared itself " (str/upper-case (name (:relation relation)))
+         " this design"
+         (case (:relation relation)
+           :within  ", meaning it needs NONE of those properties to change.\n"
+           :extends ", meaning it adds without contradicting any of them.\n"
+           :revisit (str ", and named these as the ones it has to break:\n"
+                         (bullets (:breaks relation)) "\n"))
+         "\n"
+         "So there are two things to check that the invariants alone cannot tell\n"
+         "you:\n"
+         "1. Did it honour that declaration? A load-bearing property broken\n"
+         "   WITHOUT being named in the declaration is the design failing to be\n"
+         "   what it said it was — report it in load_bearing_broken. A property\n"
+         "   the change named and broke on purpose is NOT a finding.\n"
+         "2. Was the baseline right? If a finding shows a stated property is\n"
+         "   simply not true of the code, the design may be sound and the SURVEY\n"
+         "   wrong. Classify that finding as \"baseline\" — it means re-survey,\n"
+         "   not redesign, and the two must not be confused.\n"
+         "Populate load_bearing_held with the properties this round confirmed\n"
+         "still stand, for the same reason invariants_held exists.\n")))
+
 (defn build-prompt
-  "The verdict prompt. `design` is the workstream's :design record, `findings` the
-   findings still open at the end, `history` the per-round digest."
-  [{:keys [design stance findings history rounds]}]
+  "The verdict prompt. `design` is the workstream's :design record, `baseline` the
+   :baseline record it cited (nil when it predates them), `findings` the findings
+   still open at the end, `history` the per-round digest."
+  [{:keys [design baseline stance findings history rounds]}]
   (str
    "You are judging whether a DESIGN survived a code review, not whether the code\n"
    "is correct. The review loop has finished; the fixes it wanted are already in.\n\n"
@@ -44,6 +87,7 @@
           "shows an assumption was false, the design may have been sound and the\n"
           "premise wrong — say so, it is a different failure:\n"
           (bullets (map :about a)) "\n"))
+   (baseline-section baseline (:baseline design))
    "\n"
    (when stance
      (str "PROJECT STANCE — framing only, never cite it against a specific\n"
@@ -68,7 +112,9 @@
    " \"reason\": \"...\",\n"
    " \"invariants_held\": [\"...\"],\n"
    " \"invariants_broken\": [{\"invariant\": \"...\", \"finding\": \"...\"}],\n"
-   " \"findings_classified\": [{\"finding\": \"...\", \"as\": \"implementation|design|stance\"}],\n"
+   " \"load_bearing_held\": [\"...\"],\n"
+   " \"load_bearing_broken\": [{\"invariant\": \"...\", \"finding\": \"...\"}],\n"
+   " \"findings_classified\": [{\"finding\": \"...\", \"as\": \"implementation|design|stance|baseline\"}],\n"
    " \"needs\": \"...\"}\n\n"
    "- sound: the findings were implementation details. THIS IS THE EXPECTED\n"
    "  OUTCOME. Populate invariants_held with the ones this round actually\n"
@@ -108,11 +154,20 @@
                                :finding   (str (:finding %))})
                          (:invariants_broken m)))
 
+            (seq (:load_bearing_held m))
+            (assoc :load-bearing-held (mapv str (:load_bearing_held m)))
+
+            (seq (:load_bearing_broken m))
+            (assoc :load-bearing-broken
+                   (mapv #(-> {:invariant (str (:invariant %))
+                               :finding   (str (:finding %))})
+                         (:load_bearing_broken m)))
+
             (seq (:findings_classified m))
             (assoc :findings-classified
                    (into []
                          (keep #(let [as (keyword (str (:as %)))]
-                                  (when (#{:implementation :design :stance} as)
+                                  (when (#{:implementation :design :stance :baseline} as)
                                     {:finding (str (:finding %)) :as as})))
                          (:findings_classified m)))
 
@@ -141,6 +196,7 @@
   (when-let [design (stages/discover-design-record cwd)]
     (let [prompt (build-prompt
                   {:design design
+                   :baseline (stages/discover-baseline cwd design)
                    :stance (stages/read-stance (first (stages/project+ws-from-cwd cwd)))
                    :findings (still-open (:findings final))
                    :history (mapv #(dissoc % :findings) (:history final))

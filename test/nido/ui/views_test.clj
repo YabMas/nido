@@ -574,6 +574,26 @@
     (is (str/includes? html "not determined (1)")
         "the count is shown even folded: an empty unknowns is a smell, not a pass")))
 
+(deftest workstream-pane-renders-a-verdict-with-broken-load-bearing-properties
+  (let [ws   (assoc sample-ws :report
+                    {:format :design-verdict :verdict :invalidated :round 3
+                     :reason "the change moved summing into the invoice reader"
+                     :invariants-broken [{:invariant "a total is rounded exactly once"
+                                          :finding "invoice re-rounds"}]
+                     :load-bearing-held ["a line item's amount is never rounded in place"]
+                     :load-bearing-broken [{:invariant "the aggregate is the only summing path"
+                                            :finding "invoice.clj sums lines directly"}]
+                     :findings-classified [{:finding "invoice re-rounds" :as :baseline}]
+                     :needs "is the aggregate still the only summer?"})
+        html (views/workstream-pane ws {})]
+    (is (str/includes? html "Broken without being declared"))
+    (is (str/includes? html "the aggregate is the only summing path")
+        "shown unfolded — a property broken without being declared is the
+         finding, not a detail behind a fold")
+    (is (str/includes? html "invoice.clj sums lines directly"))
+    (is (str/includes? html "still standing (1)"))
+    (is (str/includes? html "[baseline]") "the premise classification is visible")))
+
 (deftest workstream-pane-renders-implementation-plan-card
   (let [ws   (assoc sample-ws :report {:format :implementation-plan :summary "Round on the total."
                                        :direction "Round once on the order total" :effort :M

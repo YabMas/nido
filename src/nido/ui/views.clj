@@ -936,7 +936,7 @@
 
 (defn- design-verdict-card
   [{:keys [verdict round reason invariants-held invariants-broken
-           findings-classified needs]}]
+           load-bearing-held load-bearing-broken findings-classified needs]}]
   [:div.md
    [:h2 "Design verdict"]
    [:div.report-meta
@@ -951,6 +951,17 @@
       (into [:ul]
             (for [{:keys [invariant finding]} invariants-broken]
               [:li invariant [:div.meta "by: " finding]]))])
+   (when (seq load-bearing-broken)
+     [:div [:h3 "Broken without being declared"]
+      [:p.meta "Properties the area relied on that this change did not say it
+                would move — the design failing to be what it said it was."]
+      (into [:ul]
+            (for [{:keys [invariant finding]} load-bearing-broken]
+              [:li invariant [:div.meta "by: " finding]]))])
+   (when (seq load-bearing-held)
+     [:details.trail
+      [:summary "Load-bearing properties still standing (" (count load-bearing-held) ")"]
+      (into [:ul] (for [i load-bearing-held] [:li i]))])
    (when (seq findings-classified)
      [:details.trail
       [:summary "Findings by layer (" (count findings-classified) ")"]

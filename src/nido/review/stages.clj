@@ -224,6 +224,21 @@
   (when-let [[project ws-id] (project+ws-from-cwd cwd)]
     (ws/latest-entry project ws-id :design)))
 
+(defn discover-baseline
+  "The baseline `design` was judged against — the entry it CITES, not the newest
+   one. A workstream may survey more than once, and the design committed to a
+   particular reading; handing the judge a later baseline would have it check the
+   change against a yardstick the author never saw.
+
+   nil for a pre-baseline design record, which is correct rather than degraded:
+   there was no baseline, and the judge is told so instead of being handed
+   something invented in its place."
+  [cwd design]
+  (when-let [n (get-in design [:baseline :seq])]
+    (when-let [[project ws-id] (project+ws-from-cwd cwd)]
+      (let [e (ws/entry-at-seq project ws-id n)]
+        (when (= :baseline (:format e)) e)))))
+
 (def ^:private stance-char-cap 12000)
 
 (defn read-stance
