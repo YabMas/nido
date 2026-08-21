@@ -24,12 +24,27 @@
 (def ^:private id-pattern
   #"(?i)(?<![0-9a-f])[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}(?![0-9a-f])")
 
+;; Notion's "copy link" on a row opened over a database view appends the VIEW
+;; id as ?v=… — which is the last hex run in the string, so a naive "take the
+;; last match" reads the view, retrieves nothing, and the pickup dies as
+;; :unresolved. Worse, the address-bar form puts the DATABASE id in the path
+;; and the page id in a ?p=… param. So: honour ?p= first, else read the path
+;; (query string stripped), else fall back to the whole string for a bare uuid.
+(def ^:private page-param-pattern
+  #"(?i)[?&]p=([0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12})(?![0-9a-f])")
+
+(defn- last-id [s]
+  (some-> (seq (re-seq id-pattern (str s))) last))
+
 (defn extract-page-id
-  "The trailing 32-hex run of a Notion URL / uuid, returned dashed; nil if none."
+  "The page id of a Notion URL / uuid, returned dashed; nil if none."
   [s]
   (when s
-    (when-let [matches (seq (re-seq id-pattern (str s)))]
-      (-> (last matches) (str/replace "-" "") str/lower-case dash-uuid))))
+    (let [s (str s)]
+      (when-let [hex (or (second (re-find page-param-pattern s))
+                         (last-id (str/replace s #"[?#].*$" ""))
+                         (last-id s))]
+        (-> hex (str/replace "-" "") str/lower-case dash-uuid)))))
 
 (defn- normalise [page]
   (let [n (client/normalise-page page)]

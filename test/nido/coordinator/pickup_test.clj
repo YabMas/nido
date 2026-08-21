@@ -15,6 +15,16 @@
            (pickup/extract-page-id (str "https://app.notion.com/p/x-" pid "?pvs=4"))))
     (is (= "2a1b3c4d-5e6f-7081-a2b3-c4d5e6f70810"
            (pickup/extract-page-id "2a1b3c4d-5e6f-7081-a2b3-c4d5e6f70810")) "bare dashed uuid")
+    (is (= "2a1b3c4d-5e6f-7081-a2b3-c4d5e6f70810"
+           (pickup/extract-page-id
+             (str "https://app.notion.com/p/ws/Some-Title-" pid
+                  "?v=3c3fca9f403c8054971c000cad2213e6&source=copy_link")))
+        "the ?v= view id trails the page id — the path wins")
+    (is (= "2a1b3c4d-5e6f-7081-a2b3-c4d5e6f70810"
+           (pickup/extract-page-id
+             (str "https://www.notion.so/ws/124fca9f403c80d4896ffc857e105e35"
+                  "?v=3c3fca9f403c8054971c000cad2213e6&p=" pid "&pm=s")))
+        "address-bar form: the path holds the DATABASE id, ?p= holds the page")
     (is (nil? (pickup/extract-page-id "BR-4826")) "a BR id is not a page-id")
     (is (nil? (pickup/extract-page-id "nonsense")))))
 
