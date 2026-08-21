@@ -65,27 +65,45 @@ Advance the ticket to the stage you're starting. This also tells nido's coordina
 bb nido:ticket:status :project brian :br <BR-####> :status implementing
 ```
 
-Then author the **design record** — a typed `:design` ledger event, and the one
-durable artifact this session produces before any code. It states what the change
-commits to in design terms, and it resolves any triage `:squirrel` into a concrete
-effort: sizing follows from the design, not the other way round.
+Then two ledger events, **in this order** — the durable artifacts this session
+produces before any code.
 
-**Read `/design` for the doctrine** — what belongs in the record, what does not,
-and how to infer the current design safely. The short version: claims about
-structure, not a plan of action. There is no step list; the schema rejects one.
+### First the baseline: what is already there
 
-Start from the triage entry's `:design-frame`, then its `:directions` and
-`:trail`. The frame's `:defect-layer` tells you which job this is:
+Survey the area and append a `:baseline` event **before you decide anything**.
+Read `/design` §4 for the doctrine; the short version is that every field must be
+fillable without knowing the fix, because an inference made by someone who
+already knows the fix is bent toward it.
 
-| `:defect-layer` | what you are doing |
+Triage's `:design-frame` is a **provisional read, not a verdict**. It was made in
+twenty minutes, often on a shallow route, by an agent that had not surveyed. Use
+its `:trail` and `:violated` as leads — they say where to look — and let the
+survey confirm or overturn the frame. **When they disagree, say so in the design
+record's `:baseline :note`.** That disagreement is worth more than either reading
+alone: it is the only thing that measures whether triage's design reading is
+worth anything.
+
+Scope by what *governs* the behaviour, not by the files you expect to touch —
+`:violated` cites the checkable layer, which is a good starting point and a bad
+boundary.
+
+### Then the design: how the change stands to it
+
+The `:design` event states what the change commits to, cites the baseline by
+`:seq`, and resolves any triage `:squirrel` into a concrete effort — sizing
+follows from the design, not the other way round. Claims about structure, not a
+plan of action; there is no step list and the schema rejects one.
+
+The `:baseline :relation` is the job, and now you can derive it rather than guess:
+
+| relation | what you are doing |
 |---|---|
-| `:implementation` | the design is right, the code doesn't honour it — a **fix**. `:shape` restates the design the code should have had; the invariants are the ones it already broke. |
-| `:design` | the code faithfully implements a design that is wrong — a **decision**. This is where a `:squirrel` came from. Say what the new shape is and why, and check whether it needs `:extends` or `:challenges`. |
-| `:unknown` / absent | triage didn't root-cause — or never ran, which is the normal case for a Slack-sourced workstream (see Step 2). Infer the area yourself before committing to a shape (`/design` §4), and put what you find in `:assumes`. |
+| `:within` | every load-bearing property survives. A defect here is an **implementation** defect — a fix. `:shape` restates the design the code should have had; the invariants are the ones it already broke. |
+| `:extends` | the change lands on an existing extension point, or adds one that contradicts nothing load-bearing. Say which, in `:at`. |
+| `:revisit` | a load-bearing property has to change — a **decision**, and where a `:squirrel` came from. Name the properties in `:breaks`, say what the new shape is, and check whether it also needs `:extends` or `:challenges` against the *stance*. |
 
-The deepdive already read the area, so `:assumes` carries that inference forward
-rather than re-deriving it cold — and `:violated` names rules you are now on the
-hook for, so they usually belong in `:invariants`.
+`:violated` names rules you are now on the hook for, so they usually belong in
+`:invariants`.
 
 ```bash
 cat > /tmp/design.edn <<'EDN'
@@ -95,9 +113,8 @@ cat > /tmp/design.edn <<'EDN'
                 fall, what crosses them>"
  :invariants ["<what must hold once this lands — checkable; at least one>"]
  :standing   {:relation :conforms}   ; :extends / :challenges MUST carry :note
- :assumes    [{:about "<the area's current design, as you inferred it>"
-               :read  ["<file you read to infer it>"]
-               :drift "<where that departs from the stance>"}]      ; optional
+ :baseline   {:seq 2 :relation :within}  ; :seq = the baseline you just filed;
+                                         ; :revisit MUST carry :breaks
  :rejected   [{:alternative "<…>" :why-not "<…>"}]                  ; optional
  :layers     [{:claim "<one sentence, no \"and\">" :mode :judgment}]  ; optional
  :effort     :M}          ; concrete :XS :S :M :L :XL — resolve a :squirrel here

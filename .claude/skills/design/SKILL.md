@@ -1,6 +1,6 @@
 ---
 name: design
-description: State the high-level design a change commits to, and record it in the ledger — the frame that /stack and /spin-out cut against. The four layers of design in a project, what belongs in a design record and what does not, how to infer the current design safely, and how to amend a design that turned out wrong. Usage: /design
+description: Survey the area's current design, then state what the change commits to relative to it, both recorded in the ledger — the frame that /stack and /spin-out cut against. The four layers of design in a project, how to write a baseline and what belongs in a design record, how to tell an implementation defect from a design defect, and how to amend a design that turned out wrong. Usage: /design
 ---
 
 # /design
@@ -40,11 +40,11 @@ most common way this goes wrong.
 | layer | what it is | where it lives | can a diff violate it? |
 |---|---|---|---|
 | **the stance** | the project's durable architectural convictions — what the system is *for* | `.claude/skills/design/stances/<project>.md` (see below) | no — it primes reasoning, it is not a checklist |
-| **the current design** | what the system actually *is* right now | **nowhere — inferred per change** (§4) | no — it is a description, and a partial one |
+| **the current design** | what the system actually *is* right now | the ledger, as a `:baseline` event (§4) | not violated — but it can be *falsified*, and that is a different failure from a wrong design |
 | **the checkable layer** | concrete, citable rules | `.claude/agents/lane-*.md`, `docs/reference/` | **yes — this is the only one that can be cited against a line** |
 | **the change design** | what *this* change commits to | the ledger, as a `:design` event | yes — by its own `:invariants` |
 
-**Read the stance before you write the record.** It ships with this skill, so it
+**Read the stance before you survey.** It ships with this skill, so it
 resolves from any session:
 
 ```bash
@@ -80,9 +80,10 @@ One `:design` event per workstream, appended to the ledger:
  :standing   {:relation   :conforms          ; :conforms | :extends | :challenges
               :principles ["refs into the project's stance"]
               :note       "REQUIRED for :extends / :challenges — what, and why"}
- :assumes    [{:about "the area's current design, as inferred from the code"
-               :read  ["src/order/calc.clj"]
-               :drift "where that departs from the stance"}]
+ :baseline   {:seq      2                  ; the :baseline entry this was judged against
+              :relation :within            ; :within | :extends | :revisit
+              :breaks   ["load-bearing property that cannot survive"]  ; REQUIRED for :revisit
+              :note     "REQUIRED for :extends / :revisit"}
  :rejected   [{:alternative "…" :why-not "…"}]
  :layers     [{:claim "one sentence, no \"and\"" :mode :judgment}]
  :seams      [{:what "deliberate incompleteness" :visible-how "how a reader sees it"}]
@@ -91,8 +92,10 @@ One `:design` event per workstream, appended to the ledger:
  :effort     :M}                     ; concrete; resolves a triage :squirrel
 ```
 
-Required: `:format :summary :shape :invariants :standing :effort`. The append
-validates and rejects a malformed record with an explain dump — fix and retry.
+Required: `:format :summary :shape :invariants :standing :baseline :effort`. The
+append validates and rejects a malformed record with an explain dump — fix and
+retry, and it also refuses a `:baseline :seq` that names no baseline on this
+workstream.
 
 **What is deliberately not in it:** file lists, function names, task breakdowns,
 ordering. *If it would be stale after the first commit, it is plan, not design.*
@@ -108,7 +111,12 @@ what survives the session.
   round three re-proposes what round zero rejected and nobody can tell whether
   that is new insight or re-litigation. With it, a finding is either *answered*
   or *the reason no longer holds*.
-- **`:assumes` is the inference, captured** (§4).
+- **`:baseline` is the relation to what was already there** (§4). Not the same
+  question as `:standing`: that relates the change to the *stance*, this relates
+  it to the *current design*, and a change can satisfy either while breaking the
+  other. `:revisit` must name what it breaks — otherwise "the design needs
+  revisiting" is a feeling, and deriving it instead of feeling it is the entire
+  point of surveying first.
 - **`:layers` is the design's decomposition claim** — `/stack` realises it.
   Claim and review mode only; bookmarks, slugs and ordering are mechanics.
 - **`:seams` is what makes `/spin-out`'s veto checkable.** Visibly incomplete is
@@ -125,44 +133,88 @@ A claim, a test, and the failure mode it prevents.
 2. **Name the invariants — they are what review has to check.** *Test:* can a
    reviewer state a concrete observation that would prove this design wrong?
    *Failure:* every finding becomes a matter of taste, and no argument resolves.
-3. **Record the rejected alternatives with their reasons.** The shape of a design
+3. **Survey before you decide, and say how you stand to what you found.** *Test:*
+   was every line of the baseline written before you knew the fix? *Failure:* the
+   inference bends toward the change, "is" gets derived from "ought", and the
+   design confirms whatever you already meant to do.
+4. **Record the rejected alternatives with their reasons.** The shape of a design
    is defined as much by what it is not.
-4. **Declare the relation to the stance** — conforms, extends, or challenges,
+5. **Declare the relation to the stance** — conforms, extends, or challenges,
    always one of the three. *Failure:* architecture erodes with no single change
    looking wrong.
-5. **The design must be smaller than the change.** *Test:* can a reader hold it
+6. **The design must be smaller than the change.** *Test:* can a reader hold it
    whole while weighing a review finding? If it is as long as the diff, it is a
    plan.
-6. **Boundaries before mechanisms.** Say where the seams are and what crosses
+7. **Boundaries before mechanisms.** Say where the seams are and what crosses
    them; do not name libraries or data shapes unless the seam is *about* them.
    *Failure:* an implementation sketch that cannot survive the first surprise in
    the code, so it is abandoned rather than amended.
-7. **The layering is part of the design.** If the layers cannot be stated from
+8. **The layering is part of the design.** If the layers cannot be stated from
    the design, the design is not decomposed yet. *Test:* every layer's `Claims:`
    traces to a line in the record.
-8. **Visible incompleteness is a design decision; invisible incompleteness is a
+9. **Visible incompleteness is a design decision; invisible incompleteness is a
    defect.** A design may leave a seam — then say so in `:seams`, with what makes
    it visible.
-9. **Amend the design when it is wrong; never quietly patch around it** (§5).
-10. **The stance earns its authority by being amendable.** A constitution nobody
+10. **Amend the design when it is wrong; never quietly patch around it** (§5).
+11. **The stance earns its authority by being amendable.** A constitution nobody
     can change gets routed around instead of followed. Declaring `:challenges` is
     a sign of health.
 
-## 4. Inferring the current design
+## 4. The baseline — survey before you commit
 
-**The current design is not written down, and for now will not be.** You infer
-the slice you need, from the code, at the moment you need it. Three rules make
-that safe enough to build on.
+**Every workstream starts by writing down what is already there.** One
+`:baseline` event, appended before the design record, describing the area as it
+*is*. Then the design record declares how the change stands to it.
 
-**Scope it to the blast radius.** "Infer the design" without a bound means read
-the codebase. What you need is the design of *the area this change touches* — the
-modules it crosses, the data that flows between them, the boundaries it will
-move. Anything wider is a survey, not an inference.
+This exists because of a specific failure. The inference used to live inside the
+design record, as `:assumes` — a field in the document that also states the
+commitment, written by someone who already knew the fix. That is the one
+condition under which an inference is worth nothing: you infer the design that
+makes your change look right. Splitting `is` from `ought` is the whole move; the
+rest of this section is how to keep them split.
 
-**Never confuse *is* with *ought*.** Reading code tells you what is there,
-including the accidents, the half-finished migrations, and the patterns that were
-never decided, only copied. The stance is what separates them. The most valuable
-sentence an inference produces is often:
+### The test for what belongs in it
+
+**Every field must be fillable without knowing the change.** If a field needs the
+fix, the effort, or the intended shape to fill in, it belongs in the design
+record. The schema enforces this by being closed, but the discipline is yours: a
+baseline written with the fix in mind will pass validation and still be worthless.
+
+### Scope to the design that governs, not the files you will touch
+
+The blast radius is defined by the change. **The design flaw is routinely
+upstream of it.** Scoping to what a diff would touch is how a survey confirms
+whatever the fix already assumed — so bound it by what *governs the behaviour*,
+and say where you put the boundary in `:bounded-by`. That field is required
+because scoping is the first claim the record makes, and the only guard against
+both failure modes: reading the whole codebase, and reading three files and
+calling it a design.
+
+### The two lists are what do the work
+
+- **`:load-bearing`** — not what *ought* to hold; what would break if you
+  violated it. Each with `:evidence`, because a property with nothing to point at
+  is a guess. This is what makes the routing question answerable by derivation
+  rather than taste:
+
+  > behaviour that violates one of these is an **implementation** defect;
+  > behaviour that honours every one of them and is still wrong indicts the
+  > **design**.
+
+- **`:extension-points`** — where the design already admits change, and how. The
+  same question asked of a feature: one that lands on an existing point
+  `:extends` the design; one that needs a point which is not there is asking the
+  core to move, which is `:revisit`.
+
+One bit, derived rather than judged, and **the same bit for a bug and a
+feature**. That symmetry is the point — it is what makes this a way of working
+rather than a bug-triage nicety.
+
+### Never confuse *is* with *ought*
+
+Reading code tells you what is there, including the accidents, the half-finished
+migrations, and the patterns that were never decided, only copied. The stance is
+what separates them. The most valuable sentence a survey produces is often:
 
 > the current design here is X; per the stance, X is drift rather than intent
 
@@ -170,10 +222,29 @@ That goes in `:drift`. Deriving *ought* from a majority vote of *is* — "most
 schemas here are open, so open must be the convention" — is the failure this rule
 names.
 
-**Capture it where you make it.** An inference left in your head is re-derived,
-differently, by the next session. Write it into `:assumes` with what you read.
-These entries accumulate: the written current design does not have to be
-authored, it can be harvested from them later.
+### Survey theatre is the failure mode
+
+A fluent, generic baseline inferred from three files will read well and be worth
+nothing. `:read` is required and non-empty; so is an honest `:unknowns`. **An
+empty `:unknowns` is a smell, not a clean bill of health** — a survey that found
+nothing it could not determine usually did not look. Same signal as the design
+buffer that sweeps to nothing (§6).
+
+### It stays in the ledger
+
+Per workstream, and **never written into the codebase**. A checked-in current
+design rots and then lies, which is worse than one that is absent, because it is
+citable. The cost is real and accepted: the same area gets re-surveyed by every
+workstream that touches it. Baselines accumulate in ledgers, and a written
+current design can be harvested from them later if it is ever wanted — that is a
+different decision, not this one.
+
+### When the review says the baseline was wrong
+
+The verdict can classify a finding as `:baseline`: a property you claimed is
+simply not true of the code. **That is not the design being wrong.** The design
+may be sound on a bad premise, and the remedy is to re-survey, not to supersede.
+Getting these two confused is how a sound design gets thrown away.
 
 ## 5. Amending a design
 
@@ -211,7 +282,7 @@ Sweep it before you ship, and route every line:
 
 | The noticing is | Destination |
 |---|---|
-| a fact about the area the record didn't have | `:assumes` — amend the record |
+| a fact about the area the baseline got wrong or missed | **append a new `:baseline`**, and cite it from the amended design record |
 | a question the record can't answer yet | `:open` — amend the record |
 | incompleteness you are choosing to leave | `:seams` — amend, and say what makes it visible |
 | the shape you committed to cannot hold | **supersede** the record (§5) |
@@ -224,12 +295,36 @@ doing it.
 
 **A buffer that sweeps to nothing is itself a signal.** Zero design noticings
 across a substantial change usually means the record was written once and never
-looked at again — which is exactly how a design stays "true" (principle 9).
+looked at again — which is exactly how a design stays "true" (principle 10).
 
 ## 7. Mechanics
 
-Write the EDN to a temp file, then append it. The ledger key is the `BR-####`
-(or the slack `:id` for a Slack-sourced workstream):
+Two appends, in order. Write the EDN to a temp file each time — a typed report
+does not survive a shell argument at any useful size. The ledger key is the
+`BR-####` (or the slack `:id` for a Slack-sourced workstream).
+
+**First the baseline**, before you have decided anything:
+
+```bash
+cat > /tmp/baseline.edn <<'EDN'
+{:format       :baseline
+ :area         "…"
+ :bounded-by   "why the boundary sits there"
+ :shape        "…"
+ :load-bearing [{:property "…" :evidence ["src/…:41"] :drift "…"}]
+ :extension-points [{:at "…" :how "…"}]
+ :governing    ["refs into the stance"]
+ :drift        ["…"]
+ :read         ["src/…"]
+ :unknowns     ["…"]}
+EDN
+bb nido:ticket:append :project brian :br <BR-####> :kind baseline \
+  :session <session> :run-id <run-id> :file /tmp/baseline.edn
+```
+
+Note the `:seq` it prints back — the design record cites it.
+
+**Then the design**, declaring how the change stands to it:
 
 ```bash
 cat > /tmp/design.edn <<'EDN'
@@ -238,6 +333,7 @@ cat > /tmp/design.edn <<'EDN'
  :shape      "…"
  :invariants ["…"]
  :standing   {:relation :conforms}
+ :baseline   {:seq 2 :relation :within}
  :effort     :M}
 EDN
 bb nido:ticket:append :project brian :br <BR-####> :kind design \
@@ -245,7 +341,8 @@ bb nido:ticket:append :project brian :br <BR-####> :kind design \
 ```
 
 Derive `<session>` from cwd and `<run-id>` from the `./run-link/` symlink target.
-For a workstream with no ticket key, use `bb nido:workstream:entry:add`.
+For a workstream with no ticket key, use `bb nido:workstream:entry:add` with
+`:ws-id <id>` and the same `:kind` / `:file` pair.
 
 Read back what is there with `bb nido:workstream:show :project <p> :ref <ref>`.
 
@@ -260,7 +357,19 @@ Read back what is there with `bb nido:workstream:show :project <p> :ref <ref>`.
   the next change contradicts a commitment it never knew existed.
 - **Citing the stance to condemn a line of code.** The stance frames; the lanes
   and `docs/reference/` check. Cite the layer that can actually be violated.
-- **Inferring the whole codebase.** Scope to the blast radius (§4).
+- **Surveying the whole codebase.** Scope to the design that governs the
+  behaviour, and say where you bounded it (§4).
+- **Surveying three files and calling it a design.** The other half of the same
+  mistake, and the more common one. `:read` and `:unknowns` are what a reader
+  checks it by.
+- **Writing the baseline after you know the fix.** It will validate and be worth
+  nothing. Every field has to be fillable without knowing the change (§4).
+- **`:load-bearing` full of things that ought to hold.** The question is what
+  breaks if you violate it, and `:evidence` is what keeps the answer honest.
+- **An empty `:unknowns`.** A survey that could determine everything usually did
+  not look (§4).
+- **Reading a `:baseline` finding as a wrong design.** The premise was wrong;
+  re-survey. Superseding a sound design over it throws away the wrong thing (§4).
 - **Codifying drift as intent** — "this is how it is done here" derived from a
   majority vote of what is there. Say it is drift, in `:drift`.
 - **Editing a design that turned out wrong** instead of superseding it (§5).

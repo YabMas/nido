@@ -126,6 +126,13 @@ for the design — one bit, and it routes everything downstream:
 > honour it — or a **design defect** — the code faithfully implements a design that
 > is wrong?
 
+**This reading is provisional, and downstream knows it.** The impl session
+surveys the area properly and files a `:baseline` before it commits to anything
+(`/design` §4); its relation to that baseline is what settles the question. Your
+job is to give that survey a head start — the `:trail` and `:violated` that say
+where to look — not to pre-empt it. Being overturned is a normal outcome, and a
+frame confidently wrong is worse than `:unknown`.
+
 An implementation defect is a fix. A design defect is a decision, and sizing a
 decision before it is made is exactly what `:squirrel` exists for.
 
