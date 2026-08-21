@@ -395,11 +395,34 @@ looked at again — which is exactly how a design stays "true" (principle 10).
 
 ## 7. Mechanics
 
-Two appends, in order. Write the EDN to a temp file each time — a typed report
-does not survive a shell argument at any useful size. The ledger key is the
-`BR-####` (or the slack `:id` for a Slack-sourced workstream).
+**Three** appends, in order — intent, baseline, design. Write the EDN to a temp
+file each time; a typed report does not survive a shell argument at any useful
+size. The ledger key is the `BR-####` (or the slack `:id` for a Slack-sourced
+workstream); for a workstream with no ticket key, use
+`bb nido:workstream:entry:add :ws-id <id>` with the same `:kind` / `:file` pair.
 
-**First the baseline**, before you have decided anything:
+**First the intent**, before you have surveyed anything:
+
+```bash
+cat > /tmp/intent.edn <<'EDN'
+{:format    :intent
+ :goal      "what this is for — one or two sentences"
+ :done-when ["what would make it done — each one falsifiable"]
+ :context   "optional: why now, what prompted it"}
+EDN
+```
+
+Skip it only when the intent is already written down: a triaged ticket's
+`:triage` entry states the goal, and the design may cite that entry instead.
+Nothing else is citable — a design cannot say it is *for* a review or a blocker.
+
+**A goal authored after the design is a goal the design satisfies.** That is the
+same contamination §4 exists to prevent for the current-design inference, which
+is why this is a separate record written first rather than a field on the design.
+`:done-when` is what makes it falsifiable, and an unfalsifiable goal cannot tell
+an over-serving design from a right-sized one.
+
+**Then the baseline**, before you have decided anything:
 
 ```bash
 cat > /tmp/baseline.edn <<'EDN'
@@ -432,6 +455,7 @@ cat > /tmp/design.edn <<'EDN'
  :invariants ["…"]
  :standing   {:relation :conforms}
  :baseline   {:seq 2 :relation :within}
+ :intent     {:seq 1}
  :routes     [{:health-id "short-slug" :to :spin-out
                :why "…" :ref "FU-##"}]
  :effort     :M}
@@ -441,8 +465,13 @@ bb nido:ticket:append :project brian :br <BR-####> :kind design \
 ```
 
 Derive `<session>` from cwd and `<run-id>` from the `./run-link/` symlink target.
-For a workstream with no ticket key, use `bb nido:workstream:entry:add` with
-`:ws-id <id>` and the same `:kind` / `:file` pair.
+
+Then verify what you wrote before building on it:
+
+```bash
+bb nido:review:baseline    # is the survey true, and complete enough to decide against?
+bb nido:review:design      # given all of it, should we execute on this?
+```
 
 Read back what is there with `bb nido:workstream:show :project <p> :ref <ref>`.
 

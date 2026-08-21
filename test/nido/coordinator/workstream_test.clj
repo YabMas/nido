@@ -370,22 +370,49 @@
                    :evidence ["src/order/aggregate.clj:12"]}]
    :read         ["src/order/aggregate.clj"]})
 
-(defn- design-citing [n]
-  {:format     :design
-   :summary    "Round on the total."
-   :shape      "One rounding boundary at the aggregate."
-   :invariants ["a total is rounded exactly once"]
-   :standing   {:relation :conforms}
-   :baseline   {:seq n :relation :within}
-   :effort     :M})
+(def ^:private a-triage
+  {:format :triage-report :ticket-key "BR-7" :determination :bug
+   :title "Checkout off by a cent" :summary "Rounding applied per line."
+   :confidence {:level :high :reason "reproduced"}
+   :directions [{:label "A" :shape "round once on the total" :effort :M
+                 :confidence {:level :medium :reason "money math"}}]
+   :notion-writes nil
+   :trail [{:ref "src/order.clj:88" :note "per-line round here"}]})
+
+(def ^:private an-intent
+  {:format    :intent
+   :goal      "Totals match the invoice."
+   :done-when ["a multi-line order's total equals the sum of its invoice lines"]})
+
+(defn- design-citing
+  "A design citing baseline `n` and, unless overridden, the intent this suite
+   seeds at seq 2."
+  ([n] (design-citing n 2))
+  ([n intent-seq]
+   (cond-> {:format     :design
+            :summary    "Round on the total."
+            :shape      "One rounding boundary at the aggregate."
+            :invariants ["a total is rounded exactly once"]
+            :standing   {:relation :conforms}
+            :baseline   {:seq n :relation :within}
+            :effort     :M}
+     intent-seq (assoc :intent {:seq intent-seq}))))
+
+(defn- seed-intent!
+  "Append the intent entry the default design-citing points at. Callers append a
+   baseline first, so the intent lands at seq 2."
+  [w]
+  (ws/append-entry! :brian (:id w) {:kind :intent} (pr-str an-intent)))
 
 (deftest design-may-cite-a-real-baseline-on-the-same-workstream
   (with-tmp
     (fn [_]
       (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
         (ws/append-entry! :brian (:id w) {:kind :baseline} (pr-str a-baseline))
+        (seed-intent! w)
         (ws/append-entry! :brian (:id w) {:kind :design} (pr-str (design-citing 1)))
-        (is (= 1 (get-in (ws/latest-entry :brian (:id w) :design) [:baseline :seq])))))))
+        (is (= 1 (get-in (ws/latest-entry :brian (:id w) :design) [:baseline :seq])))
+        (is (= 2 (get-in (ws/latest-entry :brian (:id w) :design) [:intent :seq])))))))
 
 (deftest design-citing-a-baseline-that-does-not-exist-is-refused
   (with-tmp
@@ -423,6 +450,7 @@
       (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
         (ws/append-entry! :brian (:id w) {:kind :baseline}
                           (pr-str a-baseline-with-health))
+        (seed-intent! w)
         (f w)))))
 
 (deftest design-routing-every-health-observation-is-accepted
@@ -443,8 +471,9 @@
            (ws/append-entry!
             :brian (:id w) {:kind :design}
             (pr-str (design-routing 1 [{:health-id "invoice-resums" :to :fix-here}])))))
-      (is (= 1 (count (:entries (ws/read-ws :brian (:id w)))))
-          "refused before anything is written — the baseline is still alone"))))
+      (is (= 2 (count (:entries (ws/read-ws :brian (:id w)))))
+          "refused before anything is written — only the baseline and the intent
+           it was seeded with are there"))))
 
 (deftest design-routing-an-observation-the-baseline-never-made-is-refused
   (with-health-baseline
@@ -501,9 +530,45 @@
     (fn [_]
       (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
         (ws/append-entry! :brian (:id w) {:kind :baseline} (pr-str a-baseline))
+        (seed-intent! w)
         (ws/append-entry! :brian (:id w) {:kind :design} (pr-str (design-citing 1)))
         (is (ws/latest-entry :brian (:id w) :design)
             "every design record written before health existed still appends")))))
+
+(deftest a-design-may-cite-a-triage-entry-as-its-intent
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+        (ws/append-entry! :brian (:id w) {:kind :baseline} (pr-str a-baseline))
+        (ws/append-entry! :brian (:id w) {:kind :triage} (pr-str a-triage))
+        (ws/append-entry! :brian (:id w) {:kind :design} (pr-str (design-citing 1 2)))
+        (is (= 2 (get-in (ws/latest-entry :brian (:id w) :design) [:intent :seq]))
+            "a workstream whose intent was written down at triage does not
+             restate it")))))
+
+(deftest a-design-citing-an-entry-that-states-no-intent-is-refused
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+        (ws/append-entry! :brian (:id w) {:kind :baseline} (pr-str a-baseline))
+        (ws/append-entry! :brian (:id w) {:kind :blocker}
+                          (pr-str {:format :blocker :summary "s" :needs "n"}))
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"neither an :intent nor a :triage"
+             (ws/append-entry! :brian (:id w) {:kind :design}
+                               (pr-str (design-citing 1 2)))))
+        (is (= 2 (count (:entries (ws/read-ws :brian (:id w)))))
+            "refused before anything is written")))))
+
+(deftest a-design-citing-an-intent-that-does-not-exist-is-refused
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+        (ws/append-entry! :brian (:id w) {:kind :baseline} (pr-str a-baseline))
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"neither an :intent nor a :triage"
+             (ws/append-entry! :brian (:id w) {:kind :design}
+                               (pr-str (design-citing 1 9)))))))))
 
 (deftest design-citing-an-entry-that-is-not-a-baseline-is-refused
   (with-tmp
@@ -525,6 +590,7 @@
    :shape      "Two writers during the migration; one reader throughout."
    :invariants [{:invariant "no request reads a column no writer maintains" :holds :always}]
    :standing   {:relation :conforms}
+   :intent     {:seq 2}
    :baseline   {:seq n :relation :within}
    :phases     [{:claim     "both writers maintain the new column"
                  :habitable "nothing reads the new column yet"
@@ -544,6 +610,7 @@
     (fn [_]
       (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
         (ws/append-entry! :brian (:id w) {:kind :baseline} (pr-str a-baseline))
+        (seed-intent! w)
         (ws/append-entry! :brian (:id w) {:kind :design}
                           (pr-str (phased-design-citing 1 "the old column is dropped")))
         (is (= 2 (count (:phases (ws/latest-entry :brian (:id w) :design)))))))))

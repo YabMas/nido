@@ -325,6 +325,44 @@
     :permanent (str "permanent — " why)
     nil))
 
+(def Intent
+  "What the task is FOR, and what would make it done. Authored BEFORE the design
+   that cites it, and closed against everything that needs the change to fill in
+   — the same test the baseline is held to, for the same reason.
+
+   It exists because intent was the last yardstick a round could not resolve from
+   durable state. Everything else a decision is judged against — the baseline, the
+   stance, the rejected alternatives — is written down and citable; the goal
+   arrived as an argument typed by whoever ran the round. Two decisions over
+   identical records could therefore disagree, and on this workstream's own ledger
+   two of them did.
+
+   Authoring order carries as much weight as the content. Goals written after the
+   design are goals the design satisfies, which is the same contamination that
+   moved the current-design inference out of :assumes and into its own event. The
+   ledger cannot check when you wrote it, but it can check that you cited it, and
+   the schema can refuse anything that only makes sense once you know the answer.
+
+   :done-when is what makes the goal falsifiable. A goal nobody can fail to meet
+   cannot tell an over-serving design from a right-sized one, which is the whole
+   job of the goal-served check."
+  [:map {:closed true}
+   [:format    [:= :intent]]
+   [:goal      string?]
+   [:done-when [:vector {:min 1} string?]]
+   [:context   {:optional true} string?]])
+
+(def IntentRelation
+  "Which entry states what this change is for. :seq may name an :intent entry or
+   an existing :triage entry — a workstream whose intent is already written down
+   does not restate it — and the append boundary refuses anything else.
+
+   A citation rather than a lookup, for the reason the baseline is one: resolving
+   'the latest intent' would let an entry appended later silently change what an
+   already-judged decision was judged against."
+  [:map {:closed true}
+   [:seq int?]])
+
 (def Route
   "Where one health observation from the cited baseline goes. The baseline
    observes and never routes, because routing needs the change; this is the
@@ -543,7 +581,8 @@
    say WHEN each invariant holds would be ceremony with one legal answer."
   (into [:map {:closed true}]
         (concat design-common
-                [[:invariants [:vector {:min 1} string?]]
+                [[:intent     IntentRelation]
+                 [:invariants [:vector {:min 1} string?]]
                  [:seams      {:optional true} [:vector Seam]]])))
 
 (def PhasedDesign
@@ -563,7 +602,8 @@
    the same usual cause, a design boundary in the wrong place."
   (into [:map {:closed true}]
         (concat design-common
-                [[:invariants [:vector {:min 1} Invariant]]
+                [[:intent     IntentRelation]
+                 [:invariants [:vector {:min 1} Invariant]]
                  [:phases     [:vector {:min 2} Phase]]
                  [:seams      {:optional true} [:vector Seam]]])))
 
@@ -649,6 +689,13 @@
                  [:phases     {:optional true} [:vector {:min 1} Phase]]
                  [:seams      {:optional true} [:vector [:or Seam SeamLegacy]]]])))
 
+(def DesignVisionReadCurrent
+  "The wide READ shape for a design written since :intent became required — the
+   pre-intent read shape plus the citation. Built from that shape rather than
+   beside it, so the two cannot drift: a widening added for some later tightening
+   reaches both tiers automatically."
+  (into DesignVisionRead [[:intent IntentRelation]]))
+
 (def DesignVisionAny
   "The READ contract for :design — anything that was legitimately writable at the
    time it was written.
@@ -659,13 +706,23 @@
    omits the field, lands in the lenient branch, and validates. Strict on write,
    wide on read — the tightening has teeth going forward and costs no history.
 
-   The :current branch is DesignVisionRead rather than DesignVision for the same
-   reason at one more remove: the write shape now splits on :phases, and reading
-   a record through the branch it was WRITTEN by would mean re-deriving the era
-   it was written in from the fields it happens to carry."
-  [:multi {:dispatch (fn [r] (if (contains? r :baseline) :current :legacy))}
-   [:current DesignVisionRead]
-   [:legacy  DesignVisionLegacy]])
+   The :current branch is a read shape rather than a write shape for the same
+   reason at one more remove: the write shape splits on :phases, and reading a
+   record through the branch it was WRITTEN by would mean re-deriving the era it
+   was written in from the fields it happens to carry.
+
+   Three tiers now, because :design has been tightened twice. :intent is the
+   newest and is dispatched on first; :baseline is the older one. The pre-intent
+   tier is DesignVisionRead UNCHANGED — the era before a tightening is exactly
+   the read shape that preceded it, so a tightening adds a tier rather than
+   rewriting one."
+  [:multi {:dispatch (fn [r] (cond
+                               (contains? r :intent)   :current
+                               (contains? r :baseline) :pre-intent
+                               :else                   :legacy))}
+   [:current    DesignVisionReadCurrent]
+   [:pre-intent DesignVisionRead]
+   [:legacy     DesignVisionLegacy]])
 
 
 (def ImplementationPlan
@@ -958,6 +1015,7 @@
   "Entry :kind → its Malli schema. Drives ledger-boundary validation + rendering.
    A :kind absent here is stored as verbatim markdown (legacy / freeform)."
   {:triage                   TriageReport
+   :intent                   Intent
    :baseline                 Baseline
    :design                   DesignVision
    :implementation-plan      ImplementationPlan
@@ -983,8 +1041,10 @@
    but one per era, and the reader's job is 'was this valid when written', not
    'would I accept this today'. Every entry here should name the tightening that
    put it here, and may be dropped once no record of the old shape survives."
-  {;; :baseline became required on :design; DesignVisionLegacy is the pre-baseline
-   ;; shape, which also carries the :assumes the baseline event replaced.
+  {;; Two tightenings on :design, one era each. :baseline became required —
+   ;; DesignVisionLegacy is the pre-baseline shape, which also carries the
+   ;; :assumes the baseline event replaced. Then :intent became required, and
+   ;; DesignVisionPreIntent is everything written between the two.
    :design DesignVisionAny})
 
 (defn- validate-against
@@ -1101,6 +1161,15 @@
                              "\n  - invisibly incomplete: deferring this leaves the branch untrue"))))))
           [[:design "Design health"] [:implementation "Implementation health"]]))
 
+(defn- intent->markdown
+  [{:keys [goal done-when context]}]
+  (str/join
+   "\n"
+   (concat
+    ["# Intent — what this is for" "" goal "" "## Done when"]
+    (for [d done-when] (str "- " d))
+    (when context ["\n## Context" context]))))
+
 (defn- baseline->markdown
   [{:keys [area bounded-by shape load-bearing extension-points health governing
            drift read unknowns]}]
@@ -1141,8 +1210,8 @@
        (when note (str "\n> " note))))
 
 (defn- design->markdown
-  [{:keys [summary shape invariants standing baseline assumes routes rejected
-           layers phases seams open supersedes effort]}]
+  [{:keys [summary shape invariants standing baseline intent assumes routes
+           rejected layers phases seams open supersedes effort]}]
   (str/join
    "\n"
    (concat
@@ -1153,6 +1222,7 @@
           "  ·  **Effort:** " (name effort))]
     (when-let [n (:note standing)] [(str "> " n)])
     (when baseline [(baseline-relation->markdown baseline)])
+    (when intent [(str "**For:** entry " (:seq intent))])
     (when supersedes
       [(str "*Supersedes entry " (:seq supersedes) " — " (:why supersedes) "*")])
     ["" summary "" "## Shape" shape "" "## Invariants"]
@@ -1375,6 +1445,7 @@
   (case (:format report)
     :markdown                 (or (:markdown report) "")
     :triage-report            (triage->markdown report)
+    :intent                   (intent->markdown report)
     :baseline                 (baseline->markdown report)
     :design                   (design->markdown report)
     :implementation-plan      (plan->markdown report)
@@ -1397,6 +1468,7 @@
    the caller falls back to)."
   [report]
   (case (:format report)
+    :intent                   (str "Intent: " (first-line (:goal report)))
     :baseline                 (str "Baseline: " (first-line (:area report)))
     :design                   (first-line (:shape report))
     :implementation-plan      (:direction report)

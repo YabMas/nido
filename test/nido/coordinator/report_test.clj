@@ -112,6 +112,7 @@
                 "no line item carries a rounded amount"]
    :standing   {:relation :conforms :principles ["shape of the data is the design"]}
    :baseline   {:seq 1 :relation :within}
+   :intent     {:seq 2}
    :rejected   [{:alternative "round at render time"
                  :why-not     "moves money math into the view layer"}]
    :layers     [{:claim "extract the total aggregate" :mode :judgment}
@@ -147,6 +148,7 @@
    :invariants [{:invariant "no request reads a column no writer maintains" :holds :always}
                 {:invariant "exactly one writer maintains the address"      :holds :on-completion}]
    :standing   {:relation :conforms}
+   :intent     {:seq 2}
    :baseline   {:seq 1 :relation :within}
    :phases     [{:claim     "both writers maintain the new column; nothing reads it"
                  :habitable "readers are unchanged; the new column is write-only and unobserved"
@@ -893,6 +895,56 @@
   (is (= "Baseline: order totalling"
          (report/report-title (assoc valid-baseline :area "order totalling\nand its readers")))
       "one line per entry — the index is a table, and :area is prose that wraps"))
+
+(def ^:private valid-intent
+  {:format    :intent
+   :goal      "Checkout totals match the invoice to the cent."
+   :done-when ["a multi-line order's total equals the sum of its invoice lines"
+               "no support ticket about a one-cent discrepancy for a full month"]
+   :context   "Reported three times this quarter; each was closed as unreproducible."})
+
+(deftest validate-event-accepts-an-intent
+  (is (= valid-intent (report/validate-event :intent valid-intent))))
+
+(deftest intent-requires-something-that-would-make-it-done
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event :intent (assoc valid-intent :done-when [])))
+      "a goal nobody can fail to meet cannot tell an over-serving design from a
+       right-sized one, which is the whole job of the goal-served check"))
+
+(deftest intent-refuses-to-carry-the-answer
+  (doseq [k [:shape :effort :layers :direction :invariants]]
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (report/validate-event :intent (assoc valid-intent k :anything)))
+        (str "a field that needs the change belongs on the design record — " k))))
+
+(deftest report->markdown-intent-has-its-sections
+  (let [md (report/report->markdown valid-intent)]
+    (is (str/includes? md "# Intent — what this is for"))
+    (is (str/includes? md "## Done when"))
+    (is (str/includes? md "no support ticket"))
+    (is (str/includes? md "## Context"))))
+
+(deftest design-requires-an-intent-citation
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event :design (dissoc valid-design :intent)))
+      "the last yardstick that was not written down is now required, the same
+       way :baseline is"))
+
+(deftest a-pre-intent-design-is-unwritable-but-still-readable
+  (let [pre (dissoc valid-design :intent)]
+    (is (thrown? clojure.lang.ExceptionInfo (report/validate-event :design pre))
+        "strict on write")
+    (is (= pre (report/parse-event :design pre))
+        "wide on read — without this era every existing design would fail
+         validation, and ws/latest-entry swallows that, so they would not be
+         contradicted, they would simply stop being there")))
+
+(deftest all-three-design-eras-read
+  (doseq [[label r] {"current"    valid-design
+                     "pre-intent" (dissoc valid-design :intent)
+                     "pre-baseline" legacy-design}]
+    (is (= r (report/parse-event :design r)) label)))
 
 ;; ── Routes — the other half of "the baseline never routes" ──────────────────
 ;; The survey observes and cannot route; the design routes and cannot observe.

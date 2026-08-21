@@ -247,10 +247,16 @@
                       {:vetoed (vec (sort spun))})))))
 
 (defn- check-baseline-citation!
-  "A :design record's :baseline names the entry it was judged against, and its
-   :routes answer that entry's health observations. The schema sees one record
-   and can resolve neither, so the check belongs here — the one place that holds
-   both the record and the ledger it is joining.
+  "A :design record's :baseline names the entry it was judged against, its
+   :routes answer that entry's health observations, and its :intent names what
+   the task is for. The schema sees one record and can resolve none of them, so
+   the check belongs here — the one place that holds both the record and the
+   ledger it is joining.
+
+   The intent citation accepts two kinds: an :intent entry, or a :triage entry
+   for a workstream whose intent was already written down when the ticket was
+   triaged. Anything else is refused, so a design can never cite a review, a
+   blocker or a baseline as the thing it is for.
 
    Rejecting a dangling ref matters more than it looks: the baseline is the whole
    yardstick, and a :seq pointing at nothing reads downstream exactly like one
@@ -267,7 +273,18 @@
                            :baselines (->> (:entries w)
                                            (filter #(= :baseline (:kind %)))
                                            (mapv :seq))})))
-        (check-routes-total! (read-entry-at w n) record)))))
+        (check-routes-total! (read-entry-at w n) record))
+      (when-let [n (get-in record [:intent :seq])]
+        (let [e (->> (:entries w) (filter #(= n (:seq %))) first)]
+          (when-not (#{:intent :triage} (:kind e))
+            (throw (ex-info (str "Design cites intent entry " n
+                                 ", which is neither an :intent nor a :triage "
+                                 "entry on this workstream")
+                            {:seq n
+                             :kind (:kind e)
+                             :citable (->> (:entries w)
+                                           (filter #(#{:intent :triage} (:kind %)))
+                                           (mapv (juxt :seq :kind)))}))))))))
 
 (defn- check-seam-phase-ref!
   "A seam that says a phase closes it names that phase by its :claim. Malli sees

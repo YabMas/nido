@@ -602,6 +602,17 @@
             (for [{:keys [ref note]} trail]
               [:li [:code ref] " — " note]))])])
 
+(defn- intent-card
+  "What the task is for. Never folded: it is the yardstick goal-served is checked
+   against, and a collapsed yardstick is one nobody checks."
+  [{:keys [goal done-when context]}]
+  [:div.md
+   [:h2 "Intent — what this is for"]
+   (md/render goal)
+   [:h3 "Done when"]
+   (into [:ul] (for [d done-when] [:li d]))
+   (when context [:details.trail [:summary "Context"] (md/render context)])])
+
 (defn- baseline-card
   "Curated render of a baseline: the area and what bounded it, the shape, then the
    two lists that do the routing work — what cannot move, and where it can. Both
@@ -662,8 +673,8 @@
    its invariants (always shown — they are what review checks against), then the
    optional sections. `assumes` is collapsed: it is the captured inference, useful
    when a design is questioned and noise the rest of the time."
-  [{:keys [summary shape invariants standing baseline assumes routes rejected
-           layers phases seams open supersedes effort]}]
+  [{:keys [summary shape invariants standing baseline intent assumes routes
+           rejected layers phases seams open supersedes effort]}]
   [:div.md
    [:h2 "Design"]
    [:div.report-meta
@@ -684,6 +695,8 @@
           [:div [:p.meta "Load-bearing properties this breaks:"]
            (into [:ul] (for [b breaks] [:li b]))])
         (when note [:blockquote note])]))
+   (when intent
+     [:p.meta "For: entry " (:seq intent)])
    (when supersedes
      [:p.meta "Supersedes entry " (:seq supersedes) " — " (:why supersedes)])
    (md/render summary)
@@ -1071,6 +1084,7 @@
   ([report pos]
    (case (:format report)
      :triage-report            (triage-report-card report)
+     :intent                   (intent-card report)
      :baseline                 (baseline-card report)
      :design                   (design-card report)
      :implementation-plan      (plan-card report)
