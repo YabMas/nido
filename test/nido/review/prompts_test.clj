@@ -141,17 +141,26 @@
     :claim "renders the banner; no change to how a goal is computed."
     :files ["src/ui/banner.clj"]}])
 
+(deftest composition-block-asks-about-the-cut-and-the-wiring
+  ;; Not about a wider diff. Reading the branch flat is what the layer reviews
+  ;; already do between them; what nothing else in the loop is asked is whether
+  ;; the change was cut into the right pieces and whether they hold together.
+  (let [s (prompts/composition-block {:layers two-layers})]
+    (is (str/includes? s "THE CUT — are these the right pieces?"))
+    (is (str/includes? s "THE WIRING — do the pieces hold together?"))
+    (is (str/includes? s "not so\nthat you can review it flat"))
+    (doseq [{:keys [kind asks]} prompts/composition-kinds]
+      (is (#{:cut :wiring} asks) (str kind " answers neither question")))))
+
 (deftest composition-block-hands-over-the-intermediate-revisions
-  ;; This is the whole difference between the composition primer and the map a
-  ;; warden gets. `toc-block` withholds revisions so a warden cannot re-derive
-  ;; its neighbours; the composition pass is given them because the states the
-  ;; branch passes THROUGH are the only thing it is there to look at, and no
-  ;; other reader in the loop can reach them.
+  ;; The evidence for the wiring half, and the whole difference between this
+  ;; primer and the map a warden gets: `toc-block` withholds revisions so a
+  ;; warden cannot re-derive its neighbours, and this hands them over so each
+  ;; piece can be looked at standing on its own.
   (let [s (prompts/composition-block {:layers two-layers})]
     (is (str/includes? s "--from FORK --to cA"))
     (is (str/includes? s "--from cA --to cB"))
     (is (str/includes? s "-r cA") "the tree a layer's own PR would merge")
-    (is (str/includes? s "see the SEQUENCE"))
     (is (str/includes? s "--ignore-working-copy file show"))
     (is (str/includes? s "Never `cat`"))))
 

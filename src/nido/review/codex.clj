@@ -181,9 +181,10 @@
 
    `brief` is the layer's `/stack` §5 review brief, which bounds the review to
    what that layer claims. A whole-stack pass carries `composition` instead —
-   the stack's layers with their revisions — which primes it to review the
-   SEQUENCE rather than the branch flat. The two are exclusive by construction:
-   a target is one layer or the composition of several, never both, and a
+   the stack's layers with their revisions — which primes it to ask whether the
+   change was cut into the right pieces and whether they hold together, rather
+   than to review the branch flat. The two are exclusive by construction: a
+   target is one layer or the composition of several, never both, and a
    composition has no single brief to be bounded by.
 
    The schema follows the primer and not the target: the composition variant

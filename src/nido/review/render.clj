@@ -104,19 +104,19 @@
    only a subset — a number that renumbered itself between rounds would be worse
    than none.
 
-   The composition pass has no number because it is not a layer. It is named for
-   what it actually reads — the layers IN SEQUENCE, which is the only way to
-   find a defect that exists solely in how two of them compose. It named every
-   layer at once, which is a wider diff, and a wider diff is the one thing this
-   pass is not: reading the branch flat is what the layer reviews already did
-   between them, and the states the branch passes THROUGH are what nothing else
-   in the loop can reach.
+   The composition pass has no number because it is not a layer, and is named
+   for the question it asks rather than for the range it reads. Earlier names
+   described the range — every layer at once, the layers in sequence — and both
+   pointed at a wider diff, which is the one thing this pass is not. What it
+   asks is whether the change was cut into the right pieces and whether those
+   pieces hold together.
 
-   With no layers under it there is no sequence to read, the pass is not primed
-   as a composition at all, and it is simply the branch."
+   The layer count no longer appears in the name, but it still decides it: with
+   no layers beneath it there is nothing to compose, the pass is not primed as a
+   composition at all, and it is simply the branch."
   [{:keys [index stack? label]} layer-count]
   (cond
-    (and stack? (pos? layer-count)) (str "The " layer-count " layers in sequence")
+    (and stack? (pos? layer-count)) "Composition"
     stack?                          "Whole branch"
     index                           (str "Layer " index " · " label)
     :else                           (str label)))
@@ -138,49 +138,33 @@
     "error"   "failed"
     (str findings " finding" (when (not= 1 findings) "s"))))
 
-(defn- composition-rule
-  "The captioned rule that separates the composition pass from the layers.
-
-   Carrying the caption HERE rather than in the row's name is what keeps the
-   name field driven by the layers: `Composition · the layers in sequence` in
-   the name column would have set the width of every row above it, pushing six
-   short slugs a third of the way across the terminal to make room for a phrase
-   that is really a section heading."
-  [col]
-  (let [head (str indent "─── composition ")]
-    (str head (apply str (repeat (max 3 (- (+ (count indent) 2 col) (count head)))
-                                 "─")))))
-
 (defn- block-lines
-  "Render rows into aligned lines, ruling off the composition pass from the
-   layers above it.
+  "Render rows into aligned lines: the numbered layers, then the composition
+   pass last.
 
-   The rule is the whole distinction. The composition row is not a seventh
-   sibling of six layers — it is one pass over how the six compose — and a label
-   alone was not carrying that: it sat in the list looking like a layer whose
-   name happened to be `stack`. Drawn only when a layer precedes it, since a
-   rule under nothing separates nothing.
+   A captioned rule used to separate the two, on the reasoning that the
+   composition row is not a seventh sibling of six layers. The name carries that
+   now — `Composition` next to `Layer 3 · slug` is already a different kind of
+   thing — and a section heading over a single row was more furniture than the
+   distinction needed.
 
    `layers` is how wide the STACK is, which is not the same as how many layer
    rows this block has: the warden block holds only the layers that reported
-   something, and the composition pass still read all of them. nil falls back to
-   counting the rows, which is what a report written before the target carried a
-   layer count has to rely on."
+   something, and the composition pass still read all of them. That gap is why
+   the count is still threaded through with the rule gone — `row-name` reads it
+   to tell a composition from a branch with nothing under it, and a warden block
+   holding only the composition row would otherwise count zero layers and call
+   it the whole branch. nil falls back to counting the rows, which is what a
+   report written before the target carried a layer count has to rely on."
   [rows layers glyph-fn text-fn]
   (let [rows   (vec rows)
         layers (or layers (count (remove :stack? rows)))
         names  (mapv #(row-name % layers) rows)
-        col    (name-col names)
-        rule   (composition-rule col)]
+        col    (name-col names)]
     (into []
-          (comp (map-indexed
-                 (fn [i r]
-                   (let [line (str indent (glyph-fn r) " "
-                                   (pad (nth names i) col) (text-fn r))]
-                     (if (and (:stack? r) (pos? i) (not (:stack? (nth rows (dec i)))))
-                       [rule line]
-                       [line]))))
-                cat)
+          (map-indexed
+           (fn [i r]
+             (str indent (glyph-fn r) " " (pad (nth names i) col) (text-fn r))))
           rows)))
 
 (defn- layer-lines

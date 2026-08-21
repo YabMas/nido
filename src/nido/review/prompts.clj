@@ -52,13 +52,19 @@
   "The kinds of defect that exist ONLY in the composition of layers, each paired
    with the check that finds it.
 
+   `:asks` is which of the pass's two questions the kind answers — :cut, whether
+   the change was decomposed into the right pieces, or :wiring, whether those
+   pieces hold together. The primer groups them by it, because that is the first
+   thing a reviewer has to settle about a defect it has found and the two lead
+   somewhere different: a cut defect is usually not fixable in place at all.
+
    A closed set, deliberately. This pass's whole difficulty is that its findings
    are easy to confuse with ordinary ones, and a kind a reviewer has to name is a
-   kind it cannot drift into: there is no bucket here for \"something about the
-   stack\". `resources/review/composition_schema.json` carries the same list as
-   its `kind` enum, and the two are asserted equal in the tests — a taxonomy the
-   prompt teaches but the schema will not accept is a 400 on every round."
-  [{:kind "broken-intermediate"
+   kind it cannot drift into: there is no bucket here for a vague unease about
+   the stack. `nido.review.codex/composition-schema` builds its `kind` enum from
+   this same list — a taxonomy the prompt teaches but the schema will not accept
+   is not a soft mismatch, it is a 400 on every round."
+  [{:kind "broken-intermediate" :asks :wiring
     :what (str "the stack does not hold at some layer's own tip. A layer leaves\n"
                "  the tree referring to something only a LATER layer supplies, or\n"
                "  breaks a contract a later layer restores. Every layer is\n"
@@ -66,35 +72,35 @@
                "  at a time.")
     :how  (str "for each layer bottom→top, take what its diff REMOVED or renamed\n"
                "  and search the tree AT THAT LAYER'S OWN REV for anything still\n"
-               "  referring to it. Look here first: this is the defect the pass\n"
-               "  exists for, and no other reader in this loop can reach it.")}
-   {:kind "claim-falsified"
+               "  referring to it. This is the wiring question at its most\n"
+               "  concrete, and the layer tips are the only place to answer it.")}
+   {:kind "claim-falsified" :asks :cut
     :what (str "a layer's stated claim is contradicted by a layer above it. The\n"
                "  common form: a layer claims `mechanical`, or no behaviour\n"
                "  change, and a layer above quietly compensates for behaviour\n"
                "  that did change.")
     :how  (str "read each layer's claims, then read the layers above it for code\n"
                "  that only makes sense if that claim is false. Name the claim.")}
-   {:kind "duplicated-across-layers"
+   {:kind "duplicated-across-layers" :asks :cut
     :what (str "two layers independently introduce the same thing — a helper, a\n"
                "  guard, a migration step — because bounded review guaranteed\n"
                "  neither could see the other.")
     :how  (str "for each thing a layer ADDS, look through the other layers for a\n"
                "  near-twin. The names will differ; the shape will not.")}
-   {:kind "order-dependence"
+   {:kind "order-dependence" :asks :wiring
     :what (str "a layer depends on something a layer ABOVE it establishes, so the\n"
                "  stack is in the wrong order. Distinct from broken-intermediate:\n"
                "  there the repair is to complete a layer, here it is to move one.")
     :how  (str "when a layer reaches for something it did not bring, find which\n"
                "  layer supplies it and check whether that layer sits above.")}
-   {:kind "orphaned-by-scope"
+   {:kind "orphaned-by-scope" :asks :cut
     :what (str "something in this branch that EVERY layer's `out of scope` pushed\n"
                "  away, so no reviewer ever held it and no warden ever ruled on\n"
                "  it. You are the only pass that can see this hole, because you\n"
                "  are the only one that reads all the exclusions at once.")
     :how  (str "read the `out of scope` lines above as one set, and ask what in\n"
                "  the branch falls through all of them.")}
-   {:kind "misplaced-seam"
+   {:kind "misplaced-seam" :asks :cut
     :what (str "the cut itself is wrong: one idea split so neither side is\n"
                "  coherent alone, or a layer boundary running through the middle\n"
                "  of a thing. **Report the seam, not a patch.** Saying where the\n"
@@ -103,21 +109,27 @@
     :how  (str "you have usually already found this when a defect has no good\n"
                "  owner. When placing it on either layer feels arbitrary, that is\n"
                "  the cut telling you about itself — say so instead of choosing.")}
-   {:kind "aggregate"
+   {:kind "aggregate" :asks :wiring
     :what (str "each layer's contribution is defensible alone and their sum is\n"
                "  not: a cost, a lock, a query, an allocation added once per\n"
                "  layer.")
     :how  (str "count the added instances of anything that has to stay rare\n"
                "  ACROSS layers rather than within one.")}])
 
+(def ^:private asks-heading
+  {:cut    "THE CUT — are these the right pieces?"
+   :wiring "THE WIRING — do the pieces hold together?"})
+
 (defn- kinds-block
-  []
+  [asks]
   (->> composition-kinds
+       (filter #(= asks (:asks %)))
        (map (fn [{:keys [kind what how]}]
               (str "- " kind "\n"
                    "  " what "\n"
                    "  HOW TO LOOK: " how "\n")))
-       (str/join "\n")))
+       (str/join "\n")
+       (str (asks-heading asks) "\n\n")))
 
 (defn- composition-layer-rows
   "The stack rendered for the composition pass: each layer with the range it
@@ -171,21 +183,36 @@
      "them again is not harmless redundancy — it is the exact cost this layering\n"
      "was built to avoid, and it gets paid twice: once by you, once by whoever\n"
      "has to read two copies of the same thing and work out they are one.\n\n"
-     "You are the only reader in this loop that can see the SEQUENCE. A layer\n"
-     "reviewer saw one range and could not see the others. A reviewer of the\n"
-     "finished branch sees only where the stack ENDS UP. Neither can see the\n"
-     "states the branch passes THROUGH, and that is where a composition defect\n"
-     "lives. Your range spans the whole branch so that you can reach those\n"
-     "states — not so that you can review it flat.\n\n"
+     "Your subject is not the code. It is the CUT and the WIRING — whether this\n"
+     "change was decomposed into the right pieces, and whether those pieces hold\n"
+     "together. Two questions, and every finding you return answers one of them:\n\n"
+     "  THE CUT — are these the right pieces? Right boundaries, nothing built\n"
+     "  twice because two layers could not see each other, nothing falling\n"
+     "  through the gap between what they all excluded, each layer's stated\n"
+     "  claim actually true of what it contains.\n\n"
+     "  THE WIRING — do the pieces hold together? Each one has to stand up where\n"
+     "  it sits, given only what the layers below it actually supply, and what\n"
+     "  they add up to has to be defensible too.\n\n"
+     "Nobody else in this loop is asked either question. A layer reviewer was\n"
+     "handed a piece and asked whether the piece is correct; it cannot see the\n"
+     "cut it was handed, let alone judge it. And a reviewer of the finished\n"
+     "branch sees only where the stack ENDS UP — one tree, with the seams gone.\n"
+     "Your range spans the whole branch so that you can see the seams, not so\n"
+     "that you can review it flat.\n\n"
      "THE STACK, BOTTOM TO TOP:\n\n"
      (composition-layer-rows layers)
      "\n"
      "A layer's rev is the tree AS THAT LAYER LEAVES IT — exactly what that\n"
-     "layer's PR would merge on its own, with nothing above it. Read it with\n"
-     "`jj --ignore-working-copy file show -r <that rev> -- <path>`, and read one\n"
-     "layer's own diff with the `--from`/`--to` pair given for it. Never `cat`:\n"
-     "the working copy sits above every layer, so it shows you a state no single\n"
-     "layer produces.\n\n"
+     "layer's PR would merge on its own, with nothing above it. That is how the\n"
+     "wiring question gets answered rather than guessed: you can go and look at\n"
+     "each piece standing on its own, which is the state every reviewer before\n"
+     "you was structurally unable to see.\n\n"
+     "  the tree as of a layer:\n"
+     "    jj --ignore-working-copy file show -r <that layer's rev> -- <path>\n"
+     "  one layer's own diff:\n"
+     "    the --from/--to pair given for it above\n\n"
+     "Never `cat`: the working copy sits above every layer, so it shows you a\n"
+     "state no single layer produces.\n\n"
      "WHAT IS YOURS, AND WHAT IS NOT\n\n"
      "One sentence decides it: **if you can state the defect without naming two\n"
      "layers, it is not yours.**\n\n"
@@ -198,7 +225,9 @@
      "layer deliberately left to another. What it does not cover is the case\n"
      "where EVERY layer pushed the same thing away — that one is yours, below.\n\n"
      "THE KINDS OF DEFECT THAT ARE YOURS\n\n"
-     (kinds-block)
+     (kinds-block :cut)
+     "\n"
+     (kinds-block :wiring)
      "\n"
      "OUTPUT\n\n"
      "Report ONLY composition findings. Returning none is a good outcome and a\n"

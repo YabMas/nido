@@ -75,7 +75,7 @@
     (is (str/includes? s "Layer 2 · widen"))
     (is (str/includes? s "converged"))
     (is (str/includes? s "1 layer converged"))
-    (is (str/includes? s "composition") "the whole-stack pass is named for what it is")))
+    (is (str/includes? s "Composition") "the whole-stack pass is named for what it is")))
 
 (deftest a-converged-layer-keeps-its-place-in-the-stack
   ;; Rows used to arrive reviewed-first, skipped-after, so a layer appeared to
@@ -90,12 +90,15 @@
                                         {:label "three" :index 3 :status "skipped"}
                                         {:label "stack" :stack? true :status "running"}]}]}]}
         rows (->> (str/split-lines (render/frame r (java.time.Instant/parse "2026-01-01T00:00:10Z")))
-                  (keep #(second (re-find #"(Layer \d · \w+|The \d layers in sequence)" %))))]
-    (is (= ["Layer 1 · one" "Layer 2 · two" "Layer 3 · three" "The 3 layers in sequence"]
+                  (keep #(second (re-find #"(Layer \d · \w+|Composition)" %))))]
+    (is (= ["Layer 1 · one" "Layer 2 · two" "Layer 3 · three" "Composition"]
            rows)
         "converged layers sit between the layers they sit between")))
 
-(deftest the-composition-pass-is-set-apart-from-the-layers-it-spans
+(deftest the-composition-pass-is-the-last-row-and-carries-no-layer-number
+  ;; It sat in the list looking like a layer whose name happened to be `stack`.
+  ;; The name is what sets it apart now — a captioned rule over a single row was
+  ;; more furniture than the distinction needed.
   (let [r {:target {:cwd "/x/feat/thing" :base "main" :layers 6 :files ["a"]}
            :rounds [{:round 1
                      :phases [{:phase "review" :status "running"
@@ -104,18 +107,16 @@
                                         {:label "two" :index 2 :status "running"}
                                         {:label "stack" :stack? true :status "running"}]}]}]}
         lines (str/split-lines (render/frame r (java.time.Instant/parse "2026-01-01T00:00:10Z")))
-        rule  (first (keep-indexed (fn [i l] (when (str/includes? l "───") i)) lines))]
-    (is rule "a rule separates it from the layers")
-    (is (str/includes? (nth lines rule) "composition")
-        "the rule says what the block below it is")
-    (is (str/includes? (nth lines (inc rule)) "The 6 layers in sequence")
-        "and it is named for the whole stack, not for the rows in this round")
-    (is (not (str/includes? (nth lines (inc rule)) "Layer "))
-        "the composition pass carries no layer number — it is not a layer")))
+        comp  (first (filter #(str/includes? % "Composition") lines))]
+    (is comp)
+    (is (= comp (last lines)) "it comes after every layer, and nothing after it")
+    (is (not (str/includes? comp "Layer "))
+        "the composition pass carries no layer number — it is not a layer")
+    (is (not-any? #(str/includes? % "───") lines) "no rule, no section heading")))
 
 (deftest a-branch-with-no-layers-is-a-branch-and-not-a-composition
   ;; Below two layers there is nothing to compose, so the single target is the
-  ;; whole branch — and a rule under nothing separates nothing.
+  ;; whole branch.
   (let [r {:target {:cwd "/x/feat/thing" :base "main" :layers 0 :files ["a"]}
            :rounds [{:round 1
                      :phases [{:phase "review" :status "running"
@@ -123,8 +124,7 @@
                                :layers [{:label "stack" :stack? true :status "running"}]}]}]}
         s (render/frame r (java.time.Instant/parse "2026-01-01T00:00:10Z"))]
     (is (str/includes? s "Whole branch"))
-    (is (not (str/includes? s "composition")))
-    (is (not (str/includes? s "───")))))
+    (is (not (str/includes? s "Composition")))))
 
 (deftest the-name-column-cannot-be-widened-without-bound
   ;; repaint! counts the frame's newlines to know how far to move the cursor
@@ -180,9 +180,9 @@
                                :by-layer [{:label "one" :index 1 :stack? false :count 1}
                                           {:label "stack" :stack? true :count 2}]}]}]}
         s (render/frame r (java.time.Instant/parse "2026-01-01T00:00:10Z"))]
-    (is (str/includes? s "Layer 1 · one            1 to rule on")
-        "the layer row pads to the composition row's width, so the two align")
-    (is (str/includes? s "The 2 layers in sequence 2 to the arbiter"))))
+    (is (str/includes? s "Layer 1 · one        1 to rule on")
+        "both names are under the floor, so the column is the floor and they align")
+    (is (str/includes? s "Composition          2 to the arbiter"))))
 
 (deftest final-says-what-was-decided-about-each-finding
   (let [r {:target {:cwd "/x/feat/thing" :base "main"}
@@ -243,7 +243,7 @@
   (let [s (render/frame mid-review-report now)]
     (is (str/includes? s "Layer 1 · helpers"))
     (is (str/includes? s "queued"))
-    (is (str/includes? s "The 2 layers in sequence"))
+    (is (str/includes? s "Composition"))
     (is (str/includes? s "converged")
         "a target skipped by the cache says so from the start")))
 

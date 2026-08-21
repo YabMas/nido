@@ -111,9 +111,9 @@
 
    The revisions are the point. A warden gets `toc-block` — a map with no
    coordinates — precisely so it cannot re-derive the layers around it. The
-   composition pass gets the coordinates for the opposite reason: the states the
-   branch passes THROUGH are the only thing it is there to look at, and they are
-   reachable from nowhere else in the loop."
+   composition pass gets the coordinates for the opposite reason: it is asked
+   whether each piece holds together where it sits, and a layer's own tip is the
+   only place that can be looked at rather than guessed."
   [cwd targets]
   (into []
         (map (fn [{:keys [label index from to brief]}]
