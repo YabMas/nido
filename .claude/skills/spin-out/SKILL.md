@@ -272,11 +272,14 @@ by date.
 either do the work now (it is cheap and you are already here) or decline it
 explicitly. A DB full of never is what makes the real items invisible.
 
-**Past ~3 spin-outs from one branch, the ticket was mis-scoped** — or you are
-strip-mining. Same shape as `/stack`'s "past ~7 layers, it is two tickets": stop
-and revisit the decomposition rather than filing a fourth. Both counts are
-symptoms with the same usual cause — a design boundary in the wrong place — and
-the record is where you can see that, so re-read it before you re-cut.
+**Spin-outs that share a CAUSE mean the boundary is wrong** — not spin-outs that
+share a branch. Several unrelated stories leaving one branch is decomposition
+doing its job, however many there are. Two that fall out of the same seam, or
+that would both be answered by moving one boundary, is the ticket drawn across
+that boundary — and the next one will land there too, whatever you decide now.
+So read what the items have in common rather than counting them; the design
+record is where a shared cause is visible, so re-read it before you re-cut.
+Same shape as `/stack`'s test for whether a stack is still one story.
 
 **Zero spin-outs off a large change is also a signal** — either genuinely tight,
 or nobody looked.

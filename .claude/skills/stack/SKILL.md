@@ -35,7 +35,10 @@ not a reason to split one small change into five PRs."*
 **Stack** when there are genuine dependency boundaries — schema beneath the code
 that reads it, a mechanical rename apart from the judgment call it enables.
 
-Target **3–5 layers**. Past ~7, say so: the ticket is probably two tickets.
+**The layer count is not the test — one story is.** State what the whole stack
+claims, in one sentence, with no "and". If you cannot, it is two tickets, and
+that is as true of four layers as of nine. A change with many genuine dependency
+seams is not mis-scoped for having them.
 
 Record the decision in the plan. A one-layer stack is exactly today's flow,
 which is why every sibling skill forks on **layer count**, not on a flag.

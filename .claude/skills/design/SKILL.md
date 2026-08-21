@@ -345,6 +345,12 @@ The superseded record stays in the ledger. That is the point: the failure mode i
 a design that stayed "true" only because nobody updated it, and the second worst
 is one that was quietly rewritten so the reasoning that failed is unrecoverable.
 
+**Amendments that each fix a distinct defect are the process working.**
+Amendments that contradict each other are not: a field widened in one and left
+narrow in the next means you are patching the record rather than re-thinking it,
+and those contradictions are yours, not the reviewer's. When that starts, rewrite
+the record whole and supersede once rather than appending another patch.
+
 ## 6. Noticing mid-work
 
 The record is written at hour zero. The most valuable design thoughts arrive at
