@@ -24,3 +24,35 @@
          (:heartbeat-at (health/daemon-health {:halted? false :alive? true :breaker-count 0
                                                :status {:status :running
                                                         :heartbeat-at "2026-06-22T00:00:00Z"}})))))
+
+(deftest queue-blocker-answers-will-this-envelope-run
+  ;; nil = it runs. A breaker on ANOTHER trigger is invisible here by design:
+  ;; the caller passes only its own trigger's state, so the dot's global
+  ;; breaker-count can never leak in and read as "down".
+  (is (nil? (health/queue-blocker {:alive? true :halted? false
+                                   :status {:status :running} :trigger-tripped? false})))
+  ;; This is the regression the rail dot caused: healthy daemon, unrelated
+  ;; trigger tripped -> pickup must still promise the work runs.
+  (is (nil? (health/queue-blocker {:alive? true :halted? false
+                                   :status {:status :running} :trigger-tripped? false
+                                   :breaker-count 3})))
+  (is (= :breaker (health/queue-blocker {:alive? true :halted? false
+                                         :status {:status :running} :trigger-tripped? true})))
+  (is (= :halted (health/queue-blocker {:alive? true :halted? true
+                                        :status {:status :halted} :trigger-tripped? false})))
+  (is (= :daemon-down (health/queue-blocker {:alive? false :halted? false
+                                             :status nil :trigger-tripped? false})))
+  ;; Alive but not draining (booting/wedged) is down, not "running".
+  (is (= :daemon-down (health/queue-blocker {:alive? true :halted? false
+                                             :status {:status :stopped} :trigger-tripped? false}))))
+
+(deftest queue-blocker-reports-the-actionable-reason-first
+  ;; A dead process with a stale halted.edn is :daemon-down — resuming a daemon
+  ;; that isn't running would not help, so aliveness outranks the halt file.
+  (is (= :daemon-down (health/queue-blocker {:alive? false :halted? true
+                                             :status {:status :halted} :trigger-tripped? true})))
+  ;; A LIVE halted daemon writes :status :halted, which also fails the :running
+  ;; check — halt must be reported before that, or the copy says "down" for a
+  ;; daemon that is up and merely paused.
+  (is (= :halted (health/queue-blocker {:alive? true :halted? true
+                                        :status {:status :halted} :trigger-tripped? true}))))

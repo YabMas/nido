@@ -68,6 +68,13 @@
 
 (defn read-rail-daemon "Seam over health for stubbing in tests." [] (health/read-daemon-health))
 
+(defn read-pickup-blocker
+  "Seam over health for stubbing in tests. What blocks the leg a pickup fires,
+   or nil when nothing does — deliberately NOT read-rail-daemon, whose :state is
+   a severity ladder for the dot rather than a go/no-go for one envelope."
+  [project]
+  (health/read-queue-blocker (keyword project) pickup/trigger))
+
 (defn derive-screen
   "Impure wiring: gather what only IO can produce (grouped rows, gates, in-flight
    resolve keys), hand off to the pure work/screen, then attach the selection
@@ -327,16 +334,21 @@
       (and (= 3 (count segs)) (= "workstreams" (first segs)) (= "pickup" (nth segs 1)))
       (let [project (nth segs 2)
             input   (str/trim (str (:pickup (parse-json-body body))))
-            ready?  (= :up (:state (read-rail-daemon)))]
+            ;; Ask what blocks THIS envelope, not what color the rail dot is.
+            ;; The dot ranks :breaker above :up, so reading it as go/no-go
+            ;; reported a healthy daemon as down whenever any unrelated
+            ;; trigger was tripped.
+            blocked (read-pickup-blocker project)
+            opts    {:project project :blocked-by blocked :trigger pickup/trigger}]
         (if (str/blank? input)
           (sse-response
            (sse-fragment
             (views/pickup-result-fragment {:decision :unresolved :error :unrecognized-input}
-                                          {:project project :daemon-ready? ready?})))
+                                          opts)))
           (let [result (pickup/pickup! (keyword project) input (client/keychain-token))]
             (sse-response
              (sse-fragment
-              (views/pickup-result-fragment result {:project project :daemon-ready? ready?}))))))
+              (views/pickup-result-fragment result opts))))))
 
       ;; POST /workstreams/:project/:ws-id/winddown — bring a closed workstream's
       ;; leftover sessions down. Optimistic :stopping keyed "project/ws-id" (same

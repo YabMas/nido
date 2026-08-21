@@ -1366,10 +1366,27 @@
       [:button.btn {"data-on:click" post} "Drive →"]]
      [:div {:id "pickup-result" :class "pickup-result"}]]))
 
+(defn- pickup-blocked-note
+  "The warning under a queued pickup, worded for the reason it won't run — or
+   nil when it will. Each reason has a different fix, so they can't share copy:
+   a down daemon needs starting, a halted one needs resuming, and an open
+   breaker needs clearing while the daemon keeps running normally."
+  [blocked-by trigger project]
+  (when blocked-by
+    [:p.meta
+     (case blocked-by
+       :daemon-down "⚠ daemon is down — queued, but it won't run until the daemon is back up."
+       :halted      "⚠ coordinator is halted — queued, but it won't run until you resume it (bb nido:coordinator:resume)."
+       :breaker     (str "⚠ " (name trigger) "'s breaker is open — queued, but it won't run "
+                         "until it's cleared (bb nido:trigger:enable :project " project
+                         " " (name trigger) ").")
+       nil)]))
+
 (defn pickup-result-fragment
   "HTML string (root #pickup-result) reporting the outcome of a pickup POST.
-   `result` is pickup!'s return; opts is {:project <str> :daemon-ready? <bool>}."
-  [result {:keys [project daemon-ready?]}]
+   `result` is pickup!'s return; opts is
+   {:project <str> :blocked-by <kw or nil> :trigger <kw>}."
+  [result {:keys [project blocked-by trigger]}]
   (str
    (h/html
     [:div {:id "pickup-result" :class "pickup-result" :style "margin-top:8px;"}
@@ -1390,8 +1407,7 @@
              " (session spinning up…)"]
             [:p "✓ Starting " [:strong id] " \"" title "\" (new workstream) — "
              "it'll appear in the spine shortly."])
-          (when-not daemon-ready?
-            [:p.meta "⚠ daemon is down — queued, but it won't run until the daemon is back up."])]))])))
+          (pickup-blocked-note blocked-by trigger project)]))])))
 
 (defn workstreams-page
   "Overview + ledger pane, rendered from the screen. The list, its poll query,

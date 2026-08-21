@@ -82,6 +82,11 @@
             {:error :notion-error}))
         {:error :unrecognized-input}))))
 
+;; The leg every pickup fires. Named so the UI can ask whether THIS trigger's
+;; breaker is open before promising the user their ticket will be driven —
+;; without either side hardcoding the answer and drifting from the other.
+(def trigger :plan-bug)
+
 (defn pickup!
   "Resolve `input` and, on success, enqueue the :plan-bug envelope to drive the
    ticket (the daemon find-or-creates the workstream by its Notion ref → the shared
@@ -99,6 +104,6 @@
          :continuing? (some? existing)
          :ws-id       (:id existing)
          :queued      (queue/enqueue!
-                        {:target  {:project (keyword (name project)) :trigger :plan-bug}
+                        {:target  {:project (keyword (name project)) :trigger trigger}
                          :payload {:id (:id r) :notion-page-id (:page-id r)
                                    :url (:url r) :title (:title r)}})}))))
