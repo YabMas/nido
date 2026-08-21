@@ -124,6 +124,31 @@
        "review"
        (fn [ph] (assoc ph :layers (vec targets))))))
 
+(def ^:private row-rank
+  "How far along a row is. A row only ever moves forward: events cross threads
+   and can be folded out of order, and a target that flickered back to `running`
+   after reporting would be the display lying about work that is done."
+  {"pending" 0 "running" 1 "reviewed" 2 "skipped" 2 "error" 2})
+
+(defn- move-target
+  "Advance one target's row on the running review phase.
+
+   Rows are matched by label, which is unique within a round: it is the layer's
+   bookmark slug, or `stack` for the composition pass."
+  [report {:keys [label status findings]}]
+  (update-current-phase
+   report "review"
+   (fn [ph]
+     (update ph :layers
+             (fn [rows]
+               (mapv (fn [row]
+                       (if (and (= label (:label row))
+                                (> (row-rank status 0) (row-rank (:status row) 0)))
+                         (cond-> (assoc row :status status)
+                           findings (assoc :findings findings))
+                         row))
+                     (vec rows)))))))
+
 (defn- total-fixed
   [report]
   (->> (:rounds report)
@@ -164,6 +189,9 @@
 
     :targets-resolved
     (resolve-target report ev)
+
+    :target-moved
+    (move-target report ev)
 
     :phase-errored
     (update-current-phase report (name (:phase ev))

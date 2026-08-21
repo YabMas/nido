@@ -79,9 +79,10 @@
     (str s (apply str (repeat n " ")))))
 
 (defn- layer-glyph
-  [status]
+  [status now]
   (case status
     ("skipped" "pending") "·"
+    "running"             (spinner now)
     "error"               "✗"
     "✓"))
 
@@ -90,6 +91,7 @@
   (case status
     "skipped" "unchanged since it converged"
     "pending" "queued"
+    "running" "reviewing …"
     "error"   "failed"
     (str findings " finding" (when (not= 1 findings) "s"))))
 
@@ -103,11 +105,11 @@
    and silent truncation reads as coverage. A pending one is shown for the same
    reason from the other end: the round names every target before it reviews any
    of them, so a run interrupted mid-review still says what it set out to read."
-  [ph]
+  [ph now]
   (->> (:layers ph)
        (map (fn [{:keys [label stack? status] :as row}]
               (str "       "
-                   (layer-glyph status) " "
+                   (layer-glyph status now) " "
                    (pad (if stack? (str label " (composition)") label))
                    (layer-text row))))))
 
@@ -124,7 +126,7 @@
                  ;; for minutes is precisely the one worth showing detail for. A
                  ;; finished phase has already replaced them with its own rows,
                  ;; so what a COMPLETED run renders is unchanged by this.
-                 "review" (when (seq (:layers ph)) (layer-lines ph))
+                 "review" (when (seq (:layers ph)) (layer-lines ph now))
                  "warden" (when (= "ok" (:status ph)) (warden-lines ph))
                  nil)]
     (str/join "\n" (cons (phase-line ph target now) (remove str/blank? detail)))))
@@ -185,8 +187,14 @@
 
 (defn plain-line
   "One line per transition for non-TTY mode, or nil to stay silent."
-  [_report {:keys [event iter phase status]}]
+  [_report {:keys [event iter phase status label findings]}]
   (case event
+    ;; Only completions narrate. A start line per target would double the log
+    ;; for a fan-out that reports out of order anyway, and plain mode is read
+    ;; after the fact.
+    :target-moved   (when (= "reviewed" status)
+                      (str "round " iter " · " label " ✓ "
+                           findings " finding" (when (not= 1 findings) "s")))
     :phase-started  (str "round " iter " · " (name phase) " …")
     :phase-finished (str "round " iter " · " (name phase) " ✓")
     :phase-errored  (str "round " iter " · " (name phase) " ✗")

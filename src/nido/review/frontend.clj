@@ -18,14 +18,27 @@
 
 (defn emit-fn
   "Build the emit fn: fold event → atom, persist, and in plain mode print a
-   narration line."
+   narration line.
+
+   Serialized, because emit is no longer called only from the engine's thread:
+   the review stage fans out and each target reports as it finishes. `swap!`
+   would survive that on its own, but `persist!` stages through one fixed
+   `<path>.tmp` before its atomic rename, so two threads writing at once can
+   interleave their bytes and rename a corrupt file over a good one. The lock
+   also keeps plain-mode narration from tearing across lines.
+
+   Folds the value `swap!` returned rather than re-dereferencing: the atom may
+   already hold a newer report, and an event's own line should describe the
+   report that event produced."
   [report-atom report-path clock plain?]
-  (fn [event]
-    (swap! report-atom report/apply-event event clock)
-    (report/persist! @report-atom report-path)
-    (when plain?
-      (when-let [line (render/plain-line @report-atom event)]
-        (println line)))))
+  (let [lock (Object.)]
+    (fn [event]
+      (locking lock
+        (let [r (swap! report-atom report/apply-event event clock)]
+          (report/persist! r report-path)
+          (when plain?
+            (when-let [line (render/plain-line r event)]
+              (println line))))))))
 
 ;; ANSI helpers ------------------------------------------------------------
 (def ^:private esc "")

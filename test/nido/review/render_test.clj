@@ -135,3 +135,21 @@
         s (render/frame done now)]
     (is (str/includes? s "2 findings"))
     (is (not (str/includes? s "queued")))))
+
+(deftest a-running-target-spins-and-a-finished-one-reports
+  (let [r (assoc-in mid-review-report [:rounds 0 :phases 0 :layers]
+                    [{:label "helpers" :stack? false :status "reviewed" :findings 2}
+                     {:label "basis"   :stack? false :status "running"}
+                     {:label "stack"   :stack? true  :status "pending"}])
+        s (render/frame r now)]
+    (is (str/includes? s "reviewing …"))
+    (is (str/includes? s "2 findings"))
+    (is (str/includes? s "queued"))))
+
+(deftest plain-mode-narrates-each-target-as-it-lands
+  (is (= "round 1 · specs ✓ 5 findings"
+         (render/plain-line {} {:event :target-moved :iter 1
+                                :label "specs" :status "reviewed" :findings 5})))
+  (is (nil? (render/plain-line {} {:event :target-moved :iter 1
+                                   :label "specs" :status "running"}))
+      "a start is not worth a log line"))

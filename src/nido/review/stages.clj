@@ -203,6 +203,23 @@
                                (mapv (partial row "skipped") skipped))}))
       (catch Throwable _ nil))))
 
+(defn- announce-target!
+  "Move one target's row. Called from the fan-out, so it runs on a worker thread
+   — `nido.review.frontend/emit-fn` serializes on our behalf.
+
+   Best-effort for the same reason as announce-targets!: a review that finished
+   must not be lost because the event describing it could not be sent."
+  [ctx status t extra]
+  (when-let [emit (get-in ctx [:config :emit])]
+    (try
+      (emit (merge {:event  :target-moved
+                    :iter   (:iter ctx)
+                    :at     (str (java.time.Instant/now))
+                    :label  (:label t)
+                    :status status}
+                   extra))
+      (catch Throwable _ nil))))
+
 (def review-stage
   "Every layer and the whole stack, reviewed in one round.
 
@@ -222,11 +239,16 @@
                  results (in-parallel
                           max-concurrent-reviews
                           (map (fn [t]
-                                 #(assoc (codex/review!
-                                          {:cwd cwd :run-id run-id :iter (:iter ctx)
-                                           :from (:from t) :to (:to t)
-                                           :label (:label t) :brief (:brief t)})
-                                         :target t))
+                                 #(do
+                                    (announce-target! ctx "running" t nil)
+                                    (let [r (assoc (codex/review!
+                                                    {:cwd cwd :run-id run-id :iter (:iter ctx)
+                                                     :from (:from t) :to (:to t)
+                                                     :label (:label t) :brief (:brief t)})
+                                                   :target t)]
+                                      (announce-target! ctx "reviewed" t
+                                                        {:findings (count (:findings r))})
+                                      r)))
                                targets))
                  whole    (or (first (filter #(:stack? (:target %)) results))
                               (first results))

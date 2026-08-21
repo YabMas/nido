@@ -174,3 +174,51 @@
     (let [parsed (json/parse-string (slurp path) true)]
       (is (= "running" (:status parsed)))
       (is (= 1 (:schema parsed))))))
+
+;; ---- rows moving while the phase is still running ------------------------
+
+(def ^:private resolved
+  [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+   {:event :phase-started :iter 1 :phase :review :at "t1"}
+   {:event :targets-resolved :iter 1 :at "t1a" :base-rev "BASE" :files []
+    :targets [{:label "lower" :stack? false :status "pending"}
+              {:label "upper" :stack? false :status "pending"}
+              {:label "stack" :stack? true  :status "pending"}]}])
+
+(defn- rows [r]
+  (:layers (first (:phases (first (:rounds r))))))
+
+(deftest a-target-moves-its-own-row-and-only-its-own
+  (let [r (drive (concat resolved
+                         [{:event :target-moved :iter 1 :at "t2"
+                           :label "lower" :status "running"}
+                          {:event :target-moved :iter 1 :at "t3"
+                           :label "lower" :status "reviewed" :findings 2}]))]
+    (is (= ["reviewed" "pending" "pending"] (mapv :status (rows r))))
+    (is (= 2 (:findings (first (rows r)))))))
+
+(deftest a-row-never-moves-backwards
+  ;; Targets report from worker threads; a late `running` arriving after the
+  ;; `reviewed` it belongs to must not un-finish a target that is done.
+  (let [r (drive (concat resolved
+                         [{:event :target-moved :iter 1 :at "t2"
+                           :label "lower" :status "reviewed" :findings 1}
+                          {:event :target-moved :iter 1 :at "t3"
+                           :label "lower" :status "running"}]))]
+    (is (= "reviewed" (:status (first (rows r)))))
+    (is (= 1 (:findings (first (rows r)))))))
+
+(deftest a-move-for-an-unknown-label-changes-nothing
+  (let [r (drive (concat resolved
+                         [{:event :target-moved :iter 1 :at "t2"
+                           :label "not-a-target" :status "reviewed" :findings 9}]))]
+    (is (= ["pending" "pending" "pending"] (mapv :status (rows r))))))
+
+(deftest a-skipped-row-is-not-reopened-by-a-move
+  (let [r (drive (concat [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+                          {:event :phase-started :iter 1 :phase :review :at "t1"}
+                          {:event :targets-resolved :iter 1 :at "t1a" :base-rev "B" :files []
+                           :targets [{:label "done" :stack? false :status "skipped"}]}]
+                         [{:event :target-moved :iter 1 :at "t2"
+                           :label "done" :status "running"}]))]
+    (is (= "skipped" (:status (first (rows r)))))))

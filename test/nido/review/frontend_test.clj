@@ -3,7 +3,8 @@
    [clojure.test :refer [deftest is]]
    [cheshire.core :as json]
    [babashka.fs :as fs]
-   [nido.review.frontend :as frontend]))
+   [nido.review.frontend :as frontend]
+   [nido.review.report :as report]))
 
 (def clock (constantly (java.time.Instant/parse "2026-06-30T14:00:00Z")))
 
@@ -63,3 +64,31 @@
     ;; emitted contiguously right before the final block.
     (is (re-find #"\x1b\[\d+A\x1b\[0J\x1b\[\?25h" out)
         "final summary overwrites the live frame instead of appending below it")))
+
+(deftest emit-survives-concurrent-callers
+  ;; The review stage fans out and each target reports as it finishes, so emit
+  ;; is called from several threads at once. persist! stages through one fixed
+  ;; <path>.tmp, so an unserialized emit can rename a half-written file.
+  (let [d (str (fs/create-temp-dir))]
+    (let [path (str (fs/path d "report.json"))
+          a    (atom (report/init {:run-id "r" :cwd "/w" :base "main"
+                                   :started-at "t0"}))
+          emit (frontend/emit-fn a path (constantly "t") false)]
+      (emit {:event :phase-started :iter 1 :phase :review :at "t1"})
+      (emit {:event :targets-resolved :iter 1 :at "t1a" :base-rev "B" :files []
+             :targets (mapv (fn [i] {:label (str "l" i) :stack? false
+                                     :status "pending"})
+                            (range 24))})
+      (->> (range 24)
+           (mapv (fn [i]
+                   (future (emit {:event :target-moved :iter 1 :at "t2"
+                                  :label (str "l" i) :status "reviewed"
+                                  :findings i}))))
+           (run! deref))
+      (let [rows (:layers (first (:phases (first (:rounds @a)))))]
+        (is (= 24 (count rows)))
+        (is (every? #(= "reviewed" (:status %)) rows)
+            "every concurrent report landed"))
+      (let [on-disk (json/parse-string (slurp path) true)]
+        (is (= "running" (:status on-disk))
+            "the persisted file is complete JSON, not a torn write")))))
