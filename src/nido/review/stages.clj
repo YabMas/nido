@@ -556,6 +556,26 @@
   [history label]
   (boolean (some (fn [h] (some #(= label (:layer %)) (:fixes h))) history)))
 
+(defn- with-working-copy-restored
+  "Run `f`, and whatever happens put the working copy back on top of `stack`
+   before returning or before the failure propagates.
+
+   The invariant this defends is that the fix stage NEVER hands back a working
+   copy parked mid-stack. A fix inserts onto its own layer, so a plan that dies
+   part-way through — a layer that will not position, a fixer that blows its
+   budget — leaves `@` somewhere inside the stack, and from there `<base>..@`
+   no longer spans the branch. The next run would then review a truncated stack
+   without ever saying so.
+
+   The restore is best-effort BECAUSE it runs on the failure path: a restore
+   that also fails must not replace the diagnosis the caller is about to see."
+  [cwd stack f]
+  (try
+    (f)
+    (catch Throwable t
+      (try (layers/restore-top! cwd stack) (catch Throwable _ nil))
+      (throw t))))
+
 (def fix-stage
   "Fixes run only after every finding has an owner, one layer at a time,
    bottom→top.
@@ -574,7 +594,9 @@
                (if (empty? plan)
                  (assoc ctx :control :stop :status :fix-noop)
                  (let [ctx'
-                       (reduce
+                       (with-working-copy-restored
+                        cwd stack
+                        #(reduce
                         (fn [acc {:keys [label layer findings]}]
                           (layers/position-for-fix! cwd layer)
                           (let [{:keys [num-turns]}
@@ -598,7 +620,7 @@
                                 (update acc :fixes (fnil conj [])
                                         {:layer label :commit cid
                                          :fixed-count (count findings)})))))
-                        ctx plan)]
+                          ctx plan))]
                    (if (empty? (:fixes ctx'))
                      (assoc ctx' :control :stop :status :fix-noop)
                      (update ctx' :history (fnil conj [])

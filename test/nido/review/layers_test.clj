@@ -198,3 +198,19 @@
                            {:exit 0 :out layer-message :err ""})]
       (is (= :mechanical (:mode (layers/brief "/w" "cB"))))
       (is (some #{"cB"} (first @calls))))))
+
+(deftest restore-top-fails-loud-rather-than-parking-the-working-copy-mid-stack
+  ;; Swallowing the exit code here does not degrade this run, it corrupts the
+  ;; next one: `<base>..@` read from mid-stack spans fewer layers than the
+  ;; branch has, and the review reports success over the part it could see.
+  (with-redefs [jj/jj! (fn [& _] {:exit 1 :out "" :err "Revision doesn't exist"})]
+    (let [e (is (thrown? clojure.lang.ExceptionInfo
+                         (layers/restore-top! "/w" [{:bookmark "sess--top"}])))]
+      (is (= :review-failed (:reason (ex-data e))))
+      (is (str/includes? (ex-message e) "sess--top")))))
+
+(deftest restore-top-is-a-no-op-on-an-empty-stack
+  (let [calls (atom [])]
+    (with-redefs [jj/jj! (stub-log "" calls)]
+      (is (nil? (layers/restore-top! "/w" [])))
+      (is (empty? @calls)))))

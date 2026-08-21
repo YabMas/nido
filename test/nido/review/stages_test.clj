@@ -397,3 +397,36 @@
   ;; assumed one was present would break every caller that does not care.
   (is (nil? (stages/announce-targets! {:iter 1 :config {:cwd "/tmp"}}
                                       {:review [] :skipped []}))))
+
+(deftest fix-stage-returns-the-working-copy-to-the-top-when-a-layer-dies
+  ;; A fix inserts onto its own layer, so a plan that dies part-way through
+  ;; leaves `@` inside the stack — and from there `<base>..@` no longer spans
+  ;; the branch. The next run would review a truncated stack and say nothing.
+  (let [stack     [{:bookmark "sess--lower" :slug "lower" :tip "c1"}
+                   {:bookmark "sess--top" :slug "top" :tip "c2"}]
+        restored  (atom [])]
+    (with-redefs [stages/session-stack      (fn [& _] stack)
+                  layers/position-for-fix!  (fn [_ layer]
+                                              (throw (ex-info (str "cannot position " (:bookmark layer))
+                                                              {:reason :review-failed})))
+                  layers/restore-top!       (fn [_ s] (swap! restored conj (:bookmark (last s))))
+                  agent/launch!             (fn [_] {:num-turns 1})]
+      (let [e (is (thrown? clojure.lang.ExceptionInfo
+                           ((:run stages/fix-stage)
+                            {:config {:cwd "/w" :run-id "r1" :impl-session-id "impl-1"} :iter 1
+                             :findings [{:id "aa11" :disposition :fix :owner-layer "lower"}]})))]
+        (is (str/includes? (ex-message e) "cannot position sess--lower")
+            "the original diagnosis reaches the caller, not the restore's")
+        (is (= ["sess--top"] @restored)
+            "the working copy is put back on the top layer before the failure propagates")))))
+
+(deftest fix-stage-restore-failure-never-masks-the-original-diagnosis
+  (with-redefs [stages/session-stack     (fn [& _] [{:bookmark "sess--top" :slug "top" :tip "c1"}])
+                layers/position-for-fix! (fn [& _] (throw (ex-info "the real problem" {:reason :review-failed})))
+                layers/restore-top!      (fn [& _] (throw (ex-info "restore also failed" {})))
+                agent/launch!            (fn [_] {:num-turns 1})]
+    (let [e (is (thrown? clojure.lang.ExceptionInfo
+                         ((:run stages/fix-stage)
+                          {:config {:cwd "/w" :run-id "r1" :impl-session-id "impl-1"} :iter 1
+                           :findings [{:id "aa11" :disposition :fix :owner-layer "top"}]})))]
+      (is (= "the real problem" (ex-message e))))))

@@ -226,7 +226,20 @@
    exist` and leaves the working copy stranded mid-stack.
 
    Also cleans up after a fixer that changed nothing: the empty commit the
-   insert created is abandoned by the same rule when we move away from it."
+   insert created is abandoned by the same rule when we move away from it.
+
+   **Fails loud.** Swallowing jj's exit code here does not degrade the run, it
+   corrupts the next one: the working copy stays parked mid-stack, so every
+   later `<base>..@` read sees a TRUNCATED stack and silently reviews fewer
+   layers than the branch has. A crash is recoverable; a review that quietly
+   skipped half the stack while reporting success is not."
   [cwd stack]
   (when-let [top (last stack)]
-    (jj/jj! cwd "new" (:bookmark top))))
+    (let [{:keys [exit err]} (jj/jj! cwd "new" (:bookmark top))]
+      (when-not (zero? exit)
+        (throw (ex-info (str "could not return the working copy to the top of the stack ("
+                             (:bookmark top) ") — " err
+                             "\nThe working copy is parked mid-stack: move it back with"
+                             " `jj new " (:bookmark top) "` before reviewing again,"
+                             " or the next run will see a truncated stack.")
+                        {:reason :review-failed :cwd cwd :layer top}))))))
