@@ -64,8 +64,9 @@ Two rules fall straight out of the table:
   wrong. Asking a priming document to adjudicate a specific line produces
   confabulated specificity.
 - **Cite the stance** when the question is which register you are in, whether a
-  boundary is carrying its weight, or whether what the code does is intent or
-  drift. That is what it is for.
+  boundary is carrying its weight, whether a structure is complexity the problem
+  ever asked for, or whether what the code does is intent or drift. That is what
+  it is for.
 
 ## 2. The record
 
@@ -214,7 +215,9 @@ rather than a bug-triage nicety.
 
 Reading code tells you what is there, including the accidents, the half-finished
 migrations, and the patterns that were never decided, only copied. The stance is
-what separates them. The most valuable sentence a survey produces is often:
+what separates them, and its sharpest form is the essential/accidental question:
+what here did the problem require, and what did our solution introduce? The most
+valuable sentence a survey produces is often:
 
 > the current design here is X; per the stance, X is drift rather than intent
 
