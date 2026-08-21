@@ -517,6 +517,16 @@
    :task (System/exit (nido-review/exit-code
                         (apply nido-review/loop-cmd *command-line-args*)))}
 
+  nido:review:baseline
+  {:requires ([tasks.nido-review :as nido-review])
+   :doc "Verify the workstream's latest baseline against the code, before any design. [:cwd <dir>]"
+   :task (apply nido-review/baseline-cmd *command-line-args*)}
+
+  nido:review:design
+  {:requires ([tasks.nido-review :as nido-review])
+   :doc "Decision round over the latest design record, before any code. [:goals \"...\"] [:cwd <dir>]"
+   :task (apply nido-review/design-cmd *command-line-args*)}
+
   nido:work
   {:requires ([tasks.nido-work :as nido-work])
    :doc "Boot an interactive agent in the current worktree with nido context injected. Default :agent claude; supports :agent codex."

@@ -602,6 +602,42 @@
     (is (< (str/index-of html "Design health") (str/index-of html "Implementation health"))
         "design health leads — it is the half that can change the declared relation")))
 
+(deftest workstream-pane-renders-a-baseline-review
+  (let [ws   (assoc sample-ws :report
+                    {:format :baseline-review :verdict :falsified :baseline-seq 3
+                     :reason "invoice.clj sums lines directly"
+                     :confirmed ["line amounts are never rounded in place"]
+                     :findings [{:cites ["the aggregate is the only summing path"]
+                                 :claim "invoice.clj sums lines directly"
+                                 :evidence ["src/order/invoice.clj:88"]}]})
+        html (views/workstream-pane ws {})]
+    (is (str/includes? html "Baseline review"))
+    (is (str/includes? html "falsified"))
+    (is (str/includes? html "the aggregate is the only summing path"))
+    (is (str/includes? html "src/order/invoice.clj:88"))
+    (is (str/includes? html "Re-survey")
+        "falsified means the premise was wrong, not the design — and the two
+         have different remedies")))
+
+(deftest workstream-pane-never-folds-what-the-decision-round-derived
+  (let [ws   (assoc sample-ws :report
+                    {:format :design-decision :recommend :proceed :design-seq 4
+                     :reason "nothing derivable blocks it"
+                     :checks [{:check :relation-honest :held? true :note "within holds"}
+                              {:check :goal-served :held? false
+                               :note "a smaller design would also serve it"}]
+                     :asks "worth doing now, at M?"})
+        html (views/workstream-pane ws {})]
+    (is (str/includes? html "Design decision"))
+    (is (str/includes? html "Derived — already ruled on"))
+    (is (str/includes? html "relation-honest"))
+    (is (str/includes? html "a smaller design would also serve it"))
+    (is (str/includes? html "For you to decide"))
+    (is (str/includes? html "worth doing now, at M?"))
+    (is (not (str/includes? html "<details" ))
+        "a reader who cannot see what was already ruled out has been handed an
+         unreduced question after all")))
+
 (deftest workstream-pane-renders-a-verdict-with-broken-load-bearing-properties
   (let [ws   (assoc sample-ws :report
                     {:format :design-verdict :verdict :invalidated :round 3

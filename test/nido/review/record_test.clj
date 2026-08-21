@@ -1,0 +1,254 @@
+(ns nido.review.record-test
+  "The pure half of a round over a record: whether it is worth running, what the
+   prompt puts in front of the judge, and what an answer has to look like to be
+   recorded. The codex call itself is a seam and is not exercised here."
+  (:require
+   [cheshire.core :as json]
+   [clojure.string :as str]
+   [clojure.test :refer [deftest is]]
+   [nido.coordinator.report :as report]
+   [nido.review.record :as record]))
+
+(def ^:private baseline
+  {:format       :baseline
+   :seq          3
+   :area         "order totalling"
+   :bounded-by   "everything that reads or writes a money amount on an order"
+   :shape        "The aggregate is the only thing that sums lines."
+   :load-bearing [{:property "the aggregate is the only summing path"
+                   :evidence ["src/order/aggregate.clj:12"]}]
+   :health       [{:id "invoice-resums" :axis :design
+                   :observation "two summing paths where the design claims one"
+                   :evidence ["src/order/invoice.clj:88"]}]
+   :read         ["src/order/aggregate.clj"]
+   :unknowns     ["whether the CSV importer bypasses the aggregate"]})
+
+(def ^:private design
+  {:format     :design
+   :seq        4
+   :summary    "Rounding moves to a single point on the order total."
+   :shape      "One rounding boundary at the order aggregate."
+   :invariants ["a total is rounded exactly once"]
+   :standing   {:relation :conforms}
+   :baseline   {:seq 3 :relation :within}
+   :effort     :M})
+
+;; ── Worth running ───────────────────────────────────────────────────────────
+
+(deftest a-baseline-with-checkable-claims-is-worth-verifying
+  (is (record/baseline-round-worth-running? baseline))
+  (is (record/baseline-round-worth-running?
+       (assoc baseline :load-bearing [] :health (:health baseline)))
+      "health alone is checkable — every observation carries evidence"))
+
+(deftest a-baseline-with-nothing-checkable-is-not
+  (is (not (record/baseline-round-worth-running? nil)))
+  (is (not (record/baseline-round-worth-running?
+            (dissoc (assoc baseline :load-bearing []) :health)))
+      "nothing to refute means a round could only produce prose"))
+
+(deftest a-design-claiming-it-moves-nothing-gets-no-decision-round
+  (is (not (record/design-round-worth-running? design))
+      ":within + :conforms + modest effort is a claim that is cheap to
+       spot-check; paying for a decision round there is the cost this guards"))
+
+(deftest every-declared-reason-to-doubt-triggers-the-round
+  (is (record/design-round-worth-running?
+       (assoc design :baseline {:seq 3 :relation :revisit
+                                :breaks ["the aggregate is the only summing path"]
+                                :note "the boundary has to move"})))
+  (is (record/design-round-worth-running?
+       (assoc design :standing {:relation :challenges :note "money needs mutability"})))
+  (is (record/design-round-worth-running? (assoc design :effort :L)))
+  (is (record/design-round-worth-running?
+       (assoc design :routes [{:health-id "invoice-resums" :to :spin-out
+                               :why "revealed, not created" :ref "FU-88"}]))
+      "an observation routed anywhere but fix-here is a scope decision, and
+       scope decisions are what the round exists to put to a human")
+  (is (not (record/design-round-worth-running?
+            (assoc design :routes [{:health-id "invoice-resums" :to :fix-here}])))
+      "routing everything to fix-here decides nothing that needs deciding"))
+
+;; ── What the judge is shown ─────────────────────────────────────────────────
+
+(deftest the-baseline-prompt-hands-over-the-evidence-refs
+  (let [p (record/baseline-prompt {:baseline baseline})]
+    (is (str/includes? p "src/order/aggregate.clj:12")
+        "the refs ARE the check — going to read them is the whole job")
+    (is (str/includes? p "src/order/invoice.clj:88"))
+    (is (str/includes? p "ACCURATE IS THE EXPECTED OUTCOME"))
+    (is (str/includes? p "MUST cite"))
+    (is (str/includes? p "UNDERSCOPED"))
+    (is (str/includes? p "whether the CSV importer bypasses the aggregate")
+        "a declared unknown is honesty already recorded, not a finding to make")))
+
+(deftest the-decision-prompt-carries-the-four-derivations-and-the-answer-key
+  (let [p (record/design-prompt
+           {:design (assoc design
+                           :rejected [{:alternative "round at render time"
+                                       :why-not "moves money math into the view"}]
+                           :layers [{:claim "extract the aggregate" :mode :judgment}])
+            :baseline baseline
+            :stance "two registers of data"
+            :goals "stop the checkout being off by a cent"})]
+    (is (str/includes? p "relation-honest"))
+    (is (str/includes? p "goal-served"))
+    (is (str/includes? p "decomposable"))
+    (is (str/includes? p "routing-coherent"))
+    (is (str/includes? p "ALREADY REJECTED")
+        "without the answer key the round re-proposes what was already rejected")
+    (is (str/includes? p "round at render time"))
+    (is (str/includes? p "stop the checkout being off by a cent"))
+    (is (str/includes? p "You do not make the decision"))
+    (is (str/includes? p "Never answer it yourself"))))
+
+(deftest the-decision-prompt-survives-a-design-with-no-baseline-or-stance
+  (is (string? (record/design-prompt {:design design}))
+      "framing is optional everywhere else in this system; it is here too"))
+
+(def ^:private legacy-design
+  "A :design from before the baseline event: no :baseline, and still readable."
+  {:format :design :summary "s" :shape "sh" :invariants ["i"]
+   :standing {:relation :conforms} :effort :M})
+
+(deftest a-legacy-design-qualifies-for-a-round
+  (is (record/design-round-worth-running? legacy-design)
+      "its absent baseline relation is not :within, so it qualifies — which is
+       exactly why the prompt has to survive it"))
+
+(deftest a-legacy-design-does-not-crash-the-prompt
+  (let [p (record/design-prompt {:design legacy-design})]
+    (is (string? p))
+    (is (str/includes? p "Declared against the baseline: NOTHING")
+        "the degrade this area takes everywhere else — say the yardstick is
+         absent rather than invent one")
+    (is (str/includes? p "not itself a finding")))
+  ;; The regression this pins: the prompt is built as an ARGUMENT to run-round!,
+  ;; so it is evaluated outside that function's catch. A throw here does not
+  ;; degrade to "no answer recorded" — it takes the whole task down. :baseline is
+  ;; the only field a ledger-legal design can be missing that the prompt calls
+  ;; `name` on; :standing is required by both the current and the legacy schema.
+  (is (string? (record/design-prompt {:design legacy-design
+                                      :baseline nil :stance nil :goals nil}))
+      "every other framing input is already optional and stays so"))
+
+;; ── What counts as an answer ────────────────────────────────────────────────
+
+(defn- baseline-json [m] (json/generate-string m))
+
+(deftest an-accurate-baseline-review-parses-and-needs-no-findings
+  (let [r (record/parse-baseline-review
+           (baseline-json {:verdict "accurate" :reason "both claims held"
+                           :confirmed ["the aggregate is the only summing path"]
+                           :findings []})
+           3)]
+    (is (= :accurate (:verdict r)))
+    (is (= 3 (:baseline-seq r)))
+    (is (= ["the aggregate is the only summing path"] (:confirmed r)))
+    (is (nil? (:findings r)))
+    (is (= r (report/validate-event :baseline-review r))
+        "whatever the parser emits has to satisfy the ledger write contract")))
+
+(deftest a-falsified-baseline-review-carries-its-citations
+  (let [r (record/parse-baseline-review
+           (baseline-json {:verdict "falsified" :reason "invoice re-sums"
+                           :confirmed []
+                           :findings [{:cites ["the aggregate is the only summing path"]
+                                       :claim "invoice.clj sums lines directly"
+                                       :evidence ["src/order/invoice.clj:88"]}]})
+           3)]
+    (is (= :falsified (:verdict r)))
+    (is (= 1 (count (:findings r))))
+    (is (= r (report/validate-event :baseline-review r)))))
+
+(deftest a-finding-that-cites-nothing-is-dropped
+  (is (nil? (record/parse-baseline-review
+             (baseline-json {:verdict "falsified" :reason "vibes"
+                             :findings [{:cites [] :claim "feels shaky"
+                                         :evidence []}]})
+             3))
+      "a non-accurate verdict whose findings all cite nothing is the theatre
+       this round exists to prevent — read it as no answer, not as a verdict"))
+
+(deftest an-unknown-verdict-is-a-non-answer
+  (is (nil? (record/parse-baseline-review
+             (baseline-json {:verdict "looks-fine" :reason "" :findings []}) 3)))
+  (is (nil? (record/parse-baseline-review "not json at all" 3))
+      "nil is a non-answer; the caller records nothing rather than inventing
+       trust it did not earn"))
+
+(deftest a-proceed-decision-parses-with-its-derivations
+  (let [r (record/parse-design-decision
+           (json/generate-string
+            {:recommend "proceed" :reason "nothing derivable blocks it"
+             :checks [{:check "relation_honest" :held true :note "within holds"}
+                      {:check "goal_served" :held true :note "no smaller design"}
+                      {:check "decomposable" :held true :note "two layers state cleanly"}
+                      {:check "routing_coherent" :held true :note "one story"}]
+             :findings []
+             :asks "worth doing now, at M, given the invoice work queued behind it?"})
+           4)]
+    (is (= :proceed (:recommend r)))
+    (is (= 4 (count (:checks r))))
+    (is (every? :held? (:checks r)))
+    (is (str/includes? (:asks r) "worth doing now"))
+    (is (= r (report/validate-event :design-decision r)))))
+
+(deftest a-decision-without-asks-is-a-non-answer
+  (is (nil? (record/parse-design-decision
+             (json/generate-string
+              {:recommend "proceed" :reason "fine"
+               :checks [{:check "relation_honest" :held true :note "ok"}]
+               :findings [] :asks ""})
+             4))
+      "the round prepares an approval; one that asks nothing has granted it"))
+
+(deftest a-decision-that-derived-nothing-is-a-non-answer
+  (is (nil? (record/parse-design-decision
+             (json/generate-string
+              {:recommend "proceed" :reason "looks good to me"
+               :checks [] :findings [] :asks "ship it?"})
+             4))
+      "handing a human an unreduced question is the rubber stamp with garnish"))
+
+(deftest a-non-proceed-recommendation-must-carry-findings
+  (is (nil? (record/parse-design-decision
+             (json/generate-string
+              {:recommend "recut" :reason "feels wrong"
+               :checks [{:check "decomposable" :held false :note "cannot state layers"}]
+               :findings [] :asks "recut?"})
+             4))
+      "saying the design is wrong without citing anything is the same theatre"))
+
+;; ── A round that could not run is not a round that found nothing ───────────
+;; The one confusion a judgment surface cannot afford. Silence from a judge is
+;; evidence; silence from a missing binary is not, and one nil for both invites
+;; the second to be read as the first.
+
+(deftest a-round-outside-a-session-says-so
+  (let [r (record/baseline-review! {:cwd "/definitely/not/a/session" :run-id "x"})]
+    (is (= :no-workstream (:outcome r)))
+    (is (string? (:detail r)))
+    (is (nil? (:format r)) "an outcome is never mistaken for a record")))
+
+(deftest an-outcome-is-never-appended-as-a-record
+  (is (nil? (record/append! "/definitely/not/a/session"
+                            {:outcome :codex-failed :detail "exit 127"}))
+      "append! writes records, and an outcome is not one — appending it would
+       put 'the judge did not run' into the ledger as a judgment"))
+
+(deftest each-remedy-parses-distinctly
+  (doseq [[in out] {"amend" :amend "recut" :recut "resurvey" :resurvey}]
+    (let [r (record/parse-design-decision
+             (json/generate-string
+              {:recommend in :reason "…"
+               :checks [{:check "goal_served" :held false :note "a smaller design does"}]
+               :findings [{:cites ["a total is rounded exactly once"]
+                           :claim "the smaller design already satisfies it"
+                           :evidence ["src/order/aggregate.clj:12"]}]
+               :asks "which way?"})
+             4)]
+      (is (= out (:recommend r))
+          "redesign, recut and re-survey are different instructions; collapsing
+           them is worse than saying nothing")
+      (is (= r (report/validate-event :design-decision r))))))

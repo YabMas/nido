@@ -1,0 +1,48 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["recommend", "reason", "checks", "findings", "asks"],
+  "properties": {
+    "recommend": {
+      "type": "string",
+      "enum": ["proceed", "amend", "recut", "resurvey"],
+      "description": "proceed: nothing derivable blocks it. amend: a derivable defect in the record. recut: the decomposition does not hold. resurvey: the premise is wrong, not the commitment."
+    },
+    "reason": { "type": "string" },
+    "checks": {
+      "type": "array",
+      "description": "The four derivations, each with what you found. Never empty.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["check", "held", "note"],
+        "properties": {
+          "check": {
+            "type": "string",
+            "enum": ["relation_honest", "goal_served", "decomposable", "routing_coherent"]
+          },
+          "held": { "type": "boolean" },
+          "note": { "type": "string" }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "description": "Empty when recommending proceed. Every entry must cite what it falsifies.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["cites", "claim", "evidence"],
+        "properties": {
+          "cites": { "type": "array", "items": { "type": "string" } },
+          "claim": { "type": "string" },
+          "evidence": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "asks": {
+      "type": "string",
+      "description": "The question the human still has to answer, with everything derived taken off the table. Required whatever you recommend. Never answer it yourself."
+    }
+  }
+}

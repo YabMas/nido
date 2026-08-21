@@ -1,0 +1,40 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdict", "reason", "confirmed", "findings"],
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": ["accurate", "falsified", "underscoped"],
+      "description": "accurate is the expected outcome. falsified: a stated claim is not true of the code. underscoped: the bound excludes something that governs the behaviour."
+    },
+    "reason": { "type": "string" },
+    "confirmed": {
+      "type": "array",
+      "description": "Claims you actually went and checked, and which held.",
+      "items": { "type": "string" }
+    },
+    "findings": {
+      "type": "array",
+      "description": "Empty when the verdict is accurate. Every entry must cite what it falsifies.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["cites", "claim", "evidence"],
+        "properties": {
+          "cites": {
+            "type": "array",
+            "description": "The exact property or observation text this refutes. Never empty.",
+            "items": { "type": "string" }
+          },
+          "claim": { "type": "string" },
+          "evidence": {
+            "type": "array",
+            "description": "file:line references that support the refutation.",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}

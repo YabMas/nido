@@ -838,6 +838,103 @@
      [:findings-classified {:optional true} [:vector ClassifiedFinding]]
      [:needs string?]]]])
 
+(def RecordFinding
+  "One finding from a judgment over a RECORD rather than over a diff.
+
+   :cites is required and non-empty, and it carries the whole anti-theatre rule.
+   A pre-implementation round has no diff to be wrong about, so an agent asked
+   'is this any good?' produces fluent, unfalsifiable findings forever. A finding
+   has to name the thing it falsifies — a load-bearing property, a health
+   observation, an invariant, a stance principle, an :open item, or a rejected
+   alternative whose reason no longer holds. A finding citing nothing is not a
+   finding, and the schema is where that stops being a hope."
+  [:map {:closed true}
+   [:cites    [:vector {:min 1} string?]]
+   [:claim    string?]
+   [:evidence {:optional true} [:vector string?]]])
+
+(def BaselineReview
+  "The verification round over a survey: is this true, and is it complete enough
+   to decide against?
+
+   Near-mechanical by construction — every load-bearing property and health
+   observation carries file:line evidence, so checking one is 'go read it'. That
+   makes this the cheapest and most decidable round in the lifecycle, and the one
+   that protects everything above it: a design can be perfectly sound on a survey
+   that was wrong, and nothing else detects that before the code is written.
+
+   Two failure modes, and they are the two the skill names. :falsified — a stated
+   property is not true of the code. :underscoped — the bound excludes something
+   that governs the behaviour, which is the one that hides design flaws, since
+   the flaw is routinely upstream of the blast radius. Both mean re-survey, never
+   redesign.
+
+   :accurate is the expected outcome and names what it CONFIRMED, for the same
+   reason the design verdict's :sound does: a clean round should accumulate trust
+   rather than evaporate."
+  (let [common [[:format       [:= :baseline-review]]
+                [:baseline-seq int?]
+                [:reason       string?]
+                [:confirmed    {:optional true} [:vector string?]]]
+        shape  (fn [verdict & extra]
+                 (into [:map {:closed true}]
+                       (concat common [[:verdict [:= verdict]]] extra)))]
+    [:multi {:dispatch :verdict}
+     [:accurate    (shape :accurate)]
+     [:falsified   (shape :falsified   [:findings [:vector {:min 1} RecordFinding]])]
+     [:underscoped (shape :underscoped [:findings [:vector {:min 1} RecordFinding]])]]))
+
+(def DerivedCheck
+  "One thing the decision round worked out for itself, so a human does not have
+   to. The four are the derivable no-answers — each is decidable from the records
+   plus the code, and none of them is a matter of taste:
+
+     :relation-honest  — the design declares :within, but its own shape needs a
+                         load-bearing property to move
+     :goal-served      — the goal is met by a strictly smaller design the record
+                         already rejected, for a reason that no longer holds
+     :decomposable     — the layering cannot be stated, so there is nothing to
+                         approve yet
+     :routing-coherent — the health routes make this two stories rather than one
+
+   :checks is required and non-empty. A decision round that derived nothing did
+   not reduce anything, and handing a human an unreduced question is the rubber
+   stamp this round exists to avoid."
+  [:map {:closed true}
+   [:check [:enum :relation-honest :goal-served :decomposable :routing-coherent]]
+   [:held? boolean?]
+   [:note  string?]])
+
+(def DesignDecision
+  "The pre-implementation decision round — the only point in the lifecycle where
+   'don't build this' is still cheap, and the one round that is a DECISION rather
+   than a verification.
+
+   Which is why it never decides. Asked 'should we?', a model returns yes-with-
+   suggestions forever, so the question is split by who can answer it: everything
+   derivable is derived into :checks, and :asks carries the irreducible judgement
+   — worth doing, now, at this cost — to a human. :asks is required on every
+   branch, :recommend included: this round prepares an approval, it does not
+   grant one.
+
+   :recommend is what the derivation supports. :proceed means nothing derivable
+   blocks it. The other three each name a different remedy, and saying the wrong
+   one is worse than saying nothing: :amend fixes the record, :recut redoes the
+   decomposition, :resurvey fixes the premise and leaves the commitment alone."
+  (let [common [[:format     [:= :design-decision]]
+                [:design-seq int?]
+                [:reason     string?]
+                [:checks     [:vector {:min 1} DerivedCheck]]
+                [:asks       string?]]
+        shape  (fn [recommend & extra]
+                 (into [:map {:closed true}]
+                       (concat common [[:recommend [:= recommend]]] extra)))]
+    [:multi {:dispatch :recommend}
+     [:proceed  (shape :proceed)]
+     [:amend    (shape :amend    [:findings [:vector {:min 1} RecordFinding]])]
+     [:recut    (shape :recut    [:findings [:vector {:min 1} RecordFinding]])]
+     [:resurvey (shape :resurvey [:findings [:vector {:min 1} RecordFinding]])]]))
+
 (def FindingItem
   [:map {:closed true}
    [:id       string?]
@@ -870,6 +967,8 @@
    :merged                   Merged
    :ship-submitted           ShipSubmitted
    :review                   ReviewReport
+   :baseline-review          BaselineReview
+   :design-decision          DesignDecision
    :design-verdict           DesignVerdict
    :findings                 FindingsRound
    :proposed-ticket          ProposedTicket})
@@ -1155,6 +1254,52 @@
        (when summary (str "\n" summary))
        (when report-path (str "\nfull report → " report-path))])))
 
+(defn- record-findings->markdown
+  "Findings from a round over a record. What each one CITES leads, because that
+   is what makes it a finding rather than an opinion."
+  [heading findings]
+  (when (seq findings)
+    (cons (str "\n## " heading)
+          (for [{:keys [cites claim evidence]} findings]
+            (str "- **" (str/join "; " cites) "** — " claim
+                 (when (seq evidence)
+                   (str "\n  - " (str/join ", " (map #(str "`" % "`") evidence)))))))))
+
+(defn- baseline-review->markdown
+  [{:keys [verdict baseline-seq reason confirmed findings]}]
+  (str/join
+   "\n"
+   (remove nil?
+     (concat
+      [(str "# Baseline review: " (name verdict))
+       (str "of entry " baseline-seq)
+       "" reason]
+      (when (seq confirmed)
+        (cons "\n## Confirmed against the code"
+              (for [c confirmed] (str "- " c))))
+      (record-findings->markdown
+       (case verdict
+         :underscoped "What the bound leaves out"
+         "Claims the code does not support")
+       findings)
+      (when (not= :accurate verdict)
+        ["\n> Re-survey — the design may be sound on a bad premise."])))))
+
+(defn- design-decision->markdown
+  [{:keys [recommend design-seq reason checks asks findings]}]
+  (str/join
+   "\n"
+   (remove nil?
+     (concat
+      [(str "# Design decision: " (name recommend))
+       (str "of entry " design-seq)
+       "" reason
+       "\n## Derived — already ruled on, so you do not have to"]
+      (for [{:keys [check held? note]} checks]
+        (str "- " (if held? "✓" "✗") " " (name check) " — " note))
+      (record-findings->markdown "What the derivation found" findings)
+      ["\n## For you to decide" asks]))))
+
 (defn- design-verdict->markdown
   [{:keys [verdict round reason invariants-held invariants-broken
            load-bearing-held load-bearing-broken findings-classified needs]}]
@@ -1239,6 +1384,8 @@
     :merged                   (merged->markdown report)
     :ship-submitted           (ship-submitted->markdown report)
     :review-report            (review->markdown report)
+    :baseline-review          (baseline-review->markdown report)
+    :design-decision          (design-decision->markdown report)
     :design-verdict           (design-verdict->markdown report)
     :findings                 (findings->markdown report)
     :proposed-ticket          (proposed-ticket->markdown report)
@@ -1256,6 +1403,8 @@
     :implementation-completed (first-line (:summary report))
     :blocker                  (or (:needs report) (first-line (:summary report)))
     :review-report            (str "Review: " (name (:status report)))
+    :baseline-review          (str "Baseline review: " (name (:verdict report)))
+    :design-decision          (str "Design decision: " (name (:recommend report)))
     :design-verdict           (str "Design verdict: " (name (:verdict report)))
     :findings                 (str "Findings round " (:round report)
                                    " (" (count (:items report)) " items)")

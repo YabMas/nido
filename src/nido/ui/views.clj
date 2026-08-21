@@ -1011,6 +1011,57 @@
    (when needs
      [:div [:h3 "Needs a decision"] [:p needs]])])
 
+(defn- record-findings-list
+  "Findings from a round over a record. What each cites leads, because that is
+   what separates a finding from an opinion here."
+  [findings]
+  (into [:ul]
+        (for [{:keys [cites claim evidence]} findings]
+          [:li [:strong (str/join "; " cites)]
+           [:div claim]
+           (when (seq evidence)
+             [:div.meta (str/join ", " evidence)])])))
+
+(defn- baseline-review-card
+  [{:keys [verdict baseline-seq reason confirmed findings]}]
+  [:div.md
+   [:h2 "Baseline review"]
+   [:div.report-meta
+    [:span {:class (str "chip c-verdict-" (name verdict))} (name verdict)]
+    [:span.meta "of entry " baseline-seq]]
+   (md/render reason)
+   (when (seq findings)
+     [:div [:h3 (if (= :underscoped verdict)
+                  "What the bound leaves out"
+                  "Claims the code does not support")]
+      (record-findings-list findings)])
+   (when (not= :accurate verdict)
+     [:blockquote "Re-survey — the design may be sound on a bad premise."])
+   (when (seq confirmed)
+     [:details.trail
+      [:summary "Confirmed against the code (" (count confirmed) ")"]
+      (into [:ul] (for [c confirmed] [:li c]))])])
+
+(defn- design-decision-card
+  "The pre-implementation decision. What was DERIVED is never folded: it is the
+   whole point of the round, and a reader who cannot see what was already ruled
+   out has been handed an unreduced question after all."
+  [{:keys [recommend design-seq reason checks asks findings]}]
+  [:div.md
+   [:h2 "Design decision"]
+   [:div.report-meta
+    [:span {:class (str "chip c-recommend-" (name recommend))} (name recommend)]
+    [:span.meta "of entry " design-seq]]
+   (md/render reason)
+   [:h3 "Derived — already ruled on"]
+   (into [:ul]
+         (for [{:keys [check held? note]} checks]
+           [:li [:span.meta (if held? "✓ " "✗ ")] (name check)
+            [:div.meta note]]))
+   (when (seq findings)
+     [:div [:h3 "What the derivation found"] (record-findings-list findings)])
+   [:div [:h3 "For you to decide"] [:p asks]]])
+
 (defn- report-body
   "Dispatch a gate/ledger report on :format — each typed event gets its curated card,
    markdown reports render through md/render. `pos` is the workstream pane's reading
@@ -1028,6 +1079,8 @@
      :pr-opened                (pr-opened-card report)
      :merged                   (merged-card report)
      :ship-submitted           (ship-submitted-card report)
+     :baseline-review          (baseline-review-card report)
+     :design-decision          (design-decision-card report)
      :design-verdict           (design-verdict-card report)
      :review-report            (review-card report pos)
      :findings                 (md/render (report/report->markdown report))

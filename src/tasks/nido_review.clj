@@ -7,7 +7,9 @@
    [nido.coordinator.session :as csession]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.workstream :as ws]
+   [clojure.string :as str]
    [nido.review.frontend :as frontend]
+   [nido.review.record :as record]
    [nido.review.loop :as rloop]
    [nido.review.report :as report]
    [nido.review.verdict :as verdict]
@@ -142,3 +144,79 @@
 (defn loop-cmd [& args]
   (let [[_ opts] (task-args/split-args args)]
     (loop-cmd* opts)))
+
+;; ── Rounds over a record, before there is any code ──────────────────────────
+
+(defn- print-record-round!
+  "Report a record round on the terminal. Both are human-invoked, so the outcome
+   is stated here rather than filed somewhere nobody looks — and the two
+   non-accurate baseline verdicts and the three non-proceed recommendations each
+   point at a DIFFERENT remedy, so the remedy is named rather than implied."
+  [record]
+  (if-let [outcome (:outcome record)]
+    ;; Never one line for every way a round can produce nothing. A round that
+    ;; could not run is not a round that found nothing to say, and reading the
+    ;; second as the first is the one mistake a judgment surface must not invite.
+    (do (println (str "no judgment recorded — " (name outcome)))
+        (println (str "  " (:detail record)))
+        (println (str "  → " (case outcome
+                               :no-workstream    "run this from a nido session worktree"
+                               :no-record        "author the record first"
+                               :nothing-to-check "nothing in the survey is refutable yet"
+                               :not-worth-running "the records say a round would not pay here"
+                               :codex-failed     "the judge did not run — this is NOT a clean result"
+                               :no-output        "the judge ran and wrote nothing — NOT a clean result"
+                               :round-crashed    "the round threw before it could degrade"
+                               :unusable-answer  "the judge answered, but not in a form a record accepts"
+                               "unrecognised outcome"))))
+    (case (:format record)
+      :baseline-review
+      (do (println (str "baseline review: " (name (:verdict record))))
+          (println (str "  " (:reason record)))
+          (doseq [{:keys [cites claim]} (:findings record)]
+            (println (str "  ✗ " (str/join "; " cites)))
+            (println (str "      " claim)))
+          (when (not= :accurate (:verdict record))
+            (println "  → re-survey; the design may be sound on a bad premise")))
+
+      :design-decision
+      (do (println (str "design decision: " (name (:recommend record))))
+          (println (str "  " (:reason record)))
+          (doseq [{:keys [check held? note]} (:checks record)]
+            (println (str "  " (if held? "✓" "✗") " " (name check) " — " note)))
+          (doseq [{:keys [cites claim]} (:findings record)]
+            (println (str "  ✗ " (str/join "; " cites)))
+            (println (str "      " claim)))
+          (println (str "  → " (case (:recommend record)
+                                 :proceed  "nothing derivable blocks it"
+                                 :amend    "amend the record"
+                                 :recut    "the decomposition does not hold — recut the layers"
+                                 :resurvey "re-survey; the premise is wrong, not the commitment")))
+          (println "\n  FOR YOU TO DECIDE:")
+          (println (str "  " (:asks record))))
+
+      (println (str "recorded " (name (:format record)))))))
+
+(defn- record-round-cmd*
+  [round {:keys [cwd goals]}]
+  (let [cwd    (or cwd (lifecycle/worktree-from-cwd) (System/getProperty "user.dir"))
+        run-id (str (name round) "-" (random-uuid))
+        record (case round
+                 :baseline-review (record/baseline-review! {:cwd cwd :run-id run-id})
+                 :design-decision (record/design-decision! {:cwd cwd :run-id run-id
+                                                            :goals goals}))]
+    (record/append! cwd record)
+    (print-record-round! record)
+    record))
+
+(defn baseline-cmd
+  "Verify the workstream's latest baseline against the code."
+  [& args]
+  (let [[_ opts] (task-args/split-args args)]
+    (record-round-cmd* :baseline-review opts)))
+
+(defn design-cmd
+  "Run the pre-implementation decision round over the latest design record."
+  [& args]
+  (let [[_ opts] (task-args/split-args args)]
+    (record-round-cmd* :design-decision opts)))
