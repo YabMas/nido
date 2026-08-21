@@ -325,6 +325,43 @@
     :permanent (str "permanent — " why)
     nil))
 
+(def Route
+  "Where one health observation from the cited baseline goes. The baseline
+   observes and never routes, because routing needs the change; this is the
+   other half of that split, and the reason the observations carry ids.
+
+   Four destinations, and the asymmetry between them is deliberate. :fix-here is
+   the conservative default and defends itself — you are doing the work. The
+   other three are all forms of NOT doing it here, so each has to say why, the
+   same way :conforms needs no note and :extends does.
+
+   :spin-out additionally requires a :ref. 'We should clean this up later' in a
+   PR comment is a wish; the doctrine's rule is that there is no spin-out
+   without a ref, and this is where it stops being a matter of nerve.
+
+   :constrains is the destination for an observation that is not work at all —
+   it bounds what this change may leave behind. An observation the baseline
+   marked :invisibly-incomplete? can never be spun out, and the ledger enforces
+   that when the design is appended."
+  [:multi {:dispatch :to}
+   [:fix-here   [:map {:closed true}
+                 [:health-id string?]
+                 [:to        [:= :fix-here]]
+                 [:why       {:optional true} string?]]]
+   [:constrains [:map {:closed true}
+                 [:health-id string?]
+                 [:to        [:= :constrains]]
+                 [:why       string?]]]
+   [:spin-out   [:map {:closed true}
+                 [:health-id string?]
+                 [:to        [:= :spin-out]]
+                 [:why       string?]
+                 [:ref       string?]]]
+   [:declined   [:map {:closed true}
+                 [:health-id string?]
+                 [:to        [:= :declined]]
+                 [:why       string?]]]])
+
 (def Supersedes
   "Set when this record amends one the review found wrong. The superseded entry
    stays in the ledger — a design is amended and cited, never silently rewritten."
@@ -482,12 +519,17 @@
 (def ^:private design-common
   "The fields a :design record carries in every era. The three that differ across
    eras and across the phased/unphased split — :invariants, :seams, :phases — are
-   spliced in per shape rather than repeated."
+   spliced in per shape rather than repeated.
+
+   :routes is here rather than spliced because routing the cited baseline's health
+   observations is orthogonal to how many landings a change has: a phased design
+   answers for them exactly as an unphased one does."
   [[:format     [:= :design]]
    [:summary    string?]
    [:shape      string?]
    [:standing   Standing]
    [:baseline   BaselineRelation]
+   [:routes     {:optional true} [:vector Route]]
    [:rejected   {:optional true} [:vector Rejected]]
    [:layers     {:optional true} [:vector Layer]]
    [:open       {:optional true} [:vector string?]]
@@ -534,6 +576,12 @@
    :invariants is required and non-empty on purpose. It is what the review arbiter
    checks findings against; a design that names none is unfalsifiable, and every
    finding against it becomes a matter of taste.
+
+   :routes is where the cited baseline's health observations get their
+   destinations. It is not free-form commentary: the ledger checks that every
+   observation the baseline recorded is routed exactly once and that none is
+   invented, because 'nothing is lost and nothing is smuggled' is only true if
+   something counts.
 
    :baseline is required for the same class of reason and a sharper one. The
    inference about what was ALREADY there used to live here, as :assumes — a
@@ -994,8 +1042,8 @@
        (when note (str "\n> " note))))
 
 (defn- design->markdown
-  [{:keys [summary shape invariants standing baseline assumes rejected layers
-           phases seams open supersedes effort]}]
+  [{:keys [summary shape invariants standing baseline assumes routes rejected
+           layers phases seams open supersedes effort]}]
   (str/join
    "\n"
    (concat
@@ -1033,6 +1081,12 @@
                    (when (seq read)
                      (str " — read: " (str/join ", " (map #(str "`" % "`") read))))
                    (when drift (str "\n  - drift from the stance: " drift))))))
+    (when (seq routes)
+      (cons "\n## Routed from the baseline's health"
+            (for [{:keys [health-id to why ref]} routes]
+              (str "- `" health-id "` → **" (name to) "**"
+                   (when why (str " — " why))
+                   (when ref (str " (" ref ")"))))))
     (when (seq rejected)
       (cons "\n## Rejected"
             (for [{:keys [alternative why-not]} rejected]

@@ -397,6 +397,114 @@
         (is (empty? (:entries (ws/read-ws :brian (:id w))))
             "refused before anything is written — no orphan entry file")))))
 
+;; ── Routing the cited baseline's health is total ───────────────────────────
+;; The baseline observes and cannot route; the design routes and cannot observe.
+;; Here is the only place both are in hand, so it is the only place "nothing is
+;; lost and nothing is smuggled" can be made true rather than intended.
+
+(def ^:private a-baseline-with-health
+  (assoc a-baseline
+         :health [{:id "invoice-resums" :axis :design
+                   :observation "two summing paths where the design claims one"
+                   :evidence ["src/order/invoice.clj:88"]}
+                  {:id "half-migrated" :axis :implementation
+                   :observation "two call sites migrated, eight not"
+                   :evidence ["src/order/calc.clj:5"]
+                   :invisibly-incomplete? true}]))
+
+(defn- design-routing [n routes]
+  (assoc (design-citing n) :routes routes))
+
+(defn- with-health-baseline
+  "Mint a workstream carrying the health baseline at seq 1, then run `f` on it."
+  [f]
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+        (ws/append-entry! :brian (:id w) {:kind :baseline}
+                          (pr-str a-baseline-with-health))
+        (f w)))))
+
+(deftest design-routing-every-health-observation-is-accepted
+  (with-health-baseline
+    (fn [w]
+      (ws/append-entry!
+       :brian (:id w) {:kind :design}
+       (pr-str (design-routing 1 [{:health-id "invoice-resums" :to :spin-out
+                                   :why "revealed, not created" :ref "FU-88"}
+                                  {:health-id "half-migrated" :to :fix-here}])))
+      (is (= 2 (count (:routes (ws/latest-entry :brian (:id w) :design))))))))
+
+(deftest design-leaving-a-health-observation-unrouted-is-refused
+  (with-health-baseline
+    (fn [w]
+      (is (thrown-with-msg?
+           clojure.lang.ExceptionInfo #"unrouted|half-migrated"
+           (ws/append-entry!
+            :brian (:id w) {:kind :design}
+            (pr-str (design-routing 1 [{:health-id "invoice-resums" :to :fix-here}])))))
+      (is (= 1 (count (:entries (ws/read-ws :brian (:id w)))))
+          "refused before anything is written — the baseline is still alone"))))
+
+(deftest design-routing-an-observation-the-baseline-never-made-is-refused
+  (with-health-baseline
+    (fn [w]
+      (is (thrown-with-msg?
+           clojure.lang.ExceptionInfo #"does not record"
+           (ws/append-entry!
+            :brian (:id w) {:kind :design}
+            (pr-str (design-routing 1 [{:health-id "invoice-resums" :to :fix-here}
+                                       {:health-id "half-migrated" :to :fix-here}
+                                       {:health-id "invented" :to :declined
+                                        :why "nobody observed this"}]))))))))
+
+(deftest design-routing-one-observation-twice-is-refused
+  (with-health-baseline
+    (fn [w]
+      (is (thrown-with-msg?
+           clojure.lang.ExceptionInfo #"more than once"
+           (ws/append-entry!
+            :brian (:id w) {:kind :design}
+            (pr-str (design-routing 1 [{:health-id "invoice-resums" :to :fix-here}
+                                       {:health-id "invoice-resums" :to :declined
+                                        :why "changed my mind halfway down"}
+                                       {:health-id "half-migrated" :to :fix-here}]))))
+          "exactly once — two destinations for one observation is not a routing"))))
+
+(deftest spinning-out-invisible-incompleteness-is-vetoed
+  (with-health-baseline
+    (fn [w]
+      (is (thrown-with-msg?
+           clojure.lang.ExceptionInfo #"invisibly incomplete"
+           (ws/append-entry!
+            :brian (:id w) {:kind :design}
+            (pr-str (design-routing 1 [{:health-id "invoice-resums" :to :fix-here}
+                                       {:health-id "half-migrated" :to :spin-out
+                                        :why "feels separate" :ref "FU-99"}]))))
+          "the one rule in /spin-out that is not a judgment call, enforced where
+           it cannot depend on remembering to be principled"))))
+
+(deftest invisible-incompleteness-may-still-constrain-or-be-fixed
+  (with-health-baseline
+    (fn [w]
+      (ws/append-entry!
+       :brian (:id w) {:kind :design}
+       (pr-str (design-routing 1 [{:health-id "invoice-resums" :to :declined
+                                   :why "cold corner"}
+                                  {:health-id "half-migrated" :to :constrains
+                                   :why "this change may not add a ninth unmigrated site"}])))
+      (is (ws/latest-entry :brian (:id w) :design)
+          "the veto is on deferring it, not on the observation existing"))))
+
+(deftest a-baseline-with-no-health-routes-vacuously
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+        (ws/append-entry! :brian (:id w) {:kind :baseline} (pr-str a-baseline))
+        (ws/append-entry! :brian (:id w) {:kind :design} (pr-str (design-citing 1)))
+        (is (ws/latest-entry :brian (:id w) :design)
+            "every design record written before health existed still appends")))))
+
 (deftest design-citing-an-entry-that-is-not-a-baseline-is-refused
   (with-tmp
     (fn [_]

@@ -187,10 +187,70 @@
               (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))]
     (write! (if (seq tracker) (assoc w :findings tracker) (dissoc w :findings)))))
 
-(defn- check-baseline-ref!
-  "A :design record's :baseline names the entry it was judged against. The schema
-   sees one record and cannot resolve a :seq, so the check belongs here — the one
-   place that holds both the record and the ledger it is joining.
+(defn- read-entry-at
+  "Parse the entry at `seq-n` on the workstream record `w`, through the READ
+   contract, stamped with :seq/:at — or nil when absent or unparseable. Degrades
+   to nil for the same reason latest-entry does: a reader following a citation
+   has to be able to find nothing without the caller crashing."
+  [w seq-n]
+  (when-let [e (->> (:entries w) (filter #(= seq-n (:seq %))) first)]
+    (let [f (str (fs/path (cstate/workstream-dir (:project w) (:id w)) (:file e)))]
+      (try (-> (report/parse-event (:kind e) (io/read-edn f))
+               (assoc :seq (:seq e) :at (:at e)))
+           (catch Throwable _ nil)))))
+
+(defn- check-routes-total!
+  "Every health observation on the cited `baseline` is routed exactly once by
+   `record`, none is invented, and none the survey marked invisibly incomplete is
+   spun out.
+
+   This is what makes 'nothing is lost and nothing is smuggled' a property rather
+   than an intention. The baseline observes and does not route; the design routes
+   and cannot observe; so the only place the two can be reconciled is where both
+   are in hand, which is here.
+
+   The spin-out veto is the sharp one. Invisible incompleteness — a half-applied
+   invariant, a rule with silent exceptions — is exactly what must not be
+   deferred, and a veto that depends on remembering to be principled fires when
+   you are fresh and not when you are tired. The survey flags it as an is-claim
+   about the code; the ledger refuses the deferral.
+
+   An unparseable baseline yields no observations and so checks vacuously — the
+   same degrade direction read-entry-at takes, and the right one: a record that
+   can no longer be read must not block the workstream from moving."
+  [baseline record]
+  (let [observed (into #{} (map :id) (:health baseline))
+        routed   (mapv :health-id (:routes record))
+        vetoed   (into #{} (comp (filter :invisibly-incomplete?) (map :id))
+                       (:health baseline))]
+    (when-let [unknown (seq (remove observed routed))]
+      (throw (ex-info (str "Design routes health observation(s) the cited baseline "
+                           "does not record: " (str/join ", " (sort unknown)))
+                      {:unknown (vec (sort unknown)) :observed (vec (sort observed))})))
+    (when-let [dupes (seq (for [[id n] (frequencies routed) :when (> n 1)] id))]
+      (throw (ex-info (str "Design routes health observation(s) more than once: "
+                           (str/join ", " (sort dupes)))
+                      {:duplicated (vec (sort dupes))})))
+    (when-let [missing (seq (remove (set routed) observed))]
+      (throw (ex-info (str "Design leaves health observation(s) unrouted: "
+                           (str/join ", " (sort missing))
+                           " — route each to :fix-here, :spin-out, :declined or "
+                           ":constrains")
+                      {:unrouted (vec (sort missing))})))
+    (when-let [spun (seq (for [r (:routes record)
+                               :when (and (= :spin-out (:to r))
+                                          (vetoed (:health-id r)))]
+                           (:health-id r)))]
+      (throw (ex-info (str "Design spins out health observation(s) the baseline "
+                           "marked invisibly incomplete: " (str/join ", " (sort spun))
+                           " — deferring these leaves the branch untrue")
+                      {:vetoed (vec (sort spun))})))))
+
+(defn- check-baseline-citation!
+  "A :design record's :baseline names the entry it was judged against, and its
+   :routes answer that entry's health observations. The schema sees one record
+   and can resolve neither, so the check belongs here — the one place that holds
+   both the record and the ledger it is joining.
 
    Rejecting a dangling ref matters more than it looks: the baseline is the whole
    yardstick, and a :seq pointing at nothing reads downstream exactly like one
@@ -198,14 +258,16 @@
    against something when it had not been."
   [w kind payload]
   (when (= :design kind)
-    (when-let [n (get-in (edn/read-string payload) [:baseline :seq])]
-      (when-not (some #(and (= n (:seq %)) (= :baseline (:kind %))) (:entries w))
-        (throw (ex-info (str "Design cites baseline entry " n
-                             ", which is not a :baseline on this workstream")
-                        {:seq n
-                         :baselines (->> (:entries w)
-                                         (filter #(= :baseline (:kind %)))
-                                         (mapv :seq))}))))))
+    (let [record (edn/read-string payload)]
+      (when-let [n (get-in record [:baseline :seq])]
+        (when-not (some #(and (= n (:seq %)) (= :baseline (:kind %))) (:entries w))
+          (throw (ex-info (str "Design cites baseline entry " n
+                               ", which is not a :baseline on this workstream")
+                          {:seq n
+                           :baselines (->> (:entries w)
+                                           (filter #(= :baseline (:kind %)))
+                                           (mapv :seq))})))
+        (check-routes-total! (read-entry-at w n) record)))))
 
 (defn- check-seam-phase-ref!
   "A seam that says a phase closes it names that phase by its :claim. Malli sees
@@ -241,7 +303,7 @@
                   (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))
         seq-n (inc (count (:entries w)))
         [ext payload] (report/entry-payload (:kind entry) content)
-        _     (check-baseline-ref! w (:kind entry) payload)
+        _     (check-baseline-citation! w (:kind entry) payload)
         _     (check-seam-phase-ref! (:kind entry) payload)
         fname (format "%04d-%s.%s" seq-n (name (:kind entry)) ext)
         rel   (str "entries/" fname)
@@ -283,11 +345,7 @@
    design was judged against one of them specifically."
   [project ws-id seq-n]
   (when-let [w (read-ws project ws-id)]
-    (when-let [e (->> (:entries w) (filter #(= seq-n (:seq %))) first)]
-      (let [f (str (fs/path (cstate/workstream-dir project ws-id) (:file e)))]
-        (try (-> (report/parse-event (:kind e) (io/read-edn f))
-                 (assoc :seq (:seq e) :at (:at e)))
-             (catch Throwable _ nil))))))
+    (read-entry-at w seq-n)))
 
 (defn list-ids
   "Vector of ws-ids under a project's workstreams dir; [] if none."

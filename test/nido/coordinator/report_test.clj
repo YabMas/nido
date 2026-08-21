@@ -894,6 +894,63 @@
          (report/report-title (assoc valid-baseline :area "order totalling\nand its readers")))
       "one line per entry — the index is a table, and :area is prose that wraps"))
 
+;; ── Routes — the other half of "the baseline never routes" ──────────────────
+;; The survey observes and cannot route; the design routes and cannot observe.
+;; The schema's job here is the asymmetry: doing the work needs no defence,
+;; every form of not-doing-it-here does.
+
+(deftest design-accepts-routes-for-each-destination
+  (let [routed (assoc valid-design
+                      :routes [{:health-id "a" :to :fix-here}
+                               {:health-id "b" :to :constrains
+                                :why "this change may not leave it half-applied"}
+                               {:health-id "c" :to :spin-out
+                                :why "revealed, not created; cheap to resume cold"
+                                :ref "FU-88"}
+                               {:health-id "d" :to :declined
+                                :why "cold corner, nothing walks through here"}])]
+    (is (= routed (report/validate-event :design routed)))))
+
+(deftest fix-here-needs-no-reason
+  (is (report/validate-event :design (assoc valid-design
+                                            :routes [{:health-id "a" :to :fix-here}]))
+      "the conservative default defends itself — you are doing the work"))
+
+(deftest not-doing-it-here-always-needs-a-reason
+  (doseq [to [:constrains :declined]]
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (report/validate-event :design (assoc valid-design
+                                                       :routes [{:health-id "a" :to to}])))
+        (str (name to) " without a why is a shrug, not a decision"))))
+
+(deftest a-spin-out-needs-a-ref
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event
+                :design (assoc valid-design
+                               :routes [{:health-id "a" :to :spin-out
+                                         :why "cheap to resume cold"}])))
+      "no spin-out without a ref — 'later' in a PR comment is a wish"))
+
+(deftest routes-reject-an-unknown-destination
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event
+                :design (assoc valid-design
+                               :routes [{:health-id "a" :to :maybe-someday}])))))
+
+(deftest report->markdown-design-renders-its-routes
+  (let [md (report/report->markdown
+            (assoc valid-design
+                   :routes [{:health-id "invoice-resums" :to :spin-out
+                             :why "revealed, not created" :ref "FU-88"}]))]
+    (is (str/includes? md "## Routed from the baseline's health"))
+    (is (str/includes? md "`invoice-resums`"))
+    (is (str/includes? md "**spin-out**"))
+    (is (str/includes? md "(FU-88)"))))
+
+(deftest report->markdown-design-omits-routes-when-absent
+  (is (not (str/includes? (report/report->markdown valid-design)
+                          "Routed from the baseline's health"))))
+
 ;; ── The baseline relation, and the write/read split ─────────────────────────
 
 (deftest design-requires-a-baseline-relation

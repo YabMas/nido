@@ -125,6 +125,24 @@ what survives the session.
   round three re-proposes what round zero rejected and nobody can tell whether
   that is new insight or re-litigation. With it, a finding is either *answered*
   or *the reason no longer holds*.
+- **`:routes` is where the survey's health observations get answered.** The
+  baseline observed them and deliberately did not route them, because routing
+  needs the change (§4a). This is the other half. Four destinations:
+
+  | The observation | Route |
+  |---|---|
+  | bounds what this change may leave behind | `:constrains` |
+  | you are doing it, here, in this branch | `:fix-here` |
+  | a different story, filed | `:spin-out` — needs a `:ref` |
+  | a different story you will not do | `:declined` — needs the reason |
+
+  **The ledger checks this is total**: every observation routed exactly once,
+  none invented, and — the one that is not a judgment call — **nothing the
+  survey marked `:invisibly-incomplete?` may be spun out**. That is
+  `/spin-out`'s veto, enforced where it cannot depend on remembering to be
+  principled. `:fix-here` needs no reason; every form of *not doing it here*
+  does.
+
 - **`:baseline` is the relation to what was already there** (§4). Not the same
   question as `:standing`: that relates the change to the *stance*, this relates
   it to the *current design*, and a change can satisfy either while breaking the
@@ -408,6 +426,8 @@ cat > /tmp/design.edn <<'EDN'
  :invariants ["…"]
  :standing   {:relation :conforms}
  :baseline   {:seq 2 :relation :within}
+ :routes     [{:health-id "short-slug" :to :spin-out
+               :why "…" :ref "FU-##"}]
  :effort     :M}
 EDN
 bb nido:ticket:append :project brian :br <BR-####> :kind design \

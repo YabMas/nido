@@ -662,8 +662,8 @@
    its invariants (always shown — they are what review checks against), then the
    optional sections. `assumes` is collapsed: it is the captured inference, useful
    when a design is questioned and noise the rest of the time."
-  [{:keys [summary shape invariants standing baseline assumes rejected layers
-           phases seams open supersedes effort]}]
+  [{:keys [summary shape invariants standing baseline assumes routes rejected
+           layers phases seams open supersedes effort]}]
   [:div.md
    [:h2 "Design"]
    [:div.report-meta
@@ -713,6 +713,14 @@
       (into [:ol]
             (for [{:keys [claim mode]} layers]
               [:li claim " " [:span.meta "(" (name mode) ")"]]))])
+   (when (seq routes)
+     [:div [:h3 "Routed from the baseline's health"]
+      (into [:ul]
+            (for [{:keys [health-id to why ref]} routes]
+              [:li [:code health-id] " → "
+               [:span {:class (str "chip c-route-" (name to))} (name to)]
+               (when why [:span.meta " — " why])
+               (when ref [:span.meta " (" ref ")"])]))])
    (when (seq rejected)
      [:div [:h3 "Rejected"]
       (into [:ul]
