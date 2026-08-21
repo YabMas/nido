@@ -1372,11 +1372,19 @@
 
    Only ever called for a real (non-bare) workstream — bare-pane-body computes its
    own action set via work/gate-actions directly and calls action-bar itself, so
-   its copy and its buttons read off the same value and can never disagree."
-  [project ws-id origin stage sessions]
+   its copy and its buttons read off the same value and can never disagree.
+
+   `report` is the entry being read, and it is only ever the CURRENT one (callers
+   gate on :on-latest?). It reaches gate-actions because a parked :in-progress
+   gate showing a design decision offers a different question from one showing
+   anything else — and the pane and the gate inbox must not disagree about which."
+  [project ws-id origin stage sessions report]
   (let [parked? (boolean (some :parked? sessions))
         session (:name (first (filter :parked? sessions)))]
-    (action-bar project ws-id (work/gate-actions stage parked? origin) session pane-route)))
+    (action-bar project ws-id
+                (work/gate-actions stage parked? origin
+                                   {:report-format (:format report)})
+                session pane-route)))
 
 (defn- file-findings-form
   "Findings-filing form shown on a shipped (:done) workstream's pane. One finding
@@ -1479,7 +1487,7 @@
             ;; Live actions only on the current ledger entry — older entries are read-back.
             (when (and on-latest? error-msg)
               [:div.action-err "⚠ " error-msg])
-            (when on-latest? (pane-action-bar project ws-id origin stage sessions))
+            (when on-latest? (pane-action-bar project ws-id origin stage sessions report))
             (when (= :done stage) (file-findings-form project ws-id))
             [:h2 "Environment"]
             (if-let [env-name (:name environment)]

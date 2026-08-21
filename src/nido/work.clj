@@ -137,7 +137,7 @@
    correct automatically if the action sets change."
   ([stage parked?] (gate-actions stage parked? nil nil))
   ([stage parked? origin] (gate-actions stage parked? origin nil))
-  ([stage parked? _origin {:keys [bare?]}]
+  ([stage parked? _origin {:keys [bare? report-format]}]
    (let [actions
          (case stage
            :incoming    [{:id :promote :label "Promote" :kind :mutation :style :primary}
@@ -164,10 +164,27 @@
            :dismissed   [{:id :restore :label "Restore" :kind :mutation :style :default}]
            :ready       [{:id :promote :label "Promote" :kind :mutation :style :primary}
                          {:id :drop    :label "Drop"    :kind :mutation :style :danger}]
-           :in-progress (if parked?
+           :in-progress (cond
+                          (not parked?) []
+                          ;; A parked session whose latest entry is a design decision
+                          ;; is asking ONE question — the irreducible judgement the
+                          ;; round could not derive. So the gate asks one question:
+                          ;; grant the approval, or send it back. Done is deliberately
+                          ;; absent here; settling a workstream is not an answer to
+                          ;; "should we build this", and offering it beside Approve
+                          ;; invites it to be read as one.
+                          ;;
+                          ;; No new stage: this is the SAME :in-progress gate, told
+                          ;; apart by what the ledger holds last. Widening the spine
+                          ;; for it would put every reader's band mapping at risk for
+                          ;; something the report already distinguishes.
+                          (= :design-decision report-format)
+                          [{:id :approve :label "Approve" :kind :mutation :style :primary}
+                           {:id :reply   :label "Reply"   :kind :resume  :style :default}]
+
+                          :else
                           [{:id :reply :label "Reply" :kind :resume :style :default}
-                           {:id :done  :label "Done"  :kind :mutation :style :primary}]
-                          [])
+                           {:id :done  :label "Done"  :kind :mutation :style :primary}])
            :shipping    (if parked?
                           ;; Blocked in the merge lane: Reply resumes the agent with a
                           ;; note; Drop takes it off the queue (back to :in-progress).
@@ -558,15 +575,19 @@
    `gates` (string or keyword arg) or `all-gates`."
   [project row]
   (let [parked? (= :parked-at-gate (:engagement row))
-        psess   (parked-session project (:ws-id row))]
+        psess   (parked-session project (:ws-id row))
+        ;; Read once: the action set is derived from what the ledger holds last,
+        ;; so the buttons and the report a reader is looking at cannot disagree.
+        report  (latest-report project (:ws-id row))]
     {:ws-id        (:ws-id row)
      :project      (name project)
      :origin       (:origin row)
      :stage        (:stage row)
      :label        (:label row)
      :links        (:links row)
-     :report       (latest-report project (:ws-id row))
-     :actions      (gate-actions (:stage row) parked? (:origin row))
+     :report       report
+     :actions      (gate-actions (:stage row) parked? (:origin row)
+                                 {:report-format (:format report)})
      :session      (:name psess)
      :resume-error (get-in psess [:autonomy :error])
      :working?     (resuming? project (:ws-id row))}))
@@ -952,6 +973,23 @@
                 {:decision :triaging})))))
     {:decision :no-trigger}))
 
+(def approval-input
+  "What Approve resumes the parked agent with. Built nido-side rather than sent
+   from the browser, because the server only carries free text for :reply — and
+   because an approval should say the same thing every time it is granted.
+
+   It names what was approved. The decision round adjudicates claims and
+   layering, never a plan, and that distinction is what keeps this gate an
+   approval to proceed rather than a freeze: the most valuable design thoughts
+   arrive from inside the code, and a design frozen at the gate cannot receive
+   them. So the resume says so, and points at the amend path rather than leaving
+   the agent to infer that the record is now untouchable."
+  (str "The design decision was APPROVED by a human. The claims and the layering "
+       "are what was approved — not a plan, and not a freeze. Proceed with "
+       "implementation. If the shape turns out not to hold once you are inside "
+       "the code, amend or supersede the design record (/design §5) rather than "
+       "patching around it."))
+
 (defn resolve-gate!
   "Apply a gate follow-action, dispatching on `action-id`. A workstream-less ws-id
    (e.g. a bare watched-view row) is a no-op — {:decision :no-workstream} — for
@@ -960,6 +998,7 @@
      :promote -> set-stage! :in-progress   :dismiss -> off-radar (ticket + ws :dismissed)
      :drop    -> close! :dropped            :done    -> set-stage! :done
      :apply   -> apply! (ticket:complete)   :reply   -> resume! the parked agent with `input`
+     :approve -> resume! the parked agent with `approval-input` (a design gate)
      :restore -> restore! (clear ticket status + reopen at :triaging)
      :start-triage -> start-triage-page! (force-spawn the triage trigger)
    Returns the resolver's result map."
@@ -981,6 +1020,7 @@
        :drop    (do (cws/close! project ws-id :dropped) {:decision :dropped})
        :apply   (apply! project ws-id)
        :reply   (resume/resume! project ws-id input)
+       :approve (resume/resume! project ws-id approval-input)
        (throw (ex-info "Unknown gate action" {:action-id action-id :ws-id ws-id}))))))
 
 (defn new!

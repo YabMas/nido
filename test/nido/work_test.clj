@@ -9,7 +9,7 @@
    [nido.coordinator.facets]
    [nido.coordinator.pickup]
    [nido.coordinator.promote]
-   [nido.coordinator.resume]
+   [nido.coordinator.resume :as resume]
    [nido.coordinator.runs :as runs]
    [nido.coordinator.session :as session]
    [nido.coordinator.sources.state]
@@ -483,6 +483,58 @@
          (work/gate-actions :in-progress true)))
   (is (= [] (work/gate-actions :intake true)))
   (is (= [] (work/gate-actions :done true))))
+
+;; ── The design gate: same stage, different question ────────────────────────
+;; No new spine stage. A parked :in-progress workstream whose latest ledger
+;; entry is a design decision is asking the one thing the round could not
+;; derive, so it offers one question — grant it, or send it back.
+
+(deftest a-parked-design-decision-asks-to-be-approved
+  (is (= [{:id :approve :label "Approve" :kind :mutation :style :primary}
+          {:id :reply   :label "Reply"   :kind :resume  :style :default}]
+         (work/gate-actions :in-progress true nil {:report-format :design-decision}))
+      "Done is deliberately absent — settling a workstream is not an answer to
+       'should we build this', and offering it beside Approve invites it to be
+       read as one"))
+
+(deftest every-other-in-progress-gate-is-unchanged
+  (let [usual [{:id :reply :label "Reply" :kind :resume :style :default}
+               {:id :done  :label "Done"  :kind :mutation :style :primary}]]
+    (is (= usual (work/gate-actions :in-progress true nil {:report-format :blocker})))
+    (is (= usual (work/gate-actions :in-progress true nil {:report-format nil})))
+    (is (= usual (work/gate-actions :in-progress true))
+        "the arity that predates report-format keeps its answer"))
+  (is (= [] (work/gate-actions :in-progress false nil {:report-format :design-decision}))
+      "a decision nobody is parked on is not a gate — there is no agent to
+       resume, so approving it would resume nothing"))
+
+(deftest approve-is-not-a-workstream-less-action
+  (is (not (contains? @#'work/workstream-less-actions :approve))
+      "Approve resumes a parked agent, so it needs a workstream; the two-way
+       membership hazard documented on that set is why this is pinned"))
+
+(deftest approving-resumes-the-parked-agent-with-a-canned-input
+  (with-tmp
+    (fn [_]
+      (let [w      (workstream/create! :brian {:stage :in-progress :external-refs []})
+            got    (atom nil)]
+        (with-redefs [resume/resume! (fn [_ _ input]
+                                       (reset! got input)
+                                       {:decision :resumed})]
+          (is (= {:decision :resumed}
+                 (work/resolve-gate! :brian (:id w) :approve)))
+          (is (str/includes? @got "APPROVED"))
+          (is (str/includes? @got "not a plan"))
+          (is (str/includes? @got "amend or supersede")
+              "an approval that reads as a freeze is how the design stops being
+               able to receive what the code teaches"))))))
+
+(deftest approving-a-workstream-that-does-not-exist-is-a-no-op
+  (with-tmp
+    (fn [_]
+      (is (= {:decision :no-workstream}
+             (work/resolve-gate! :brian "ws-nope" :approve))
+          "past the bare-row set, so it lands behind the read-ws guard"))))
 
 (deftest gates-hydrates-a-parked-triage-workstream
   (with-tmp
