@@ -14,11 +14,18 @@
    :project       :brian
    :external-refs [{:adapter :notion :id "BR-4659"
                     :page-id "p" :url "u" :title "Firefox loading"}]
-   :stage         :investigation
-   :stage-history [{:at "2026-06-05T09:00:00Z" :stage :investigation}]
+   :stage         :triaging
+   :stage-history [{:at "2026-06-05T09:00:00Z" :stage :triaging}]
    :closed        nil
    :created-at    "2026-06-05T09:00:00Z"
    :entries       []})
+
+(defn- with-tmp [f]
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (f tmp))
+      (finally (fs/delete-tree tmp)))))
 
 (deftest schema-accepts-valid-workstream
   (is (m/validate ws/Workstream example-ws)))
@@ -26,8 +33,56 @@
 (deftest schema-rejects-missing-id
   (is (not (m/validate ws/Workstream (dissoc example-ws :id)))))
 
-(deftest stage-is-a-free-keyword
+(deftest schema-leaves-stage-open-so-a-foreign-record-stays-repairable
+  ;; The vocabulary is closed at the SETTERS (create!/advance-stage!), not in the
+  ;; schema — so a record that acquired a foreign stage some other way can still
+  ;; be read, written and advanced back to a legal stage. Closing it here would
+  ;; wedge every write! of such a record, including the one that repairs it.
   (is (m/validate ws/Workstream (assoc example-ws :stage :some-project-specific-stage))))
+
+(deftest create-rejects-a-stage-outside-the-vocabulary
+  (with-tmp
+    (fn [_]
+      ;; :implementing is a TICKET status, not a stage. It used to be written
+      ;; happily and then ignored by every projection.
+      (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Unknown workstream stage"
+                                    (ws/create! :brian {:stage :implementing :external-refs []})))]
+        (is (= :implementing (:stage (ex-data e))))
+        (is (= :create! (:where (ex-data e))))))))
+
+(deftest advance-stage-rejects-a-stage-outside-the-vocabulary
+  (with-tmp
+    (fn [_]
+      (ws/write! example-ws)
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Unknown workstream stage"
+                            (ws/advance-stage! :brian (:id example-ws) :implementing)))
+      (is (= :triaging (:stage (ws/read-ws :brian (:id example-ws))))
+          "the refused stage is not written"))))
+
+(deftest advance-stage-refuses-a-foreign-stage-even-when-unchanged
+  ;; The guard runs ahead of the no-op check, so re-setting the stage a foreign
+  ;; record already carries is refused rather than quietly accepted.
+  (with-tmp
+    (fn [_]
+      (ws/write! (assoc example-ws :stage :implementing))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Unknown workstream stage"
+                            (ws/advance-stage! :brian (:id example-ws) :implementing))))))
+
+(deftest a-foreign-record-can-still-be-advanced-back-to-a-legal-stage
+  ;; The repair path the permissive schema exists for.
+  (with-tmp
+    (fn [_]
+      (ws/write! (assoc example-ws :stage :implementing))
+      (is (= :in-progress (:stage (ws/advance-stage! :brian (:id example-ws) :in-progress)))))))
+
+(deftest every-storable-stage-is-accepted-by-both-setters
+  (with-tmp
+    (fn [_]
+      (doseq [stage sess/storable-stages]
+        (let [w (ws/create! :brian {:stage stage :external-refs []})]
+          (is (= stage (:stage w)) (str "create! accepts " stage))
+          (is (= :triage (:stage (ws/advance-stage! :brian (:id w) :triage)))
+              (str "advance-stage! moves off " stage)))))))
 
 (deftest mint-id-has-ws-prefix-and-is-unique
   (with-redefs [clock/now-iso (constantly "2026-06-05T09:00:00Z")]
@@ -55,11 +110,11 @@
     (try
       (with-redefs [cstate/nido-root (constantly (str tmp))
                     clock/now-iso (constantly "2026-06-05T09:00:00Z")]
-        (let [w (ws/create! :brian {:stage :investigation
+        (let [w (ws/create! :brian {:stage :triaging
                                     :external-refs [{:adapter :notion :id "BR-1"}]})]
           (is (str/starts-with? (:id w) "ws-"))
-          (is (= :investigation (:stage w)))
-          (is (= [{:at "2026-06-05T09:00:00Z" :stage :investigation}] (:stage-history w)))
+          (is (= :triaging (:stage w)))
+          (is (= [{:at "2026-06-05T09:00:00Z" :stage :triaging}] (:stage-history w)))
           (is (nil? (:closed w)))
           (is (= [] (:entries w)))
           (is (= w (ws/read-ws :brian (:id w))))))
@@ -71,10 +126,10 @@
       (with-redefs [cstate/nido-root (constantly (str tmp))
                     clock/now-iso (constantly "2026-06-05T10:00:00Z")]
         (ws/write! example-ws)
-        (let [updated (ws/advance-stage! :brian (:id example-ws) :triaged)]
-          (is (= :triaged (:stage updated)))
+        (let [updated (ws/advance-stage! :brian (:id example-ws) :ready)]
+          (is (= :ready (:stage updated)))
           (is (= 2 (count (:stage-history updated))))
-          (is (= {:at "2026-06-05T10:00:00Z" :stage :triaged}
+          (is (= {:at "2026-06-05T10:00:00Z" :stage :ready}
                  (last (:stage-history updated))))
           (is (= updated (ws/read-ws :brian (:id example-ws))))))
       (finally (fs/delete-tree tmp)))))
@@ -84,7 +139,7 @@
     (try
       (with-redefs [cstate/nido-root (constantly (str tmp))]
         (ws/write! example-ws)
-        (let [updated (ws/advance-stage! :brian (:id example-ws) :investigation)]
+        (let [updated (ws/advance-stage! :brian (:id example-ws) :triaging)]
           (is (= 1 (count (:stage-history updated))))))
       (finally (fs/delete-tree tmp)))))
 
@@ -134,7 +189,7 @@
   (let [tmp (fs/create-temp-dir)]
     (try
       (with-redefs [cstate/nido-root (constantly (str tmp))]
-        (let [w0 (ws/create! :brian {:stage :investigation :external-refs []})
+        (let [w0 (ws/create! :brian {:stage :triaging :external-refs []})
               w1 (ws/add-ref! :brian (:id w0) {:adapter :notion :id "BR-9"})
               w2 (ws/add-ref! :brian (:id w0) {:adapter :notion :id "BR-9"})]
           (is (= 1 (count (:external-refs w1))))
@@ -145,9 +200,9 @@
   (let [tmp (fs/create-temp-dir)]
     (try
       (with-redefs [cstate/nido-root (constantly (str tmp))]
-        (let [w (ws/create! :brian {:stage :investigation
+        (let [w (ws/create! :brian {:stage :triaging
                                     :external-refs [{:adapter :notion :id "BR-42"}]})]
-          (ws/create! :brian {:stage :investigation
+          (ws/create! :brian {:stage :triaging
                               :external-refs [{:adapter :notion :id "BR-99"}]})
           (is (= (:id w) (:id (ws/find-by-ref :brian :notion "BR-42"))))
           (is (nil? (ws/find-by-ref :brian :notion "BR-nope")))))
@@ -158,19 +213,12 @@
     (try
       (with-redefs [cstate/nido-root (constantly (str tmp))
                     clock/now-iso (constantly "2026-06-05T09:00:00Z")]
-        (let [w (ws/create! :brian {:stage :investigation})]
+        (let [w (ws/create! :brian {:stage :triaging})]
           (is (= :idle (ws/engagement :brian (:id w))))
           (sess/create! :brian (:id w) {:name "s1" :weight :light :autonomy nil})
           (is (= :active (ws/engagement :brian (:id w))))
           (ws/close! :brian (:id w) :dropped)
           (is (= :settled (ws/engagement :brian (:id w))))))
-      (finally (fs/delete-tree tmp)))))
-
-(defn- with-tmp [f]
-  (let [tmp (fs/create-temp-dir)]
-    (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
-        (f tmp))
       (finally (fs/delete-tree tmp)))))
 
 (deftest create-persists-intake
@@ -300,7 +348,9 @@
       (with-redefs [cstate/nido-root (constantly (str tmp))
                     clock/now-iso (constantly "2026-06-05T09:00:00Z")]
         ;; A record persisted before the rename carries the legacy :stage :inbox.
-        (let [w (ws/create! :brian {:stage :inbox :external-refs []})]
+        ;; Written directly: create! refuses it now — :inbox is read-legacy only,
+        ;; deliberately outside the storable vocabulary.
+        (let [w (ws/write! (assoc example-ws :stage :inbox))]
           (is (= :incoming (:stage (ws/read-ws :brian (:id w))))
               "legacy :inbox is mapped to :incoming on read")))
       (finally (fs/delete-tree tmp)))))

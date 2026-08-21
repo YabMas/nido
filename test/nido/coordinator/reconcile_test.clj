@@ -206,7 +206,7 @@
   (with-tmp
     (fn [_]
       (let [id "merge-r1"
-            w  (ws/create! :brian {:stage :implementing :external-refs []})
+            w  (ws/create! :brian {:stage :in-progress :external-refs []})
             _  (session/create! :brian (:id w)
                                 {:name "impl-x" :weight :heavy
                                  :autonomy (assoc autonomy-running

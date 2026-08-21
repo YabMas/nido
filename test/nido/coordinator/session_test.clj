@@ -180,7 +180,7 @@
     (try
       (with-redefs [cstate/nido-root (constantly (str tmp))
                     clock/now-iso (constantly "2026-06-05T09:00:00Z")]
-        (let [w (ws/create! :brian {:stage :investigation})
+        (let [w (ws/create! :brian {:stage :triaging})
               auto (fn [nm phase]
                      {:name nm :weight :light
                       :autonomy (assoc (:autonomy autonomous-session)
@@ -201,7 +201,7 @@
     (try
       (with-redefs [cstate/nido-root (constantly (str tmp))
                     clock/now-iso (constantly "2026-06-05T09:00:00Z")]
-        (let [w  (ws/create! :brian {:stage :investigation})
+        (let [w  (ws/create! :brian {:stage :triaging})
               mk (fn [nm phase]
                    (sess/create! :brian (:id w)
                                  {:name nm :weight :light
@@ -225,8 +225,8 @@
     (try
       (with-redefs [cstate/nido-root (constantly (str tmp))
                     clock/now-iso (constantly "2026-06-05T09:00:00Z")]
-        (let [open   (ws/create! :brian {:stage :investigation})
-              closed (ws/create! :brian {:stage :investigation})
+        (let [open   (ws/create! :brian {:stage :triaging})
+              closed (ws/create! :brian {:stage :triaging})
               mk (fn [wsid nm phase]
                    (sess/create! :brian wsid
                                  {:name nm :weight :light

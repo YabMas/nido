@@ -25,7 +25,7 @@
   "Create a workstream via the real writer, then apply overrides and re-write
    so tests can set :external-refs / :closed / :entries / :stage-history."
   [project overrides]
-  (let [w (workstream/create! project {:stage (:stage overrides :investigating)})]
+  (let [w (workstream/create! project {:stage (:stage overrides :triaging)})]
     (workstream/write! (merge w overrides {:id (:id w) :project project}))))
 
 (defn- make-session!
@@ -134,9 +134,9 @@
   (with-tmp
     (fn [_]
       ;; idle: open workstream, no sessions
-      (make-ws! :brian {:stage :triaged})
+      (make-ws! :brian {:stage :triaging})
       ;; active: one live autonomous session, running
-      (let [w (make-ws! :brian {:stage :implementing
+      (let [w (make-ws! :brian {:stage :triaging
                                 :external-refs [{:adapter :notion :id "BR-1" :title "Active one"}]})]
         (make-session! :brian (:id w) "run-a" {:autonomy autonomy-running}))
       (let [rows (wsv/workstream-rows :brian)
@@ -164,7 +164,7 @@
 (deftest autonomous-engagement-ignores-live-names
   (with-tmp
     (fn [_]
-      (let [w (make-ws! :brian {:stage :implementing
+      (let [w (make-ws! :brian {:stage :triaging
                                 :external-refs [{:adapter :notion :id "BR-1"}]})]
         (make-session! :brian (:id w) "run-a" {:autonomy autonomy-running})
         (is (= :active (:engagement (wsv/workstream-row :brian (workstream/read-ws :brian (:id w)) #{})))
@@ -181,7 +181,7 @@
 (deftest workstream-rows-marks-closed-as-settled
   (with-tmp
     (fn [_]
-      (let [w (make-ws! :brian {:stage :implementing
+      (let [w (make-ws! :brian {:stage :triaging
                                 :closed {:at "2026-06-06T00:00:00Z" :outcome :done}})]
         (make-session! :brian (:id w) "run-a" {:autonomy autonomy-running}))
       (let [rows (wsv/workstream-rows :brian)]
@@ -199,7 +199,7 @@
 (deftest workstream-rows-parked-beats-active
   (with-tmp
     (fn [_]
-      (let [w (make-ws! :brian {:stage :planning})]
+      (let [w (make-ws! :brian {:stage :triaging})]
         (make-session! :brian (:id w) "run-parked"
                        {:autonomy (assoc autonomy-running :phase :parked)}))
       (is (= [:parked-at-gate] (map :engagement (wsv/workstream-rows :brian)))))))
@@ -271,7 +271,7 @@
 (deftest session-rows-reports-phase-weight-substrate
   (with-tmp
     (fn [_]
-      (let [w (make-ws! :brian {:stage :implementing})]
+      (let [w (make-ws! :brian {:stage :triaging})]
         (make-session! :brian (:id w) "run-auto"
                        {:weight :heavy :autonomy autonomy-running})
         (make-session! :brian (:id w) "human-sess" {:autonomy nil})
@@ -384,7 +384,7 @@
 (deftest workstream-row-non-shipping-has-nil-substate
   (with-tmp
     (fn [_]
-      (let [w (make-ws! :brian {:stage :implementing})]
+      (let [w (make-ws! :brian {:stage :triaging})]
         (make-session! :brian (:id w) "run-a" {:autonomy autonomy-running})
         (let [row (wsv/workstream-row :brian (workstream/read-ws :brian (:id w)))]
           (is (nil? (:ship-substate row)) ":ship-substate is nil for non-shipping workstreams"))))))

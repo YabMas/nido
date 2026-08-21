@@ -37,7 +37,10 @@
       (finally (fs/delete-tree tmp)))))
 
 (deftest stages-is-the-canonical-spine
-  (is (= [:intake :triage :ready :in-progress :shipping :done] work/stages)))
+  ;; :incoming, not :intake — these are STORED stage names (see
+  ;; spine-is-exactly-the-stages-the-board-honors). :intake is the TAB that holds
+  ;; the :triage and :incoming bands, which is what tab-bands takes.
+  (is (= [:incoming :triage :ready :in-progress :shipping :done] work/stages)))
 
 (deftest tab-bands-splits-the-spine-into-two-jobs
   (let [grouped {:incoming [{:ws-id "i"}]
@@ -312,6 +315,17 @@
   (with-tmp
     (fn [_]
       (is (nil? (work/workstream :brian "ws-does-not-exist"))))))
+
+(deftest spine-is-exactly-the-stages-the-board-honors
+  ;; work/stages is what the TUI stage picker offers and what default-target
+  ;; validates a configured override against — both feed set-stage!, so every
+  ;; entry must be a stage the board actually honors. The head used to read
+  ;; :intake, a TAB name no record ever carries: picking it wrote a stage
+  ;; grouped-by-stage has no key for and the workstream left every band.
+  (is (= session/lifecycle-stages (set work/stages)))
+  (is (= (count session/lifecycle-stages) (count work/stages)) "ordered, no dupes")
+  (is (every? session/storable-stages work/stages)
+      "every pickable stage survives create!/advance-stage!"))
 
 (deftest default-target-falls-back-to-in-progress
   (with-redefs [nido.config/read-projects (constantly {})]

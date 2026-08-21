@@ -30,10 +30,22 @@
         (let [w2 (ws/read-ws :brian (:id w))]
           (is (= 1 (count (:entries w2))))
           (is (= :note (-> w2 :entries first :kind))))
-        (task/stage-advance* {:project "brian" :ref "BR-3" :stage "investigating"})
-        (is (= :investigating (:stage (ws/read-ws :brian (:id w)))))
+        (task/stage-advance* {:project "brian" :ref "BR-3" :stage "ready"})
+        (is (= :ready (:stage (ws/read-ws :brian (:id w)))))
         (task/close* {:project "brian" :ref "BR-3" :outcome "done"})
         (is (= :done (-> (ws/read-ws :brian (:id w)) :closed :outcome)))))))
+
+(deftest stage-advance-refuses-a-stage-outside-the-vocabulary
+  (with-tmp
+    (fn [_]
+      (ws/create! :brian {:stage :triaging :external-refs [{:adapter :notion :id "BR-3"}]})
+      ;; :implementing is a ticket status. The CLI keywordizes whatever you type,
+      ;; so this is the surface a stage nothing projects arrived through.
+      (is (thrown-with-msg?
+            clojure.lang.ExceptionInfo #"Unknown workstream stage"
+            (task/stage-advance* {:project "brian" :ref "BR-3" :stage "implementing"})))
+      (is (= :triaging (:stage (ws/read-ws :brian (:id (ws/find-by-ref :brian :notion "BR-3")))))
+          "the refused stage is not written"))))
 
 (deftest ref-add-stamps-github-ref
   (with-tmp

@@ -32,6 +32,13 @@
    [:id            string?]
    [:project       keyword?]
    [:external-refs [:vector ExternalRef]]
+   ;; Deliberately looser than session/storable-stages, which create! and
+   ;; advance-stage! enforce. The vocabulary is closed at the SETTERS, not here,
+   ;; so a record that acquired a foreign stage some other way (a hand-edited
+   ;; edn, a pre-guard write) stays readable, closable and repairable instead of
+   ;; wedging every subsequent write! of it — including the advance-stage! back
+   ;; to a legal stage that fixes it. :stage-history is looser still, and stays
+   ;; that way: it is the record of what happened, mistakes included.
    [:stage         keyword?]
    [:stage-history [:vector [:map [:at string?] [:stage keyword?]]]]
    ;; :dismissed is the nido-side veto (work/dismiss!). It is a distinct outcome
@@ -83,11 +90,29 @@
   (io/write-edn! (cstate/workstream-edn-path (:project w) (:id w)) w)
   w)
 
+(defn- check-stage!
+  "Throw unless `stage` is in the closed vocabulary (session/storable-stages).
+   The vocabulary has two tiers and only this check spans both, so it is the one
+   place a stage the rest of nido cannot act on gets refused. Without it a stage
+   outside the set was written happily and then ignored by every projection: the
+   workstream simply stopped appearing where you put it."
+  [stage where]
+  (when-not (contains? session/storable-stages stage)
+    (throw (ex-info (str "Unknown workstream stage " (pr-str stage)
+                         " — nothing projects it, so the workstream would go missing")
+                    {:stage    stage
+                     :where    where
+                     :storable (vec (sort session/storable-stages))
+                     :hint     (str "Board stages: " (vec (sort session/lifecycle-stages))
+                                    ". Ticket statuses (:planning/:implementing/…) are a "
+                                    "different vocabulary — :implementing is :in-progress here.")}))))
+
 (defn create!
   "Mint an id and persist a fresh workstream at the given stage. `base` may
    carry :external-refs (default []), :intake {:trigger <kw> :payload <map>}
    (default absent), :facets <map> (default absent), and must carry :stage."
   [project {:keys [stage external-refs intake facets]}]
+  (check-stage! stage :create!)
   (let [now (clock/now-iso)
         w   (cond-> {:id            (mint-id)
                      :project       project
@@ -104,8 +129,11 @@
 (defn advance-stage!
   "Move a workstream to `new-stage`, appending to :stage-history. No-op (no
    history entry) when already at `new-stage`. Throws if the workstream is
-   absent. Returns the updated record."
+   absent, or if `new-stage` is outside session/storable-stages — checked ahead
+   of the no-op, so re-setting a foreign stage is refused rather than quietly
+   accepted. Returns the updated record."
   [project ws-id new-stage]
+  (check-stage! new-stage :advance-stage!)
   (let [w (or (read-ws project ws-id)
               (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))]
     (if (= new-stage (:stage w))

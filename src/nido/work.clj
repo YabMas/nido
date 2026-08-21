@@ -39,9 +39,17 @@
    [nido.session.state :as sstate]))
 
 (def stages
-  "The canonical spine, in order. A PR merge is the event that advances
-   :shipping → :done; :shipping is the merge-pipeline stage entered by `nido ship`."
-  [:intake :triage :ready :in-progress :shipping :done])
+  "The canonical spine, in order — session/lifecycle-stages, sequenced. A PR merge
+   is the event that advances :shipping → :done; :shipping is the merge-pipeline
+   stage entered by `nido ship`.
+
+   These are STORED stage names, because both readers turn them into one: the TUI
+   stage picker feeds set-stage! straight from this vector, and default-target
+   validates a project's configured override against it. The head used to read
+   :intake — the name of the TAB that holds the :triage and :incoming bands
+   (tab-bands), never a stage any record carries. Picking it wrote a stage
+   grouped-by-stage has no key for, and the workstream dropped off every band."
+  [:incoming :triage :ready :in-progress :shipping :done])
 
 (defn tab-bands
   "Ordered [stage rows] pairs for `tab` out of a `grouped` map, empty bands

@@ -28,7 +28,7 @@
         (is (= (:id a) (:id b)))
         (is (= 1 (count (ws/list-ids :brian))))
         (is (= :triaging (:stage a))))
-      (let [c (spawn/ensure-workstream! :brian {} :intake)]
+      (let [c (spawn/ensure-workstream! :brian {} :incoming)]
         (is (= 2 (count (ws/list-ids :brian))))
         (is (empty? (:external-refs c)))))))
 

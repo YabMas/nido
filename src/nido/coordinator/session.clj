@@ -187,6 +187,30 @@
    never derived) — honored as a stored override on an open workstream."
   #{:incoming :triage :ready :in-progress :shipping :done})
 
+(def marker-stages
+  "Stages a workstream may be STORED at that deliberately do NOT override the
+   projection: :triaging (create!'s default — the workstream has been minted but
+   its position is whatever the projection derives) and :scratch (the marker
+   work/to-spine keys a scratch one-off on before folding it to :in-progress).
+   Kept out of lifecycle-stages on purpose; kept legal to write, because both are
+   written by nido itself."
+  #{:triaging :scratch})
+
+(def storable-stages
+  "The closed vocabulary a workstream's :stage may be SET to — the union of the
+   stages the board honors as an override and the markers that ride alongside
+   them. Enforced by workstream/create! and workstream/advance-stage!.
+
+   Wider than lifecycle-stages, and the difference is the whole point: a marker
+   stage is legal but never overrides, so the two sets must not be conflated.
+   Anything outside this set was silently accepted and then silently ignored by
+   every projection — a workstream stored at, say, :implementing (a TICKET status,
+   not a stage) fell through to derive-stage and landed back in the triage queue
+   with no indication anything had gone wrong. :inbox is absent by design: it is
+   legacy-on-read only (workstream/normalize-legacy-stage maps it to :incoming),
+   never something new code may write."
+  (into lifecycle-stages marker-stages))
+
 (defn- derive-stage
   "Lifecycle stage from workstream :closed + local ticket status.
    A ticket with NO ledger entry (nil status) is :triage — it has not been
