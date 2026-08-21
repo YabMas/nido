@@ -368,3 +368,28 @@
                    "a" [{:id "aa11" :from-layer "a" :disposition :closed :authority "design"}
                         {:id "bb22" :from-layer "a" :disposition :fix}
                         {:id "cc33" :from-layer "b" :disposition :closed}])))))
+
+;; ---- announcing the round's targets before it starts ---------------------
+
+(deftest announce-targets-publishes-every-target-before-any-agent-runs
+  (let [seen (atom [])
+        ctx  {:iter 1 :config {:cwd "/definitely/not/a/workspace"
+                               :emit #(swap! seen conj %)}}]
+    (stages/announce-targets!
+     ctx {:review  [{:label "lower" :from "BASE" :to "L"}
+                    {:label "stack" :from "BASE" :to "@" :stack? true}]
+          :skipped [{:label "upper" :from "L" :to "U"}]})
+    (let [ev (first @seen)]
+      (is (= :targets-resolved (:event ev)))
+      (is (= "BASE" (:base-rev ev)) "base-rev is the stack target's fork point")
+      (is (= ["lower" "stack" "upper"] (mapv :label (:targets ev))))
+      (is (= ["pending" "pending" "skipped"] (mapv :status (:targets ev))))
+      (is (= [false true false] (mapv :stack? (:targets ev))))
+      (is (= [] (:files ev))
+          "an unresolvable cwd yields no file list rather than taking the run down"))))
+
+(deftest announce-targets-is-inert-without-an-emit
+  ;; run-loop defaults :emit to a no-op and tests inject their own; a stage that
+  ;; assumed one was present would break every caller that does not care.
+  (is (nil? (stages/announce-targets! {:iter 1 :config {:cwd "/tmp"}}
+                                      {:review [] :skipped []}))))

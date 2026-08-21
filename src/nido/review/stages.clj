@@ -173,6 +173,36 @@
                                           (str/split-lines (or manifest ""))))})))
         results))
 
+(defn announce-targets!
+  "Publish what this round is about to review, BEFORE any agent starts.
+
+   Everything here is known at setup: the fork point from jj, the target list
+   from the stack, the manifest from one `jj diff --name-only`. It used to reach
+   the report only as a by-product of the WHOLE-STACK target's result — the last
+   and widest target of the round — so the header could not name the stack until
+   the slowest thing in it had finished, and a run interrupted before that
+   reported nothing at all about what it had been reviewing.
+
+   Best-effort by design. A run must not die because a display event could not be
+   built, so a failure here is swallowed and the round proceeds exactly as it did
+   before this event existed."
+  [ctx {:keys [review skipped]}]
+  (when-let [emit (get-in ctx [:config :emit])]
+    (try
+      (let [cwd      (get-in ctx [:config :cwd])
+            base-rev (:from (first (filter :stack? (concat review skipped))))
+            row      (fn [status t] {:label  (:label t)
+                                     :stack? (boolean (:stack? t))
+                                     :status status})]
+        (emit {:event    :targets-resolved
+               :iter     (:iter ctx)
+               :at       (str (java.time.Instant/now))
+               :base-rev base-rev
+               :files    (if base-rev (codex/changed-files cwd base-rev "@") [])
+               :targets  (into (mapv (partial row "pending") review)
+                               (mapv (partial row "skipped") skipped))}))
+      (catch Throwable _ nil))))
+
 (def review-stage
   "Every layer and the whole stack, reviewed in one round.
 
@@ -188,6 +218,7 @@
                  all     (with-patch-hashes cwd (review-targets cwd base))
                  {:keys [review skipped]} (to-review cached all)
                  targets review
+                 _       (announce-targets! ctx {:review review :skipped skipped})
                  results (in-parallel
                           max-concurrent-reviews
                           (map (fn [t]

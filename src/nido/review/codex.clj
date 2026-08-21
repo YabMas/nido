@@ -86,6 +86,31 @@
                       {:reason :review-failed :exit exit :cwd cwd :base base :err err})))
     rev))
 
+(defn- diff-name-only
+  "Raw `jj diff --name-only` over a range. Returns jj!'s {:exit :out :err}; the
+   caller decides what a failure means, because the two callers disagree. A
+   review must treat a failed diff as fatal — an empty diff read as \"clean\"
+   would report that nothing was wrong with code nothing looked at — while
+   resolving the target up front must not take a run down over a display detail."
+  [cwd from to]
+  (jj/jj! cwd "diff" "--name-only" "--from" from "--to" to))
+
+(defn changed-files
+  "The files a range touches, or [] when the diff fails for any reason. Tolerant
+   by design: this feeds the target block the display reads, and a header is
+   never worth a run.
+
+   Catches as well as checking the exit code — `shell` THROWS on an unusable
+   :dir rather than returning non-zero, so an exit check alone would let a bad
+   cwd escape as an exception from a display path."
+  [cwd from to]
+  (try
+    (let [{:keys [exit out]} (diff-name-only cwd from to)]
+      (if (zero? exit)
+        (vec (remove str/blank? (str/split-lines (str out))))
+        []))
+    (catch Throwable _ [])))
+
 (defn safe-label
   "A label made safe to put in a filename. Layer labels come from bookmarks, and
    an unstacked branch's bookmark is the session name — which contains a slash
@@ -124,7 +149,7 @@
    than the one under review."
   [{:keys [cwd from to run-id iter label brief]}]
   (let [to       (or to "@")
-        {:keys [exit out err]} (jj/jj! cwd "diff" "--name-only" "--from" from "--to" to)
+        {:keys [exit out err]} (diff-name-only cwd from to)
         _        (when-not (zero? exit)
                    ;; A failed diff (cwd not a jj workspace, bad range, …) must not
                    ;; be mistaken for an empty diff — that would silently report a

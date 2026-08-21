@@ -89,3 +89,49 @@
     (is (str/includes? s "→ closed"))
     (is (str/includes? s "out-of-scope"))
     (is (str/includes? s "reported by widen") "attribution is visible when it moved")))
+
+;; ---- what a run that has not finished reviewing yet shows ----------------
+
+(def mid-review-report
+  "The state the display is in for most of a real round: targets resolved, six
+   agents in flight, nothing finished. Before targets-resolved this rendered as
+   one bare `reviewing …` line for the whole multi-minute phase."
+  {:schema 1 :run-id "review-1" :status "running"
+   :target {:cwd "/w/feat/progress-ratio" :base "main" :base-rev "B"
+            :files ["src/a.clj" "src/b.clj" "src/c.clj"] :layers 2}
+   :started-at "2026-06-30T14:00:00Z" :ended-at nil
+   :rounds [{:round 1 :status "running" :started-at "2026-06-30T14:00:00Z"
+             :phases [{:phase "review" :status "running"
+                       :started-at "2026-06-30T14:00:00Z" :ended-at nil
+                       :layers [{:label "helpers" :stack? false :status "pending"}
+                                {:label "basis"   :stack? false :status "skipped"}
+                                {:label "stack"   :stack? true  :status "pending"}]}]}]
+   :summary nil})
+
+(deftest header-names-the-stack-before-any-review-finishes
+  (let [s (render/frame mid-review-report now)]
+    (is (str/includes? s "2 layers")
+        "the layer count comes from the resolved target, not from a finished review")
+    (is (str/includes? s "3 files"))))
+
+(deftest a-running-review-lists-its-targets
+  (let [s (render/frame mid-review-report now)]
+    (is (str/includes? s "helpers"))
+    (is (str/includes? s "queued"))
+    (is (str/includes? s "stack (composition)"))
+    (is (str/includes? s "unchanged since it converged")
+        "a target skipped by the cache says so from the start")))
+
+(deftest a-completed-review-renders-exactly-as-before
+  ;; The running-state display must not be bought with a regression in the
+  ;; finished-state one — the rows a finished phase carries are its own.
+  (let [done (assoc-in mid-review-report [:rounds 0 :phases 0]
+                       {:phase "review" :status "ok"
+                        :started-at "2026-06-30T14:00:00Z"
+                        :ended-at "2026-06-30T14:00:30Z"
+                        :findings []
+                        :layers [{:label "helpers" :stack? false
+                                  :status "reviewed" :findings 2}]})
+        s (render/frame done now)]
+    (is (str/includes? s "2 findings"))
+    (is (not (str/includes? s "queued")))))

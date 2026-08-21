@@ -24,6 +24,10 @@
   (let [r (drive
            [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
             {:event :phase-started :iter 1 :phase :review :at "t1"}
+            {:event :targets-resolved :iter 1 :at "t1a" :base-rev "BASE"
+             :files ["src/a.clj" "src/b.clj"]
+             :targets [{:label "one" :stack? false :status "pending"}
+                       {:label "stack" :stack? true :status "pending"}]}
             {:event :phase-finished :iter 1 :phase :review :at "t2"
              :ctx {:findings [{:title "bug" :file "/w/a.clj" :line-start 5 :line-end 6}]
                    :overall-correctness "incorrect"
@@ -37,7 +41,43 @@
     (is (= "incorrect" (:overall-correctness review)))
     (is (= 1 (count (:findings review))))
     (is (= "BASE" (:base-rev (:target r))))
-    (is (= ["src/a.clj" "src/b.clj"] (:files (:target r))))))
+    (is (= ["src/a.clj" "src/b.clj"] (:files (:target r))))
+    (is (= 1 (:layers (:target r)))
+        "the stack target is not a layer")))
+
+(deftest targets-resolved-populates-the-target-before-any-review-finishes
+  (let [r (drive
+           [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+            {:event :phase-started :iter 1 :phase :review :at "t1"}
+            {:event :targets-resolved :iter 1 :at "t1a" :base-rev "BASE"
+             :files ["src/a.clj" "src/b.clj" "src/c.clj"]
+             :targets [{:label "lower" :stack? false :status "pending"}
+                       {:label "upper" :stack? false :status "skipped"}
+                       {:label "stack" :stack? true :status "pending"}]}])
+        review (first (:phases (first (:rounds r))))]
+    ;; This is the state an INTERRUPTED run leaves behind: the review phase has
+    ;; not finished and never will, and the report still says what it was for.
+    (is (= "running" (:status review)))
+    (is (= "BASE" (:base-rev (:target r))))
+    (is (= 3 (count (:files (:target r)))))
+    (is (= 2 (:layers (:target r))))
+    (is (= ["lower" "upper" "stack"] (mapv :label (:layers review))))
+    (is (= ["pending" "skipped" "pending"] (mapv :status (:layers review))))))
+
+(deftest a-finished-review-replaces-the-seeded-rows-with-its-own
+  (let [r (drive
+           [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+            {:event :phase-started :iter 1 :phase :review :at "t1"}
+            {:event :targets-resolved :iter 1 :at "t1a" :base-rev "BASE"
+             :files [] :targets [{:label "one" :stack? false :status "pending"}]}
+            {:event :phase-finished :iter 1 :phase :review :at "t2"
+             :ctx {:findings [{:title "bug" :from-layer "one"}]
+                   :reviews  [{:target {:label "one"}}]
+                   :skipped  []}}])
+        review (first (:phases (first (:rounds r))))]
+    (is (= [{:label "one" :status "reviewed" :stack? false :findings 1}]
+           (:layers review))
+        "the finished payload owns the rows; the seed only carries the round")))
 
 (deftest arbiter-and-fix-fill-in-the-round
   (let [r (drive

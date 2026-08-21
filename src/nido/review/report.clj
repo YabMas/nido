@@ -4,8 +4,7 @@
    (apply-event). Pure — persistence is one explicit fn (persist!)."
   (:require
    [babashka.fs :as fs]
-   [cheshire.core :as json]
-   [clojure.string :as str]))
+   [cheshire.core :as json]))
 
 (def schema-version 1)
 
@@ -107,18 +106,23 @@
                 (assoc ph :fixes (vec (:fixes h)) :fixed-count (:fixed-count h)))
       ph)))
 
-(defn- patch-target
-  "On the first review with a base-rev, populate target base-rev + files + how
-   many layers the stack was cut into."
-  [report ctx]
-  (if (and (nil? (:base-rev (:target report))) (:base-rev ctx))
-    (-> report
-        (assoc-in [:target :base-rev] (:base-rev ctx))
-        (assoc-in [:target :layers]
-                  (count (remove :stack? (review-layers ctx))))
-        (assoc-in [:target :files]
-                  (vec (remove str/blank? (str/split-lines (or (:manifest ctx) ""))))))
-    report))
+(defn- resolve-target
+  "Record what the round is about to review, and seed one row per target on the
+   running review phase.
+
+   This replaces deriving the same three values from the whole-stack target's
+   RESULT. They were never results: the fork point, the target list and the
+   manifest are all known before an agent starts, and reading them off the
+   slowest target of the round meant a watcher learned what was under review
+   only once it no longer mattered — and an interrupted run never learned it."
+  [report {:keys [base-rev files targets]}]
+  (-> report
+      (assoc-in [:target :base-rev] base-rev)
+      (assoc-in [:target :files] (vec files))
+      (assoc-in [:target :layers] (count (remove :stack? targets)))
+      (update-current-phase
+       "review"
+       (fn [ph] (assoc ph :layers (vec targets))))))
 
 (defn- total-fixed
   [report]
@@ -154,10 +158,12 @@
                        :started-at (:at ev) :ended-at nil}))
 
     :phase-finished
-    (let [ctx (assoc (:ctx ev) :iter (:iter ev))
-          r   (update-current-phase report (name (:phase ev))
-                                    #(finish-phase % (:phase ev) ctx (:at ev)))]
-      (if (= :review (:phase ev)) (patch-target r ctx) r))
+    (let [ctx (assoc (:ctx ev) :iter (:iter ev))]
+      (update-current-phase report (name (:phase ev))
+                            #(finish-phase % (:phase ev) ctx (:at ev))))
+
+    :targets-resolved
+    (resolve-target report ev)
 
     :phase-errored
     (update-current-phase report (name (:phase ev))

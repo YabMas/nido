@@ -78,22 +78,38 @@
         n (max 1 (- layer-col (count s)))]
     (str s (apply str (repeat n " ")))))
 
+(defn- layer-glyph
+  [status]
+  (case status
+    ("skipped" "pending") "·"
+    "error"               "✗"
+    "✓"))
+
+(defn- layer-text
+  [{:keys [status findings]}]
+  (case status
+    "skipped" "unchanged since it converged"
+    "pending" "queued"
+    "error"   "failed"
+    (str findings " finding" (when (not= 1 findings) "s"))))
+
 (defn- layer-lines
-  "One indented line per review target: what it found, or that it was not looked
-   at because its patch had already converged.
+  "One indented line per review target: what it found, that it has not been
+   looked at yet, or that it was not looked at at all because its patch had
+   already converged.
 
    A skipped layer is SHOWN rather than omitted. A reader who cannot see that a
    layer was passed over has to take on trust that it was safe to pass over —
-   and silent truncation reads as coverage."
+   and silent truncation reads as coverage. A pending one is shown for the same
+   reason from the other end: the round names every target before it reviews any
+   of them, so a run interrupted mid-review still says what it set out to read."
   [ph]
   (->> (:layers ph)
-       (map (fn [{:keys [label status findings stack?]}]
+       (map (fn [{:keys [label stack? status] :as row}]
               (str "       "
-                   (if (= "skipped" status) "·" "✓") " "
+                   (layer-glyph status) " "
                    (pad (if stack? (str label " (composition)") label))
-                   (if (= "skipped" status)
-                     "unchanged since it converged"
-                     (str findings " finding" (when (not= 1 findings) "s"))))))))
+                   (layer-text row))))))
 
 (defn- warden-lines
   [ph]
@@ -103,7 +119,12 @@
 
 (defn- phase-block [ph target now]
   (let [detail (case (:phase ph)
-                 "review" (when (= "ok" (:status ph)) (layer-lines ph))
+                 ;; Gated on the rows EXISTING, not on the phase being over.
+                 ;; They are seeded when targets resolve, and a phase that runs
+                 ;; for minutes is precisely the one worth showing detail for. A
+                 ;; finished phase has already replaced them with its own rows,
+                 ;; so what a COMPLETED run renders is unchanged by this.
+                 "review" (when (seq (:layers ph)) (layer-lines ph))
                  "warden" (when (= "ok" (:status ph)) (warden-lines ph))
                  nil)]
     (str/join "\n" (cons (phase-line ph target now) (remove str/blank? detail)))))
