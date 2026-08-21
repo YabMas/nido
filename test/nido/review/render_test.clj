@@ -90,8 +90,8 @@
                                         {:label "three" :index 3 :status "skipped"}
                                         {:label "stack" :stack? true :status "running"}]}]}]}
         rows (->> (str/split-lines (render/frame r (java.time.Instant/parse "2026-01-01T00:00:10Z")))
-                  (keep #(second (re-find #"(Layer \d · \w+|All \d layers at once)" %))))]
-    (is (= ["Layer 1 · one" "Layer 2 · two" "Layer 3 · three" "All 3 layers at once"]
+                  (keep #(second (re-find #"(Layer \d · \w+|The \d layers in sequence)" %))))]
+    (is (= ["Layer 1 · one" "Layer 2 · two" "Layer 3 · three" "The 3 layers in sequence"]
            rows)
         "converged layers sit between the layers they sit between")))
 
@@ -108,7 +108,7 @@
     (is rule "a rule separates it from the layers")
     (is (str/includes? (nth lines rule) "composition")
         "the rule says what the block below it is")
-    (is (str/includes? (nth lines (inc rule)) "All 6 layers at once")
+    (is (str/includes? (nth lines (inc rule)) "The 6 layers in sequence")
         "and it is named for the whole stack, not for the rows in this round")
     (is (not (str/includes? (nth lines (inc rule)) "Layer "))
         "the composition pass carries no layer number — it is not a layer")))
@@ -180,8 +180,9 @@
                                :by-layer [{:label "one" :index 1 :stack? false :count 1}
                                           {:label "stack" :stack? true :count 2}]}]}]}
         s (render/frame r (java.time.Instant/parse "2026-01-01T00:00:10Z"))]
-    (is (str/includes? s "Layer 1 · one        1 to rule on"))
-    (is (str/includes? s "All 2 layers at once 2 to the arbiter"))))
+    (is (str/includes? s "Layer 1 · one            1 to rule on")
+        "the layer row pads to the composition row's width, so the two align")
+    (is (str/includes? s "The 2 layers in sequence 2 to the arbiter"))))
 
 (deftest final-says-what-was-decided-about-each-finding
   (let [r {:target {:cwd "/x/feat/thing" :base "main"}
@@ -242,7 +243,7 @@
   (let [s (render/frame mid-review-report now)]
     (is (str/includes? s "Layer 1 · helpers"))
     (is (str/includes? s "queued"))
-    (is (str/includes? s "All 2 layers at once"))
+    (is (str/includes? s "The 2 layers in sequence"))
     (is (str/includes? s "converged")
         "a target skipped by the cache says so from the start")))
 

@@ -105,12 +105,18 @@
    than none.
 
    The composition pass has no number because it is not a layer. It is named for
-   what it actually reads — every layer at once, which is the only way to find a
-   defect that exists solely in the composition of two of them — and with no
-   layers under it there is nothing to compose and it is simply the branch."
+   what it actually reads — the layers IN SEQUENCE, which is the only way to
+   find a defect that exists solely in how two of them compose. It named every
+   layer at once, which is a wider diff, and a wider diff is the one thing this
+   pass is not: reading the branch flat is what the layer reviews already did
+   between them, and the states the branch passes THROUGH are what nothing else
+   in the loop can reach.
+
+   With no layers under it there is no sequence to read, the pass is not primed
+   as a composition at all, and it is simply the branch."
   [{:keys [index stack? label]} layer-count]
   (cond
-    (and stack? (pos? layer-count)) (str "All " layer-count " layers at once")
+    (and stack? (pos? layer-count)) (str "The " layer-count " layers in sequence")
     stack?                          "Whole branch"
     index                           (str "Layer " index " · " label)
     :else                           (str label)))
@@ -136,10 +142,10 @@
   "The captioned rule that separates the composition pass from the layers.
 
    Carrying the caption HERE rather than in the row's name is what keeps the
-   name field driven by the layers: `Composition · all layers at once` in the
-   name column would have set the width of every row above it, pushing six short
-   slugs a third of the way across the terminal to make room for a phrase that
-   is really a section heading."
+   name field driven by the layers: `Composition · the layers in sequence` in
+   the name column would have set the width of every row above it, pushing six
+   short slugs a third of the way across the terminal to make room for a phrase
+   that is really a section heading."
   [col]
   (let [head (str indent "─── composition ")]
     (str head (apply str (repeat (max 3 (- (+ (count indent) 2 col) (count head)))
@@ -150,10 +156,10 @@
    layers above it.
 
    The rule is the whole distinction. The composition row is not a seventh
-   sibling of six layers — it is one pass over all of them — and a label alone
-   was not carrying that: it sat in the list looking like a layer whose name
-   happened to be `stack`. Drawn only when a layer precedes it, since a rule
-   under nothing separates nothing.
+   sibling of six layers — it is one pass over how the six compose — and a label
+   alone was not carrying that: it sat in the list looking like a layer whose
+   name happened to be `stack`. Drawn only when a layer precedes it, since a
+   rule under nothing separates nothing.
 
    `layers` is how wide the STACK is, which is not the same as how many layer
    rows this block has: the warden block holds only the layers that reported
