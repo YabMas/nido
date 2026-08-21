@@ -12,11 +12,12 @@ description: Survey the area's current design, then state what the change commit
 ## What this is
 
 `/stack` cuts work **vertically** — same story, ordered by dependency.
-`/spin-out` cuts **horizontally** — a different story altogether. **This skill is
-not a third axis. It is the frame both of them cut against.** They route work;
-this says what the work is *for*.
+`/spin-out` cuts **horizontally** — a different story altogether. `/phase` cuts
+**temporally** — same story, landings separated by a deploy. **This skill is not
+a fourth axis. It is the frame all three cut against.** They route work; this
+says what the work is *for*.
 
-**Invoke it before either of them, at planning time.** A design authored at ship
+**Invoke it before any of them, at planning time.** A design authored at ship
 time is a description, not a decision — and by then the layers have already been
 cut against nothing.
 
@@ -24,8 +25,8 @@ cut against nothing.
 
 The same thing the shipping doctrine optimises: **change landed per unit of
 reviewer attention, at constant-or-rising trust.** This skill serves it from the
-other end. `/stack` and `/spin-out` bound how much arrives at once; a design
-record makes what arrives **evaluable**.
+other end. `/stack` and `/spin-out` bound how much arrives at once and `/phase` bounds how
+much is at risk in one landing; a design record makes what arrives **evaluable**.
 
 The failure it exists to prevent: *a finding is only meaningful relative to an
 intent.* With no stated intent, "this is wrong" and "this is not what we decided"
@@ -78,6 +79,8 @@ One `:design` event per workstream, appended to the ledger:
  :shape      "The structural claim: which parts exist, where the boundaries
               fall, what crosses them."
  :invariants ["what must hold once this lands — one per line, checkable"]
+              ;; a PHASED record writes maps instead, each saying when it holds:
+              ;; [{:invariant "…" :holds :always | :on-completion}]
  :standing   {:relation   :conforms          ; :conforms | :extends | :challenges
               :principles ["refs into the project's stance"]
               :note       "REQUIRED for :extends / :challenges — what, and why"}
@@ -87,7 +90,13 @@ One `:design` event per workstream, appended to the ledger:
               :note     "REQUIRED for :extends / :revisit"}
  :rejected   [{:alternative "…" :why-not "…"}]
  :layers     [{:claim "one sentence, no \"and\"" :mode :judgment}]
- :seams      [{:what "deliberate incompleteness" :visible-how "how a reader sees it"}]
+ :phases     [{:claim     "what is true of the RUNNING system once this lands"
+                :habitable "what is true of it while this phase is live"
+                :exit      {:kind :observation :criterion "what must be observed first"}
+                :undo      {:how :revert :by "…"}}]  ; only when phased — see /phase
+ :seams      [{:what "deliberate incompleteness" :visible-how "how a reader sees it"
+                :closed-by :phase :phase "the phase that closes it"}]
+              ;; …or :closed-by :spun-out :ref "FU-12", or :permanent :why "…"
  :open       ["design questions still unresolved"]
  :supersedes {:seq 4 :why "…"}       ; only when amending — §5
  :effort     :M}                     ; concrete; resolves a triage :squirrel
@@ -107,7 +116,11 @@ what survives the session.
 
 - **`:invariants` is the yardstick.** The review judge checks findings against
   these and nothing else. Required, non-empty, and each one written so a reviewer
-  could state an observation that proves it false.
+  could state an observation that proves it false. **On a phased record each one
+  also says *when* it holds** — `:always` at every phase boundary, or
+  `:on-completion` — because a phase plan creates intermediate states that are
+  wrong on purpose, and without the marker the judge reads the plan working as
+  the design failing.
 - **`:rejected` is what makes a later review round decidable.** Without it,
   round three re-proposes what round zero rejected and nobody can tell whether
   that is new insight or re-litigation. With it, a finding is either *answered*
@@ -120,8 +133,16 @@ what survives the session.
   point of surveying first.
 - **`:layers` is the design's decomposition claim** — `/stack` realises it.
   Claim and review mode only; bookmarks, slugs and ordering are mechanics.
+- **`:phases` is the design's *other* decomposition claim** — `/phase` realises
+  it, as `/stack` realises `:layers`. Present only when the change cannot reach
+  production in one landing. Each phase claims something about the running
+  system, says what is true of it while that phase is live, and names the
+  observation that lets the next one start.
 - **`:seams` is what makes `/spin-out`'s veto checkable.** Visibly incomplete is
-  a decision; invisibly incomplete is a defect.
+  a decision; invisibly incomplete is a defect — and incompleteness nothing is
+  scheduled to close is a third thing. So every seam names its closure: a
+  `:phase` of this record's own plan, a `:spun-out` ref, or `:permanent` with its
+  reason. The ledger refuses a seam naming a phase the plan does not contain.
 
 ## 3. The principles
 
@@ -154,8 +175,11 @@ A claim, a test, and the failure mode it prevents.
    the design, the design is not decomposed yet. *Test:* every layer's `Claims:`
    traces to a line in the record.
 9. **Visible incompleteness is a design decision; invisible incompleteness is a
-   defect.** A design may leave a seam — then say so in `:seams`, with what makes
-   it visible.
+   defect; incompleteness nothing will close is a wish.** A design may leave a
+   seam — then say so in `:seams`, with what makes it visible *and* what closes
+   it. *Test:* for every seam, name the phase, the ref, or the reason it is
+   permanent. *Failure:* the system lives forever with two paths and a flag
+   nobody dares remove, and no single change ever looked wrong.
 10. **Amend the design when it is wrong; never quietly patch around it** (§5).
 11. **The stance earns its authority by being amendable.** A constitution nobody
     can change gets routed around instead of followed. Declaring `:challenges` is
@@ -287,7 +311,8 @@ Sweep it before you ship, and route every line:
 |---|---|
 | a fact about the area the baseline got wrong or missed | **append a new `:baseline`**, and cite it from the amended design record |
 | a question the record can't answer yet | `:open` — amend the record |
-| incompleteness you are choosing to leave | `:seams` — amend, and say what makes it visible |
+| incompleteness you are choosing to leave | `:seams` — amend, and say what makes it visible and what closes it |
+| the change cannot safely arrive in one deploy | `:phases` — amend, and read `/phase` |
 | the shape you committed to cannot hold | **supersede** the record (§5) |
 | a different story altogether | `/spin-out` — file it, with a ref |
 | true, and not worth acting on | decline it in the layer's brief, with the reason |
@@ -381,6 +406,15 @@ Read back what is there with `bb nido:workstream:show :project <p> :ref <ref>`.
 - **Sweeping a design noticing into the code and not the record** — the fix
   lands, the record still describes a system that no longer exists.
 - **Keeping the buffer in the worktree**, where it can ride along in a commit.
+- **A phase plan with plain-string invariants** — refused on write, because
+  without `:holds` the verdict pass judges the middle of a migration against the
+  end of it (`/phase` §6).
+- **A seam with no closure named** — "visible" was only ever half the obligation;
+  the other half is what will close it, and `:permanent` is a real answer that
+  has to carry its reason (principle 9).
+- **Cutting a phase where a layer belongs.** If nobody is ever on the
+  intermediate state, it is a layer — the merge dissolves the boundary anyway
+  (`/phase` §2).
 - **A design longer than its diff.** It is a plan; cut it back to claims.
 - **Layers that do not appear in the record** — either the design is incomplete
   or the layer is smuggling a decision nobody stated (`/stack` §2).

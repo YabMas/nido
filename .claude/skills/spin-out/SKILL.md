@@ -15,10 +15,11 @@ description: Decide what leaves the current branch and file it — the horizonta
 How to decide what belongs in the batch you are shipping and what belongs
 somewhere else, and how to file the somewhere-else so it is not lost.
 
-`/stack` cuts work **vertically** — same story, ordered by dependency. This
-skill cuts **horizontally** — a different story altogether. They are the same
-operation (routing a unit of work to a destination) along different axes, which
-is why their tests rhyme: the one-sentence-no-"and" title test, the
+`/stack` cuts work **vertically** — same story, ordered by dependency. `/phase`
+cuts **temporally** — same story, landings separated by a deploy. This skill cuts
+**horizontally** — a different story altogether. They are the same operation
+(routing a unit of work to a destination) along different axes, which is why
+their tests rhyme: the one-sentence-no-"and" title test, the
 review-mode test, and "does it carry its own design decisions" are all
 **claim-identity** tests, and claim identity is what both axes cut along.
 
@@ -80,6 +81,7 @@ is an item you keep — the branch is what you understand best right now.
 |---|---|
 | same story, same claim | **this layer** |
 | same story, a different claim | **another layer** — `/stack` |
+| same story, a claim that needs the previous one **live** first | **another phase** — `/phase` |
 | a different story | **spun out** — §6 |
 | a different story you will not do | **declined** — named in the brief, not filed |
 
@@ -92,6 +94,14 @@ reviewable act.
 "who picks this up?" is *me, next, while I still hold this context*, it is a
 layer or the next branch — not a backlog row. Route by whether the work rides
 your current context, not by whether it feels separate.
+
+**And the remainder of a migration is the third row, not the fourth.** The
+follow-up DB has a `migration-remainder` kind, which is evidence that this work
+exists and not that this is where it belongs: filed there it becomes optional,
+unordered against its siblings, resumed cold, and severed from the design record
+that justified leaving the gap. If the work *must* happen or the batch you
+already shipped was a mistake, it is a phase — same story, same design record,
+one more landing. Spin out what is genuinely elective; phase what is owed.
 
 ## 3. The veto
 
@@ -120,6 +130,21 @@ boundary.
 are deliberately leaving goes in the design record's `:seams`, with what makes it
 visible to a reader. That is the difference between a seam and a defect: the
 defect is the one nobody wrote down.
+
+**And visibility was only half of it.** It tells a reader the gap is intentional;
+it never told anyone the gap would be closed, which is how a system ends up
+living permanently with two writers and a flag nobody dares remove. So the veto
+extends, and every seam names its closure:
+
+> Visibly incomplete is a **decision** when a phase closes it, or it is declared
+> permanent. Visibly incomplete with nothing scheduled to close it is a wish with
+> better manners.
+
+Three honest closures: a `:phase` of the record's own plan (`/phase`), a
+`:spun-out` ref — which is this skill, and the ref is the deferral — or
+`:permanent`, with the reason it will never close. The ledger refuses a seam
+naming a phase the plan does not contain, which is also what stops a record with
+no phase plan from promising one.
 
 ## 4. The reasoning axes
 
@@ -269,6 +294,11 @@ oversight.
 - **Leaving a seam without declaring it** — an undeclared seam is
   indistinguishable from a defect, which is exactly how a later reader reads it
   (§3).
+- **Declaring a seam without naming what closes it** — visible and unscheduled
+  is how a temporary state becomes permanent with nobody deciding to let it
+  (§3).
+- **Filing a migration remainder that is actually owed** — if skipping it makes
+  the batch you shipped a mistake, it is a phase, not a backlog row (§2).
 - **Filing what should have been a layer** — if you are picking it up next while
   the context is hot, it is `/stack`'s axis, not this one (§2).
 - **Filing instead of declining** — "someone might want this someday" fills the

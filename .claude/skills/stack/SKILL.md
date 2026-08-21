@@ -42,10 +42,17 @@ which is why every sibling skill forks on **layer count**, not on a flag.
 
 **This skill is the vertical cut only** — same story, ordered by dependency.
 Deciding what belongs to a *different* story, and does not ship in this branch
-at all, is the horizontal cut: see **`/spin-out`**. Both are the same operation
-(routing a unit of work to a destination) and both cut along claim identity, so
-plan them together — a layer you were about to build and a follow-up you were
-about to file are the same question with different answers.
+at all, is the horizontal cut: see **`/spin-out`**. Deciding that the change
+cannot safely arrive in one deploy, so it lands in several, is the temporal cut:
+see **`/phase`**. All three are the same operation (routing a unit of work to a
+destination) and all three cut along claim identity, so plan them together — a
+layer you were about to build, a follow-up you were about to file and a phase
+you were about to schedule are one question with three answers.
+
+**A phase is a shipment, and a shipment may be a stack.** They compose rather
+than compete: phase 2 of a plan being a three-layer stack is normal. The counts
+multiply though — four phases of five layers each is the mis-scoping signal
+firing on both axes at once, not thoroughness.
 
 ## 1. Ordering — dependency direction
 
@@ -118,6 +125,14 @@ to the same specialist?* Project review lanes are real subject boundaries.
   This is an **authoring obligation on you, checked by review — not
   machine-verified.** No gate enforces it; CI runs on the merged tip. Don't go
   looking for the check, and don't treat its absence as permission to skip it.
+- **Independent correctness is not independent deployability**, and reading it
+  as such is how a migration blows up. Green build is a fact about CI; habitable
+  system is a fact about production. A layer that adds a `NOT NULL` column with
+  the backfill in the layer above satisfies this rule at every layer and would
+  take the site down if it shipped alone. It never does — `gh stack merge` lands
+  the whole stack at once, which is exactly why no layer boundary has to be
+  survivable. When one *does* have to be survivable, it is not a layer: it is a
+  phase, and `/phase` §2 is the test.
 - **Size exemptions.** Pure deletions and generated files count toward nothing.
   A 2,000-line supersede layer is a one-minute review.
 
@@ -457,19 +472,28 @@ lifts this into the PR body; `/squash` regenerates it.
 
     Refs BR-####
 
+**On a phased change, the PR body opens with where in the plan this lands** —
+a reviewer's first question is what state the system is being left in:
+
+    Phase: 2/3 — reads move to the new column.
+    While live: the old column is still written, so a revert is a config flip.
+    Next phase opens when: one full billing cycle with no incident.
+
 ### The four brief fields
 
 - **Claims** — what this layer asserts about itself. It should be the `:claim`
   from the design record's `:layers`, verbatim or close to it; if you find
   yourself writing something the record doesn't contain, one of the two is
-  wrong.
+  wrong. A layer's claim is about the **diff**; if it is about the running
+  system, you are describing a phase (`/phase` §2).
 - **Verify** — concrete checks, never "review this".
 - **Lane** — which specialism applies; also how a reviewer agent is picked.
 - **Out of scope** — what this layer's reviewer should *not* flag, and where it
   lives instead: a layer above, a spun-out ref (`spun out as FU-12`, see
-  `/spin-out`), an explicit decline with its reason, or — the strongest form —
-  a citation of the design: *the record puts this behind the X boundary*. All
-  four are legal; a bare "later" is not. The design citation is worth reaching
+  `/spin-out`), a later phase (`that is phase 3, gated on the soak`, see
+  `/phase`), an explicit decline with its reason, or — the strongest form — a
+  citation of the design: *the record puts this behind the X boundary*. All five
+  are legal; a bare "later" is not. The design citation is worth reaching
   for, because it is the only one the reviewer can check rather than take on
   trust.
 
@@ -787,5 +811,8 @@ cleaning up a merged stack's branches.
   special-cased sites is not mechanical.
 - **Stacking a small change** — under ~200 lines with no dependency seam, ship
   one plain PR.
+- **Using a layer boundary where a phase boundary is needed** — if the system
+  has to run in that state, green tests are not the obligation; habitability is
+  (§3, `/phase` §2).
 - **Pushing the session bookmark** — only `<session>--*` bookmarks get pushed.
 - **Writing "and" in a layer's PR title** — that is two layers.
