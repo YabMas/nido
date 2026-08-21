@@ -203,6 +203,67 @@
    [:seq int?]
    [:why string?]])
 
+(def LoadBearing
+  "One property the CURRENT code already relies on — not what ought to hold, but
+   what would break if you violated it. This is the field that makes the routing
+   question answerable by derivation instead of taste: behaviour that violates one
+   of these is an implementation defect, and behaviour that honours every one of
+   them and is still wrong indicts the design itself.
+
+   :evidence is required and non-empty. A load-bearing property with nothing to
+   point at is a guess, and a guess is exactly what this record exists to replace."
+  [:map {:closed true}
+   [:property string?]
+   [:evidence [:vector {:min 1} string?]]
+   [:drift    {:optional true} string?]])
+
+(def ExtensionPoint
+  "Somewhere the current design already admits extension, and how. The mirror of
+   :load-bearing — that names what cannot move, this names where it can. A change
+   landing on one of these extends the design; one that needs a point which is not
+   here is asking for the design to be revisited.
+
+   Deliberately NOT called a seam. In /design and /spin-out a seam is a *change's*
+   own visible incompleteness, which is a different thing, and one word for both
+   would collide two ideas this vocabulary was built to keep apart."
+  [:map {:closed true}
+   [:at  string?]
+   [:how string?]])
+
+(def Baseline
+  "An area's current design, as it is — the yardstick every later judgement in the
+   workstream is made against. Authored BEFORE the design record and independent
+   of it, which is the whole point: an inference made by someone who already knows
+   the fix is an inference bent toward the fix.
+
+   THE TEST FOR WHAT BELONGS HERE: every field must be fillable without knowing the
+   change. That is why nothing about effort, direction or intended shape appears —
+   those are the design record's business, and a field that needs them has crossed
+   from `is` to `ought`.
+
+   Scoped to the design that GOVERNS the behaviour, not to the files a change would
+   touch. Those differ, and the difference is where design flaws hide: the blast
+   radius is defined by the fix, while the flaw is routinely upstream of it. Hence
+   :bounded-by — the scoping decision is the first claim this record makes, and the
+   only guard against both failure modes (reading the whole codebase, and reading
+   three files and calling it a design).
+
+   Per workstream, and never written into the codebase. A checked-in current design
+   rots and then lies, which is worse than one that is absent, because it is
+   citable. /design §4 anticipates harvesting a written one from records like these
+   later; this is not that."
+  [:map {:closed true}
+   [:format           [:= :baseline]]
+   [:area             string?]
+   [:bounded-by       string?]
+   [:shape            string?]
+   [:load-bearing     [:vector {:min 1} LoadBearing]]
+   [:extension-points {:optional true} [:vector ExtensionPoint]]
+   [:governing        {:optional true} [:vector string?]]
+   [:drift            {:optional true} [:vector string?]]
+   [:read             [:vector {:min 1} string?]]
+   [:unknowns         {:optional true} [:vector string?]]])
+
 (def DesignVision
   "The high-level design one workstream commits to — authored by triage (obvious)
    or the impl session (deferred); resolves a triage :squirrel into a concrete
@@ -408,6 +469,7 @@
   "Entry :kind → its Malli schema. Drives ledger-boundary validation + rendering.
    A :kind absent here is stored as verbatim markdown (legacy / freeform)."
   {:triage                   TriageReport
+   :baseline                 Baseline
    :design                   DesignVision
    :implementation-plan      ImplementationPlan
    :implementation-completed ImplementationCompleted
@@ -497,6 +559,33 @@
   "First non-blank, trimmed line of `s`, or nil."
   [s]
   (some->> (some-> s str/split-lines) (map str/trim) (some not-empty)))
+
+(defn- baseline->markdown
+  [{:keys [area bounded-by shape load-bearing extension-points governing drift
+           read unknowns]}]
+  (str/join
+   "\n"
+   (concat
+    ["# Baseline — the current design"
+     (str "**Area:** " area)
+     (str "*Bounded by: " bounded-by "*")]
+    (when (seq governing)
+      [(str "**Governed by:** " (str/join ", " governing))])
+    ["" "## Shape" shape ""
+     "## Load-bearing — what breaks if you violate it"]
+    (for [{:keys [property evidence] lb-drift :drift} load-bearing]
+      (str "- " property
+           " — " (str/join ", " (map #(str "`" % "`") evidence))
+           (when lb-drift (str "\n  - drift from the stance: " lb-drift))))
+    (when (seq extension-points)
+      (cons "\n## Extension points — where the design already admits change"
+            (for [{:keys [at how]} extension-points]
+              (str "- " at " — " how))))
+    (when (seq drift)
+      (cons "\n## Drift from the stance" (for [d drift] (str "- " d))))
+    (when (seq unknowns)
+      (cons "\n## Not determined" (for [u unknowns] (str "- " u))))
+    ["\n## Read" (str/join ", " (map #(str "`" % "`") read))])))
 
 (defn- design->markdown
   [{:keys [summary shape invariants standing assumes rejected layers seams open
@@ -656,6 +745,7 @@
   (case (:format report)
     :markdown                 (or (:markdown report) "")
     :triage-report            (triage->markdown report)
+    :baseline                 (baseline->markdown report)
     :design                   (design->markdown report)
     :implementation-plan      (plan->markdown report)
     :implementation-completed (completed->markdown report)
@@ -675,6 +765,7 @@
    the caller falls back to)."
   [report]
   (case (:format report)
+    :baseline                 (str "Baseline: " (first-line (:area report)))
     :design                   (first-line (:shape report))
     :implementation-plan      (:direction report)
     :implementation-completed (first-line (:summary report))

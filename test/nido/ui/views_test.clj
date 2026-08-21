@@ -527,6 +527,32 @@
     (is (str/includes? html "src/order/calc.clj") "the captured inference is present, if collapsed")
     (is (str/includes? html "drift from the stance:"))))
 
+(deftest workstream-pane-renders-baseline-card
+  (let [ws   (assoc sample-ws :report
+                    {:format       :baseline
+                     :area         "order totalling"
+                     :bounded-by   "everything that reads or writes a money amount"
+                     :shape        "The aggregate is the only thing that sums lines."
+                     :load-bearing [{:property "the aggregate is the only summing path"
+                                     :evidence ["src/order/aggregate.clj:12"]
+                                     :drift    "invoice.clj re-sums defensively"}]
+                     :extension-points [{:at  "the aggregate's reducer"
+                                         :how "a new money kind adds a case"}]
+                     :read         ["src/order/aggregate.clj"]
+                     :unknowns     ["whether the CSV importer bypasses the aggregate"]})
+        html (views/workstream-pane ws {})]
+    (is (str/includes? html "Baseline"))
+    (is (str/includes? html "order totalling"))
+    (is (str/includes? html "Bounded by:"))
+    (is (str/includes? html "Load-bearing"))
+    (is (str/includes? html "the aggregate is the only summing path")
+        "the yardstick is never collapsed — a folded one is one nobody checks")
+    (is (str/includes? html "src/order/aggregate.clj:12"))
+    (is (str/includes? html "drift from the stance:"))
+    (is (str/includes? html "Extension points"))
+    (is (str/includes? html "not determined (1)")
+        "the count is shown even folded: an empty unknowns is a smell, not a pass")))
+
 (deftest workstream-pane-renders-implementation-plan-card
   (let [ws   (assoc sample-ws :report {:format :implementation-plan :summary "Round on the total."
                                        :direction "Round once on the order total" :effort :M

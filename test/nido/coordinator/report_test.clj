@@ -568,3 +568,97 @@
     (is (string? (report/owner->user-id o)) (str o " maps to a user-id"))
     (is (not (clojure.string/blank? (report/owner->user-id o)))))
   (is (= "955b4c25-7bce-4ca2-ab5e-d99acbcd423a" (report/owner->user-id :eric))))
+
+;; ── Baseline ────────────────────────────────────────────────────────────────
+;; The area's design as it IS, authored before the change design and independent
+;; of it. The schema's job is to keep it descriptive: every field has to be
+;; fillable without knowing the change, which is what stops the inference being
+;; bent toward the fix someone already has in mind.
+
+(def ^:private valid-baseline
+  {:format       :baseline
+   :area         "order totalling — calc, the aggregate, and the invoice reader"
+   :bounded-by   "everything that reads or writes a money amount on an order; the
+                  render layer is out, it only formats what it is handed"
+   :shape        "Line items hold exact amounts; the order aggregate is the only
+                  thing that sums them; invoices read the aggregate, never lines."
+   :load-bearing [{:property "a line item's amount is never rounded in place"
+                   :evidence ["src/order/calc.clj:41"]}
+                  {:property "the aggregate is the only summing path"
+                   :evidence ["src/order/aggregate.clj:12" "src/order/invoice.clj:88"]
+                   :drift    "invoice.clj re-sums defensively — copied, never decided"}]
+   :extension-points [{:at "the aggregate's reducer"
+                       :how "a new money kind adds a case; nothing else changes"}]
+   :governing    ["two registers of data — values in motion vs state at rest"]
+   :drift        ["most of this area parses at the DB edge; order/invoice re-parses"]
+   :read         ["src/order/calc.clj" "src/order/aggregate.clj" "src/order/invoice.clj"]
+   :unknowns     ["whether the legacy CSV importer bypasses the aggregate"]})
+
+(deftest validate-event-accepts-a-baseline
+  (is (= valid-baseline (report/validate-event :baseline valid-baseline))))
+
+(deftest baseline-requires-at-least-one-load-bearing-property
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event :baseline (assoc valid-baseline :load-bearing [])))
+      "a baseline naming nothing load-bearing cannot answer whether a defect is
+       implementation or design — which is the only reason it exists"))
+
+(deftest baseline-requires-evidence-for-every-load-bearing-property
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event
+                :baseline (assoc valid-baseline
+                                 :load-bearing [{:property "totals are exact" :evidence []}])))
+      "a property with nothing to point at is a guess"))
+
+(deftest baseline-requires-what-was-read
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event :baseline (assoc valid-baseline :read [])))
+      "an inference with no sources cannot be checked, only believed"))
+
+(deftest baseline-requires-its-bound
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event :baseline (dissoc valid-baseline :bounded-by)))
+      "scoping is the first claim the record makes, and the guard against both
+       reading everything and reading three files"))
+
+(deftest baseline-refuses-to-carry-the-change
+  ;; The authoring test, enforced: a field that needs to know the change has
+  ;; crossed from `is` to `ought` and belongs on the design record.
+  (doseq [k [:effort :invariants :standing :summary :relation]]
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (report/validate-event :baseline (assoc valid-baseline k :anything)))
+        (str "closed map rejects " k))))
+
+(deftest report->markdown-baseline-has-its-sections
+  (let [md (report/report->markdown valid-baseline)]
+    (is (str/includes? md "# Baseline — the current design"))
+    (is (str/includes? md "**Area:** order totalling"))
+    (is (str/includes? md "*Bounded by:"))
+    (is (str/includes? md "**Governed by:** two registers"))
+    (is (str/includes? md "## Load-bearing"))
+    (is (str/includes? md "the aggregate is the only summing path"))
+    (is (str/includes? md "`src/order/aggregate.clj:12`"))
+    (is (str/includes? md "drift from the stance: invoice.clj re-sums"))
+    (is (str/includes? md "## Extension points"))
+    (is (str/includes? md "## Drift from the stance"))
+    (is (str/includes? md "## Not determined"))
+    (is (str/includes? md "## Read"))))
+
+(deftest report->markdown-baseline-omits-empty-optional-sections
+  (let [md (report/report->markdown
+            (dissoc valid-baseline :extension-points :governing :drift :unknowns))]
+    (is (str/includes? md "## Load-bearing"))
+    (is (not (str/includes? md "**Governed by:**")))
+    (is (not (str/includes? md "## Extension points")))
+    (is (not (str/includes? md "## Drift from the stance")))
+    (is (not (str/includes? md "## Not determined")))
+    (is (not (str/includes? md "\n\n\n"))
+        "an absent optional leaves no blank hole where its line would have been")))
+
+(deftest baseline-titles-itself-by-area
+  (is (= "Baseline: order totalling — calc, the aggregate, and the invoice reader"
+         (report/report-title valid-baseline))
+      "the ledger index shows what was surveyed, not the first line of its shape")
+  (is (= "Baseline: order totalling"
+         (report/report-title (assoc valid-baseline :area "order totalling\nand its readers")))
+      "one line per entry — the index is a table, and :area is prose that wraps"))

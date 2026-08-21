@@ -602,6 +602,48 @@
             (for [{:keys [ref note]} trail]
               [:li [:code ref] " — " note]))])])
 
+(defn- baseline-card
+  "Curated render of a baseline: the area and what bounded it, the shape, then the
+   two lists that do the routing work — what cannot move, and where it can. Both
+   are always shown; they are what every later judgement in the workstream is made
+   against, and a collapsed yardstick is one nobody checks.
+
+   `read` and `unknowns` collapse together into the provenance fold: they matter
+   when the baseline is doubted, and are noise the rest of the time. An empty
+   `unknowns` is a smell rather than a clean bill of health — a survey that found
+   nothing it could not determine usually did not look — so the fold says how many
+   there were instead of hiding the count."
+  [{:keys [area bounded-by shape load-bearing extension-points governing drift
+           read unknowns]}]
+  [:div.md
+   [:h2 "Baseline — the current design"]
+   [:div.report-meta
+    [:span.chip "area"]
+    [:span.meta area]
+    (when (seq governing)
+      [:span.meta " · governed by: " (str/join ", " governing)])]
+   [:p.meta "Bounded by: " bounded-by]
+   [:h3 "Shape"]
+   (md/render shape)
+   [:h3 "Load-bearing"]
+   (into [:ul]
+         (for [{:keys [property evidence] lb-drift :drift} load-bearing]
+           [:li property
+            [:span.meta " — " (str/join ", " evidence)]
+            (when lb-drift [:div.meta "drift from the stance: " lb-drift])]))
+   (when (seq extension-points)
+     [:div [:h3 "Extension points"]
+      (into [:ul]
+            (for [{:keys [at how]} extension-points]
+              [:li at " — " how]))])
+   (when (seq drift)
+     [:div [:h3 "Drift from the stance"] (into [:ul] (for [d drift] [:li d]))])
+   [:details.trail
+    [:summary "Read (" (count read) ") · not determined (" (count unknowns) ")"]
+    (into [:ul] (for [r read] [:li [:code r]]))
+    (when (seq unknowns)
+      (into [:ul] (for [u unknowns] [:li u])))]])
+
 (defn- design-card
   "Curated render of a typed design record: stance + effort chips, the shape and
    its invariants (always shown — they are what review checks against), then the
@@ -916,6 +958,7 @@
   ([report pos]
    (case (:format report)
      :triage-report            (triage-report-card report)
+     :baseline                 (baseline-card report)
      :design                   (design-card report)
      :implementation-plan      (plan-card report)
      :implementation-completed (completed-card report)
