@@ -650,7 +650,7 @@
    optional sections. `assumes` is collapsed: it is the captured inference, useful
    when a design is questioned and noise the rest of the time."
   [{:keys [summary shape invariants standing baseline assumes rejected layers
-           seams open supersedes effort]}]
+           phases seams open supersedes effort]}]
   [:div.md
    [:h2 "Design"]
    [:div.report-meta
@@ -677,7 +677,24 @@
    [:h3 "Shape"]
    (md/render shape)
    [:h3 "Invariants"]
-   (into [:ul] (for [i invariants] [:li i]))
+   (into [:ul]
+         (for [i invariants]
+           (let [{t :invariant h :holds} (report/invariant i)]
+             [:li t (when (= :on-completion h)
+                      [:span.meta " (holds on completion)"])])))
+   (when (seq phases)
+     [:div [:h3 "Phases"]
+      (into [:ol]
+            (for [{:keys [claim habitable exit undo]} phases]
+              [:li claim
+               [:ul
+                [:li [:span.meta "live meanwhile: "] habitable]
+                [:li [:span.meta "exit (" (name (:kind exit)) "): "] (:criterion exit)]
+                [:li [:span.meta "undo: "]
+                 (case (:how undo)
+                   :revert  (str "revert — " (:by undo))
+                   :forward (str "forward only — " (:by undo))
+                   :none    [:strong "point of no return — " (:why undo)])]]]))])
    (when (seq layers)
      [:div [:h3 "Intended layers"]
       (into [:ol]
@@ -691,8 +708,10 @@
    (when (seq seams)
      [:div [:h3 "Seams"]
       (into [:ul]
-            (for [{:keys [what visible-how]} seams]
-              [:li what " — visible as: " visible-how]))])
+            (for [{:keys [what visible-how] :as seam} seams]
+              [:li what " — visible as: " visible-how
+               (when-let [c (report/seam-closure seam)]
+                 [:span.meta "; " c])]))])
    (when (seq open)
      [:div [:h3 "Open"] (into [:ul] (for [o open] [:li o]))])
    (when (seq assumes)

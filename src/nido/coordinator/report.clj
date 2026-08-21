@@ -188,13 +188,142 @@
    [:claim string?]
    [:mode  [:enum :mechanical :judgment]]])
 
-(def Seam
-  "Deliberate, visible incompleteness. /spin-out's veto turns on this: invisibly
-   incomplete is a defect, visibly incomplete is a decision — so say how a reader
-   sees it."
+(def SeamLegacy
+  "LEGACY READ SHAPE — a seam from before :closed-by existed, when visibility was
+   the whole of the obligation. Not registered for writing; see Seam."
   [:map {:closed true}
    [:what        string?]
    [:visible-how string?]])
+
+(def Seam
+  "Deliberate, visible incompleteness. /spin-out's veto turns on this: invisibly
+   incomplete is a defect, visibly incomplete is a decision — so say how a reader
+   sees it.
+
+   :closed-by is the second half of that, and it was missing. Visibility told a
+   reader the seam was intentional; nothing told anyone it would ever be closed,
+   because :seams lives in a record that stops being read the moment the
+   workstream merges. So a seam names its closure and there are exactly three
+   honest answers: a phase of this record's own plan closes it, a spun-out
+   follow-up closes it (and then the ref is the deferral — \"later\" in a PR
+   comment is a wish), or nothing closes it, which is a decision that has to
+   carry its reason.
+
+   The :phase case names a phase by its :claim; workstream/append-entry! rejects
+   one that names no phase on the same record, which is also what stops a record
+   with no phase plan from claiming a phase will close anything."
+  [:multi {:dispatch :closed-by}
+   [:phase     [:map {:closed true}
+                [:what        string?]
+                [:visible-how string?]
+                [:closed-by   [:= :phase]]
+                [:phase       string?]]]
+   [:spun-out  [:map {:closed true}
+                [:what        string?]
+                [:visible-how string?]
+                [:closed-by   [:= :spun-out]]
+                [:ref         string?]]]
+   [:permanent [:map {:closed true}
+                [:what        string?]
+                [:visible-how string?]
+                [:closed-by   [:= :permanent]]
+                [:why         string?]]]])
+
+(def Invariant
+  "One invariant, with the moment it holds. A design that lands once has only one
+   such moment, which is why this used to be a bare string and why a bare string
+   is still what an unphased record writes.
+
+   A phase plan has several landings, and between them some invariants are false
+   BY DESIGN — during an expand/migrate/contract, \"there is exactly one writer\"
+   is deliberately untrue for the whole middle phase. Without :holds the review
+   arbiter reads that deliberate state as an invalidated design and escalates a
+   decision that was already made.
+
+     :always         holds at EVERY phase boundary, so review checks it every time
+     :on-completion  holds only once the last phase lands; checked there, and
+                     nowhere before"
+  [:map {:closed true}
+   [:invariant string?]
+   [:holds     [:enum :always :on-completion]]])
+
+(def Gate
+  "A phase's exit criterion: what must be observed of the RUNNING system before
+   the next phase may start. This is the field that separates a phase from a
+   to-do — a phase carrying no gate is a wish with an ordinal, the same failure
+   /spin-out §6 names for a deferral filed without its :reason.
+
+   :kind is required because it decides how the criterion is checked, and getting
+   that wrong is how a gate becomes a formality:
+
+     :observation  a measurement on the live system (a counter, a discrepancy
+                   rate, an error budget)
+     :soak         elapsed time with nothing observed — a period, not a metric
+     :completion   a finite job done (a backfill drained, N of N callers moved)
+
+   nido observes no production today, so nothing here is machine-checked: the
+   criterion is asserted with its evidence when the phase advances, the way a
+   spin-out's :reason is required and not verified."
+  [:map {:closed true}
+   [:kind      [:enum :observation :soak :completion]]
+   [:criterion string?]])
+
+(def PhaseUndo
+  "How this phase is taken back, answered before it ships rather than during the
+   incident. Every branch carries its own justification, because the three
+   answers are not interchangeable and the difference is the whole value of a
+   phase plan — it is what tells you WHICH phase is the one you cannot undo.
+
+     :revert   roll back to the previous phase; :by says how
+     :forward  no way back, but a further landing fixes it; :by says what
+     :none     the point of no return; :why says what makes it irreversible"
+  [:multi {:dispatch :how}
+   [:revert  [:map {:closed true} [:how [:= :revert]]  [:by  string?]]]
+   [:forward [:map {:closed true} [:how [:= :forward]] [:by  string?]]]
+   [:none    [:map {:closed true} [:how [:= :none]]    [:why string?]]]])
+
+(def Phase
+  "One landing of a phased change — the temporal cut, /phase's unit, sibling of
+   Layer. The two are not the same unit and the difference is sharp: a stack's
+   layers all land in one `gh stack merge`, so no intermediate layer state is
+   ever observed by a running system, and a layer's obligation is only that the
+   build is green there. A phase boundary IS a deploy, so its obligation is that
+   the system is habitable there.
+
+   :claim is about the RUNNING system, not the diff — what is true in production
+   once this lands. One sentence, no \"and\", same test as a layer's.
+
+   :habitable is what makes \"could you live here indefinitely?\" answerable from
+   the record instead of from memory. It is the field that catches the phase that
+   is really half a phase."
+  [:map {:closed true}
+   [:claim     string?]
+   [:habitable string?]
+   [:exit      Gate]
+   [:undo      PhaseUndo]])
+
+(defn invariant
+  "Normalise one :invariants entry to {:invariant <string> :holds <keyword>}.
+
+   A plain string is what every record written before phasing carries, and it
+   means :always — a change that lands once has exactly one moment for an
+   invariant to hold at, so there was nothing else it could have meant. Every
+   reader goes through here rather than testing string? at the point of use,
+   which is how the two shapes stay one concept."
+  [x]
+  (if (string? x) {:invariant x :holds :always} x))
+
+(defn seam-closure
+  "The one-line rendering of what closes `seam`, or nil for a legacy seam that
+   names no closure. nil is a real answer here and is rendered as absence rather
+   than as \"unknown\": the record predates the obligation, so saying nothing is
+   more honest than implying its author declined to answer."
+  [{:keys [closed-by phase ref why]}]
+  (case closed-by
+    :phase     (str "closed by phase — " phase)
+    :spun-out  (str "spun out as " ref)
+    :permanent (str "permanent — " why)
+    nil))
 
 (def Supersedes
   "Set when this record amends one the review found wrong. The superseded entry
@@ -303,6 +432,52 @@
               [:breaks   [:vector {:min 1} string?]]
               [:note     string?]]]])
 
+(def ^:private design-common
+  "The fields a :design record carries in every era. The three that differ across
+   eras and across the phased/unphased split — :invariants, :seams, :phases — are
+   spliced in per shape rather than repeated."
+  [[:format     [:= :design]]
+   [:summary    string?]
+   [:shape      string?]
+   [:standing   Standing]
+   [:baseline   BaselineRelation]
+   [:rejected   {:optional true} [:vector Rejected]]
+   [:layers     {:optional true} [:vector Layer]]
+   [:open       {:optional true} [:vector string?]]
+   [:supersedes {:optional true} Supersedes]
+   [:effort     Effort]])
+
+(def UnphasedDesign
+  "A change that reaches production in ONE landing — the ordinary case, and
+   unchanged by phasing. :invariants stays a vector of plain strings precisely
+   because there is only one moment for them to hold at: asking such a record to
+   say WHEN each invariant holds would be ceremony with one legal answer."
+  (into [:map {:closed true}]
+        (concat design-common
+                [[:invariants [:vector {:min 1} string?]]
+                 [:seams      {:optional true} [:vector Seam]]])))
+
+(def PhasedDesign
+  "A change that reaches production in more than one landing, each of which the
+   system has to live in. Two fields tighten, and both tighten for the same
+   reason — a phase plan creates intermediate states that are correct by design,
+   and a record that cannot express that is read as a broken one.
+
+   :invariants moves to the Invariant map, so each says whether it holds at every
+   phase boundary or only on completion. Without it the arbiter judges the middle
+   of a migration against the end of it.
+
+   :phases has :min 2 because one phase is not a plan, it is a shipment. The
+   ceiling is doctrine rather than schema: past ~4 phases it is a program, not a
+   change, and the answer is to decompose the story rather than lengthen the
+   plan — the same shape as /stack's ~7 layers and /spin-out's ~3 spin-outs, and
+   the same usual cause, a design boundary in the wrong place."
+  (into [:map {:closed true}]
+        (concat design-common
+                [[:invariants [:vector {:min 1} Invariant]]
+                 [:phases     [:vector {:min 2} Phase]]
+                 [:seams      {:optional true} [:vector Seam]]])))
+
 (def DesignVision
   "The high-level design one workstream commits to — authored by the impl session
    before any code, and resolving a triage :squirrel into a concrete effort.
@@ -323,21 +498,17 @@
    project's stance, :baseline relates it to the current design, and a change can
    satisfy either while breaking the other.
 
+   The dispatch is on :phases, and it is a dispatch rather than a pair of
+   optional fields on purpose: the two shapes make DIFFERENT claims about when
+   the design is true, so a record that carries a phase plan and plain-string
+   invariants is not a lenient case to wave through — it is a phase plan whose
+   author has not said which of its claims survive the middle of it.
+
    THIS IS THE WRITE CONTRACT. Records appended before :baseline existed do not
    satisfy it and are not supposed to — see DesignVisionLegacy and read-schemas."
-  [:map {:closed true}
-   [:format     [:= :design]]
-   [:summary    string?]
-   [:shape      string?]
-   [:invariants [:vector {:min 1} string?]]
-   [:standing   Standing]
-   [:baseline   BaselineRelation]
-   [:rejected   {:optional true} [:vector Rejected]]
-   [:layers     {:optional true} [:vector Layer]]
-   [:seams      {:optional true} [:vector Seam]]
-   [:open       {:optional true} [:vector string?]]
-   [:supersedes {:optional true} Supersedes]
-   [:effort     Effort]])
+  [:multi {:dispatch (fn [r] (if (contains? r :phases) :phased :unphased))}
+   [:phased   PhasedDesign]
+   [:unphased UnphasedDesign]])
 
 (def DesignVisionLegacy
   "LEGACY READ SHAPE — a :design record from before the baseline event existed:
@@ -357,24 +528,50 @@
    [:assumes    {:optional true} [:vector Assumption]]
    [:rejected   {:optional true} [:vector Rejected]]
    [:layers     {:optional true} [:vector Layer]]
-   [:seams      {:optional true} [:vector Seam]]
+   [:seams      {:optional true} [:vector SeamLegacy]]
    [:open       {:optional true} [:vector string?]]
    [:supersedes {:optional true} Supersedes]
    [:effort     Effort]])
 
+(def DesignVisionRead
+  "The wide READ shape for a post-baseline :design record: anything that was
+   writable in any era since the baseline event landed. Two widenings, each
+   naming the tightening that made it necessary —
+
+     :invariants accepts a plain string OR an Invariant map, because every record
+     written before :holds existed carries strings and means :always by them.
+
+     :seams accepts SeamLegacy OR Seam, because every record written before
+     :closed-by existed carries the two-field shape.
+
+   Both are wide here and strict in the write shapes above. A record that omits
+   what it should carry must fail on write, where the author can fix it — not on
+   read, months later, where the only available behaviour is to make the design
+   silently disappear from the panes and the arbiter."
+  (into [:map {:closed true}]
+        (concat design-common
+                [[:invariants [:vector {:min 1} [:or string? Invariant]]]
+                 [:phases     {:optional true} [:vector {:min 1} Phase]]
+                 [:seams      {:optional true} [:vector [:or Seam SeamLegacy]]]])))
+
 (def DesignVisionAny
   "The READ contract for :design — anything that was legitimately writable at the
-   time it was written. Current shape first, so a record satisfying both is read
-   as current.
+   time it was written.
 
    Deliberately NOT how the write contract is relaxed. Dispatching the one schema
    on whether :baseline happens to be present would make the requirement
    toothless in the exact case it exists for: a session that skips the baseline
    omits the field, lands in the lenient branch, and validates. Strict on write,
-   wide on read — the tightening has teeth going forward and costs no history."
+   wide on read — the tightening has teeth going forward and costs no history.
+
+   The :current branch is DesignVisionRead rather than DesignVision for the same
+   reason at one more remove: the write shape now splits on :phases, and reading
+   a record through the branch it was WRITTEN by would mean re-deriving the era
+   it was written in from the fields it happens to carry."
   [:multi {:dispatch (fn [r] (if (contains? r :baseline) :current :legacy))}
-   [:current DesignVision]
+   [:current DesignVisionRead]
    [:legacy  DesignVisionLegacy]])
+
 
 (def ImplementationPlan
   "LEGACY — superseded by DesignVision (:design). Kept registered so ledgers
@@ -734,7 +931,7 @@
 
 (defn- design->markdown
   [{:keys [summary shape invariants standing baseline assumes rejected layers
-           seams open supersedes effort]}]
+           phases seams open supersedes effort]}]
   (str/join
    "\n"
    (concat
@@ -748,7 +945,23 @@
     (when supersedes
       [(str "*Supersedes entry " (:seq supersedes) " — " (:why supersedes) "*")])
     ["" summary "" "## Shape" shape "" "## Invariants"]
-    (for [i invariants] (str "- " i))
+    (for [i invariants]
+      (let [{t :invariant h :holds} (invariant i)]
+        (str "- " t
+             (when (= :on-completion h)
+               " *(holds on completion — not at every phase boundary)*"))))
+    (when (seq phases)
+      (cons "\n## Phases"
+            (map-indexed
+             (fn [i {:keys [claim habitable exit undo]}]
+               (str (inc i) ". " claim
+                    "\n   - live meanwhile: " habitable
+                    "\n   - exit (" (name (:kind exit)) "): " (:criterion exit)
+                    "\n   - undo: " (case (:how undo)
+                                       :revert  (str "revert — " (:by undo))
+                                       :forward (str "forward only — " (:by undo))
+                                       :none    (str "**point of no return** — " (:why undo)))))
+             phases)))
     (when (seq assumes)
       (cons "\n## Assumes — the current design, as inferred"
             (for [{:keys [about read drift]} assumes]
@@ -767,8 +980,9 @@
                          layers)))
     (when (seq seams)
       (cons "\n## Seams"
-            (for [{:keys [what visible-how]} seams]
-              (str "- " what " — visible as: " visible-how))))
+            (for [{:keys [what visible-how] :as seam} seams]
+              (str "- " what " — visible as: " visible-how
+                   (when-let [c (seam-closure seam)] (str "; " c))))))
     (when (seq open)
       (cons "\n## Open" (for [o open] (str "- " o)))))))
 

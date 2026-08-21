@@ -207,6 +207,32 @@
                                          (filter #(= :baseline (:kind %)))
                                          (mapv :seq))}))))))
 
+(defn- check-seam-phase-ref!
+  "A seam that says a phase closes it names that phase by its :claim. Malli sees
+   the seam and the phase list in the same record but cannot express \"this string
+   appears in that vector\", so the check lands beside the other cross-record one.
+
+   It also does the work of a rule the schema deliberately does not encode: on a
+   record with NO phase plan there is nothing for the claim to match, so a seam
+   promising a phase will close it is refused rather than left standing as a
+   commitment no plan schedules. That is the whole difference between a seam and
+   a defect — the defect is the one nobody wrote down — and a seam pointing at a
+   phase that does not exist reads downstream exactly like one pointing at a real
+   phase, which is the same failure mode as a dangling :baseline :seq."
+  [kind payload]
+  (when (= :design kind)
+    (let [r      (edn/read-string payload)
+          claims (set (map :claim (:phases r)))
+          orphan (->> (:seams r)
+                      (filter #(= :phase (:closed-by %)))
+                      (remove #(contains? claims (:phase %))))]
+      (when (seq orphan)
+        (throw (ex-info (str "Seam names a closing phase that is not in :phases: "
+                             (str/join "; " (map :phase orphan)))
+                        {:orphan-seams (mapv :what orphan)
+                         :named        (mapv :phase orphan)
+                         :phases       (vec claims)}))))))
+
 (defn append-entry!
   "Write an immutable entry file under entries/ and record it in :entries.
    `entry` = {:kind <kw> :session <str>?}. Returns the absolute file path."
@@ -216,6 +242,7 @@
         seq-n (inc (count (:entries w)))
         [ext payload] (report/entry-payload (:kind entry) content)
         _     (check-baseline-ref! w (:kind entry) payload)
+        _     (check-seam-phase-ref! (:kind entry) payload)
         fname (format "%04d-%s.%s" seq-n (name (:kind entry)) ext)
         rel   (str "entries/" fname)
         abs   (str (fs/path (cstate/workstream-dir project ws-id) rel))]

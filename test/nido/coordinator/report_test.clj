@@ -117,7 +117,8 @@
    :layers     [{:claim "extract the total aggregate" :mode :judgment}
                 {:claim "drop per-line rounding at all 12 call sites" :mode :mechanical}]
    :seams      [{:what "the legacy per-line path stays for invoices"
-                 :visible-how "old fn kept, marked deprecated, both callers listed"}]
+                 :visible-how "old fn kept, marked deprecated, both callers listed"
+                 :closed-by :spun-out :ref "FU-12"}]
    :open       ["whether invoices should follow in the same arc"]
    :effort     :M})
 
@@ -132,7 +133,38 @@
    :assumes    [{:about "line totals are computed per-item in order/calc"
                  :read  ["src/order/calc.clj"]
                  :drift "rounding is applied per line — copied, never decided"}]
+   :seams      [{:what "the legacy per-line path stays for invoices"
+                 :visible-how "old fn kept, marked deprecated"}]
    :effort     :M})
+
+(def ^:private phased-design
+  "A change that reaches production in three landings. The middle one is the
+   reason :holds exists: while it is live there are two writers, so the record's
+   own second invariant is false ON PURPOSE."
+  {:format     :design
+   :summary    "The order address moves to its own column."
+   :shape      "Two writers during the migration; one reader throughout."
+   :invariants [{:invariant "no request reads a column no writer maintains" :holds :always}
+                {:invariant "exactly one writer maintains the address"      :holds :on-completion}]
+   :standing   {:relation :conforms}
+   :baseline   {:seq 1 :relation :within}
+   :phases     [{:claim     "both writers maintain the new column; nothing reads it"
+                 :habitable "readers are unchanged; the new column is write-only and unobserved"
+                 :exit      {:kind :observation
+                             :criterion "shadow-read discrepancy counter flat at zero for 7 days"}
+                 :undo      {:how :revert :by "stop dual-writing; nothing reads the new column"}}
+                {:claim     "reads move to the new column"
+                 :habitable "the old column is still written, so a revert is a config flip"
+                 :exit      {:kind :soak :criterion "one full billing cycle with no incident"}
+                 :undo      {:how :revert :by "flip the read path back"}}
+                {:claim     "the old column is dropped"
+                 :habitable "one writer, one reader — the end state"
+                 :exit      {:kind :completion :criterion "nothing follows; the migration is done"}
+                 :undo      {:how :none :why "the column and its data are gone; no backup past 30 days"}}]
+   :seams      [{:what "the old column is still written through phases 1 and 2"
+                 :visible-how "both writers sit side by side in one namespace"
+                 :closed-by :phase :phase "the old column is dropped"}]
+   :effort     :L})
 
 (deftest validate-event-accepts-a-design
   (is (= valid-design (report/validate-event :design valid-design))))
@@ -202,6 +234,104 @@
     (is (= "edn" ext))
     (is (str/includes? payload ":design"))
     (is (= valid-design (edn/read-string payload)))))
+
+;; ---------------------------------------------------------------------------
+;; Phasing — the temporal cut. A phase plan makes the record claim things about
+;; a RUNNING system across several landings, which is why two fields tighten.
+
+(deftest validate-event-accepts-a-phased-design
+  (is (= phased-design (report/validate-event :design phased-design))))
+
+(deftest a-phase-plan-forces-every-invariant-to-say-when-it-holds
+  ;; The whole point: without :holds the verdict pass judges the middle of a
+  ;; migration against the end of it, and reports the plan working as a defect.
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event
+                :design (assoc phased-design
+                               :invariants ["exactly one writer maintains the address"])))))
+
+(deftest an-unphased-design-keeps-plain-string-invariants
+  ;; And may not use the map form: one landing has exactly one moment for an
+  ;; invariant to hold at, so :holds there is ceremony with one legal answer.
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event
+                :design (assoc valid-design
+                               :invariants [{:invariant "a total is rounded exactly once"
+                                             :holds :always}])))))
+
+(deftest one-phase-is-not-a-plan
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event
+                :design (update phased-design :phases (comp vec (partial take 1)))))))
+
+(deftest a-phase-must-carry-its-gate-and-its-undo
+  (doseq [missing [:exit :undo :habitable :claim]]
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (report/validate-event
+                  :design (update phased-design :phases
+                                  (fn [ps] (vec (cons (dissoc (first ps) missing) (rest ps)))))))
+        (str "a phase missing " missing " must be refused"))))
+
+(deftest a-seam-must-name-what-closes-it
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event
+                :design (assoc valid-design
+                               :seams [{:what "the legacy path stays"
+                                        :visible-how "old fn kept, marked deprecated"}])))))
+
+(deftest every-closure-kind-carries-its-own-justification
+  (doseq [seam [{:closed-by :phase     :phase "the old column is dropped"}
+                {:closed-by :spun-out  :ref   "FU-12"}
+                {:closed-by :permanent :why   "the old path is a supported mode, not debt"}]]
+    (is (report/validate-event
+         :design (assoc phased-design
+                        :seams [(merge {:what "w" :visible-how "v"} seam)]))))
+  ;; …and a bare :closed-by with nothing behind it is not one of them.
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event
+                :design (assoc phased-design
+                               :seams [{:what "w" :visible-how "v" :closed-by :permanent}])))))
+
+(deftest a-two-field-seam-fails-on-write-and-survives-on-read
+  ;; Strict on write, wide on read: the tightening has teeth going forward and
+  ;; costs no history. A record written before :closed-by must never become
+  ;; invalid — read validation swallows failures, so it would silently vanish
+  ;; from the panes and from the verdict pass rather than being contradicted.
+  (let [old-shape (assoc valid-design
+                         :seams [{:what "the legacy path stays"
+                                  :visible-how "old fn kept, marked deprecated"}])]
+    (is (thrown? clojure.lang.ExceptionInfo (report/validate-event :design old-shape)))
+    (is (= old-shape (report/parse-event :design old-shape)))))
+
+(deftest a-string-invariant-survives-on-read
+  (is (= valid-design (report/parse-event :design valid-design))))
+
+(deftest invariant-normalises-both-shapes
+  (is (= {:invariant "x" :holds :always} (report/invariant "x")))
+  (is (= {:invariant "x" :holds :on-completion}
+         (report/invariant {:invariant "x" :holds :on-completion}))))
+
+(deftest seam-closure-renders-each-kind-and-nothing-for-a-legacy-seam
+  (is (= "closed by phase — drop the old column"
+         (report/seam-closure {:closed-by :phase :phase "drop the old column"})))
+  (is (= "spun out as FU-12" (report/seam-closure {:closed-by :spun-out :ref "FU-12"})))
+  (is (= "permanent — supported mode" (report/seam-closure {:closed-by :permanent :why "supported mode"})))
+  (is (nil? (report/seam-closure {:what "w" :visible-how "v"}))))
+
+(deftest report->markdown-phased-design-shows-the-plan
+  (let [md (report/report->markdown phased-design)]
+    (is (str/includes? md "## Phases"))
+    (is (str/includes? md "1. both writers maintain the new column; nothing reads it"))
+    (is (str/includes? md "exit (observation): shadow-read discrepancy counter flat at zero for 7 days"))
+    (is (str/includes? md "live meanwhile: the old column is still written"))
+    (is (str/includes? md "**point of no return**"))
+    ;; the marker a reader needs to know an invariant is not expected to hold yet
+    (is (str/includes? md "*(holds on completion — not at every phase boundary)*"))
+    ;; and the always-invariant carries no marker
+    (is (str/includes? md "- no request reads a column no writer maintains\n"))))
+
+(deftest report->markdown-unphased-design-has-no-phases-section
+  (is (not (str/includes? (report/report->markdown valid-design) "## Phases"))))
 
 (def ^:private valid-plan
   {:format :implementation-plan :summary "Round on the total."

@@ -407,6 +407,67 @@
                                        (pr-str (design-citing 1))))
             "seq 1 exists, but it is a note — the ref must name a baseline")))))
 
+(defn- phased-design-citing
+  "A two-phase design on baseline `n`, with a seam that `phase` closes. Same
+   shape as design-citing, one axis over: the ledger has to check a claim inside
+   the record against another field of it, which Malli cannot express."
+  [n phase]
+  {:format     :design
+   :summary    "The address moves to its own column."
+   :shape      "Two writers during the migration; one reader throughout."
+   :invariants [{:invariant "no request reads a column no writer maintains" :holds :always}]
+   :standing   {:relation :conforms}
+   :baseline   {:seq n :relation :within}
+   :phases     [{:claim     "both writers maintain the new column"
+                 :habitable "nothing reads the new column yet"
+                 :exit      {:kind :observation :criterion "discrepancy counter flat at zero for 7 days"}
+                 :undo      {:how :revert :by "stop dual-writing"}}
+                {:claim     "the old column is dropped"
+                 :habitable "one writer, one reader — the end state"
+                 :exit      {:kind :completion :criterion "nothing follows"}
+                 :undo      {:how :none :why "the data is gone"}}]
+   :seams      [{:what "the old column is still written through phase 1"
+                 :visible-how "both writers sit side by side in one namespace"
+                 :closed-by :phase :phase phase}]
+   :effort     :L})
+
+(deftest a-seam-may-name-a-phase-that-is-in-the-plan
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+        (ws/append-entry! :brian (:id w) {:kind :baseline} (pr-str a-baseline))
+        (ws/append-entry! :brian (:id w) {:kind :design}
+                          (pr-str (phased-design-citing 1 "the old column is dropped")))
+        (is (= 2 (count (:phases (ws/latest-entry :brian (:id w) :design)))))))))
+
+(deftest a-seam-naming-a-phase-that-is-not-in-the-plan-is-refused
+  ;; A seam pointing at a phantom phase reads downstream exactly like one
+  ;; pointing at a real phase — the seam looks scheduled for closure when
+  ;; nothing schedules it. Same failure as a dangling :baseline :seq.
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+        (ws/append-entry! :brian (:id w) {:kind :baseline} (pr-str a-baseline))
+        (is (thrown? clojure.lang.ExceptionInfo
+                     (ws/append-entry! :brian (:id w) {:kind :design}
+                                       (pr-str (phased-design-citing 1 "some later phase")))))
+        (is (= 1 (count (:entries (ws/read-ws :brian (:id w)))))
+            "refused before anything is written — only the baseline is on the ledger")))))
+
+(deftest a-seam-cannot-promise-a-phase-on-a-record-with-no-phase-plan
+  ;; The rule the schema deliberately does not encode: with no plan there is
+  ;; nothing for the claim to match, so the promise is refused rather than left
+  ;; standing as a closure nobody scheduled.
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+        (ws/append-entry! :brian (:id w) {:kind :baseline} (pr-str a-baseline))
+        (is (thrown? clojure.lang.ExceptionInfo
+                     (ws/append-entry! :brian (:id w) {:kind :design}
+                                       (pr-str (-> (phased-design-citing 1 "the old column is dropped")
+                                                   (dissoc :phases)
+                                                   (assoc :invariants ["no request reads a column no writer maintains"]))))))))))
+
 (deftest a-legacy-design-entry-on-disk-still-reads-back
   ;; The migration case, at the level that matters: a record written before
   ;; :baseline existed is still there, and latest-entry must not quietly stop

@@ -14,6 +14,7 @@
    [cheshire.core :as json]
    [clojure.string :as str]
    [nido.coordinator.agent :as agent]
+   [nido.coordinator.report :as report]
    [nido.coordinator.state :as cstate]
    [nido.review.stages :as stages]))
 
@@ -65,6 +66,39 @@
          "Populate load_bearing_held with the properties this round confirmed\n"
          "still stand, for the same reason invariants_held exists.\n")))
 
+(defn- phase-section
+  "What a phase plan changes about the question being asked, or nil when the
+   design lands in one go.
+
+   Without this the verdict pass judges the middle of a migration against the end
+   of it. A phased design's intermediate states are correct BY DESIGN — during an
+   expand/migrate/contract, \"there is exactly one writer\" is deliberately untrue
+   for the whole middle phase — so an :on-completion invariant that does not hold
+   yet is the plan working, not the design failing.
+
+   The pass is not told WHICH phase is current, because nothing tracks that yet.
+   That is a real limit and the prompt says so rather than inviting a guess: an
+   :on-completion invariant is reported on only when the code shows the last
+   phase has landed and it still does not hold."
+  [phases]
+  (when (seq phases)
+    (str "\nTHIS DESIGN LANDS IN " (count phases) " PHASES, not one. Each phase is a\n"
+         "separate deploy that the system has to be able to live in:\n"
+         (str/join "\n"
+                   (map-indexed
+                    (fn [i {:keys [claim habitable exit]}]
+                      (str (inc i) ". " claim
+                           "\n   while live: " habitable
+                           "\n   moves on when: " (:criterion exit)))
+                    phases))
+         "\n\n"
+         "An invariant marked \"holds on completion\" is NOT expected to hold before\n"
+         "the last phase lands. Finding that one does not hold yet is the plan\n"
+         "working as written — do not report it as broken. Report it only if the\n"
+         "code shows the final phase has landed and it still does not hold.\n"
+         "Invariants marked \"holds always\" are the ones that must be true at\n"
+         "EVERY phase boundary, including this one; judge those normally.\n")))
+
 (defn build-prompt
   "The verdict prompt. `design` is the workstream's :design record, `baseline` the
    :baseline record it cited (nil when it predates them), `findings` the findings
@@ -77,7 +111,13 @@
    "answered from the diff summary alone.\n\n"
    "THE DESIGN THIS CHANGE COMMITTED TO:\n"
    "Shape: " (:shape design) "\n"
-   "Invariants:\n" (bullets (:invariants design)) "\n"
+   "Invariants:\n"
+   (bullets (map (fn [i]
+                   (let [{t :invariant h :holds} (report/invariant i)]
+                     (str t " [holds " (name h) "]")))
+                 (:invariants design)))
+   "\n"
+   (phase-section (:phases design))
    (when-let [r (seq (:rejected design))]
      (str "Already rejected (a finding re-proposing one of these is ANSWERED,\n"
           "not evidence against the design — unless the reason no longer holds):\n"
