@@ -316,13 +316,14 @@
 (defn- entry->report
   "Render a ledger entry as a `:format`-tagged gate report. An `.edn` file is a
    typed event — read + validated against the schema for its `:kind`
-   (report/validate-event), :at stamped from the entry; any other file is markdown
+   (report/parse-event — the read contract, which accepts any shape that was
+   writable when the entry was written), :at stamped from the entry; any other file is markdown
    (:format :markdown). A typed `.edn` that fails to read/validate degrades to a
    :markdown payload of its raw text rather than blanking the pane."
   [base-dir entry]
   (let [f (str (fs/path base-dir (:file entry)))]
     (or (when (str/ends-with? (str (:file entry)) ".edn")
-          (try (-> (report/validate-event (:kind entry) (io/read-edn f))
+          (try (-> (report/parse-event (:kind entry) (io/read-edn f))
                    (assoc :at (:at entry)))
                (catch Throwable _ nil)))
         (let [md (when (fs/exists? f) (slurp f))]

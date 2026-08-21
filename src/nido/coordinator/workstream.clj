@@ -5,6 +5,7 @@
    See spec docs/superpowers/specs/2026-06-05-workstream-session-model-design.md."
   (:require
    [babashka.fs :as fs]
+   [clojure.edn :as edn]
    [clojure.string :as str]
    [malli.core :as m]
    [nido.coordinator.clock :as clock]
@@ -186,6 +187,26 @@
               (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))]
     (write! (if (seq tracker) (assoc w :findings tracker) (dissoc w :findings)))))
 
+(defn- check-baseline-ref!
+  "A :design record's :baseline names the entry it was judged against. The schema
+   sees one record and cannot resolve a :seq, so the check belongs here — the one
+   place that holds both the record and the ledger it is joining.
+
+   Rejecting a dangling ref matters more than it looks: the baseline is the whole
+   yardstick, and a :seq pointing at nothing reads downstream exactly like one
+   pointing at a real record, so the design would appear to have been judged
+   against something when it had not been."
+  [w kind payload]
+  (when (= :design kind)
+    (when-let [n (get-in (edn/read-string payload) [:baseline :seq])]
+      (when-not (some #(and (= n (:seq %)) (= :baseline (:kind %))) (:entries w))
+        (throw (ex-info (str "Design cites baseline entry " n
+                             ", which is not a :baseline on this workstream")
+                        {:seq n
+                         :baselines (->> (:entries w)
+                                         (filter #(= :baseline (:kind %)))
+                                         (mapv :seq))}))))))
+
 (defn append-entry!
   "Write an immutable entry file under entries/ and record it in :entries.
    `entry` = {:kind <kw> :session <str>?}. Returns the absolute file path."
@@ -194,6 +215,7 @@
                   (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))
         seq-n (inc (count (:entries w)))
         [ext payload] (report/entry-payload (:kind entry) content)
+        _     (check-baseline-ref! w (:kind entry) payload)
         fname (format "%04d-%s.%s" seq-n (name (:kind entry)) ext)
         rel   (str "entries/" fname)
         abs   (str (fs/path (cstate/workstream-dir project ws-id) rel))]
@@ -206,7 +228,12 @@
   "The most recent typed entry of `kind` on this workstream — parsed, validated,
    and stamped with its :seq and :at — or nil. Degrades to nil on a missing,
    unreadable, or schema-failing payload: a reader asking for the design record
-   must be able to find none without the caller crashing."
+   must be able to find none without the caller crashing.
+
+   Validates through report/parse-event, NOT validate-event: an entry is immutable,
+   so the question is whether it was valid when written, not whether it would be
+   accepted today. Because the failure here is swallowed, getting that backwards
+   does not raise — it just makes old records stop existing."
   [project ws-id kind]
   (when-let [w (read-ws project ws-id)]
     (when-let [e (->> (:entries w)
@@ -214,7 +241,7 @@
                       (sort-by :seq)
                       last)]
       (let [f (str (fs/path (cstate/workstream-dir project ws-id) (:file e)))]
-        (try (-> (report/validate-event kind (io/read-edn f))
+        (try (-> (report/parse-event kind (io/read-edn f))
                  (assoc :seq (:seq e) :at (:at e)))
              (catch Throwable _ nil))))))
 

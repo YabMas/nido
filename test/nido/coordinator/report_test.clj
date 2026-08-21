@@ -111,9 +111,7 @@
    :invariants ["a total is rounded exactly once"
                 "no line item carries a rounded amount"]
    :standing   {:relation :conforms :principles ["shape of the data is the design"]}
-   :assumes    [{:about "line totals are computed per-item in order/calc"
-                 :read  ["src/order/calc.clj"]
-                 :drift "rounding is applied per line — copied, never decided"}]
+   :baseline   {:seq 1 :relation :within}
    :rejected   [{:alternative "round at render time"
                  :why-not     "moves money math into the view layer"}]
    :layers     [{:claim "extract the total aggregate" :mode :judgment}
@@ -121,6 +119,19 @@
    :seams      [{:what "the legacy per-line path stays for invoices"
                  :visible-how "old fn kept, marked deprecated, both callers listed"}]
    :open       ["whether invoices should follow in the same arc"]
+   :effort     :M})
+
+(def ^:private legacy-design
+  "A :design record from before the baseline event: no :baseline, carrying the
+   :assumes it replaced. Not writable any more; must stay readable forever."
+  {:format     :design
+   :summary    "Rounding moves to a single point on the order total."
+   :shape      "One rounding boundary at the order aggregate."
+   :invariants ["a total is rounded exactly once"]
+   :standing   {:relation :conforms}
+   :assumes    [{:about "line totals are computed per-item in order/calc"
+                 :read  ["src/order/calc.clj"]
+                 :drift "rounding is applied per line — copied, never decided"}]
    :effort     :M})
 
 (deftest validate-event-accepts-a-design
@@ -158,8 +169,7 @@
     (is (str/includes? md "**Stance:** conforms"))
     (is (str/includes? md "## Invariants"))
     (is (str/includes? md "a total is rounded exactly once"))
-    (is (str/includes? md "## Assumes"))
-    (is (str/includes? md "drift from the stance:"))
+    (is (str/includes? md "**Against the baseline:** within (entry 1)"))
     (is (str/includes? md "## Rejected"))
     (is (str/includes? md "## Intended layers"))
     (is (str/includes? md "*(mechanical)*"))
@@ -168,9 +178,8 @@
 
 (deftest report->markdown-design-omits-empty-optional-sections
   (let [md (report/report->markdown
-            (dissoc valid-design :assumes :rejected :layers :seams :open))]
+            (dissoc valid-design :rejected :layers :seams :open))]
     (is (str/includes? md "## Invariants"))
-    (is (not (str/includes? md "## Assumes")))
     (is (not (str/includes? md "## Rejected")))
     (is (not (str/includes? md "## Intended layers")))
     (is (not (str/includes? md "## Seams")))
@@ -662,3 +671,86 @@
   (is (= "Baseline: order totalling"
          (report/report-title (assoc valid-baseline :area "order totalling\nand its readers")))
       "one line per entry — the index is a table, and :area is prose that wraps"))
+
+;; ── The baseline relation, and the write/read split ─────────────────────────
+
+(deftest design-requires-a-baseline-relation
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event :design (dissoc valid-design :baseline)))
+      "the requirement is the teeth: a session that skips the baseline cannot
+       file the design record that was supposed to be judged against it"))
+
+(deftest design-no-longer-accepts-assumes
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event
+                :design (assoc valid-design :assumes [{:about "x" :read ["y"]}])))
+      "the inference has exactly one home now, and it is not inside the record
+       that also states the commitment"))
+
+(deftest baseline-revisit-must-name-what-it-breaks
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event
+                :design (assoc valid-design
+                               :baseline {:seq 1 :relation :revisit
+                                          :note "the aggregate has to go"})))
+      "without :breaks, \"the design needs revisiting\" is a feeling")
+  (is (report/validate-event
+       :design (assoc valid-design
+                      :baseline {:seq 1 :relation :revisit
+                                 :breaks ["the aggregate is the only summing path"]
+                                 :note "invoices need their own total"}))))
+
+(deftest baseline-extends-requires-a-note-and-within-does-not
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event
+                :design (assoc valid-design :baseline {:seq 1 :relation :extends})))
+      "adding a commitment without saying why is the silent-erosion case")
+  (is (report/validate-event
+       :design (assoc valid-design
+                      :baseline {:seq 1 :relation :extends
+                                 :at "the aggregate's reducer"
+                                 :note "a new money kind adds a case"})))
+  (is (report/validate-event
+       :design (assoc valid-design :baseline {:seq 1 :relation :within}))
+      ":within is the normal case and carries no obligation"))
+
+(deftest baseline-relation-is-not-standing
+  ;; The two questions are independent: this change conforms to the stance and
+  ;; still tears up the current design. A schema that let one stand in for the
+  ;; other would collapse exactly the distinction the field was added for.
+  (is (report/validate-event
+       :design (assoc valid-design
+                      :standing {:relation :conforms}
+                      :baseline {:seq 1 :relation :revisit
+                                 :breaks ["the aggregate is the only summing path"]
+                                 :note "conforming to the stance says nothing about this"}))))
+
+(deftest legacy-design-is-unwritable-but-still-readable
+  (is (thrown? clojure.lang.ExceptionInfo (report/validate-event :design legacy-design))
+      "the write contract tightened")
+  (is (= legacy-design (report/parse-event :design legacy-design))
+      "the read contract did not — an entry is immutable, so the question is
+       whether it was valid when written")
+  (is (= valid-design (report/parse-event :design valid-design))
+      "a record satisfying both is read as current"))
+
+(deftest read-contract-still-refuses-what-was-never-valid
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/parse-event :design (dissoc legacy-design :invariants)))
+      "wider is not lax: no era of this schema allowed a design with no invariants"))
+
+(deftest report->markdown-renders-a-revisit-with-its-breaks
+  (let [md (report/report->markdown
+            (assoc valid-design
+                   :baseline {:seq 2 :relation :revisit
+                              :breaks ["the aggregate is the only summing path"]
+                              :note "invoices need their own total"}))]
+    (is (str/includes? md "**Against the baseline:** revisit (entry 2)"))
+    (is (str/includes? md "Breaks: the aggregate is the only summing path"))
+    (is (str/includes? md "invoices need their own total"))))
+
+(deftest report->markdown-still-renders-a-legacy-design
+  (let [md (report/report->markdown legacy-design)]
+    (is (str/includes? md "# Design"))
+    (is (str/includes? md "## Assumes"))
+    (is (not (str/includes? md "Against the baseline")))))

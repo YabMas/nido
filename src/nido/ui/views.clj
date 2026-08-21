@@ -649,8 +649,8 @@
    its invariants (always shown — they are what review checks against), then the
    optional sections. `assumes` is collapsed: it is the captured inference, useful
    when a design is questioned and noise the rest of the time."
-  [{:keys [summary shape invariants standing assumes rejected layers seams open
-           supersedes effort]}]
+  [{:keys [summary shape invariants standing baseline assumes rejected layers
+           seams open supersedes effort]}]
   [:div.md
    [:h2 "Design"]
    [:div.report-meta
@@ -660,6 +660,17 @@
     (when-let [ps (seq (:principles standing))]
       [:span.meta " · " (str/join ", " ps)])]
    (when-let [n (:note standing)] [:blockquote n])
+   (when baseline
+     (let [{:keys [relation at breaks note]} baseline]
+       [:div
+        [:p.report-meta
+         [:span {:class (str "chip c-rel-" (name relation))} (name relation)]
+         [:span.meta "against baseline entry " (:seq baseline)
+          (when at (str " — at: " at))]]
+        (when (seq breaks)
+          [:div [:p.meta "Load-bearing properties this breaks:"]
+           (into [:ul] (for [b breaks] [:li b]))])
+        (when note [:blockquote note])]))
    (when supersedes
      [:p.meta "Supersedes entry " (:seq supersedes) " — " (:why supersedes)])
    (md/render summary)

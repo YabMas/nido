@@ -512,9 +512,9 @@
                      :shape      "One rounding boundary at the order aggregate."
                      :invariants ["a total is rounded exactly once"]
                      :standing   {:relation :challenges :note "money math needs an accumulator"}
-                     :assumes    [{:about "line totals computed per-item"
-                                   :read ["src/order/calc.clj"]
-                                   :drift "per-line rounding was copied, never decided"}]
+                     :baseline   {:seq 2 :relation :revisit
+                                  :breaks ["the aggregate is the only summing path"]
+                                  :note "invoices need their own total"}
                      :layers     [{:claim "extract the total aggregate" :mode :judgment}]
                      :effort     :M})
         html (views/workstream-pane ws {})]
@@ -524,8 +524,29 @@
     (is (str/includes? html "Invariants"))
     (is (str/includes? html "a total is rounded exactly once"))
     (is (str/includes? html "Intended layers"))
+    (is (str/includes? html "revisit") "the relation to the current design is a chip of its own")
+    (is (str/includes? html "against baseline entry 2"))
+    (is (str/includes? html "the aggregate is the only summing path")
+        "a :revisit shows what it breaks — that is what makes it a decision")
+    (is (str/includes? html "invoices need their own total"))))
+
+(deftest workstream-pane-still-renders-a-pre-baseline-design-card
+  (let [ws   (assoc sample-ws :report
+                    {:format     :design
+                     :summary    "Rounding moves to a single point."
+                     :shape      "One rounding boundary at the order aggregate."
+                     :invariants ["a total is rounded exactly once"]
+                     :standing   {:relation :conforms}
+                     :assumes    [{:about "line totals computed per-item"
+                                   :read ["src/order/calc.clj"]
+                                   :drift "per-line rounding was copied, never decided"}]
+                     :effort     :M})
+        html (views/workstream-pane ws {})]
+    (is (str/includes? html "Design"))
     (is (str/includes? html "src/order/calc.clj") "the captured inference is present, if collapsed")
-    (is (str/includes? html "drift from the stance:"))))
+    (is (str/includes? html "drift from the stance:"))
+    (is (not (str/includes? html "against baseline entry"))
+        "no baseline to relate to, and nothing invented in its place")))
 
 (deftest workstream-pane-renders-baseline-card
   (let [ws   (assoc sample-ws :report

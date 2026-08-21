@@ -7,7 +7,8 @@
    [nido.coordinator.clock :as clock]
    [nido.coordinator.session :as sess]
    [nido.coordinator.state :as cstate]
-   [nido.coordinator.workstream :as ws]))
+   [nido.coordinator.workstream :as ws]
+   [nido.io :as io]))
 
 (def example-ws
   {:id            "ws-20260605-a1b2c3"
@@ -354,3 +355,77 @@
           (is (= :incoming (:stage (ws/read-ws :brian (:id w))))
               "legacy :inbox is mapped to :incoming on read")))
       (finally (fs/delete-tree tmp)))))
+
+;; ── A design's baseline ref has to resolve ─────────────────────────────────
+;; The schema sees one record and cannot join it to the ledger, so this is the
+;; one place the citation can be checked. A dangling :seq reads downstream
+;; exactly like a real one — the design would look judged when it was not.
+
+(def ^:private a-baseline
+  {:format       :baseline
+   :area         "order totalling"
+   :bounded-by   "everything that reads or writes a money amount on an order"
+   :shape        "The aggregate is the only thing that sums lines."
+   :load-bearing [{:property "the aggregate is the only summing path"
+                   :evidence ["src/order/aggregate.clj:12"]}]
+   :read         ["src/order/aggregate.clj"]})
+
+(defn- design-citing [n]
+  {:format     :design
+   :summary    "Round on the total."
+   :shape      "One rounding boundary at the aggregate."
+   :invariants ["a total is rounded exactly once"]
+   :standing   {:relation :conforms}
+   :baseline   {:seq n :relation :within}
+   :effort     :M})
+
+(deftest design-may-cite-a-real-baseline-on-the-same-workstream
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+        (ws/append-entry! :brian (:id w) {:kind :baseline} (pr-str a-baseline))
+        (ws/append-entry! :brian (:id w) {:kind :design} (pr-str (design-citing 1)))
+        (is (= 1 (get-in (ws/latest-entry :brian (:id w) :design) [:baseline :seq])))))))
+
+(deftest design-citing-a-baseline-that-does-not-exist-is-refused
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+        (is (thrown? clojure.lang.ExceptionInfo
+                     (ws/append-entry! :brian (:id w) {:kind :design}
+                                       (pr-str (design-citing 4)))))
+        (is (empty? (:entries (ws/read-ws :brian (:id w))))
+            "refused before anything is written — no orphan entry file")))))
+
+(deftest design-citing-an-entry-that-is-not-a-baseline-is-refused
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+        (ws/append-entry! :brian (:id w) {:kind :note} "just a note")
+        (is (thrown? clojure.lang.ExceptionInfo
+                     (ws/append-entry! :brian (:id w) {:kind :design}
+                                       (pr-str (design-citing 1))))
+            "seq 1 exists, but it is a note — the ref must name a baseline")))))
+
+(deftest a-legacy-design-entry-on-disk-still-reads-back
+  ;; The migration case, at the level that matters: a record written before
+  ;; :baseline existed is still there, and latest-entry must not quietly stop
+  ;; seeing it. It validates on read and swallows the failure, so the symptom of
+  ;; getting this wrong is not an error — it is the design silently going absent.
+  (with-tmp
+    (fn [_]
+      (let [w   (ws/create! :brian {:stage :in-progress :external-refs []})
+            old {:format     :design
+                 :summary    "Round on the total."
+                 :shape      "One rounding boundary at the aggregate."
+                 :invariants ["a total is rounded exactly once"]
+                 :standing   {:relation :conforms}
+                 :assumes    [{:about "totals are per-item" :read ["src/order/calc.clj"]}]
+                 :effort     :M}
+            dir (cstate/workstream-dir :brian (:id w))]
+        ;; written by hand: append-entry! would refuse it now, which is the point
+        (io/write-text! (str (fs/path dir "entries/0001-design.edn")) (pr-str old))
+        (ws/write! (assoc w :entries [{:kind :design :seq 1 :at "2026-01-01T00:00:00Z"
+                                       :file "entries/0001-design.edn"}]))
+        (is (= old (dissoc (ws/latest-entry :brian (:id w) :design) :seq :at))
+            "the pre-baseline record is still readable, :assumes and all")))))

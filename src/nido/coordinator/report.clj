@@ -264,15 +264,90 @@
    [:read             [:vector {:min 1} string?]]
    [:unknowns         {:optional true} [:vector string?]]])
 
+(def BaselineRelation
+  "How this change relates to the area's CURRENT design — the layer-2 question,
+   and deliberately NOT :standing, which relates it to the project's stance. The
+   two are independent: a change can conform to the stance perfectly and still
+   require the current design to be torn up, and it is the second question that
+   decides whether a bug is a fix or a decision.
+
+     :within   the design already accommodates this. A defect here is an
+               implementation defect; a feature here needs no new boundary.
+     :extends  the design holds, and this lands where it already admits change —
+               or adds a point that contradicts nothing already load-bearing.
+     :revisit  a load-bearing property has to change. A defect here indicts the
+               design; a feature here is asking the core to move.
+
+   :revisit REQUIRES :breaks, naming properties from the cited baseline that
+   cannot survive. Without it \"the design needs revisiting\" is a feeling, and
+   deriving that answer instead of feeling it is the only reason the baseline
+   exists. :extends requires a note for the same reason Standing/:extends does —
+   a commitment added without saying why is the silent-erosion case.
+
+   :seq points at the :baseline entry this was judged against. The schema sees
+   one record and cannot resolve it; append-entry! checks that it names a real
+   baseline on the same workstream."
+  [:multi {:dispatch :relation}
+   [:within  [:map {:closed true}
+              [:seq      int?]
+              [:relation [:= :within]]
+              [:note     {:optional true} string?]]]
+   [:extends [:map {:closed true}
+              [:seq      int?]
+              [:relation [:= :extends]]
+              [:at       {:optional true} string?]
+              [:note     string?]]]
+   [:revisit [:map {:closed true}
+              [:seq      int?]
+              [:relation [:= :revisit]]
+              [:breaks   [:vector {:min 1} string?]]
+              [:note     string?]]]])
+
 (def DesignVision
-  "The high-level design one workstream commits to — authored by triage (obvious)
-   or the impl session (deferred); resolves a triage :squirrel into a concrete
-   effort. Replaces ImplementationPlan, and drops its :steps: a step list is
-   working memory, and the ledger holds what survives the session.
+  "The high-level design one workstream commits to — authored by the impl session
+   before any code, and resolving a triage :squirrel into a concrete effort.
+   Replaces ImplementationPlan, and drops its :steps: a step list is working
+   memory, and the ledger holds what survives the session.
 
    :invariants is required and non-empty on purpose. It is what the review arbiter
    checks findings against; a design that names none is unfalsifiable, and every
-   finding against it becomes a matter of taste."
+   finding against it becomes a matter of taste.
+
+   :baseline is required for the same class of reason and a sharper one. The
+   inference about what was ALREADY there used to live here, as :assumes — a
+   field inside the record that also states the commitment, so it was written by
+   someone who already knew the fix, which is the one condition under which an
+   inference is worth nothing. It now lives in its own :baseline event, authored
+   first, and this field is where the change declares its relation to it. Two
+   questions are being kept apart on purpose: :standing relates the change to the
+   project's stance, :baseline relates it to the current design, and a change can
+   satisfy either while breaking the other.
+
+   THIS IS THE WRITE CONTRACT. Records appended before :baseline existed do not
+   satisfy it and are not supposed to — see DesignVisionLegacy and read-schemas."
+  [:map {:closed true}
+   [:format     [:= :design]]
+   [:summary    string?]
+   [:shape      string?]
+   [:invariants [:vector {:min 1} string?]]
+   [:standing   Standing]
+   [:baseline   BaselineRelation]
+   [:rejected   {:optional true} [:vector Rejected]]
+   [:layers     {:optional true} [:vector Layer]]
+   [:seams      {:optional true} [:vector Seam]]
+   [:open       {:optional true} [:vector string?]]
+   [:supersedes {:optional true} Supersedes]
+   [:effort     Effort]])
+
+(def DesignVisionLegacy
+  "LEGACY READ SHAPE — a :design record from before the baseline event existed:
+   no :baseline, and carrying the :assumes that the baseline replaced.
+
+   Not registered for writing. It exists so history stays readable, which is not
+   a courtesy: ws/latest-entry and work/entry->report validate on READ and
+   swallow the failure, so without this every design record written before the
+   cutover would quietly vanish from the panes and from the review judge — the
+   design would not be contradicted, it would simply stop being there."
   [:map {:closed true}
    [:format     [:= :design]]
    [:summary    string?]
@@ -286,6 +361,20 @@
    [:open       {:optional true} [:vector string?]]
    [:supersedes {:optional true} Supersedes]
    [:effort     Effort]])
+
+(def DesignVisionAny
+  "The READ contract for :design — anything that was legitimately writable at the
+   time it was written. Current shape first, so a record satisfying both is read
+   as current.
+
+   Deliberately NOT how the write contract is relaxed. Dispatching the one schema
+   on whether :baseline happens to be present would make the requirement
+   toothless in the exact case it exists for: a session that skips the baseline
+   omits the field, lands in the lenient branch, and validates. Strict on write,
+   wide on read — the tightening has teeth going forward and costs no history."
+  [:multi {:dispatch (fn [r] (if (contains? r :baseline) :current :legacy))}
+   [:current DesignVision]
+   [:legacy  DesignVisionLegacy]])
 
 (def ImplementationPlan
   "LEGACY — superseded by DesignVision (:design). Kept registered so ledgers
@@ -482,18 +571,53 @@
    :findings                 FindingsRound
    :proposed-ticket          ProposedTicket})
 
+(def read-schemas
+  "Kinds whose READ contract is wider than their write contract, because records
+   written before a tightening must stay readable. Consulted only by parse-event;
+   a kind absent here reads under the same schema it was written by.
+
+   This map is the standing acknowledgement of something the ledger otherwise
+   pretends is not true: entries are immutable, so a schema is not one contract
+   but one per era, and the reader's job is 'was this valid when written', not
+   'would I accept this today'. Every entry here should name the tightening that
+   put it here, and may be dropped once no record of the old shape survives."
+  {;; :baseline became required on :design; DesignVisionLegacy is the pre-baseline
+   ;; shape, which also carries the :assumes the baseline event replaced.
+   :design DesignVisionAny})
+
+(defn- validate-against
+  [schema kind report]
+  (if (m/validate schema report)
+    report
+    (throw (ex-info "Invalid event report"
+                    {:explain (m/explain schema report) :report report :kind kind}))))
+
 (defn validate-event
-  "Validate `report` (parsed EDN) against the schema registered for entry `kind`.
-   Returns the report on success; throws ex-info carrying a malli :explain on mismatch
-   (the bb task prints it so the emitting skill can fix + retry). Throws for an
-   unregistered kind."
+  "THE WRITE CONTRACT. Validate `report` (parsed EDN) against the schema registered
+   for entry `kind` — what may be appended today. Returns the report on success;
+   throws ex-info carrying a malli :explain on mismatch (the bb task prints it so
+   the emitting skill can fix + retry). Throws for an unregistered kind."
   [kind report]
-  (let [schema (or (event-schemas kind)
-                   (throw (ex-info "No schema for entry kind" {:kind kind})))]
-    (if (m/validate schema report)
-      report
-      (throw (ex-info "Invalid event report"
-                      {:explain (m/explain schema report) :report report :kind kind})))))
+  (validate-against (or (event-schemas kind)
+                        (throw (ex-info "No schema for entry kind" {:kind kind})))
+                    kind report))
+
+(defn parse-event
+  "THE READ CONTRACT. Like validate-event, but accepts anything that was
+   legitimately writable when it was written (read-schemas), not only what is
+   writable now.
+
+   Every reader must use this rather than validate-event. Both readers validate
+   on read and SWALLOW the failure — ws/latest-entry returns nil, work/entry->report
+   degrades to raw markdown — so tightening a write schema without widening the
+   read one does not surface as an error anywhere. It deletes history from the
+   panes and from the review judge, silently, which is the failure mode the
+   ledger's immutability is supposed to rule out."
+  [kind report]
+  (validate-against (or (read-schemas kind)
+                        (event-schemas kind)
+                        (throw (ex-info "No schema for entry kind" {:kind kind})))
+                    kind report))
 
 (defn validate
   "Backward-compatible triage validator — delegates to (validate-event :triage report)."
@@ -587,9 +711,19 @@
       (cons "\n## Not determined" (for [u unknowns] (str "- " u))))
     ["\n## Read" (str/join ", " (map #(str "`" % "`") read))])))
 
+(defn- baseline-relation->markdown
+  ;; :seq is bound as entry-seq — {:keys [seq ...]} would shadow clojure.core/seq
+  ;; and the next line calls it.
+  [{:keys [relation at breaks note] entry-seq :seq}]
+  (str "**Against the baseline:** " (name relation) " (entry " entry-seq ")"
+       (when at (str " — at: " at))
+       (when (seq breaks)
+         (str "\n> Breaks: " (str/join "; " breaks)))
+       (when note (str "\n> " note))))
+
 (defn- design->markdown
-  [{:keys [summary shape invariants standing assumes rejected layers seams open
-           supersedes effort]}]
+  [{:keys [summary shape invariants standing baseline assumes rejected layers
+           seams open supersedes effort]}]
   (str/join
    "\n"
    (concat
@@ -599,6 +733,7 @@
             (str " — " (str/join ", " ps)))
           "  ·  **Effort:** " (name effort))]
     (when-let [n (:note standing)] [(str "> " n)])
+    (when baseline [(baseline-relation->markdown baseline)])
     (when supersedes
       [(str "*Supersedes entry " (:seq supersedes) " — " (:why supersedes) "*")])
     ["" summary "" "## Shape" shape "" "## Invariants"]
