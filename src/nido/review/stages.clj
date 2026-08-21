@@ -103,6 +103,11 @@
   "What this round reviews: one target per layer, bounded by that layer's brief,
    plus one over the whole stack.
 
+   Each layer target carries its :index — its 1-based place in the stack, which
+   is known here and nowhere else downstream: `layers/ranges` hands them over
+   bottom→top, and after this the order is just the order of a vector. The
+   whole-stack target deliberately has none, because it is not a layer.
+
    The whole-stack target is what finds a defect that exists only in the
    COMPOSITION of two layers — something no layer reviewer can see, since each
    one is shown a diff in which the other layer does not appear. It is therefore
@@ -114,11 +119,14 @@
         whole    {:label "stack" :from base-rev :to "@" :brief nil :stack? true}]
     (if (< (count stack) 2)
       [whole]
-      (conj (mapv (fn [r] {:label (or (:slug r) (:bookmark r))
-                           :layer r
-                           :from  (:from r)
-                           :to    (:to r)
-                           :brief (layers/brief cwd (:tip r))})
+      (conj (into []
+                  (map-indexed
+                   (fn [i r] {:label (or (:slug r) (:bookmark r))
+                              :index (inc i)
+                              :layer r
+                              :from  (:from r)
+                              :to    (:to r)
+                              :brief (layers/brief cwd (:tip r))}))
                   (layers/ranges stack base-rev))
             whole))))
 
@@ -191,9 +199,11 @@
     (try
       (let [cwd      (get-in ctx [:config :cwd])
             base-rev (:from (first (filter :stack? (concat review skipped))))
-            row      (fn [status t] {:label  (:label t)
-                                     :stack? (boolean (:stack? t))
-                                     :status status})]
+            row      (fn [status t]
+                       (cond-> {:label  (:label t)
+                                :stack? (boolean (:stack? t))
+                                :status status}
+                         (:index t) (assoc :index (:index t))))]
         (emit {:event    :targets-resolved
                :iter     (:iter ctx)
                :at       (str (java.time.Instant/now))

@@ -281,7 +281,11 @@
       (is (= ["a" "b" "stack"] (map :label ts)))
       (is (= [["FORK" "cA"] ["cA" "cB"] ["FORK" "@"]] (map (juxt :from :to) ts)))
       (is (= "claim of cA" (:claims (:brief (first ts)))) "each layer carries its own brief")
-      (is (nil? (:brief (last ts))) "the whole-stack pass is deliberately unbounded"))))
+      (is (nil? (:brief (last ts))) "the whole-stack pass is deliberately unbounded")
+      (is (= [1 2] (map :index (butlast ts)))
+          "a layer is numbered by its place in the stack, bottom→top")
+      (is (nil? (:index (last ts)))
+          "the composition pass is not a layer and carries no number"))))
 
 (deftest review-targets-skip-the-stack-pass-below-two-layers
   ;; A composition defect needs two layers to compose. With one layer the stack

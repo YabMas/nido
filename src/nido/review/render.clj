@@ -41,7 +41,9 @@
                (let [n       (count (:findings ph))
                      skipped (count (filter #(= "skipped" (:status %)) (:layers ph)))]
                  (str n " finding" (when (not= 1 n) "s")
-                      (when (pos? skipped) (str " · " skipped " skipped")))))
+                      (when (pos? skipped)
+                        (str " · " skipped " layer" (when (not= 1 skipped) "s")
+                             " converged")))))
     ("arbiter" "judge") (when (:decision ph)
                (str "→ " (:decision ph)
                     (when-let [n (seq (filter #(= "fix" (str (name (or (:disposition %) "")))) 
@@ -68,15 +70,50 @@
                           (:error ph)])]
     (str "   " (glyph ph now) " " (str/join "  " bits))))
 
-(def ^:private layer-col 21)
+(def ^:private indent "       ")
+(def ^:private min-name-col 21)
+(def ^:private max-name-col 34)
+
+(defn- name-col
+  "How wide the name field is for THIS block: its longest name plus a space.
+
+   Floored so a stack of short slugs still lines its text up with the rest of
+   the display, and capped so one long slug pushes only its own line right
+   instead of widening every row. The cap is not cosmetic — `frontend/repaint!`
+   counts the frame's NEWLINES and moves the cursor up that many rows, so a line
+   that wraps is a row the repaint does not know about and the frame walks down
+   the screen."
+  [names]
+  (-> (reduce max 0 (map count names))
+      inc
+      (max min-name-col)
+      (min max-name-col)))
 
 (defn- pad
-  "Left-align into the label column, always leaving at least one space — a long
-   label must not run into the text after it."
-  [s]
-  (let [s (str s)
-        n (max 1 (- layer-col (count s)))]
-    (str s (apply str (repeat n " ")))))
+  "Left-align into the name field, always leaving at least one space — a long
+   name must not run into the text after it."
+  [s col]
+  (let [s (str s)]
+    (str s (apply str (repeat (max 1 (- col (count s))) " ")))))
+
+(defn- row-name
+  "A row's name, in the shape that says what kind of thing it is.
+
+   A layer is numbered by its place in the stack. The number comes from jj, not
+   from where the row happens to sit, so a layer keeps it when a round reviews
+   only a subset — a number that renumbered itself between rounds would be worse
+   than none.
+
+   The composition pass has no number because it is not a layer. It is named for
+   what it actually reads — every layer at once, which is the only way to find a
+   defect that exists solely in the composition of two of them — and with no
+   layers under it there is nothing to compose and it is simply the branch."
+  [{:keys [index stack? label]} layer-count]
+  (cond
+    (and stack? (pos? layer-count)) (str "All " layer-count " layers at once")
+    stack?                          "Whole branch"
+    index                           (str "Layer " index " · " label)
+    :else                           (str label)))
 
 (defn- layer-glyph
   [status now]
@@ -89,35 +126,98 @@
 (defn- layer-text
   [{:keys [status findings]}]
   (case status
-    "skipped" "unchanged since it converged"
+    "skipped" "converged"
     "pending" "queued"
     "running" "reviewing …"
     "error"   "failed"
     (str findings " finding" (when (not= 1 findings) "s"))))
+
+(defn- composition-rule
+  "The captioned rule that separates the composition pass from the layers.
+
+   Carrying the caption HERE rather than in the row's name is what keeps the
+   name field driven by the layers: `Composition · all layers at once` in the
+   name column would have set the width of every row above it, pushing six short
+   slugs a third of the way across the terminal to make room for a phrase that
+   is really a section heading."
+  [col]
+  (let [head (str indent "─── composition ")]
+    (str head (apply str (repeat (max 3 (- (+ (count indent) 2 col) (count head)))
+                                 "─")))))
+
+(defn- block-lines
+  "Render rows into aligned lines, ruling off the composition pass from the
+   layers above it.
+
+   The rule is the whole distinction. The composition row is not a seventh
+   sibling of six layers — it is one pass over all of them — and a label alone
+   was not carrying that: it sat in the list looking like a layer whose name
+   happened to be `stack`. Drawn only when a layer precedes it, since a rule
+   under nothing separates nothing.
+
+   `layers` is how wide the STACK is, which is not the same as how many layer
+   rows this block has: the warden block holds only the layers that reported
+   something, and the composition pass still read all of them. nil falls back to
+   counting the rows, which is what a report written before the target carried a
+   layer count has to rely on."
+  [rows layers glyph-fn text-fn]
+  (let [rows   (vec rows)
+        layers (or layers (count (remove :stack? rows)))
+        names  (mapv #(row-name % layers) rows)
+        col    (name-col names)
+        rule   (composition-rule col)]
+    (into []
+          (comp (map-indexed
+                 (fn [i r]
+                   (let [line (str indent (glyph-fn r) " "
+                                   (pad (nth names i) col) (text-fn r))]
+                     (if (and (:stack? r) (pos? i) (not (:stack? (nth rows (dec i)))))
+                       [rule line]
+                       [line]))))
+                cat)
+          rows)))
 
 (defn- layer-lines
   "One indented line per review target: what it found, that it has not been
    looked at yet, or that it was not looked at at all because its patch had
    already converged.
 
-   A skipped layer is SHOWN rather than omitted. A reader who cannot see that a
-   layer was passed over has to take on trust that it was safe to pass over —
-   and silent truncation reads as coverage. A pending one is shown for the same
-   reason from the other end: the round names every target before it reviews any
-   of them, so a run interrupted mid-review still says what it set out to read."
-  [ph now]
-  (->> (:layers ph)
-       (map (fn [{:keys [label stack? status] :as row}]
-              (str "       "
-                   (layer-glyph status now) " "
-                   (pad (if stack? (str label " (composition)") label))
-                   (layer-text row))))))
+   A converged layer holds its place in the stack and says `converged` where its
+   finding count would go. Moving it to the end of the list — which is what the
+   split between reviewed and skipped targets used to do — made a layer look as
+   though it had left the stack in the round it stopped changing.
+
+   It is SHOWN rather than omitted for the older reason: a reader who cannot see
+   that a layer was passed over has to take on trust that it was safe to pass
+   over, and silent truncation reads as coverage. A pending one is shown for the
+   same reason from the other end: the round names every target before it
+   reviews any of them, so a run interrupted mid-review still says what it set
+   out to read."
+  [ph layers now]
+  (block-lines (:layers ph) layers
+               #(layer-glyph (:status %) now)
+               layer-text))
+
+(defn- warden-rows
+  "The warden block's rows, tolerating the label→count map older reports carry."
+  [by-layer]
+  (if (map? by-layer)
+    (mapv (fn [[label n]] {:label label :count n}) by-layer)
+    (vec by-layer)))
 
 (defn- warden-lines
-  [ph]
-  (->> (:by-layer ph)
-       (map (fn [[label n]]
-              (str "       ✓ " (pad label) n " to rule on")))))
+  "One line per target that reported something, numbered and ordered like the
+   review block above it.
+
+   The composition pass gets a line but never a warden: its findings belong to
+   no single layer by construction, so they go straight to the arbiter. Saying
+   where they went is the difference between a reader seeing a routing decision
+   and a reader seeing a layer that nobody ruled on."
+  [ph layers]
+  (block-lines (warden-rows (:by-layer ph)) layers
+               #(if (:stack? %) "·" "✓")
+               #(str (:count %)
+                     (if (:stack? %) " to the arbiter" " to rule on"))))
 
 (defn- phase-block [ph target now]
   (let [detail (case (:phase ph)
@@ -126,8 +226,10 @@
                  ;; for minutes is precisely the one worth showing detail for. A
                  ;; finished phase has already replaced them with its own rows,
                  ;; so what a COMPLETED run renders is unchanged by this.
-                 "review" (when (seq (:layers ph)) (layer-lines ph now))
-                 "warden" (when (= "ok" (:status ph)) (warden-lines ph))
+                 "review" (when (seq (:layers ph))
+                            (layer-lines ph (:layers target) now))
+                 "warden" (when (= "ok" (:status ph))
+                            (warden-lines ph (:layers target)))
                  nil)]
     (str/join "\n" (cons (phase-line ph target now) (remove str/blank? detail)))))
 

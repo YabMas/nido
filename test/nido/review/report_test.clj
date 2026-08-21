@@ -79,6 +79,68 @@
            (:layers review))
         "the finished payload owns the rows; the seed only carries the round")))
 
+(deftest a-converged-target-keeps-its-place-in-the-stack
+  ;; to-review hands back two vectors, and the rows used to be concatenated in
+  ;; that order — so a layer moved to the bottom of the list in the round it
+  ;; converged, which reads as leaving the stack rather than as being unchanged.
+  (let [r (drive
+           [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+            {:event :phase-started :iter 1 :phase :review :at "t1"}
+            {:event :targets-resolved :iter 1 :at "t1a" :base-rev "B" :files []
+             :targets [{:label "two" :index 2 :stack? false :status "pending"}
+                       {:label "stack" :stack? true :status "pending"}
+                       {:label "one" :index 1 :stack? false :status "skipped"}
+                       {:label "three" :index 3 :stack? false :status "skipped"}]}
+            {:event :phase-finished :iter 1 :phase :review :at "t2"
+             :ctx {:findings []
+                   :reviews [{:target {:label "two" :index 2}}
+                             {:target {:label "stack" :stack? true}}]
+                   :skipped [{:label "one" :index 1} {:label "three" :index 3}]}}])
+        review (first (:phases (first (:rounds r))))]
+    (is (= ["one" "two" "three" "stack"] (mapv :label (:layers review)))
+        "the finished payload is in stack order, composition last")))
+
+(deftest seeded-rows-are-in-the-same-order-the-finished-ones-will-be
+  (let [r (drive
+           [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+            {:event :phase-started :iter 1 :phase :review :at "t1"}
+            {:event :targets-resolved :iter 1 :at "t1a" :base-rev "B" :files []
+             :targets [{:label "two" :index 2 :stack? false :status "pending"}
+                       {:label "stack" :stack? true :status "pending"}
+                       {:label "one" :index 1 :stack? false :status "skipped"}]}])
+        review (first (:phases (first (:rounds r))))]
+    (is (= ["one" "two" "stack"] (mapv :label (:layers review))))
+    (is (= ["skipped" "pending" "pending"] (mapv :status (:layers review)))
+        "a target sits in the same place from the moment it is named")))
+
+(deftest an-unnumbered-row-keeps-the-order-it-arrived-in
+  ;; A report written before :index existed, and the stack-of-one case that has
+  ;; no layers to number. Stable sort, so nothing is shuffled.
+  (is (= ["b" "a" "c"]
+         (mapv :label (report/in-stack-order [{:label "b"} {:label "a"} {:label "c"}]))))
+  (is (= ["b" "a" "stack"]
+         (mapv :label (report/in-stack-order
+                       [{:label "b"} {:label "stack" :stack? true} {:label "a"}])))
+      "the composition still sorts last without any numbers around it"))
+
+(deftest warden-rows-are-ordered-and-name-the-composition-as-one
+  (let [ctx {:findings [{:from-layer "specs"} {:from-layer "specs"}
+                        {:from-layer "stack"} {:from-layer "helpers"}]
+             :reviews [{:target {:label "helpers" :index 1}}
+                       {:target {:label "specs" :index 2}}
+                       {:target {:label "stack" :stack? true}}]}]
+    (is (= [{:label "helpers" :index 1 :stack? false :count 1}
+            {:label "specs"   :index 2 :stack? false :count 2}
+            {:label "stack"   :stack? true :count 1}]
+           (report/warden-rows ctx))
+        "in stack order, the composition last and flagged as not a layer")))
+
+(deftest warden-rows-drop-nothing-they-cannot-place
+  (let [rows (report/warden-rows {:findings [{:from-layer "ghost"}]
+                                  :reviews  [{:target {:label "real" :index 1}}]})]
+    (is (= [{:label "ghost" :stack? false :count 1}] rows)
+        "an unplaceable label keeps its row, unnumbered, rather than vanishing")))
+
 (deftest arbiter-and-fix-fill-in-the-round
   (let [r (drive
            [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
