@@ -26,8 +26,16 @@
 (def ^:private row-template
   "One tab-separated row per commit. Descriptions are deliberately NOT in here:
    they are multi-line, which would need a record separator and a parser. The
-   few layer tips that need their brief fetch it by bookmark (`description`)."
-  "commit_id ++ \"\\t\" ++ change_id ++ \"\\t\" ++ local_bookmarks ++ \"\\n\"")
+   few layer tips that need their brief fetch it by bookmark (`description`).
+
+   Bookmarks go through `.name()` rather than being interpolated bare. A bare
+   `local_bookmarks` renders jj's DISPLAY form of each ref, which decorates the
+   name with sync markers — `*` when the local bookmark has diverged from a
+   tracked remote, `??` when it is conflicted. That marker is not part of the
+   name, and a layer read with one on it is unusable as a revision: the moment
+   this loop lands a fix on a pushed layer, the layer diverges from its remote
+   and every later round would ask jj for `<layer>*`, which does not exist."
+  "commit_id ++ \"\\t\" ++ change_id ++ \"\\t\" ++ local_bookmarks.map(|b| b.name()).join(\" \") ++ \"\\n\"")
 
 (defn- parse-row
   [line]

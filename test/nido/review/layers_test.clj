@@ -65,6 +65,19 @@
         (is (some #{"trunk()..@"} args))
         (is (some #{"--reversed"} args))))))
 
+(deftest stack-asks-jj-for-bookmark-NAMES-not-their-display-form
+  ;; A bare `local_bookmarks` renders jj's decorated form of each ref: `<name>*`
+  ;; once the local bookmark has diverged from a tracked remote — which is
+  ;; precisely what landing a fix on an already-pushed layer does. The marker is
+  ;; not part of the name, so the round after the first fix would ask jj to
+  ;; position on `<layer>*`, which does not exist.
+  (let [calls (atom [])]
+    (with-redefs [jj/jj! (stub-log "" calls)]
+      (layers/stack "/w" "sess" "main")
+      (let [args (first @calls)
+            tmpl (second (drop-while #(not= "-T" %) args))]
+        (is (str/includes? tmpl "local_bookmarks.map(|b| b.name())"))))))
+
 ;; ---- positioning ---------------------------------------------------------
 
 (deftest position-for-fix-inserts-after-the-layer-bookmark
