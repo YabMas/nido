@@ -574,6 +574,34 @@
     (is (str/includes? html "not determined (1)")
         "the count is shown even folded: an empty unknowns is a smell, not a pass")))
 
+(deftest workstream-pane-renders-baseline-health-grouped-by-axis
+  (let [ws   (assoc sample-ws :report
+                    {:format       :baseline
+                     :area         "order totalling"
+                     :bounded-by   "everything that reads or writes a money amount"
+                     :shape        "The aggregate is the only thing that sums lines."
+                     :load-bearing [{:property "the aggregate is the only summing path"
+                                     :evidence ["src/order/aggregate.clj:12"]}]
+                     :health       [{:id "invoice-resums"
+                                     :observation "two summing paths where the design claims one"
+                                     :axis :design
+                                     :evidence ["src/order/invoice.clj:88"]}
+                                    {:id "importer-untested"
+                                     :observation "no test covers importer rounding"
+                                     :axis :implementation
+                                     :evidence ["src/order/import.clj:14"]
+                                     :invisibly-incomplete? true}]
+                     :read         ["src/order/aggregate.clj"]
+                     :unknowns     []})
+        html (views/workstream-pane ws {})]
+    (is (str/includes? html "Design health"))
+    (is (str/includes? html "Implementation health"))
+    (is (str/includes? html "invoice-resums"))
+    (is (str/includes? html "src/order/invoice.clj:88"))
+    (is (str/includes? html "invisibly incomplete"))
+    (is (< (str/index-of html "Design health") (str/index-of html "Implementation health"))
+        "design health leads — it is the half that can change the declared relation")))
+
 (deftest workstream-pane-renders-a-verdict-with-broken-load-bearing-properties
   (let [ws   (assoc sample-ws :report
                     {:format :design-verdict :verdict :invalidated :round 3

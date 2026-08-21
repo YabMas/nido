@@ -794,6 +794,98 @@
     (is (not (str/includes? md "\n\n\n"))
         "an absent optional leaves no blank hole where its line would have been")))
 
+;; ── Health — what the survey ran into ───────────────────────────────────────
+;; The one field of the baseline that is a judgement rather than a reading, and
+;; still an `is`. Its job is to make "leave the place cleaner than you found it"
+;; a record rather than a virtue, without letting the survey start routing.
+
+(def ^:private healthy-baseline
+  (assoc valid-baseline
+         :health
+         [{:id          "invoice-resums"
+           :observation "invoice.clj re-sums line items instead of reading the
+                         aggregate, so there are two summing paths where the
+                         design claims one"
+           :axis        :design
+           :evidence    ["src/order/invoice.clj:88"]}
+          {:id          "csv-importer-untested"
+           :observation "the CSV importer writes amounts with no test covering
+                         rounding"
+           :axis        :implementation
+           :evidence    ["src/order/import.clj:14"]
+           :invisibly-incomplete? true}]))
+
+(deftest validate-event-accepts-a-baseline-with-health
+  (is (= healthy-baseline (report/validate-event :baseline healthy-baseline))))
+
+(deftest health-is-optional
+  (is (= valid-baseline (report/validate-event :baseline valid-baseline))
+      "a survey that ran into nothing worth recording is legitimate; the smell
+       lives in the skill, not in the schema"))
+
+(deftest health-observation-requires-an-axis
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event
+                :baseline (assoc valid-baseline
+                                 :health [{:id "x" :observation "messy"
+                                           :evidence ["src/a.clj:1"]}])))
+      "design health and implementation health route differently — an
+       unaxed observation is the useless 'a bit messy' output"))
+
+(deftest health-observation-requires-evidence
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event
+                :baseline (assoc valid-baseline
+                                 :health [{:id "x" :observation "shaky"
+                                           :axis :design :evidence []}])))
+      "same rule as a load-bearing property: nothing to point at is a guess"))
+
+(deftest health-observation-rejects-an-unknown-axis
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event
+                :baseline (assoc valid-baseline
+                                 :health [{:id "x" :observation "shaky"
+                                           :axis :process
+                                           :evidence ["src/a.clj:1"]}])))))
+
+(deftest health-observation-cannot-carry-a-destination
+  (doseq [k [:route :destination :spin-out :fix-here]]
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (report/validate-event
+                  :baseline (assoc valid-baseline
+                                   :health [{:id "x" :observation "shaky"
+                                             :axis :design
+                                             :evidence ["src/a.clj:1"]
+                                             k :anything}])))
+        (str "the baseline never routes — closed map rejects " k))))
+
+(deftest health-ids-must-be-unique-within-a-baseline
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event
+                :baseline (assoc valid-baseline
+                                 :health [{:id "dup" :observation "a" :axis :design
+                                           :evidence ["src/a.clj:1"]}
+                                          {:id "dup" :observation "b" :axis :design
+                                           :evidence ["src/b.clj:1"]}])))
+      "a duplicate id makes 'routed exactly once' unanswerable for the design
+       record that cites this baseline"))
+
+(deftest report->markdown-baseline-groups-health-by-axis
+  (let [md (report/report->markdown healthy-baseline)]
+    (is (str/includes? md "## Health — what the survey ran into"))
+    (is (str/includes? md "### Design health"))
+    (is (str/includes? md "### Implementation health"))
+    (is (str/includes? md "`invoice-resums`"))
+    (is (str/includes? md "`src/order/invoice.clj:88`"))
+    (is (str/includes? md "invisibly incomplete"))
+    (is (< (str/index-of md "### Design health")
+           (str/index-of md "### Implementation health"))
+        "design health first — it is the half that can change the declared
+         relation, so it is what a reader is scanning for")))
+
+(deftest report->markdown-baseline-omits-health-when-absent
+  (is (not (str/includes? (report/report->markdown valid-baseline) "## Health"))))
+
 (deftest baseline-titles-itself-by-area
   (is (= "Baseline: order totalling — calc, the aggregate, and the invoice reader"
          (report/report-title valid-baseline))

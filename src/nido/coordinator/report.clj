@@ -359,11 +359,54 @@
    [:at  string?]
    [:how string?]])
 
+(def HealthObservation
+  "One thing about the area's health that the survey ENCOUNTERED while
+   establishing what the operating design is. Deliberately not an audit: a pass
+   that goes looking will always find something, and the area would then be
+   reviewed in full at the start of every workstream that touches it. Bounded by
+   the same :bounded-by as everything else in the record.
+
+   :axis carries the weight, because the two halves fail differently and the
+   remedy differs with them. A strong design shakily implemented is debt — no
+   threat to what is about to be built, and the most routable class there is. A
+   weak design cleanly implemented is the dangerous one: it looks healthy,
+   everything downstream inherits it, and it is what should turn a change's
+   declared relation from :within into :revisit. Collapsing them yields the
+   useless survey output ('this area is a bit messy') instead of the useful one
+   ('the boundary is in the wrong place, and the code honouring it is why nobody
+   noticed').
+
+   :invisibly-incomplete? marks the class /spin-out's veto turns on — an
+   inconsistency a future reader would read as intentional. It is an is-claim
+   about the code, true whoever is building whatever, which is why it can be
+   stated here without the record crossing into routing.
+
+   :id is how a design record names this observation when it routes it, so it
+   has to be unique within the baseline."
+  [:map {:closed true}
+   [:id          string?]
+   [:observation string?]
+   [:axis        [:enum :design :implementation]]
+   [:evidence    [:vector {:min 1} string?]]
+   [:invisibly-incomplete? {:optional true} boolean?]])
+
+(defn- distinct-health-ids?
+  "Health observation ids are unique within one baseline. A duplicate would make
+   'routed exactly once' unanswerable for the design record that cites it."
+  [{:keys [health]}]
+  (or (< (count health) 2) (apply distinct? (map :id health))))
+
 (def Baseline
   "An area's current design, as it is — the yardstick every later judgement in the
    workstream is made against. Authored BEFORE the design record and independent
    of it, which is the whole point: an inference made by someone who already knows
    the fix is an inference bent toward the fix.
+
+   :health is the one field that is a judgement rather than a reading, and it is
+   still an `is`: whether what is here holds, not whether it should be different.
+   It never carries a destination — routing needs the change, and a survey by
+   someone who already knows the change is worth nothing. The design record that
+   cites this baseline is what routes them.
 
    THE TEST FOR WHAT BELONGS HERE: every field must be fillable without knowing the
    change. That is why nothing about effort, direction or intended shape appears —
@@ -381,17 +424,21 @@
    rots and then lies, which is worse than one that is absent, because it is
    citable. /design §4 anticipates harvesting a written one from records like these
    later; this is not that."
-  [:map {:closed true}
-   [:format           [:= :baseline]]
-   [:area             string?]
-   [:bounded-by       string?]
-   [:shape            string?]
-   [:load-bearing     [:vector {:min 1} LoadBearing]]
-   [:extension-points {:optional true} [:vector ExtensionPoint]]
-   [:governing        {:optional true} [:vector string?]]
-   [:drift            {:optional true} [:vector string?]]
-   [:read             [:vector {:min 1} string?]]
-   [:unknowns         {:optional true} [:vector string?]]])
+  [:and
+   [:map {:closed true}
+    [:format           [:= :baseline]]
+    [:area             string?]
+    [:bounded-by       string?]
+    [:shape            string?]
+    [:load-bearing     [:vector {:min 1} LoadBearing]]
+    [:extension-points {:optional true} [:vector ExtensionPoint]]
+    [:health           {:optional true} [:vector HealthObservation]]
+    [:governing        {:optional true} [:vector string?]]
+    [:drift            {:optional true} [:vector string?]]
+    [:read             [:vector {:min 1} string?]]
+    [:unknowns         {:optional true} [:vector string?]]]
+   [:fn {:error/message "health observation ids must be unique within a baseline"}
+    distinct-health-ids?]])
 
 (def BaselineRelation
   "How this change relates to the area's CURRENT design — the layer-2 question,
@@ -892,9 +939,24 @@
   [s]
   (some->> (some-> s str/split-lines) (map str/trim) (some not-empty)))
 
+(defn- health->markdown
+  "Health grouped by axis, design first. The axis is the routing signal, so it is
+   the heading rather than a suffix — a reader scanning for what threatens the
+   change should not have to read every line to find the ones that do."
+  [health]
+  (mapcat (fn [[axis label]]
+            (when-let [items (seq (filter #(= axis (:axis %)) health))]
+              (cons (str "\n### " label)
+                    (for [{:keys [id observation evidence invisibly-incomplete?]} items]
+                      (str "- `" id "` " observation
+                           " — " (str/join ", " (map #(str "`" % "`") evidence))
+                           (when invisibly-incomplete?
+                             "\n  - invisibly incomplete: deferring this leaves the branch untrue"))))))
+          [[:design "Design health"] [:implementation "Implementation health"]]))
+
 (defn- baseline->markdown
-  [{:keys [area bounded-by shape load-bearing extension-points governing drift
-           read unknowns]}]
+  [{:keys [area bounded-by shape load-bearing extension-points health governing
+           drift read unknowns]}]
   (str/join
    "\n"
    (concat
@@ -913,6 +975,8 @@
       (cons "\n## Extension points — where the design already admits change"
             (for [{:keys [at how]} extension-points]
               (str "- " at " — " how))))
+    (when (seq health)
+      (cons "\n## Health — what the survey ran into" (health->markdown health)))
     (when (seq drift)
       (cons "\n## Drift from the stance" (for [d drift] (str "- " d))))
     (when (seq unknowns)

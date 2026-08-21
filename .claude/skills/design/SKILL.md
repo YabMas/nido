@@ -235,6 +235,49 @@ One bit, derived rather than judged, and **the same bit for a bug and a
 feature**. That symmetry is the point — it is what makes this a way of working
 rather than a bug-triage nicety.
 
+### Health — and why it is still an `is`
+
+`:load-bearing` says what holds. `:health` says whether what holds is *sound* —
+and it is the field most likely to smuggle an `ought` past you, so it has two
+rules.
+
+**It is what the survey ran into, not what an audit went looking for.** Go
+looking and you will always find something, and you will have written a code
+review of the whole module before the ticket starts. Bounded by the same
+`:bounded-by` as everything else here.
+
+**Split it by axis, because the halves fail differently:**
+
+- `:axis :implementation` — a strong design shakily executed. Debt. No threat to
+  what you are about to build, and the most routable class there is.
+- `:axis :design` — a weak design cleanly executed. **The dangerous one**: it
+  looks healthy, everything downstream inherits it, and it is what should turn
+  your `:relation` from `:within` into `:revisit`.
+
+Collapsing them gives you *"this area is a bit messy"*. Keeping them apart gives
+you *"the boundary is in the wrong place, and the code honouring it is why
+nobody noticed"* — the same derivation this record already uses for routing a
+defect, applied to the area.
+
+Set `:invisibly-incomplete?` when a reader would take the inconsistency for
+intent — a half-applied invariant, a migration that stopped, a rule with silent
+exceptions. That is the class `/spin-out`'s veto turns on, and it is an is-claim
+about the code, true whoever is building whatever, which is why it can be stated
+here without the record crossing into routing.
+
+### The baseline never routes
+
+You will notice, while surveying, that some of what you found should be fixed
+and some of it should not be fixed *by this change*. **Do not write that down
+here.** Which of them are in scope depends on what you are about to build, and a
+survey by someone who already knows the change is the one thing this record
+exists to prevent.
+
+Noticing is free; deciding is batched — the same split §6 uses for mid-work
+noticings. Give each observation an `:id`, and the design record that cites this
+baseline is what routes it (§4a). The schema enforces the boundary: `:health` is
+a closed map with no destination field in it.
+
 ### Never confuse *is* with *ought*
 
 Reading code tells you what is there, including the accidents, the half-finished
@@ -255,7 +298,8 @@ A fluent, generic baseline inferred from three files will read well and be worth
 nothing. `:read` is required and non-empty; so is an honest `:unknowns`. **An
 empty `:unknowns` is a smell, not a clean bill of health** — a survey that found
 nothing it could not determine usually did not look. Same signal as the design
-buffer that sweeps to nothing (§6).
+buffer that sweeps to nothing (§6), and the same signal as an empty `:health` on
+an area anyone has worked in.
 
 ### It stays in the ledger
 
@@ -341,6 +385,8 @@ cat > /tmp/baseline.edn <<'EDN'
  :shape        "…"
  :load-bearing [{:property "…" :evidence ["src/…:41"] :drift "…"}]
  :extension-points [{:at "…" :how "…"}]
+ :health       [{:id "short-slug" :axis :design :observation "…"
+                 :evidence ["src/…:88"] :invisibly-incomplete? false}]
  :governing    ["refs into the stance"]
  :drift        ["…"]
  :read         ["src/…"]

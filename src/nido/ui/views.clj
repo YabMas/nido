@@ -613,8 +613,8 @@
    `unknowns` is a smell rather than a clean bill of health — a survey that found
    nothing it could not determine usually did not look — so the fold says how many
    there were instead of hiding the count."
-  [{:keys [area bounded-by shape load-bearing extension-points governing drift
-           read unknowns]}]
+  [{:keys [area bounded-by shape load-bearing extension-points health governing
+           drift read unknowns]}]
   [:div.md
    [:h2 "Baseline — the current design"]
    [:div.report-meta
@@ -636,6 +636,19 @@
       (into [:ul]
             (for [{:keys [at how]} extension-points]
               [:li at " — " how]))])
+   (when (seq health)
+     [:div [:h3 "Health"]
+      (for [[axis label] [[:design "Design health"] [:implementation "Implementation health"]]
+            :let [items (filter #(= axis (:axis %)) health)]
+            :when (seq items)]
+        [:div
+         [:h4 label]
+         (into [:ul]
+               (for [{:keys [id observation evidence invisibly-incomplete?]} items]
+                 [:li [:code id] " " observation
+                  [:span.meta " — " (str/join ", " evidence)]
+                  (when invisibly-incomplete?
+                    [:div.meta "invisibly incomplete — deferring this leaves the branch untrue"])]))])])
    (when (seq drift)
      [:div [:h3 "Drift from the stance"] (into [:ul] (for [d drift] [:li d]))])
    [:details.trail
