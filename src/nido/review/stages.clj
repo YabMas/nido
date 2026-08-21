@@ -99,6 +99,33 @@
                           futs))))
         (partition-all n thunks)))
 
+(defn composition-of
+  "What the composition pass is told about the stack it is composing: one entry
+   per layer, in stack order, carrying the range that layer contributes, the rev
+   of the tree its own PR would merge, what it claims, what it declared out of
+   scope, and what it touches.
+
+   Built here rather than from the round's results, because the composition pass
+   runs IN that round: `build-toc` reads each target's manifest once its review
+   has returned, which is exactly too late to prime one with.
+
+   The revisions are the point. A warden gets `toc-block` — a map with no
+   coordinates — precisely so it cannot re-derive the layers around it. The
+   composition pass gets the coordinates for the opposite reason: the states the
+   branch passes THROUGH are the only thing it is there to look at, and they are
+   reachable from nowhere else in the loop."
+  [cwd targets]
+  (into []
+        (map (fn [{:keys [label index from to brief]}]
+               {:label        label
+                :index        index
+                :from         from
+                :tip          to
+                :claim        (:claims brief)
+                :out-of-scope (:out-of-scope brief)
+                :files        (codex/changed-files cwd from to)}))
+        targets))
+
 (defn review-targets
   "What this round reviews: one target per layer, bounded by that layer's brief,
    plus one over the whole stack.
@@ -112,23 +139,32 @@
    COMPOSITION of two layers — something no layer reviewer can see, since each
    one is shown a diff in which the other layer does not appear. It is therefore
    only worth running when there are at least two layers to compose; below that
-   it is the same diff twice, and the stack target is the only one."
+   it is the same diff twice, and the stack target is the only one.
+
+   With layers to compose it also carries :composition, and that is what makes
+   it a composition pass rather than a second, wider layer review. Without it
+   the target is the flat-branch reviewer pointed at the whole branch and never
+   told a stack exists — so it re-derives every layer it was supposed to trust,
+   and the findings that are genuinely its own come back indistinguishable from
+   the ones the layer reviews already hold."
   [cwd base]
   (let [base-rev (codex/merge-base cwd base)
         stack    (session-stack cwd base)
         whole    {:label "stack" :from base-rev :to "@" :brief nil :stack? true}]
     (if (< (count stack) 2)
       [whole]
-      (conj (into []
-                  (map-indexed
-                   (fn [i r] {:label (or (:slug r) (:bookmark r))
-                              :index (inc i)
-                              :layer r
-                              :from  (:from r)
-                              :to    (:to r)
-                              :brief (layers/brief cwd (:tip r))}))
-                  (layers/ranges stack base-rev))
-            whole))))
+      (let [per-layer (into []
+                            (map-indexed
+                             (fn [i r] {:label (or (:slug r) (:bookmark r))
+                                        :index (inc i)
+                                        :layer r
+                                        :from  (:from r)
+                                        :to    (:to r)
+                                        :brief (layers/brief cwd (:tip r))}))
+                            (layers/ranges stack base-rev))]
+        (conj per-layer
+              (assoc whole :composition
+                     {:layers (composition-of cwd per-layer)}))))))
 
 (defn with-patch-hashes
   "Stamp each target with the hash of the patch it contributes — its identity
@@ -254,7 +290,8 @@
                                     (let [r (assoc (codex/review!
                                                     {:cwd cwd :run-id run-id :iter (:iter ctx)
                                                      :from (:from t) :to (:to t)
-                                                     :label (:label t) :brief (:brief t)})
+                                                     :label (:label t) :brief (:brief t)
+                                                     :composition (:composition t)})
                                                    :target t)]
                                       (announce-target! ctx "reviewed" t
                                                         {:findings (count (:findings r))})

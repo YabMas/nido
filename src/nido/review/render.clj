@@ -255,10 +255,21 @@
   "A finding, with where it was seen and what was decided about it. The
    disposition is shown because a finding that is merely absent from the fix
    list reads as forgotten; naming it closed, and by what authority, is the
-   difference between a decision and a shrug."
+   difference between a decision and a shrug.
+
+   A composition finding also shows its kind and the layers it spans, next to
+   the location rather than inside the disposition — it is a property of the
+   defect, not of what was decided. It is what makes a `park` legible: parked
+   for contradicting an invariant and parked because the CUT is wrong ask very
+   different things of whoever reads this, and the word alone cannot tell them
+   apart."
   [f]
   (str "    • [P" (:priority f) "] " (:title f)
        "\n      " (:file f) ":" (:line-start f) "-" (:line-end f)
+       (when-let [k (:kind f)]
+         (str "  ·  " (name k)
+              (when (seq (:layers f))
+                (str " across " (str/join " + " (:layers f))))))
        (when-let [d (:disposition f)]
          (str "\n      → " (name d)
               (when-let [o (:owner-layer f)] (str " · " o))

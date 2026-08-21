@@ -22,18 +22,25 @@
   (digest/short-id (str file "|" line-start "|" title)))
 
 (defn normalize-finding
-  "Codex native finding (keyword keys) -> normalized finding."
+  "Codex native finding (keyword keys) -> normalized finding.
+
+   `kind` and `layers` are added only when the finding carries them, which is
+   only ever the composition pass: a layer review is not asked for them, and
+   stamping every finding with two nils would put the composition vocabulary on
+   findings that have no claim to it."
   [raw]
   (let [loc (:code_location raw)
         lr  (:line_range loc)]
-    {:title      (:title raw)
-     :body       (:body raw)
-     :priority   (:priority raw)
-     :reach      (some-> (:reach raw) keyword)
-     :confidence (:confidence_score raw)
-     :file       (:absolute_file_path loc)
-     :line-start (:start lr)
-     :line-end   (:end lr)}))
+    (cond-> {:title      (:title raw)
+             :body       (:body raw)
+             :priority   (:priority raw)
+             :reach      (some-> (:reach raw) keyword)
+             :confidence (:confidence_score raw)
+             :file       (:absolute_file_path loc)
+             :line-start (:start lr)
+             :line-end   (:end lr)}
+      (:kind raw)         (assoc :kind (keyword (:kind raw)))
+      (seq (:layers raw)) (assoc :layers (vec (:layers raw))))))
 
 (defn- with-id [f] (assoc f :id (finding-id f)))
 
@@ -66,6 +73,41 @@
   [opts]
   (let [res (apply p/shell (codex-argv opts))]
     {:exit (:exit res)}))
+
+(defn composition-schema
+  "The findings schema with the composition pass's two extra fields: the `kind`
+   it must classify the defect as, and the `layers` it must show the defect
+   spans.
+
+   Derived from the base schema rather than kept beside it as a second resource.
+   It IS the findings schema plus those two, and a copy would quietly stop being
+   that the first time the base gains a field — leaving the pass that most needs
+   a change to the review contract as the one place that never sees it.
+
+   The `kind` enum comes from `prompts/composition-kinds`, the same list the
+   primer teaches. A taxonomy the prompt names but the schema will not accept is
+   not a soft mismatch: strict structured-output mode rejects the response, so
+   every round 400s before the review turn starts.
+
+   Every added property is also added to `required`, for the same reason —
+   strict mode demands it of every object node."
+  [base]
+  (update-in base [:properties :findings :items]
+             (fn [item]
+               (-> item
+                   (assoc-in [:properties :kind]
+                             {:type "string"
+                              :enum (mapv :kind prompts/composition-kinds)})
+                   (assoc-in [:properties :layers]
+                             {:type "array" :items {:type "string"}})
+                   (update :required #(into (vec %) ["kind" "layers"]))))))
+
+(defn schema-json
+  "The output schema to hand codex for this review, as JSON."
+  [composition?]
+  (let [base (json/parse-string
+              (slurp (io/resource "review/findings_schema.json")) true)]
+    (json/generate-string (cond-> base composition? composition-schema))))
 
 (defn merge-base
   "Resolve the merge base (fork point) of @ and `base` to a single commit id.
@@ -138,16 +180,22 @@
    turns everything base gained into spurious deletions.
 
    `brief` is the layer's `/stack` §5 review brief, which bounds the review to
-   what that layer claims. Omit it for a whole-stack review: there is no single
-   brief for a composition, and inventing one would bound the pass that exists
-   precisely to be unbounded.
+   what that layer claims. A whole-stack pass carries `composition` instead —
+   the stack's layers with their revisions — which primes it to review the
+   SEQUENCE rather than the branch flat. The two are exclusive by construction:
+   a target is one layer or the composition of several, never both, and a
+   composition has no single brief to be bounded by.
+
+   The schema follows the primer and not the target: the composition variant
+   demands a `kind` and the `layers` a defect spans, and asking that of a
+   reviewer that was never taught the taxonomy is a contract nothing can meet.
 
    The prompt carries a changed-file MANIFEST (`jj diff --name-only`), not the
    inlined diff: the full concatenated diff overflows codex's 1 MiB input limit.
    Codex pulls each file's diff itself and reads file content AT `to` — never
    from the working copy, which for a layer review sits at a different revision
    than the one under review."
-  [{:keys [cwd from to run-id iter label brief]}]
+  [{:keys [cwd from to run-id iter label brief composition]}]
   (let [to       (or to "@")
         {:keys [exit out err]} (diff-name-only cwd from to)
         _        (when-not (zero? exit)
@@ -165,13 +213,14 @@
             schema-path (str (fs/path dir (artifact-name label iter "-schema.json")))
             out-path    (str (fs/path dir (artifact-name label iter "-out.json")))
             log-path    (str (fs/path dir (artifact-name label iter ".log")))
+            composed    (prompts/composition-block composition)
             prompt      (str prompts/review-prompt
-                             "\n\n" (prompts/layer-brief-block brief)
+                             "\n\n" (or (prompts/layer-brief-block brief) composed)
                              "\nBase revision (use this exact value as <base> in the"
                              " commands above): " from "\n"
                              "Head revision (use this exact value as <head>): " to "\n"
                              "Changed files:\n" (str/trim manifest))]
-        (spit schema-path (slurp (io/resource "review/findings_schema.json")))
+        (spit schema-path (schema-json (some? composed)))
         (let [{:keys [exit]} (run-codex! {:cwd cwd :schema-path schema-path
                                           :out-path out-path :log-path log-path
                                           :prompt prompt})]

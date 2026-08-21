@@ -274,6 +274,7 @@
 (deftest review-targets-cover-each-layer-and-the-whole-stack
   (with-redefs [layers/patch-hash (fn [& _] nil)
                 codex/merge-base    (fn [& _] "FORK")
+                codex/changed-files  (fn [& _] [])
                 stages/session-stack (fn [& _] [{:bookmark "s--a" :slug "a" :tip "cA"}
                                                 {:bookmark "s--b" :slug "b" :tip "cB"}])
                 layers/brief         (fn [_ rev] {:claims (str "claim of " rev)})]
@@ -430,3 +431,48 @@
                           {:config {:cwd "/w" :run-id "r1" :impl-session-id "impl-1"} :iter 1
                            :findings [{:id "aa11" :disposition :fix :owner-layer "top"}]})))]
       (is (= "the real problem" (ex-message e))))))
+
+
+(deftest review-targets-prime-the-stack-pass-with-the-layers-and-their-revisions
+  ;; Without :composition the whole-stack target is the flat-branch reviewer
+  ;; pointed at the whole branch and never told a stack exists — so it
+  ;; re-derives every layer it was supposed to trust, which is the exact cost
+  ;; the layering was built to avoid.
+  (with-redefs [layers/patch-hash    (fn [& _] nil)
+                codex/merge-base     (fn [& _] "FORK")
+                codex/changed-files  (fn [_ from _to] [(str "touched-since-" from)])
+                stages/session-stack (fn [& _] [{:bookmark "s--a" :slug "a" :tip "cA"}
+                                                {:bookmark "s--b" :slug "b" :tip "cB"}])
+                layers/brief         (fn [_ rev] {:claims       (str "claim of " rev)
+                                                  :out-of-scope (str "not " rev)})]
+    (let [ls (:layers (:composition (last (stages/review-targets "/w" "main"))))]
+      (is (= ["a" "b"] (mapv :label ls)) "in stack order, bottom→top")
+      (is (= [["FORK" "cA"] ["cA" "cB"]] (mapv (juxt :from :tip) ls))
+          "each layer's own range and the tree its PR would merge")
+      (is (= ["claim of cA" "claim of cB"] (mapv :claim ls)))
+      (is (= ["not cA" "not cB"] (mapv :out-of-scope ls)))
+      (is (= [["touched-since-FORK"] ["touched-since-cA"]] (mapv :files ls))))))
+
+(deftest review-targets-carry-no-composition-below-two-layers
+  ;; With nothing to compose the whole-stack target IS the branch review.
+  (with-redefs [layers/patch-hash    (fn [& _] nil)
+                codex/merge-base     (fn [& _] "FORK")
+                codex/changed-files  (fn [& _] [])
+                stages/session-stack (fn [& _] [{:bookmark "s" :slug nil :tip "cA"}])
+                layers/brief         (fn [& _] nil)]
+    (is (nil? (:composition (first (stages/review-targets "/w" "main")))))))
+
+(deftest review-stage-hands-the-stack-pass-its-composition
+  (let [seen (atom {})]
+    (with-redefs [layers/patch-hash    (fn [& _] nil)
+                  codex/merge-base     (fn [& _] "FORK")
+                  codex/changed-files  (fn [& _] [])
+                  stages/session-stack (fn [& _] [{:bookmark "s--a" :slug "a" :tip "cA"}
+                                                  {:bookmark "s--b" :slug "b" :tip "cB"}])
+                  layers/brief         (fn [& _] {:claims "c"})
+                  codex/review!        (fn [{:keys [label composition]}]
+                                         (swap! seen assoc label (boolean composition))
+                                         {:findings [] :manifest "m" :base-rev "FORK"})]
+      ((:run stages/review-stage) {:config {:cwd "/w" :base "main" :run-id "r"} :iter 1})
+      (is (= {"a" false "b" false "stack" true} @seen)
+          "only the pass that composes layers is primed to compose them"))))

@@ -197,6 +197,23 @@
     (is (str/includes? s "out-of-scope"))
     (is (str/includes? s "reported by widen") "attribution is visible when it moved")))
 
+(deftest final-says-what-kind-of-composition-defect-a-parked-finding-is
+  ;; `park` alone cannot tell a reader whether an invariant is in question or
+  ;; the cut is — and those ask very different things of them.
+  (let [r {:target {:cwd "/x/feat/thing" :base "main"}
+           :status "converged" :started-at "2026-01-01T00:00:00Z"
+           :ended-at "2026-01-01T00:01:00Z"
+           :rounds [{:round 1
+                     :phases [{:phase "review" :status "ok" :started-at "2026-01-01T00:00:00Z"
+                               :findings [{:priority 2 :title "t" :file "a.clj" :line-start 1
+                                           :line-end 2 :disposition :park
+                                           :kind :misplaced-seam
+                                           :layers ["series" "banner"]
+                                           :from-layer "stack" :owner-layer "banner"}]}]}]}
+        s (render/final r)]
+    (is (str/includes? s "misplaced-seam across series + banner"))
+    (is (str/includes? s "→ park"))))
+
 ;; ---- what a run that has not finished reviewing yet shows ----------------
 
 (def mid-review-report

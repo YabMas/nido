@@ -2,20 +2,19 @@
   (:require
    [clojure.test :refer [deftest is]]
    [nido.review.codex :as codex]
+   [nido.review.prompts :as prompts]
    [nido.vsdd.jj :as jj]
    [nido.coordinator.state :as cstate]
    [babashka.fs :as fs]
    [cheshire.core :as json]
    [clojure.java.io :as io]))
 
-(deftest findings-schema-is-strict-output-compatible
-  ;; Codex/gpt strict structured-output mode requires every property of every
-  ;; object node to also appear in that node's "required" list. A missing key
-  ;; makes the model reject the request with 400 invalid_json_schema, so the
-  ;; review turn never even starts — fatal for the whole loop.
-  (let [schema     (json/parse-string
-                    (slurp (io/resource "review/findings_schema.json")) true)
-        violations (atom [])]
+(defn- strict-mode-violations
+  "Every object node whose `properties` are not all listed in its `required`.
+   Codex/gpt strict structured-output mode rejects such a schema with a 400
+   invalid_json_schema, so the review turn never starts — fatal for the loop."
+  [schema]
+  (let [violations (atom [])]
     (letfn [(walk [node path]
               (when (map? node)
                 (when-let [props (:properties node)]
@@ -26,8 +25,34 @@
                 (doseq [[k v] node]
                   (walk v (conj path k)))))]
       (walk schema []))
-    (is (= [] @violations)
-        "every object property must be listed in \"required\" (strict mode)")))
+    @violations))
+
+(deftest findings-schema-is-strict-output-compatible
+  (is (= [] (strict-mode-violations
+             (json/parse-string
+              (slurp (io/resource "review/findings_schema.json")) true)))
+      "every object property must be listed in \"required\" (strict mode)"))
+
+(deftest composition-schema-is-strict-output-compatible
+  ;; The composition variant adds two properties, and adding a property without
+  ;; adding it to "required" is the same fatal 400 — on the pass that has the
+  ;; least chance of anyone noticing, since a stack of one layer never runs it.
+  (is (= [] (strict-mode-violations
+             (json/parse-string (codex/schema-json true) true)))))
+
+(deftest composition-schema-demands-the-kind-and-the-span
+  (let [item (get-in (json/parse-string (codex/schema-json true) true)
+                     [:properties :findings :items])]
+    (is (= (mapv :kind prompts/composition-kinds)
+           (get-in item [:properties :kind :enum]))
+        "the enum is the taxonomy the primer teaches — a kind the prompt names
+         but the schema refuses is a 400 on every round")
+    (is (= "array" (get-in item [:properties :layers :type])))
+    (is (every? (set (:required item)) ["kind" "layers"]))))
+
+(deftest schema-json-without-a-composition-is-the-plain-findings-schema
+  (is (= (json/parse-string (slurp (io/resource "review/findings_schema.json")) true)
+         (json/parse-string (codex/schema-json false) true))))
 
 (def sample-output
   (str "{\"findings\":[{\"title\":\"[P1] Remove the extra accumulation\","
@@ -215,3 +240,69 @@
         f   (first (:findings (codex/parse-output out)))]
     (is (nil? (:reach f))
         "the schema requires it, but a stale or hand-made payload must still parse")))
+
+
+(deftest parse-output-carries-a-composition-findings-kind-and-span
+  (let [out (str "{\"findings\":[{\"title\":\"t\",\"body\":\"b\","
+                 "\"confidence_score\":0.5,\"priority\":2,\"reach\":\"structural\","
+                 "\"kind\":\"misplaced-seam\",\"layers\":[\"series\",\"banner\"],"
+                 "\"code_location\":{\"absolute_file_path\":\"/w/a.clj\","
+                 "\"line_range\":{\"start\":1,\"end\":2}}}],"
+                 "\"overall_correctness\":\"correct\"}")
+        f   (first (:findings (codex/parse-output out)))]
+    (is (= :misplaced-seam (:kind f)))
+    (is (= ["series" "banner"] (:layers f)))))
+
+(deftest parse-output-leaves-a-layer-finding-without-the-composition-keys
+  ;; Stamping every finding with two nils would put the composition vocabulary
+  ;; on findings that have no claim to it — and give the arbiter a `kind` field
+  ;; to read on rows where it means nothing.
+  (let [f (first (:findings (codex/parse-output sample-output)))]
+    (is (not (contains? f :kind)))
+    (is (not (contains? f :layers)))))
+
+(def ^:private stack-of-two
+  {:layers [{:label "series" :from "FORK" :tip "cA" :claim "the entity"}
+            {:label "banner" :from "cA" :tip "cB" :claim "the UI"}]})
+
+(deftest review!-primes-the-composition-pass-with-the-stack-and-its-revisions
+  (let [tmp      (str (fs/create-temp-dir))
+        captured (atom nil)
+        schema   (atom nil)]
+    (with-redefs [jj/jj!           (fn [& _] {:exit 0 :out "src/a.clj" :err ""})
+                  cstate/run-dir   (fn [_] tmp)
+                  codex/run-codex! (fn [opts]
+                                     (reset! captured (:prompt opts))
+                                     (reset! schema (slurp (:schema-path opts)))
+                                     (spit (:out-path opts) sample-output)
+                                     {:exit 0})]
+      (codex/review! {:cwd "/w" :from "FORK" :to "@" :run-id "r" :iter 1
+                      :label "stack" :composition stack-of-two})
+      (is (re-find #"COMPOSITION PASS" @captured))
+      (is (re-find #"--from cA --to cB" @captured) "the intermediate revisions")
+      (is (re-find #"misplaced-seam" @captured) "the taxonomy")
+      (is (re-find #"misplaced-seam" @schema)
+          "the schema follows the primer: a reviewer taught the taxonomy is
+           asked for it"))))
+
+(deftest review!-of-one-layer-gets-neither-the-primer-nor-the-composition-schema
+  ;; The two are exclusive by construction — a target is one layer or the
+  ;; composition of several — and asking a reviewer that was never taught the
+  ;; taxonomy to classify by it is a contract nothing can meet.
+  (let [tmp      (str (fs/create-temp-dir))
+        captured (atom nil)
+        schema   (atom nil)]
+    (with-redefs [jj/jj!           (fn [& _] {:exit 0 :out "src/a.clj" :err ""})
+                  cstate/run-dir   (fn [_] tmp)
+                  codex/run-codex! (fn [opts]
+                                     (reset! captured (:prompt opts))
+                                     (reset! schema (slurp (:schema-path opts)))
+                                     (spit (:out-path opts) sample-output)
+                                     {:exit 0})]
+      (codex/review! {:cwd "/w" :from "cA" :to "cB" :run-id "r" :iter 1
+                      :label "banner"
+                      :brief {:claims "renders the banner"
+                              :out-of-scope "the export"}})
+      (is (re-find #"BOUNDED TO ONE LAYER" @captured))
+      (is (nil? (re-find #"COMPOSITION PASS" @captured)))
+      (is (nil? (re-find #"misplaced-seam" @schema))))))

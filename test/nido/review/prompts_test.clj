@@ -42,8 +42,18 @@
 (deftest arbiter-prompt-without-a-design-record-forbids-escalation
   (let [out (prompts/arbiter-prompt {:findings findings :history [] :design nil})]
     (is (str/includes? out "No design record on this workstream"))
-    (is (str/includes? out "do NOT park anything"))
+    (is (str/includes? out "do NOT park anything for contradicting an invariant"))
     (is (not (str/includes? out "Invariants:")))))
+
+(deftest arbiter-prompt-without-a-design-record-still-parks-a-bad-cut
+  ;; The two entrances to park are independent. One turns on a named invariant
+  ;; and is unavailable with no design record; the other says the loop has no
+  ;; move for the finding, which is true whether or not anyone wrote a design
+  ;; down. Collapsing them would send every seam finding to a fixer on exactly
+  ;; the workstreams with the least written down about their shape.
+  (let [out (prompts/arbiter-prompt {:findings findings :history [] :design nil})]
+    (is (str/includes? out "misplaced-seam or order-dependence finding still parks"))
+    (is (str/includes? out "does not turn on the design record"))))
 
 (deftest arbiter-prompt-marks-the-stance-as-framing-not-checklist
   (let [out (prompts/arbiter-prompt {:findings findings :history [] :design design
@@ -118,3 +128,83 @@
   ;; leaves the unbounded pass unbounded, which is what it is for.
   (is (nil? (prompts/layer-brief-block nil)))
   (is (nil? (prompts/layer-brief-block {:subject "review-loop: iter 1 fixes"}))))
+
+
+;; ---- the composition pass -------------------------------------------------
+
+(def ^:private two-layers
+  [{:label "series" :from "FORK" :tip "cA"
+    :claim "the series entity and its migration; nothing reads it yet."
+    :out-of-scope "the banner UI — that lands in the layer above."
+    :files ["src/model/series.clj"]}
+   {:label "banner" :from "cA" :tip "cB"
+    :claim "renders the banner; no change to how a goal is computed."
+    :files ["src/ui/banner.clj"]}])
+
+(deftest composition-block-hands-over-the-intermediate-revisions
+  ;; This is the whole difference between the composition primer and the map a
+  ;; warden gets. `toc-block` withholds revisions so a warden cannot re-derive
+  ;; its neighbours; the composition pass is given them because the states the
+  ;; branch passes THROUGH are the only thing it is there to look at, and no
+  ;; other reader in the loop can reach them.
+  (let [s (prompts/composition-block {:layers two-layers})]
+    (is (str/includes? s "--from FORK --to cA"))
+    (is (str/includes? s "--from cA --to cB"))
+    (is (str/includes? s "-r cA") "the tree a layer's own PR would merge")
+    (is (str/includes? s "see the SEQUENCE"))
+    (is (str/includes? s "--ignore-working-copy file show"))
+    (is (str/includes? s "Never `cat`"))))
+
+(deftest composition-block-refuses-a-defect-that-names-one-layer
+  ;; Without this the pass re-derives every layer it was supposed to trust —
+  ;; which is the exact cost the layering was built to avoid, paid again by the
+  ;; one pass that was supposed to be buying something else.
+  (let [s (prompts/composition-block {:layers two-layers})]
+    (is (str/includes? s "without naming two
+layers, it is not yours"))
+    (is (str/includes? s "ALREADY been reviewed on its own"))
+    (is (str/includes? s "Two or more, always"))))
+
+(deftest composition-block-carries-each-layer-claim-and-exclusion
+  (let [s (prompts/composition-block {:layers two-layers})]
+    (is (str/includes? s "nothing reads it yet"))
+    (is (str/includes? s "the banner UI — that lands in the layer above"))
+    (is (str/includes? s "src/model/series.clj"))
+    (is (str/includes? s "1. series"))
+    (is (str/includes? s "2. banner"))))
+
+(deftest composition-block-teaches-every-kind-the-schema-will-accept
+  (let [s (prompts/composition-block {:layers two-layers})]
+    (doseq [{:keys [kind]} prompts/composition-kinds]
+      (is (str/includes? s kind) (str kind " is missing from the primer")))))
+
+(deftest composition-block-is-nil-below-two-layers
+  ;; Not a degradation: with nothing to compose the whole-stack target IS the
+  ;; branch review, and priming it as a composition pass would tell it to
+  ;; report only findings that cannot exist.
+  (is (nil? (prompts/composition-block nil)))
+  (is (nil? (prompts/composition-block {:layers []})))
+  (is (nil? (prompts/composition-block {:layers [(first two-layers)]}))))
+
+(deftest arbiter-prompt-shows-a-composition-findings-kind-and-span
+  (let [out (prompts/arbiter-prompt
+             {:findings [{:id "aa11" :priority 2 :title "t" :body "b"
+                          :reach :structural :from-layer "stack"
+                          :kind :misplaced-seam :layers ["series" "banner"]}]
+              :history [] :design design})]
+    (is (str/includes? out "reported-by stack · misplaced-seam · across series + banner"))))
+
+(deftest arbiter-prompt-parks-a-bad-cut-instead-of-handing-it-to-a-fixer
+  ;; A fixer can only patch one side of a seam, and a patched seam converges —
+  ;; so the round reports success and the wrong cut ships.
+  (let [out (prompts/arbiter-prompt {:findings findings :history [] :design design})]
+    (is (str/includes? out "cannot re-cut a stack"))
+    (is (str/includes? out "makes the bad seam permanent"))))
+
+(deftest arbiter-prompt-attributes-a-composition-finding-by-what-it-spans
+  ;; The highest-layer rule itself is guarded above; this is the new half — the
+  ;; arbiter is no longer guessing the span off file lists, the pass reports it.
+  (let [out (prompts/arbiter-prompt {:findings findings :history [] :design design})]
+    (is (str/includes? out "names the ones it spans after `across`"))
+    (is (str/includes? out "spans only ONE layer")
+        "a stack finding naming one layer is that layer's own, reported twice")))
