@@ -1099,3 +1099,79 @@
     (is (str/includes? md "# Design"))
     (is (str/includes? md "## Assumes"))
     (is (not (str/includes? md "Against the baseline")))))
+
+;; ── A blocker that is a choice ─────────────────────────────────────────────
+;; The gate can only offer buttons for branches the record actually names, so
+;; the write contract is where prose-shaped choices get turned back.
+
+(def ^:private blocker-with-options
+  {:format  :blocker
+   :summary "The modal offers a branch nothing implements."
+   :needs   "A product decision on the Keep Old branch."
+   :options [{:label "Drop Keep Old" :summary "Collapse the modal to Continue/Cancel."
+              :consequence "Retires the /keep-old route." :recommended? true}
+             {:label "Implement archive-and-clone" :summary "Build the archive path."
+              :consequence "Needs a prior product call on what archived means."}]})
+
+(deftest a-blocker-may-name-the-branches-it-is-asking-between
+  (is (= blocker-with-options (report/validate-event :blocker blocker-with-options)))
+  (is (= {:format :blocker :summary "s" :needs "The Stripe test key."}
+         (report/validate-event :blocker {:format :blocker :summary "s"
+                                          :needs "The Stripe test key."}))
+      ":options stays optional — not every halt is a choice"))
+
+(deftest one-option-is-not-a-choice-and-seven-is-not-a-gate
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event
+                :blocker (assoc blocker-with-options
+                                :options [{:label "Only way" :summary "x"}]))))
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event
+                :blocker (assoc blocker-with-options
+                                :options (vec (repeat (inc (count report/option-letters))
+                                                      {:label "a" :summary "b"})))))))
+
+(deftest a-choice-written-as-prose-is-refused-on-write
+  (is (thrown-with-msg?
+       clojure.lang.ExceptionInfo #":options"
+       (report/validate-event
+        :blocker {:format :blocker :summary "The modal offers a branch nothing implements."
+                  :needs "Option A: drop Keep Old. Option B: implement archive-and-clone."}))
+      "a choice recorded as prose can only be answered by typing an essay back")
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event
+                :blocker {:format :blocker
+                          :summary "The modal offers a branch nothing implements."
+                          :needs "Option 1 archives the question; option 2 clones it."}))
+      "the markers are what matter, not the words around them")
+  (is (some? (report/validate-event
+              :blocker {:format :blocker
+                        :summary "Option A and Option B both fail without the test key."
+                        :needs   "The Stripe test key."}))
+      ":needs is the question and :summary is the narrative around it — a halt
+       that asks for a credential while DISCUSSING branches is not a choice, and
+       refusing it would lose the halt entirely")
+  (is (some? (report/validate-event
+              :blocker {:format :blocker :summary "The optional callback is never invoked."
+                        :needs "Whether to keep it at all."}))
+      "narrow by design: 'optional' is not an enumeration, and a false positive
+       here refuses to record a halt at all")
+  (is (some? (report/validate-event
+              :blocker {:format :blocker
+                        :summary "The checkout path under option A is unreachable."
+                        :needs "Obtain the Stripe test key for Option A."}))
+      "ONE distinct marker names a branch; it takes two to enumerate a choice —
+       this halt asks for a key, and refusing it would lose the halt entirely")
+  (let [prose {:format :blocker
+               :summary "The modal offers a branch nothing implements."
+               :needs   "Option A: drop Keep Old. Option B: implement archive-and-clone."}]
+    (is (= prose (report/parse-event :blocker prose))
+        "READ is untouched — blockers written before the rule stay readable")))
+
+(deftest blocker-markdown-letters-the-options
+  (let [md (report/report->markdown blocker-with-options)]
+    (is (str/includes? md "## Options"))
+    (is (str/includes? md "**A — Drop Keep Old**"))
+    (is (str/includes? md "· recommended"))
+    (is (str/includes? md "**B — Implement archive-and-clone**"))
+    (is (str/includes? md "Needs a prior product call"))))

@@ -772,11 +772,56 @@
    [:design-delta {:optional true} DesignDelta]
    [:open         {:optional true} [:vector string?]]])
 
+(def option-letters
+  "The letters a blocker's options are answered BY. Derived from position and
+   never stored: a letter written into the record is a second source of truth for
+   ordering, and the two disagree the moment an option is inserted or dropped.
+
+   The length is also the cap Blocker's :options enforces. Six is not a technical
+   limit — a halt with seven branches is a conversation, not a question with an
+   answer, and offering it as seven buttons pretends otherwise."
+  ["A" "B" "C" "D" "E" "F"])
+
+(defn option-letter
+  "The letter for the option at position `i`, or nil past the cap."
+  [i]
+  (get option-letters i))
+
+(def BlockerOption
+  "One answerable branch of a blocker — what the human is picking BETWEEN.
+
+   :summary is required, and that is the whole point of the shape. A branch
+   named 'Keep Old' says nothing about what agreeing to it commits you to, and a
+   one-click gate that resumes an agent on a name alone is how the wrong branch
+   gets taken by a click. :consequence carries what taking it costs — size,
+   follow-on decisions, what it forecloses — because a choice between two
+   summaries with no prices is not a choice a human can make from the gate.
+
+   :recommended? is what the agent's own derivation supports. It is a hint, not
+   a default: nothing auto-selects it, and the gate still waits."
+  [:map {:closed true}
+   [:label        string?]
+   [:summary      string?]
+   [:consequence  {:optional true} string?]
+   [:recommended? {:optional true} boolean?]])
+
 (def Blocker
+  "A halt that needs a human. :needs is the question; :options is that same
+   question in answerable form — the branches the agent can already see, which
+   the gate renders as A/B/… and answers with one click (nido.work/option-input
+   builds the resume text nido-side from the option the human picked).
+
+   :options is optional because not every blocker is a choice — 'I need the
+   Stripe key' has no branches. But a blocker that DOES enumerate branches must
+   carry them here rather than in prose: validate-event rejects the prose form
+   (enforce-blocker-options), because a choice written as an essay can only be
+   answered by typing an essay back at it."
   [:map {:closed true}
    [:format  [:= :blocker]]
    [:summary string?]
-   [:needs   string?]])
+   [:needs   string?]
+   [:options {:optional true}
+    [:vector {:min 2 :max (count option-letters)} BlockerOption]]])
 
 (def PrOpened
   [:map {:closed true}
@@ -1145,15 +1190,67 @@
     (throw (ex-info "Invalid event report"
                     {:explain (m/explain schema report) :report report :kind kind}))))
 
+(def ^:private prose-enumerated-options
+  "What a choice looks like when it was written as prose. Deliberately narrow —
+   it matches the enumeration itself ('Option A', 'option 2'), not hedging words
+   like 'optional' or 'either' — because a false positive here refuses to record
+   a halt, and an unrecorded halt is worse than an unstructured one."
+  #"(?i)\boption\s+(a|b|1|2)\b")
+
+(defn- prose-option-markers
+  "The DISTINCT enumeration markers `text` names, case-folded so 'Option A' and
+   'option a' count once. A single marker is not an enumeration — \"obtain the
+   key for Option A\" names one branch without offering a choice between
+   branches — so only two or more are evidence that prose is standing in for
+   :options."
+  [text]
+  (into #{} (map (comp str/lower-case second))
+        (re-seq prose-enumerated-options (str text))))
+
+(defn- enforce-blocker-options
+  "THE FORCING FUNCTION. A blocker whose prose enumerates branches ('Option A …
+   Option B …') is a CHOICE, and a choice recorded as prose can only be answered
+   by typing an essay back at it — which is exactly the answer that does not
+   arrive. Reject it on write so the agent re-emits the same halt as :options,
+   which the gate renders as A/B/… and resumes on one click.
+
+   Two conditions, and both are about keeping a false positive from eating a
+   halt. It reads :needs ALONE, because :needs is the question and :summary is
+   the narrative around it — a credential blocker may well say \"Option A and
+   Option B both fail without the test key\" while asking for nothing but the
+   key. And it takes TWO distinct markers, because one names a branch rather
+   than enumerating a choice.
+
+   Write-contract only (validate-event, never parse-event): blockers recorded
+   before this rule existed stay readable."
+  [{:keys [needs options] :as report}]
+  (if (or (seq options)
+          (< (count (prose-option-markers needs)) 2))
+    report
+    (throw (ex-info
+            (str "This blocker enumerates options in prose. Put each branch in "
+                 ":options — [{:label \"<the branch, a few words>\" "
+                 ":summary \"<what taking it means>\" "
+                 ":consequence \"<what it costs / forecloses>\" "
+                 ":recommended? true}] (2–" (count option-letters) " of them) — and "
+                 "leave :needs as the question itself. The gate renders them as "
+                 "A/B/… and resumes you with the one the human picks; written as "
+                 "prose, the only way to answer is a free-text essay.")
+            {:kind :blocker :report report}))))
+
 (defn validate-event
   "THE WRITE CONTRACT. Validate `report` (parsed EDN) against the schema registered
    for entry `kind` — what may be appended today. Returns the report on success;
    throws ex-info carrying a malli :explain on mismatch (the bb task prints it so
-   the emitting skill can fix + retry). Throws for an unregistered kind."
+   the emitting skill can fix + retry). Throws for an unregistered kind.
+
+   Some kinds carry a rule the schema cannot express — see
+   enforce-blocker-options. Those run AFTER the schema, on the write path only."
   [kind report]
-  (validate-against (or (event-schemas kind)
-                        (throw (ex-info "No schema for entry kind" {:kind kind})))
-                    kind report))
+  (cond-> (validate-against (or (event-schemas kind)
+                                (throw (ex-info "No schema for entry kind" {:kind kind})))
+                            kind report)
+    (= :blocker kind) enforce-blocker-options))
 
 (defn parse-event
   "THE READ CONTRACT. Like validate-event, but accepts anything that was
@@ -1388,8 +1485,22 @@
                   (for [d deviations] (str "- " d)))))))
      (when (seq open) (concat ["" "## Still open"] (for [o open] (str "- " o)))))))
 
-(defn- blocker->markdown [{:keys [summary needs]}]
-  (str/join "\n" ["# Blocker" "" summary "" "## Needs" needs]))
+(defn- blocker->markdown [{:keys [summary needs options]}]
+  (str/join "\n"
+    (concat
+     ["# Blocker" "" summary "" "## Needs" needs]
+     (when (seq options)
+       (cons "\n## Options"
+             (map-indexed
+              (fn [i {:keys [label consequence recommended?] :as opt}]
+                (str/join "\n"
+                  (remove nil?
+                    [(str "**" (option-letter i) " — " label "**"
+                          (when recommended? "  · recommended"))
+                     (:summary opt)
+                     (when consequence (str "_" consequence "_"))
+                     ""])))
+              options))))))
 
 (defn- pr-opened->markdown [{:keys [url title summary]}]
   (str/join "\n"
