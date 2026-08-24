@@ -36,11 +36,7 @@
                      opts'      (if (contains? opts :shutdown)
                                   opts
                                   (assoc opts :shutdown nil))]
-                 (apply orig opts' cmd)))))
-          (binding [*err* *err*]
-            (.println ^java.io.PrintWriter *err*
-                      (str "[nido :init] shell altered: "
-                           (str babashka.process/shell)))))
+                 (apply orig opts' cmd))))))
 
   nido:help
   {:requires ([tasks.nido-help :as nido-help])
