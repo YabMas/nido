@@ -50,52 +50,76 @@
 (defn- repaint!
   "Reprint the live block in place: move the cursor up the lines printed last
    frame, clear downward, print the new frame. Returns the new line count."
-  [report ^Instant now last-lines]
-  (let [s     (render/frame report now)
-        lines (inc (count (re-seq #"\n" s)))]
+  [s last-lines]
+  (let [lines (inc (count (re-seq #"\n" s)))]
     (print (str (when (pos? last-lines) (cursor-up last-lines))
                 clear-down s "\n"))
     (flush)
     lines))
 
-(defn- render-loop
-  "Spin until `running?` is false, repainting at ~8 fps. Returns the final
-   line count so the caller can position the final summary."
-  [report-atom running? clock]
+(defn- animate!
+  "Spin until `running?` is false, repainting `(frame-fn now)` at ~8 fps.
+   Returns the final line count so the caller can erase what it left on screen.
+
+   Takes a frame FN rather than a report, because what is being watched is not
+   always a review: the spinner and the elapsed clock have to keep moving while
+   one stage blocks for minutes, and that is true of any pipeline. The frame is
+   the only part that knows which one."
+  [frame-fn running? clock]
   (loop [last-lines 0]
-    (let [n (repaint! @report-atom (clock) last-lines)]
+    (let [n (repaint! (frame-fn (clock)) last-lines)]
       (if @running?
         (do (Thread/sleep 120) (recur n))
         n))))
 
+(defn with-live-frame
+  "Animate `frame-fn` while `(f)` runs, then erase the live block and give the
+   cursor back. Returns whatever `(f)` returned.
+
+   The erase is why this owns the ANSI rather than leaving it to callers: the
+   last painted frame is still on screen when the loop stops, and every caller
+   wants to print something over it. Doing that means knowing how many rows the
+   last frame occupied, which only the render loop knows.
+
+   Plain mode animates nothing and erases nothing — there is no cursor to move
+   and no frame to erase — so `(f)` simply runs. Pass :plain? to force a mode;
+   omit it to auto-detect."
+  [{:keys [frame-fn clock] :as opts :or {clock #(Instant/now)}} f]
+  (let [plain (if (contains? opts :plain?) (:plain? opts) (plain?))]
+    (if plain
+      (f)
+      (let [running? (atom true)
+            thread   (future (animate! frame-fn running? clock))]
+        (print hide-cursor) (flush)
+        (try
+          (f)
+          (finally
+            (reset! running? false)
+            (let [last-lines (try @thread (catch Exception _ 0))]
+              (print (str (when (pos? (long last-lines)) (cursor-up last-lines))
+                          clear-down show-cursor))
+              (flush))))))))
+
 (defn with-live-display
-  "Run (f emit). In plain mode just provides emit (which narrates lines). In a
-   TTY, spawns the render thread, hides the cursor, runs f, then stops the
-   thread, repaints once more, shows the cursor, and prints the final summary.
-   Always restores the cursor (finally). Pass :plain? to force a mode; omit it
-   to auto-detect via the `plain?` fn. (Local is named `plain` so it never
-   shadows the `plain?` namespace fn.)"
+  "Run (f emit) under the review report's live frame, then print the final
+   summary over it. Pass :plain? to force a mode; omit it to auto-detect via the
+   `plain?` fn. (Local is named `plain` so it never shadows the `plain?`
+   namespace fn.)
+
+   `final` re-renders the live frame as its own static head, which is exactly
+   why with-live-frame erases the live one first — otherwise the round block
+   prints twice.
+
+   The summary prints from a `finally`, so a run that throws still leaves the
+   report on screen: what a review found before it died is the most useful thing
+   there is at that moment."
   [{:keys [report-atom report-path clock] :as opts
     :or   {clock #(Instant/now)}} f]
   (let [plain (if (contains? opts :plain?) (:plain? opts) (plain?))
         emit  (emit-fn report-atom report-path clock plain)]
-    (if plain
-      (let [v (f emit)]
-        (println (render/final @report-atom))
-        v)
-      (let [running? (atom true)
-            thread   (future (render-loop report-atom running? clock))]
-        (print hide-cursor) (flush)
-        (try
-          (f emit)
-          (finally
-            (reset! running? false)
-            ;; The render loop's last paint leaves the live frame on screen and
-            ;; returns its line count; `final` re-renders that frame as its
-            ;; static head, so cursor up over the live frame and clear it first
-            ;; — otherwise the round block prints twice.
-            (let [last-lines (try @thread (catch Exception _ 0))]
-              (print (str (when (pos? (long last-lines)) (cursor-up last-lines))
-                          clear-down show-cursor
-                          (render/final @report-atom) "\n"))
-              (flush))))))))
+    (try
+      (with-live-frame {:frame-fn #(render/frame @report-atom %)
+                        :clock clock :plain? plain}
+        #(f emit))
+      (finally
+        (println (render/final @report-atom))))))

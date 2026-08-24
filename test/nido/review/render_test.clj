@@ -272,3 +272,89 @@
   (is (nil? (render/plain-line {} {:event :target-moved :iter 1
                                    :label "specs" :status "running"}))
       "a start is not worth a log line"))
+
+;; ── A loop over a ledger record ─────────────────────────────────────────────
+
+(def ^:private now-10s (java.time.Instant/parse "2026-01-01T00:00:10Z"))
+
+(def ^:private record-report
+  {:status "running"
+   :started-at "2026-01-01T00:00:00Z"
+   :rounds [{:round 1 :status "ended" :started-at "2026-01-01T00:00:00Z"
+             :phases [{:phase "judge" :status "ok" :started-at "2026-01-01T00:00:00Z"
+                       :ended-at "2026-01-01T00:00:04Z"
+                       :verdict "falsified"
+                       :findings [{:cites ["a"] :claim "x"} {:cites ["b"] :claim "y"}]}
+                      {:phase "amend" :status "running"
+                       :started-at "2026-01-01T00:00:04Z"}]}]})
+
+(deftest a-running-record-phase-shows-that-it-is-working
+  (let [s (render/record-frame record-report now-10s {:title "baseline loop · ws-1"})]
+    (is (str/includes? s "baseline loop · ws-1"))
+    (is (re-find #"amend\s+00:06" s) "the elapsed clock is what says it is not stuck")
+    (is (re-find #"[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] amend" s))))
+
+(deftest a-finished-judge-shows-its-verdict-and-how-much-it-found
+  (let [s (render/record-frame record-report now-10s {:title "t"})]
+    (is (re-find #"✓ judge\s+falsified · 2 findings" s))))
+
+(deftest an-amendment-says-where-it-gave-something-up
+  (let [r (assoc-in record-report [:rounds 0 :phases 1]
+                    {:phase "amend" :status "ok" :started-at "2026-01-01T00:00:04Z"
+                     :ended-at "2026-01-01T00:00:08Z"
+                     :retreats [{:what :health-dropped :detail "h1 is no longer recorded"}]})
+        s (render/record-frame r now-10s {:title "t"})]
+    (is (re-find #"✓ amend\s+amended · 1 weakening" s))))
+
+(deftest a-judge-that-could-not-run-never-renders-like-a-clean-one
+  ;; A ✓ with nothing after it reads as "judged, found nothing". For a round that
+  ;; never reached a judgment that is the one wrong reading available.
+  (let [r (assoc-in record-report [:rounds 0 :phases 0]
+                    {:phase "judge" :status "ok" :started-at "2026-01-01T00:00:00Z"
+                     :ended-at "2026-01-01T00:00:02Z" :outcome "codex-failed"})
+        s (render/record-frame r now-10s {:title "t"})]
+    (is (re-find #"judge\s+codex-failed — no judgment" s))))
+
+(deftest a-run-that-never-amended-does-not-claim-it-gave-nothing-up
+  ;; Same distinction the section exists for, applied to itself: not reaching an
+  ;; amendment is not the same as declining to weaken the record.
+  (let [r {:status "no-workstream" :started-at "2026-01-01T00:00:00Z"
+           :ended-at "2026-01-01T00:00:01Z"
+           :rounds [{:round 1 :status "ended" :started-at "2026-01-01T00:00:00Z"
+                     :phases [{:phase "judge" :status "ok"
+                               :started-at "2026-01-01T00:00:00Z"
+                               :outcome "no-workstream"}]}]}
+        s (render/record-final r {:title "t"})]
+    (is (str/includes? s "(no amendment ran — nothing here was even attempted)"))
+    (is (not (str/includes? s "claims everything it claimed at the start")))))
+
+(deftest no-frame-line-carries-trailing-whitespace
+  (let [s (render/record-frame record-report now-10s {:title "t"})]
+    (is (every? #(= % (str/trimr %)) (str/split-lines s)))))
+
+(deftest the-final-block-never-leaves-nothing-given-up-implied
+  ;; The distinction a vanishing section destroys: "nothing was weakened" and
+  ;; "nobody looked" have to read differently.
+  (let [r (-> record-report (assoc :status "accurate" :ended-at "2026-01-01T00:00:10Z"))
+        s (render/record-final r {:title "t"})]
+    (is (str/includes? s "Weakened:"))
+    (is (str/includes? s "(nothing — the record claims everything it claimed at the start)"))
+    (is (str/includes? s "Status: accurate"))))
+
+(deftest the-final-block-lists-every-weakening-across-every-round
+  (let [r (-> record-report
+              (assoc :status "retreated" :ended-at "2026-01-01T00:00:10Z")
+              (assoc-in [:rounds 0 :phases 1]
+                        {:phase "amend" :status "ok" :started-at "2026-01-01T00:00:04Z"
+                         :retreats [{:what :health-dropped :detail "h1 gone"}
+                                    {:what :veto-lifted :detail "h2 unmarked"}]}))
+        s (render/record-final r {:title "t"})]
+    (is (str/includes? s "! health-dropped — h1 gone"))
+    (is (str/includes? s "! veto-lifted — h2 unmarked"))))
+
+(deftest no-frame-line-can-wrap-the-repaint-off-its-count
+  ;; frontend/repaint! counts NEWLINES to know how far to move the cursor up, so
+  ;; a wrapped line is a row it cannot see and the frame walks down the screen.
+  (let [s (render/record-frame record-report now-10s
+                               {:title (apply str (repeat 200 "x"))})]
+    (is (every? #(<= (count %) 80) (str/split-lines s)))))

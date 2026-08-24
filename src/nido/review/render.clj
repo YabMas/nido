@@ -275,3 +275,95 @@
     :phase-errored  (str "round " iter " · " (name phase) " ✗")
     :run-finalized  (str "done · " (name status))
     nil))
+
+;; ── A loop over a ledger record ─────────────────────────────────────────────
+;;
+;; Two stages, no targets, no layers — so this is a much smaller projection than
+;; `frame`. What it has to get right is the thing a blocking round got wrong: a
+;; judge that reads code for minutes must look like it is working, and an
+;; amendment that gave something up must say so where it happened rather than
+;; only in the summary.
+
+(def ^:private title-cap 72)
+
+(defn- judge-detail
+  "A verdict, or — when there is none — why there is none.
+
+   Never blank. A ✓ with nothing after it reads as `judged, found nothing`, and
+   that is the one reading a round which could not run must never invite."
+  [ph]
+  (if-let [v (:verdict ph)]
+    (let [n (count (:findings ph))]
+      (str v (when (pos? n)
+               (str " · " n " finding" (when (not= 1 n) "s")))))
+    (when-let [o (:outcome ph)]
+      (str o " — no judgment"))))
+
+(defn- amend-detail
+  [ph]
+  (let [n (count (:retreats ph))]
+    (str "amended"
+         (when (pos? n)
+           (str " · " n " weakening" (when (not= 1 n) "s"))))))
+
+(defn- record-phase-line
+  [ph ^Instant now]
+  (let [detail (if (= "running" (:status ph))
+                 (elapsed (:started-at ph) now)
+                 (case (:phase ph)
+                   "judge" (judge-detail ph)
+                   "amend" (amend-detail ph)
+                   nil))]
+    (str/trimr (str "    " (glyph ph now) " " (pad (:phase ph) 7) (or detail "")))))
+
+(defn record-frame
+  "The live block: a title line, then one block per round.
+
+   The title is passed in rather than read off the report, because a record loop
+   is identified by what it is judging — a workstream and a record kind — and the
+   report carries a diff review's :target instead. Capped for the reason
+   `name-col` is: a line that wraps is a row the repaint cannot count, and the
+   frame walks down the screen."
+  [report ^Instant now {:keys [title]}]
+  (str "  " (let [t (str title)]
+              (if (> (count t) title-cap) (str (subs t 0 title-cap) "…") t))
+       "\n"
+       (str/join "\n"
+                 (for [r (:rounds report)]
+                   (str "  round " (:round r) "\n"
+                        (str/join "\n" (map #(record-phase-line % now) (:phases r))))))))
+
+(defn- all-phases
+  [report]
+  (mapcat :phases (:rounds report)))
+
+(defn- all-retreats
+  [report]
+  (mapcat :retreats (all-phases report)))
+
+(defn record-final
+  "Printed once at the end: the live frame's static form, then what the run gave
+   up, then the terminal status.
+
+   The weakenings section prints even when empty, and says so. That a loop
+   converged WITHOUT claiming less is the single most important fact about it,
+   and a section that simply vanishes when there is nothing to report leaves the
+   reader unable to tell 'nothing was given up' from 'nobody looked'."
+  [report {:keys [title]}]
+  (let [rs       (all-retreats report)
+        amended? (boolean (some #(= "amend" (:phase %)) (all-phases report)))]
+    (str (record-frame report
+                       (Instant/parse (or (:ended-at report) (:started-at report)))
+                       {:title title})
+         "\n\n  Weakened:\n"
+         (cond
+           (seq rs)   (str/join "\n" (map #(str "    ! " (name (:what %)) " — " (:detail %)) rs))
+           ;; The distinction this section exists to preserve, applied to itself:
+           ;; a run that never reached an amendment did not decline to weaken the
+           ;; record, it never got as far as touching it.
+           amended?   "    (nothing — the record claims everything it claimed at the start)"
+           :else      "    (no amendment ran — nothing here was even attempted)")
+         "\n\n  Status: " (:status report)
+         (when-let [s (:summary report)]
+           (str "  ·  " (:rounds s) " round(s)"))
+         "\n  Full report: <run-dir>/report.json")))

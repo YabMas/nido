@@ -266,3 +266,53 @@
                          [{:event :target-moved :iter 1 :at "t2"
                            :label "done" :status "running"}]))]
     (is (= "skipped" (:status (first (rows r)))))))
+
+;; ── A record loop's rounds ──────────────────────────────────────────────────
+
+(deftest a-judge-phase-keeps-its-verdict-and-what-it-found
+  (let [r (-> (report/init {:run-id "r" :cwd "/w" :base nil :started-at "t0"})
+              (report/apply-event {:event :phase-started :iter 1 :phase :judge :at "t1"} nil)
+              (report/apply-event {:event :phase-finished :iter 1 :phase :judge :at "t2"
+                                   :ctx {:record {:verdict :falsified}
+                                         :findings [{:cites ["a"] :claim "x"}]}}
+                                  nil))
+        ph (first (:phases (first (:rounds r))))]
+    (is (= "falsified" (:verdict ph)))
+    (is (= 1 (count (:findings ph))))))
+
+(deftest an-amend-phase-keeps-what-it-gave-up
+  (let [r (-> (report/init {:run-id "r" :cwd "/w" :base nil :started-at "t0"})
+              (report/apply-event {:event :phase-started :iter 1 :phase :amend :at "t1"} nil)
+              (report/apply-event {:event :phase-finished :iter 1 :phase :amend :at "t2"
+                                   :ctx {:retreats [{:what :health-dropped :detail "d"}]}}
+                                  nil))
+        ph (first (:phases (first (:rounds r))))]
+    (is (= [{:what :health-dropped :detail "d"}] (:retreats ph)))))
+
+(defn- record-round-status
+  [judge-findings retreats]
+  (let [r (-> (report/init {:run-id "r" :cwd "/w" :base nil :started-at "t0"})
+              (report/apply-event {:event :phase-started :iter 1 :phase :judge :at "t1"} nil)
+              (report/apply-event {:event :phase-finished :iter 1 :phase :judge :at "t2"
+                                   :ctx {:record {:verdict :falsified}
+                                         :findings judge-findings}} nil))
+        r (if retreats
+            (-> r
+                (report/apply-event {:event :phase-started :iter 1 :phase :amend :at "t3"} nil)
+                (report/apply-event {:event :phase-finished :iter 1 :phase :amend :at "t4"
+                                     :ctx {:retreats retreats}} nil))
+            r)]
+    (:status (first (:rounds (report/apply-event
+                              r {:event :run-finalized :status :accurate :ctx {} :at "t5"} nil))))))
+
+(deftest a-record-round-that-found-nothing-is-clean
+  (is (= "clean" (record-round-status [] nil))))
+
+(deftest a-record-round-that-gave-something-up-says-so
+  (is (= "weakened" (record-round-status [{:cites ["a"]}] [{:what :health-dropped :detail "d"}]))))
+
+(deftest a-record-round-that-amended-cleanly-continues
+  (is (= "continued" (record-round-status [{:cites ["a"]}] []))))
+
+(deftest a-record-round-with-no-amendment-yet-is-not-mistaken-for-a-review-round
+  (is (= "ended" (record-round-status [{:cites ["a"]}] nil))))

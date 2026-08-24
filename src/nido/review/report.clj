@@ -26,9 +26,17 @@
   [round]
   (let [phases (:phases round)
         ph     (fn [n] (last (filter #(= n (:phase %)) phases)))
-        review (ph "review") warden (ph "warden") fix (ph "fix")]
+        review (ph "review") warden (ph "warden") fix (ph "fix")
+        judge  (ph "judge")  amend  (ph "amend")]
     (cond
       (some #(= "error" (:status %)) phases)                       "failed"
+      ;; A record round, whose two stages tell the same story the review's three
+      ;; do: nothing left to say, something given up, or another round earned.
+      (and judge (= "ok" (:status judge)) (empty? (:findings judge))) "clean"
+      (and amend (seq (:retreats amend)))                          "weakened"
+      (and judge amend)                                            "continued"
+      judge                                                        "ended"
+
       (and review (= "ok" (:status review))
            (empty? (:findings review)) (nil? warden))              "clean"
       (= "escalate" (:decision warden))                            "escalated"
@@ -117,6 +125,18 @@
   [ph phase ctx at]
   (let [ph (assoc ph :status "ok" :ended-at at)]
     (case phase
+      ;; A record loop's two stages. What each keeps is what a reader of the
+      ;; finished report has to be able to reconstruct: what the judge decided
+      ;; and against what, and what the amendment cost.
+      ;; :outcome as well as :verdict, and they are not alternatives to each
+      ;; other: a verdict is what the judge decided, an outcome is why there is
+      ;; no verdict. A phase that kept only the first renders a codex failure
+      ;; exactly like a clean round.
+      :judge  (assoc ph :verdict (some-> (get-in ctx [:record :verdict]) name)
+                        :outcome (some-> (get-in ctx [:record :outcome]) name)
+                        :findings (vec (:findings ctx)))
+      :amend  (assoc ph :retreats (vec (:retreats ctx)))
+
       :review (assoc ph :overall-correctness (:overall-correctness ctx)
                         :findings (vec (:findings ctx))
                         :layers (review-layers ctx))
