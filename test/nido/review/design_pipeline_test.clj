@@ -322,3 +322,13 @@
     (is (str/includes? p "softening :revisit to :within"))
     (is (str/includes? p "1. relation-honest"))
     (is (str/includes? p "IF A CHECK IS WRONGLY MARKED BROKEN"))))
+
+(deftest a-failed-resurvey-carries-its-reason-out-of-the-nested-loop
+  ;; Seen live: the terminal said :resurvey-amend-invalid and stopped. A reader
+  ;; cannot act on a refusal whose reason stayed inside a loop they never saw.
+  (with-redefs [rloop/run-loop (fn [_] {:status :amend-invalid
+                                        :amend-error "{:at [\"disallowed key\"]}"})]
+    (let [out (run record/design-amend-stage
+                   (assoc (ctx :findings []) :record (decision :resurvey)))]
+      (is (= :resurvey-amend-invalid (:status out)))
+      (is (= "{:at [\"disallowed key\"]}" (:amend-error out))))))

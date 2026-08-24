@@ -300,14 +300,21 @@
       (str o " — no judgment"))))
 
 (defn- amend-detail
+  "What the round did, in the order it did it.
+
+   `amended` is asserted only when a record was actually appended. A round that
+   re-surveyed and got no further, or that spent itself objecting, has not
+   amended anything, and a line saying it did is the same class of lie as a ✓
+   on a judge that never ran."
   [ph]
   (let [n (count (:retreats ph))
-        d (count (:disputes ph))]
-    (str (if (and (zero? n) (pos? d)) "disputed" "amended")
-         (when (pos? n)
-           (str " · " n " weakening" (when (not= 1 n) "s")))
-         (when (pos? d)
-           (str " · " d " objection" (when (not= 1 d) "s"))))))
+        d (count (:disputes ph))
+        parts (cond-> []
+                (:resurveyed ph) (conj (str "re-surveyed " (:resurveyed ph)))
+                (:amended? ph)   (conj "amended")
+                (pos? n)         (conj (str n " weakening" (when (not= 1 n) "s")))
+                (pos? d)         (conj (str d " objection" (when (not= 1 d) "s"))))]
+    (if (seq parts) (str/join " · " parts) "nothing to amend")))
 
 (defn- record-phase-line
   [ph ^Instant now]

@@ -135,8 +135,13 @@
       :judge  (assoc ph :verdict (some-> (get-in ctx [:record :verdict]) name)
                         :outcome (some-> (get-in ctx [:record :outcome]) name)
                         :findings (vec (:findings ctx)))
+      ;; What the stage actually DID, not what its name suggests. An amend phase
+      ;; that spent its round re-surveying and never reached an amendment must
+      ;; not report itself as having amended anything.
       :amend  (assoc ph :retreats (vec (:retreats ctx))
-                        :disputes (vec (:disputes ctx)))
+                        :disputes (vec (:disputes ctx))
+                        :amended? (boolean (:amended? ctx))
+                        :resurveyed (some-> (:resurveyed ctx) name))
 
       :review (assoc ph :overall-correctness (:overall-correctness ctx)
                         :findings (vec (:findings ctx))

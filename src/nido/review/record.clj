@@ -752,8 +752,8 @@
                                        :disputes disputes
                                        :history (conj (vec (:history ctx)) (entry retreats)))]
                        (if (baseline-round-worth-running? record)
-                         ctx'
-                         (assoc ctx' :control :stop :status :retreated))))))))))))})
+                         (assoc ctx' :amended? true)
+                         (assoc ctx' :amended? true :control :stop :status :retreated))))))))))))})
 
 (def baseline-pipeline
   "judge -> amend. No warden, no fix: nothing here touches the working copy."
@@ -967,7 +967,12 @@
           ;; design still cites the survey that was wrong — so the round is not
           ;; over, and the amendment that finishes it records them together.
           (assoc ctx :resurveyed (:status out))
+          ;; The nested failure's DETAIL travels with its status. Without it the
+          ;; terminal says :resurvey-amend-invalid and stops — the one shape a
+          ;; judgment surface must not take, since a reader cannot act on a
+          ;; refusal whose reason stayed inside a loop they never saw.
           (assoc ctx :resurveyed (:status out)
+                 :amend-error (:amend-error out)
                  :history (conj (vec (:history ctx))
                                 {:iter (:iter ctx) :findings (:findings ctx)
                                  :retreats [] :disputes [] :resurveyed (:status out)})
@@ -1041,8 +1046,8 @@
                                 :disputes disputes
                                 :history (conj (vec (:history ctx)) (entry retreats true)))]
                 (if (design-round-worth-running? record)
-                  ctx'
-                  (assoc ctx' :control :stop :status :retreated))))))))))
+                  (assoc ctx' :amended? true)
+                  (assoc ctx' :amended? true :control :stop :status :retreated))))))))))
 
 (def design-amend-stage
   "Repair whatever the recommendation named — the record, the cut, or the

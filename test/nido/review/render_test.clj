@@ -301,10 +301,27 @@
 (deftest an-amendment-says-where-it-gave-something-up
   (let [r (assoc-in record-report [:rounds 0 :phases 1]
                     {:phase "amend" :status "ok" :started-at "2026-01-01T00:00:04Z"
-                     :ended-at "2026-01-01T00:00:08Z"
+                     :ended-at "2026-01-01T00:00:08Z" :amended? true
                      :retreats [{:what :health-dropped :detail "h1 is no longer recorded"}]})
         s (render/record-frame r now-10s {:title "t"})]
     (is (re-find #"✓ amend\s+amended · 1 weakening" s))))
+
+(deftest a-round-that-only-re-surveyed-does-not-claim-to-have-amended
+  ;; The same class of lie as a ✓ on a judge that never ran. Seen live: a design
+  ;; round whose re-survey failed outright still reported "amended".
+  (let [r (assoc-in record-report [:rounds 0 :phases 1]
+                    {:phase "amend" :status "ok" :started-at "2026-01-01T00:00:04Z"
+                     :ended-at "2026-01-01T00:00:08Z" :resurveyed "amend-invalid"})
+        s (render/record-frame r now-10s {:title "t"})]
+    (is (re-find #"✓ amend\s+re-surveyed amend-invalid" s))
+    (is (not (str/includes? s "amended")))))
+
+(deftest a-round-that-did-nothing-at-all-says-so
+  (let [r (assoc-in record-report [:rounds 0 :phases 1]
+                    {:phase "amend" :status "ok" :started-at "2026-01-01T00:00:04Z"
+                     :ended-at "2026-01-01T00:00:08Z"})
+        s (render/record-frame r now-10s {:title "t"})]
+    (is (re-find #"✓ amend\s+nothing to amend" s))))
 
 (deftest a-judge-that-could-not-run-never-renders-like-a-clean-one
   ;; A ✓ with nothing after it reads as "judged, found nothing". For a round that
