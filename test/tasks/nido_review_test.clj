@@ -287,3 +287,62 @@
       (is (= "30m" (:budget @seen)))
       (with-out-str (t/baseline-cmd ":cwd" "/w"))
       (is (nil? (:budget @seen)) "none by default, same as the diff loop"))))
+
+;; ── The design loop ─────────────────────────────────────────────────────────
+
+(deftest design-cmd-drives-the-design-pipeline
+  (let [seen (atom nil)]
+    (with-redefs [rloop/run-loop (fn [cfg] (reset! seen cfg) {:status :proceed})]
+      (with-out-str (t/design-cmd ":cwd" "/w"))
+      (is (= record/design-pipeline (:pipeline @seen)))
+      (is (= record/design-finding-key (:finding-key @seen)))
+      (is (nil? (:max-iters @seen)))
+      (is (str/starts-with? (:run-id @seen) "design-loop-")))))
+
+(deftest design-cmd-hands-over-the-question-it-could-not-answer
+  ;; The whole point of the round: everything derivable is derived so that what
+  ;; reaches a human is only the judgement that cannot be.
+  (with-redefs [rloop/run-loop (fn [_] {:status :proceed
+                                        :record {:asks "is this worth doing now, at this cost?"}})]
+    (let [out (with-out-str (t/design-cmd ":cwd" "/w"))]
+      (is (str/includes? out "FOR YOU TO DECIDE"))
+      (is (str/includes? out "is this worth doing now, at this cost?"))
+      (is (str/includes? out "the part only you can answer")))))
+
+(deftest design-cmd-names-a-check-it-had-no-yardstick-for
+  (with-redefs [rloop/run-loop (fn [_] {:status :underivable
+                                        :underivable [{:check :relation-honest
+                                                       :note "no stance document exists"}]})]
+    (let [out (with-out-str (t/design-cmd ":cwd" "/w"))]
+      (is (str/includes? out "relation-honest could not be derived: no stance document exists"))
+      (is (str/includes? out "not a defect an amender can repair")))))
+
+(deftest a-failed-resurvey-reports-which-loop-stopped-and-why
+  ;; The nested statuses are open by construction, so this is a lookup fn rather
+  ;; than a table. Collapsing them to "the re-survey failed" would throw away the
+  ;; only useful part.
+  (doseq [[status marker] {:resurvey-retreated "ended retreated"
+                           :resurvey-no-progress "ended no-progress"}]
+    (with-redefs [rloop/run-loop (fn [_] {:status status})]
+      (let [out (with-out-str (t/design-cmd ":cwd" "/w"))]
+        (is (str/includes? out marker))
+        (is (str/includes? out "the premise is still wrong"))))))
+
+(deftest every-design-terminal-status-names-its-own-remedy
+  (doseq [[status marker]
+          {:proceed            "only you can answer"
+           :underivable        "no yardstick"
+           :disputed           "neither can settle it"
+           :retreated          "below what its own round would check"
+           :resurvey-exhausted "the AREA is what is not understood"
+           :no-record          "author the design first"
+           :not-worth-running  "would not pay"
+           :codex-failed       "NOT a clean result"}]
+    (with-redefs [rloop/run-loop (fn [_] {:status status})]
+      (let [out (with-out-str (t/design-cmd ":cwd" "/w"))]
+        (is (str/includes? out marker) (str status " must say what to do about it"))))))
+
+(deftest both-loops-share-the-terminal-statuses-they-actually-share
+  (doseq [cmd [t/baseline-cmd t/design-cmd]]
+    (with-redefs [rloop/run-loop (fn [_] {:status :amend-touched-code})]
+      (is (str/includes? (with-out-str (cmd ":cwd" "/w")) "still there")))))

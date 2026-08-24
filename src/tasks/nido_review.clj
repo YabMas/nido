@@ -1,13 +1,21 @@
 (ns tasks.nido-review
-  "bb-task entrypoint for the codex review loop. Drives the engine inside a live
-   terminal frontend (spinner + per-round ledger); persists report.json under
-   the run dir. See docs/superpowers/specs/2026-06-30-review-tui-frontend-design.md."
+  "bb-task entrypoints for the three judgment loops — over a baseline record,
+   over a design record, and over a branch diff. All three drive the same engine
+   inside a live terminal frontend and persist report.json under the run dir.
+
+   The two record loops share `record-loop-cmd*` and differ in four values: the
+   pipeline, the finding identity, what each terminal status asks of the reader,
+   and whether there is anything to hand over at the end. The diff loop keeps its
+   own command because what it does after the engine stops — the design verdict,
+   the ledger event, the queued analysis — has no counterpart before there is
+   code.
+
+   See docs/superpowers/specs/2026-06-30-review-tui-frontend-design.md."
   (:require
    [babashka.fs :as fs]
    [nido.coordinator.session :as csession]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.workstream :as ws]
-   [clojure.string :as str]
    [nido.review.analysis :as analysis]
    [nido.review.frontend :as frontend]
    [nido.review.record :as record]
@@ -179,74 +187,7 @@
   (let [[_ opts] (task-args/split-args args)]
     (loop-cmd* opts)))
 
-;; ── Rounds over a record, before there is any code ──────────────────────────
-
-(defn- print-record-round!
-  "Report a record round on the terminal. Both are human-invoked, so the outcome
-   is stated here rather than filed somewhere nobody looks — and the two
-   non-accurate baseline verdicts and the three non-proceed recommendations each
-   point at a DIFFERENT remedy, so the remedy is named rather than implied."
-  [record]
-  (if-let [outcome (:outcome record)]
-    ;; Never one line for every way a round can produce nothing. A round that
-    ;; could not run is not a round that found nothing to say, and reading the
-    ;; second as the first is the one mistake a judgment surface must not invite.
-    (do (println (str "no judgment recorded — " (name outcome)))
-        (println (str "  " (:detail record)))
-        (println (str "  → " (case outcome
-                               :no-workstream    "run this from a nido session worktree"
-                               :no-record        "author the record first"
-                               :nothing-to-check "nothing in the survey is refutable yet"
-                               :not-worth-running "the records say a round would not pay here"
-                               :codex-failed     "the judge did not run — this is NOT a clean result"
-                               :no-output        "the judge ran and wrote nothing — NOT a clean result"
-                               :round-crashed    "the round threw before it could degrade"
-                               :unusable-answer  "the judge answered, but not in a form a record accepts"
-                               "unrecognised outcome"))))
-    (case (:format record)
-      :baseline-review
-      (do (println (str "baseline review: " (name (:verdict record))))
-          (println (str "  " (:reason record)))
-          (doseq [{:keys [cites claim]} (:findings record)]
-            (println (str "  ✗ " (str/join "; " cites)))
-            (println (str "      " claim)))
-          (when (not= :accurate (:verdict record))
-            (println "  → re-survey; the design may be sound on a bad premise")))
-
-      :design-decision
-      (do (println (str "design decision: " (name (:recommend record))))
-          (println (str "  " (:reason record)))
-          (doseq [{:keys [check status note]} (:checks record)]
-            (println (str "  " (case status :held "✓" :broken "✗" :underivable "—")
-                          " " (name check) " — " note)))
-          (doseq [{:keys [cites claim]} (:findings record)]
-            (println (str "  ✗ " (str/join "; " cites)))
-            (println (str "      " claim)))
-          (println (str "  → " (case (:recommend record)
-                                 :proceed  "nothing derivable blocks it"
-                                 :amend    "amend the record"
-                                 :recut    "the decomposition does not hold — recut the layers"
-                                 :resurvey "re-survey; the premise is wrong, not the commitment")))
-          (println "\n  FOR YOU TO DECIDE:")
-          (println (str "  " (:asks record))))
-
-      (println (str "recorded " (name (:format record)))))))
-
-(defn- record-round-cmd*
-  "One-shot: judge a record once and report. Only the DESIGN round still comes
-   through here — the baseline round loops (see baseline-cmd*). The
-   :baseline-review branch and its half of print-record-round! are kept rather
-   than pruned because phase 2 loops the design round too and deletes this whole
-   path; pruning now would be churn that phase 2 undoes."
-  [round {:keys [cwd]}]
-  (let [cwd    (or cwd (lifecycle/worktree-from-cwd) (System/getProperty "user.dir"))
-        run-id (str (name round) "-" (random-uuid))
-        record (case round
-                 :baseline-review (record/baseline-review! {:cwd cwd :run-id run-id})
-                 :design-decision (record/design-decision! {:cwd cwd :run-id run-id}))]
-    (record/append! cwd record)
-    (print-record-round! record)
-    record))
+;; ── Loops over a record, before there is any code ───────────────────────────
 
 (defn- record-loop-title
   "What this loop is judging, for the frame's one title line. The session name
@@ -261,25 +202,44 @@
            ws-id   (str (name (or p "?")) "/" ws-id)
            :else   cwd))))
 
-(defn baseline-cmd*
-  "Verify the workstream's latest baseline against the code, and keep correcting
-   it until the code stops refuting it.
+(def ^:private shared-remedies
+  "The ways any record loop can end, and what each one asks of the reader.
+
+   Kept as data rather than a cond, because the one rule this surface has is
+   that no two of these may collapse into a shared line: a round that could not
+   run and a round that ran and found nothing look identical on a terminal
+   unless something insists otherwise."
+  {:retreated  "the record was amended below what its own round would check — read the weakenings above before accepting any of it"
+   :no-progress "the amender stopped changing anything the judge cares about; the last findings are still open"
+   :disputed   "the judge restated a finding the amender objected to twice — neither can settle it, so you do"
+   :amend-noop "the amender produced no record — nothing was appended"
+   :amend-unreadable "the amender's answer would not parse as EDN"
+   :amend-invalid "the ledger refused the amended record"
+   :amend-touched-code "a record pass wrote to the working copy; whatever it wrote is still there"
+   :dry-run    "nothing was amended"
+   :no-workstream "run this from a nido session worktree"
+   :codex-failed "the judge did not run — this is NOT a clean result"
+   :no-output  "the judge ran and wrote nothing — NOT a clean result"
+   :unusable-answer "the judge answered, but not in a form a record accepts"
+   :round-crashed "the round threw before it could degrade"})
+
+(defn- record-loop-cmd*
+  "Drive a record pipeline through the engine inside the live frame.
 
    No default cap, for the same reason the diff loop has none: the run ends when
-   it converges, retreats, stalls or fails. `:max-iters` only caps it when a
-   caller asks for a cap.
+   it converges, escalates, retreats, stalls or fails. `:max-iters` only caps it
+   when a caller asks. `:budget` bounds each amender launch — with the iteration
+   count uncapped, that per-launch wall clock is the only thing between a hung
+   claude and a loop that never returns.
 
    The final block prints from a `finally`, so a loop that throws still leaves
-   its rounds and its weakenings on screen.
-
-   `:budget` bounds each amender launch, not the run. With the iteration count
-   uncapped by design, that per-launch bound is the only thing standing between
-   a hung claude and a loop that never returns."
-  [{:keys [cwd max-iters dry-run? budget]}]
+   its rounds, its weakenings and its objections on screen."
+  [{:keys [kind pipeline finding-key remedies epilogue]}
+   {:keys [cwd max-iters dry-run? budget]}]
   (let [cwd    (or cwd (lifecycle/worktree-from-cwd) (System/getProperty "user.dir"))
-        run-id (str "baseline-loop-" (random-uuid))
+        run-id (str kind "-loop-" (random-uuid))
         clock  #(Instant/now)
-        title  (record-loop-title cwd "baseline")
+        title  (record-loop-title cwd kind)
         report-path (str (fs/path (cstate/run-dir run-id) "report.json"))
         report-atom (atom (report/init {:run-id run-id :cwd cwd :base nil
                                         :started-at (str (clock))}))
@@ -292,38 +252,78 @@
                    #(rloop/run-loop {:cwd cwd :run-id run-id
                                      :max-iters max-iters
                                      :dry-run? (boolean dry-run?)
-                                     ;; The amender is a claude launch, and the
-                                     ;; iteration count is deliberately uncapped
-                                     ;; — so wall-clock is the only bound on a
-                                     ;; single hung round. nil means none, which
-                                     ;; is the diff loop's default too.
                                      :budget budget
                                      :clock clock :emit emit
-                                     :pipeline    record/baseline-pipeline
-                                     :finding-key record/baseline-finding-key}))
+                                     :pipeline pipeline
+                                     :finding-key finding-key}))
                  (finally
-                   (println (render/record-final @report-atom {:title title}))))]
-    (println (str "baseline-loop: " (name (:status final)) " · report " report-path))
+                   (println (render/record-final @report-atom {:title title}))))
+        status (:status final)]
+    (println (str kind "-loop: " (name status) " · report " report-path))
     (when-let [detail (:amend-error final)]
       (println (str "  " detail)))
-    (println (str "  → " (case (:status final)
-                           :accurate   "the survey holds against the code"
-                           :retreated  "the record was amended below what its own round would check — read the weakenings above before accepting any of it"
-                           :no-progress "the amender stopped changing anything the judge cares about; the last findings are still open"
-                           :amend-noop "the amender produced no record — nothing was appended"
-                           :amend-unreadable "the amender's answer would not parse as EDN"
-                           :amend-invalid "the ledger refused the amended record"
-                           :amend-touched-code "a record pass wrote to the working copy; whatever it wrote is still there"
-                           :dry-run    "nothing was amended"
-                           :no-workstream "run this from a nido session worktree"
-                           :no-record  "author the baseline first"
-                           :nothing-to-check "nothing in the survey is refutable yet"
-                           :codex-failed "the judge did not run — this is NOT a clean result"
-                           :no-output  "the judge ran and wrote nothing — NOT a clean result"
-                           :unusable-answer "the judge answered, but not in a form a record accepts"
-                           :round-crashed "the round threw before it could degrade"
-                           (str "unrecognised terminal status: " (:status final)))))
-    (:status final)))
+    ;; The pipeline's own remedies first, then the ones every record loop shares.
+    ;; A lookup FN rather than a map, because a nested loop's terminal status
+    ;; comes through prefixed and the set is open by construction.
+    (println (str "  → " (or (and remedies (remedies status))
+                             (shared-remedies status)
+                             (str "unrecognised terminal status: " status))))
+    (when epilogue (epilogue final))
+    status))
+
+(def ^:private baseline-remedies
+  {:accurate "the survey holds against the code"
+   :no-record "author the baseline first"
+   :nothing-to-check "nothing in the survey is refutable yet"})
+
+(defn baseline-cmd*
+  "Verify the workstream's latest baseline against the code, and keep correcting
+   it until the code stops refuting it."
+  [opts]
+  (record-loop-cmd* {:kind "baseline"
+                     :pipeline    record/baseline-pipeline
+                     :finding-key record/baseline-finding-key
+                     :remedies    baseline-remedies}
+                    opts))
+
+(def ^:private design-remedies
+  {:proceed "nothing derivable blocks it — what is left is the part only you can answer"
+   :underivable "a check has no yardstick to derive against, which is not a defect an amender can repair"
+   :resurvey-exhausted "the premise was re-surveyed twice and still did not hold; the AREA is what is not understood"
+   :no-record "author the design first"
+   :not-worth-running "the design declares it moves nothing structural, so a decision round would not pay"})
+
+(defn- design-remedy
+  "A re-survey that did not hold reports under the nested loop's own terminal
+   status, so the outcomes are open-ended by construction. Naming the nested
+   status is the whole value of the line — collapsing them to 'the re-survey
+   failed' would throw away which loop stopped and why."
+  [status]
+  (or (design-remedies status)
+      (when-let [nested (some->> (name status) (re-find #"^resurvey-(.+)$") second)]
+        (str "the baseline loop this round started ended " nested
+             " — the premise is still wrong, so nothing here can be decided on it"))))
+
+(defn- design-epilogue
+  "What the round could not settle, printed last because it is what the reader
+   is actually being handed."
+  [final]
+  (doseq [{:keys [check note]} (:underivable final)]
+    (println (str "  — " (name check) " could not be derived: " note)))
+  (when-let [asks (get-in final [:record :asks])]
+    (println "\n  FOR YOU TO DECIDE:")
+    (println (str "  " asks))))
+
+(defn design-cmd*
+  "Decide, against the latest design record, whether this should be executed —
+   repairing what is derivable and escalating what is not."
+  [opts]
+  (record-loop-cmd* {:kind "design"
+                     :pipeline    record/design-pipeline
+                     :finding-key record/design-finding-key
+                     :remedies    design-remedy
+                     :epilogue    design-epilogue}
+                    opts))
 
 (defn baseline-cmd
   [& args]
@@ -331,7 +331,6 @@
     (baseline-cmd* opts)))
 
 (defn design-cmd
-  "Run the pre-implementation decision round over the latest design record."
   [& args]
   (let [[_ opts] (task-args/split-args args)]
-    (record-round-cmd* :design-decision opts)))
+    (design-cmd* opts)))

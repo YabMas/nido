@@ -528,7 +528,7 @@
 
   nido:review:design
   {:requires ([tasks.nido-review :as nido-review])
-   :doc "Decision round over the latest design record, before any code. Intent comes from the record it cites. [:cwd <dir>]"
+   :doc "Loop the decision round over the latest design record: derive, amend, re-survey if the premise is wrong, escalate only the ask. [:cwd <dir>] [:max-iters <n>] [:budget 30m] [:dry-run? true]"
    :task (apply nido-review/design-cmd *command-line-args*)}
 
   nido:work
