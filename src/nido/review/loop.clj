@@ -16,13 +16,26 @@
    reassign work to."
   [stages/review-stage stages/warden-stage stages/fix-stage])
 
-(defn- finding-key [f] [(:file f) (:line-start f) (:title f)])
+(defn default-finding-key
+  "How the DIFF review tells one finding from another: the place in the code it
+   is about, plus its title. Correct there because a fix moves code and the
+   finding follows it, so a finding that survives a round is recognisable.
+
+   It is wrong for a pass that judges a RECORD. Those findings carry no file and
+   no line, and the text they do carry is the very text their fixer rewrites — so
+   a record pipeline injects its own, keyed on something its amender cannot
+   move. See `run-loop`'s :finding-key."
+  [f]
+  [(:file f) (:line-start f) (:title f)])
 
 (defn- no-progress?
-  [prev-findings curr-findings]
+  "The same findings again, by whatever identity this pipeline keys on.
+
+   This is the ONLY thing that ends an uncapped run that is getting nowhere, so
+   the identity fn is load-bearing: one that never collides turns `:max-iters`
+   from a cap into the sole terminator."
+  [finding-key prev-findings curr-findings]
   (and (seq prev-findings)
-       (>= (count (set (map finding-key curr-findings)))
-           (count (set (map finding-key prev-findings))))
        (= (set (map finding-key curr-findings))
           (set (map finding-key prev-findings)))))
 
@@ -60,9 +73,12 @@
    terminates on its own merits (converged / escalated / clean / no-progress /
    error). A round that changes nothing still ends the run via `no-progress?`,
    so unbounded does not mean non-terminating. Pass :max-iters only to cap it.
-   :pipeline / :emit / :clock are injection seams."
-  [{:keys [run-id max-iters pipeline emit clock] :as config
-    :or   {emit (fn [_]) clock #(Instant/now)}}]
+   :pipeline / :emit / :clock / :finding-key are injection seams. :finding-key
+   decides what \"the same finding again\" means and so what no-progress? can
+   detect; it defaults to the diff review's default-finding-key."
+  [{:keys [run-id max-iters pipeline emit clock finding-key] :as config
+    :or   {emit (fn [_]) clock #(Instant/now)
+           finding-key default-finding-key}}]
   (let [pipeline (or pipeline default-pipeline)
         impl-session-id (str (random-uuid))]
     (emit {:event :run-started :run-id run-id
@@ -77,10 +93,16 @@
                        (assoc ctx0 :status :review-failed :error (ex-message e))
                        (throw e))))
             final (cond
-                    (:status ctx)                                ctx
-                    (no-progress? prev-findings (:findings ctx)) (assoc ctx :status :no-progress)
-                    (and max-iters (>= iter max-iters))          (assoc ctx :status :max-iters)
-                    :else                                        nil)]
+                    (:status ctx)
+                    ctx
+
+                    (no-progress? finding-key prev-findings (:findings ctx))
+                    (assoc ctx :status :no-progress)
+
+                    (and max-iters (>= iter max-iters))
+                    (assoc ctx :status :max-iters)
+
+                    :else nil)]
         (if final
           (do (emit {:event :run-finalized :status (:status final)
                      :ctx final :at (str (clock))})

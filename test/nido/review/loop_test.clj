@@ -101,3 +101,41 @@
                            :cwd "/w" :base "main"})]
     (is (some #(= :phase-errored (:event %)) @events))
     (is (= :review-failed (:status (last (filter #(= :run-finalized (:event %)) @events)))))))
+
+;; ── The injected finding identity ──────────────────────────────────────────
+
+(deftest injected-finding-key-detects-a-stall-the-default-cannot
+  ;; Record findings carry no :file, :line-start or :title, so every one of them
+  ;; keys to [nil nil nil] under the default — which makes the SAME finding and a
+  ;; DIFFERENT one indistinguishable. This is the case the seam exists for: two
+  ;; distinct findings must not read as a stall, and the same one must.
+  (let [[_ emit] (capturing)
+        findings [{:cites ["a"] :claim "one"}]
+        pipe [(stage :judge (fn [c] (assoc c :findings findings)))
+              (stage :amend (fn [c] (assoc c :control :continue)))]
+        out (rloop/run-loop {:run-id "r1" :max-iters 10 :pipeline pipe :emit emit
+                             :finding-key (juxt :cites :claim)})]
+    (is (= :no-progress (:status out))
+        "the same record finding twice is a stall")))
+
+(deftest injected-finding-key-lets-a-changing-record-round-continue
+  (let [[_ emit] (capturing)
+        pipe [(stage :judge (fn [c] (assoc c :findings [{:cites ["a"]
+                                                         :claim (str "round " (:iter c))}])))
+              (stage :amend (fn [c] (assoc c :control :continue)))]
+        out (rloop/run-loop {:run-id "r1" :max-iters 4 :pipeline pipe :emit emit
+                             :finding-key (juxt :cites :claim)})]
+    (is (= :max-iters (:status out))
+        "a different finding each round is progress, so only the cap ends it")))
+
+(deftest default-finding-key-is-still-the-diff-review-identity
+  (is (= ["a.clj" 4 "t"]
+         (rloop/default-finding-key {:file "a.clj" :line-start 4 :line-end 9
+                                     :title "t" :priority 1}))))
+
+(deftest record-findings-all-collide-under-the-default-key
+  ;; Not a wish — the reason the seam is not optional. Two unrelated record
+  ;; findings are one key under the default, so an uncapped record loop would
+  ;; stop on its second round no matter what the judge said.
+  (is (= (rloop/default-finding-key {:cites ["a"] :claim "one"})
+         (rloop/default-finding-key {:cites ["b"] :claim "two"}))))
