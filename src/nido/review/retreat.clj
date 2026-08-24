@@ -1,0 +1,145 @@
+;; src/nido/review/retreat.clj
+(ns nido.review.retreat
+  "What a superseding record GAVE UP relative to the one it supersedes.
+
+   A record loop puts an agent in front of a judge with one instruction — make
+   these findings go away — and the cheapest way to satisfy that is never to
+   correct the record. It is to claim less. Drop the load-bearing property the
+   code refuted, soften `:revisit` to `:within`, lower the effort, un-mark the
+   observation whose `:invisibly-incomplete?` was the only thing stopping it from
+   being spun out. Every one of those makes the next round quieter, and none of
+   them is a repair.
+
+   The diff review needs no equivalent, because its findings cite code that tests
+   run against: a fixer that deletes the behaviour rather than fixing it breaks
+   something. A record has no such floor. This namespace is the floor.
+
+   Two deliberate limits:
+
+   1. A retreat is NEVER treated as forbidden. Over-claiming is a real defect and
+      the honest repair for it IS to claim less — a baseline that asserted a
+      property the code does not have should lose it. So this reports, and the
+      caller decides; what the caller must not do is let one pass silently.
+
+   2. Pure, and dependency-free by choice. Whether a retreated record has fallen
+      below the point where its own round would still run is a question for the
+      predicates that own it (`record/baseline-round-worth-running?` and its
+      design sibling), asked by the stage that has both records in hand. Reaching
+      for them here would invert that ownership to save a line."
+  (:require
+   [clojure.string :as str]))
+
+(defn- retreat
+  [what detail]
+  {:what what :detail detail})
+
+(defn- fewer
+  "A count that fell, as one retreat, or nil."
+  [what label prev curr]
+  (let [p (count prev) c (count curr)]
+    (when (< c p)
+      (retreat what (str label " " p " → " c)))))
+
+(defn- rank-drop
+  "A move DOWN an ordinal, as one retreat, or nil. `order` is cheapest-first, so
+   an unknown value on either side yields nil rather than a false alarm — a
+   vocabulary this does not know about is not evidence of a retreat."
+  [what order prev curr]
+  (let [idx (zipmap order (range))
+        p   (idx prev) c (idx curr)]
+    (when (and p c (< c p))
+      (retreat what (str prev " → " curr)))))
+
+;; ── Baseline ────────────────────────────────────────────────────────────────
+
+(def ^:private baseline-evidence
+  (comp set (partial mapcat :evidence) :load-bearing))
+
+(defn baseline-retreats
+  "Everything the superseding baseline claims less of than the one before it.
+
+   Health observations are compared by :id, which is stable by schema — that is
+   what :id is for, and what lets a dropped observation be named rather than
+   counted. Load-bearing properties have no id, so they are compared two ways
+   that survive rewording: how many there are, and which file:line references
+   nothing cites any more. A property genuinely corrected keeps pointing at the
+   code that corrected it; one quietly dropped takes its evidence with it."
+  [prev curr]
+  (let [pids  (into {} (map (juxt :id identity)) (:health prev))
+        cids  (into {} (map (juxt :id identity)) (:health curr))
+        gone  (remove (set (keys cids)) (keys pids))
+        unveiled (for [[id p] pids
+                       :let [c (cids id)]
+                       :when (and c (:invisibly-incomplete? p)
+                                  (not (:invisibly-incomplete? c)))]
+                   id)
+        ev-gone (sort (remove (baseline-evidence curr) (baseline-evidence prev)))]
+    (vec
+     (concat
+      (keep identity
+            [(fewer :load-bearing-fewer "load-bearing" (:load-bearing prev) (:load-bearing curr))
+             (fewer :read-narrowed "read" (:read prev) (:read curr))])
+      (for [id (sort gone)]
+        (retreat :health-dropped (str "observation " id " is no longer recorded")))
+      ;; The veto is the whole reason :invisibly-incomplete? exists — an
+      ;; observation carrying it can never be spun out. Clearing the flag is
+      ;; therefore not a survey correction with a side effect; it is the one
+      ;; edit that converts a defect into a deferrable.
+      (for [id (sort unveiled)]
+        (retreat :veto-lifted
+                 (str "observation " id " was invisibly-incomplete? and no longer is")))
+      (for [e ev-gone]
+        (retreat :evidence-dropped (str e " is cited by no load-bearing property any more")))))))
+
+;; ── Design ──────────────────────────────────────────────────────────────────
+
+(def effort-order   [:XS :S :M :L :XL])
+(def baseline-order [:within :extends :revisit])
+(def standing-order [:conforms :extends :challenges])
+
+(defn design-retreats
+  "Everything the superseding design commits to less strongly than the one
+   before it.
+
+   The three relations are ordinals, cheapest first, and every one of them is a
+   claim about how much of the existing system this change is willing to move.
+   Sliding down one is exactly how a design stops being refutable while still
+   reading like a design.
+
+   Routes are read in one direction only. :fix-here is the conservative
+   destination — it says you are doing the work — so moving TO it is not a
+   retreat, and moving AWAY from it to any form of not-doing-it is. That this
+   also happens to be the direction that makes `design-round-worth-running?`
+   fall silent is a separate question, and one for the caller: quieting the
+   round by promising MORE work is not something this can call a retreat without
+   lying about which way the doctrine points."
+  [prev curr]
+  (let [proutes (into {} (map (juxt :health-id :to)) (:routes prev))
+        croutes (into {} (map (juxt :health-id :to)) (:routes curr))]
+    (vec
+     (concat
+      (keep identity
+            [(rank-drop :effort-lowered effort-order (:effort prev) (:effort curr))
+             (rank-drop :baseline-relation-softened baseline-order
+                        (get-in prev [:baseline :relation]) (get-in curr [:baseline :relation]))
+             (rank-drop :standing-softened standing-order
+                        (get-in prev [:standing :relation]) (get-in curr [:standing :relation]))
+             (fewer :invariants-fewer "invariants" (:invariants prev) (:invariants curr))
+             (fewer :rejected-fewer "rejected alternatives" (:rejected prev) (:rejected curr))
+             (when (and (seq (:phases prev)) (empty? (:phases curr)))
+               (retreat :phases-dropped
+                        (str (count (:phases prev)) " phases → none; the change now claims one landing")))])
+      (for [[hid to] (sort-by key croutes)
+            :let [was (proutes hid)]
+            :when (and was (= :fix-here was) (not= :fix-here to))]
+        (retreat :route-deferred (str hid ": :fix-here → " to)))))))
+
+;; ── Reporting ───────────────────────────────────────────────────────────────
+
+(defn summary
+  "One line per retreat, for the terminal and for the escalation. Empty vector
+   renders as nil rather than as an empty heading — 'nothing was weakened' is
+   worth saying once, by the caller, not implied by a blank section."
+  [retreats]
+  (when (seq retreats)
+    (str/join "\n" (map #(str "  ! " (name (:what %)) " — " (:detail %)) retreats))))
