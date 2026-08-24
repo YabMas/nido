@@ -294,7 +294,7 @@ red checks left. Merge:
 
 ```bash
 SRC=$(cd .jj && cd "$(dirname "$(cat repo)")/.." && pwd)
-(cd "$SRC" && gh stack merge <top-pr-number> --yes --rebase)
+(cd "$SRC" && gh stack merge <top-pr-number> --yes --squash)
 ```
 
 **Merge by the top layer's PR number.** `gh stack link --help` states the
@@ -311,14 +311,29 @@ the one this flow takes. (The stack number is obtainable too — §1's
 verified against a real two-layer merge, both landed one second apart from a
 single invocation, base branch history clean and linear afterward.
 
-**Always pass `--rebase`.** With no method flag, `--yes` uses *"your
-last-used merge method"* (`gh stack merge --help`) — mutable, per-machine
-state, not a guarantee. Observed: an unflagged call merged *"via rebase"*
-only because that was this machine's last-used method. `--rebase` is what a
-stack wants — `/squash` leaves one commit per layer, and rebase lands exactly
-one commit per layer on trunk — but a stray `--squash` on any machine would
-collapse a later stack's layers into a single commit and destroy the
-layering. Pin it rather than rely on machine state.
+**Always pass a method.** With no method flag, `--yes` uses *"your last-used
+merge method"* (`gh stack merge --help`) — mutable, per-machine state, not a
+guarantee. Observed: an unflagged call merged *"via rebase"* only because that
+was this machine's last-used method. Whatever the repo wants, pin it rather than
+inherit it from whoever last merged something on this laptop.
+
+**`--squash` is the pin, and it does not flatten the stack.** Squash is per pull
+request, not per stack: *"Squash creates one clean, squashed commit per pull
+request. Merging n pull requests creates n squashed commits on the base branch"*,
+and *"the resulting commit history is the same as merging each pull request
+individually, starting from the bottom"* ([GitHub
+docs](https://docs.github.com/en/pull-requests/reference/stacked-pull-requests)).
+So a three-layer stack lands three commits under either method — the layering
+survives both. What differs is the commit that lands: `--squash` writes GitHub's
+squash commit, titled from the PR and suffixed `(#1234)`; `--rebase` replays your
+local commit verbatim, with no PR number in it.
+
+That suffix is why `--squash` is right for the projects this skill runs against.
+Every commit on brian's `main` reads `title (#4596)` — fifteen for fifteen in a
+sample taken 2026-08-24 — because every single PR merges through a queue that
+squashes. A stack landing under `--rebase` would be the only thing in that
+history with no PR number attached to it, and the layer's commit would no longer
+be traceable to the review that cleared it.
 
 Per `gh stack merge --help`, when the base branch uses a merge queue, the
 stack is added to the queue and lands when the queue processes it; otherwise
@@ -467,9 +482,11 @@ it, `/drive-home` records the outcome — `:implementation-completed` or
 - **Omitting `--base "$TRUNK"` on the `gh stack link --open` re-link** —
   force-resets the bottom PR's base to the repo default branch unless given
   explicitly; observed doing this unasked against a non-trunk base (§2).
-- **Omitting `--rebase` on `gh stack merge`** — the method otherwise falls back
-  to whatever was last used on this machine; a stray `--squash` there would
-  collapse the stack's layers into one commit (§8).
+- **Omitting the method on `gh stack merge`** — it otherwise falls back to
+  whatever was last used *on this machine*, so the shape of trunk depends on who
+  ran it. Pin `--squash` (§8).
+- **Thinking `--squash` flattens a stack into one commit** — it is per pull
+  request: n PRs land n squashed commits, same shape as `--rebase` (§8).
 - **Merging layer-by-layer with `gh pr merge`** — that abandons atomicity;
   `gh stack merge` lands the whole stack or none of it (§8).
 - **Calling `gh pr merge --auto` on a stack** — use

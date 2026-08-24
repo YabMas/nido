@@ -393,7 +393,7 @@ SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
 SRC=$(cd .jj && cd "$(dirname "$(cat repo)")/.." && pwd)
 TRUNK=$(gh repo view -R "$SLUG" --json defaultBranchRef -q '.defaultBranchRef.name')
 (cd "$SRC" && gh stack link --base "$TRUNK" <session>--<l1> <session>--<l2> <session>--<l3> --open 2>&1); echo "EXIT=$?"
-(cd "$SRC" && gh stack merge <top-pr-number> --yes --rebase)
+(cd "$SRC" && gh stack merge <top-pr-number> --yes --squash)
 ```
 
 `--open` flips new and existing PRs from draft to ready for review. Verified:
@@ -426,17 +426,33 @@ single invocation, with the base branch's final history showing both layer
 commits in order, linear, no merge commits, each carrying exactly its own
 layer's files.
 
-**Always pass `--rebase`.** With no method flag, `gh stack merge --yes` uses
+**Always pass a method.** With no method flag, `gh stack merge --yes` uses
 *"your last-used merge method"* (`gh stack merge --help`) — mutable,
 per-machine state, not a guaranteed default. Observed: an unflagged call
 merged *"via rebase"* only because that happened to be this machine's
-last-used method. `--rebase` is what a stack wants — `/squash` leaves exactly
-one commit per layer, and rebase lands exactly one commit per layer on
-trunk — but nothing guarantees the next machine, or this one after someone
-runs `gh stack merge --squash` once, picks it. A stray `--squash` would
-collapse a later stack's layers into one commit and destroy the layering the
-whole design exists to produce. Pinning it removes the dependency on that
-state.
+last-used method. Nothing guarantees the next machine picks the same one, so
+the shape of trunk would depend on who ran the merge. Pin it.
+
+**The method does not decide whether the layering survives — all three keep
+it.** Squash is applied per pull request, not per stack: *"Squash creates one
+clean, squashed commit per pull request. Merging n pull requests creates n
+squashed commits on the base branch"*, and *"the resulting commit history is
+the same as merging each pull request individually, starting from the
+bottom"* ([GitHub
+docs](https://docs.github.com/en/pull-requests/reference/stacked-pull-requests)).
+A three-layer stack lands three commits under `--squash` exactly as it does
+under `--rebase`. (An earlier revision of this skill claimed a stray
+`--squash` would collapse the layers into one commit and destroy the
+layering. That was an inference, and it was wrong.)
+
+What the method actually decides is *which* commit lands. `--squash` writes
+GitHub's squash commit — titled from the PR, suffixed `(#1234)`, authored by
+the merger. `--rebase` replays your local commit verbatim, carrying no PR
+number. **Pin `--squash`**, because trunk in the projects this skill targets is
+built that way: every commit on brian's `main` reads `title (#4596)` (fifteen
+for fifteen, sampled 2026-08-24). A rebase-landed layer would be the only
+commit in that history with nothing linking it back to the review that cleared
+it.
 
 Per `gh stack merge --help`: *"If the base branch uses a merge queue, the
 stack is added to the queue and merges once the queue processes it; otherwise
@@ -770,10 +786,11 @@ cleaning up a merged stack's branches.
   had deliberately been created against another base, with no prompt. Harmless
   today only because the bottom layer's base already is `$TRUNK`; pass it
   explicitly anyway so the failure mode can't reappear later (§4).
-- **Omitting `--rebase` on `gh stack merge`** — with no method flag it uses
-  whatever method was last used on that machine, which is state, not a
-  guarantee. A stray `--squash` on any machine would collapse a stack's
-  layers into one commit (§4).
+- **Omitting the method on `gh stack merge`** — with no method flag it uses
+  whatever was last used on that machine, which is state, not a guarantee, so
+  trunk's shape depends on who ran it. Pin `--squash` (§4).
+- **Believing `--squash` flattens a stack** — it is per pull request: n PRs land
+  n squashed commits, the same shape `--rebase` produces (§4).
 - **Trusting stacks-API discovery without `select(.open)`** — a merged stack
   stays listed forever with `open:false`; unfiltered discovery treats a
   shipped stack as still live and does pointless (though harmless) work
