@@ -1006,3 +1006,32 @@
     (let [html (views/workstream-pane ws {})]
       (is (not (str/includes? html "link-k")) (str what ": no links row"))
       (is (not (str/includes? html "↗")) (str what ": heading label is not an anchor")))))
+
+;; ── A record this reader cannot parse ───────────────────────────────────────
+;; Unmerged stacks writing kinds the running daemon has never heard of is a
+;; normal condition here, not an anomaly: the daemon reads src/ once at startup.
+;; So the common case gets an honest answer instead of a wall of raw EDN.
+
+(deftest an-unknown-kind-says-the-reader-is-old-not-the-record-broken
+  (let [ws   (assoc sample-ws :report
+                    {:format :markdown :kind :design-decision
+                     :degraded {:kind :design-decision :reason :unknown-kind}
+                     :markdown "{:format :design-decision,\n :recommend :proceed}"})
+        html (views/workstream-pane ws {})]
+    (is (str/includes? html "Not rendered by this reader"))
+    (is (str/includes? html "has no schema for"))
+    (is (str/includes? html "restart the"))
+    (is (str/includes? html "<pre>")
+        "the payload goes in a pre — md/render has no code block and would turn
+         every line of EDN into its own paragraph")))
+
+(deftest a-schema-mismatch-is-named-as-a-different-failure
+  (let [ws   (assoc sample-ws :report
+                    {:format :markdown :kind :baseline
+                     :degraded {:kind :baseline :reason :schema-mismatch}
+                     :markdown "{:format :baseline}"})
+        html (views/workstream-pane ws {})]
+    (is (str/includes? html "disagree about a kind they both know"))
+    (is (not (str/includes? html "older than the entry"))
+        "restarting fixes an unknown kind and does nothing for a mismatch —
+         saying the wrong remedy is worse than saying none")))

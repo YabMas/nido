@@ -1077,6 +1077,29 @@
      [:div [:h3 "What the derivation found"] (record-findings-list findings)])
    [:div [:h3 "For you to decide"] [:p asks]]])
 
+(defn- degraded-card
+  "A typed entry this reader could not parse. Shown as what it is — an intact
+   record and an inadequate reader — with the payload in a <pre> rather than
+   through md/render, which has no code block and turns every line of EDN into
+   its own paragraph.
+
+   Naming which of the two failures it is matters: an unknown kind means this
+   process predates the record and the fix is to restart it on newer code, while
+   a schema mismatch means the record and this reader disagree about a kind they
+   both know, which is a different problem with a different owner."
+  [{:keys [markdown]} {:keys [kind reason]}]
+  [:div.md
+   [:h2 "Not rendered by this reader"]
+   [:blockquote
+    (case reason
+      :unknown-kind
+      (list "This reader has no schema for " [:code (str kind)]
+            " — it is older than the entry. The record is intact; restart the "
+            "daemon on code that knows this kind.")
+      (list "This entry does not match the schema this reader has for "
+            [:code (str kind)] " — the two disagree about a kind they both know."))]
+   [:pre markdown]])
+
 (defn- report-body
   "Dispatch a gate/ledger report on :format — each typed event gets its curated card,
    markdown reports render through md/render. `pos` is the workstream pane's reading
@@ -1084,7 +1107,9 @@
    which has no position of its own, omits it."
   ([report] (report-body report nil))
   ([report pos]
-   (case (:format report)
+   (if-let [d (:degraded report)]
+     (degraded-card report d)
+     (case (:format report)
      :triage-report            (triage-report-card report)
      :intent                   (intent-card report)
      :baseline                 (baseline-card report)
@@ -1101,7 +1126,7 @@
      :review-report            (review-card report pos)
      :findings                 (md/render (report/report->markdown report))
      :proposed-ticket          (md/render (report/report->markdown report))
-     (md/render (:markdown report)))))
+     (md/render (:markdown report))))))
 
 (defn gate-pane
   "The detail pane: rendered report + follow-actions. nil -> calm placeholder.

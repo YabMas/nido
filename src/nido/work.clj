@@ -338,17 +338,30 @@
    (:format :markdown). A typed `.edn` that fails to read/validate degrades to a
    :markdown payload of its raw text rather than blanking the pane."
   [base-dir entry]
-  (let [f (str (fs/path base-dir (:file entry)))]
-    (or (when (str/ends-with? (str (:file entry)) ".edn")
+  (let [f    (str (fs/path base-dir (:file entry)))
+        edn? (str/ends-with? (str (:file entry)) ".edn")]
+    (or (when edn?
           (try (-> (report/parse-event (:kind entry) (io/read-edn f))
                    (assoc :at (:at entry)))
                (catch Throwable _ nil)))
         (let [md (when (fs/exists? f) (slurp f))]
-          {:format   :markdown
-           :kind     (:kind entry)
-           :at       (:at entry)
-           :title    (first-heading md)
-           :markdown md}))))
+          (cond-> {:format   :markdown
+                   :kind     (:kind entry)
+                   :at       (:at entry)
+                   :title    (first-heading md)
+                   :markdown md}
+            ;; A typed entry that would not read is NOT freeform markdown, and
+            ;; rendering it as if it were is the same conflation this codebase
+            ;; keeps having to undo: the reader cannot tell a corrupt record from
+            ;; one it is simply too old to understand. Unmerged stacks writing
+            ;; kinds the running daemon has never heard of is a NORMAL condition
+            ;; here — the daemon reads src/ once at startup — so the honest answer
+            ;; is the common one, and it says which of the two it is.
+            edn? (assoc :degraded
+                        {:kind   (:kind entry)
+                         :reason (if (contains? report/event-schemas (:kind entry))
+                                   :schema-mismatch
+                                   :unknown-kind)}))))))
 
 (defn- review-detail
   "The review-loop's own report.json — target, rounds, per-round phases and their

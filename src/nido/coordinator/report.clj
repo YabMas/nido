@@ -1513,12 +1513,34 @@
     :proposed-ticket          (proposed-ticket->markdown report)
     ""))
 
+(def ^:private index-title-cap
+  "The index is a table, one row per entry. Several of these titles are drawn
+   from prose fields with no length discipline of their own — a design's :shape
+   and a baseline's :area are paragraphs — so first-line is not enough on its
+   own: a paragraph written without newlines is one line, and it is the whole
+   paragraph."
+  110)
+
+(defn- clamp
+  "Bound a title to one index row, ellipsis included so a reader can see it was
+   cut rather than wondering whether the record just says that."
+  [s]
+  (when s
+    (if (> (count s) index-title-cap)
+      (str (str/trimr (subs s 0 (dec index-title-cap))) "…")
+      s)))
+
 (defn report-title
   "Index title for the typed events that carry no top-level :title — design / plan
    / completed / blocker. nil otherwise (triage, pr-opened, merged and markdown carry a usable :title that
-   the caller falls back to)."
+   the caller falls back to).
+
+   Every branch is clamped: the index is a table, and a title that wraps to six
+   lines makes the entry list unreadable exactly when there are many entries to
+   scan, which is when the index matters."
   [report]
-  (case (:format report)
+  (clamp
+   (case (:format report)
     :intent                   (str "Intent: " (first-line (:goal report)))
     :baseline                 (str "Baseline: " (first-line (:area report)))
     :design                   (first-line (:shape report))
@@ -1531,5 +1553,5 @@
     :design-verdict           (str "Design verdict: " (name (:verdict report)))
     :findings                 (str "Findings round " (:round report)
                                    " (" (count (:items report)) " items)")
-    :ship-submitted           "Ship submitted"
-    nil))
+     :ship-submitted           "Ship submitted"
+     nil)))

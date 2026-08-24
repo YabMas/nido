@@ -888,6 +888,20 @@
 (deftest report->markdown-baseline-omits-health-when-absent
   (is (not (str/includes? (report/report->markdown valid-baseline) "## Health"))))
 
+(deftest an-index-title-is-bounded
+  ;; first-line is not enough on its own: a paragraph written without newlines
+  ;; is one line, and it is the whole paragraph. Every design record in this
+  ;; project has a :shape like that.
+  (let [long-shape (apply str (repeat 40 "one rounding boundary at the aggregate "))
+        t (report/report-title (assoc valid-design :shape long-shape))]
+    (is (<= (count t) 110))
+    (is (str/ends-with? t "…") "cut is visible, so a reader does not read the
+                                truncation as the record being terse"))
+  (is (= (report/report-title valid-design)
+         (report/report-title valid-design))
+      "a short title is returned unchanged")
+  (is (not (str/ends-with? (report/report-title valid-design) "…"))))
+
 (deftest baseline-titles-itself-by-area
   (is (= "Baseline: order totalling — calc, the aggregate, and the invoice reader"
          (report/report-title valid-baseline))
