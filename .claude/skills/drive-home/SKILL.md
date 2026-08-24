@@ -1,6 +1,6 @@
 ---
 name: drive-home
-description: Take the current nido session's stack home by composing /align (rebase + trivial-conflict resolution), /local-ci auto (CI + autonomous mechanical fix), and /squash (fold each layer to one commit + regenerate every PR title/description), then mark every layer ready and merge the stack atomically. Halts for human judgement on semantic conflicts or non-mechanical CI failures. Usage: /drive-home
+description: Take the current nido session's stack home by composing /align (rebase + trivial-conflict resolution), /local-ci (CI + autonomous fix of every failure it can settle), and /squash (fold each layer to one commit + regenerate every PR title/description), then mark every layer ready and merge the stack atomically. Halts for human judgement on semantic conflicts, or on CI findings that resisted /local-ci's attempts. Usage: /drive-home
 ---
 
 # drive-home
@@ -17,8 +17,8 @@ One command that drives the **current session's** stack from "work written" to
 
 1. `/align` — rebase on a fresh `origin/main`, auto-resolve only trivial
    conflicts (halt on anything semantic),
-2. `/local-ci auto` — run CI and auto-fix only the mechanical class (halt on
-   anything needing judgement),
+2. `/local-ci` — run CI, attempt every failure through its owning agent, and
+   halt only on what resisted or needs a decision,
 3. `/squash` — fold each layer into one coherent commit and regenerate every
    layer's PR title/description from it,
 4. mark every layer's PR ready and merge the stack atomically (a single-PR
@@ -160,15 +160,20 @@ a failure would record a `:blocker` on every successful rebase.
 Files listed ⇒ `/align` halted — record a `:blocker` (see "When it halts") and
 stop. Nothing listed ⇒ continue.
 
-## 4. CI — `/local-ci auto`
+## 4. CI — `/local-ci`
 
-`cd ..` (session home), then invoke **`/local-ci auto`**. It commits a clean
-tree, runs CI, auto-fixes the mechanical class, and halts on anything needing
-judgement.
+`cd ..` (session home), then invoke **`/local-ci`**. It commits a clean
+tree, runs CI, attempts every failure through the agent that owns it, and halts
+only on findings that resisted those attempts or would need a decision.
 
-Read its reported outcome — **CI green** ⇒ continue; **halted** (a non-mechanical
-failure) ⇒ record a `:blocker` and stop. CI is a slow Docker build, so trust
-`/local-ci auto`'s green/halted report rather than re-running to check.
+It returns a report with `Resolved` / `Unresolved` / `Flake` sections. **`Unresolved`
+empty and CI green ⇒ continue.** Anything under `Unresolved` ⇒ record a
+`:blocker` and stop.
+
+Carry its `Resolved` entries forward: they are edits that are now in the branch
+and belong in the layer's commit brief at `/squash` (§5), and if you halt, the
+blocker should say what was already settled so the human does not re-derive it.
+CI is a slow Docker build, so trust the report rather than re-running to check.
 
 ## 5. Squash + PR text — `/squash`
 
@@ -373,21 +378,26 @@ the PR (or stack) merges. (No watcher is built here.)
 
 ## When it halts
 
-On a semantic conflict surfaced by `/align` (§3) or a non-mechanical CI failure
-surfaced by `/local-ci auto` (§4), drive-home leaves the worktree exactly as it
+On a semantic conflict surfaced by `/align` (§3) or an `Unresolved` CI finding
+surfaced by `/local-ci` (§4), drive-home leaves the worktree exactly as it
 is, reports **what** blocks and **how to resume** (resolve conflict X / fix test
 Y, then re-run `/drive-home`), and stops. It makes no `ready`/`merge` calls on a
 halted journey.
 
-When it halts on a semantic conflict surfaced by `/align` (§3) or a non-mechanical
-CI failure surfaced by `/local-ci auto` (§4), also record a typed `:blocker` event
+**A CI halt arrives with an attempt history.** `/local-ci` reports what it
+tried on each unresolved finding and what came back; pass that through rather
+than restating the job name. The human's first question is "what has already
+been ruled out", and the answer is in the report.
+
+When it halts on a semantic conflict surfaced by `/align` (§3) or an `Unresolved`
+CI finding surfaced by `/local-ci` (§4), also record a typed `:blocker` event
 so the parked workstream shows what blocks it:
 
 ```bash
 cat > /tmp/blocker.edn <<'EDN'
 {:format  :blocker
- :summary "<what blocks: the semantic conflict / the non-mechanical CI failure>"
- :needs   "<what the human must do: resolve conflict X / fix test Y, then re-run /drive-home>"}
+ :summary "<what blocks: the semantic conflict / the CI finding that resisted, and what was tried>"
+ :needs   "<the decision the human must make, then re-run /drive-home>"}
 EDN
 bb nido:ticket:append :project <project> :br <BR-####> :kind blocker :file /tmp/blocker.edn
 ```
@@ -397,8 +407,9 @@ stops and makes no `ready`/`merge` calls.
 
 ## Common mistakes
 
-- **Calling bare `/local-ci` instead of `/local-ci auto`** — the bare approval
-  gate halts the autonomous flow; `auto` is the composed path (§4).
+- **Waiting for `/local-ci` to ask for approval** — it has no approval gate any
+  more; it attempts, then halts only on what resists (§4). The `auto` argument
+  is still accepted and does nothing.
 - **Parsing the session as the last path segment** — slash-namespaced sessions
   span multiple segments; take everything after `/sessions/<project>/`.
 - **Running `gh`/`git` from the session home** — it's not git-colocated;
@@ -406,7 +417,7 @@ stops and makes no `ready`/`merge` calls.
   home).
 - **Flipping `ready` before CI is green** — §6 is reached only after §4 reports
   green.
-- **Proceeding to `/squash` before `/local-ci auto` reports green** — `/squash`
+- **Proceeding to `/squash` before `/local-ci` reports green** — `/squash`
   (squash + PR text) is the last phase, after green CI. Commit-shaping itself
   lives in `/squash`; drive-home never splits or reshapes commits here.
 - **Calling `gh pr merge --auto` on a stack** — use

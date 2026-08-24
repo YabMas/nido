@@ -105,7 +105,7 @@ resolved, means it exits 2 with `Error: No conflicts found at this revision`.
 ## What this skill does NOT do
 
 - **No commit.** It leaves the resolved (or halted) worktree as-is; the next
-  phase (`/local-ci auto`) commits a clean tree before CI.
+  phase (`/local-ci`) commits a clean tree before CI.
 - **No ledger events.** On a halt it reports the semantic conflict and stops;
   `/drive-home` is what records the blocker in the coordinator ledger when it
   composes this skill.

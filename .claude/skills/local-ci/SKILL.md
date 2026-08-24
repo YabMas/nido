@@ -1,32 +1,38 @@
 ---
 name: local-ci
-description: Run brian's CI for the session you're in and fix findings. Bare `/local-ci` triages then STOPS for human approval before any edit. `/local-ci auto` drives autonomously — commits a clean tree, runs CI, applies mechanical fixes and halts on anything needing judgement (the path /drive-home composes). Invoked in-session from the session home.
+description: Run brian's CI for the session you're in, attempt every failure through the agent that owns it, and halt only on what genuinely resists or would need a decision — then report what was resolved and how. Autonomous; the path /drive-home composes. Invoked in-session from the session home.
 ---
 
 # /local-ci
 
 ## Overview
 
-Run brian's own CI for the session you're in, triage the failures into a
-lane-grouped report, and fix them **only after the user approves**. This drives
-the existing `bb nido:run … ci` task and brian's lane/dev agents (present
-in-session). It does not reimplement CI or parse output in code.
+Run brian's own CI for the session you're in, triage the failures, and **settle
+what can be settled** — dispatching each failure to the agent that owns it,
+verifying each fix narrowly, and stopping only at findings that resist or that
+would require deciding rather than doing. This drives the existing
+`bb nido:run … ci` task and brian's lane/dev agents (present in-session). It does
+not reimplement CI or parse output in code.
 
 Two diff-scoped hygiene lints in the `Checks` job — `Comment Lint` and
 `Ticket Refs` — are reproduced locally first, in ~2s, so a comment typo does not
 cost a five-minute Docker cycle to discover. See "### 2. Hygiene pre-flight".
 
-## Two modes
+## One mode
 
-- **bare `/local-ci`** — run CI, triage into a report, **STOP for human
-  approval**, then fix only the approved subset. Refuses a dirty tree (tells you
-  to commit). This is the default and the rest of "## Flow" describes it.
-- **`/local-ci auto`** — the **autonomous** path (what `/drive-home` composes):
-  commit a clean tree, run CI, apply **mechanical** fixes and **halt** on
-  anything needing judgement, no approval gate. See "## Autonomous mode (auto)".
+There used to be two: a bare mode that stopped for approval before any edit, and
+an `auto` mode for `/drive-home`. The gate is gone. A CI failure with a named
+owner and a reproducible error is work to do, not a decision to bring someone;
+what actually needs a human is a much smaller set, and §5 draws that line
+directly instead of proxying it through who typed the command.
 
-Pick the mode from the argument: no argument ⇒ bare; the literal `auto` ⇒
-autonomous.
+**`/local-ci auto` still works** — `auto` is accepted and ignored, so an older
+invocation or a habit does not break.
+
+What replaced the gate is not nothing: a **bounded attempt** at every failure,
+verified narrowly before it counts as fixed, and a **halt line** drawn at
+deciding rather than doing. Both are §5, and both apply however the skill was
+invoked.
 
 ## When to use
 
@@ -68,8 +74,9 @@ does not). The script must run with **cwd = the worktree** — that is where jj
 answers about the right tree and where brian's `bb.edn` puts its own lint
 namespaces on the classpath.
 
-Exit 1 ⇒ the `Checks` job **will** fail. Fix these first (see "## Hygiene fixes")
-and re-run the scan until it is clean, then continue to CI. Exit 0 ⇒ proceed.
+Exit 1 ⇒ the `Checks` job **will** fail. Fix these first — inside comments only,
+proven by the gate in "## Hygiene fixes" — commit, and re-scan until clean before
+spending a CI cycle. Exit 0 ⇒ proceed.
 
 The scan also reports two **advisory** classes that CI has no check for at all:
 
@@ -80,14 +87,30 @@ The scan also reports two **advisory** classes that CI has no check for at all:
 - **stray artifacts** — added debug output, commented-out code, `.orig`/`.rej`
   files.
 
-Fold both into the triage report in step 5. They are findings like any other,
-and **neither is auto-fixed** — every fix for them is a code edit (see
+Fold both into the report (§6). They are findings like any other, and **neither
+is fixed** — every fix for them is a code edit about intent (see
 "## Hygiene fixes").
 
 **Why not just run `bb lint:comments`.** In a session worktree those tasks are
 structurally broken, and broken *silently* — see "## Common mistakes".
 
-### 3. Run CI
+### 3. Commit a clean tree
+
+CI Docker-COPYs the worktree, so `:ci` aborts on a dirty `jj st`. Commit any
+working-copy changes yourself — this used to refuse and hand the job back:
+
+```bash
+cd worktree
+jj st                                   # if dirty…
+jj commit -m "chore(ci): clean tree for CI"   # …fold it in
+cd ..                                   # back to the session home
+```
+
+(A clean tree ⇒ skip the commit.) These `chore(ci): …` commits are throwaway
+scaffolding — `/squash` folds them into the final commit, so the message
+doesn't matter.
+
+### 4. Run CI
 
 Image caching is ENABLED and jj-safe: brian keys the CI image cache on the
 working-tree CONTENTS (sha256 of the bytes that get COPY'd — brian PR #3380),
@@ -106,110 +129,116 @@ by its own `CI_SUFFIX`.
 **Clean-worktree gate:** the `:ci` command refuses to run if the worktree is
 dirty (output starts `nido: working copy is dirty …`, followed by `jj st`).
 This is **not** a CI failure — the Docker build COPYs the worktree, so a dirty
-tree would test code the remote can't see. Don't triage it as a failed job:
-tell the user to commit their changes, then re-run `/local-ci`. Do **not**
-commit on their behalf.
+tree would test code the remote can't see. Seeing it here means §3 was skipped
+or something wrote to the tree since: go back, commit, and re-run. Never triage
+it as a failed job.
 
-### 4. Green path
-
-Exit 0 → report "CI green, nothing to fix", plus any advisory hygiene items from
-step 2. Stop.
-
-### 5. Triage
+Exit 0 ⇒ green. Report it (§6), with any advisory hygiene items from §2. Stop.
 
 On failure, read the output: enumerate failed jobs (`:check`, `:unit`,
 `:integ-{a,b,c}`, `:e2e-{1,2,3}`) and brian's `ACTION REQUIRED:` tail.
 Distinguish real regressions from flake/infra (Docker errors, e2e flakiness —
 the summary reports flaky counts; a partition imbalance is not a code bug).
-Produce a **lane-grouped findings report**: for each real failure — the job, the
-salient error lines, a proposed fix, and the **owning agent** (see Routing). Get
-the actual error from logs; don't guess from the job name.
+For each real failure, name the job, the salient error lines, and the **owning
+agent** (see Routing) — that list is what §5 works through. Get the actual error
+from logs; don't guess from the job name.
 
-### 6. STOP for approval
+### 5. Fix — attempt everything, halt only on what genuinely resists
 
-Present the report. Ask which findings to fix: all / a named subset / none.
-**Make no edits** — see The Approval Gate.
+**The Routing table names who fixes, not whether to fix.** A row
+routing to `test-dev`, `e2e-dev`, `database-dev` or a `lane-*` means *dispatch
+that agent*. It does not mean stop. Halting because a failure was not in the
+mechanical class is the most common way this skill wastes a human: most such
+findings settle in one dispatch, and a halt that arrives before anything was
+tried tells the human nothing they could not have guessed from the job name.
 
-### 7. Fix (only after approval)
+**Attempt every real failure**, except the three below, which are never
+attempted:
 
-For each approved finding, delegate to its owning agent via the Agent tool with
-a focused prompt: the worktree path (`cd worktree` from the session home, or
-`~/Code/brian/.worktrees/<session>`), the failing job, and the error. Mechanical
-findings you may fix directly. **No auto-commit** — leave changes in the worktree
-for review (if it's a jj worktree, follow jj commit hygiene). Then suggest
-re-running `/local-ci`.
+1. **`needs-eyes` from the prose gate** — a real string in the program changed.
+   The gate exists precisely to put eyes on those. See "## Hygiene fixes".
+2. **`ACTION REQUIRED` instructions that name a decision** — version gates, e2e
+   partition rebalance, anything the tail says is unclear. Surface the exact
+   instruction; do not guess at it.
+3. **Flake and infra** — not a failure to fix. Re-run the affected job once; if
+   it passes, it was flake and belongs in the report as such, not as a fix.
 
-## Autonomous mode (auto)
+#### The attempt protocol
 
-Reached only when invoked as `/local-ci auto`. No approval gate — this is the
-path `/drive-home` composes, so it must be able to fix and re-run without a human
-in the loop. It reuses the **same** CI command and the **same Routing table**
-below; only the gate differs.
+Per finding, in order:
 
-### 1. Commit a clean tree
+1. **Read the actual error from the logs.** Never diagnose from the job name.
+2. **Dispatch the owning agent** with: the worktree path, the failing job, the
+   error text, and the claim constraint below.
+3. **Verify narrowly.** Re-run the *specific* thing that failed — that test
+   namespace, that lint, that one Playwright spec — not the whole suite. A full
+   CI cycle is a Docker build across eight containers; spending one to learn
+   whether a single test now passes is how this skill becomes too slow to use.
+4. **Failed verification ⇒ one more attempt**, informed by what the first one
+   learned. Still failing ⇒ unresolved. **Two attempts per finding**, then stop
+   attempting that one and move to the next.
 
-CI Docker-COPYs the worktree, so `:ci` aborts on a dirty `jj st`. In auto mode,
-commit any working-copy changes yourself (bare mode refuses instead):
+Commit resolved findings in the worktree
+(`cd worktree; jj commit -m "chore(ci): fix <job>"; cd ..`).
 
-```bash
-cd worktree
-jj st                                   # if dirty…
-jj commit -m "chore(ci): clean tree for CI"   # …fold it in
-cd ..                                   # back to the session home
+#### The halt line: doing versus deciding
+
+A finding is unresolved — whatever the routing table says, and however easy the
+fix looks — when settling it means **deciding** something rather than **doing**
+it. Concretely, when the fix would:
+
+- **change what the branch claims** rather than make the claim hold: editing a
+  test's expected value, deleting or skipping a test, loosening an assertion,
+  or widening a schema to admit what the test sent. The failing test is the
+  claim; a fix that edits the claim has not fixed anything, it has moved the
+  goalposts and gone green.
+- **choose between two readings of intent** that the layer's own brief (Claims /
+  Out of scope) does not settle.
+- **touch files this branch does not already change** — that is a different
+  story, and it leaves through the report, not through a fix.
+- **contradict a fix already made this run** — two findings pulling opposite
+  ways is a design question wearing a CI failure's clothes.
+
+These halt *immediately*, without burning attempts on them. Everything else
+halts only after its two attempts have genuinely failed.
+
+**Run budget:** at most **three** full CI runs total (the first, plus two
+re-runs). Findings surfaced for the first time by the final run are reported,
+not attempted — otherwise "attempt everything" is a loop with no floor. Never
+re-run CI merely hoping for green.
+
+### 6. Report what resolved, and how
+
+Emit this every time, green or halted — it is the whole output of this skill, and
+the only thing `/drive-home` sees.
+
+```
+CI: <green | halted> · <n> resolved · <m> unresolved · <k> flake
+
+Resolved
+- <job> · <one-line finding>
+  cause:    <what was actually wrong — from the log, not the job name>
+  fix:      <what changed, and where>  (agent: <who did it>)
+  verified: <the narrow check that now passes>
+
+Unresolved
+- <job> · <one-line finding>
+  attempted: <what attempt 1 did, and what came back>
+             <what attempt 2 did, and what came back>   (or: not attempted — <which of the three>)
+  needs:     <the decision a human has to make>
+
+Flake
+- <job> — passed on re-run
 ```
 
-(A clean tree ⇒ skip the commit.) These `chore(ci): …` commits are throwaway
-scaffolding — `/squash` folds them into the final commit, so the message
-doesn't matter.
+The `attempted` lines are what make a halt worth reading. A halt that says only
+"unit test failing, routed to test-dev" is the failure mode this section exists
+to prevent: say what was tried and what came back, so the human starts from
+where the attempt stopped rather than from the top.
 
-### 2. Hygiene pre-flight, then CI
+This skill emits **no** coordinator ledger events — when `/drive-home` composes it,
+`/drive-home` records the halt in its ledger, from this report.
 
-Run the pre-flight exactly as in "### 2. Hygiene pre-flight" above. Blocking
-hits are auto-fixable here (see "## Hygiene fixes" — the gate is what makes
-them safe without a human), so fix, gate, commit, and re-scan before running CI.
-The two advisory classes are **reported, never fixed**, in auto mode as in bare.
-
-Then run `bb nido:run :project <project> <session> ci` (see "### 3. Run CI" for
-the caching model). Separate flake/infra from real regressions exactly as in
-"### 5. Triage". Get the real error from logs; don't guess from the job name.
-
-### 3. Tiered fix — no gate
-
-Classify every real failure with the **Routing** table below (single source of
-truth):
-
-- **AUTO-FIX (no approval)** — failures whose owner is "fix directly
-  (mechanical)" or "hygiene fix (gated)". Fix and commit in the worktree
-  (`cd worktree; jj commit -m "chore(ci): fix <job>"; cd ..`), then re-run CI once.
-- **HALT (report, do not fix)** — every other row (anything the table routes to a
-  domain agent or skill). Produce the lane-grouped report (job, salient error
-  lines, owning agent) and **stop**. Do not dispatch fix agents.
-
-**Loop guard:** at most **two** mechanical fix→re-run cycles. Still red after
-that, or a non-mechanical failure appears ⇒ halt and report. Never loop CI to
-green.
-
-Auto mode emits **no** coordinator ledger events — when `/drive-home` composes it,
-`/drive-home` records the halt in its ledger.
-
-## The Approval Gate (do not skip)
-
-**This gate applies to bare `/local-ci` only.** `/local-ci auto` deliberately
-skips it — see "## Autonomous mode (auto)".
-
-Steps 1–6 NEVER edit files. Present the triage report and wait for explicit
-approval before ANY fix — **including "obvious", "trivial", or "just
-formatting" ones.** The whole point is review-before-edit.
-
-| Rationalization | Reality |
-|---|---|
-| "It's just a lint/format nit" | Still wait. Present it; fix on approval. |
-| "Fixing now saves a round-trip" | Review-before-edit is the point. Stop. |
-| "The fix is obvious / low-risk" | Obvious ≠ approved. Present it, wait. |
-| "They said 'fix all findings' upfront" | That authorizes the fix *phase*, after triage — not edits during triage. |
-
-**Red flags — STOP:** editing a worktree file before the user picks findings;
-dispatching a fix agent during triage; "I'll just quickly fix this one."
 
 ## Hygiene fixes
 
@@ -235,10 +264,13 @@ Three outcomes per file:
   literal, or a quoted span in a non-Clojure file. The gate prints each one
   before → after, narrowed to the region that differs, and holds. `(def timeout
   "30s")` → `"9000s"` lands here too, which is why it is never silent.
-  **Bare mode:** show the strings, get approval, re-run with `--allow-prose`.
-  **Auto mode:** never pass `--allow-prose` — halt and report the strings. A ref
-  inside a `testing` label or an allium `open question "…"` legitimately lands
-  here; that halt is correct, not a bug.
+  **Never pass `--allow-prose` on your own initiative** — the flag asserts that
+  a human read these strings, which is a thing only a human can make true. Halt
+  and show them, each before → after. If a human is in the conversation and says
+  they are fine, that assertion now holds and you may re-run with the flag; a
+  coordinator-spawned run has nobody to say it, so it stops there. A ref inside a
+  `testing` label or an allium `open question "…"` legitimately lands here; that
+  halt is correct, not a bug.
 - **`CODE`** — forms differ outside strings, a file was added or removed, or the
   file type has no comment grammar. This is a bug in **your fix**, not a finding:
   `jj restore <path>` and redo the edit inside the comment.
@@ -274,7 +306,8 @@ the file set. All three are code edits, so they leave through the report.
 ## Routing (failure class → owner in the fix phase)
 
 Defer to brian's `docs/reference/agent-delegation.md` for anything ambiguous.
-Starter map:
+Starter map. **This table routes ownership, not permission** — the owner named
+here is dispatched (§5). A row naming an agent has never meant "halt".
 
 | Failure | Owner |
 |---|---|
@@ -305,7 +338,8 @@ Starter map:
 - **Deleting the banned token instead of rewriting the comment.** Passes the
   linter, leaves the archaeology.
 - **Passing `--allow-prose` to get to green.** The flag means "a human read
-  these strings", and the report has to show them. Auto mode never passes it.
+  these strings", and the report has to show them. Only an actual human saying
+  so makes it true.
 - Parsing the session name as only the last path segment — slash-namespaced
   sessions (`fix/add-delay`) span multiple segments; take everything after
   `/sessions/<project>/`.
@@ -313,8 +347,19 @@ Starter map:
   the centralized `:ci` config (the clean-worktree gate and the private-dep
   token wiring live there).
 - Running `bb nido:session:up` first — unnecessary; brian's CI is self-contained.
-- Auto-fixing before approval (see The Approval Gate).
-- Looping CI to green — this skill does ONE run; re-run only after fixes, on request.
+- **Halting because the Routing table names an agent.** The table
+  says who fixes, not whether to. Dispatch it; halt only if the attempt fails or
+  the fix would require deciding (see "#### The halt line").
+- **Halting without saying what was tried.** "Unit test failing, routed to
+  test-dev" is the job name restated. The report owes the human the attempts and
+  what came back.
+- **Going green by editing the claim** — changing an expected value, skipping a
+  test, loosening an assertion. That is not a fix that failed; it is a fix that
+  succeeded at the wrong thing.
+- **Spending a full CI cycle to verify one fix.** Re-run the specific test or
+  lint. CI is eight containers and minutes; the narrow check is seconds.
+- Looping CI to green — three full runs is the ceiling, and the last one's new
+  findings are reported, not chased.
 - Treating flaky e2e / Docker infra errors as code bugs — separate them before routing.
-- Running `auto` when you wanted review, or bare mode inside `/drive-home` — the
-  bare gate halts the autonomous flow; `/drive-home` composes `/local-ci auto`.
+- **Looking for the approval gate.** There isn't one any more; §5's halt line
+  replaced it. `auto` is still accepted as an argument and does nothing.
