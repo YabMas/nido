@@ -8,6 +8,7 @@
    [nido.coordinator.state :as cstate]
    [nido.coordinator.workstream :as ws]
    [clojure.string :as str]
+   [nido.review.analysis :as analysis]
    [nido.review.frontend :as frontend]
    [nido.review.record :as record]
    [nido.review.loop :as rloop]
@@ -54,6 +55,30 @@
         (println (str "review-loop: could not append :review ledger event — "
                       (ex-message e))))
       nil)))
+
+(defn queue-analysis!
+  "Queue this run for nido-side analysis. Best-effort, for the same reason
+   `append-review-entry!` is: the review is over, and a missing side record must
+   not turn a finished review into a failed one.
+
+   Everything the analysis is told about the reviewed branch is a NAME —
+   project, session, workstream id. The path is deliberately not passed: the
+   analysis runs on nido's side and has no business in the worktree the loop
+   just reviewed."
+  [cwd final report report-path config ws-id]
+  (let [{:keys [project session]} (or (lifecycle/session-from-cwd cwd) {})]
+    (analysis/enqueue!
+     {:run-id             (:run-id config)
+      :report-path        report-path
+      :status             (:status final)
+      :dry-run?           (:dry-run? config)
+      :base               (get-in report [:target :base])
+      :rounds             (or (get-in report [:summary :rounds]) 0)
+      :findings-fixed     (or (get-in report [:summary :findings-fixed]) 0)
+      :findings-remaining (count (verdict/still-open (:findings final)))
+      :reviewed-project   project
+      :reviewed-session   session
+      :reviewed-ws-id     ws-id})))
 
 (defn verdict-worth-running?
   "The verdict pass judges findings against the design, so it needs findings.
@@ -138,10 +163,14 @@
         final  (frontend/with-live-display
                  {:report-atom report-atom :report-path report-path :clock clock}
                  (fn [emit] (rloop/run-loop (assoc config :emit emit))))
-        status (:status final)]
-    (append-review-entry! cwd final @report-atom report-path)
+        status (:status final)
+        ws-id  (append-review-entry! cwd final @report-atom report-path)]
     (println (str "review-loop: " (name status) " · report " report-path))
     (print-verdict! (append-design-verdict! cwd final @report-atom config))
+    ;; Last, so the analysis session finds everything this run wrote — the
+    ;; report, the :review ledger entry and the design verdict are all on disk
+    ;; by the time the envelope exists.
+    (queue-analysis! cwd final @report-atom report-path config ws-id)
     status))
 
 (defn loop-cmd [& args]

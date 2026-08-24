@@ -1,12 +1,43 @@
 (ns tasks.nido-review-test
   (:require
+   [babashka.fs :as fs]
    [clojure.string :as str]
-   [clojure.test :refer [deftest is]]
+   [clojure.test :refer [deftest is use-fixtures]]
    [nido.coordinator.session :as csession]
+   [nido.coordinator.state :as cstate]
    [nido.coordinator.workstream :as ws]
    [nido.review.loop :as rloop]
    [nido.session.lifecycle :as lifecycle]
    [tasks.nido-review :as t]))
+
+(defn- with-tmp-nido-root
+  "Every `loop-cmd` test drives the REAL command, so every side effect it has
+   lands on the real filesystem unless the root is moved. That is not a
+   hypothetical: `loop-cmd*` ends by enqueuing the run for analysis, and without
+   this the suite wrote live envelopes into ~/.nido/coordinator/queue/ that the
+   running daemon drained and spawned agent sessions for — one per test, every
+   time anyone ran `bb nido:test`.
+
+   Redirecting the root is the fix rather than stubbing the one function that
+   bit, because the hazard is structural: a command test that writes wherever
+   the command writes will bite again the next time `loop-cmd*` grows a side
+   effect."
+  [f]
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (cstate/ensure-dirs!)
+        (f))
+      (finally (fs/delete-tree tmp)))))
+
+(use-fixtures :each with-tmp-nido-root)
+
+(defn- queued-envelopes
+  "Envelopes sitting in the (temp) queue dir."
+  []
+  (->> (fs/list-dir (cstate/queue-dir))
+       (filter #(str/ends-with? (str %) ".edn"))
+       (mapv #(clojure.edn/read-string (slurp (str %))))))
 
 (deftest loop-cmd-passes-config-and-defaults
   (let [seen (atom nil)]
@@ -18,6 +49,40 @@
       (is (string? (:run-id @seen)))
       (is (fn? (:emit @seen)) "engine is given an emit fn")
       (is (fn? (:clock @seen)) "engine is given a clock"))))
+
+(defn- run-loop-writing-a-report
+  "A stubbed engine that leaves a report where the real one would, so the
+   enqueue gate — which refuses a run with no report to read — sees a run that
+   produced something."
+  [status]
+  (fn [cfg]
+    (let [rp (fs/path (cstate/run-dir (:run-id cfg)) "report.json")]
+      (fs/create-dirs (fs/parent rp))
+      (spit (str rp) "{}"))
+    {:status status :history []}))
+
+(deftest loop-cmd-queues-exactly-one-analysis-for-the-finished-run
+  ;; Fires once per RUN, never per round, and only after the loop returns.
+  (with-redefs [rloop/run-loop (run-loop-writing-a-report :converged)]
+    (t/loop-cmd ":cwd" "/w")
+    (let [envs (queued-envelopes)]
+      (is (= 1 (count envs)))
+      (is (= {:project :nido :trigger :review-analysis} (:target (first envs)))
+          "aimed nido-side, never at the reviewed project")
+      (is (= "converged" (get-in (first envs) [:payload :status]))))))
+
+(deftest loop-cmd-queues-no-analysis-for-a-dry-run
+  (with-redefs [rloop/run-loop (run-loop-writing-a-report :converged)]
+    (t/loop-cmd ":cwd" "/w" ":dry-run?" "true")
+    (is (empty? (queued-envelopes)))))
+
+(deftest loop-cmd-queues-no-analysis-when-the-run-left-no-report
+  ;; The shape that spawned phantom sessions: the command driven with the engine
+  ;; stubbed out, so nothing was written and there is nothing to analyse.
+  (with-redefs [rloop/run-loop (fn [_] {:status :converged :history []})]
+    (t/loop-cmd ":cwd" "/w")
+    (is (empty? (queued-envelopes))
+        "no report on disk means no session is provisioned to go and read one")))
 
 (deftest loop-cmd-defaults-base-to-main
   (let [seen (atom nil)]

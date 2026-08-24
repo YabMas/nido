@@ -1058,6 +1058,45 @@
    [:note        {:optional true} string?]    ; overall reviewer note
    [:items       [:vector FindingItem]]])
 
+(def ReviewObservation
+  "One thing the analysis noticed about how the review loop behaved. `:where`
+   names the machinery it is about — a stage, a prompt, the cache — so a reader
+   can go to the code rather than re-derive which part misbehaved.
+
+   `:evidence` is required and is what separates this from an opinion: it must
+   point at something in the analysed run (a round, a finding id, a log line),
+   not at a general belief about how review ought to work."
+  [:map {:closed true}
+   [:kind     [:enum :waste :miss :misfire :friction :working-well]]
+   [:where    string?]                        ; e.g. "warden prompt" / "answered-cache" / "fix stage"
+   [:summary  string?]
+   [:evidence string?]
+   [:proposal {:optional true} string?]])     ; what to change; absent = noticed, not yet answered
+
+(def ReviewAnalysis
+  "What one finished review loop says about the review loop itself.
+
+   The loop reviews other people's code; this is the record of it being read
+   back. Written nido-side by the `analyze-review-loop` skill from the run's
+   report.json, never from the reviewed worktree — so the analysed branch is
+   named here and nowhere reachable.
+
+   `:verdict` is about the RUN, not about the code that was reviewed: :healthy
+   means the machinery did its job whatever it found, and :degraded means it
+   spent rounds, agents or human attention without earning them. `:at` is
+   stamped by the ledger."
+  [:map {:closed true}
+   [:format           [:= :review-analysis]]
+   [:verdict          [:enum :healthy :degraded :broken]]
+   [:run-id           string?]
+   [:status           string?]                    ; the analysed run's terminal status
+   [:rounds           int?]
+   [:reviewed         {:optional true} string?]   ; "<project>/<session>" — a name, never a path
+   [:summary          string?]
+   [:observations     [:vector ReviewObservation]]
+   [:report-path      {:optional true} [:maybe string?]]
+   [:artifact         {:optional true} string?]])
+
 (def event-schemas
   "Entry :kind → its Malli schema. Drives ledger-boundary validation + rendering.
    A :kind absent here is stored as verbatim markdown (legacy / freeform)."
@@ -1076,6 +1115,7 @@
    :design-decision          DesignDecision
    :design-verdict           DesignVerdict
    :findings                 FindingsRound
+   :review-analysis          ReviewAnalysis
    :proposed-ticket          ProposedTicket})
 
 (def read-schemas
@@ -1466,6 +1506,23 @@
           (str "- **" (name severity) "** "
                (when area (str "(" area ") ")) "[" id "] " summary))))))
 
+(defn- review-analysis->markdown
+  [{:keys [verdict run-id status rounds reviewed summary observations report-path]}]
+  (str/join "\n"
+    (remove nil?
+      (concat
+        [(str "# Review-loop analysis — " (name verdict))
+         (str "`" run-id "` · ended " status " after " rounds
+              " round" (when (not= 1 rounds) "s")
+              (when reviewed (str "  ·  reviewed " reviewed)))
+         ""
+         summary
+         ""]
+        (for [{:keys [kind where summary proposal]} observations]
+          (str "- **" (name kind) "** (" where ") " summary
+               (when proposal (str "\n  → " proposal))))
+        [(when report-path (str "\n`" report-path "`"))]))))
+
 (defn- proposed-ticket-head
   [{:keys [title ticket-type priority]}]
   [(str "# " title)
@@ -1512,6 +1569,7 @@
     :design-decision          (design-decision->markdown report)
     :design-verdict           (design-verdict->markdown report)
     :findings                 (findings->markdown report)
+    :review-analysis          (review-analysis->markdown report)
     :proposed-ticket          (proposed-ticket->markdown report)
     ""))
 
@@ -1555,5 +1613,7 @@
     :design-verdict           (str "Design verdict: " (name (:verdict report)))
     :findings                 (str "Findings round " (:round report)
                                    " (" (count (:items report)) " items)")
+     :review-analysis          (str "Review-loop analysis: " (name (:verdict report))
+                                    " (" (count (:observations report)) " observations)")
      :ship-submitted           "Ship submitted"
      nil)))
