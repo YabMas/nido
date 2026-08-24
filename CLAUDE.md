@@ -105,6 +105,48 @@ _nido_tab_title() {
 add-zsh-hook precmd _nido_tab_title
 ```
 
+### Notion token in the agent's environment
+
+A project's `bb notion:*` tasks read `NOTION_TOKEN`, and projects load it with
+direnv from a gitignored secrets file. **direnv can never deliver it to an
+agent.** It hooks interactive shells, and `claude` is launched from the session
+home anyway — not from the project checkout — so the repo's `.envrc` never runs
+in the shell the agent inherits from. Every `bb notion:*` call from an agent
+therefore dies on `NOTION_TOKEN or NOTION_API_TOKEN env var required`, which
+reads as *"you have no Notion access"* and stops the agent cold.
+
+nido already holds the token: `bb nido:notion:auth:set` writes it to the macOS
+Keychain under service `nido-notion`. Export it from there, once, in the shell
+every agent inherits from. Add to `~/.zshrc`:
+
+```zsh
+# Publish nido's Notion PAT as NOTION_TOKEN so every project's `bb notion:*`
+# task works in an agent session. direnv-loaded secrets never reach an agent
+# (interactive-shell hook; and `claude` starts from the session home, not the
+# repo), so the token has to be in the environment the agent inherits.
+_nido_notion_token=$(security find-generic-password -s nido-notion -w 2>/dev/null)
+[[ -n "$_nido_notion_token" ]] && export NOTION_TOKEN="$_nido_notion_token"
+unset _nido_notion_token
+```
+
+**The non-empty guard is load-bearing.** `(System/getenv "NOTION_TOKEN")`
+returning `""` is truthy in Clojure, so an unconditional export with no keychain
+entry would shadow the `NOTION_API_TOKEN` fallback and turn a clear
+missing-credential error into an opaque 401.
+
+Two limits worth knowing:
+
+- **It reaches sessions started after you add it** — the agent inherits the
+  environment of the shell that launched it, so live sessions keep the old one.
+  Same for rotating the token: new shells only.
+- **It does not reach coordinator-spawned Runs.** The daemon runs under launchd,
+  which does not source `~/.zshrc`. That is fine today because the autonomous
+  skills (`/triage-bug`, `/triage-slack`) use the `notion` CLI, which carries
+  its own credential — but a Run that shells `bb notion:*` would fail.
+
+The `notion` CLI is unaffected by all of this and stays the path agents should
+reach for first; see `docs/reference/notion-access.md`.
+
 Rules of engagement:
 
 - **Edit code in the worktree, not in nido's source tree.** Use absolute paths or `cd worktree/` from the session home.

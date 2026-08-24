@@ -31,8 +31,11 @@ run `Agent` with `subagent_type=Explore` first.
 4. Browser tooling only after REPL/tests, and only for visual or
    interaction checks.
 5. Before querying Postgres tables, inspect `information_schema.columns`.
-6. Use `bb notion:*` tasks for Notion. Do not use WebFetch on Notion
-   URLs.
+6. Reach Notion through the `notion` CLI, never WebFetch (it returns an
+   empty app shell). `bb notion:*` works too wherever NOTION_TOKEN is
+   exported; if it reports that variable missing, this shell is stale —
+   the credential is on the machine. See
+   `~/Code/nido/docs/reference/notion-access.md`.
 
 ### Clojure REPL execution
 
@@ -57,7 +60,8 @@ environment — do NOT start a fresh JVM, Kaocha runner, or
 - `~/Code/brian/docs/reference/agent-ownership.md`
 - `~/Code/brian/docs/reference/repl.md`
 - `~/Code/brian/docs/guidelines/testing-requirements.md`
-- `~/Code/brian/docs/reference/notion-context.md`
+- `~/Code/nido/docs/reference/notion-access.md` (supersedes brian's
+  `docs/reference/notion-context.md` for agent sessions)
 
 ## Layer boundaries and review lanes
 
