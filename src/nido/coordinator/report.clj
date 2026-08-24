@@ -1027,6 +1027,27 @@
    [:held? boolean?]
    [:note  string?]])
 
+(def TrajectoryRound
+  "One round of the loop that produced a decision, as the human reading that
+   decision needs it.
+
+   A looped round hands over a verdict that several agents argued their way to,
+   and the verdict alone does not say whether it was argued to honestly. These
+   are the three things that decide that, and none is derivable from the final
+   record: what the round found, what it gave up to make the finding go away,
+   and what it refused to accept.
+
+   :weakened is the one that changes how the rest should be read. A decision
+   reached by amending the record down to where nothing could refute it is not
+   the same decision as one reached by correcting it, and the final record looks
+   identical either way."
+  [:map {:closed true}
+   [:round    int?]
+   [:found    {:optional true} [:vector string?]]
+   [:amended  {:optional true} boolean?]
+   [:weakened {:optional true} [:vector string?]]
+   [:disputed {:optional true} [:vector string?]]])
+
 (def DesignDecision
   "The pre-implementation decision round — the only point in the lifecycle where
    'don't build this' is still cheap, and the one round that is a DECISION rather
@@ -1047,7 +1068,11 @@
                 [:design-seq int?]
                 [:reason     string?]
                 [:checks     [:vector {:min 1} DerivedCheck]]
-                [:asks       string?]]
+                [:asks       string?]
+                ;; Optional because a round can still be run once, by hand, and
+                ;; a one-shot round has no trajectory to report — not because
+                ;; a looped one may omit it.
+                [:trajectory {:optional true} [:vector TrajectoryRound]]]
         shape  (fn [recommend & extra]
                  (into [:map {:closed true}]
                        (concat common [[:recommend [:= recommend]]] extra)))]
@@ -1557,8 +1582,28 @@
       (when (not= :accurate verdict)
         ["\n> Re-survey — the design may be sound on a bad premise."])))))
 
+(defn- trajectory->markdown
+  "How the decision was arrived at, round by round.
+
+   Placed BEFORE the ask, deliberately. A reader who has already been asked the
+   question is answering it; this is context for the answer, not a footnote to
+   it, and a weakening discovered after you have decided is discovered too late."
+  [trajectory]
+  (when (seq trajectory)
+    (cons "\n## How this was arrived at"
+          (for [{:keys [round found amended weakened disputed]} trajectory]
+            (str "- **round " round "** — "
+                 (if (seq found)
+                   (str "found " (str/join ", " found))
+                   "nothing left to derive")
+                 (when amended "; the record was amended")
+                 (when (seq weakened)
+                   (str "\n  - ⚠ weakened: " (str/join "; " weakened)))
+                 (when (seq disputed)
+                   (str "\n  - disputed: " (str/join "; " disputed))))))))
+
 (defn- design-decision->markdown
-  [{:keys [recommend design-seq reason checks asks findings]}]
+  [{:keys [recommend design-seq reason checks asks findings trajectory]}]
   (str/join
    "\n"
    (remove nil?
@@ -1572,6 +1617,7 @@
                     :held "✓" :broken "✗" :underivable "—")
              " " (name check) " — " note))
       (record-findings->markdown "What the derivation found" findings)
+      (trajectory->markdown trajectory)
       ["\n## For you to decide" asks]))))
 
 (defn- design-verdict->markdown

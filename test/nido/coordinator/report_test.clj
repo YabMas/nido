@@ -1175,3 +1175,37 @@
     (is (str/includes? md "· recommended"))
     (is (str/includes? md "**B — Implement archive-and-clone**"))
     (is (str/includes? md "Needs a prior product call"))))
+
+;; ── A looped decision's trajectory ──────────────────────────────────────────
+
+(def ^:private a-decision
+  {:format :design-decision
+   :design-seq 7
+   :recommend :proceed
+   :reason "nothing derivable blocks it"
+   :checks [{:check :relation-honest :status :held :note "n"}]
+   :asks "is this worth doing now, at this cost?"})
+
+(deftest a-decision-may-carry-how-it-was-arrived-at
+  (let [with-t (assoc a-decision
+                      :trajectory [{:round 1 :found ["relation-honest"] :amended true
+                                    :weakened ["effort-lowered — :L → :M"]}
+                                   {:round 2 :amended false :disputed ["the renderer sums"]}])]
+    (is (report/validate-event :design-decision with-t) "the field is writable")
+    (is (report/validate-event :design-decision a-decision)
+        "and optional — a one-shot round has no trajectory")))
+
+(deftest the-trajectory-reaches-the-reader-before-the-question
+  ;; A weakening discovered after you have answered is discovered too late.
+  (let [md (report/report->markdown
+            (assoc a-decision
+                   :trajectory [{:round 1 :found ["relation-honest"] :amended true
+                                 :weakened ["effort-lowered — :L → :M"]}]))]
+    (is (str/includes? md "How this was arrived at"))
+    (is (str/includes? md "⚠ weakened: effort-lowered — :L → :M"))
+    (is (< (str/index-of md "How this was arrived at")
+           (str/index-of md "For you to decide")))))
+
+(deftest a-decision-with-no-trajectory-renders-no-section
+  (let [md (report/report->markdown a-decision)]
+    (is (not (str/includes? md "How this was arrived at")))))
