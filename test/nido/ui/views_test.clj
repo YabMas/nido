@@ -776,14 +776,19 @@
   (let [gate (assoc sample-gate
                     :stage :in-progress
                     :report blocker-with-options
-                    :actions [{:id :option-a :label "A — Drop Keep Old" :kind :mutation :style :primary}
-                              {:id :option-b :label "B — Implement archive-and-clone"
+                    :actions [{:id :option-a :label "A" :title "Drop Keep Old"
+                               :kind :mutation :style :primary}
+                              {:id :option-b :label "B" :title "Implement archive-and-clone"
                                :kind :mutation :style :default}
                               {:id :reply :label "Reply" :kind :resume :style :default}])
         html (views/gate-pane gate)]
     (is (str/includes? html "/gate/brian/ws-1/option-a"))
     (is (str/includes? html "/gate/brian/ws-1/option-b"))
-    (is (str/includes? html "A — Drop Keep Old"))
+    (is (str/includes? html ">A</button>")
+        "the button is the letter alone — the branch is on the card above it, and
+         a button as wide as a sentence broke the row")
+    (is (str/includes? html "title=\"Drop Keep Old\"")
+        "…with the branch as the hover title, which costs no layout")
     (is (str/includes? html "textarea")
         "Reply survives beside the buttons — the answer that is none of them")))
 
@@ -791,7 +796,7 @@
   (let [gate (assoc sample-gate
                     :stage :in-progress
                     :report (assoc blocker-with-options :seq 4)
-                    :actions [{:id :option-a :label "A — Drop Keep Old" :kind :mutation
+                    :actions [{:id :option-a :label "A" :title "Drop Keep Old" :kind :mutation
                                :style :primary :seq 4}
                               {:id :reply :label "Reply" :kind :resume :style :default}])
         html (views/gate-pane gate)]
@@ -810,7 +815,9 @@
                     :sessions [{:name "auto" :parked? true}])
         html (views/workstream-pane ws {})]
     (is (str/includes? html "/workstreams/brian/ws-1/gate/option-a?entry=4"))
-    (is (str/includes? html "A — Drop Keep Old"))
+    (is (str/includes? html "title=\"Drop Keep Old\"")
+        "derived from the report, not a fixture: the button is the bare letter
+         and the branch it answers is its title")
     (is (not (str/includes? html "/gate/done"))
         "and no Done — beside A/B it reads as an answer to the question")))
 

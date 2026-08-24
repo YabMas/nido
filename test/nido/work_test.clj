@@ -520,9 +520,11 @@
     :consequence "Needs a prior product call on what archived means."}])
 
 (deftest a-parked-blocker-with-options-offers-one-button-per-branch
-  (is (= [{:id :option-a :label "A — Drop Keep Old"              :kind :mutation :style :primary}
-          {:id :option-b :label "B — Implement archive-and-clone" :kind :mutation :style :default}
-          {:id :reply    :label "Reply"                           :kind :resume  :style :default}]
+  (is (= [{:id :option-a :label "A" :title "Drop Keep Old"
+           :kind :mutation :style :primary}
+          {:id :option-b :label "B" :title "Implement archive-and-clone"
+           :kind :mutation :style :default}
+          {:id :reply    :label "Reply" :kind :resume :style :default}]
          (work/gate-actions :in-progress true nil
                             {:report-format :blocker :options sample-options}))
       "the recommended branch is the primary button; Reply stays for the answer

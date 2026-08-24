@@ -142,7 +142,16 @@
   (vec (map-indexed
         (fn [i {:keys [label recommended?]}]
           (cond-> {:id    (nth option-action-ids i)
-                   :label (str (report/option-letter i) " — " label)
+                   ;; The LETTER alone. The branch is spelled out on the card
+                   ;; directly above, which is the whole reason the options are
+                   ;; lettered: the reader picks by matching a letter, not by
+                   ;; re-reading the branch on a button. Putting the label here
+                   ;; too made a row of buttons as wide as three sentences.
+                   :label (report/option-letter i)
+                   ;; …but a button reading "A" says nothing on its own once the
+                   ;; card scrolls away, so the branch rides along as the hover
+                   ;; title, where it costs no layout.
+                   :title label
                    :kind  :mutation
                    :style (if recommended? :primary :default)}
             entry-seq (assoc :seq entry-seq)))

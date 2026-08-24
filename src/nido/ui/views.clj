@@ -542,12 +542,15 @@
    work/option-actions) posts it as ?entry=, the same reading position every other
    surface rides: the letter it sends means nothing except relative to the report
    that drew it, so the resolver needs to know which report that was."
-  [project ws-id {:keys [id label style] entry-seq :seq} route]
-  [:button {:class (style-class style)
-            "data-on:click" (str "@post('"
-                                 (cond-> (route project ws-id id)
-                                   entry-seq (str "?entry=" entry-seq))
-                                 "')")}
+  [project ws-id {:keys [id label style title] entry-seq :seq} route]
+  [:button (cond-> {:class (style-class style)
+                    "data-on:click" (str "@post('"
+                                         (cond-> (route project ws-id id)
+                                           entry-seq (str "?entry=" entry-seq))
+                                         "')")}
+             ;; Only the lettered option buttons carry one — their label is a
+             ;; single character, so what they answer lives in the tooltip.
+             title (assoc :title title))
    label])
 
 (defn action-bar
