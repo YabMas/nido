@@ -835,6 +835,18 @@
      :recut (str "It says the DECOMPOSITION does not hold. Re-cut it. The claims may be\n"
                  "right; how the change is split into layers or phases is what is wrong,\n"
                  "and restating the claims will not fix it.\n\n")
+     :resurvey (str "It said the PREMISE was wrong — and the survey has since been\n"
+                    "re-run and now holds against the code. The corrected baseline is\n"
+                    "below.\n\n"
+                    "Re-state this design against it. That is not a re-citation: the\n"
+                    "design's claims were made about a reading of the area that has\n"
+                    "changed, so each one has to be checked against the new survey and\n"
+                    "may not survive it. Point :baseline :seq at the corrected baseline\n"
+                    "and set :supersedes to the design you are replacing.\n\n"
+                    "If a claim no longer holds under the corrected survey, change it.\n"
+                    "Re-pointing the citation while leaving the claims untouched asserts\n"
+                    "the design still stands on a premise nobody has re-checked it\n"
+                    "against, which is the failure this whole round exists to catch.\n\n")
      (str "It says the RECORD has a derivable defect. Repair the record — the\n"
           "commitment may well be sound, and the layering with it.\n\n"))
    "Your job is to make the record TRUE and coherent. It is NOT to make the\n"
@@ -947,87 +959,122 @@
                                  :emit (fn [_])
                                  :pipeline    baseline-pipeline
                                  :finding-key baseline-finding-key})
-            entry {:iter (:iter ctx) :findings (:findings ctx)
-                   :retreats [] :disputes [] :resurveyed (:status out)}]
+                ]
         (if (= :accurate (:status out))
+          ;; No history entry here. The re-survey is only HALF the repair — the
+          ;; design still cites the survey that was wrong — so the round is not
+          ;; over, and the amendment that finishes it records them together.
+          (assoc ctx :resurveyed (:status out))
           (assoc ctx :resurveyed (:status out)
-                 :history (conj (vec (:history ctx)) entry))
-          (assoc ctx :resurveyed (:status out)
-                 :history (conj (vec (:history ctx)) entry)
+                 :history (conj (vec (:history ctx))
+                                {:iter (:iter ctx) :findings (:findings ctx)
+                                 :retreats [] :disputes [] :resurveyed (:status out)})
                  :control :stop
                  :status (keyword (str "resurvey-" (name (:status out))))))))))
 
+(defn- amend-design!
+  "Launch the amender against the design record and take in what it hands back.
+
+   `baseline` is what the amender is shown alongside the design: the CITED one
+   for an ordinary amendment, and the corrected one when this is finishing a
+   re-survey. That difference is the whole of the re-survey repair — the
+   amendment is what moves the citation."
+  [ctx recommend baseline]
+  (let [{:keys [cwd run-id budget]} (:config ctx)
+        [project ws-id] (stages/project+ws-from-cwd cwd)
+        prev     (ws/latest-entry project ws-id :design)
+        dir      (cstate/run-dir run-id)
+        out-path (str (fs/path dir (str "design-amend-round-" (:iter ctx) ".edn")))
+        dirty-before? (stages/working-copy-dirty? cwd)]
+    (fs/create-dirs dir)
+    (fs/delete-if-exists out-path)
+    (agent/launch!
+     {:run-id run-id :cwd cwd :budget budget
+      :first-message (design-amend-prompt
+                      {:design prev
+                       :baseline baseline
+                       :recommend recommend
+                       :reason (get-in ctx [:record :reason])
+                       :checks (:findings ctx)
+                       :findings (get-in ctx [:record :findings])
+                       :out-path out-path})
+      :err-file (str (fs/path dir (str "design-amend-round-" (:iter ctx) ".err.log")))})
+    (cond
+      (and (not dirty-before?) (stages/working-copy-dirty? cwd))
+      (assoc ctx :control :stop :status :amend-touched-code)
+
+      (not (fs/exists? out-path))
+      (assoc ctx :control :stop :status :amend-noop)
+
+      :else
+      (let [raw    (try (edn/read-string (slurp out-path)) (catch Exception _ nil))
+            answer (parse-amend-answer raw (:findings ctx) design-finding-base-key)
+            {:keys [record disputes]} answer
+            entry  (fn [retreats amended?]
+                     (cond-> {:iter (:iter ctx) :findings (:findings ctx)
+                              :retreats retreats :disputes disputes :amended? amended?}
+                       (:resurveyed ctx) (assoc :resurveyed (:resurveyed ctx))))]
+        (cond
+          (nil? answer)
+          (assoc ctx :control :stop :status :amend-unreadable)
+
+          (and (nil? record) (seq disputes))
+          (assoc ctx :disputes disputes :retreats []
+                 :history (conj (vec (:history ctx)) (entry [] false)))
+
+          (nil? record)
+          (assoc ctx :control :stop :status :amend-noop)
+
+          :else
+          (let [err (try (ws/append-entry! project ws-id
+                                           {:kind :design} (pr-str record))
+                         nil
+                         (catch Exception e (or (ex-message e) "the ledger refused it")))]
+            (if err
+              (assoc ctx :control :stop :status :amend-invalid :amend-error err)
+              (let [retreats (retreat/design-retreats prev record)
+                    ctx' (assoc ctx
+                                :retreats retreats
+                                :disputes disputes
+                                :history (conj (vec (:history ctx)) (entry retreats true)))]
+                (if (design-round-worth-running? record)
+                  ctx'
+                  (assoc ctx' :control :stop :status :retreated))))))))))
+
 (def design-amend-stage
   "Repair whatever the recommendation named — the record, the cut, or the
-   premise. Only the first two are written here; the third is a loop."
+   premise.
+
+   The premise takes two steps, and skipping the second is how the loop fails to
+   converge. A re-survey repairs the BASELINE, but the design still cites the
+   survey that was wrong, and `discover-baseline` resolves the citation rather
+   than the newest entry — deliberately, so a later survey cannot silently change
+   what an already-judged design was judged against. So a re-survey alone changes
+   nothing the next round can see: it would judge the same design against the
+   same stale baseline, reach the same verdict, and re-survey again until the
+   cap. The design is re-stated against the corrected survey here, and only that
+   finishes the repair."
   {:name :amend
    :run
    (fn [ctx]
-     (let [{:keys [cwd run-id budget dry-run?]} (:config ctx)
-           recommend (get-in ctx [:record :recommend])]
+     (let [{:keys [cwd dry-run?]} (:config ctx)
+           recommend (get-in ctx [:record :recommend])
+           [project ws-id] (stages/project+ws-from-cwd cwd)]
        (cond
-         dry-run? (assoc ctx :control :stop :status :dry-run)
-         (= :resurvey recommend) (resurvey! ctx)
+         dry-run?
+         (assoc ctx :control :stop :status :dry-run)
+
+         (= :resurvey recommend)
+         (let [ctx' (resurvey! ctx)]
+           (if (:status ctx')
+             ctx'
+             (amend-design! ctx' :resurvey
+                            (ws/latest-entry project ws-id :baseline))))
+
          :else
-         (let [[project ws-id] (stages/project+ws-from-cwd cwd)
-               prev     (ws/latest-entry project ws-id :design)
-               dir      (cstate/run-dir run-id)
-               out-path (str (fs/path dir (str "design-amend-round-" (:iter ctx) ".edn")))
-               dirty-before? (stages/working-copy-dirty? cwd)]
-           (fs/create-dirs dir)
-           (fs/delete-if-exists out-path)
-           (agent/launch!
-            {:run-id run-id :cwd cwd :budget budget
-             :first-message (design-amend-prompt
-                             {:design prev
-                              :baseline (stages/discover-baseline cwd prev)
-                              :recommend recommend
-                              :reason (get-in ctx [:record :reason])
-                              :checks (:findings ctx)
-                              :findings (get-in ctx [:record :findings])
-                              :out-path out-path})
-             :err-file (str (fs/path dir (str "design-amend-round-" (:iter ctx) ".err.log")))})
-           (cond
-             (and (not dirty-before?) (stages/working-copy-dirty? cwd))
-             (assoc ctx :control :stop :status :amend-touched-code)
-
-             (not (fs/exists? out-path))
-             (assoc ctx :control :stop :status :amend-noop)
-
-             :else
-             (let [raw    (try (edn/read-string (slurp out-path)) (catch Exception _ nil))
-                   answer (parse-amend-answer raw (:findings ctx) design-finding-base-key)
-                   {:keys [record disputes]} answer
-                   entry  (fn [retreats amended?]
-                            {:iter (:iter ctx) :findings (:findings ctx)
-                             :retreats retreats :disputes disputes :amended? amended?})]
-               (cond
-                 (nil? answer)
-                 (assoc ctx :control :stop :status :amend-unreadable)
-
-                 (and (nil? record) (seq disputes))
-                 (assoc ctx :disputes disputes :retreats []
-                        :history (conj (vec (:history ctx)) (entry [] false)))
-
-                 (nil? record)
-                 (assoc ctx :control :stop :status :amend-noop)
-
-                 :else
-                 (let [err (try (ws/append-entry! project ws-id
-                                                  {:kind :design} (pr-str record))
-                                nil
-                                (catch Exception e (or (ex-message e) "the ledger refused it")))]
-                   (if err
-                     (assoc ctx :control :stop :status :amend-invalid :amend-error err)
-                     (let [retreats (retreat/design-retreats prev record)
-                           ctx' (assoc ctx
-                                       :retreats retreats
-                                       :disputes disputes
-                                       :history (conj (vec (:history ctx))
-                                                      (entry retreats true)))]
-                       (if (design-round-worth-running? record)
-                         ctx'
-                         (assoc ctx' :control :stop :status :retreated))))))))))))})
+         (amend-design! ctx recommend
+                        (stages/discover-baseline
+                         cwd (ws/latest-entry project ws-id :design))))))})
 
 (def design-pipeline
   "judge -> amend, where amend may be a whole baseline loop."

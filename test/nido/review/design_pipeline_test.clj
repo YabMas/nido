@@ -181,23 +181,67 @@
 
 ;; ── Resurvey: the loop that calls the other loop ────────────────────────────
 
-(deftest resurvey-runs-the-baseline-loop-and-comes-back
-  (let [seen (atom nil)]
-    (with-redefs [rloop/run-loop (fn [cfg] (reset! seen cfg) {:status :accurate})]
-      (let [out (run record/design-amend-stage
-                     (assoc (ctx :findings [(check :relation-honest :broken)])
-                            :record (decision :resurvey)))]
-        (is (nil? (:status out)) "an accurate re-survey is not terminal")
-        (is (= record/baseline-pipeline (:pipeline @seen)))
-        (is (= record/baseline-finding-key (:finding-key @seen)))
-        (is (= 1 (count (:history out))))))))
+(def ^:private corrected-baseline
+  {:format :baseline :seq 11 :area "a" :bounded-by "b" :shape "s"
+   :load-bearing [{:property "p" :evidence ["src/x.clj:1"]}] :read ["src/x.clj"]})
+
+(defn- with-resurvey
+  "Stub every seam the two-step re-survey touches. `amends` stands in for what
+   the amender wrote after the nested loop came back."
+  [{:keys [nested amends]} c]
+  (let [prompt (atom nil) appended (atom nil)]
+    (with-redefs [rloop/run-loop (fn [_] {:status nested})
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry (fn [_ _ kind]
+                                    (if (= :baseline kind) corrected-baseline a-design))
+                  stages/discover-baseline (fn [_ _] {:format :baseline :seq 8})
+                  stages/working-copy-dirty? (fn [_] false)
+                  ws/append-entry! (fn [_ _ _ payload] (reset! appended payload) "/e")
+                  agent/launch! (fn [{:keys [first-message]}]
+                                  (reset! prompt first-message)
+                                  (when amends
+                                    (amends (second (re-find #"Write EDN to:\n\n  (\S+)"
+                                                             first-message))))
+                                  {:num-turns 3})]
+      [(run record/design-amend-stage c) @prompt @appended])))
+
+(deftest a-resurvey-is-only-half-the-repair
+  ;; The failure this catches: discover-baseline resolves the CITED baseline, so
+  ;; repairing the latest one changes nothing the next round can see. The design
+  ;; would be judged against the same stale survey, reach the same verdict, and
+  ;; re-survey until the cap.
+  (let [repointed (assoc a-design :baseline {:seq 11 :relation :extends :note "n"})
+        [out prompt appended]
+        (with-resurvey {:nested :accurate
+                        :amends (fn [p] (spit p (pr-str {:record repointed})))}
+                       (assoc (ctx :findings [(check :relation-honest :broken)])
+                              :record (decision :resurvey)))]
+    (is (nil? (:status out)) "the round continues once the design is re-stated")
+    (is (some? appended) "and the design is what gets superseded")
+    (is (= 11 (get-in (read-string appended) [:baseline :seq])))
+    (testing "the amender sees the CORRECTED survey, not the one that was wrong"
+      (is (str/includes? prompt "PREMISE was wrong"))
+      (is (str/includes? prompt ":seq 11")))
+    (testing "and is told a bare re-citation is not the job"
+      (is (str/includes? prompt "not a re-citation"))
+      (is (str/includes? prompt "nobody has re-checked it")))
+    (testing "the two halves are recorded as one round"
+      (is (= 1 (count (:history out))))
+      (is (= :accurate (:resurveyed (first (:history out))))))))
 
 (deftest the-nested-loop-does-not-emit-into-this-run
   ;; Its rounds are not this run's rounds; folding them in would renumber both.
   (let [seen (atom nil)]
-    (with-redefs [rloop/run-loop (fn [cfg] (reset! seen cfg) {:status :accurate})]
+    (with-redefs [rloop/run-loop (fn [cfg] (reset! seen cfg) {:status :accurate})
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry (fn [_ _ _] a-design)
+                  stages/discover-baseline (fn [_ _] nil)
+                  stages/working-copy-dirty? (fn [_] false)
+                  agent/launch! (fn [_] {:num-turns 0})]
       (run record/design-amend-stage
            (assoc (ctx :findings []) :record (decision :resurvey)))
+      (is (= record/baseline-pipeline (:pipeline @seen)))
+      (is (= record/baseline-finding-key (:finding-key @seen)))
       (is (fn? (:emit @seen)))
       (is (nil? ((:emit @seen) {:event :phase-started}))))))
 
