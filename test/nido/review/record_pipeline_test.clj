@@ -257,7 +257,7 @@
   (let [answer (record/parse-amend-answer
                 {:disputes [{:finding 1 :because "the renderer calls the aggregate"
                              :evidence ["src/order/invoice.clj:90"]}]}
-                [a-finding])]
+                [a-finding] record/baseline-finding-base-key)]
     (is (nil? (:record answer)))
     (is (= [{:key (record/baseline-finding-base-key a-finding)
              :claim (:claim a-finding)
@@ -268,17 +268,21 @@
 (deftest an-objection-that-cannot-be-answered-is-dropped
   (testing "out of range"
     (is (= [] (:disputes (record/parse-amend-answer
-                          {:disputes [{:finding 7 :because "no"}]} [a-finding])))))
+                          {:disputes [{:finding 7 :because "no"}]} [a-finding]
+                          record/baseline-finding-base-key)))))
   (testing "no reason given — an objection with no reason is not an appeal"
     (is (= [] (:disputes (record/parse-amend-answer
-                          {:disputes [{:finding 1 :because "  "}]} [a-finding]))))
+                          {:disputes [{:finding 1 :because "  "}]} [a-finding]
+                          record/baseline-finding-base-key))))
     (is (= [] (:disputes (record/parse-amend-answer
-                          {:disputes [{:finding 1}]} [a-finding]))))))
+                          {:disputes [{:finding 1}]} [a-finding]
+                          record/baseline-finding-base-key))))))
 
 (deftest a-bare-record-is-still-a-valid-answer
   ;; The shape from before there was anything to say back. Records already
   ;; written must not stop being readable because the answer grew a wrapper.
-  (let [answer (record/parse-amend-answer a-baseline [a-finding])]
+  (let [answer (record/parse-amend-answer a-baseline [a-finding]
+                                          record/baseline-finding-base-key)]
     (is (= a-baseline (:record answer)))
     (is (= [] (:disputes answer)))))
 

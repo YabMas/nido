@@ -44,6 +44,7 @@
    [nido.coordinator.state :as cstate]
    [nido.coordinator.workstream :as ws]
    [nido.review.codex :as codex]
+   [nido.review.loop :as rloop]
    [nido.review.retreat :as retreat]
    [nido.review.stages :as stages]))
 
@@ -209,7 +210,7 @@
 
 (defn design-prompt
   "The decision prompt. Derives what can be derived; hands the rest over."
-  [{:keys [design baseline stance intent]}]
+  [{:keys [design baseline stance intent disputes]}]
   (str
    "You are deciding whether a change should be EXECUTED, before any code is\n"
    "written. This is the last cheap moment to say it should not be.\n\n"
@@ -303,7 +304,8 @@
    "not a finding.\n\n"
    "asks is REQUIRED whatever you recommend: state the question the human still\n"
    "has to answer, in one or two sentences, with everything you derived already\n"
-   "taken off the table. Never answer it yourself."))
+   "taken off the table. Never answer it yourself."
+   (disputes-block disputes)))
 
 ;; ── Running a round ─────────────────────────────────────────────────────────
 
@@ -445,17 +447,19 @@
    the ledger record, or {:outcome <kw> :detail <str>} saying why there is none.
 
    Single-pass on purpose: it emits a decision, not findings to iterate on."
-  [{:keys [cwd run-id]}]
+  [{:keys [cwd run-id label disputes]}]
   (if-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
     (if-let [design (ws/latest-entry project ws-id :design)]
       (if (design-round-worth-running? design)
         (judged (run-round!
                  {:cwd cwd :run-id run-id :kind :design-decision
+                  :label label
                   :prompt (design-prompt
                            {:design   design
                             :baseline (stages/discover-baseline cwd design)
                             :stance   (stages/read-stance project)
-                            :intent   (discover-intent cwd design)})})
+                            :intent   (discover-intent cwd design)
+                            :disputes disputes})})
                 #(parse-design-decision % (:seq design)))
         {:outcome :not-worth-running
          :detail "the design declares :within on its baseline and :conforms on the stance at a modest effort, with nothing routed away from :fix-here"})
@@ -538,7 +542,7 @@
    number is either in range or it is not. One out of range is dropped rather
    than guessed at, along with one that objects without saying why — an
    objection with no reason cannot be answered and is not an appeal."
-  [raw findings]
+  [raw findings base-key]
   (when (map? raw)
     (let [record   (if (:format raw) raw (:record raw))
           disputes (when-not (:format raw) (:disputes raw))]
@@ -548,8 +552,10 @@
                                     f (when (and (nat-int? i) (< i (count findings)))
                                         (nth findings i))]
                                 (when (and f (not (str/blank? (str because))))
-                                  {:key      (baseline-finding-base-key f)
-                                   :claim    (:claim f)
+                                  {:key      (base-key f)
+                                   :claim    (or (:claim f)
+                                                 (some-> (:check f) name)
+                                                 (str f))
                                    :because  (str because)
                                    :evidence (vec (map str evidence))})))
                             disputes))})))
@@ -704,7 +710,8 @@
 
              :else
              (let [raw    (try (edn/read-string (slurp out-path)) (catch Exception _ nil))
-                   answer (parse-amend-answer raw (:findings ctx))
+                   answer (parse-amend-answer raw (:findings ctx)
+                                              baseline-finding-base-key)
                    {:keys [record disputes]} answer
                    entry  (fn [retreats]
                             {:iter (:iter ctx)
@@ -750,3 +757,278 @@
 (def baseline-pipeline
   "judge -> amend. No warden, no fix: nothing here touches the working copy."
   [judge-stage amend-stage])
+
+;; ── The design round as a loop ──────────────────────────────────────────────
+;;
+;; Same two stages and the same appeal channel, over a different record and with
+;; one addition the baseline loop has no use for: this round can conclude that
+;; the SURVEY is wrong rather than the design, and when it does the repair is a
+;; different loop. So :resurvey descends into the baseline pipeline and comes
+;; back, which is what makes the pair a state machine rather than two loops that
+;; happen to share an engine.
+;;
+;; The terminal state is an escalation, not a convergence. That is not a
+;; limitation — it is the round's whole purpose: everything derivable is derived
+;; so that what reaches a human is only the judgement that cannot be.
+
+(def max-resurveys
+  "Two descents into the baseline loop, then a human.
+
+   Each one is a full loop of its own, and a third would mean the design round
+   has now twice concluded that a re-surveyed area is still surveyed wrongly.
+   That is not a premise a further round fixes; it says the AREA is not
+   understood, and nothing derivable follows from repeating the attempt."
+  2)
+
+(defn broken-checks
+  "The derivations that failed — the design round's findings, at the granularity
+   the round can actually decide at.
+
+   The prose findings say more, but they quote the record and so are rewritten
+   by every amendment. The check vocabulary is four closed values that no
+   amendment can move, which is what a stall detector and an appeal both need."
+  [record]
+  (vec (filter #(= :broken (:status %)) (:checks record))))
+
+(defn underivable-checks
+  "The derivations the round could not make at all.
+
+   Never findings, and the distinction is the reason :status has three values.
+   A check with no yardstick — nido's own work has no stance document, so
+   relation-honest has nothing to check against — is not a defect in the record,
+   and an amender told to fix one would amend a true record until the complaint
+   went away."
+  [record]
+  (vec (filter #(= :underivable (:status %)) (:checks record))))
+
+(defn design-finding-base-key [c] [:check (:check c)])
+(def design-finding-key (dispute-aware design-finding-base-key))
+
+(defn- resurvey-count [history]
+  (count (filter :resurveyed history)))
+
+(defn trajectory
+  "The run, as the human reading the escalated decision needs it. Rounds that
+   found nothing and gave up nothing are still listed: a round that passed
+   quietly is evidence about the ones that did not."
+  [history]
+  (vec (map-indexed
+        (fn [i {:keys [findings retreats disputes amended?]}]
+          (cond-> {:round (inc i)}
+            (seq findings) (assoc :found (mapv #(name (:check %)) findings))
+            (some? amended?) (assoc :amended (boolean amended?))
+            (seq retreats) (assoc :weakened (mapv #(str (name (:what %)) " — " (:detail %)) retreats))
+            (seq disputes) (assoc :disputed (mapv :claim disputes))))
+        history)))
+
+(defn design-amend-prompt
+  "Instruction to repair a design record the derivation found wanting.
+
+   :recut and :amend are given different jobs, because saying the wrong one is
+   worse than saying nothing: a decomposition that does not hold is not fixed by
+   restating claims, and a claim that is wrong is not fixed by re-cutting layers."
+  [{:keys [design baseline recommend reason checks findings out-path]}]
+  (str
+   "A read-only judge derived what could be derived about this DESIGN record,\n"
+   "before any code is written, and it did not come out clean.\n\n"
+   (case recommend
+     :recut (str "It says the DECOMPOSITION does not hold. Re-cut it. The claims may be\n"
+                 "right; how the change is split into layers or phases is what is wrong,\n"
+                 "and restating the claims will not fix it.\n\n")
+     (str "It says the RECORD has a derivable defect. Repair the record — the\n"
+          "commitment may well be sound, and the layering with it.\n\n"))
+   "Your job is to make the record TRUE and coherent. It is NOT to make the\n"
+   "checks pass. Lowering the effort, softening :revisit to :within, dropping\n"
+   "invariants or routing work away from :fix-here all quiet a check without\n"
+   "making anything truer; every one of those is measured and reported to the\n"
+   "human this decision escalates to.\n\n"
+   "WHY: " reason "\n\n"
+   "THE CURRENT DESIGN:\n\n" (pr-str design)
+   (when baseline (str "\n\nTHE BASELINE IT CITES:\n\n" (pr-str baseline)))
+   "\n\nWHAT FAILED TO DERIVE — numbered, and you answer them by number:\n\n"
+   (str/join
+    "\n"
+    (map-indexed (fn [i {:keys [check note]}]
+                   (str (inc i) ". " (name check) " — " note))
+                 checks))
+   (when (seq findings)
+     (str "\n\nWHAT THE DERIVATION FOUND:\n\n"
+          (str/join
+           "\n\n"
+           (map (fn [f]
+                  (str "- refutes: " (str/join "; " (:cites f)) "\n"
+                       "  claim:   " (:claim f)
+                       (when (seq (:evidence f))
+                         (str "\n  evidence: " (str/join ", " (:evidence f))))))
+                findings))))
+   "\n\nIF A CHECK IS WRONGLY MARKED BROKEN, SAY SO INSTEAD OF AMENDING FOR IT.\n"
+   "You do not settle it — the judge is asked again with your objection in front\n"
+   "of it. An objection with no reason is dropped.\n\n"
+   "Write EDN to:\n\n  " out-path "\n\n"
+   "  {:record   <the COMPLETE superseding design — every field, not a diff>\n"
+   "   :disputes [{:finding 1 :because \"...\" :evidence [\"src/x.clj:41\"]}]}\n\n"
+   "Omit :record if every check is disputed and the design needs no change.\n"
+   "It must satisfy the same schema the current one does; nido reads this file,\n"
+   "validates it, and appends it as the superseding design. Do not append it\n"
+   "yourself and do not commit anything."))
+
+(def design-judge-stage
+  "Derive everything derivable, and stop the moment nothing is left.
+
+   Four ways to end here and only one of them is convergence-shaped. :proceed
+   escalates because the ask is the point. A run whose only remaining checks are
+   underivable also escalates, because there is nothing an amender could do about
+   a missing yardstick. A finding stated a third time after two objections
+   escalates. Everything else is another round."
+  {:name :judge
+   :run
+   (fn [ctx]
+     (let [{:keys [cwd run-id]} (:config ctx)
+           counts (dispute-counts (:history ctx))
+           record (design-decision!
+                   {:cwd cwd :run-id run-id
+                    :label (str "design-decision-round-" (:iter ctx))
+                    :disputes (disputes-for-judge (:history ctx))})
+           traj   (trajectory (:history ctx))
+           final! (fn [c] (append! cwd (cond-> record (seq traj) (assoc :trajectory traj))) c)]
+       (cond
+         (:outcome record)
+         (do (append! cwd record)
+             (assoc ctx :record record :status (:outcome record)))
+
+         (= :proceed (:recommend record))
+         (final! (assoc ctx :record record :findings []
+                        :underivable (underivable-checks record)
+                        :control :escalate :status :proceed))
+
+         :else
+         (let [findings (mapv #(assoc % :disputed-n
+                                      (get counts (design-finding-base-key %) 0))
+                              (broken-checks record))]
+           (cond
+             (some #(>= (:disputed-n %) 2) findings)
+             (final! (assoc ctx :record record :findings findings
+                            :underivable (underivable-checks record)
+                            :control :escalate :status :disputed))
+
+             ;; Nothing derivable failed, yet the round will not say proceed —
+             ;; so what is left is a yardstick it could not reach. An amender
+             ;; asked to fix that would amend a true record until the complaint
+             ;; stopped.
+             (empty? findings)
+             (final! (assoc ctx :record record :findings []
+                            :underivable (underivable-checks record)
+                            :control :escalate :status :underivable))
+
+             :else
+             (do (append! cwd record)
+                 (assoc ctx :record record :findings findings
+                        :underivable (underivable-checks record))))))))})
+
+(defn- resurvey!
+  "Repair the premise by running the baseline loop, then come back.
+
+   The nested loop emits nothing into this run's report: its rounds are not this
+   run's rounds, and folding them in would renumber both. What it does write is
+   the ledger — every baseline review and every superseding baseline — so the
+   trajectory survives where a reader looks for it.
+
+   Any non-:accurate outcome is terminal HERE. A design round cannot proceed on
+   a survey the baseline loop could not make true, and re-judging the design
+   against it would produce a decision built on the premise that just failed."
+  [ctx]
+  (let [{:keys [cwd run-id budget]} (:config ctx)
+        n (resurvey-count (:history ctx))]
+    (if (>= n max-resurveys)
+      (assoc ctx :control :escalate :status :resurvey-exhausted)
+      (let [out (rloop/run-loop {:cwd cwd
+                                 :run-id (str run-id "-resurvey-" (inc n))
+                                 :budget budget
+                                 :emit (fn [_])
+                                 :pipeline    baseline-pipeline
+                                 :finding-key baseline-finding-key})
+            entry {:iter (:iter ctx) :findings (:findings ctx)
+                   :retreats [] :disputes [] :resurveyed (:status out)}]
+        (if (= :accurate (:status out))
+          (assoc ctx :resurveyed (:status out)
+                 :history (conj (vec (:history ctx)) entry))
+          (assoc ctx :resurveyed (:status out)
+                 :history (conj (vec (:history ctx)) entry)
+                 :control :stop
+                 :status (keyword (str "resurvey-" (name (:status out))))))))))
+
+(def design-amend-stage
+  "Repair whatever the recommendation named — the record, the cut, or the
+   premise. Only the first two are written here; the third is a loop."
+  {:name :amend
+   :run
+   (fn [ctx]
+     (let [{:keys [cwd run-id budget dry-run?]} (:config ctx)
+           recommend (get-in ctx [:record :recommend])]
+       (cond
+         dry-run? (assoc ctx :control :stop :status :dry-run)
+         (= :resurvey recommend) (resurvey! ctx)
+         :else
+         (let [[project ws-id] (stages/project+ws-from-cwd cwd)
+               prev     (ws/latest-entry project ws-id :design)
+               dir      (cstate/run-dir run-id)
+               out-path (str (fs/path dir (str "design-amend-round-" (:iter ctx) ".edn")))
+               dirty-before? (stages/working-copy-dirty? cwd)]
+           (fs/create-dirs dir)
+           (fs/delete-if-exists out-path)
+           (agent/launch!
+            {:run-id run-id :cwd cwd :budget budget
+             :first-message (design-amend-prompt
+                             {:design prev
+                              :baseline (stages/discover-baseline cwd prev)
+                              :recommend recommend
+                              :reason (get-in ctx [:record :reason])
+                              :checks (:findings ctx)
+                              :findings (get-in ctx [:record :findings])
+                              :out-path out-path})
+             :err-file (str (fs/path dir (str "design-amend-round-" (:iter ctx) ".err.log")))})
+           (cond
+             (and (not dirty-before?) (stages/working-copy-dirty? cwd))
+             (assoc ctx :control :stop :status :amend-touched-code)
+
+             (not (fs/exists? out-path))
+             (assoc ctx :control :stop :status :amend-noop)
+
+             :else
+             (let [raw    (try (edn/read-string (slurp out-path)) (catch Exception _ nil))
+                   answer (parse-amend-answer raw (:findings ctx) design-finding-base-key)
+                   {:keys [record disputes]} answer
+                   entry  (fn [retreats amended?]
+                            {:iter (:iter ctx) :findings (:findings ctx)
+                             :retreats retreats :disputes disputes :amended? amended?})]
+               (cond
+                 (nil? answer)
+                 (assoc ctx :control :stop :status :amend-unreadable)
+
+                 (and (nil? record) (seq disputes))
+                 (assoc ctx :disputes disputes :retreats []
+                        :history (conj (vec (:history ctx)) (entry [] false)))
+
+                 (nil? record)
+                 (assoc ctx :control :stop :status :amend-noop)
+
+                 :else
+                 (let [err (try (ws/append-entry! project ws-id
+                                                  {:kind :design} (pr-str record))
+                                nil
+                                (catch Exception e (or (ex-message e) "the ledger refused it")))]
+                   (if err
+                     (assoc ctx :control :stop :status :amend-invalid :amend-error err)
+                     (let [retreats (retreat/design-retreats prev record)
+                           ctx' (assoc ctx
+                                       :retreats retreats
+                                       :disputes disputes
+                                       :history (conj (vec (:history ctx))
+                                                      (entry retreats true)))]
+                       (if (design-round-worth-running? record)
+                         ctx'
+                         (assoc ctx' :control :stop :status :retreated))))))))))))})
+
+(def design-pipeline
+  "judge -> amend, where amend may be a whole baseline loop."
+  [design-judge-stage design-amend-stage])
