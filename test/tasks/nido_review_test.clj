@@ -7,6 +7,7 @@
    [nido.coordinator.state :as cstate]
    [nido.coordinator.workstream :as ws]
    [nido.review.loop :as rloop]
+   [nido.review.record :as record]
    [nido.session.lifecycle :as lifecycle]
    [tasks.nido-review :as t]))
 
@@ -170,3 +171,119 @@
                                        :target {:base "main" :base-rev "abc"}}
                                       "/runs/r/report.json"))
         "a ledger-write failure is swallowed — returns nil, does not throw")))
+
+;; ── The baseline loop ───────────────────────────────────────────────────────
+
+(deftest baseline-cmd-drives-the-record-pipeline-not-the-review-one
+  ;; The two things the engine cannot default for a record loop: which stages to
+  ;; run, and what makes two findings the same finding. Getting the second wrong
+  ;; is silent — every record finding collides under the review's key, so the
+  ;; loop would stop after one amendment and call it progress.
+  (let [seen (atom nil)]
+    (with-redefs [rloop/run-loop (fn [cfg] (reset! seen cfg) {:status :accurate})]
+      (with-out-str (t/baseline-cmd ":cwd" "/w"))
+      (is (= record/baseline-pipeline (:pipeline @seen)))
+      (is (= record/baseline-finding-key (:finding-key @seen)))
+      (is (= "/w" (:cwd @seen)))
+      (is (str/starts-with? (:run-id @seen) "baseline-loop-"))
+      (is (fn? (:emit @seen))))))
+
+(deftest baseline-cmd-is-uncapped-unless-asked
+  (let [seen (atom nil)]
+    (with-redefs [rloop/run-loop (fn [cfg] (reset! seen cfg) {:status :accurate})]
+      (with-out-str (t/baseline-cmd ":cwd" "/w"))
+      (is (nil? (:max-iters @seen)) "no default cap, same as the diff loop")
+      (with-out-str (t/baseline-cmd ":cwd" "/w" ":max-iters" "2"))
+      (is (= 2 (:max-iters @seen)))
+      (with-out-str (t/baseline-cmd ":cwd" "/w" ":dry-run?" "true"))
+      (is (true? (:dry-run? @seen))))))
+
+(deftest baseline-cmd-resolves-the-worktree-when-cwd-is-absent
+  (let [seen (atom nil)]
+    (with-redefs [rloop/run-loop (fn [cfg] (reset! seen cfg) {:status :accurate})
+                  lifecycle/worktree-from-cwd (constantly "/resolved")]
+      (with-out-str (t/baseline-cmd))
+      (is (= "/resolved" (:cwd @seen))))))
+
+(defn- run-loop-emitting-a-clean-round
+  "A stubbed engine that emits the events a real round would, so the report the
+   command renders from is the shape the fold actually produces."
+  [status]
+  (fn [{:keys [emit run-id cwd]}]
+    (emit {:event :run-started :run-id run-id :cwd cwd :at "2026-01-01T00:00:00Z"})
+    (emit {:event :phase-started :iter 1 :phase :judge :at "2026-01-01T00:00:01Z"})
+    (emit {:event :phase-finished :iter 1 :phase :judge :at "2026-01-01T00:00:02Z"
+           :ctx {:record {:verdict :falsified} :findings [{:cites ["a"] :claim "x"}]}})
+    (emit {:event :phase-started :iter 1 :phase :amend :at "2026-01-01T00:00:03Z"})
+    (emit {:event :phase-finished :iter 1 :phase :amend :at "2026-01-01T00:00:04Z"
+           :ctx {:retreats []}})
+    (emit {:event :run-finalized :status status :ctx {} :at "2026-01-01T00:00:05Z"})
+    {:status status}))
+
+(deftest a-loop-that-amended-and-gave-nothing-up-says-so-in-words
+  ;; That a loop converged WITHOUT claiming less is the single most important
+  ;; fact about it, so it is stated rather than left to an absent section.
+  (with-redefs [rloop/run-loop (run-loop-emitting-a-clean-round :accurate)]
+    (let [out (with-out-str (t/baseline-cmd ":cwd" "/w"))]
+      (is (str/includes? out "Weakened:"))
+      (is (str/includes? out "(nothing — the record claims everything it claimed at the start)"))
+      (is (str/includes? out "the survey holds against the code")))))
+
+(deftest a-loop-that-never-amended-says-that-instead
+  ;; The same distinction one level up: a run that never reached an amendment
+  ;; did not decline to weaken the record.
+  (with-redefs [rloop/run-loop (fn [_] {:status :no-workstream})]
+    (let [out (with-out-str (t/baseline-cmd ":cwd" "/w"))]
+      (is (str/includes? out "(no amendment ran — nothing here was even attempted)"))
+      (is (not (str/includes? out "claims everything it claimed at the start"))))))
+
+(deftest a-weakening-reaches-the-terminal-even-when-the-loop-continued-past-it
+  (with-redefs [rloop/run-loop
+                (fn [{:keys [emit run-id cwd]}]
+                  (emit {:event :run-started :run-id run-id :cwd cwd :at "2026-01-01T00:00:00Z"})
+                  (emit {:event :phase-started :iter 1 :phase :amend :at "2026-01-01T00:00:01Z"})
+                  (emit {:event :phase-finished :iter 1 :phase :amend :at "2026-01-01T00:00:02Z"
+                         :ctx {:retreats [{:what :veto-lifted :detail "h2 unmarked"}]}})
+                  (emit {:event :run-finalized :status :accurate :ctx {} :at "2026-01-01T00:00:03Z"})
+                  {:status :accurate})]
+    (let [out (with-out-str (t/baseline-cmd ":cwd" "/w"))]
+      (is (str/includes? out "! veto-lifted — h2 unmarked")))))
+
+(deftest every-terminal-status-names-its-own-remedy
+  ;; The rule the one-shot round already held: a round that could not run must
+  ;; not read like a round that ran and found nothing. A loop adds four more ways
+  ;; to stop, and two of them (:retreated, :amend-touched-code) need a human to
+  ;; do something specific.
+  (doseq [[status marker]
+          {:accurate           "holds against the code"
+           :retreated          "below what its own round would check"
+           :no-progress        "still open"
+           :amend-noop         "nothing was appended"
+           :amend-unreadable   "would not parse as EDN"
+           :amend-invalid      "the ledger refused"
+           :amend-touched-code "still there"
+           :no-workstream      "session worktree"
+           :no-record          "author the baseline first"
+           :nothing-to-check   "refutable"
+           :codex-failed       "NOT a clean result"}]
+    (with-redefs [rloop/run-loop (fn [_] {:status status})]
+      (let [out (with-out-str (t/baseline-cmd ":cwd" "/w"))]
+        (is (str/includes? out marker) (str status " must say what to do about it"))
+        (is (str/includes? out (name status)))))))
+
+(deftest a-loop-that-throws-still-shows-what-it-had
+  (with-redefs [rloop/run-loop (fn [_] (throw (ex-info "judge exploded" {})))]
+    (let [out (with-out-str
+                (is (thrown? Exception (t/baseline-cmd ":cwd" "/w"))))]
+      (is (str/includes? out "Weakened:")
+          "the final block prints from a finally, so a crash still reports"))))
+
+(deftest baseline-cmd-passes-a-budget-through-to-the-amender
+  ;; The iteration count is uncapped by design, so the per-launch wall clock is
+  ;; the only bound on a single hung round.
+  (let [seen (atom nil)]
+    (with-redefs [rloop/run-loop (fn [cfg] (reset! seen cfg) {:status :accurate})]
+      (with-out-str (t/baseline-cmd ":cwd" "/w" ":budget" "30m"))
+      (is (= "30m" (:budget @seen)))
+      (with-out-str (t/baseline-cmd ":cwd" "/w"))
+      (is (nil? (:budget @seen)) "none by default, same as the diff loop"))))

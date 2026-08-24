@@ -523,7 +523,7 @@
 
   nido:review:baseline
   {:requires ([tasks.nido-review :as nido-review])
-   :doc "Verify the workstream's latest baseline against the code, before any design. [:cwd <dir>]"
+   :doc "Loop the baseline round: judge the survey against the code, amend it, repeat until it holds. Uncapped unless :max-iters. [:cwd <dir>] [:max-iters <n>] [:budget 30m] [:dry-run? true]"
    :task (apply nido-review/baseline-cmd *command-line-args*)}
 
   nido:review:design

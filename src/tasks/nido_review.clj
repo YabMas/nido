@@ -12,6 +12,8 @@
    [nido.review.frontend :as frontend]
    [nido.review.record :as record]
    [nido.review.loop :as rloop]
+   [nido.review.render :as render]
+   [nido.review.stages :as stages]
    [nido.review.report :as report]
    [nido.review.verdict :as verdict]
    [nido.session.lifecycle :as lifecycle]
@@ -231,6 +233,11 @@
       (println (str "recorded " (name (:format record)))))))
 
 (defn- record-round-cmd*
+  "One-shot: judge a record once and report. Only the DESIGN round still comes
+   through here — the baseline round loops (see baseline-cmd*). The
+   :baseline-review branch and its half of print-record-round! are kept rather
+   than pruned because phase 2 loops the design round too and deletes this whole
+   path; pruning now would be churn that phase 2 undoes."
   [round {:keys [cwd]}]
   (let [cwd    (or cwd (lifecycle/worktree-from-cwd) (System/getProperty "user.dir"))
         run-id (str (name round) "-" (random-uuid))
@@ -241,11 +248,87 @@
     (print-record-round! record)
     record))
 
+(defn- record-loop-title
+  "What this loop is judging, for the frame's one title line. The session name
+   when there is one — that is what the human running this calls the branch —
+   and the workstream id when there is not."
+  [cwd kind]
+  (let [{:keys [project session]} (or (lifecycle/session-from-cwd cwd) {})
+        [p ws-id] (stages/project+ws-from-cwd cwd)]
+    (str kind " loop · "
+         (cond
+           session (str project "/" session)
+           ws-id   (str (name (or p "?")) "/" ws-id)
+           :else   cwd))))
+
+(defn baseline-cmd*
+  "Verify the workstream's latest baseline against the code, and keep correcting
+   it until the code stops refuting it.
+
+   No default cap, for the same reason the diff loop has none: the run ends when
+   it converges, retreats, stalls or fails. `:max-iters` only caps it when a
+   caller asks for a cap.
+
+   The final block prints from a `finally`, so a loop that throws still leaves
+   its rounds and its weakenings on screen.
+
+   `:budget` bounds each amender launch, not the run. With the iteration count
+   uncapped by design, that per-launch bound is the only thing standing between
+   a hung claude and a loop that never returns."
+  [{:keys [cwd max-iters dry-run? budget]}]
+  (let [cwd    (or cwd (lifecycle/worktree-from-cwd) (System/getProperty "user.dir"))
+        run-id (str "baseline-loop-" (random-uuid))
+        clock  #(Instant/now)
+        title  (record-loop-title cwd "baseline")
+        report-path (str (fs/path (cstate/run-dir run-id) "report.json"))
+        report-atom (atom (report/init {:run-id run-id :cwd cwd :base nil
+                                        :started-at (str (clock))}))
+        plain  (frontend/plain?)
+        emit   (frontend/emit-fn report-atom report-path clock plain)
+        final  (try
+                 (frontend/with-live-frame
+                   {:frame-fn #(render/record-frame @report-atom % {:title title})
+                    :clock clock :plain? plain}
+                   #(rloop/run-loop {:cwd cwd :run-id run-id
+                                     :max-iters max-iters
+                                     :dry-run? (boolean dry-run?)
+                                     ;; The amender is a claude launch, and the
+                                     ;; iteration count is deliberately uncapped
+                                     ;; — so wall-clock is the only bound on a
+                                     ;; single hung round. nil means none, which
+                                     ;; is the diff loop's default too.
+                                     :budget budget
+                                     :clock clock :emit emit
+                                     :pipeline    record/baseline-pipeline
+                                     :finding-key record/baseline-finding-key}))
+                 (finally
+                   (println (render/record-final @report-atom {:title title}))))]
+    (println (str "baseline-loop: " (name (:status final)) " · report " report-path))
+    (when-let [detail (:amend-error final)]
+      (println (str "  " detail)))
+    (println (str "  → " (case (:status final)
+                           :accurate   "the survey holds against the code"
+                           :retreated  "the record was amended below what its own round would check — read the weakenings above before accepting any of it"
+                           :no-progress "the amender stopped changing anything the judge cares about; the last findings are still open"
+                           :amend-noop "the amender produced no record — nothing was appended"
+                           :amend-unreadable "the amender's answer would not parse as EDN"
+                           :amend-invalid "the ledger refused the amended record"
+                           :amend-touched-code "a record pass wrote to the working copy; whatever it wrote is still there"
+                           :dry-run    "nothing was amended"
+                           :no-workstream "run this from a nido session worktree"
+                           :no-record  "author the baseline first"
+                           :nothing-to-check "nothing in the survey is refutable yet"
+                           :codex-failed "the judge did not run — this is NOT a clean result"
+                           :no-output  "the judge ran and wrote nothing — NOT a clean result"
+                           :unusable-answer "the judge answered, but not in a form a record accepts"
+                           :round-crashed "the round threw before it could degrade"
+                           (str "unrecognised terminal status: " (:status final)))))
+    (:status final)))
+
 (defn baseline-cmd
-  "Verify the workstream's latest baseline against the code."
   [& args]
   (let [[_ opts] (task-args/split-args args)]
-    (record-round-cmd* :baseline-review opts)))
+    (baseline-cmd* opts)))
 
 (defn design-cmd
   "Run the pre-implementation decision round over the latest design record."
