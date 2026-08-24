@@ -37,11 +37,14 @@
   (:require
    [babashka.fs :as fs]
    [cheshire.core :as json]
+   [clojure.edn :as edn]
    [clojure.java.io :as jio]
    [clojure.string :as str]
+   [nido.coordinator.agent :as agent]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.workstream :as ws]
    [nido.review.codex :as codex]
+   [nido.review.retreat :as retreat]
    [nido.review.stages :as stages]))
 
 ;; ── Whether a round is worth running ────────────────────────────────────────
@@ -353,11 +356,16 @@
    like a round that ran and found nothing to say. Silence from a judge is
    evidence; silence from a missing binary is not, and a reader who cannot tell
    them apart draws the wrong conclusion from the same blank line."
-  [{:keys [cwd run-id kind prompt]}]
+  [{:keys [cwd run-id kind prompt label]}]
   (try
     (let [dir (cstate/run-dir run-id)
           _   (fs/create-dirs dir)
-          n   (name kind)
+          ;; :label names the ARTIFACTS, :kind selects the schema and the parse.
+          ;; They are the same thing for a one-shot round and must not be for a
+          ;; loop: every iteration is the same :kind, and sharing a basename
+          ;; would leave each round reading the previous round's answer after a
+          ;; codex failure that wrote nothing.
+          n   (or label (name kind))
           schema-path (str (fs/path dir (str n "-schema.json")))
           out-path    (str (fs/path dir (str n "-out.json")))
           log-path    (str (fs/path dir (str n ".log")))]
@@ -389,11 +397,12 @@
   "Verify this workstream's latest baseline against the code. Returns the ledger
    record, or {:outcome <kw> :detail <str>} saying why there is none — never a
    bare nil, so a caller can always tell a skipped round from a failed one."
-  [{:keys [cwd run-id]}]
+  [{:keys [cwd run-id label]}]
   (if-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
     (if-let [baseline (ws/latest-entry project ws-id :baseline)]
       (if (baseline-round-worth-running? baseline)
         (judged (run-round! {:cwd cwd :run-id run-id :kind :baseline-review
+                             :label label
                              :prompt (baseline-prompt {:baseline baseline})})
                 #(parse-baseline-review % (:seq baseline)))
         {:outcome :nothing-to-check
@@ -433,3 +442,182 @@
       (when-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
         (ws/append-entry! project ws-id {:kind (:format record)} (pr-str record))))
     (catch Exception _ nil)))
+
+;; ── The baseline round as a loop ────────────────────────────────────────────
+;;
+;; Two stages on the shared engine: JUDGE (codex, read-only, the same pass the
+;; one-shot round ran) and AMEND (claude, correcting the survey). The engine
+;; drives them until the code stops refuting the record, or until something says
+;; stop that a human has to hear about.
+;;
+;; What is deliberately absent is a warden. The diff loop needs one because a
+;; finding has to be attributed to a layer before anyone may act on it; a
+;; baseline has no layers, and the ruling a record loop would actually want — is
+;; this finding true of the code — is one the diff warden could not make anyway,
+;; holding no tools. Phase 2 gives that its own channel. Phase 1 has none, which
+;; is why the prompt below tells an amender who thinks a finding is wrong to
+;; sharpen the property's evidence rather than to argue: sharper evidence is a
+;; repair the next round can read, and an argument in phase 1 has nowhere to go.
+
+(defn baseline-finding-key
+  "What makes two baseline findings the same finding, for the engine's stall
+   detector.
+
+   Keyed on the CODE the finding cites, because that is the one thing the
+   amender does not move: amending a record rewrites `:cites` — it quotes the
+   property text being refuted — while `src/x.clj:41` still says what it said.
+   Keying on the quoted text instead would make every round look like new
+   findings and no-progress? would never fire.
+
+   Tagged, so an evidence key can never collide with the text key a finding
+   without evidence falls back to. The schema requires evidence, so that branch
+   is the degenerate one, and it is keyed on the unstable thing deliberately —
+   a finding that cites no code is one the loop should stop on early."
+  [f]
+  (if-let [ev (seq (:evidence f))]
+    [:evidence (vec (sort ev))]
+    [:cites (vec (sort (:cites f)))]))
+
+(defn amend-prompt
+  "Instruction to correct a survey the code refuted.
+
+   States the one thing that makes the loop worth running at all: the job is to
+   make the record TRUE, and making the findings go away is not the same job.
+   The distinction has a cheap wrong answer — delete the property, drop the
+   observation, clear the flag — which is why nido measures the result rather
+   than trusting this paragraph (see `retreat`)."
+  [{:keys [baseline findings out-path]}]
+  (str
+   "A read-only judge checked this workstream's BASELINE — the survey of how the\n"
+   "area works today — against the code, and refuted part of it.\n\n"
+   "Your job is to make the survey TRUE. That is not the same job as making the\n"
+   "findings go away, and the difference is the whole point of this pass:\n\n"
+   "  - A property the code does not have should be CORRECTED to what the code\n"
+   "    actually does, and keep pointing at the evidence that shows it.\n"
+   "  - A property that is right but stated so loosely the judge misread it\n"
+   "    should get SHARPER evidence, not softer wording.\n"
+   "  - Deleting a property, dropping a health observation, or clearing an\n"
+   "    :invisibly-incomplete? flag makes the next round quieter without making\n"
+   "    the record truer. Every one of those is measured and reported to a human.\n"
+   "    Do it only where the survey was genuinely wrong to claim it, and expect\n"
+   "    to have said why.\n\n"
+   "Read the cited code before you change a word of the record.\n\n"
+   "Do NOT edit any source file. This pass writes one file and nothing else.\n\n"
+   "THE CURRENT BASELINE:\n\n"
+   (pr-str baseline)
+   "\n\nWHAT THE JUDGE REFUTED:\n\n"
+   (str/join
+    "\n\n"
+    (map (fn [f]
+           (str "- refutes: " (str/join "; " (:cites f)) "\n"
+                "  claim:   " (:claim f)
+                (when (seq (:evidence f))
+                  (str "\n  evidence: " (str/join ", " (:evidence f))))))
+         findings))
+   "\n\nWrite the COMPLETE corrected baseline record — every field, not a diff —\n"
+   "as EDN to:\n\n  " out-path "\n\n"
+   "It must satisfy the same schema the current one does. nido reads that file,\n"
+   "validates it, and appends it to the ledger as the superseding baseline; do\n"
+   "not append it yourself and do not commit anything."))
+
+(def judge-stage
+  "The same read-only pass the one-shot round ran, with its verdict appended to
+   the ledger exactly as before.
+
+   Every non-verdict outcome is terminal and keeps its own name. That is the
+   rule the one-shot round already held — a round that could not run must never
+   read like a round that ran and found nothing — and a loop makes it matter
+   more, not less: `:codex-failed` on round three of an otherwise converging run
+   is not convergence."
+  {:name :judge
+   :run
+   (fn [ctx]
+     (let [{:keys [cwd run-id]} (:config ctx)
+           record (baseline-review! {:cwd cwd :run-id run-id
+                                     :label (str "baseline-review-round-" (:iter ctx))})]
+       (append! cwd record)
+       (cond
+         (:outcome record)
+         (assoc ctx :record record :status (:outcome record))
+
+         (= :accurate (:verdict record))
+         (assoc ctx :record record :findings [] :control :stop :status :accurate)
+
+         :else
+         (assoc ctx :record record :findings (vec (:findings record))))))})
+
+(def amend-stage
+  "Correct the survey, then measure what the correction cost.
+
+   Three things are checked after the amender exits, and they are three
+   different failures:
+
+     the working copy went dirty — the pass wrote code, which no record loop may
+       do. Terminal, and loud: whatever it wrote is still there for a human.
+     no usable record came back — the amender declined or failed. Terminal as
+       :amend-noop, the ledger untouched, mirroring the diff loop's :fix-noop.
+     the record came back smaller — reported always, and terminal when it fell
+       below the point its own round would still run. That last one is the whole
+       reason this stage measures rather than trusts: a loop that converges by
+       deleting what it was asked to defend would otherwise report success."
+  {:name :amend
+   :run
+   (fn [ctx]
+     (let [{:keys [cwd run-id budget dry-run?]} (:config ctx)]
+       (if dry-run?
+         (assoc ctx :control :stop :status :dry-run)
+         (let [[project ws-id] (stages/project+ws-from-cwd cwd)
+               prev      (ws/latest-entry project ws-id :baseline)
+               dir       (cstate/run-dir run-id)
+               out-path  (str (fs/path dir (str "amend-round-" (:iter ctx) ".edn")))
+               ;; Dirty BEFORE, not dirty after: a session worktree may already
+               ;; carry a human's uncommitted work, and calling that a violation
+               ;; would halt every loop run outside a clean tree.
+               dirty-before? (stages/working-copy-dirty? cwd)]
+           (fs/create-dirs dir)
+           ;; "The file is there" is the whole test for whether the amender
+           ;; answered, so the round must start with it absent. A leftover from
+           ;; an earlier run under this run-id would otherwise be read as this
+           ;; round's answer and appended to the ledger as a superseding record.
+           (fs/delete-if-exists out-path)
+           (agent/launch!
+            {:run-id run-id :cwd cwd :budget budget
+             :first-message (amend-prompt {:baseline prev
+                                           :findings (:findings ctx)
+                                           :out-path out-path})
+             :err-file (str (fs/path dir (str "amend-round-" (:iter ctx) ".err.log")))})
+           (cond
+             (and (not dirty-before?) (stages/working-copy-dirty? cwd))
+             (assoc ctx :control :stop :status :amend-touched-code)
+
+             (not (fs/exists? out-path))
+             (assoc ctx :control :stop :status :amend-noop)
+
+             :else
+             (let [curr (try (edn/read-string (slurp out-path)) (catch Exception _ nil))]
+               (if-not (map? curr)
+                 (assoc ctx :control :stop :status :amend-unreadable)
+                 ;; A sentinel, not the return value: append-entry! answers with
+                 ;; the path it wrote, so "it came back a string" is what SUCCESS
+                 ;; looks like here.
+                 (let [err (try (ws/append-entry! project ws-id
+                                                  {:kind :baseline} (pr-str curr))
+                                nil
+                                (catch Exception e (or (ex-message e) "the ledger refused it")))]
+                   (if err
+                     (assoc ctx :control :stop :status :amend-invalid
+                            :amend-error err)
+                     (let [retreats (retreat/baseline-retreats prev curr)
+                           ctx' (update ctx :history (fnil conj [])
+                                        {:iter (:iter ctx)
+                                         :verdict (get-in ctx [:record :verdict])
+                                         :findings (:findings ctx)
+                                         :retreats retreats})]
+                       (if (baseline-round-worth-running? curr)
+                         (assoc ctx' :retreats retreats)
+                         (assoc ctx' :retreats retreats
+                                :control :stop :status :retreated))))))))))))})
+
+(def baseline-pipeline
+  "judge -> amend. No warden, no fix: nothing here touches the working copy."
+  [judge-stage amend-stage])
