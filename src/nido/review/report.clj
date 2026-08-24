@@ -135,7 +135,8 @@
       :judge  (assoc ph :verdict (some-> (get-in ctx [:record :verdict]) name)
                         :outcome (some-> (get-in ctx [:record :outcome]) name)
                         :findings (vec (:findings ctx)))
-      :amend  (assoc ph :retreats (vec (:retreats ctx)))
+      :amend  (assoc ph :retreats (vec (:retreats ctx))
+                        :disputes (vec (:disputes ctx)))
 
       :review (assoc ph :overall-correctness (:overall-correctness ctx)
                         :findings (vec (:findings ctx))

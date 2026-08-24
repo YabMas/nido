@@ -54,7 +54,7 @@
   (let [no-ev (dissoc a-finding :evidence)]
     (is (not= (record/baseline-finding-key no-ev)
               (record/baseline-finding-key a-finding)))
-    (is (= [:cites (:cites no-ev)] (record/baseline-finding-key no-ev)))))
+    (is (= [:cites (:cites no-ev)] (record/baseline-finding-base-key no-ev)))))
 
 ;; ── The judge stage ─────────────────────────────────────────────────────────
 
@@ -74,7 +74,8 @@
                 record/append! (fn [_ _] nil)]
     (let [out (run record/judge-stage (ctx))]
       (is (nil? (:status out)))
-      (is (= [a-finding] (:findings out))))))
+      (is (= [(assoc a-finding :disputed-n 0)] (:findings out))
+          "each finding carries how many times it has been objected to"))))
 
 (deftest a-round-that-could-not-run-keeps-its-own-name
   ;; The distinction the one-shot round already held, and which matters more in
@@ -105,7 +106,7 @@
                                      "/ws/entries/0002-baseline.edn")
                   agent/launch! (fn [{:keys [first-message]}]
                                   (when writes
-                                    (writes (second (re-find #"as EDN to:\n\n  (\S+)"
+                                    (writes (second (re-find #"Write EDN to:\n\n  (\S+)"
                                                              first-message))))
                                   (reset! dirty dirty-after?)
                                   {:num-turns 3})]
@@ -203,7 +204,7 @@
                   stages/working-copy-dirty? (fn [_] false)
                   ws/append-entry! (fn [_ _ _ _] "/ws/entries/0002-baseline.edn")
                   agent/launch! (fn [{:keys [first-message]}]
-                                  (spit (second (re-find #"as EDN to:\n\n  (\S+)" first-message))
+                                  (spit (second (re-find #"Write EDN to:\n\n  (\S+)" first-message))
                                         (pr-str a-baseline))
                                   {:num-turns 3})]
       (let [out (rloop/run-loop {:run-id "r-conv" :cwd "/w"
@@ -225,7 +226,7 @@
                 stages/working-copy-dirty? (fn [_] false)
                 ws/append-entry! (fn [_ _ _ _] "/ws/entries/0002-baseline.edn")
                 agent/launch! (fn [{:keys [first-message]}]
-                                (spit (second (re-find #"as EDN to:\n\n  (\S+)" first-message))
+                                (spit (second (re-find #"Write EDN to:\n\n  (\S+)" first-message))
                                       (pr-str a-baseline))
                                 {:num-turns 3})]
     (let [out (rloop/run-loop {:run-id "r-stall" :cwd "/w"
@@ -248,4 +249,120 @@
       (is (str/includes? p "measured and reported to a human")))
     (testing "and it may not write code or append the record itself"
       (is (str/includes? p "Do NOT edit any source file"))
-      (is (str/includes? p "do\nnot append it yourself")))))
+      (is (str/includes? p "Do not append it yourself")))))
+
+;; ── The appeal channel ──────────────────────────────────────────────────────
+
+(deftest an-objection-is-made-by-number-so-nothing-has-to-match-text-to-text
+  (let [answer (record/parse-amend-answer
+                {:disputes [{:finding 1 :because "the renderer calls the aggregate"
+                             :evidence ["src/order/invoice.clj:90"]}]}
+                [a-finding])]
+    (is (nil? (:record answer)))
+    (is (= [{:key (record/baseline-finding-base-key a-finding)
+             :claim (:claim a-finding)
+             :because "the renderer calls the aggregate"
+             :evidence ["src/order/invoice.clj:90"]}]
+           (:disputes answer)))))
+
+(deftest an-objection-that-cannot-be-answered-is-dropped
+  (testing "out of range"
+    (is (= [] (:disputes (record/parse-amend-answer
+                          {:disputes [{:finding 7 :because "no"}]} [a-finding])))))
+  (testing "no reason given — an objection with no reason is not an appeal"
+    (is (= [] (:disputes (record/parse-amend-answer
+                          {:disputes [{:finding 1 :because "  "}]} [a-finding]))))
+    (is (= [] (:disputes (record/parse-amend-answer
+                          {:disputes [{:finding 1}]} [a-finding]))))))
+
+(deftest a-bare-record-is-still-a-valid-answer
+  ;; The shape from before there was anything to say back. Records already
+  ;; written must not stop being readable because the answer grew a wrapper.
+  (let [answer (record/parse-amend-answer a-baseline [a-finding])]
+    (is (= a-baseline (:record answer)))
+    (is (= [] (:disputes answer)))))
+
+(deftest an-objection-round-trip-is-progress-not-a-stall
+  ;; A dispute changes no record, so a judge that answers by RESTATING produces
+  ;; a set identical to last round's. Without the dispute count in the identity
+  ;; that reads as a stalled loop and ends before the channel completes even one
+  ;; exchange.
+  (let [f0 (assoc a-finding :disputed-n 0)
+        f1 (assoc a-finding :disputed-n 1)]
+    (is (not= (record/baseline-finding-key f0) (record/baseline-finding-key f1)))))
+
+(deftest an-amender-that-only-objects-leaves-the-ledger-alone-and-keeps-going
+  (let [[out appended]
+        (with-amend {:writes (fn [p] (spit p (pr-str {:disputes [{:finding 1 :because "wrong"}]})))}
+                    (ctx :findings [a-finding]))]
+    (is (nil? (:status out)) "objecting is a complete answer, not an empty one")
+    (is (nil? appended) "and it does not touch the record")
+    (is (= 1 (count (:disputes out))))
+    (is (= [] (:retreats out)))))
+
+(deftest objections-and-an-amendment-can-arrive-together
+  (let [corrected (assoc a-baseline :read ["src/order/aggregate.clj" "src/order/invoice.clj"])
+        [out appended]
+        (with-amend {:writes (fn [p] (spit p (pr-str {:record corrected
+                                                      :disputes [{:finding 1 :because "wrong"}]})))}
+                    (ctx :findings [a-finding]))]
+    (is (nil? (:status out)))
+    (is (= corrected (read-string appended)))
+    (is (= 1 (count (:disputes out))))))
+
+(deftest a-finding-restated-after-two-objections-goes-to-a-human
+  ;; Neither side can settle it: the judge cannot be overruled by the pass it is
+  ;; judging, and that pass may not amend a record it believes is already true.
+  (let [disputed (fn [n] (vec (repeat n {:disputes [{:key (record/baseline-finding-base-key a-finding)
+                                                     :claim "c" :because "b"}]})))]
+    (with-redefs [record/baseline-review! (fn [_] {:format :baseline-review
+                                                   :verdict :falsified
+                                                   :findings [a-finding]})
+                  record/append! (fn [_ _] nil)]
+      (testing "once objected to, the judge restating it is the answer we asked for"
+        (let [out (run record/judge-stage (ctx :history (disputed 1)))]
+          (is (nil? (:status out)))
+          (is (= 1 (:disputed-n (first (:findings out)))))))
+      (testing "twice objected to and stated again, it is a human's call"
+        (let [out (run record/judge-stage (ctx :history (disputed 2)))]
+          (is (= :disputed (:status out)))
+          (is (= :escalate (:control out))))))))
+
+(deftest a-withdrawn-finding-never-reaches-the-escalation
+  (with-redefs [record/baseline-review! (fn [_] {:format :baseline-review
+                                                 :verdict :accurate :reason "ok"})
+                record/append! (fn [_ _] nil)]
+    (let [out (run record/judge-stage
+                   (ctx :history (vec (repeat 2 {:disputes [{:key (record/baseline-finding-base-key a-finding)
+                                                             :claim "c" :because "b"}]}))))]
+      (is (= :accurate (:status out)) "withdrawing is the other honest answer"))))
+
+(deftest standing-objections-reach-the-next-judge
+  (let [seen (atom nil)]
+    (with-redefs [record/baseline-review! (fn [opts] (reset! seen opts)
+                                            {:format :baseline-review :verdict :accurate})
+                  record/append! (fn [_ _] nil)]
+      (run record/judge-stage
+           (ctx :history [{:disputes [{:key [:evidence ["x"]] :claim "c" :because "b"}]}]))
+      (is (= 1 (count (:disputes @seen)))))))
+
+(deftest the-judge-prompt-tells-the-judge-it-may-be-the-one-that-is-wrong
+  (let [p (record/disputes-block [{:claim "the renderer sums independently"
+                                   :because "it delegates to the aggregate"
+                                   :evidence ["src/order/invoice.clj:90"]}])]
+    (is (str/includes? p "may itself be mistaken")
+        "the amender is not an authority — the judge is told to go look")
+    (is (str/includes? p "withdraw the finding"))
+    (is (str/includes? p "report it again with evidence"))
+    (is (str/includes? p "src/order/invoice.clj:90"))))
+
+(deftest no-objections-puts-nothing-in-the-prompt
+  (is (nil? (record/disputes-block []))))
+
+(deftest the-amend-prompt-offers-the-objection-route-and-names-its-worst-abuse
+  (let [p (record/amend-prompt {:baseline a-baseline :findings [a-finding]
+                                :out-path "/run/a.edn"})]
+    (is (str/includes? p "1. refutes:") "findings are numbered, and answered by number")
+    (is (str/includes? p "IF A FINDING IS WRONG ABOUT THE CODE, SAY SO INSTEAD"))
+    (is (str/includes? p "You do not settle it"))
+    (is (str/includes? p "makes the record false AND ends the argument"))))

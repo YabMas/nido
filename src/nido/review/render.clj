@@ -301,10 +301,13 @@
 
 (defn- amend-detail
   [ph]
-  (let [n (count (:retreats ph))]
-    (str "amended"
+  (let [n (count (:retreats ph))
+        d (count (:disputes ph))]
+    (str (if (and (zero? n) (pos? d)) "disputed" "amended")
          (when (pos? n)
-           (str " · " n " weakening" (when (not= 1 n) "s"))))))
+           (str " · " n " weakening" (when (not= 1 n) "s")))
+         (when (pos? d)
+           (str " · " d " objection" (when (not= 1 d) "s"))))))
 
 (defn- record-phase-line
   [ph ^Instant now]
@@ -341,6 +344,10 @@
   [report]
   (mapcat :retreats (all-phases report)))
 
+(defn- all-disputes
+  [report]
+  (mapcat :disputes (all-phases report)))
+
 (defn record-final
   "Printed once at the end: the live frame's static form, then what the run gave
    up, then the terminal status.
@@ -363,6 +370,16 @@
            ;; record, it never got as far as touching it.
            amended?   "    (nothing — the record claims everything it claimed at the start)"
            :else      "    (no amendment ran — nothing here was even attempted)")
+         ;; Only when there were any. Unlike Weakened — which answers a question
+         ;; asked of every run — an objection is an event, and a heading saying
+         ;; none occurred would be noise on the overwhelming majority of runs.
+         (when-let [ds (seq (all-disputes report))]
+           (str "\n\n  Disputed by the amender:\n"
+                (str/join "\n"
+                          (map #(str "    ? " (:claim %) "\n      because " (:because %)
+                                     (when (seq (:evidence %))
+                                       (str "\n      cites " (str/join ", " (:evidence %)))))
+                               ds))))
          "\n\n  Status: " (:status report)
          (when-let [s (:summary report)]
            (str "  ·  " (:rounds s) " round(s)"))

@@ -138,10 +138,38 @@
                            "  [holds always]"))))
                 invariants)))
 
+(defn disputes-block
+  "What an earlier round's amender said back, put in front of the judge.
+
+   This is the whole appeal channel. Without it a dispute is a note in a file
+   nobody reads and the judge repeats itself forever; with it the judge has to
+   do one of exactly two things, and both of them move.
+
+   Never phrased as a correction. The amender is not an authority here — it may
+   be the one that is wrong — so what crosses is its counter-evidence, and the
+   judge is told to go look rather than to defer."
+  [disputes]
+  (when (seq disputes)
+    (str "\nDISPUTED — an earlier round of yours produced these, and the pass that\n"
+         "would have acted on them says they are wrong about the code. It is not an\n"
+         "authority and may itself be mistaken. Go and look, then do ONE of:\n"
+         "  - withdraw the finding, by not reporting it again; or\n"
+         "  - report it again with evidence that answers the objection.\n"
+         "Reporting it again unchanged is the one answer that helps nobody.\n\n"
+         (str/join
+          "\n\n"
+          (map (fn [{:keys [claim because evidence]}]
+                 (str "- you found: " claim "\n"
+                      "  objection: " because
+                      (when (seq evidence)
+                        (str "\n  they cite: " (str/join ", " evidence)))))
+               disputes))
+         "\n")))
+
 (defn baseline-prompt
   "The verification prompt. Everything it needs to refute a claim is a file
    reference the record itself supplied."
-  [{:keys [baseline]}]
+  [{:keys [baseline disputes]}]
   (str
    "You are checking whether a SURVEY of an area is true, and whether it is\n"
    "complete enough to decide against. You are NOT designing anything, and you\n"
@@ -176,7 +204,8 @@
    "report it.\n\n"
    "ACCURATE IS THE EXPECTED OUTCOME. Populate confirmed with the claims you\n"
    "actually went and checked, and return accurate when they held. Do not\n"
-   "manufacture findings to look thorough."))
+   "manufacture findings to look thorough."
+   (disputes-block disputes)))
 
 (defn design-prompt
   "The decision prompt. Derives what can be derived; hands the rest over."
@@ -397,13 +426,14 @@
   "Verify this workstream's latest baseline against the code. Returns the ledger
    record, or {:outcome <kw> :detail <str>} saying why there is none — never a
    bare nil, so a caller can always tell a skipped round from a failed one."
-  [{:keys [cwd run-id label]}]
+  [{:keys [cwd run-id label disputes]}]
   (if-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
     (if-let [baseline (ws/latest-entry project ws-id :baseline)]
       (if (baseline-round-worth-running? baseline)
         (judged (run-round! {:cwd cwd :run-id run-id :kind :baseline-review
                              :label label
-                             :prompt (baseline-prompt {:baseline baseline})})
+                             :prompt (baseline-prompt {:baseline baseline
+                                                       :disputes disputes})})
                 #(parse-baseline-review % (:seq baseline)))
         {:outcome :nothing-to-check
          :detail "the baseline records no load-bearing property and no health observation"})
@@ -459,9 +489,8 @@
 ;; sharpen the property's evidence rather than to argue: sharper evidence is a
 ;; repair the next round can read, and an argument in phase 1 has nowhere to go.
 
-(defn baseline-finding-key
-  "What makes two baseline findings the same finding, for the engine's stall
-   detector.
+(defn baseline-finding-base-key
+  "What makes two baseline findings the same finding.
 
    Keyed on the CODE the finding cites, because that is the one thing the
    amender does not move: amending a record rewrites `:cites` — it quotes the
@@ -477,6 +506,63 @@
   (if-let [ev (seq (:evidence f))]
     [:evidence (vec (sort ev))]
     [:cites (vec (sort (:cites f)))]))
+
+(defn dispute-aware
+  "Fold how many times a finding has been disputed into its identity.
+
+   Without this the appeal channel cannot complete a single round trip. A
+   dispute changes no record, so the judge that answers it by RESTATING the
+   finding produces a set identical to last round's — which `no-progress?`
+   reads as a stalled loop and ends, before the judge has been disputed the
+   second time that would escalate it.
+
+   Restating a finding after a new objection is not the loop going nowhere. It
+   is the judge answering, which is exactly what the channel asked it to do."
+  [base-key]
+  (fn [f] [(base-key f) (:disputed-n f 0)]))
+
+(def baseline-finding-key (dispute-aware baseline-finding-base-key))
+
+;; ── The appeal channel ──────────────────────────────────────────────────────
+
+(defn parse-amend-answer
+  "What an amender may hand back: an amended record, objections to what it was
+   asked to amend for, or both.
+
+   A bare record — no wrapper — is still accepted, because that is what the
+   answer was before there was anything to say back, and a shape change is not a
+   reason to stop reading records already written.
+
+   Disputes are made BY NUMBER against the findings as they were listed. The
+   amender never computes a key, and nothing has to match text back to text: a
+   number is either in range or it is not. One out of range is dropped rather
+   than guessed at, along with one that objects without saying why — an
+   objection with no reason cannot be answered and is not an appeal."
+  [raw findings]
+  (when (map? raw)
+    (let [record   (if (:format raw) raw (:record raw))
+          disputes (when-not (:format raw) (:disputes raw))]
+      {:record   (when (map? record) record)
+       :disputes (vec (keep (fn [{:keys [finding because evidence]}]
+                              (let [i (dec (long (or finding 0)))
+                                    f (when (and (nat-int? i) (< i (count findings)))
+                                        (nth findings i))]
+                                (when (and f (not (str/blank? (str because))))
+                                  {:key      (baseline-finding-base-key f)
+                                   :claim    (:claim f)
+                                   :because  (str because)
+                                   :evidence (vec (map str evidence))})))
+                            disputes))})))
+
+(defn dispute-counts
+  "How many times each finding has been objected to across the whole run."
+  [history]
+  (frequencies (map :key (mapcat :disputes history))))
+
+(defn disputes-for-judge
+  "Every standing objection, oldest first, for the next judge prompt."
+  [history]
+  (vec (mapcat :disputes history)))
 
 (defn amend-prompt
   "Instruction to correct a survey the code refuted.
@@ -505,20 +591,30 @@
    "Do NOT edit any source file. This pass writes one file and nothing else.\n\n"
    "THE CURRENT BASELINE:\n\n"
    (pr-str baseline)
-   "\n\nWHAT THE JUDGE REFUTED:\n\n"
+   "\n\nWHAT THE JUDGE REFUTED — numbered, and you answer them by number:\n\n"
    (str/join
     "\n\n"
-    (map (fn [f]
-           (str "- refutes: " (str/join "; " (:cites f)) "\n"
-                "  claim:   " (:claim f)
-                (when (seq (:evidence f))
-                  (str "\n  evidence: " (str/join ", " (:evidence f))))))
-         findings))
-   "\n\nWrite the COMPLETE corrected baseline record — every field, not a diff —\n"
-   "as EDN to:\n\n  " out-path "\n\n"
-   "It must satisfy the same schema the current one does. nido reads that file,\n"
-   "validates it, and appends it to the ledger as the superseding baseline; do\n"
-   "not append it yourself and do not commit anything."))
+    (map-indexed
+     (fn [i f]
+       (str (inc i) ". refutes: " (str/join "; " (:cites f)) "\n"
+            "   claim:   " (:claim f)
+            (when (seq (:evidence f))
+              (str "\n   evidence: " (str/join ", " (:evidence f))))))
+     findings))
+   "\n\nIF A FINDING IS WRONG ABOUT THE CODE, SAY SO INSTEAD OF AMENDING FOR IT.\n"
+   "You do not settle it — the judge is asked again with your objection in front\n"
+   "of it, and has to withdraw the finding or answer your evidence. An objection\n"
+   "with no reason is dropped, because it cannot be answered. Amending a record\n"
+   "you believe is already right, to quiet a finding you believe is wrong, is the\n"
+   "worst available answer: it makes the record false AND ends the argument.\n\n"
+   "Write EDN to:\n\n  " out-path "\n\n"
+   "  {:record   <the COMPLETE corrected baseline — every field, not a diff>\n"
+   "   :disputes [{:finding 2 :because \"...\" :evidence [\"src/x.clj:41\"]}]}\n\n"
+   "Omit :record entirely if every finding is disputed and the survey needs no\n"
+   "change. Omit :disputes if you accepted all of them. The record must satisfy\n"
+   "the same schema the current one does; nido reads this file, validates it, and\n"
+   "appends it as the superseding baseline. Do not append it yourself and do not\n"
+   "commit anything."))
 
 (def judge-stage
   "The same read-only pass the one-shot round ran, with its verdict appended to
@@ -533,8 +629,11 @@
    :run
    (fn [ctx]
      (let [{:keys [cwd run-id]} (:config ctx)
-           record (baseline-review! {:cwd cwd :run-id run-id
-                                     :label (str "baseline-review-round-" (:iter ctx))})]
+           counts (dispute-counts (:history ctx))
+           record (baseline-review!
+                   {:cwd cwd :run-id run-id
+                    :label (str "baseline-review-round-" (:iter ctx))
+                    :disputes (disputes-for-judge (:history ctx))})]
        (append! cwd record)
        (cond
          (:outcome record)
@@ -544,7 +643,17 @@
          (assoc ctx :record record :findings [] :control :stop :status :accurate)
 
          :else
-         (assoc ctx :record record :findings (vec (:findings record))))))})
+         (let [findings (mapv #(assoc % :disputed-n
+                                      (get counts (baseline-finding-base-key %) 0))
+                              (:findings record))]
+           ;; Twice objected to and stated a third time. Neither side is giving
+           ;; way and neither can settle it: the judge cannot be overruled by the
+           ;; pass it is judging, and that pass may not amend a record it believes
+           ;; is already true. That is a human's call, not another round's.
+           (if (some #(>= (:disputed-n %) 2) findings)
+             (assoc ctx :record record :findings findings
+                    :control :escalate :status :disputed)
+             (assoc ctx :record record :findings findings))))))})
 
 (def amend-stage
   "Correct the survey, then measure what the correction cost.
@@ -594,29 +703,49 @@
              (assoc ctx :control :stop :status :amend-noop)
 
              :else
-             (let [curr (try (edn/read-string (slurp out-path)) (catch Exception _ nil))]
-               (if-not (map? curr)
+             (let [raw    (try (edn/read-string (slurp out-path)) (catch Exception _ nil))
+                   answer (parse-amend-answer raw (:findings ctx))
+                   {:keys [record disputes]} answer
+                   entry  (fn [retreats]
+                            {:iter (:iter ctx)
+                             :verdict (get-in ctx [:record :verdict])
+                             :findings (:findings ctx)
+                             :retreats retreats
+                             :disputes disputes})]
+               (cond
+                 (nil? answer)
                  (assoc ctx :control :stop :status :amend-unreadable)
+
+                 ;; Objections and no amendment is a COMPLETE answer, not an
+                 ;; empty one: the amender read the code and says the record is
+                 ;; already right. The ledger is untouched and the next round puts
+                 ;; the objection in front of the judge.
+                 (and (nil? record) (seq disputes))
+                 (assoc ctx :disputes disputes :retreats []
+                        :history (conj (vec (:history ctx)) (entry [])))
+
+                 (nil? record)
+                 (assoc ctx :control :stop :status :amend-noop)
+
+                 :else
                  ;; A sentinel, not the return value: append-entry! answers with
                  ;; the path it wrote, so "it came back a string" is what SUCCESS
                  ;; looks like here.
                  (let [err (try (ws/append-entry! project ws-id
-                                                  {:kind :baseline} (pr-str curr))
+                                                  {:kind :baseline} (pr-str record))
                                 nil
                                 (catch Exception e (or (ex-message e) "the ledger refused it")))]
                    (if err
                      (assoc ctx :control :stop :status :amend-invalid
                             :amend-error err)
-                     (let [retreats (retreat/baseline-retreats prev curr)
-                           ctx' (update ctx :history (fnil conj [])
-                                        {:iter (:iter ctx)
-                                         :verdict (get-in ctx [:record :verdict])
-                                         :findings (:findings ctx)
-                                         :retreats retreats})]
-                       (if (baseline-round-worth-running? curr)
-                         (assoc ctx' :retreats retreats)
-                         (assoc ctx' :retreats retreats
-                                :control :stop :status :retreated))))))))))))})
+                     (let [retreats (retreat/baseline-retreats prev record)
+                           ctx' (assoc ctx
+                                       :retreats retreats
+                                       :disputes disputes
+                                       :history (conj (vec (:history ctx)) (entry retreats)))]
+                       (if (baseline-round-worth-running? record)
+                         ctx'
+                         (assoc ctx' :control :stop :status :retreated))))))))))))})
 
 (def baseline-pipeline
   "judge -> amend. No warden, no fix: nothing here touches the working copy."
