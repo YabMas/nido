@@ -351,6 +351,20 @@
                  (assoc :seq (:seq e) :at (:at e)))
              (catch Throwable _ nil))))))
 
+(defn unstamp
+  "Strip what `latest-entry` and `entry-at-seq` ADD on the way out.
+
+   :seq and :at are the reader's, not the author's — an entry does not carry
+   them on disk, and the write schemas are closed, so a record that has been read
+   cannot be written back without this. That matters the moment anything amends a
+   record it was shown: a faithful amender returns every field it was given, and
+   the ledger refuses the result.
+
+   Removing them is not discarding an author's work. Nothing may author them, so
+   there is nothing here to lose."
+  [entry]
+  (dissoc entry :seq :at))
+
 (defn entry-at-seq
   "The typed entry at `seq-n` on this workstream, parsed through the READ contract
    and stamped with :seq/:at — or nil. Same degrade-to-nil contract as

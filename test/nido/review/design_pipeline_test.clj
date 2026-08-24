@@ -221,7 +221,10 @@
     (is (= 11 (get-in (read-string appended) [:baseline :seq])))
     (testing "the amender sees the CORRECTED survey, not the one that was wrong"
       (is (str/includes? prompt "PREMISE was wrong"))
-      (is (str/includes? prompt ":seq 11")))
+      ;; By its content, not by its :seq — the stamp is the reader's and is
+      ;; stripped before the record is shown, precisely so it can be written back.
+      (is (str/includes? prompt "src/x.clj:1"))
+      (is (not (str/includes? prompt ":seq 11"))))
     (testing "and is told a bare re-citation is not the job"
       (is (str/includes? prompt "not a re-citation"))
       (is (str/includes? prompt "nobody has re-checked it")))

@@ -596,7 +596,7 @@
    "Read the cited code before you change a word of the record.\n\n"
    "Do NOT edit any source file. This pass writes one file and nothing else.\n\n"
    "THE CURRENT BASELINE:\n\n"
-   (pr-str baseline)
+   (pr-str (ws/unstamp baseline))
    "\n\nWHAT THE JUDGE REFUTED — numbered, and you answer them by number:\n\n"
    (str/join
     "\n\n"
@@ -739,7 +739,8 @@
                  ;; the path it wrote, so "it came back a string" is what SUCCESS
                  ;; looks like here.
                  (let [err (try (ws/append-entry! project ws-id
-                                                  {:kind :baseline} (pr-str record))
+                                                  {:kind :baseline}
+                                                  (pr-str (ws/unstamp record)))
                                 nil
                                 (catch Exception e (or (ex-message e) "the ledger refused it")))]
                    (if err
@@ -855,8 +856,9 @@
    "making anything truer; every one of those is measured and reported to the\n"
    "human this decision escalates to.\n\n"
    "WHY: " reason "\n\n"
-   "THE CURRENT DESIGN:\n\n" (pr-str design)
-   (when baseline (str "\n\nTHE BASELINE IT CITES:\n\n" (pr-str baseline)))
+   "THE CURRENT DESIGN:\n\n" (pr-str (ws/unstamp design))
+   (when baseline
+     (str "\n\nTHE BASELINE IT CITES:\n\n" (pr-str (ws/unstamp baseline))))
    "\n\nWHAT FAILED TO DERIVE — numbered, and you answer them by number:\n\n"
    (str/join
     "\n"
@@ -1027,7 +1029,8 @@
 
           :else
           (let [err (try (ws/append-entry! project ws-id
-                                           {:kind :design} (pr-str record))
+                                           {:kind :design}
+                                           (pr-str (ws/unstamp record)))
                          nil
                          (catch Exception e (or (ex-message e) "the ledger refused it")))]
             (if err

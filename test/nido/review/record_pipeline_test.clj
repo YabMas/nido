@@ -370,3 +370,32 @@
     (is (str/includes? p "IF A FINDING IS WRONG ABOUT THE CODE, SAY SO INSTEAD"))
     (is (str/includes? p "You do not settle it"))
     (is (str/includes? p "makes the record false AND ends the argument"))))
+
+;; ── What the reader adds, the writer may not carry ──────────────────────────
+
+(deftest a-record-read-from-the-ledger-can-be-written-back
+  ;; The defect this catches took every amendment in both pipelines down, and no
+  ;; fixture here had ever seen it: latest-entry stamps :seq and :at on the way
+  ;; out, the write schema is closed against both, and the prompt shows the
+  ;; amender exactly what it read. A faithful amender echoes them and the ledger
+  ;; refuses the result.
+  (let [stamped (assoc a-baseline :seq 11 :at "2026-08-24T17:27:18Z")]
+    (testing "the amender is shown the record as it will be WRITTEN"
+      (let [p (record/amend-prompt {:baseline stamped :findings [a-finding]
+                                    :out-path "/run/a.edn"})]
+        (is (not (str/includes? p ":seq 11")))
+        (is (not (str/includes? p ":at \"2026-08-24")))))
+    (testing "and an echoed stamp still does not reach the ledger"
+      (let [[out appended]
+            (with-amend {:prev stamped
+                         :writes (fn [p] (spit p (pr-str {:record stamped})))}
+                        (ctx :findings [a-finding]))]
+        (is (nil? (:status out)) "not :amend-invalid")
+        (is (= a-baseline (read-string appended)))))))
+
+(deftest unstamping-leaves-a-citation-alone
+  ;; A design's :baseline :seq is an author's citation, not the reader's stamp,
+  ;; and they are the same key one level apart.
+  (is (= {:format :design :baseline {:seq 8 :relation :within}}
+         (ws/unstamp {:format :design :seq 10 :at "t"
+                      :baseline {:seq 8 :relation :within}}))))
