@@ -184,7 +184,14 @@
   ([stage parked?] (gate-actions stage parked? nil nil))
   ([stage parked? origin] (gate-actions stage parked? origin nil))
   ([stage parked? _origin {:keys [bare? report-format options] entry-seq :seq}]
-   (let [actions
+   (let [;; The branches of the CURRENT blocker, or [] — offered whether or not a
+         ;; session is parked, because answering no longer depends on one being
+         ;; alive to hear it (choose-option! records the answer on the ledger and
+         ;; resumes only if there is someone to resume). Every OTHER action here
+         ;; stays gated on parked?: Reply, Apply, Approve and Done all reach for an
+         ;; agent, and offering them with none is a button that can only fail.
+         answers (option-actions entry-seq options)
+         actions
          (case stage
            :incoming    [{:id :promote :label "Promote" :kind :mutation :style :primary}
                          {:id :drop    :label "Dismiss" :kind :mutation :style :danger}]
@@ -201,17 +208,17 @@
                             bare?   [{:id :start-triage :label "Start triage"
                                       :kind :mutation :style :primary}
                                      dismiss]
-                            parked? [{:id :apply :label "Apply" :kind :mutation :style :primary}
-                                     dismiss
-                                     {:id :reply :label "Reply" :kind :resume :style :default}]
-                            :else   [dismiss]))
+                            parked? (into answers
+                                          [{:id :apply :label "Apply" :kind :mutation :style :primary}
+                                           dismiss
+                                           {:id :reply :label "Reply" :kind :resume :style :default}])
+                            :else   (into answers [dismiss])))
            ;; The nido-side veto, reversible: Restore clears the ticket status so the row
            ;; rejoins the triage queue and the auto-triage gate can pick it up again.
            :dismissed   [{:id :restore :label "Restore" :kind :mutation :style :default}]
            :ready       [{:id :promote :label "Promote" :kind :mutation :style :primary}
                          {:id :drop    :label "Drop"    :kind :mutation :style :danger}]
            :in-progress (cond
-                          (not parked?) []
                           ;; A parked session whose latest entry is a design decision
                           ;; is asking ONE question — the irreducible judgement the
                           ;; round could not derive. So the gate asks one question:
@@ -224,33 +231,39 @@
                           ;; apart by what the ledger holds last. Widening the spine
                           ;; for it would put every reader's band mapping at risk for
                           ;; something the report already distinguishes.
-                          (= :design-decision report-format)
+                          (and parked? (= :design-decision report-format))
                           [{:id :approve :label "Approve" :kind :mutation :style :primary}
                            {:id :reply   :label "Reply"   :kind :resume  :style :default}]
 
                           ;; A blocker that named its branches is the same shape of
                           ;; gate: one question, answerable. Each option is a button;
                           ;; Reply stays for the answer that is none of them ("B, but
-                          ;; keep the i18n key"). Done is absent for the reason it is
-                          ;; absent above — settling the workstream is not an answer
-                          ;; to the question, and beside A/B it reads as one.
-                          (seq options)
-                          (conj (option-actions entry-seq options)
-                                {:id :reply :label "Reply" :kind :resume :style :default})
+                          ;; keep the i18n key") — and only while someone is parked to
+                          ;; hear it. Done is absent for the reason it is absent above:
+                          ;; settling the workstream is not an answer to the question,
+                          ;; and beside A/B it reads as one.
+                          (seq answers)
+                          (cond-> answers
+                            parked? (conj {:id :reply :label "Reply" :kind :resume :style :default}))
+
+                          (not parked?) []
 
                           :else
                           [{:id :reply :label "Reply" :kind :resume :style :default}
                            {:id :done  :label "Done"  :kind :mutation :style :primary}])
-           :shipping    (if parked?
-                          ;; Blocked in the merge lane: any named options first (a
-                          ;; drive-home halt is where they most often appear), then
-                          ;; Reply to resume the agent with a note; Drop takes it off
-                          ;; the queue (back to :in-progress). The usual path is to fix
-                          ;; in the worktree and `nido ship` again.
-                          (conj (option-actions entry-seq options)
-                                {:id :reply :label "Reply" :kind :resume   :style :default}
-                                {:id :drop  :label "Drop"  :kind :mutation :style :danger})
-                          [])
+           ;; Blocked in the merge lane: any named branches first (a drive-home
+           ;; halt is where they most often appear), then Reply to resume the agent
+           ;; with a note and Drop to take it off the queue (back to :in-progress).
+           ;; The usual path is to fix in the worktree and `nido ship` again. The
+           ;; branches stand without a parked session; Reply and Drop do not.
+           :shipping    (cond
+                          (seq answers) (cond-> answers
+                                          parked?
+                                          (into [{:id :reply :label "Reply" :kind :resume   :style :default}
+                                                 {:id :drop  :label "Drop"  :kind :mutation :style :danger}]))
+                          parked?       [{:id :reply :label "Reply" :kind :resume   :style :default}
+                                         {:id :drop  :label "Drop"  :kind :mutation :style :danger}]
+                          :else         [])
            [])]
      (if bare?
        (filterv #(contains? workstream-less-actions (:id %)) actions)
@@ -1112,25 +1125,51 @@
        " the code, record a new :blocker naming what broke and park again."))
 
 (defn- choose-option!
-  "Resume the parked agent with the branch `action-id` selects, resolved against
-   the workstream's CURRENT latest report — never against what the browser was
-   showing. A click carries a letter and `entry-seq`, the ledger position of the
-   report that letter was rendered from; the ledger decides what the letter meant,
-   and the position decides whether that question is still the one being asked.
+  "ANSWER the blocker, then tell whoever is listening. The answer is written to
+   the ledger first (a :blocker-answered entry) and only then does this try to
+   resume a parked agent, because the two have different lifetimes: the question
+   is a durable ledger entry, the session that asked it is not.
 
-   Both checks are needed, and the position is the one that matters. A letter
-   alone silently resolves against WHATEVER is latest at click time: if another
-   tab answered the blocker and the agent parked on a new one with as many
+   That order is the whole point. Four of five blockers on this box outlived
+   their session — runs fail, budgets kill, sessions get torn down — and an
+   answer that exists only as a resume argument is available exactly when it is
+   least needed. Recorded, the decision stands with nobody listening: the next
+   session picking the workstream up reads it (/continue-ticket), and the gate
+   stops asking, because the latest entry is now the answer rather than the
+   question. It also means a resume that dies mid-turn cannot silently swallow a
+   human decision.
+
+   The branch is resolved against the CURRENT latest report, never against what
+   the browser was showing. A click carries a letter and `entry-seq`, the ledger
+   position the letter was rendered from: the ledger decides what the letter
+   meant, and the position decides whether that question is still the one being
+   asked. A letter alone would silently resolve against WHATEVER is latest — if
+   another tab answered and the agent parked on a new blocker with as many
    branches, :option-a would pick branch A of a question the human never read.
-   So a click whose position is not the latest entry — or which carries none at
-   all — is refused, not resolved."
+   A click whose position is not the latest entry, or which carries none, is
+   refused. After answering, the answer IS the latest entry, so a double-click
+   refuses on the same check."
   [project ws-id action-id entry-seq]
   (let [report (latest-report project ws-id)
         i      (option-index action-id)]
     (if-let [opt (and (some? entry-seq)
                       (= entry-seq (:seq report))
                       (get (vec (:options report)) i))]
-      (resume/resume! project ws-id (option-input i opt))
+      (let [parked (parked-session project ws-id)]
+        (cws/append-entry!
+         project ws-id {:kind :blocker-answered}
+         (pr-str {:format      :blocker-answered
+                  :blocker-seq entry-seq
+                  :letter      (report/option-letter i)
+                  :label       (:label opt)
+                  :summary     (:summary opt)
+                  :resumed     (:name parked)}))
+        (if parked
+          (assoc (resume/resume! project ws-id (option-input i opt)) :decision :answered)
+          ;; Nobody to tell. The answer is on the ledger and the gate has stopped
+          ;; asking; this is a real outcome, not a failure, so it must not read as
+          ;; one — see ui.server/resolve-failure-msg.
+          {:decision :answered-unresumed}))
       {:decision :option-stale})))
 
 (defn resolve-gate!

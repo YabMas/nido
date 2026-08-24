@@ -501,9 +501,11 @@
   ([action-id project ws-id pane-id]
    (gate-action-fragment
     (if (work/option-action? action-id)
+      ;; Honest for both outcomes: the answer is always recorded on the ledger,
+      ;; and the resume happens only if a session is still parked to hear it.
       ;; Which letter it was is on the card the reader is looking at; repeating it
       ;; here would be the one copy free to be wrong.
-      "Resuming with your answer…"
+      "Recording your answer… resuming the agent if one is still listening."
       (case action-id
         :promote "Promoting…"
         :apply   "Applying… resuming the agent to write the verdict."
@@ -832,6 +834,23 @@
       [:h3 "Options"]
       (into [:div.options] (map-indexed option-card options))])])
 
+(defn- blocker-answered-card
+  "The human's answer to a blocker, as it reads back on the timeline. `:resumed`
+   is stated either way — an answer nobody was live to hear is still the decision,
+   and the next session to pick this workstream up is what acts on it."
+  [{:keys [blocker-seq letter label summary resumed]}]
+  [:div.md
+   [:h2 "Answered"]
+   [:div.option
+    [:div.option-head
+     [:span.option-letter letter]
+     [:strong label]]
+    [:p summary]]
+   [:p.meta "answers the blocker at entry " blocker-seq
+    (if resumed
+      (list " · resumed " [:code resumed])
+      " · no session was live to resume — the next one reads it here")]])
+
 (defn- pr-opened-card [{:keys [url title summary]}]
   [:div.md
    [:h2 "PR opened"]
@@ -1153,6 +1172,7 @@
      :implementation-plan      (plan-card report)
      :implementation-completed (completed-card report)
      :blocker                  (blocker-card report)
+     :blocker-answered         (blocker-answered-card report)
      :pr-opened                (pr-opened-card report)
      :merged                   (merged-card report)
      :ship-submitted           (ship-submitted-card report)

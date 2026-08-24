@@ -823,6 +823,33 @@
    [:options {:optional true}
     [:vector {:min 2 :max (count option-letters)} BlockerOption]]])
 
+(def BlockerAnswered
+  "The human's answer to a blocker that named its branches — written by nido at
+   the moment the gate button is clicked (nido.work/answer-blocker!), never by an
+   agent.
+
+   It exists because the QUESTION outlives the agent that asked it. A blocker is
+   a durable ledger entry; the session that wrote it is not — runs fail, budgets
+   kill, sessions get torn down — and answering only by resuming a parked agent
+   makes the answer available exactly when it is least needed. Recorded here, the
+   decision stands whether or not anyone was still listening: it is what the next
+   session picking this workstream up reads, and it is what stops the gate asking
+   a question that has already been settled.
+
+   The branch is copied in rather than referenced, for the same reason the resume
+   text repeats it: a reader of the timeline should not have to open the entry
+   this points at to learn what was decided. `:blocker-seq` is the position it
+   answers, so the two can always be read together."
+  [:map {:closed true}
+   [:format      [:= :blocker-answered]]
+   [:blocker-seq int?]
+   [:letter      string?]
+   [:label       string?]
+   [:summary     string?]
+   ;; The session told about it, or nil when there was none to tell — the honest
+   ;; record of whether this answer reached an agent or is waiting to be read.
+   [:resumed     {:optional true} [:maybe string?]]])
+
 (def PrOpened
   [:map {:closed true}
    [:format  [:= :pr-opened]]
@@ -1177,6 +1204,7 @@
    :implementation-plan      ImplementationPlan
    :implementation-completed ImplementationCompleted
    :blocker                  Blocker
+   :blocker-answered         BlockerAnswered
    :pr-opened                PrOpened
    :merged                   Merged
    :ship-submitted           ShipSubmitted
@@ -1527,6 +1555,15 @@
                      ""])))
               options))))))
 
+(defn- blocker-answered->markdown [{:keys [blocker-seq letter label summary resumed]}]
+  (str/join "\n"
+    (remove nil?
+      [(str "# Answered: " letter " — " label)
+       (str "_answers the blocker at entry " blocker-seq
+            (if resumed (str "; resumed " resumed) "; no session was live to resume")
+            "_")
+       "" summary])))
+
 (defn- pr-opened->markdown [{:keys [url title summary]}]
   (str/join "\n"
     (remove nil? ["# PR opened" (str "**" title "** — " url) (when summary (str "\n" summary))])))
@@ -1718,6 +1755,7 @@
     :implementation-plan      (plan->markdown report)
     :implementation-completed (completed->markdown report)
     :blocker                  (blocker->markdown report)
+    :blocker-answered         (blocker-answered->markdown report)
     :pr-opened                (pr-opened->markdown report)
     :merged                   (merged->markdown report)
     :ship-submitted           (ship-submitted->markdown report)
@@ -1764,6 +1802,7 @@
     :implementation-plan      (:direction report)
     :implementation-completed (first-line (:summary report))
     :blocker                  (or (:needs report) (first-line (:summary report)))
+    :blocker-answered         (str "Answered " (:letter report) " — " (:label report))
     :review-report            (str "Review: " (name (:status report)))
     :baseline-review          (str "Baseline review: " (name (:verdict report)))
     :design-decision          (str "Design decision: " (name (:recommend report)))

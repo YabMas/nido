@@ -814,9 +814,24 @@
     (is (not (str/includes? html "/gate/done"))
         "and no Done — beside A/B it reads as an answer to the question")))
 
-(deftest answering-an-option-confirms-as-a-resume
-  (is (str/includes? (views/gate-action-confirm-fragment :option-b "brian" "ws-1")
-                     "Resuming")))
+(deftest the-answer-reads-back-on-the-timeline
+  (let [card (fn [r] (views/workstream-pane (assoc sample-ws :report r) {}))]
+    (is (str/includes?
+         (card {:format :blocker-answered :blocker-seq 2 :letter "B"
+                :label "Declare it cumulative" :summary "Relabel the metric."
+                :resumed "impl-fu-15"})
+         "impl-fu-15"))
+    (is (str/includes?
+         (card {:format :blocker-answered :blocker-seq 2 :letter "B"
+                :label "Declare it cumulative" :summary "Relabel the metric." :resumed nil})
+         "no session was live to resume")
+        "an answer nobody heard says so — the next session is what acts on it")))
+
+(deftest answering-an-option-confirms-as-a-recorded-answer
+  (let [msg (views/gate-action-confirm-fragment :option-b "brian" "ws-1")]
+    (is (str/includes? msg "Recording your answer"))
+    (is (str/includes? msg "if one is still listening")
+        "honest for the unparked case, which is the common one")))
 
 (deftest workstream-pane-renders-blocker-completed-pr-cards
   (let [pane (fn [report] (views/workstream-pane (assoc sample-ws :report report) {}))]

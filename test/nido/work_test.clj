@@ -540,21 +540,37 @@
       "a drive-home halt in the merge lane is where a choice most often lands")
   (is (= [:reply :drop] (map :id (work/gate-actions :shipping true)))
       "and a shipping gate with nothing to choose between is unchanged")
-  (is (= [] (work/gate-actions :in-progress false nil
-                               {:report-format :blocker :options sample-options}))
-      "nobody parked ⇒ no agent to resume, so there is nothing to answer"))
+  (is (= [:option-a :option-b]
+         (map :id (work/gate-actions :in-progress false nil
+                                     {:report-format :blocker :options sample-options :seq 3})))
+      "the branches stand with NOBODY parked — the question outlives the session
+       that asked it, and four of five blockers on this box outlived theirs. Reply
+       and Done are absent there: both reach for an agent that is gone")
+  (is (= [:option-a :option-b :dismiss]
+         (map :id (work/gate-actions :triage false nil
+                                     {:report-format :blocker :options sample-options :seq 3})))
+      "same at :triage, where a crashed triage run leaves its question behind")
+  (is (= [] (work/gate-actions :in-progress false))
+      "and a gate with no branches to offer is unchanged: still nothing"))
 
 (deftest choosing-an-option-resumes-with-that-branch-read-from-the-ledger
   (with-tmp
     (fn [_]
       (let [w   (workstream/create! :brian {:stage :in-progress :external-refs []})
             got (atom nil)]
+        (session/create! :brian (:id w) {:name "run-x" :weight :light :autonomy parked-autonomy})
         (workstream/append-entry! :brian (:id w) {:kind :blocker}
           (pr-str {:format :blocker :summary "The modal offers a branch nothing implements."
                    :needs "A product decision on Keep Old." :options sample-options}))
         (with-redefs [resume/resume! (fn [_ _ input] (reset! got input) {:decision :resumed})]
-          (is (= {:decision :resumed} (work/resolve-gate! :brian (:id w) :option-b 1))
+          (is (= :answered (:decision (work/resolve-gate! :brian (:id w) :option-b 1)))
               "the click names the report it was rendered from — entry 1, still the latest")
+          (let [answer (:report (work/workstream :brian (:id w) 2))]
+            (is (= :blocker-answered (:format answer))
+                "the answer is written to the ledger BEFORE the resume, so a turn
+                 that dies mid-flight cannot swallow a human decision")
+            (is (= ["B" "Implement archive-and-clone" 1 "run-x"]
+                   [(:letter answer) (:label answer) (:blocker-seq answer) (:resumed answer)])))
           (is (str/includes? @got "option B — Implement archive-and-clone"))
           (is (str/includes? @got "Build the archive path.")
               "the branch is repeated in full — the resumed turn cannot see the gate")
@@ -562,6 +578,44 @@
           (is (str/includes? @got "record a new :blocker")
               "an option that does not hold is a new blocker, not a licence to
                take the other branch on the human's behalf"))))))
+
+(deftest an-answer-outlives-the-session-that-asked-the-question
+  ;; The case that made this the shape it is: a run writes a blocker and then
+  ;; dies (failed, budget-killed, torn down). The question is still the ledger's
+  ;; latest entry and still needs a human, but there is nobody to resume — so the
+  ;; answer is recorded and waits for whoever picks the workstream up next.
+  (with-tmp
+    (fn [_]
+      (let [w       (workstream/create! :brian {:stage :in-progress :external-refs []})
+            resumed (atom false)]
+        (workstream/append-entry! :brian (:id w) {:kind :blocker}
+          (pr-str {:format :blocker :summary "s" :needs "n" :options sample-options}))
+        (with-redefs [resume/resume! (fn [& _] (reset! resumed true) {:decision :resumed})]
+          (is (= {:decision :answered-unresumed}
+                 (work/resolve-gate! :brian (:id w) :option-a 1))
+              "an answer nobody was live to hear is an outcome, not a failure")
+          (is (false? @resumed) "there was no parked session to resume"))
+        (let [answer (:report (work/workstream :brian (:id w) 2))]
+          (is (= :blocker-answered (:format answer)))
+          (is (= "A" (:letter answer)))
+          (is (nil? (:resumed answer))
+              "the record says plainly that nobody was told"))
+        (is (= [] (work/gate-actions :in-progress false nil
+                                     {:report-format (:format (:action-report (work/workstream :brian (:id w))))
+                                      :options (:options (:action-report (work/workstream :brian (:id w))))}))
+            "and the gate stops asking: the latest entry is the answer, not the
+             question, so the buttons are gone")))))
+
+(deftest answering-twice-is-refused-by-the-same-position-check
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :in-progress :external-refs []})]
+        (workstream/append-entry! :brian (:id w) {:kind :blocker}
+          (pr-str {:format :blocker :summary "s" :needs "n" :options sample-options}))
+        (is (= :answered-unresumed (:decision (work/resolve-gate! :brian (:id w) :option-a 1))))
+        (is (= {:decision :option-stale} (work/resolve-gate! :brian (:id w) :option-b 1))
+            "entry 1 is no longer the latest — the answer is — so a second click
+             on the same rendered page cannot answer the question twice")))))
 
 (deftest a-letter-that-no-longer-resolves-refuses-rather-than-resuming
   (with-tmp
@@ -596,7 +650,8 @@
               "answering entry 1 after entry 2 replaced it would resume the agent
                with branch A of a question the human never read")
           (is (false? @resumed))
-          (is (= {:decision :resumed} (work/resolve-gate! :brian (:id w) :option-a 2))
+          (is (= {:decision :answered-unresumed}
+                 (work/resolve-gate! :brian (:id w) :option-a 2))
               "the same letter on the CURRENT report still answers"))))))
 
 (deftest option-actions-are-not-workstream-less
