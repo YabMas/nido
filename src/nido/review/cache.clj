@@ -51,7 +51,7 @@
 
 (defn answered
   "Findings already closed against this exact patch, as
-   [{:id … :because …}]. Fed back to the next round's arbiter so a fresh
+   [{:id … :because …}]. Fed back to the next round's warden so a fresh
    reviewer reporting the same thing gets answered rather than re-adjudicated —
    the same job `:rejected` does for the design one altitude up.
 

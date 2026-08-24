@@ -843,7 +843,7 @@
 
 (defn- review-phase-note
   "The one-line outcome of a phase: what each layer found for review, the
-   arbiter's decision, where each fix landed. nil while it is still running.
+   warden's decision, where each fix landed. nil while it is still running.
 
    `fix-findings` and `commit` are read alongside their replacements so a
    report.json written before layers existed still renders."
@@ -856,7 +856,7 @@
                       (when (pos? skipped) (str " · " skipped " layer"
                                                 (when (not= 1 skipped) "s") " skipped"))
                       (when overall-correctness (str " · " overall-correctness)))))
-    ("arbiter" "judge") (when decision
+    ("warden" "arbiter" "judge") (when decision
                (str "→ " decision
                     (when-let [n (seq (filter #(= "fix" (name (or (:disposition %) ""))) rulings))]
                       (str " (fix " (count n) ")"))
@@ -902,7 +902,7 @@
 
 (defn- review-phase
   "One phase of a round: its line, then what it produced — the review's findings,
-   the arbiter's reasoning. Only ever rendered inside an unfolded round, so both
+   the warden's reasoning. Only ever rendered inside an unfolded round, so both
    run inline: the reader asked for exactly this."
   [cwd {:keys [phase findings reason status error] :as ph}]
   [:div.rv-phase
@@ -920,11 +920,11 @@
   "One round, folded or not.
 
    FOLDED (the default) it is a summary: the round's status, its phases' outcomes
-   on one line — findings count, the arbiter's decision, the fix's commit — and its
+   on one line — findings count, the warden's decision, the fix's commit — and its
    findings as titles with their severity. That is the shape of the round; a
    converged review is mostly rounds you never need to read past this.
 
-   UNFOLDED it is the phases in full, findings bodies and the arbiter's reasoning
+   UNFOLDED it is the phases in full, findings bodies and the warden's reasoning
    included. `toggle` is the @get that flips it, nil where the surface has no
    position to navigate to (the gate pane) — there the round renders unfolded,
    since a reader who cannot open it must not be shown the closed half."
@@ -946,7 +946,7 @@
 
 (defn- review-card
   "Curated render of a `:review` ledger event: the verdict + counts the event
-   itself carries, then the per-round detail (review · arbiter · fix, each round's
+   itself carries, then the per-round detail (review · warden · fix, each round's
    findings under it) once `:detail` is hydrated. Degrades to the verdict alone
    when the run dir that held report.json is gone.
 

@@ -29,8 +29,10 @@
     "review" (str "reviewing"
                   (when (seq (:files target))
                     (str " diff (" (count (:files target)) " files)")))
-    ;; "judge" — report.json written before the rename
-    ("arbiter" "judge") "arbitrating"
+    ;; "arbiter"/"judge" — report.json written before the two renames. A
+    ;; per-layer "warden" phase from the stage that was folded in also lands
+    ;; here; it carries no :decision, so it renders as a bare line.
+    ("warden" "arbiter" "judge") "ruling"
     "fix"    "fixing"
     (:phase ph)))
 
@@ -43,7 +45,7 @@
                       (when (pos? skipped)
                         (str " · " skipped " layer" (when (not= 1 skipped) "s")
                              " converged")))))
-    ("arbiter" "judge") (when (:decision ph)
+    ("warden" "arbiter" "judge") (when (:decision ph)
                (str "→ " (:decision ph)
                     (when-let [n (seq (filter #(= "fix" (str (name (or (:disposition %) "")))) 
                                               (:rulings ph)))]

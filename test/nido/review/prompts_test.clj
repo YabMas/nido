@@ -20,54 +20,54 @@
    :lane "lane-malli"
    :out-of-scope "the new validation logic — that lands in the layer above."})
 
-(deftest arbiter-prompt-inlines-the-design-record
-  (let [out (prompts/arbiter-prompt {:findings findings :history [] :design design})]
+(deftest warden-prompt-inlines-the-design-record
+  (let [out (prompts/warden-prompt {:findings findings :history [] :design design})]
     (is (str/includes? out "one rounding boundary at the order aggregate"))
     (is (str/includes? out "a total is rounded exactly once"))
     (is (str/includes? out "challenges — money math needs an accumulator"))
     (is (not (str/includes? out "Design doc")) "no path-handoff, no glob'd spec")))
 
-(deftest arbiter-prompt-carries-rejected-alternatives-as-answered
-  (let [out (prompts/arbiter-prompt {:findings findings :history [] :design design})]
+(deftest warden-prompt-carries-rejected-alternatives-as-answered
+  (let [out (prompts/warden-prompt {:findings findings :history [] :design design})]
     (is (str/includes? out "round at render time"))
     (is (str/includes? out "rejected because money math in the view"))
     (is (str/includes? out "ANSWERED, not new")
         "a finding re-proposing a rejected alternative is answered, not a new problem")))
 
-(deftest arbiter-prompt-ties-escalate-to-a-named-invariant
-  (let [out (prompts/arbiter-prompt {:findings findings :history [] :design design})]
+(deftest warden-prompt-ties-escalate-to-a-named-invariant
+  (let [out (prompts/warden-prompt {:findings findings :history [] :design design})]
     (is (str/includes? out "CONTRADICTS A NAMED INVARIANT"))
     (is (str/includes? out "Do not escalate because a finding merely feels fundamental"))))
 
-(deftest arbiter-prompt-without-a-design-record-forbids-escalation
-  (let [out (prompts/arbiter-prompt {:findings findings :history [] :design nil})]
+(deftest warden-prompt-without-a-design-record-forbids-escalation
+  (let [out (prompts/warden-prompt {:findings findings :history [] :design nil})]
     (is (str/includes? out "No design record on this workstream"))
     (is (str/includes? out "do NOT park anything for contradicting an invariant"))
     (is (not (str/includes? out "Invariants:")))))
 
-(deftest arbiter-prompt-without-a-design-record-still-parks-a-bad-cut
+(deftest warden-prompt-without-a-design-record-still-parks-a-bad-cut
   ;; The two entrances to park are independent. One turns on a named invariant
   ;; and is unavailable with no design record; the other says the loop has no
   ;; move for the finding, which is true whether or not anyone wrote a design
   ;; down. Collapsing them would send every seam finding to a fixer on exactly
   ;; the workstreams with the least written down about their shape.
-  (let [out (prompts/arbiter-prompt {:findings findings :history [] :design nil})]
+  (let [out (prompts/warden-prompt {:findings findings :history [] :design nil})]
     (is (str/includes? out "misplaced-seam or order-dependence finding still parks"))
     (is (str/includes? out "does not turn on the design record"))))
 
-(deftest arbiter-prompt-marks-the-stance-as-framing-not-checklist
-  (let [out (prompts/arbiter-prompt {:findings findings :history [] :design design
+(deftest warden-prompt-marks-the-stance-as-framing-not-checklist
+  (let [out (prompts/warden-prompt {:findings findings :history [] :design design
                                    :stance "the shape of the data is the design"})]
     (is (str/includes? out "the shape of the data is the design"))
     (is (str/includes? out "NOT a checklist"))
     (is (str/includes? out "never cite it against a specific finding"))))
 
-(deftest arbiter-prompt-omits-the-stance-block-when-absent
-  (let [out (prompts/arbiter-prompt {:findings findings :history [] :design design})]
+(deftest warden-prompt-omits-the-stance-block-when-absent
+  (let [out (prompts/warden-prompt {:findings findings :history [] :design design})]
     (is (not (str/includes? out "PROJECT STANCE")))))
 
-(deftest arbiter-prompt-names-findings-by-id-and-shows-who-reported-them
-  (let [out (prompts/arbiter-prompt
+(deftest warden-prompt-names-findings-by-id-and-shows-who-reported-them
+  (let [out (prompts/warden-prompt
              {:findings [{:id "aa11" :priority 1 :title "t" :body "b"
                           :reach :structural :from-layer "drop-legacy"}
                          {:id "bb22" :priority 2 :title "u" :body "c"}]
@@ -76,15 +76,15 @@
     (is (str/includes? out "id bb22  [P2/unclear]")
         "an unlabelled finding is unclear, not local")))
 
-(deftest arbiter-prompt-requires-an-authority-for-every-non-fix
+(deftest warden-prompt-requires-an-authority-for-every-non-fix
   ;; A closed with no authority is a shrug, and is how a review quietly stops
   ;; reviewing.
-  (let [out (prompts/arbiter-prompt {:findings findings :history [] :design design})]
+  (let [out (prompts/warden-prompt {:findings findings :history [] :design design})]
     (is (str/includes? out "Nothing is dropped"))
     (is (str/includes? out "it is a shrug"))))
 
-(deftest arbiter-prompt-assigns-a-composition-finding-to-the-highest-layer
-  (let [out (prompts/arbiter-prompt {:findings findings :history [] :design design})]
+(deftest warden-prompt-assigns-a-composition-finding-to-the-highest-layer
+  (let [out (prompts/warden-prompt {:findings findings :history [] :design design})]
     (is (str/includes? out "assign it to the HIGHEST layer involved"))))
 
 (deftest toc-block-is-a-map-of-claims-and-files-not-diffs
@@ -95,20 +95,20 @@
     (is (str/includes? s "map only")))
   (is (nil? (prompts/toc-block []))))
 
-(deftest arbiter-sees-each-layers-out-of-scope
+(deftest warden-sees-each-layers-out-of-scope
   ;; It is told it may close on the authority "out-of-scope"; without the field
   ;; that is a word it can cite but never read.
-  (let [out (prompts/arbiter-prompt
+  (let [out (prompts/warden-prompt
              {:findings findings :history [] :design design
               :toc [{:label "shape" :claim "c"
                      :out-of-scope "the new validation logic"}]})]
     (is (str/includes? out "out of scope: the new validation logic"))))
 
-(deftest arbiter-gets-back-what-it-already-closed-grouped-by-layer
+(deftest warden-gets-back-what-it-already-closed-grouped-by-layer
   ;; The reviewer starts fresh every round and re-reports closed findings. These
-  ;; are the arbiter's OWN prior closes, so they are a default it may reverse
+  ;; are the warden's OWN prior closes, so they are a default it may reverse
   ;; rather than a ruling to defer to.
-  (let [out (prompts/arbiter-prompt
+  (let [out (prompts/warden-prompt
              {:findings findings :history [] :design design
               :answered [{:label "shape"
                           :answered [{:id "aa11" :title "t"
@@ -120,12 +120,12 @@
     (is (str/includes? out "out-of-scope"))
     (is (str/includes? out "say why that answer no longer"))))
 
-(deftest arbiter-omits-the-answered-block-when-nothing-was-closed
-  (let [out (prompts/arbiter-prompt {:findings findings :history [] :design design})]
+(deftest warden-omits-the-answered-block-when-nothing-was-closed
+  (let [out (prompts/warden-prompt {:findings findings :history [] :design design})]
     (is (not (str/includes? out "ALREADY CLOSED IN AN EARLIER ROUND")))))
 
-(deftest arbiter-is-told-not-to-patch-a-structural-finding-away
-  (let [out (prompts/arbiter-prompt {:findings findings :history [] :design design})]
+(deftest warden-is-told-not-to-patch-a-structural-finding-away
+  (let [out (prompts/warden-prompt {:findings findings :history [] :design design})]
     (is (str/includes? out "patching a design\nquestion makes it disappear without anyone deciding it"))))
 
 
@@ -214,25 +214,25 @@ layers, it is not yours"))
   (is (nil? (prompts/composition-block {:layers []})))
   (is (nil? (prompts/composition-block {:layers [(first two-layers)]}))))
 
-(deftest arbiter-prompt-shows-a-composition-findings-kind-and-span
-  (let [out (prompts/arbiter-prompt
+(deftest warden-prompt-shows-a-composition-findings-kind-and-span
+  (let [out (prompts/warden-prompt
              {:findings [{:id "aa11" :priority 2 :title "t" :body "b"
                           :reach :structural :from-layer "stack"
                           :kind :misplaced-seam :layers ["series" "banner"]}]
               :history [] :design design})]
     (is (str/includes? out "reported-by stack · misplaced-seam · across series + banner"))))
 
-(deftest arbiter-prompt-parks-a-bad-cut-instead-of-handing-it-to-a-fixer
+(deftest warden-prompt-parks-a-bad-cut-instead-of-handing-it-to-a-fixer
   ;; A fixer can only patch one side of a seam, and a patched seam converges —
   ;; so the round reports success and the wrong cut ships.
-  (let [out (prompts/arbiter-prompt {:findings findings :history [] :design design})]
+  (let [out (prompts/warden-prompt {:findings findings :history [] :design design})]
     (is (str/includes? out "cannot re-cut a stack"))
     (is (str/includes? out "makes the bad seam permanent"))))
 
-(deftest arbiter-prompt-attributes-a-composition-finding-by-what-it-spans
+(deftest warden-prompt-attributes-a-composition-finding-by-what-it-spans
   ;; The highest-layer rule itself is guarded above; this is the new half — the
-  ;; arbiter is no longer guessing the span off file lists, the pass reports it.
-  (let [out (prompts/arbiter-prompt {:findings findings :history [] :design design})]
+  ;; warden is no longer guessing the span off file lists, the pass reports it.
+  (let [out (prompts/warden-prompt {:findings findings :history [] :design design})]
     (is (str/includes? out "names the ones it spans after `across`"))
     (is (str/includes? out "spans only ONE layer")
         "a stack finding naming one layer is that layer's own, reported twice")))

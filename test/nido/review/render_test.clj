@@ -17,7 +17,7 @@
                        :overall-correctness "incorrect"
                        :findings [{:title "bug" :file "src/a.clj"
                                    :line-start 5 :line-end 6 :priority 1}]}
-                      {:phase "arbiter" :status "running"
+                      {:phase "warden" :status "running"
                        :started-at "2026-06-30T14:00:30Z"}]}]
    :summary nil})
 
@@ -27,13 +27,13 @@
     (is (str/includes? s "reviewing"))
     (is (str/includes? s "2 files"))
     (is (str/includes? s "1 finding"))      ; review done summary
-    (is (str/includes? s "arbitrating"))
-    (is (str/includes? s "00:12"))          ; arbiter elapsed: 14:00:42 - 14:00:30
+    (is (str/includes? s "ruling"))
+    (is (str/includes? s "00:12"))          ; warden elapsed: 14:00:42 - 14:00:30
     (is (str/includes? s "✓"))))            ; review ok glyph
 
-(deftest frame-shows-arbiter-decision-when-done
+(deftest frame-shows-warden-decision-when-done
   (let [r (assoc-in running-report [:rounds 0 :phases 1]
-                    {:phase "arbiter" :status "ok" :decision "continue"
+                    {:phase "warden" :status "ok" :decision "continue"
                      :rulings [{:id "aa11" :disposition :fix}
                                {:id "bb22" :disposition :closed}]})
         s (render/frame r now)]
@@ -163,9 +163,10 @@
     (is (not (str/includes? s "Layer ")) "nothing invents a number it does not have")))
 
 (deftest a-report-carrying-the-removed-per-layer-warden-phase-still-renders
-  ;; The stage is gone, but reports written while it existed are still on disk.
-  ;; The phase renders as a bare line rather than throwing or inventing a
-  ;; summary for a pass that no longer runs.
+  ;; The stage is gone, but reports written while it existed are still on disk —
+  ;; and "warden" now names the decision phase that replaced it. A legacy row
+  ;; lands on that branch, finds no :decision, and renders as a bare line rather
+  ;; than throwing or inventing a summary for a pass that no longer runs.
   (let [r {:target {:cwd "/x/feat/thing" :base "main" :layers 2 :files ["a"]}
            :rounds [{:round 1
                      :phases [{:phase "warden" :status "ok"
@@ -173,8 +174,9 @@
                                :dispositions [{}]
                                :by-layer [{:label "one" :index 1 :stack? false :count 1}]}]}]}
         s (render/frame r (java.time.Instant/parse "2026-01-01T00:00:10Z"))]
-    (is (str/includes? s "warden"))
-    (is (not (str/includes? s "to rule on")))))
+    (is (str/includes? s "ruling"))
+    (is (not (str/includes? s "to rule on")) "no per-layer rows survive")
+    (is (not (str/includes? s "disposition")) "and no summary is invented for it")))
 
 (deftest final-says-what-was-decided-about-each-finding
   (let [r {:target {:cwd "/x/feat/thing" :base "main"}

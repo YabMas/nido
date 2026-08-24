@@ -682,14 +682,14 @@
                                             :body "the one-shot update runs early"
                                             :priority 1 :file "/w/src/a.clj"
                                             :line-start 32 :line-end 35}]}
-                               {:phase "arbiter" :status "ok" :decision "continue"
+                               {:phase "warden" :status "ok" :decision "continue"
                                 :reason "a real correctness risk" :fix-findings [0]}
                                {:phase "fix" :status "ok" :commit "553c4779beef"
                                 :fixed-count 1}]}
                      {:round 2 :status "clean"
                       :phases [{:phase "review" :status "ok"
                                 :overall-correctness "correct" :findings []}
-                               {:phase "arbiter" :status "ok" :decision "stop"}]}]}})
+                               {:phase "warden" :status "ok" :decision "stop"}]}]}})
 
 (defn- review-pane
   "The pane with `review-report` open at ledger entry 7, `rounds` unfolded."
@@ -715,7 +715,7 @@
         "the round's phases, summarised on one line")
     ;; …and not its argument
     (is (not (str/includes? html "the one-shot update runs early")) "no finding body")
-    (is (not (str/includes? html "a real correctness risk")) "no arbiter reasoning")
+    (is (not (str/includes? html "a real correctness risk")) "no warden reasoning")
     (is (not (str/includes? html "src/a.clj:32-35")) "no locations")
     (is (str/includes? html "?entry=7&amp;rounds=1") "clicking Round 1 unfolds it")
     (is (str/includes? html "/runs/review-1/report.json") "where the full report lives")))
@@ -724,7 +724,7 @@
   (let [html (review-pane #{1})]
     (is (str/includes? html "src/a.clj:32-35") "location, relative to the reviewed worktree")
     (is (str/includes? html "the one-shot update runs early") "the finding body")
-    (is (str/includes? html "a real correctness risk") "the arbiter's reasoning")
+    (is (str/includes? html "a real correctness risk") "the warden's reasoning")
     (is (str/includes? html "→ continue (fix 0)"))
     (is (str/includes? html "commit 553c4779"))
     (is (str/includes? html "?entry=7&amp;rounds=1,2")

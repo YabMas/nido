@@ -1,7 +1,7 @@
 ;; src/nido/review/stages.clj
 (ns nido.review.stages
-  "The review loop's three stages (review/arbiter/fix) as {:name :run} maps,
-   plus the arbiter-decision parser. Stages only transform the iteration
+  "The review loop's three stages (review/warden/fix) as {:name :run} maps,
+   plus the warden-decision parser. Stages only transform the iteration
    context; the engine owns flow."
   (:require
    [babashka.fs :as fs]
@@ -24,7 +24,7 @@
 (def ^:private dispositions #{:fix :closed :deviation :park})
 
 (defn- ruling
-  "One per-finding ruling from the arbiter's JSON. A disposition outside the
+  "One per-finding ruling from the warden's JSON. A disposition outside the
    four is read as :fix rather than dropped — the fail-safe direction, and the
    one that keeps \"nothing is dropped\" true of a malformed answer."
   [r]
@@ -36,7 +36,7 @@
      :of          (:of r)
      :because     (:because r)}))
 
-(defn parse-arbiter-decision
+(defn parse-warden-decision
   "Last fenced ```json block in `text` -> {:decision :reason :rulings}.
    Unparseable -> indeterminate."
   [text]
@@ -109,7 +109,7 @@
    runs IN that round: `build-toc` reads each target's manifest once its review
    has returned, which is exactly too late to prime one with.
 
-   The revisions are the point. The arbiter gets `toc-block` — a map with no
+   The revisions are the point. The warden gets `toc-block` — a map with no
    coordinates — precisely so it cannot re-derive the layers around it. The
    composition pass gets the coordinates for the opposite reason: it is asked
    whether each piece holds together where it sits, and a layer's own tip is the
@@ -190,7 +190,7 @@
    finding — the layer reviewer's copy wins because layer targets come first and
    its view is the more specific one. This is only the mechanical case; deciding
    that two DIFFERENTLY worded findings are the same defect needs a view across
-   layers, which is the arbiter's job."
+   layers, which is the warden's job."
   [results]
   (->> results
        (mapcat (fn [{:keys [target] :as r}]
@@ -205,13 +205,13 @@
 
 (defn- build-toc
   "The stack's table of contents — one entry per layer: what it claims, what it
-   declared out of scope, and which files it touches. This is what the arbiter
+   declared out of scope, and which files it touches. This is what the warden
    gets INSTEAD of the other layers' diffs, so it can attribute deliberately
    without re-deriving them.
 
-   `:out-of-scope` is carried because the arbiter is told it may close a finding
+   `:out-of-scope` is carried because the warden is told it may close a finding
    on the authority `out-of-scope` — \"a layer's Out of scope names it\". Without
-   the field, that authority is one the arbiter can cite but never actually
+   the field, that authority is one the warden can cite but never actually
    read, which is how a close stops being evidence and becomes a guess."
   [results]
   (into []
@@ -350,7 +350,7 @@
 
 (defn read-stance
   "The project's stance text, from nido's own tree, capped so it can't blow up the
-   arbiter prompt. Read from the source dir rather than cwd: the review runs in the
+   warden prompt. Read from the source dir rather than cwd: the review runs in the
    worktree, and the stance ships with the /design skill in nido's `.claude`, which
    the worktree does not carry. Missing or unreadable degrades to nil — a headless
    review must not die for want of framing."
@@ -411,7 +411,7 @@
           reviews)))
 
 (defn answered-for
-  "What this target reported and the arbiter closed. Carried forward under the
+  "What this target reported and the warden closed. Carried forward under the
    patch hash so next round's fresh reviewer, reporting the same thing, gets
    answered rather than re-adjudicated."
   [label findings]
@@ -423,8 +423,8 @@
 (defn record-convergence!
   "Write what converged this round into the workstream's cache.
 
-   This lives in the arbiter stage rather than in a stage of its own because the
-   engine short-circuits the moment the arbiter says stop — and a round that
+   This lives in the warden stage rather than in a stage of its own because the
+   engine short-circuits the moment the warden says stop — and a round that
    stops because nothing needs fixing is exactly the round whose convergence is
    worth remembering. Best-effort: a cache that cannot be written costs the next
    run some duplicated review and nothing else."
@@ -445,9 +445,9 @@
           (cache/write! project ws-id c))))))
 
 (defn apply-rulings
-  "Merge the arbiter's per-finding rulings onto the findings.
+  "Merge the warden's per-finding rulings onto the findings.
 
-   A finding the arbiter did not rule on defaults to :fix. That is the fail-safe
+   A finding the warden did not rule on defaults to :fix. That is the fail-safe
    direction and it is what keeps \"nothing is dropped\" true of a malformed
    answer: an omitted finding is worked on, never silently discarded."
   [findings rulings]
@@ -460,17 +460,18 @@
                       :authority   (:authority r)
                       :of          (:of r)
                       :because     (or (:because r)
-                                       (when-not r "the arbiter did not rule on this finding"))})))
+                                       (when-not r "the warden did not rule on this finding"))})))
           findings)))
 
-(def arbiter-stage
+(def warden-stage
   "The one reader with a view across layers, so attribution is its job.
 
-   It used to be preceded by a per-layer pass that ruled first and handed its
-   dispositions down as advice. That pass held no tools and read no diff — the
-   same shape as this one — so the only things it had that this stage did not
-   were two pieces of text: each layer's Out of scope, and what earlier rounds
-   had already closed. Both are now inputs here (`toc` carries the first,
+Called the arbiter until it absorbed the stage in front of it — a per-layer
+   pass, confusingly the original holder of this name, that ruled first and
+   handed its dispositions down as advice. That pass held no tools and read no
+   diff, the same shape as this one, so the only things it had that this stage
+   did not were two pieces of text: each layer's Out of scope, and what earlier
+   rounds had already closed. Both are inputs here now (`toc` carries the first,
    `answered-by-layer` the second), and its rulings were advisory anyway: this
    stage was always told it could overrule them freely, and always had to rule
    on every finding itself.
@@ -479,10 +480,10 @@
    to interrupt a human, and its inputs have to be reconstructable from the
    report afterwards. What genuinely accumulates across rounds is carried as an
    inspectable value (history, answered), never as a resumed conversation."
-  {:name :arbiter
+  {:name :warden
    :run  (fn [ctx]
            (let [{:keys [cwd run-id budget]} (:config ctx)
-                 prompt (prompts/arbiter-prompt
+                 prompt (prompts/warden-prompt
                          {:findings (:findings ctx)
                           :history  (mapv #(dissoc % :findings) (:history ctx))
                           :design   (discover-design-record cwd)
@@ -494,13 +495,13 @@
                                  :first-message prompt :budget budget
                                  :tools ""
                                  :err-file (str (fs/path (cstate/run-dir run-id) "agent.err.log"))})
-                 decision (parse-arbiter-decision result-text)]
+                 decision (parse-warden-decision result-text)]
              (if (or (zero? (or num-turns 0)) result-error?
                      (= :indeterminate (:decision decision)))
-               (assoc ctx :arbiter decision :control :stop
-                      :status :arbiter-indeterminate)
+               (assoc ctx :warden decision :control :stop
+                      :status :warden-indeterminate)
                (let [ctx' (assoc ctx
-                                 :arbiter  decision
+                                 :warden  decision
                                  :findings (apply-rulings (:findings ctx) (:rulings decision))
                                  :control  (:decision decision))]
                  (record-convergence! cwd ctx')
@@ -516,7 +517,7 @@
   (or (:slug layer) (:bookmark layer)))
 
 (defn fix-plan
-  "Findings the arbiter dispositioned :fix, grouped by the layer that OWNS them,
+  "Findings the warden dispositioned :fix, grouped by the layer that OWNS them,
    ordered bottom→top.
 
    Bottom-up is what makes the fixes cheap rather than what makes them correct:
@@ -525,7 +526,7 @@
    under it again this round.
 
    A finding whose owner_layer names no layer of this stack falls to the top
-   layer — the same assign-to-highest rule the arbiter is told to use for a
+   layer — the same assign-to-highest rule the warden is told to use for a
    composition defect, applied to an answer that named nothing usable."
   [stack findings]
   (let [to-fix (filter #(= :fix (:disposition %)) findings)]
@@ -632,4 +633,4 @@
                               :fixes (:fixes ctx')
                               :fixed-count (reduce + 0 (map :fixed-count (:fixes ctx')))
                               :findings (:findings ctx')
-                              :arbiter (:arbiter ctx')})))))))})
+                              :warden (:warden ctx')})))))))})

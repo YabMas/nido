@@ -237,7 +237,7 @@
    A phase plan has several landings, and between them some invariants are false
    BY DESIGN — during an expand/migrate/contract, \"there is exactly one writer\"
    is deliberately untrue for the whole middle phase. Without :holds the review
-   arbiter reads that deliberate state as an invalidated design and escalates a
+   warden reads that deliberate state as an invalidated design and escalates a
    decision that was already made.
 
      :always         holds at EVERY phase boundary, so review checks it every time
@@ -592,7 +592,7 @@
    and a record that cannot express that is read as a broken one.
 
    :invariants moves to the Invariant map, so each says whether it holds at every
-   phase boundary or only on completion. Without it the arbiter judges the middle
+   phase boundary or only on completion. Without it the warden judges the middle
    of a migration against the end of it.
 
    :phases has :min 2 because one phase is not a plan, it is a shipment. There is
@@ -615,7 +615,7 @@
    Replaces ImplementationPlan, and drops its :steps: a step list is working
    memory, and the ledger holds what survives the session.
 
-   :invariants is required and non-empty on purpose. It is what the review arbiter
+   :invariants is required and non-empty on purpose. It is what the review warden
    checks findings against; a design that names none is unfalsifiable, and every
    finding against it becomes a matter of taste.
 
@@ -654,7 +654,7 @@
    Not registered for writing. It exists so history stays readable, which is not
    a courtesy: ws/latest-entry and work/entry->report validate on READ and
    swallow the failure, so without this every design record written before the
-   cutover would quietly vanish from the panes and from the review judge — the
+   cutover would quietly vanish from the panes and from the review warden — the
    design would not be contradicted, it would simply stop being there."
   [:map {:closed true}
    [:format     [:= :design]]
@@ -684,7 +684,7 @@
    Both are wide here and strict in the write shapes above. A record that omits
    what it should carry must fail on write, where the author can fix it — not on
    read, months later, where the only available behaviour is to make the design
-   silently disappear from the panes and the arbiter."
+   silently disappear from the panes and the warden."
   (into [:map {:closed true}]
         (concat design-common
                 [[:invariants [:vector {:min 1} [:or string? Invariant]]]
@@ -819,9 +819,9 @@
    [:format             [:= :review-report]]
    [:status             [:enum :converged :escalated :clean :no-progress
                                :max-iters :review-failed :dry-run
-                               :fix-noop :arbiter-indeterminate
+                               :fix-noop :warden-indeterminate
                                ;; pre-rename ledger entries stay readable
-                               :judge-indeterminate]]
+                               :arbiter-indeterminate :judge-indeterminate]]
    [:base               string?]
    [:base-rev           [:maybe string?]]
    [:rounds             int?]
@@ -1124,7 +1124,7 @@
    on read and SWALLOW the failure — ws/latest-entry returns nil, work/entry->report
    degrades to raw markdown — so tightening a write schema without widening the
    read one does not surface as an error anywhere. It deletes history from the
-   panes and from the review judge, silently, which is the failure mode the
+   panes and from the review warden, silently, which is the failure mode the
    ledger's immutability is supposed to rule out."
   [kind report]
   (validate-against (or (read-schemas kind)

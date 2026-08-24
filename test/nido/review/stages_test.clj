@@ -9,32 +9,32 @@
    [nido.review.stages :as stages]
    [nido.vsdd.jj :as jj]))
 
-(deftest parse-arbiter-decision-reads-per-finding-rulings
+(deftest parse-warden-decision-reads-per-finding-rulings
   (let [txt (str "Here is my call.\n\n```json\n"
                  "{\"decision\":\"continue\",\"reason\":\"2 real bugs\","
                  "\"findings\":[{\"id\":\"aa11\",\"owner_layer\":\"drop-legacy\","
                  "\"disposition\":\"fix\",\"because\":\"real\"}]}\n"
                  "```\n")
-        d   (stages/parse-arbiter-decision txt)]
+        d   (stages/parse-warden-decision txt)]
     (is (= :continue (:decision d)))
     (is (= [{:id "aa11" :owner-layer "drop-legacy" :disposition :fix
              :authority nil :of nil :because "real"}]
            (:rulings d)))))
 
-(deftest parse-arbiter-decision-reads-an-unknown-disposition-as-fix
+(deftest parse-warden-decision-reads-an-unknown-disposition-as-fix
   ;; The fail-safe direction: an unrecognised ruling is worked on, never dropped.
   (let [txt (str "```json\n{\"decision\":\"continue\",\"findings\":"
                  "[{\"id\":\"aa11\",\"disposition\":\"whatever\"}]}\n```")]
-    (is (= :fix (:disposition (first (:rulings (stages/parse-arbiter-decision txt))))))))
+    (is (= :fix (:disposition (first (:rulings (stages/parse-warden-decision txt))))))))
 
-(deftest parse-arbiter-decision-stop-without-rulings
+(deftest parse-warden-decision-stop-without-rulings
   (let [txt "```json\n{\"decision\":\"stop\",\"reason\":\"clean\"}\n```"]
     (is (= {:decision :stop :reason "clean" :rulings []}
-           (stages/parse-arbiter-decision txt)))))
+           (stages/parse-warden-decision txt)))))
 
-(deftest parse-arbiter-decision-malformed-is-indeterminate
-  (is (= :indeterminate (:decision (stages/parse-arbiter-decision "no json here"))))
-  (is (= :indeterminate (:decision (stages/parse-arbiter-decision nil)))))
+(deftest parse-warden-decision-malformed-is-indeterminate
+  (is (= :indeterminate (:decision (stages/parse-warden-decision "no json here"))))
+  (is (= :indeterminate (:decision (stages/parse-warden-decision nil)))))
 
 (deftest review-stage-sets-findings
   (with-redefs [layers/patch-hash (fn [& _] nil)
@@ -57,18 +57,18 @@
       (is (= :stop (:control ctx)))
       (is (= :clean (:status ctx))))))
 
-(deftest arbiter-stage-continue
+(deftest warden-stage-continue
   (with-redefs [agent/launch! (fn [_] {:num-turns 3 :result-error? false
                                        :result-text "```json\n{\"decision\":\"continue\",\"reason\":\"r\",\"findings\":[{\"id\":\"aa11\",\"disposition\":\"fix\"}]}\n```"})
                 stages/discover-design-record (fn [_] nil)
                 stages/project+ws-from-cwd (fn [_] nil)]
-    (let [ctx ((:run stages/arbiter-stage)
+    (let [ctx ((:run stages/warden-stage)
                {:config {:cwd "/w" :run-id "r1"} :iter 1
                 :findings [{:id "aa11" :title "x"}]})]
       (is (= :continue (:control ctx)))
       (is (= :fix (-> ctx :findings first :disposition))))))
 
-(deftest arbiter-prompt-uses-the-design-record-as-its-yardstick
+(deftest warden-prompt-uses-the-design-record-as-its-yardstick
   (let [captured (atom nil)]
     (with-redefs [agent/launch! (fn [{:keys [first-message]}]
                                   (reset! captured first-message)
@@ -82,16 +82,16 @@
                            :standing {:relation :conforms}})
                   stages/project+ws-from-cwd (fn [_] [:brian "ws-1"])
                   stages/read-stance (fn [_] "the shape of the data is the design")]
-      ((:run stages/arbiter-stage)
+      ((:run stages/warden-stage)
        {:config {:cwd "/w" :run-id "r1"} :iter 1 :findings [{:title "x"}]})
       (let [p @captured]
         (is (str/includes? p "a total is rounded exactly once"))
-        (is (str/includes? p "round at render time") "rejected alternatives reach the arbiter")
+        (is (str/includes? p "round at render time") "rejected alternatives reach the warden")
         (is (str/includes? p "ANSWERED, not new"))
         (is (str/includes? p "the shape of the data is the design"))
         (is (str/includes? p "never cite it against a specific finding"))))))
 
-(deftest arbiter-without-a-design-record-is-told-not-to-escalate
+(deftest warden-without-a-design-record-is-told-not-to-escalate
   (let [captured (atom nil)]
     (with-redefs [agent/launch! (fn [{:keys [first-message]}]
                                   (reset! captured first-message)
@@ -99,19 +99,19 @@
                                    :result-text "```json\n{\"decision\":\"stop\",\"reason\":\"r\"}\n```"})
                   stages/discover-design-record (fn [_] nil)
                   stages/project+ws-from-cwd (fn [_] nil)]
-      ((:run stages/arbiter-stage)
+      ((:run stages/warden-stage)
        {:config {:cwd "/w" :run-id "r1"} :iter 1 :findings [{:title "x"}]})
       (is (str/includes? @captured "do NOT park anything")
           "with no stated invariant there is nothing for a finding to contradict"))))
 
-(deftest arbiter-stage-noop-is-indeterminate
+(deftest warden-stage-noop-is-indeterminate
   (with-redefs [agent/launch! (fn [_] {:num-turns 0 :result-error? false :result-text ""})
                 stages/discover-design-record (fn [_] nil)
                 stages/project+ws-from-cwd (fn [_] nil)]
-    (let [ctx ((:run stages/arbiter-stage)
+    (let [ctx ((:run stages/warden-stage)
                {:config {:cwd "/w" :run-id "r1"} :iter 1 :findings []})]
       (is (= :stop (:control ctx)))
-      (is (= :arbiter-indeterminate (:status ctx))))))
+      (is (= :warden-indeterminate (:status ctx))))))
 
 (deftest fix-stage-commits-when-changed
   (let [commits (atom [])]
@@ -161,7 +161,7 @@
 
 (deftest apply-rulings-defaults-an-unruled-finding-to-fix
   ;; "Nothing is dropped" has to survive a malformed answer: a finding the
-  ;; arbiter forgot is worked on, not silently discarded.
+  ;; warden forgot is worked on, not silently discarded.
   (let [out (stages/apply-rulings [{:id "aa11" :title "t"} {:id "bb22" :title "u"}]
                                   [{:id "aa11" :disposition :closed :authority "duplicate"}])]
     (is (= :closed (:disposition (first out))))
@@ -226,14 +226,14 @@
           "resumes this layer's own fixer session")
       (is (true? (:resume? @seen)) "a layer fixed in an earlier round resumes"))))
 
-(deftest arbiter-stage-launches-report-only
+(deftest warden-stage-launches-report-only
   (let [seen (atom nil)]
     (with-redefs [agent/launch! (fn [opts] (reset! seen opts)
                                   {:num-turns 3 :result-error? false
                                    :result-text "```json\n{\"decision\":\"stop\"}\n```"})]
-      ((:run stages/arbiter-stage)
+      ((:run stages/warden-stage)
        {:config {:cwd "/w" :run-id "r1"} :iter 1 :findings [{:title "x"}]})
-      (is (= "" (:tools @seen)) "arbiter launches with tools disabled (report-only)"))))
+      (is (= "" (:tools @seen)) "warden launches with tools disabled (report-only)"))))
 
 (deftest review-stage-passes-iter-to-codex
   (let [seen (atom nil)]

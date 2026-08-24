@@ -4,7 +4,7 @@
    the findings were the ironing-out of implementation details of a sound design,
    or evidence the design itself is wrong.
 
-   Distinct from the in-loop arbiter in two ways. The arbiter decides whether to spend
+   Distinct from the in-loop warden in two ways. The warden decides whether to spend
    another fix round and is report-only (`:tools \"\"`), so it cannot read code —
    it reasons purely from what the record says. This pass is asked whether the
    design survived contact with the code, which cannot be answered without looking
@@ -221,7 +221,7 @@
   (boolean (#{:invalidated :standing-challenged} (:verdict v))))
 
 (defn still-open
-  "Findings that actually remain at the end — the arbiter closed the rest, by a
+  "Findings that actually remain at the end — the warden closed the rest, by a
    named authority. Handing a closed finding to the verdict as \"still open\"
    would have it re-adjudicate something already decided, against a design it is
    supposed to be checking."

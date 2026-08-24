@@ -77,7 +77,7 @@
     (is (str/includes? p "[P1/structural] t"))
     (is (str/includes? p "the reviewer\ncould not see the design, and you can"))))
 
-(deftest still-open-drops-what-the-arbiter-closed
+(deftest still-open-drops-what-the-warden-closed
   ;; A closed finding was decided, by a named authority. Handing it to the
   ;; verdict as "still open" re-adjudicates a settled question.
   (is (= ["b"] (map :title (verdict/still-open

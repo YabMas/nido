@@ -2,7 +2,7 @@
   "Prompt text for the review loop's codex + claude stages."
   (:require
    [clojure.java.io :as io]
-   [clojure.string :as str]))   ; used by arbiter-prompt / fix-prompt (Tasks 5–6)
+   [clojure.string :as str]))   ; used by warden-prompt / fix-prompt (Tasks 5–6)
 
 (def review-prompt
   "codex review-guidelines prompt (lifted from codex's review template)."
@@ -136,7 +136,7 @@
    contributes, the rev of the tree it leaves behind, and what it declared.
 
    Unlike `toc-block` this hands over REVISIONS, and that is the whole
-   difference between the two. The arbiter is given the map precisely so it
+   difference between the two. The warden is given the map precisely so it
    cannot re-derive the other layers; the composition pass is given the
    coordinates precisely so it can, because the states between layers are the
    only thing it is here to look at."
@@ -178,7 +178,7 @@
      "THIS IS THE COMPOSITION PASS OVER A STACKED CHANGE. Where it narrows the\n"
      "instructions above, it wins.\n\n"
      "Every layer of this stack has ALREADY been reviewed on its own, by a\n"
-     "reviewer holding only that layer's diff, and one arbiter with a view\n"
+     "reviewer holding only that layer's diff, and one warden with a view\n"
      "across layers will rule on what came back. Those findings exist. Producing\n"
      "them again is not harmless redundancy — it is the exact cost this layering\n"
      "was built to avoid, and it gets paid twice: once by you, once by whoever\n"
@@ -310,7 +310,7 @@
        (str/join "\n\n")))
 
 (defn- design-block
-  "The design record, rendered for the arbiter. This is the yardstick: findings are
+  "The design record, rendered for the warden. This is the yardstick: findings are
    judged against these invariants and nothing else. :rejected is included because
    a finding that re-proposes a rejected alternative is *answered* rather than new."
   [{:keys [shape invariants rejected standing]}]
@@ -330,7 +330,7 @@
 
 (defn- stance-block
   "The project's stance, as framing only. It primes reasoning about boundaries and
-   registers; it cannot be violated by a line of code, and an arbiter that cites it
+   registers; it cannot be violated by a line of code, and an warden that cites it
    against one is inventing specificity it does not have."
   [stance]
   (str "PROJECT STANCE — background framing only. Use it to reason about whether a\n"
@@ -368,8 +368,8 @@
               (str/join "\n"))
          "\n\n")))
 
-(defn arbiter-prompt
-  "Build the arbiter prompt. The arbiter is the only thing in the loop with a
+(defn warden-prompt
+  "Build the warden prompt. The warden is the only thing in the loop with a
    view across layers, so attribution — which layer a finding BELONGS to, as
    against which one reported it — is its job and nothing else's.
 
@@ -378,7 +378,7 @@
    human, so its inputs have to be reconstructable from the report afterwards."
   [{:keys [findings history design stance toc answered]}]
   (str
-   "You are the ARBITER in an automated code-review loop over a STACK of layers.\n"
+   "You are the WARDEN of an automated code-review loop over a STACK of layers.\n"
    "You are the only reader with a view across all of them.\n\n"
    "Return EXACTLY one fenced ```json block, nothing after it, matching:\n"
    "{\"decision\": \"continue|stop|escalate\",\n"

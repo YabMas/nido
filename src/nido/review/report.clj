@@ -26,14 +26,14 @@
   [round]
   (let [phases (:phases round)
         ph     (fn [n] (last (filter #(= n (:phase %)) phases)))
-        review (ph "review") arbiter (ph "arbiter") fix (ph "fix")]
+        review (ph "review") warden (ph "warden") fix (ph "fix")]
     (cond
       (some #(= "error" (:status %)) phases)                       "failed"
       (and review (= "ok" (:status review))
-           (empty? (:findings review)) (nil? arbiter))              "clean"
-      (= "escalate" (:decision arbiter))                            "escalated"
+           (empty? (:findings review)) (nil? warden))              "clean"
+      (= "escalate" (:decision warden))                            "escalated"
       (and fix (seq (:fixes fix)))                                "continued"
-      (= "stop" (:decision arbiter))                                "stopped"
+      (= "stop" (:decision warden))                                "stopped"
       :else                                                       "ended")))
 
 (defn- close-current-round
@@ -120,7 +120,7 @@
       :review (assoc ph :overall-correctness (:overall-correctness ctx)
                         :findings (vec (:findings ctx))
                         :layers (review-layers ctx))
-      :arbiter (let [a (:arbiter ctx)]
+      :warden (let [a (:warden ctx)]
                  (assoc ph :decision (some-> (:decision a) name)
                         :reason (:reason a)
                         :rulings (mapv #(select-keys % [:id :owner-layer :disposition

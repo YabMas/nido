@@ -123,26 +123,26 @@
                        [{:label "b"} {:label "stack" :stack? true} {:label "a"}])))
       "the composition still sorts last without any numbers around it"))
 
-(deftest arbiter-and-fix-fill-in-the-round
+(deftest warden-and-fix-fill-in-the-round
   (let [r (drive
            [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
             {:event :phase-started :iter 1 :phase :review :at "t1"}
             {:event :phase-finished :iter 1 :phase :review :at "t2"
              :ctx {:findings [{:title "b"}] :overall-correctness "x"
                    :base-rev "B" :manifest "a"}}
-            {:event :phase-started :iter 1 :phase :arbiter :at "t3"}
-            {:event :phase-finished :iter 1 :phase :arbiter :at "t4"
-             :ctx {:arbiter {:decision :continue :reason "real"
+            {:event :phase-started :iter 1 :phase :warden :at "t3"}
+            {:event :phase-finished :iter 1 :phase :warden :at "t4"
+             :ctx {:warden {:decision :continue :reason "real"
                              :rulings [{:id "aa11" :owner-layer "a" :disposition :fix}]}}}
             {:event :phase-started :iter 1 :phase :fix :at "t5"}
             {:event :phase-finished :iter 1 :phase :fix :at "t6"
              :ctx {:history [{:iter 1 :fixes [{:layer "a" :commit "abc1234567"}]
                             :fixed-count 1}]}}])
         phases (:phases (first (:rounds r)))
-        arbiter  (some #(when (= "arbiter" (:phase %)) %) phases)
+        warden  (some #(when (= "warden" (:phase %)) %) phases)
         fix    (some #(when (= "fix" (:phase %)) %) phases)]
-    (is (= "continue" (:decision arbiter)))
-    (is (= [{:id "aa11" :owner-layer "a" :disposition :fix}] (:rulings arbiter)))
+    (is (= "continue" (:decision warden)))
+    (is (= [{:id "aa11" :owner-layer "a" :disposition :fix}] (:rulings warden)))
     (is (= [{:layer "a" :commit "abc1234567"}] (:fixes fix)))
     (is (= 1 (:fixed-count fix)))))
 

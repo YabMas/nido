@@ -255,7 +255,7 @@
 
 (deftest parse-output-leaves-a-layer-finding-without-the-composition-keys
   ;; Stamping every finding with two nils would put the composition vocabulary
-  ;; on findings that have no claim to it — and give the arbiter a `kind` field
+  ;; on findings that have no claim to it — and give the warden a `kind` field
   ;; to read on rows where it means nothing.
   (let [f (first (:findings (codex/parse-output sample-output)))]
     (is (not (contains? f :kind)))
