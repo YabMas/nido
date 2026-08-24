@@ -772,15 +772,6 @@
 ;; limitation — it is the round's whole purpose: everything derivable is derived
 ;; so that what reaches a human is only the judgement that cannot be.
 
-(def max-resurveys
-  "Two descents into the baseline loop, then a human.
-
-   Each one is a full loop of its own, and a third would mean the design round
-   has now twice concluded that a re-surveyed area is still surveyed wrongly.
-   That is not a premise a further round fixes; it says the AREA is not
-   understood, and nothing derivable follows from repeating the attempt."
-  2)
-
 (defn broken-checks
   "The derivations that failed — the design round's findings, at the granularity
    the round can actually decide at.
@@ -804,9 +795,6 @@
 
 (defn design-finding-base-key [c] [:check (:check c)])
 (def design-finding-key (dispute-aware design-finding-base-key))
-
-(defn- resurvey-count [history]
-  (count (filter :resurveyed history)))
 
 (defn trajectory
   "The run, as the human reading the escalated decision needs it. Rounds that
@@ -949,19 +937,22 @@
 
    Any non-:accurate outcome is terminal HERE. A design round cannot proceed on
    a survey the baseline loop could not make true, and re-judging the design
-   against it would produce a decision built on the premise that just failed."
+   against it would produce a decision built on the premise that just failed.
+
+   Uncapped. A re-survey is only half a repair — the design is re-stated against
+   the corrected survey afterwards — so every cycle changes the record the next
+   round judges, and the engine's own stall detector is what ends a run that has
+   stopped getting anywhere. A count would stop it while it was still making
+   progress, which is the one thing a convergence loop must not do."
   [ctx]
   (let [{:keys [cwd run-id budget]} (:config ctx)
-        n (resurvey-count (:history ctx))]
-    (if (>= n max-resurveys)
-      (assoc ctx :control :escalate :status :resurvey-exhausted)
-      (let [out (rloop/run-loop {:cwd cwd
-                                 :run-id (str run-id "-resurvey-" (inc n))
-                                 :budget budget
-                                 :emit (fn [_])
-                                 :pipeline    baseline-pipeline
-                                 :finding-key baseline-finding-key})
-                ]
+        n   (count (filter :resurveyed (:history ctx)))
+        out (rloop/run-loop {:cwd cwd
+                             :run-id (str run-id "-resurvey-" (inc n))
+                             :budget budget
+                             :emit (fn [_])
+                             :pipeline    baseline-pipeline
+                             :finding-key baseline-finding-key})]
         (if (= :accurate (:status out))
           ;; No history entry here. The re-survey is only HALF the repair — the
           ;; design still cites the survey that was wrong — so the round is not
@@ -977,7 +968,7 @@
                                 {:iter (:iter ctx) :findings (:findings ctx)
                                  :retreats [] :disputes [] :resurveyed (:status out)})
                  :control :stop
-                 :status (keyword (str "resurvey-" (name (:status out))))))))))
+                 :status (keyword (str "resurvey-" (name (:status out))))))))
 
 (defn- amend-design!
   "Launch the amender against the design record and take in what it hands back.

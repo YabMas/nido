@@ -334,7 +334,6 @@
            :underivable        "no yardstick"
            :disputed           "neither can settle it"
            :retreated          "below what its own round would check"
-           :resurvey-exhausted "the AREA is what is not understood"
            :no-record          "author the design first"
            :not-worth-running  "would not pay"
            :codex-failed       "NOT a clean result"}]

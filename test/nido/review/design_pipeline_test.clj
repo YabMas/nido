@@ -258,15 +258,27 @@
         (is (= (keyword (str "resurvey-" (name s))) (:status out)))
         (is (= :stop (:control out)))))))
 
-(deftest a-third-resurvey-is-a-human-problem
-  ;; Twice re-surveyed and still wrong says the AREA is not understood, and no
-  ;; further round derives anything from repeating the attempt.
-  (with-redefs [rloop/run-loop (fn [_] {:status :accurate})]
-    (let [hist (vec (repeat record/max-resurveys {:resurveyed :accurate}))
-          out  (run record/design-amend-stage
-                    (assoc (ctx :findings [] :history hist) :record (decision :resurvey)))]
-      (is (= :resurvey-exhausted (:status out)))
-      (is (= :escalate (:control out))))))
+(deftest re-surveying-is-not-capped
+  ;; A re-survey is only half a repair: the design is re-stated against the
+  ;; corrected survey afterwards, so every cycle changes the record the next
+  ;; round judges. A count would stop the loop while it was still making
+  ;; progress, which is the one thing a convergence loop must not do — the
+  ;; engine's stall detector is what ends a run that has stopped getting
+  ;; anywhere.
+  (let [nested (atom 0)]
+    (with-redefs [rloop/run-loop (fn [_] (swap! nested inc) {:status :accurate})
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry (fn [_ _ _] a-design)
+                  stages/discover-baseline (fn [_ _] nil)
+                  stages/working-copy-dirty? (fn [_] false)
+                  agent/launch! (fn [_] {:num-turns 0})]
+      (doseq [prior (range 5)]
+        (let [hist (vec (repeat prior {:resurveyed :accurate}))
+              out  (run record/design-amend-stage
+                        (assoc (ctx :findings [] :history hist) :record (decision :resurvey)))]
+          (is (not= :resurvey-exhausted (:status out))
+              (str "descent " (inc prior) " must still be allowed to run"))))
+      (is (= 5 @nested) "every one of them reached the baseline loop"))))
 
 ;; ── Driven by the engine ────────────────────────────────────────────────────
 

@@ -289,7 +289,6 @@
 (def ^:private design-remedies
   {:proceed "nothing derivable blocks it — what is left is the part only you can answer"
    :underivable "a check has no yardstick to derive against, which is not a defect an amender can repair"
-   :resurvey-exhausted "the premise was re-surveyed twice and still did not hold; the AREA is what is not understood"
    :no-record "author the design first"
    :not-worth-running "the design declares it moves nothing structural, so a decision round would not pay"})
 
