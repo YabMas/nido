@@ -113,27 +113,6 @@
                  (:reviews ctx))
            (mapv (fn [t] (row t {:status "skipped"})) (:skipped ctx))))))
 
-(defn warden-rows
-  "One row per target that reported a finding this round, in stack order.
-
-   Was a label→count map, which said two untrue things. It had no order, so the
-   block could not be numbered or lined up with the review block above it. And
-   it counted the composition pass among the layers although the warden stage
-   deliberately excludes it: a finding from the whole-stack pass belongs to no
-   single layer by construction and goes straight to the arbiter. The row keeps
-   :stack? so the projection can say that rather than imply a warden ruled on it.
-
-   A label with no matching target keeps its row unnumbered rather than being
-   dropped — nothing this block counts may go missing from it."
-  [ctx]
-  (let [by-label (into {} (map (fn [{:keys [target]}] [(:label target) target]))
-                       (:reviews ctx))]
-    (in-stack-order
-     (into []
-           (map (fn [[label n]]
-                  (row (get by-label label {:label label}) {:count n})))
-           (frequencies (keep :from-layer (:findings ctx)))))))
-
 (defn- finish-phase
   [ph phase ctx at]
   (let [ph (assoc ph :status "ok" :ended-at at)]
@@ -147,8 +126,6 @@
                         :rulings (mapv #(select-keys % [:id :owner-layer :disposition
                                                         :authority :of :because])
                                        (:rulings a))))
-      :warden (assoc ph :dispositions (vec (:dispositions ctx))
-                        :by-layer (warden-rows ctx))
       :fix    (let [h (last (filter #(= (:iter ctx) (:iter %)) (:history ctx)))]
                 (assoc ph :fixes (vec (:fixes h)) :fixed-count (:fixed-count h)))
       ph)))

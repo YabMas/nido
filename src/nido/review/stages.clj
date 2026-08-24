@@ -109,7 +109,7 @@
    runs IN that round: `build-toc` reads each target's manifest once its review
    has returned, which is exactly too late to prime one with.
 
-   The revisions are the point. A warden gets `toc-block` — a map with no
+   The revisions are the point. The arbiter gets `toc-block` — a map with no
    coordinates — precisely so it cannot re-derive the layers around it. The
    composition pass gets the coordinates for the opposite reason: it is asked
    whether each piece holds together where it sits, and a layer's own tip is the
@@ -204,17 +204,24 @@
        :out))
 
 (defn- build-toc
-  "The stack's table of contents — one entry per layer: what it claims and which
-   files it touches. This is what a warden gets INSTEAD of the other layers'
-   diffs, so it can attribute deliberately without re-deriving them."
+  "The stack's table of contents — one entry per layer: what it claims, what it
+   declared out of scope, and which files it touches. This is what the arbiter
+   gets INSTEAD of the other layers' diffs, so it can attribute deliberately
+   without re-deriving them.
+
+   `:out-of-scope` is carried because the arbiter is told it may close a finding
+   on the authority `out-of-scope` — \"a layer's Out of scope names it\". Without
+   the field, that authority is one the arbiter can cite but never actually
+   read, which is how a close stops being evidence and becomes a guess."
   [results]
   (into []
         (comp (remove #(:stack? (:target %)))
               (map (fn [{:keys [target manifest]}]
-                     {:label (:label target)
-                      :claim (get-in target [:brief :claims])
-                      :files (vec (remove str/blank?
-                                          (str/split-lines (or manifest ""))))})))
+                     {:label        (:label target)
+                      :claim        (get-in target [:brief :claims])
+                      :out-of-scope (get-in target [:brief :out-of-scope])
+                      :files        (vec (remove str/blank?
+                                                 (str/split-lines (or manifest ""))))})))
         results))
 
 (defn announce-targets!
@@ -359,75 +366,26 @@
               s))))
       (catch Throwable _ nil))))
 
-(defn parse-dispositions
-  "Last fenced ```json block -> the warden's dispositions. An unparseable or
-   absent answer is [], which the arbiter reads as \"this layer's warden said
-   nothing\" — it still rules on every finding itself, so a mute warden costs
-   bounded judgement, never a dropped finding."
-  [text]
-  (let [block (when (string? text) (last (re-seq fenced-json-re text)))]
-    (if-let [body (second block)]
-      (try
-        (->> (:dispositions (json/parse-string body true))
-             (keep (fn [d]
-                     (when (:id d)
-                       {:id          (:id d)
-                        :disposition (some-> (:disposition d) keyword)
-                        :authority   (:authority d)
-                        :owner-guess (:owner_guess d)
-                        :because     (:because d)})))
-             vec)
-        (catch Exception _ []))
-      [])))
+(defn answered-by-layer
+  "What earlier rounds already CLOSED, per layer, for the layers under review.
 
-(defn- target-for
-  [ctx label]
-  (some #(when (= label (:label (:target %))) (:target %)) (:reviews ctx)))
+   Written by `answered-for` from this stage's own closes and hung off each
+   layer's patch hash, so an answer evaporates the moment that layer's content
+   changes. Reading it back here closes the loop: the reviewer starts fresh every
+   round and will report a closed finding again, which is not new information —
+   without this the same finding is re-adjudicated for as long as the layer sits
+   unchanged.
 
-(def ^:private max-concurrent-wardens 6)
+   Layers with nothing answered are dropped rather than carried as empty rows:
+   the prompt block is evidence, and a layer named with nothing under it reads
+   as a layer that was asked and had no answer."
+  [ctx]
+  (into []
+        (keep (fn [{:keys [target]}]
+                (when-let [a (seq (cache/answered (:cache ctx) (:patch-hash target)))]
+                  {:label (:label target) :answered (vec a)})))
+        (:reviews ctx)))
 
-(def warden-stage
-  "One warden per layer that has findings, in parallel.
-
-   A warden is bounded: it holds its own layer's brief and findings, plus the
-   stack's table of contents as a MAP. It disposes of what its brief answers and
-   escalates the rest — where escalate means \"above my pay grade\", not \"the
-   design is in question\". Report-only, like the arbiter, and fresh each round:
-   its whole input is in the prompt.
-
-   Findings from the whole-stack pass have no warden — they belong to no single
-   layer by construction, so they go straight to the arbiter."
-  {:name :warden
-   :run  (fn [ctx]
-           (let [{:keys [cwd run-id budget]} (:config ctx)
-                 by-layer (group-by :from-layer (:findings ctx))
-                 labels   (remove #(or (nil? %) (= "stack" %)) (keys by-layer))]
-             (if (empty? labels)
-               (assoc ctx :dispositions [])
-               (let [results
-                     (in-parallel
-                      max-concurrent-wardens
-                      (map (fn [label]
-                             #(let [t (target-for ctx label)
-                                    prompt (prompts/warden-prompt
-                                            {:layer    label
-                                             :findings (get by-layer label)
-                                             :toc      (:toc ctx)
-                                             :brief    (:brief t)
-                                             :answered (cache/answered (:cache ctx)
-                                                                       (:patch-hash t))})
-                                    {:keys [result-text]}
-                                    (agent/launch!
-                                     {:run-id run-id :cwd cwd
-                                      :first-message prompt :budget budget
-                                      :tools ""
-                                      :err-file (str (fs/path (cstate/run-dir run-id)
-                                                              (format "warden-%s-round-%d.err.log"
-                                                                      (codex/safe-label label)
-                                                                      (or (:iter ctx) 1))))})]
-                                (parse-dispositions result-text)))
-                           labels))]
-                 (assoc ctx :dispositions (vec (mapcat identity results)))))))})
 
 (defn converged-targets
   "Pure: the targets this round left with nothing to fix, paired with the patch
@@ -508,20 +466,29 @@
 (def arbiter-stage
   "The one reader with a view across layers, so attribution is its job.
 
+   It used to be preceded by a per-layer pass that ruled first and handed its
+   dispositions down as advice. That pass held no tools and read no diff — the
+   same shape as this one — so the only things it had that this stage did not
+   were two pieces of text: each layer's Out of scope, and what earlier rounds
+   had already closed. Both are now inputs here (`toc` carries the first,
+   `answered-by-layer` the second), and its rulings were advisory anyway: this
+   stage was always told it could overrule them freely, and always had to rule
+   on every finding itself.
+
    Report-only and fully inlined, deliberately: it is the component that decides
    to interrupt a human, and its inputs have to be reconstructable from the
    report afterwards. What genuinely accumulates across rounds is carried as an
-   inspectable value (history, dispositions), never as a resumed conversation."
+   inspectable value (history, answered), never as a resumed conversation."
   {:name :arbiter
    :run  (fn [ctx]
            (let [{:keys [cwd run-id budget]} (:config ctx)
                  prompt (prompts/arbiter-prompt
-                         {:findings     (:findings ctx)
-                          :history      (mapv #(dissoc % :findings) (:history ctx))
-                          :design       (discover-design-record cwd)
-                          :stance       (read-stance (first (project+ws-from-cwd cwd)))
-                          :toc          (:toc ctx)
-                          :dispositions (:dispositions ctx)})
+                         {:findings (:findings ctx)
+                          :history  (mapv #(dissoc % :findings) (:history ctx))
+                          :design   (discover-design-record cwd)
+                          :stance   (read-stance (first (project+ws-from-cwd cwd)))
+                          :toc      (:toc ctx)
+                          :answered (answered-by-layer ctx)})
                  {:keys [num-turns result-error? result-text]}
                  (agent/launch! {:run-id run-id :cwd cwd
                                  :first-message prompt :budget budget

@@ -95,7 +95,7 @@
                "  layer supplies it and check whether that layer sits above.")}
    {:kind "orphaned-by-scope" :asks :cut
     :what (str "something in this branch that EVERY layer's `out of scope` pushed\n"
-               "  away, so no reviewer ever held it and no warden ever ruled on\n"
+               "  away, so no reviewer ever held it and nothing ever ruled on\n"
                "  it. You are the only pass that can see this hole, because you\n"
                "  are the only one that reads all the exclusions at once.")
     :how  (str "read the `out of scope` lines above as one set, and ask what in\n"
@@ -136,10 +136,10 @@
    contributes, the rev of the tree it leaves behind, and what it declared.
 
    Unlike `toc-block` this hands over REVISIONS, and that is the whole
-   difference between the two. A warden is given the map precisely so it cannot
-   re-derive the other layers; the composition pass is given the coordinates
-   precisely so it can, because the states between layers are the only thing it
-   is here to look at."
+   difference between the two. The arbiter is given the map precisely so it
+   cannot re-derive the other layers; the composition pass is given the
+   coordinates precisely so it can, because the states between layers are the
+   only thing it is here to look at."
   [layers]
   (->> layers
        (map-indexed
@@ -178,8 +178,8 @@
      "THIS IS THE COMPOSITION PASS OVER A STACKED CHANGE. Where it narrows the\n"
      "instructions above, it wins.\n\n"
      "Every layer of this stack has ALREADY been reviewed on its own, by a\n"
-     "reviewer holding only that layer's diff, and a warden with authority over\n"
-     "that layer will rule on what came back. Those findings exist. Producing\n"
+     "reviewer holding only that layer's diff, and one arbiter with a view\n"
+     "across layers will rule on what came back. Those findings exist. Producing\n"
      "them again is not harmless redundancy — it is the exact cost this layering\n"
      "was built to avoid, and it gets paid twice: once by you, once by whoever\n"
      "has to read two copies of the same thing and work out they are one.\n\n"
@@ -262,23 +262,31 @@
 (defn- bullets [xs] (str/join "\n" (map #(str "- " %) xs)))
 
 (defn toc-block
-  "The stack's table of contents: what each layer claims and which files it
-   touches.
+  "The stack's table of contents: what each layer claims, what it declared out of
+   scope, and which files it touches.
 
-   A warden holds only its own layer's diff, so this is the MAP and not the
-   territory — enough to say \"that file is also touched by the layer below, so
-   this is probably theirs\" deliberately, instead of escalating everything it
-   cannot place. Deliberately no diffs: a warden that could read the layer below
-   would re-derive it, which is the cost the layering exists to avoid."
+   This is the MAP and not the territory — enough to say \"that file is also
+   touched by the layer below, so this is probably theirs\" deliberately, instead
+   of guessing at everything it cannot place. Deliberately no diffs: a reader
+   that could see the layer below would re-derive it, which is the cost the
+   layering exists to avoid.
+
+   `out of scope` is here because it is the only authority in the closing
+   vocabulary that lives in a layer's brief rather than in the design record or
+   the round itself. Cited without being shown, it is a word standing in for
+   evidence."
   [toc]
   (when (seq toc)
-    (str "THE STACK, BOTTOM TO TOP — what each layer claims, and what it touches.\n"
+    (str "THE STACK, BOTTOM TO TOP — what each layer claims, what it rules out,\n"
+         "and what it touches.\n"
          "You see this as a map only; you are not reviewing these layers.\n"
          (->> toc
               (map-indexed
-               (fn [i {:keys [label claim files]}]
+               (fn [i {:keys [label claim out-of-scope files]}]
                  (str (inc i) ". " label
                       (when claim (str " — claims: " claim)) "\n"
+                      (when out-of-scope
+                        (str "   out of scope: " out-of-scope "\n"))
                       (when (seq files)
                         (str "   touches: " (str/join ", " (take 12 files))
                              (when (> (count files) 12)
@@ -300,59 +308,6 @@
                    "\n  " (:file f) ":" (:line-start f) "-" (:line-end f)
                    "\n  " (:body f))))
        (str/join "\n\n")))
-
-(def ^:private disposition-json
-  (str "Return EXACTLY one fenced ```json block, nothing after it, matching:\n"
-       "{\"dispositions\": [{\"id\": \"<finding id>\",\n"
-       "                   \"disposition\": \"fix|closed|escalate\",\n"
-       "                   \"authority\": \"out-of-scope|design|false-positive\",\n"
-       "                   \"owner_guess\": \"<layer label, when escalating>\",\n"
-       "                   \"because\": \"<one sentence>\"}]}\n"
-       "Every finding you were given must appear exactly once.\n\n"))
-
-(defn warden-prompt
-  "The per-layer decider. Bounded to one layer's brief and findings, given the
-   stack's table of contents as a map.
-
-   Its `escalate` means \"above my pay grade\", NOT \"the design is in question\" —
-   a warden cannot see far enough to make that call, and the arbiter can. That
-   is a second, much more common use of a verb the engine already understands."
-  [{:keys [brief findings toc layer answered]}]
-  (str
-   "You are the WARDEN of ONE layer of a stacked change: **" layer "**.\n"
-   "You hold this layer's brief and the findings its review produced. You do\n"
-   "NOT see the other layers' diffs — only what they claim, below.\n\n"
-   disposition-json
-   "- fix: a real defect, and it belongs to THIS layer.\n"
-   "- closed: it does not need fixing here, AND you can name the authority —\n"
-   "  \"out-of-scope\" (this layer's Out of scope names it), \"design\" (the\n"
-   "  layer's own claim puts it behind a boundary), or \"false-positive\" (the\n"
-   "  reviewer is wrong; say what they missed).\n"
-   "- escalate: you cannot decide from here. The finding looks like it belongs\n"
-   "  to another layer, or contradicts what a layer below claims, or questions\n"
-   "  the design rather than the execution. Put your best guess at the owning\n"
-   "  layer in owner_guess.\n\n"
-   "Escalating is not a failure — it is the right answer whenever deciding would\n"
-   "need a view you do not have. But do not escalate what your own brief already\n"
-   "answers: that is what the brief is for.\n"
-   "**Never close a finding without an authority.** \"Not important\" is not one,\n"
-   "and neither is \"minor\". If you cannot name one, the disposition is fix or\n"
-   "escalate.\n\n"
-   (when-let [b (layer-brief-block brief)] (str b "\n"))
-   (when-let [t (toc-block toc)] (str t "\n"))
-   (when (seq answered)
-     (str "ALREADY ANSWERED against this exact version of the layer. The reviewer\n"
-          "starts each round fresh, so it can report these again — that is not new\n"
-          "information. Close them the same way unless you can say why the answer\n"
-          "no longer holds:\n"
-          (->> answered
-               (map (fn [{:keys [id title authority because]}]
-                      (str "- " id " " title " → closed (" authority ")"
-                           (when because (str ": " because)))))
-               (str/join "\n"))
-          "\n\n"))
-   "Findings from this layer's review:\n\n"
-   (findings-list findings)))
 
 (defn- design-block
   "The design record, rendered for the arbiter. This is the yardstick: findings are
@@ -383,24 +338,35 @@
        "NOT a checklist: never cite it against a specific finding.\n"
        stance "\n"))
 
-(defn- warden-says
-  "What each layer's warden already decided, keyed by finding id. The arbiter
-   overrules freely — but a warden that closed a finding by naming its own
-   layer's Out of scope has answered it with something the arbiter cannot see,
-   so reversing that silently is how a bounded review stops being bounded."
-  [dispositions]
-  (when (seq dispositions)
-    (str "WHAT THE LAYER WARDENS ALREADY DECIDED:\n"
-         (->> dispositions
-              (map (fn [{:keys [id disposition authority owner-guess because]}]
-                     (str "- " id " → " (name (or disposition :none))
-                          (when authority (str " (" authority ")"))
-                          (when owner-guess (str " · guesses owner: " owner-guess))
-                          (when because (str " · " because)))))
+(defn- answered-block
+  "What earlier rounds already closed, grouped by the layer that reported it.
+
+   The reviewer starts fresh every round, so it re-reports what was closed —
+   that is not new information, and re-adjudicating it every round is how a
+   converging stack stops converging. These hang off each layer's patch hash
+   (`nido.review.cache/answered`), so they are answers about THAT content and
+   vanish the moment the layer changes.
+
+   They are this stage's own prior closes handed back to it, which is why they
+   are stated as a default rather than as a ruling to defer to: it may reverse
+   one, but it has to say what changed."
+  [answered]
+  (when (seq answered)
+    (str "ALREADY CLOSED IN AN EARLIER ROUND, against this exact version of each\n"
+         "layer. A reviewer reporting one of these again has not found anything\n"
+         "new. Close it the same way unless you can say why that answer no longer\n"
+         "holds:\n"
+         (->> answered
+              (map (fn [{:keys [label answered]}]
+                     (str "· " label "\n"
+                          (->> answered
+                               (map (fn [{:keys [id title authority because]}]
+                                      (str "  - " id " " title
+                                           " → closed (" authority ")"
+                                           (when because (str ": " because)))))
+                               (str/join "\n")))))
               (str/join "\n"))
-         "\n\nA warden escalated what it could not decide from inside one layer.\n"
-         "Those are yours. A warden that closed something named its authority;\n"
-         "overrule it only if you can say why that authority does not hold.\n\n")))
+         "\n\n")))
 
 (defn arbiter-prompt
   "Build the arbiter prompt. The arbiter is the only thing in the loop with a
@@ -410,7 +376,7 @@
    Report-only (no tools): everything it reasons from is inlined here. That is
    deliberate and load-bearing. It is the component that decides to interrupt a
    human, so its inputs have to be reconstructable from the report afterwards."
-  [{:keys [findings history design stance toc dispositions]}]
+  [{:keys [findings history design stance toc answered]}]
   (str
    "You are the ARBITER in an automated code-review loop over a STACK of layers.\n"
    "You are the only reader with a view across all of them.\n\n"
@@ -479,7 +445,7 @@
           "does not turn on the design record.\n\n"))
    (when stance (str (stance-block stance) "\n"))
    (when-let [t (toc-block toc)] (str t "\n"))
-   (warden-says dispositions)
+   (answered-block answered)
    "History of prior rounds (findings + what was fixed):\n"
    (pr-str history) "\n\n"
    "THIS ROUND'S FINDINGS:\n\n"

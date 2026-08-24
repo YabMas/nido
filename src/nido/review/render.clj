@@ -30,7 +30,6 @@
                   (when (seq (:files target))
                     (str " diff (" (count (:files target)) " files)")))
     ;; "judge" — report.json written before the rename
-    "warden" "checking layers"
     ("arbiter" "judge") "arbitrating"
     "fix"    "fixing"
     (:phase ph)))
@@ -49,9 +48,6 @@
                     (when-let [n (seq (filter #(= "fix" (str (name (or (:disposition %) "")))) 
                                               (:rulings ph)))]
                       (str " (fix " (count n) ")"))))
-    "warden" (when (= "ok" (:status ph))
-               (let [n (count (:dispositions ph))]
-                 (str n " disposition" (when (not= 1 n) "s"))))
     "fix"    (cond
                (seq (:fixes ph))     (str/join ", " (map #(str (or (:layer %) "branch") " "
                                                                (subs (str (:commit %)) 0
@@ -149,13 +145,10 @@
    distinction needed.
 
    `layers` is how wide the STACK is, which is not the same as how many layer
-   rows this block has: the warden block holds only the layers that reported
-   something, and the composition pass still read all of them. That gap is why
-   the count is still threaded through with the rule gone — `row-name` reads it
-   to tell a composition from a branch with nothing under it, and a warden block
-   holding only the composition row would otherwise count zero layers and call
-   it the whole branch. nil falls back to counting the rows, which is what a
-   report written before the target carried a layer count has to rely on."
+   rows this block has. That gap is why the count is threaded through with the
+   rule gone — `row-name` reads it to tell a composition from a branch with
+   nothing under it. nil falls back to counting the rows, which is what a report
+   written before the target carried a layer count has to rely on."
   [rows layers glyph-fn text-fn]
   (let [rows   (vec rows)
         layers (or layers (count (remove :stack? rows)))
@@ -188,27 +181,6 @@
                #(layer-glyph (:status %) now)
                layer-text))
 
-(defn- warden-rows
-  "The warden block's rows, tolerating the label→count map older reports carry."
-  [by-layer]
-  (if (map? by-layer)
-    (mapv (fn [[label n]] {:label label :count n}) by-layer)
-    (vec by-layer)))
-
-(defn- warden-lines
-  "One line per target that reported something, numbered and ordered like the
-   review block above it.
-
-   The composition pass gets a line but never a warden: its findings belong to
-   no single layer by construction, so they go straight to the arbiter. Saying
-   where they went is the difference between a reader seeing a routing decision
-   and a reader seeing a layer that nobody ruled on."
-  [ph layers]
-  (block-lines (warden-rows (:by-layer ph)) layers
-               #(if (:stack? %) "·" "✓")
-               #(str (:count %)
-                     (if (:stack? %) " to the arbiter" " to rule on"))))
-
 (defn- phase-block [ph target now]
   (let [detail (case (:phase ph)
                  ;; Gated on the rows EXISTING, not on the phase being over.
@@ -218,8 +190,6 @@
                  ;; so what a COMPLETED run renders is unchanged by this.
                  "review" (when (seq (:layers ph))
                             (layer-lines ph (:layers target) now))
-                 "warden" (when (= "ok" (:status ph))
-                            (warden-lines ph (:layers target)))
                  nil)]
     (str/join "\n" (cons (phase-line ph target now) (remove str/blank? detail)))))
 

@@ -150,39 +150,31 @@
         "and the long row still says what it found")))
 
 (deftest a-report-written-before-layers-were-numbered-still-renders
-  ;; Rows with no :index, and a warden block whose by-layer is still the
-  ;; label->count map. Neither may throw, and neither may invent a number.
+  ;; Rows with no :index. It may not throw, and it may not invent a number.
   (let [r {:target {:cwd "/x/feat/thing" :base "main" :files ["a"]}
            :rounds [{:round 1
                      :phases [{:phase "review" :status "ok"
                                :started-at "2026-01-01T00:00:00Z" :findings []
                                :layers [{:label "lower" :status "reviewed" :findings 1}
-                                        {:label "upper" :status "reviewed" :findings 0}]}
-                              {:phase "warden" :status "ok"
-                               :started-at "2026-01-01T00:00:00Z"
-                               :dispositions [{}]
-                               :by-layer {"lower" 1}}]}]}
+                                        {:label "upper" :status "reviewed" :findings 0}]}]}]}
         s (render/frame r (java.time.Instant/parse "2026-01-01T00:00:10Z"))]
     (is (str/includes? s "lower"))
     (is (str/includes? s "upper"))
-    (is (str/includes? s "1 to rule on") "the old by-layer map still renders")
     (is (not (str/includes? s "Layer ")) "nothing invents a number it does not have")))
 
-(deftest the-warden-block-says-where-the-compositions-findings-went
-  ;; They belong to no single layer by construction, so no warden rules on them
-  ;; and they go straight to the arbiter. A row that merely appeared here would
-  ;; read as a layer nobody ruled on.
+(deftest a-report-carrying-the-removed-per-layer-warden-phase-still-renders
+  ;; The stage is gone, but reports written while it existed are still on disk.
+  ;; The phase renders as a bare line rather than throwing or inventing a
+  ;; summary for a pass that no longer runs.
   (let [r {:target {:cwd "/x/feat/thing" :base "main" :layers 2 :files ["a"]}
            :rounds [{:round 1
                      :phases [{:phase "warden" :status "ok"
                                :started-at "2026-01-01T00:00:00Z"
                                :dispositions [{}]
-                               :by-layer [{:label "one" :index 1 :stack? false :count 1}
-                                          {:label "stack" :stack? true :count 2}]}]}]}
+                               :by-layer [{:label "one" :index 1 :stack? false :count 1}]}]}]}
         s (render/frame r (java.time.Instant/parse "2026-01-01T00:00:10Z"))]
-    (is (str/includes? s "Layer 1 · one        1 to rule on")
-        "both names are under the floor, so the column is the floor and they align")
-    (is (str/includes? s "Composition          2 to the arbiter"))))
+    (is (str/includes? s "warden"))
+    (is (not (str/includes? s "to rule on")))))
 
 (deftest final-says-what-was-decided-about-each-finding
   (let [r {:target {:cwd "/x/feat/thing" :base "main"}

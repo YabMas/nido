@@ -374,6 +374,18 @@
                         {:id "bb22" :from-layer "a" :disposition :fix}
                         {:id "cc33" :from-layer "b" :disposition :closed}])))))
 
+(deftest answered-by-layer-reads-each-layers-answers-under-its-own-patch-hash
+  ;; They hang off the layer's patch, so a layer whose content changed has no
+  ;; hit and contributes nothing — the answers were about THAT content.
+  (let [ctx {:cache   {"h-a" {:answered [{:id "aa11" :title "t" :authority "design"}]}
+                       "h-b" {:answered []}}
+             :reviews [{:target {:label "a" :patch-hash "h-a"}}
+                       {:target {:label "b" :patch-hash "h-b"}}
+                       {:target {:label "c" :patch-hash "h-moved"}}]}]
+    (is (= [{:label "a" :answered [{:id "aa11" :title "t" :authority "design"}]}]
+           (stages/answered-by-layer ctx))
+        "a layer with nothing answered is dropped, not carried as an empty row")))
+
 ;; ---- announcing the round's targets before it starts ---------------------
 
 (deftest announce-targets-publishes-every-target-before-any-agent-runs

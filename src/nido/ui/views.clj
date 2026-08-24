@@ -848,7 +848,7 @@
    `fix-findings` and `commit` are read alongside their replacements so a
    report.json written before layers existed still renders."
   [{:keys [phase findings overall-correctness decision rulings fix-findings
-           commit fixes fixed-count dispositions layers status]}]
+           commit fixes fixed-count layers status]}]
   (case phase
     "review" (when (= "ok" status)
                (let [skipped (count (filter #(= "skipped" (:status %)) layers))]
@@ -856,9 +856,6 @@
                       (when (pos? skipped) (str " · " skipped " layer"
                                                 (when (not= 1 skipped) "s") " skipped"))
                       (when overall-correctness (str " · " overall-correctness)))))
-    "warden" (when (= "ok" status)
-               (str (count dispositions) " disposition"
-                    (when (not= 1 (count dispositions)) "s")))
     ("arbiter" "judge") (when decision
                (str "→ " decision
                     (when-let [n (seq (filter #(= "fix" (name (or (:disposition %) ""))) rulings))]

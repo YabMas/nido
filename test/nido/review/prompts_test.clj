@@ -95,15 +95,34 @@
     (is (str/includes? s "map only")))
   (is (nil? (prompts/toc-block []))))
 
-(deftest warden-prompt-is-bounded-and-never-closes-without-an-authority
-  (let [s (prompts/warden-prompt {:layer "drop-legacy" :brief a-brief
-                                  :findings [{:id "aa11" :title "t" :body "b"}]
-                                  :toc [{:label "shape" :claim "c"}]})]
-    (is (str/includes? s "WARDEN of ONE layer"))
-    (is (str/includes? s "Never close a finding without an authority"))
-    (is (str/includes? s "whenever deciding would\nneed a view you do not have")
-        "escalate means it cannot see far enough, not that the design is wrong")
-    (is (str/includes? s "aa11"))))
+(deftest arbiter-sees-each-layers-out-of-scope
+  ;; It is told it may close on the authority "out-of-scope"; without the field
+  ;; that is a word it can cite but never read.
+  (let [out (prompts/arbiter-prompt
+             {:findings findings :history [] :design design
+              :toc [{:label "shape" :claim "c"
+                     :out-of-scope "the new validation logic"}]})]
+    (is (str/includes? out "out of scope: the new validation logic"))))
+
+(deftest arbiter-gets-back-what-it-already-closed-grouped-by-layer
+  ;; The reviewer starts fresh every round and re-reports closed findings. These
+  ;; are the arbiter's OWN prior closes, so they are a default it may reverse
+  ;; rather than a ruling to defer to.
+  (let [out (prompts/arbiter-prompt
+             {:findings findings :history [] :design design
+              :answered [{:label "shape"
+                          :answered [{:id "aa11" :title "t"
+                                      :authority "out-of-scope"
+                                      :because "the layer below owns it"}]}]})]
+    (is (str/includes? out "ALREADY CLOSED IN AN EARLIER ROUND"))
+    (is (str/includes? out "shape"))
+    (is (str/includes? out "aa11"))
+    (is (str/includes? out "out-of-scope"))
+    (is (str/includes? out "say why that answer no longer"))))
+
+(deftest arbiter-omits-the-answered-block-when-nothing-was-closed
+  (let [out (prompts/arbiter-prompt {:findings findings :history [] :design design})]
+    (is (not (str/includes? out "ALREADY CLOSED IN AN EARLIER ROUND")))))
 
 (deftest arbiter-is-told-not-to-patch-a-structural-finding-away
   (let [out (prompts/arbiter-prompt {:findings findings :history [] :design design})]
