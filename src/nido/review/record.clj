@@ -116,6 +116,25 @@
                       " [" (str/join ", " (:evidence %)) "]")
                 items)))
 
+(defn- invariant-lines
+  "Invariants, each with the moment it holds. A record written before phasing
+   carries plain strings and means :always by them; a phased one carries the
+   Invariant map.
+
+   The distinction has to reach the round, because an :on-completion invariant is
+   deliberately false for the whole middle of a plan. A judge shown it without the
+   qualifier reads a designed intermediate state as a broken design and escalates
+   a decision that was already made — which is the reason :holds exists at all."
+  [invariants]
+  (bullets (map (fn [i]
+                  (if (string? i)
+                    i
+                    (str (:invariant i)
+                         (case (:holds i)
+                           :on-completion "  [holds ON COMPLETION — not yet true mid-plan, and NOT a finding]"
+                           "  [holds always]"))))
+                invariants)))
+
 (defn baseline-prompt
   "The verification prompt. Everything it needs to refute a claim is a file
    reference the record itself supplied."
@@ -182,7 +201,7 @@
    "Summary: " (:summary design) "\n"
    "Shape: " (:shape design) "\n"
    "Effort: " (name (:effort design)) "\n"
-   "Invariants:\n" (bullets (:invariants design)) "\n"
+   "Invariants:\n" (invariant-lines (:invariants design)) "\n"
    "Declared against the stance: " (name (get-in design [:standing :relation])) "\n"
    ;; A design written before the baseline event existed carries no :baseline at
    ;; all, and it still qualifies for a round — its absent relation is not
@@ -199,8 +218,17 @@
           "not evidence — unless you can show the stated reason no longer holds:\n"
           (bullets (map #(str (:alternative %) " — because " (:why-not %)) r)) "\n"))
    (when-let [l (seq (:layers design))]
-     (str "\nCLAIMED DECOMPOSITION — one claim per layer, ordered by dependency:\n"
+     (str "\nCLAIMED DECOMPOSITION, VERTICAL — one claim per layer, ordered by\n"
+          "dependency; all of it lands in one go:\n"
           (bullets (map #(str (:claim %) " (" (name (:mode %)) ")") l)) "\n"))
+   (when-let [ph (seq (:phases design))]
+     (str "\nCLAIMED DECOMPOSITION, TEMPORAL — each of these is a separate landing\n"
+          "the running system has to live in, so judge them as states rather than\n"
+          "as steps:\n"
+          (bullets (map #(str (:claim %)
+                              " — habitable: " (:habitable %)
+                              " — exit: " (get-in % [:exit :criterion])) ph))
+          "\n"))
    (when-let [rt (seq (:routes design))]
      (str "\nHEALTH OBSERVATIONS ROUTED:\n"
           (bullets (map #(str (:health-id %) " → " (name (:to %))
@@ -220,10 +248,14 @@
    "                      individually defensible. Check whether a strictly\n"
    "                      smaller design would do, including one already\n"
    "                      rejected for a reason that no longer holds.\n"
-   "  decomposable      — can the layers be stated? Ordered by dependency, one\n"
-   "                      claim each with no \"and\", one review mode each. A\n"
-   "                      design whose layering cannot be stated is not\n"
-   "                      decomposed yet, and there is nothing to approve.\n"
+   "  decomposable      — can the cut be stated? Vertically: layers ordered by\n"
+   "                      dependency, one claim each with no \"and\", one review\n"
+   "                      mode each. Temporally, IF the design is phased: each\n"
+   "                      phase a state the system can be left in, with an exit\n"
+   "                      criterion that is an observation rather than a to-do.\n"
+   "                      A design whose cut cannot be stated is not decomposed\n"
+   "                      yet, and there is nothing to approve. A design with no\n"
+   "                      phase plan is the ordinary case and is NOT a finding.\n"
    "  routing-coherent  — do the routed health observations keep this ONE story?\n"
    "                      Observations routed to fix-here that belong to a\n"
    "                      different story make this two changes.\n\n"

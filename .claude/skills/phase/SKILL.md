@@ -85,10 +85,14 @@ you did not need is pure cost.
 - **The blast radius of one landing exceeds what you are willing to roll back at
   once.**
 
-Target **2–4 phases**. One phase is not a plan, it is a shipment — the schema
-refuses it. Past ~4 it is a **program, not a change**: decompose the story rather
-than lengthening the plan. Same shape as `/stack`'s ~7 layers and `/spin-out`'s
-~3 spin-outs, and the same usual cause — a design boundary in the wrong place.
+One phase is not a plan, it is a shipment — the schema refuses it. Beyond that
+the count is not the test: **phases that share a cause** are one boundary in the
+wrong place, however few, and a long migration whose every landing is a distinct
+habitable state is not mis-scoped for having them. Ask what the phases have in
+common, not how many there are — if moving one boundary would answer several of
+them, it is a **program, not a change**, and the answer is to decompose the story
+rather than lengthen the plan. Same test `/stack` applies to layers and
+`/spin-out` to what leaves the branch.
 
 **Size is not the trigger; exposure is.** A 3,000-line change that can be
 reverted with one revert is a stack. A 40-line change that drops a column is a

@@ -595,11 +595,13 @@
    phase boundary or only on completion. Without it the arbiter judges the middle
    of a migration against the end of it.
 
-   :phases has :min 2 because one phase is not a plan, it is a shipment. The
-   ceiling is doctrine rather than schema: past ~4 phases it is a program, not a
-   change, and the answer is to decompose the story rather than lengthen the
-   plan — the same shape as /stack's ~7 layers and /spin-out's ~3 spin-outs, and
-   the same usual cause, a design boundary in the wrong place."
+   :phases has :min 2 because one phase is not a plan, it is a shipment. There is
+   no ceiling in the schema and none in the doctrine either: what says a plan has
+   gone wrong is not its length but whether its phases share a cause — phases that
+   would each be answered by moving the same boundary are one boundary in the
+   wrong place, however few of them there are, and a genuinely long migration with
+   a distinct habitable state per landing is not mis-scoped for having them. Same
+   test /stack applies to layers and /spin-out to what leaves the branch."
   (into [:map {:closed true}]
         (concat design-common
                 [[:intent     IntentRelation]
