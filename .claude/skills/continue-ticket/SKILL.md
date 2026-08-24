@@ -150,11 +150,26 @@ Session reminders:
   cat > /tmp/blocker.edn <<'EDN'
   {:format  :blocker
    :summary "<what you found that contradicts the prior stage>"
-   :needs   "<the decision you need from the user before proceeding>"}
+   :needs   "<the decision you need from the user before proceeding>"
+   ;; REQUIRED when that decision is a choice between branches you can see.
+   ;; 2–6, in reading order; the gate letters them A/B/… and resumes you with
+   ;; the one the human clicks. The append is REJECTED if you enumerate options
+   ;; in :needs prose instead ("Option A … Option B …").
+   :options [{:label        "<the branch, a few words — this is the button>"
+              :summary      "<what taking it means, concretely>"
+              :consequence  "<what it costs / forecloses>"
+              :recommended? true}
+             {:label   "<the other branch>"
+              :summary "<what taking it means>"}]}
   EDN
   bb nido:ticket:append :project brian :br <BR-####> :kind blocker \
     :session <session> :run-id <run-id> :file /tmp/blocker.edn
   ```
+
+  Omit `:options` only when the halt has no branches at all (a missing
+  credential, an unavailable environment). A blocker whose answer is "A or B"
+  and whose record says so in prose can only be answered by typing an essay
+  back at it.
 
 - If this is a **findings round**, mark each item resolved the moment its fix
   lands (`bb nido:findings:resolve :project brian :ws <ws-id> :items [<id>] :by <ref>`) —

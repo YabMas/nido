@@ -347,10 +347,32 @@ what blocks it:
 cat > /tmp/blocker.edn <<'EDN'
 {:format  :blocker
  :summary "<what blocks — conflict / CI finding that resisted / review finding still open — and what was tried>"
- :needs   "<the decision the human must make, then re-run /drive-home>"}
+ :needs   "<the decision the human must make, then re-run /drive-home>"
+ ;; REQUIRED when the decision is a choice between branches you can already see.
+ ;; Two to six of them, in the order you want them read; the gate letters them
+ ;; A/B/… and resumes you with the one the human clicks.
+ :options [{:label        "<the branch, a few words — this is the button>"
+            :summary      "<what taking it means, concretely>"
+            :consequence  "<what it costs / forecloses — size, follow-on calls>"
+            :recommended? true}
+           {:label   "<the other branch>"
+            :summary "<what taking it means>"}]}
 EDN
 bb nido:ticket:append :project <project> :br <BR-####> :kind blocker :file /tmp/blocker.edn
 ```
+
+**A choice goes in `:options`, not in `:needs` prose.** The append is REJECTED if
+`:needs`/`:summary` enumerate branches ("Option A … Option B …") without
+`:options` — re-emit it structured and the append succeeds. The reason is what
+happens at the gate: options render as lettered cards with one button each, and a
+click resumes you with that branch spelled out in full. Written as prose, the only
+way to answer is a free-text essay — which is the answer that does not arrive.
+Leave `:needs` as the question itself ("a product decision on the Keep Old
+branch"), and put `:recommended? true` on the branch your own derivation supports
+— it is a hint, and the gate still waits.
+
+Omit `:options` when the halt genuinely has no branches ("I need the Stripe test
+key"). Do not invent a second branch to fill the field.
 
 This records the halt; it does not change the halt behaviour — drive-home still
 stops and makes no `ready`/`merge` calls.
