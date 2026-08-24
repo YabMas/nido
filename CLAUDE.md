@@ -122,6 +122,62 @@ Nido does not redocument target-project routing. When working in a brian session
 
 Brian's domain agents and most of its skills are mirrored under `nido/.claude/` via symlink, declared in `nido/.claude/harness.edn`. Run `bb nido:harness:sync` to reconcile after brian ships harness changes — it adds new entries, prunes deletions/exclusions, and leaves any user-overridden file (real, non-symlink) untouched. Currently excluded: `dev`, `push` (brian session/workflow plumbing nido owns).
 
+## Landing work — no pull requests
+
+**Nido's own work lands by integrating with `main` locally and pushing. This
+project does not use pull requests on itself.** The harness skills injected into
+every session (`/stack`, `/prepare-draft-pr`, `/drive-home`) presume a PR per
+layer, because they are written for the *target* projects nido manages. **Where
+they and this section disagree, this section wins** — for this repo only.
+
+From a session worktree, the whole landing:
+
+```bash
+jj git fetch                                  # main moves under you; other sessions land too
+jj rebase -s <bottom-change-id> -d main       # replay the arc onto main's tip
+jj resolve --list                             # exits 2 with "No conflicts" in the CLEAN case
+bb nido:test                                  # green BEFORE it lands — nothing gates it after
+jj bookmark set main -r <top-change-id>       # fast-forward
+jj git push -b main
+```
+
+**`main` is linear and stays that way** — it has no merge commit anywhere in its
+history, and the rebase is what keeps that true. `jj git push -b main` refuses a
+non-fast-forward, so a stale base surfaces as a rejected push rather than a merge
+commit; fetch, rebase again, re-run the tests.
+
+**Nothing runs CI after the push.** There is no merge queue and no required check
+on this repo, so `bb nido:test` before the fast-forward is the only gate there is.
+Landing red means main is red for whoever fetches next.
+
+**Clean up the local bookmarks.** Never push the session bookmark. Once `main`
+points at the same commit, delete the `<session>--<slug>` layer bookmarks — they
+are local-only, and leaving them lying around is how a later bare `jj git push`
+resurrects branches nobody wanted.
+
+### What still applies, and what doesn't
+
+**The decomposition doctrine is unaffected; only its destination changes.**
+`/design` still writes the baseline and the design record to the ledger,
+`/stack` still says how to cut layers, `/spin-out` still routes what leaves the
+branch, and `/phase` still decides whether the change can arrive in one landing.
+A layer is simply a **commit** here rather than a PR — same one-sentence title
+with no "and", same `Layer:` trailer, same Claims / Verify / Lane / Out of scope
+brief in the commit message. The brief is worth *more* in this mode, not less:
+it is the only artifact a later reader gets, since there is no PR conversation
+to reconstruct the reasoning from.
+
+**What does not apply:** `/prepare-draft-pr`, `/drive-home`, every `gh stack`
+recipe in `/stack` §4 and §6, and `nido ship`. `nido ship` hands a branch to the
+coordinator's merge lane, which ends at `gh pr merge --auto` on GitHub's native
+merge queue — that is the path for target projects with CI, not for nido.
+
+**The PRs in this repo's history are not counter-examples.** Most of them are
+throwaway probes (`probe stack alpha/beta/gamma/delta/epsilon`, `chore(probe):
+layer one`) opened to work out `gh stack link`'s behaviour for the `/stack`
+skill. Nido *builds* the PR machinery; the projects it manages are what consume
+it.
+
 ## Closing a work arc
 
 **End every work arc by rebasing the root `~/Code/nido` checkout onto local `main`** — `jj rebase -d main` (or `jj rebase -r @ -d main@origin` to carry uncommitted working-copy changes forward). Work lands from session worktrees, which share the store but not the root workspace's working copy, so the root checkout stays wherever it was and silently drifts behind `main` as arcs land elsewhere.
