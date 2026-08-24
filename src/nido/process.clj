@@ -73,14 +73,49 @@
   (let [h (-> seed hash long (bit-and 0x7fffffff))]
     (+ low (mod h (- high low)))))
 
-(defn find-available-port [preferred-port max-attempts]
+(def browser-blocked-ports
+  "Ports every mainstream browser refuses to connect to (Chromium's
+   kRestrictedPorts; Firefox and Safari block near-identical lists).
+
+   A session's app port landing here is a silent trap: the service binds,
+   listens, and answers curl, so `session:status` reports app alive/listening
+   and every nido surface calls the session healthy — while the browser says
+   ERR_UNSAFE_PORT and nothing can be tested. The failure looks like a dead
+   session and isn't one.
+
+   Listed for the whole port space, not just nido's ranges, because
+   `find-available-port` walks upward from its preferred port and can leave
+   any range it starts in."
+  #{1 7 9 11 13 15 17 19 20 21 22 23 25 37 42 43 53 69 77 79 87 95
+    101 102 103 104 109 110 111 113 115 117 119 123 135 137 138 139 143
+    161 179 389 427 465 512 513 514 515 526 530 531 532 540 548 554 556 563
+    587 601 636 989 990 993 995
+    1719 1720 1723 2049
+    3659      ; apple-sasl
+    4045      ; lockd
+    4190      ; sieve
+    4444      ; nv-video / krb524
+    5060 5061 ; sip / sips
+    6000      ; X11
+    6566      ; sane-port
+    6665 6666 6667 6668 6669 6679 6697  ; irc
+    10080})   ; amanda
+
+(defn find-available-port
+  "The first port at or above `preferred-port` that is free AND openable by a
+   browser. See `browser-blocked-ports` for why free is not sufficient."
+  [preferred-port max-attempts]
   (loop [port preferred-port
          attempts 0]
     (cond
-      (port-free? port) port
+      (and (not (contains? browser-blocked-ports port))
+           (port-free? port))
+      port
+
       (>= attempts max-attempts)
       (throw (ex-info "Could not find free port"
                       {:preferred-port preferred-port :attempts max-attempts}))
+
       :else (recur (inc port) (inc attempts)))))
 
 (defn quoted [s]
