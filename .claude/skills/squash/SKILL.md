@@ -7,7 +7,7 @@ description: Fold the current session's stack so each layer is exactly one coher
 
 > **Harness-side skill, owned by nido.** Lives at `nido/.claude/skills/squash/`
 > and is injected into every spawned session's composed `.claude/skills/`.
-> Sibling of `/align`, `/local-ci`, and `/drive-home` — the squash + PR-text
+> Sibling of `/align`, `/local-ci`, `/land`, and `/drive-home` — the squash + PR-text
 > phase `/drive-home` composes.
 
 ## What this is

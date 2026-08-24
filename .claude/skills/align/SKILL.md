@@ -7,7 +7,7 @@ description: Rebase the current session's branch onto a fresh origin/main and au
 
 > **Harness-side skill, owned by nido.** Lives at `nido/.claude/skills/align/`
 > and is injected into every spawned session's composed `.claude/skills/`.
-> Sibling of `/local-ci`, `/squash`, and `/drive-home` — the rebase phase
+> Sibling of `/local-ci`, `/squash`, `/land`, and `/drive-home` — the rebase phase
 > `/drive-home` composes.
 
 ## What this is
