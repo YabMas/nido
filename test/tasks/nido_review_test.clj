@@ -24,7 +24,7 @@
     (with-redefs [rloop/run-loop (fn [cfg] (reset! seen cfg) {:status :clean :history []})]
       (t/loop-cmd ":cwd" "/w")
       (is (= "main" (:base @seen)))
-      (is (= 5 (:max-iters @seen))))))
+      (is (nil? (:max-iters @seen)) "uncapped by default — runs as long as it takes"))))
 
 (deftest loop-cmd-resolves-worktree-when-cwd-absent
   (let [seen (atom nil)]

@@ -126,7 +126,10 @@
         clock      #(Instant/now)
         report-path (str (fs/path (cstate/run-dir run-id) "report.json"))
         config     {:cwd cwd :base base
-                    :max-iters (or max-iters 5)
+                    ;; No default cap: the loop runs until it converges,
+                    ;; escalates, or stops making progress. :max-iters only
+                    ;; caps it when the caller explicitly asks for a cap.
+                    :max-iters max-iters
                     :dry-run?  (boolean dry-run?)
                     :run-id    run-id
                     :clock     clock}

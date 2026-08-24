@@ -56,16 +56,19 @@
 (defn run-loop
   "Drive the pipeline until terminal. config:
    {:cwd :base :run-id :max-iters :pipeline :emit :clock :budget :dry-run?}.
+   :max-iters is OPTIONAL and has no default — nil means run until the loop
+   terminates on its own merits (converged / escalated / clean / no-progress /
+   error). A round that changes nothing still ends the run via `no-progress?`,
+   so unbounded does not mean non-terminating. Pass :max-iters only to cap it.
    :pipeline / :emit / :clock are injection seams."
   [{:keys [run-id max-iters pipeline emit clock] :as config
-    :or   {max-iters 5 emit (fn [_]) clock #(Instant/now)}}]
+    :or   {emit (fn [_]) clock #(Instant/now)}}]
   (let [pipeline (or pipeline default-pipeline)
         impl-session-id (str (random-uuid))]
     (emit {:event :run-started :run-id run-id
            :cwd (:cwd config) :base (:base config) :at (str (clock))})
     (loop [iter 1, history [], prev-findings nil]
-      (let [ctx0 {:config (assoc config :max-iters max-iters
-                                 :impl-session-id impl-session-id)
+      (let [ctx0 {:config (assoc config :impl-session-id impl-session-id)
                   :iter iter :history history :control :continue}
             ctx  (try
                    (run-pipeline ctx0 pipeline emit clock)
@@ -76,7 +79,7 @@
             final (cond
                     (:status ctx)                                ctx
                     (no-progress? prev-findings (:findings ctx)) (assoc ctx :status :no-progress)
-                    (>= iter max-iters)                          (assoc ctx :status :max-iters)
+                    (and max-iters (>= iter max-iters))          (assoc ctx :status :max-iters)
                     :else                                        nil)]
         (if final
           (do (emit {:event :run-finalized :status (:status final)

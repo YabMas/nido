@@ -40,6 +40,21 @@
     (is (= :max-iters (:status out)))
     (is (= 3 (count (:history out))))))
 
+(deftest uncapped-when-max-iters-absent
+  ;; No :max-iters => no iteration ceiling at all. Each round yields a fresh
+  ;; finding, so `no-progress?` never fires and the run only ends when the
+  ;; pipeline itself says stop — well past the 5 rounds that used to be the
+  ;; hardcoded default.
+  (let [[_ emit] (capturing)
+        pipe [(stage :review (fn [c] (assoc c :findings [{:title (str (:iter c))}])))
+              (stage :arbiter (fn [c] (cond-> (assoc c :arbiter {:fix-findings nil})
+                                        (>= (:iter c) 9) (assoc :control :stop)
+                                        (< (:iter c) 9)  (assoc :control :continue))))
+              (stage :fix (fn [c] (update c :history (fnil conj []) {:iter (:iter c)})))]
+        out (rloop/run-loop {:run-id "r1" :pipeline pipe :emit emit})]
+    (is (= :converged (:status out)))
+    (is (= 9 (:iter out)))))
+
 (deftest stops-on-no-progress
   (let [[_ emit] (capturing)
         pipe [(stage :review (fn [c] (assoc c :findings [{:title "same"}])))

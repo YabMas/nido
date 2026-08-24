@@ -513,7 +513,7 @@
 
   nido:review:loop
   {:requires ([tasks.nido-review :as nido-review])
-   :doc "Run the codex review loop on the session's branch diff. [:base main] [:max-iters 5] [:cwd <dir>] [:dry-run? false]"
+   :doc "Run the codex review loop on the session's branch diff. Runs until it converges/stops progressing unless capped. [:base main] [:max-iters <n>] [:cwd <dir>] [:dry-run? false]"
    :task (System/exit (nido-review/exit-code
                         (apply nido-review/loop-cmd *command-line-args*)))}
 
