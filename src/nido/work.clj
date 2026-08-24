@@ -109,6 +109,45 @@
    workstream-less branch and :no-workstream refusal before it is added."
   #{:restore :dismiss :start-triage})
 
+(def option-action-ids
+  "Gate action id per blocker-option position — :option-a … :option-f. Fixed ids
+   rather than an encoded payload: a click POSTs an id and nothing else, so the
+   text the agent is resumed with is built HERE, from the ledger, at click time
+   (choose-option! → option-input). Same reasoning as approval-input — an answer
+   the browser could compose is an answer that can arrive saying anything."
+  (mapv #(keyword (str "option-" (str/lower-case %))) report/option-letters))
+
+(def ^:private option-index
+  "Action id → the position it selects."
+  (into {} (map-indexed (fn [i id] [id i])) option-action-ids))
+
+(defn option-action?
+  "True for an :option-<letter> gate action id."
+  [action-id]
+  (contains? option-index action-id))
+
+(defn- option-actions
+  "One button per branch of a blocker's :options, lettered by position. `:kind
+   :mutation` because it is resolved nido-side, like :approve — the descriptor
+   carries no input for the browser to send. Order is the record's order, so the
+   letters here and the letters on the card cannot disagree.
+
+   `entry-seq` is the ledger position of the report these were built from. It
+   rides on every button and comes back with the click, because a LETTER ALONE
+   IS NOT AN ANSWER: it only means something relative to the question that was on
+   screen, and by click time the ledger may hold a different one (the agent
+   appended, another tab answered). choose-option! refuses on the mismatch.
+   Omitted when unknown, which fails closed there rather than resolving blind."
+  [entry-seq options]
+  (vec (map-indexed
+        (fn [i {:keys [label recommended?]}]
+          (cond-> {:id    (nth option-action-ids i)
+                   :label (str (report/option-letter i) " — " label)
+                   :kind  :mutation
+                   :style (if recommended? :primary :default)}
+            entry-seq (assoc :seq entry-seq)))
+        options)))
+
 (defn gate-actions
   "Follow-actions for a gate, derived from its spine `stage` and whether a session is
    `parked?`. Each is a descriptor {:id :label :kind :style (:input)}:
@@ -124,6 +163,13 @@
    stick, and the Dismissed band + Restore make it reversible instead of silent.
    The arg stays for call-site compatibility.
 
+   `{:options [...]}` is the CURRENT report's blocker options, when it has any:
+   a parked gate whose latest entry named its branches offers one button per
+   branch (option-actions) instead of only a textarea. The call sites read
+   :report-format, :options AND :seq off the SAME report the reader is looking at,
+   so the buttons and the card can never disagree about the question — and :seq
+   is what lets the resolver notice that the question itself has since changed.
+
    `{:bare? true}` marks a row with no workstream behind it (wsv/bare-row). On
    :triage that swaps Apply/Reply — which need an agent — for :start-triage. Then,
    for EVERY stage, a bare row's action set is filtered down to
@@ -137,7 +183,7 @@
    correct automatically if the action sets change."
   ([stage parked?] (gate-actions stage parked? nil nil))
   ([stage parked? origin] (gate-actions stage parked? origin nil))
-  ([stage parked? _origin {:keys [bare? report-format]}]
+  ([stage parked? _origin {:keys [bare? report-format options] entry-seq :seq}]
    (let [actions
          (case stage
            :incoming    [{:id :promote :label "Promote" :kind :mutation :style :primary}
@@ -182,15 +228,28 @@
                           [{:id :approve :label "Approve" :kind :mutation :style :primary}
                            {:id :reply   :label "Reply"   :kind :resume  :style :default}]
 
+                          ;; A blocker that named its branches is the same shape of
+                          ;; gate: one question, answerable. Each option is a button;
+                          ;; Reply stays for the answer that is none of them ("B, but
+                          ;; keep the i18n key"). Done is absent for the reason it is
+                          ;; absent above — settling the workstream is not an answer
+                          ;; to the question, and beside A/B it reads as one.
+                          (seq options)
+                          (conj (option-actions entry-seq options)
+                                {:id :reply :label "Reply" :kind :resume :style :default})
+
                           :else
                           [{:id :reply :label "Reply" :kind :resume :style :default}
                            {:id :done  :label "Done"  :kind :mutation :style :primary}])
            :shipping    (if parked?
-                          ;; Blocked in the merge lane: Reply resumes the agent with a
-                          ;; note; Drop takes it off the queue (back to :in-progress).
-                          ;; The usual path is to fix in the worktree and `nido ship` again.
-                          [{:id :reply :label "Reply" :kind :resume                :style :default}
-                           {:id :drop  :label "Drop"  :kind :mutation              :style :danger}]
+                          ;; Blocked in the merge lane: any named options first (a
+                          ;; drive-home halt is where they most often appear), then
+                          ;; Reply to resume the agent with a note; Drop takes it off
+                          ;; the queue (back to :in-progress). The usual path is to fix
+                          ;; in the worktree and `nido ship` again.
+                          (conj (option-actions entry-seq options)
+                                {:id :reply :label "Reply" :kind :resume   :style :default}
+                                {:id :drop  :label "Drop"  :kind :mutation :style :danger})
                           [])
            [])]
      (if bare?
@@ -334,19 +393,25 @@
   "Render a ledger entry as a `:format`-tagged gate report. An `.edn` file is a
    typed event — read + validated against the schema for its `:kind`
    (report/parse-event — the read contract, which accepts any shape that was
-   writable when the entry was written), :at stamped from the entry; any other file is markdown
+   writable when the entry was written), :seq/:at stamped from the entry (the same
+   stamp cws/latest-entry applies); any other file is markdown
    (:format :markdown). A typed `.edn` that fails to read/validate degrades to a
-   :markdown payload of its raw text rather than blanking the pane."
+   :markdown payload of its raw text rather than blanking the pane.
+
+   :seq is load-bearing, not decoration: it is the ledger position a rendered
+   gate binds its buttons to, so a click can be checked against the report that
+   drew it (option-actions -> choose-option!)."
   [base-dir entry]
   (let [f    (str (fs/path base-dir (:file entry)))
         edn? (str/ends-with? (str (:file entry)) ".edn")]
     (or (when edn?
           (try (-> (report/parse-event (:kind entry) (io/read-edn f))
-                   (assoc :at (:at entry)))
+                   (assoc :seq (:seq entry) :at (:at entry)))
                (catch Throwable _ nil)))
         (let [md (when (fs/exists? f) (slurp f))]
           (cond-> {:format   :markdown
                    :kind     (:kind entry)
+                   :seq      (:seq entry)
                    :at       (:at entry)
                    :title    (first-heading md)
                    :markdown md}
@@ -493,10 +558,11 @@
 (defn workstream
   "Full detail for one workstream: origin, spine stage, label, a light ledger
    facet, a newest-first entry INDEX, the report of the entry `selected-seq` names
-   (nil — nothing open — unless it names one), `:on-latest?` (is the open entry the
-   current one — gates the pane's live actions), `:environment` (the one current
-   session — `work/environment`), and its sessions on the autonomy axis. nil when
-   the workstream is absent.
+   (nil — nothing open — unless it names one), `:action-report` (the CURRENT report,
+   which is what the live actions derive from — see the key), `:on-latest?` (is the
+   open entry the current one — gates the pane's live actions), `:environment` (the
+   one current session — `work/environment`), and its sessions on the autonomy axis.
+   nil when the workstream is absent.
 
    Nothing is selected by default: the ledger index is the pane's resting state and
    opening an entry is the reader's choice, so `selected-seq` nil (and a seq no
@@ -515,7 +581,19 @@
            {:keys [base-dir entries]} (active-ledger project ws-id)
            sel      ((set (map :seq entries)) selected-seq)
            index    (when (seq entries)
-                      (vec (reverse (mapv #(index-row base-dir %) entries))))]
+                      (vec (reverse (mapv #(index-row base-dir %) entries))))
+           latest?  (or (nil? sel) (= sel (:seq (last entries))))
+           ;; The current report, derived from the snapshot `entries` ALREADY
+           ;; holds rather than re-read from disk. A second read is a second
+           ;; moment: an entry landing between them leaves :on-latest? true with
+           ;; the viewer showing one question and the action bar — and the :seq
+           ;; its option buttons carry — built from the next one, which is
+           ;; precisely the card/button binding the seq check exists to enforce.
+           ;; Only the empty-ledger case still reads (there is no entry to bind
+           ;; to, and latest-report is where the intake-text fallback lives).
+           latest-r (if (seq entries)
+                      (hydrate (entry->report base-dir (last entries)))
+                      (latest-report project ws-id))]
        {:ws-id        ws-id
         :project      project
         :origin       (classify-origin w)
@@ -529,12 +607,21 @@
         ;; offered only on the current entry — older entries are an immutable
         ;; read-back, not something you act on — and the resting pane, which is
         ;; reading nothing at all, acts on the workstream as it stands.
-        :on-latest?   (or (nil? sel) (= sel (:seq (last entries))))
+        :on-latest?   latest?
         ;; A ledger renders only what the reader opened. With no ledger at all,
         ;; the intake text is the pane's only content, so it stands in unasked.
         :report       (if (seq entries)
                         (when sel (report-at base-dir entries sel))
-                        (latest-report project ws-id))
+                        latest-r)
+        ;; What the pane's live ACTIONS derive from — which is not what the
+        ;; viewer is showing. The resting pane has nothing open (:report nil) and
+        ;; still acts on the workstream as it stands, so a parked blocker's
+        ;; branches must reach the action bar without the reader first opening
+        ;; the entry; deriving from :report there would offer generic Reply/Done —
+        ;; including the Done the option branch deliberately withholds — for a
+        ;; question that named its answers. nil once an OLDER entry is open:
+        ;; :on-latest? is false there and no actions render at all.
+        :action-report (when latest? latest-r)
         :environment  (environment project ws-id)
         :sessions     (mapv session-facet sessions)})
      ;; No workstream at this id. For a bare watched-view row the ws-id IS the
@@ -600,7 +687,9 @@
      :links        (:links row)
      :report       report
      :actions      (gate-actions (:stage row) parked? (:origin row)
-                                 {:report-format (:format report)})
+                                 {:report-format (:format report)
+                                  :options       (:options report)
+                                  :seq           (:seq report)})
      :session      (:name psess)
      :resume-error (get-in psess [:autonomy :error])
      :working?     (resuming? project (:ws-id row))}))
@@ -1003,6 +1092,47 @@
        "the code, amend or supersede the design record (/design §5) rather than "
        "patching around it."))
 
+(defn option-input
+  "What choosing option `i` resumes the parked agent with. Built nido-side from
+   the ledger, for the same reason as approval-input: the browser sends an id,
+   never prose, so an answer cannot arrive saying something the record never
+   offered.
+
+   It repeats the branch back in full — label, summary, consequence — because the
+   agent is resumed in a fresh turn that can no longer see the gate, and 'the
+   human picked B' is not an instruction. The last sentence is the one that keeps
+   the gate honest: an option that turns out not to hold is a NEW blocker, not a
+   licence to take the other branch on the human's behalf."
+  [i {:keys [label summary consequence]}]
+  (str "A human answered the blocker at the gate: option " (report/option-letter i)
+       " — " label ". " summary
+       (when consequence (str " " consequence))
+       " Proceed on that basis. Do not re-open the choice or switch to another"
+       " option yourself: if this one turns out not to hold once you are inside"
+       " the code, record a new :blocker naming what broke and park again."))
+
+(defn- choose-option!
+  "Resume the parked agent with the branch `action-id` selects, resolved against
+   the workstream's CURRENT latest report — never against what the browser was
+   showing. A click carries a letter and `entry-seq`, the ledger position of the
+   report that letter was rendered from; the ledger decides what the letter meant,
+   and the position decides whether that question is still the one being asked.
+
+   Both checks are needed, and the position is the one that matters. A letter
+   alone silently resolves against WHATEVER is latest at click time: if another
+   tab answered the blocker and the agent parked on a new one with as many
+   branches, :option-a would pick branch A of a question the human never read.
+   So a click whose position is not the latest entry — or which carries none at
+   all — is refused, not resolved."
+  [project ws-id action-id entry-seq]
+  (let [report (latest-report project ws-id)
+        i      (option-index action-id)]
+    (if-let [opt (and (some? entry-seq)
+                      (= entry-seq (:seq report))
+                      (get (vec (:options report)) i))]
+      (resume/resume! project ws-id (option-input i opt))
+      {:decision :option-stale})))
+
 (defn resolve-gate!
   "Apply a gate follow-action, dispatching on `action-id`. A workstream-less ws-id
    (e.g. a bare watched-view row) is a no-op — {:decision :no-workstream} — for
@@ -1010,13 +1140,20 @@
    legitimately offers (see workstream-less-actions).
      :promote -> set-stage! :in-progress   :dismiss -> off-radar (ticket + ws :dismissed)
      :drop    -> close! :dropped            :done    -> set-stage! :done
-     :apply   -> apply! (ticket:complete)   :reply   -> resume! the parked agent with `input`
+     :apply   -> apply! (ticket:complete)   :reply   -> resume! the parked agent with `payload`
      :approve -> resume! the parked agent with `approval-input` (a design gate)
+     :option-a … :option-f -> resume! with the blocker branch that letter names,
+                              iff `payload` still names the latest report
      :restore -> restore! (clear ticket status + reopen at :triaging)
      :start-triage -> start-triage-page! (force-spawn the triage trigger)
+
+   `payload` is whatever the click carried besides its id, and what that is
+   depends on the action: the reply text for :reply, the :seq of the report the
+   button was rendered from for :option-*. Every other action resolves entirely
+   nido-side and ignores it.
    Returns the resolver's result map."
   ([project ws-id action-id] (resolve-gate! project ws-id action-id nil))
-  ([project ws-id action-id input]
+  ([project ws-id action-id payload]
    (cond
      ;; Bare-row-capable actions run before the guard (see workstream-less-actions).
      (contains? workstream-less-actions action-id)
@@ -1026,13 +1163,19 @@
        :start-triage (start-triage-page! project ws-id))
 
      (nil? (cws/read-ws project ws-id)) {:decision :no-workstream}
+
+     ;; Not a `case` branch: the option ids are derived from report/option-letters,
+     ;; and case needs literals — spelling six of them here is a second copy of
+     ;; that vector, free to drift from the one the buttons are built from.
+     (option-action? action-id) (choose-option! project ws-id action-id payload)
+
      :else
      (case action-id
        :promote (set-stage! project ws-id :in-progress)
        :done    (set-stage! project ws-id :done)
        :drop    (do (cws/close! project ws-id :dropped) {:decision :dropped})
        :apply   (apply! project ws-id)
-       :reply   (resume/resume! project ws-id input)
+       :reply   (resume/resume! project ws-id payload)
        :approve (resume/resume! project ws-id approval-input)
        (throw (ex-info "Unknown gate action" {:action-id action-id :ws-id ws-id}))))))
 

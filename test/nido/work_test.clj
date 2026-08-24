@@ -508,6 +508,103 @@
       "a decision nobody is parked on is not a gate — there is no agent to
        resume, so approving it would resume nothing"))
 
+;; ── The answerable blocker: A/B/… rather than an essay ─────────────────────
+;; Same gate, same stage. A blocker that NAMED its branches is a question with
+;; answers, so the gate offers them as buttons; one written as prose can only be
+;; answered by typing prose back, which is the answer that never arrives.
+
+(def ^:private sample-options
+  [{:label "Drop Keep Old" :summary "Collapse the modal to Continue/Cancel."
+    :consequence "Retires the /keep-old route." :recommended? true}
+   {:label "Implement archive-and-clone" :summary "Build the archive path."
+    :consequence "Needs a prior product call on what archived means."}])
+
+(deftest a-parked-blocker-with-options-offers-one-button-per-branch
+  (is (= [{:id :option-a :label "A — Drop Keep Old"              :kind :mutation :style :primary}
+          {:id :option-b :label "B — Implement archive-and-clone" :kind :mutation :style :default}
+          {:id :reply    :label "Reply"                           :kind :resume  :style :default}]
+         (work/gate-actions :in-progress true nil
+                            {:report-format :blocker :options sample-options}))
+      "the recommended branch is the primary button; Reply stays for the answer
+       that is none of them; Done is absent for the reason it is absent from the
+       design gate — beside A/B it reads as an answer to the question")
+  (is (= [7 7] (->> (work/gate-actions :in-progress true nil
+                                       {:report-format :blocker :options sample-options :seq 7})
+                    (filter (comp work/option-action? :id))
+                    (map :seq)))
+      "each button names the ledger position it was rendered from, so the click
+       can be checked against the question that was on screen")
+  (is (= [:option-a :option-b :reply :drop]
+         (map :id (work/gate-actions :shipping true nil
+                                     {:report-format :blocker :options sample-options})))
+      "a drive-home halt in the merge lane is where a choice most often lands")
+  (is (= [:reply :drop] (map :id (work/gate-actions :shipping true)))
+      "and a shipping gate with nothing to choose between is unchanged")
+  (is (= [] (work/gate-actions :in-progress false nil
+                               {:report-format :blocker :options sample-options}))
+      "nobody parked ⇒ no agent to resume, so there is nothing to answer"))
+
+(deftest choosing-an-option-resumes-with-that-branch-read-from-the-ledger
+  (with-tmp
+    (fn [_]
+      (let [w   (workstream/create! :brian {:stage :in-progress :external-refs []})
+            got (atom nil)]
+        (workstream/append-entry! :brian (:id w) {:kind :blocker}
+          (pr-str {:format :blocker :summary "The modal offers a branch nothing implements."
+                   :needs "A product decision on Keep Old." :options sample-options}))
+        (with-redefs [resume/resume! (fn [_ _ input] (reset! got input) {:decision :resumed})]
+          (is (= {:decision :resumed} (work/resolve-gate! :brian (:id w) :option-b 1))
+              "the click names the report it was rendered from — entry 1, still the latest")
+          (is (str/includes? @got "option B — Implement archive-and-clone"))
+          (is (str/includes? @got "Build the archive path.")
+              "the branch is repeated in full — the resumed turn cannot see the gate")
+          (is (str/includes? @got "Needs a prior product call"))
+          (is (str/includes? @got "record a new :blocker")
+              "an option that does not hold is a new blocker, not a licence to
+               take the other branch on the human's behalf"))))))
+
+(deftest a-letter-that-no-longer-resolves-refuses-rather-than-resuming
+  (with-tmp
+    (fn [_]
+      (let [w       (workstream/create! :brian {:stage :in-progress :external-refs []})
+            resumed (atom false)]
+        (workstream/append-entry! :brian (:id w) {:kind :blocker}
+          (pr-str {:format :blocker :summary "s" :needs "n" :options sample-options}))
+        (with-redefs [resume/resume! (fn [& _] (reset! resumed true) {:decision :resumed})]
+          (is (= {:decision :option-stale} (work/resolve-gate! :brian (:id w) :option-c 1))
+              "the click carries a letter; the CURRENT ledger decides what it meant")
+          (is (= {:decision :option-stale} (work/resolve-gate! :brian (:id w) :option-a))
+              "and a click carrying no position at all cannot be bound to a
+               question, so it is refused rather than resolved blind")
+          (is (false? @resumed)))))))
+
+(deftest a-click-on-a-report-the-ledger-has-moved-past-is-refused
+  (with-tmp
+    (fn [_]
+      (let [w       (workstream/create! :brian {:stage :in-progress :external-refs []})
+            resumed (atom false)]
+        (workstream/append-entry! :brian (:id w) {:kind :blocker}
+          (pr-str {:format :blocker :summary "Keep Old" :needs "n" :options sample-options}))
+        ;; Another tab answered; the agent parked again on a DIFFERENT question
+        ;; that happens to have as many branches — so the letter still resolves.
+        (workstream/append-entry! :brian (:id w) {:kind :blocker}
+          (pr-str {:format :blocker :summary "Retention" :needs "n"
+                   :options [{:label "Delete after 30 days" :summary "x"}
+                             {:label "Keep forever" :summary "y"}]}))
+        (with-redefs [resume/resume! (fn [& _] (reset! resumed true) {:decision :resumed})]
+          (is (= {:decision :option-stale} (work/resolve-gate! :brian (:id w) :option-a 1))
+              "answering entry 1 after entry 2 replaced it would resume the agent
+               with branch A of a question the human never read")
+          (is (false? @resumed))
+          (is (= {:decision :resumed} (work/resolve-gate! :brian (:id w) :option-a 2))
+              "the same letter on the CURRENT report still answers"))))))
+
+(deftest option-actions-are-not-workstream-less
+  (is (empty? (set/intersection @#'work/workstream-less-actions
+                                (set work/option-action-ids)))
+      "answering resumes a parked agent, so it needs a workstream — the two-way
+       membership hazard documented on that set is why this is pinned"))
+
 (deftest approve-is-not-a-workstream-less-action
   (is (not (contains? @#'work/workstream-less-actions :approve))
       "Approve resumes a parked agent, so it needs a workstream; the two-way
@@ -993,6 +1090,26 @@
           (is (= [:impl :impl :impl] (mapv :kind (:entries d))) "kinds carried")
           (is (nil? (:selected-seq d)) "the index alone — nothing opens itself")
           (is (nil? (:report d)) "and no report until the reader opens one"))))))
+
+(deftest workstream-at-rest-still-carries-the-current-report-for-its-actions
+  (with-tmp
+    (fn [_]
+      (let [id (:id (workstream/create! :brian {:stage :in-progress :external-refs []}))]
+        (workstream/append-entry! :brian id {:kind :impl} "# One\n\nfirst")
+        (workstream/append-entry! :brian id {:kind :blocker}
+          (pr-str {:format :blocker :summary "s" :needs "n" :options sample-options}))
+        (let [at-rest (work/workstream :brian id)]
+          (is (nil? (:report at-rest)) "the viewer stays closed — nothing opens itself")
+          (is (= sample-options (:options (:action-report at-rest)))
+              "the ACTIONS still see the parked blocker's branches: at rest the pane
+               acts on the workstream as it stands, so the option buttons must not
+               wait for the reader to open the entry first")
+          (is (= 2 (:seq (:action-report at-rest)))
+              "and it names its ledger position, which is what the click carries back"))
+        (is (some? (:action-report (work/workstream :brian id 2)))
+            "opening the CURRENT entry changes nothing")
+        (is (nil? (:action-report (work/workstream :brian id 1)))
+            "an older entry is a read-back — :on-latest? is false and no actions render")))))
 
 (deftest workstream-selects-requested-entry
   (with-tmp

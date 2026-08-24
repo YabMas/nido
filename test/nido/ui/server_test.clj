@@ -79,6 +79,22 @@
         (Thread/sleep 50)
         (is (= [["brian" "ws-1" :reply "do the fix"]] @calls))))))
 
+(deftest post-gate-option-passes-the-rendered-entry-position
+  (let [calls (atom [])]
+    (with-redefs [nido.work/resolve-gate! (fn [p w a & [in]] (swap! calls conj [p w a in]) {:resumed "auto"})
+                  nido.work/all-gates    (fn [] [])]
+      (server/handle-request {:request-method :post :uri "/gate/brian/ws-1/option-a"
+                              :query-string "entry=4"})
+      ;; ws-2, not ws-1: gate-resolve!'s in-flight guard is keyed per workstream
+      ;; and would drop a second click landing while the first is still resolving.
+      (server/handle-request {:request-method :post
+                              :uri "/workstreams/brian/ws-2/gate/option-b"
+                              :query-string "entry=4"})
+      (Thread/sleep 50)
+      (is (= [["brian" "ws-1" :option-a 4] ["brian" "ws-2" :option-b 4]] @calls)
+          "both gate routes forward the position the button was rendered at —
+           resolve-gate! refuses a letter whose report the ledger has moved past"))))
+
 (deftest post-gate-reply-returns-resuming-pane
   (with-redefs [nido.work/resolve-gate! (fn [& _] {:resumed "auto"})]
     (let [body (java.io.ByteArrayInputStream. (.getBytes "{\"reply\":\"apply\"}"))

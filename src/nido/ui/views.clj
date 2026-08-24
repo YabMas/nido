@@ -151,6 +151,15 @@
               font-size:13.5px; line-height:1.7; color:#cdcde0; background:#0f0f1e;
               border:1px solid #2a2a4a; border-radius:6px; padding:16px 18px; }
         .md code { background:#1c1c33; padding:1px 5px; border-radius:3px; color:#aee0ff; }
+        .options { display:flex; flex-direction:column; gap:8px; margin-top:6px; }
+        .option { border:1px solid #2a2a4a; border-radius:6px; background:#13132a;
+                  padding:10px 12px 11px; }
+        .option-head { display:flex; gap:9px; align-items:baseline; }
+        .option-letter { display:inline-block; min-width:20px; padding:1px 0; border-radius:4px;
+                         background:#1a2238; color:#7eb8da; font-size:11.5px; font-weight:600;
+                         text-align:center; }
+        .option p { margin:5px 0 0; }
+        .chip.c-opt-rec { background:#16352a; color:#7edaa8; }
         .reply { margin-top:16px; border:1px solid #2a2a4a; border-radius:6px; background:#13132a; padding:12px 14px; }
         .reply textarea { width:100%; min-height:62px; background:#0f0f1e; border:1px solid #2a2a4a;
                           border-radius:4px; color:#e0e0e0; font:inherit; font-size:13px; padding:9px 11px; }
@@ -491,16 +500,20 @@
   ([action-id project ws-id] (gate-action-confirm-fragment action-id project ws-id "gate-pane"))
   ([action-id project ws-id pane-id]
    (gate-action-fragment
-    (case action-id
-      :promote "Promoting…"
-      :apply   "Applying… resuming the agent to write the verdict."
-      :dismiss "✓ Dismissed — off your radar. Nothing written to Notion; restore it from the Dismissed band."
-      :restore "✓ Restored — back in the triage queue."
-      :start-triage "Starting triage… spawning the agent to investigate."
-      :drop    "✓ Dropped — not pursued."
-      :done    "✓ Marked done."
-      :reply   "Resuming… re-hydrating the session if needed, then resuming the conversation."
-      "Done.")
+    (if (work/option-action? action-id)
+      ;; Which letter it was is on the card the reader is looking at; repeating it
+      ;; here would be the one copy free to be wrong.
+      "Resuming with your answer…"
+      (case action-id
+        :promote "Promoting…"
+        :apply   "Applying… resuming the agent to write the verdict."
+        :dismiss "✓ Dismissed — off your radar. Nothing written to Notion; restore it from the Dismissed band."
+        :restore "✓ Restored — back in the triage queue."
+        :start-triage "Starting triage… spawning the agent to investigate."
+        :drop    "✓ Dropped — not pursued."
+        :done    "✓ Marked done."
+        :reply   "Resuming… re-hydrating the session if needed, then resuming the conversation."
+        "Done."))
     project ws-id pane-id)))
 
 (defn gate-action-skip-fragment
@@ -522,9 +535,17 @@
   [project ws-id action-id]
   (str "/gate/" project "/" ws-id "/" (name action-id)))
 
-(defn- action-button [project ws-id {:keys [id label style]} route]
+(defn- action-button
+  "One gate button. A descriptor carrying `:seq` (blocker-option buttons — see
+   work/option-actions) posts it as ?entry=, the same reading position every other
+   surface rides: the letter it sends means nothing except relative to the report
+   that drew it, so the resolver needs to know which report that was."
+  [project ws-id {:keys [id label style] entry-seq :seq} route]
   [:button {:class (style-class style)
-            "data-on:click" (str "@post('" (route project ws-id id) "')")}
+            "data-on:click" (str "@post('"
+                                 (cond-> (route project ws-id id)
+                                   entry-seq (str "?entry=" entry-seq))
+                                 "')")}
    label])
 
 (defn action-bar
@@ -786,12 +807,30 @@
    (when (seq open)
      [:div [:h3 "Still open"] (into [:ul] (for [o open] [:li o]))])])
 
-(defn- blocker-card [{:keys [summary needs]}]
+(defn- option-card
+  "One lettered branch of a blocker. The letter is the whole affordance: it is
+   what the button below the report says, so a reader picks by matching a letter
+   rather than by re-reading two paragraphs of prose to work out which button is
+   which. Derived from position (report/option-letter) at both ends."
+  [i {:keys [label consequence recommended?] :as opt}]
+  [:div.option
+   [:div.option-head
+    [:span.option-letter (report/option-letter i)]
+    [:strong label]
+    (when recommended? [:span.chip.c-opt-rec "recommended"])]
+   [:p (:summary opt)]
+   (when consequence [:p.meta consequence])])
+
+(defn- blocker-card [{:keys [summary needs options]}]
   [:div.md
    [:h2 "Blocker"]
    (md/render summary)
    [:h3 "Needs"]
-   [:p needs]])
+   [:p needs]
+   (when (seq options)
+     [:div
+      [:h3 "Options"]
+      (into [:div.options] (map-indexed option-card options))])])
 
 (defn- pr-opened-card [{:keys [url title summary]}]
   [:div.md
@@ -1412,16 +1451,21 @@
    own action set via work/gate-actions directly and calls action-bar itself, so
    its copy and its buttons read off the same value and can never disagree.
 
-   `report` is the entry being read, and it is only ever the CURRENT one (callers
-   gate on :on-latest?). It reaches gate-actions because a parked :in-progress
-   gate showing a design decision offers a different question from one showing
-   anything else — and the pane and the gate inbox must not disagree about which."
+   `report` is the workstream's CURRENT report (ws :action-report), NOT the entry
+   the viewer has open — the resting pane has nothing open and still acts on the
+   workstream as it stands. It reaches gate-actions because a parked :in-progress
+   gate showing a design decision offers a different question from one showing a
+   blocker that named its branches, and the pane and the gate inbox must not
+   disagree about which. Callers still gate on :on-latest?, so an older entry
+   being read renders no action bar at all."
   [project ws-id origin stage sessions report]
   (let [parked? (boolean (some :parked? sessions))
         session (:name (first (filter :parked? sessions)))]
     (action-bar project ws-id
                 (work/gate-actions stage parked? origin
-                                   {:report-format (:format report)})
+                                   {:report-format (:format report)
+                                    :options       (:options report)
+                                    :seq           (:seq report)})
                 session pane-route)))
 
 (defn- file-findings-form
@@ -1503,7 +1547,7 @@
    — see pane-fragment), so transient dev-env states (starting…) self-advance
    without the refresh closing whatever the reader has open."
   ([ws session-dev-states] (workstream-pane ws session-dev-states {}))
-  ([{:keys [project ws-id origin stage label links ledger report entries selected-seq open-rounds sessions environment on-latest? error-msg bare? br-id notion-status]
+  ([{:keys [project ws-id origin stage label links ledger report action-report entries selected-seq open-rounds sessions environment on-latest? error-msg bare? br-id notion-status]
      :or {on-latest? true}} session-dev-states machine-facts]
    (let [pos {:project project :ws-id ws-id :entry selected-seq :rounds open-rounds}]
      (str
@@ -1525,7 +1569,10 @@
             ;; Live actions only on the current ledger entry — older entries are read-back.
             (when (and on-latest? error-msg)
               [:div.action-err "⚠ " error-msg])
-            (when on-latest? (pane-action-bar project ws-id origin stage sessions report))
+            ;; The ACTIONS read :action-report, not the open entry: at rest nothing
+            ;; is open, and a parked blocker's branches are still what there is to
+            ;; answer.
+            (when on-latest? (pane-action-bar project ws-id origin stage sessions action-report))
             (when (= :done stage) (file-findings-form project ws-id))
             [:h2 "Environment"]
             (if-let [env-name (:name environment)]

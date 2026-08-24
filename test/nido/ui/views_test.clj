@@ -751,6 +751,73 @@
     (is (str/includes? html "no longer on disk"))
     (is (not (str/includes? html "Round 1")))))
 
+(def ^:private blocker-with-options
+  {:format  :blocker
+   :summary "Enabling the dropdown makes the analytics-warning modal reachable."
+   :needs   "A product decision on the Keep Old branch."
+   :options [{:label "Drop Keep Old" :summary "Collapse the modal to Continue/Cancel."
+              :consequence "Retires the /keep-old route." :recommended? true}
+             {:label "Implement archive-and-clone" :summary "Build the archive path."
+              :consequence "Needs a prior product call on what archived means."}]})
+
+(deftest blocker-card-letters-its-options
+  (let [html (views/workstream-pane (assoc sample-ws :report blocker-with-options) {})]
+    (is (str/includes? html "Options"))
+    (is (str/includes? html ">A<"))
+    (is (str/includes? html ">B<"))
+    (is (str/includes? html "Drop Keep Old"))
+    (is (str/includes? html "Collapse the modal to Continue/Cancel."))
+    (is (str/includes? html "Needs a prior product call")
+        "the consequence is on the card — a choice between two summaries with no
+         prices is not one a human can make from the gate")
+    (is (str/includes? html "recommended"))))
+
+(deftest a-lettered-gate-answers-in-one-click
+  (let [gate (assoc sample-gate
+                    :stage :in-progress
+                    :report blocker-with-options
+                    :actions [{:id :option-a :label "A — Drop Keep Old" :kind :mutation :style :primary}
+                              {:id :option-b :label "B — Implement archive-and-clone"
+                               :kind :mutation :style :default}
+                              {:id :reply :label "Reply" :kind :resume :style :default}])
+        html (views/gate-pane gate)]
+    (is (str/includes? html "/gate/brian/ws-1/option-a"))
+    (is (str/includes? html "/gate/brian/ws-1/option-b"))
+    (is (str/includes? html "A — Drop Keep Old"))
+    (is (str/includes? html "textarea")
+        "Reply survives beside the buttons — the answer that is none of them")))
+
+(deftest an-option-button-posts-the-report-it-was-rendered-from
+  (let [gate (assoc sample-gate
+                    :stage :in-progress
+                    :report (assoc blocker-with-options :seq 4)
+                    :actions [{:id :option-a :label "A — Drop Keep Old" :kind :mutation
+                               :style :primary :seq 4}
+                              {:id :reply :label "Reply" :kind :resume :style :default}])
+        html (views/gate-pane gate)]
+    (is (str/includes? html "/gate/brian/ws-1/option-a?entry=4")
+        "the letter means nothing except relative to the report that drew it, so
+         the click names that report and the resolver can refuse a stale one")
+    (is (not (str/includes? html "/gate/brian/ws-1/reply?entry="))
+        "only the option buttons carry a position — Reply is free text against
+         whatever is current")))
+
+(deftest the-resting-pane-offers-the-branches-without-opening-the-entry
+  (let [ws   (assoc sample-ws
+                    :stage :in-progress
+                    :report nil                    ; nothing open — the pane at rest
+                    :action-report (assoc blocker-with-options :seq 4)
+                    :sessions [{:name "auto" :parked? true}])
+        html (views/workstream-pane ws {})]
+    (is (str/includes? html "/workstreams/brian/ws-1/gate/option-a?entry=4"))
+    (is (str/includes? html "A — Drop Keep Old"))
+    (is (not (str/includes? html "/gate/done"))
+        "and no Done — beside A/B it reads as an answer to the question")))
+
+(deftest answering-an-option-confirms-as-a-resume
+  (is (str/includes? (views/gate-action-confirm-fragment :option-b "brian" "ws-1")
+                     "Resuming")))
+
 (deftest workstream-pane-renders-blocker-completed-pr-cards
   (let [pane (fn [report] (views/workstream-pane (assoc sample-ws :report report) {}))]
     (is (str/includes? (pane {:format :blocker :summary "Waiting." :needs "Stripe key"}) "Blocker"))

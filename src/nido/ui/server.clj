@@ -241,6 +241,8 @@
     :no-workstream          "Nothing happened — no workstream or ticket behind this row."
     :no-trigger             "No triage trigger configured for this project."
     :already-in-flight      "Skipped — a session for this ticket is already in flight."
+    :option-stale           (str "That option is no longer on the table — the report "
+                                 "moved on since this page rendered. Re-read the gate.")
     :unresolved             (str "Couldn't resolve the ticket in Notion"
                                  (when error (str ": " (name error))))
     (:notion-failed :error) (str "Apply failed"
@@ -273,7 +275,8 @@
     (if (contains? (dev/pending-resolve-keys) k)
       false
       (do
-        (dev/set-app-state! k (if (= :reply action-id) :resuming :resolving))
+        (dev/set-app-state! k (if (or (= :reply action-id) (work/option-action? action-id))
+                                :resuming :resolving))
         (future
           (try
             (if-let [msg (resolve-failure-msg (work/resolve-gate! project ws-id action-id input))]
@@ -282,6 +285,18 @@
             (catch Exception e
               (dev/set-app-state! k :failed (or (:reason (ex-data e)) (ex-message e))))))
         true))))
+
+(defn- click-payload
+  "What a gate click carries besides its action id, which depends on the action:
+   the reply textarea's text for :reply, and for a blocker-option button the :seq
+   of the report it was rendered from — posted as ?entry=, the same reading
+   position every other surface rides, so work/resolve-gate! can refuse a letter
+   whose question the ledger has since moved past. nil for every other action:
+   those resolve entirely nido-side."
+  [{:keys [body] :as req} action-id]
+  (cond
+    (= :reply action-id)            (:reply (parse-json-body body))
+    (work/option-action? action-id) (:entry (view-state/parse req))))
 
 (defn- gate-action-response-fragment
   "The pane/gate fragment for a POST'd gate action: the per-action success toast
@@ -302,8 +317,7 @@
       (let [project   (nth segs 1)
             ws-id     (nth segs 2)
             action-id (keyword (nth segs 3))
-            input     (when (= :reply action-id) (:reply (parse-json-body body)))
-            started?  (gate-resolve! project ws-id action-id input)]
+            started?  (gate-resolve! project ws-id action-id (click-payload req action-id))]
         (sse-response (sse-fragment
                        (gate-action-response-fragment started? action-id project ws-id "gate-pane"))))
 
@@ -315,8 +329,7 @@
       (let [project   (nth segs 1)
             ws-id     (nth segs 2)
             action-id (keyword (nth segs 4))
-            input     (when (= :reply action-id) (:reply (parse-json-body body)))
-            started?  (gate-resolve! project ws-id action-id input)]
+            started?  (gate-resolve! project ws-id action-id (click-payload req action-id))]
         (sse-response (sse-fragment
                        (gate-action-response-fragment started? action-id project ws-id "ws-pane"))))
 
