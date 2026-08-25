@@ -42,6 +42,68 @@
 
 (defn- check [c status] {:check c :status status :note (str (name c) " note")})
 
+;; ── The premise the round stands on ─────────────────────────────────────────
+;;
+;; Three of the four derivations are made AGAINST the survey, so a survey nobody
+;; verified makes them worthless in a way the round cannot see from inside: its
+;; only honest exit is :resurvey. The first workstream to run this loop took that
+;; exit seven times out of seven and never reached a decision, paying for a full
+;; derivation each time to rediscover something already legible in the ledger.
+
+(deftest a-survey-nobody-verified-is-not-something-to-decide-against
+  (with-redefs [ws/entries-of (constantly [])]
+    (let [out (record/unverified-premise :nido "ws-1" a-design)]
+      (is (= :premise-unverified (:outcome out)))
+      (is (str/includes? (:detail out) "entry 1")
+          "which survey went unverified is the whole of what the reader has to act on"))))
+
+(deftest a-review-of-a-DIFFERENT-survey-does-not-verify-this-one
+  ;; A workstream can hold several surveys and several reviews. The one that
+  ;; counts is the one naming the survey the design stands on — reading `the
+  ;; latest review` would let a survey of another area vouch for this one.
+  (with-redefs [ws/entries-of (constantly [{:format :baseline-review
+                                            :verdict :sufficient :baseline-seq 7}])]
+    (is (some? (record/unverified-premise :nido "ws-1" a-design))))
+  (with-redefs [ws/entries-of (constantly [{:format :baseline-review
+                                            :verdict :falsified :baseline-seq 1}])]
+    (is (some? (record/unverified-premise :nido "ws-1" a-design))
+        "checked and found wrong is not checked and found sound")))
+
+(deftest a-verified-survey-clears-the-gate-under-either-question
+  (doseq [v [:sufficient :accurate]]
+    (with-redefs [ws/entries-of (constantly [{:format :baseline-review
+                                              :verdict v :baseline-seq 1}])]
+      (is (nil? (record/unverified-premise :nido "ws-1" a-design))
+          "a survey checked under the older question was still checked"))))
+
+(deftest a-design-citing-no-survey-is-not-gated
+  (with-redefs [ws/entries-of (constantly [])]
+    (is (nil? (record/unverified-premise :nido "ws-1" (dissoc a-design :baseline)))
+        "there is no premise to verify, and the prompt says so")))
+
+(deftest the-gate-is-read-before-a-judge-is-spent
+  (let [launched (atom 0)
+        run (fn [entries]
+              (reset! launched 0)
+              (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                            ws/latest-entry (fn [_ _ k] (when (= :design k) a-design))
+                            ws/entries-of (constantly entries)
+                            stages/read-stance (constantly nil)
+                            record/discover-intent (constantly nil)
+                            record/run-round! (fn [_] (swap! launched inc)
+                                                {:outcome :no-output :detail "stub"})]
+                (record/design-decision! {:cwd "/w" :run-id "r1" :label "l"})))]
+    (is (= :premise-unverified (:outcome (run []))))
+    (is (zero? @launched)
+        "the answer is in nido's own ledger; paying an agent to rediscover it is the defect")
+    ;; The control, and it is what makes the assertion above mean anything: with
+    ;; the survey verified the same call DOES reach the judge, so a zero count is
+    ;; the gate refusing rather than the seam failing to bite.
+    (is (= :no-output (:outcome (run [{:format :baseline-review
+                                       :verdict :sufficient :baseline-seq 1}]))))
+    (is (= 1 @launched))))
+
+
 (defn- decision [recommend & {:keys [checks findings]}]
   (cond-> {:format :design-decision :design-seq 4 :recommend recommend
            :reason "r" :asks "is this worth doing now?"
@@ -229,7 +291,7 @@
   ;; re-survey until the cap.
   (let [repointed (assoc a-design :baseline {:seq 11 :relation :extends :note "n"})
         [out prompt appended]
-        (with-resurvey {:nested :accurate
+        (with-resurvey {:nested :sufficient
                         :amends (fn [p] (spit p (pr-str {:record repointed})))}
                        (assoc (ctx :findings [(check :relation-honest :broken)])
                               :record (decision :resurvey)))]
@@ -247,12 +309,12 @@
       (is (str/includes? prompt "nobody has re-checked it")))
     (testing "the two halves are recorded as one round"
       (is (= 1 (count (:history out))))
-      (is (= :accurate (:resurveyed (first (:history out))))))))
+      (is (= :sufficient (:resurveyed (first (:history out))))))))
 
 (deftest the-nested-loop-does-not-emit-into-this-run
   ;; Its rounds are not this run's rounds; folding them in would renumber both.
   (let [seen (atom nil)]
-    (with-redefs [rloop/run-loop (fn [cfg] (reset! seen cfg) {:status :accurate})
+    (with-redefs [rloop/run-loop (fn [cfg] (reset! seen cfg) {:status :sufficient})
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ _] a-design)
                   stages/discover-baseline (fn [_ _] {:format :baseline :seq 8})
@@ -288,14 +350,14 @@
   ;; engine's stall detector is what ends a run that has stopped getting
   ;; anywhere.
   (let [nested (atom 0)]
-    (with-redefs [rloop/run-loop (fn [_] (swap! nested inc) {:status :accurate})
+    (with-redefs [rloop/run-loop (fn [_] (swap! nested inc) {:status :sufficient})
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ _] a-design)
                   stages/discover-baseline (fn [_ _] nil)
                   stages/working-copy-dirty? (fn [_] false)
                   agent/launch! (fn [_] {:num-turns 0})]
       (doseq [prior (range 5)]
-        (let [hist (vec (repeat prior {:resurveyed :accurate}))
+        (let [hist (vec (repeat prior {:resurveyed :sufficient}))
               out  (run record/design-amend-stage
                         (assoc (ctx :findings [] :history hist) :record (decision :resurvey)))]
           (is (not= :resurvey-exhausted (:status out))

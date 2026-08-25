@@ -365,6 +365,24 @@
   [entry]
   (dissoc entry :seq :at))
 
+(defn entries-of
+  "Every typed entry of `kind` on this workstream, oldest first, each parsed
+   through the READ contract and stamped with :seq/:at. Entries that no longer
+   parse are dropped, on the same degrade-to-nil contract latest-entry has.
+
+   `latest-entry` answers `the current one`, which is what almost every reader
+   wants. This answers `was one ever written about THIS record` — the question a
+   precondition asks, where the newest entry of a kind need not be the one about
+   the record in hand. A workstream can hold several surveys and several reviews
+   of them, and the review that matters is the one naming the survey you are
+   standing on."
+  [project ws-id kind]
+  (if-let [w (read-ws project ws-id)]
+    (into []
+          (keep #(read-entry-at w (:seq %)))
+          (->> (:entries w) (filter #(= kind (:kind %))) (sort-by :seq)))
+    []))
+
 (defn entry-at-seq
   "The typed entry at `seq-n` on this workstream, parsed through the READ contract
    and stamped with :seq/:at — or nil. Same degrade-to-nil contract as

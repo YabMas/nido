@@ -290,6 +290,7 @@
 (def ^:private design-remedies
   {:proceed "nothing derivable blocks it — what is left is the part only you can answer"
    :underivable "a check has no yardstick to derive against, which is not a defect an amender can repair"
+   :premise-unverified "verify the survey it cites first — `bb nido:review:baseline` — then decide against it"
    :no-record "author the design first"
    :not-worth-running "the design declares it moves nothing structural, so a decision round would not pay"})
 

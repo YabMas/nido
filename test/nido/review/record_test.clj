@@ -148,6 +148,47 @@
     (is (str/includes? p "You do not make the decision"))
     (is (str/includes? p "Never answer it yourself"))))
 
+(deftest the-decision-prompt-shows-the-survey-it-derives-against
+  ;; The defect this is aimed at: the prompt named the survey's modules,
+  ;; extension points and health observations in its instructions and printed
+  ;; none of them. A judge cannot tell "the survey does not say" from "I was not
+  ;; shown it", the only recommendation that fits the first is :resurvey, and
+  ;; that is what one workstream got seven times running without ever reaching a
+  ;; decision.
+  (let [p (record/design-prompt
+           {:design (assoc design :routes [{:health-id "invoice-resums" :to :fix-here}])
+            :baseline (assoc baseline
+                             :extension-points
+                             [{:at "the aggregate's line reducer"
+                               :how "a new line kind registers a contribution"}])})]
+    (testing "relation-honest and decomposable read the decomposition"
+      (is (str/includes? p "MODULES — the decomposition claimed"))
+      (is (str/includes? p "hides:     the order in which lines are summed"))
+      (is (str/includes? p "COMPOSITION — how those are claimed"))
+      (is (str/includes? p "SHAPE: The aggregate is the only thing that sums lines.")))
+    (testing "the declared relation has its yardstick"
+      (is (str/includes? p "EXTENSION POINTS"))
+      (is (str/includes? p "a new line kind registers a contribution")))
+    (testing "routing-coherent can resolve the ids the design routes by"
+      (is (str/includes? p "- invoice-resums [design]"))
+      (is (str/includes? p "two summing paths where the design claims one")))
+    (testing "a claim keeps what would refute it, not just where to look"
+      (is (str/includes? p "refuted by: a caller outside the aggregate"))
+      (is (str/includes? p "src/order/aggregate.clj:12")))
+    (testing "and what the survey already declared it did not determine"
+      (is (str/includes? p "DECLARED NOT DETERMINED"))
+      (is (str/includes? p "whether the CSV importer bypasses the aggregate")))))
+
+(deftest a-survey-from-before-the-move-still-makes-a-decision-prompt
+  (let [p (record/design-prompt
+           {:design design
+            :baseline (dissoc baseline :modules :composition :health
+                              :unknowns :extension-points)})]
+    (is (not (str/includes? p "MODULES —")))
+    (is (not (str/includes? p "EXTENSION POINTS")))
+    (is (str/includes? p "the aggregate is the only summing path")
+        "what the legacy survey does carry is still shown")))
+
 (deftest the-decision-prompt-survives-a-design-with-no-baseline-or-stance
   (is (string? (record/design-prompt {:design design}))
       "framing is optional everywhere else in this system; it is here too"))
@@ -386,3 +427,54 @@
     (is (str/includes? p "each with the\ncounterexample that would refute it"))
     (is (str/includes? p "refuted by: a caller outside the aggregate"))
     (is (str/includes? p "THE PERSPECTIVES THIS SURVEY IS READ THROUGH"))))
+
+;; ── Insufficiency has to name what it blocks ────────────────────────────────
+
+(deftest an-insufficient-finding-names-the-derivation-and-what-is-missing
+  (let [r (record/parse-baseline-review
+           (baseline-json {:verdict "insufficient" :reason "the cut cannot be stated"
+                           :confirmed []
+                           :findings [{:blocks "decomposable"
+                                       :cites ["the aggregate is the only summing path"]
+                                       :claim "the survey never says where rounding is decided"
+                                       :needs "which module owns the rounding decision"
+                                       :evidence ["src/order/calc.clj:41"]}]})
+           3)]
+    (is (= :insufficient (:verdict r)))
+    (is (= :decomposable (:blocks (first (:findings r)))))
+    (is (= "which module owns the rounding decision" (:needs (first (:findings r)))))
+    (is (= r (report/validate-event :baseline-review r)))))
+
+(deftest a-gap-that-blocks-nothing-is-not-a-finding
+  ;; The bound, and the whole reason this verdict replaced :underscoped. Measured
+  ;; against a real area a judge finds true things to add forever — five rounds
+  ;; of exactly that produced twenty-four findings without one repeating. There
+  ;; are four derivations, so there are four ways to be insufficient.
+  (is (nil? (record/parse-baseline-review
+             (baseline-json {:verdict "insufficient" :reason "could say more"
+                             :findings [{:blocks "none" :cites ["a claim"]
+                                         :claim "the cache is not mentioned"
+                                         :needs "mention the cache" :evidence []}]})
+             3))
+      "'none' is what a falsified finding carries; it cannot make a gap")
+  (is (nil? (record/parse-baseline-review
+             (baseline-json {:verdict "insufficient" :reason "could say more"
+                             :findings [{:blocks "thoroughness" :cites ["a claim"]
+                                         :claim "x" :needs "y" :evidence []}]})
+             3))
+      "a derivation nobody derives"))
+
+(deftest an-insufficient-finding-must-say-what-would-fix-it
+  (is (nil? (record/parse-baseline-review
+             (baseline-json {:verdict "insufficient" :reason "vague"
+                             :findings [{:blocks "goal-served" :cites ["a claim"]
+                                         :claim "not enough here" :needs "" :evidence []}]})
+             3))
+      "'more detail' is not a repair anyone can make"))
+
+(deftest a-round-from-before-sufficiency-still-reads
+  (let [old {:format :baseline-review :verdict :accurate :baseline-seq 3
+             :reason "held" :confirmed ["a claim"]}]
+    (is (thrown? clojure.lang.ExceptionInfo (report/validate-event :baseline-review old))
+        "not writable any more")
+    (is (= old (report/parse-event :baseline-review old)) "but still readable")))

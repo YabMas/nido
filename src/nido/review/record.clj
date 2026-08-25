@@ -113,14 +113,6 @@
 
 (defn- bullets [xs] (str/join "\n" (map #(str "- " %) xs)))
 
-(defn- evidenced
-  "Render a list of {:property/:observation :evidence} as claim + where to look.
-   The evidence refs ARE the check — a verifier's job here is to go read them."
-  [items label-key]
-  (bullets (map #(str (get % label-key)
-                      " [" (str/join ", " (:evidence %)) "]")
-                items)))
-
 (defn- invariant-lines
   "Invariants, each with the moment it holds. A record written before phasing
    carries plain strings and means :always by them; a phased one carries the
@@ -334,6 +326,63 @@
    "checking the claims that are there, not finding more to say."
    (disputes-block disputes)))
 
+(defn- survey-block
+  "The survey the design was made against, at the level the design round needs it.
+
+   Three of the four derivations are made AGAINST this record: relation-honest
+   reads the modules and the extension points, decomposable reads the module
+   boundaries, routing-coherent reads the health observations the design's routes
+   cite by id. So it is printed the way the baseline round prints it, rather than
+   summarised.
+
+   It used to print :bounded-by and the load-bearing properties and nothing else,
+   while the derivations below asked for module boundaries, extension points and
+   health observations by name. A judge cannot tell `the survey does not say`
+   from `I was not shown it`, and the only recommendation that fits the first is
+   :resurvey — so every round recommended :resurvey, and one of them reported a
+   module as unsurveyed that the survey had named all along."
+  [baseline]
+  (when baseline
+    (str "\nTHE AREA AS SURVEYED, before this was designed. Three of the four\n"
+         "derivations are made against THIS. Where the survey states something,\n"
+         "derive against what it states — a survey that is wrong about the area is\n"
+         "a finding, but a survey you did not read is not one.\n\n"
+         "AREA: " (:area baseline) "\n"
+         "BOUNDED BY: " (:bounded-by baseline) "\n"
+         (when-let [s (:shape baseline)] (str "SHAPE: " s "\n"))
+         (module-block (:modules baseline))
+         (when-let [c (:composition baseline)]
+           (str "\nCOMPOSITION — how those are claimed to produce the behaviour:\n" c "\n"))
+         (when-let [e (seq (:extension-points baseline))]
+           (str "\nEXTENSION POINTS — where the design already admits extension. A\n"
+                "change landing on one of these EXTENDS the design; one that needs a\n"
+                "point not listed here is asking for the design to be revisited. This\n"
+                "is the yardstick for the declared relation:\n"
+                (bullets (map #(str (:at %) " — " (:how %)) e)) "\n"))
+         "\nLOAD-BEARING — what the survey claims breaks if violated:\n"
+         (claim-block (:load-bearing baseline)) "\n"
+         (when-let [h (seq (:health baseline))]
+           (str "\nHEALTH OBSERVED — the design's routes cite these BY ID, and\n"
+                "routing-coherent is derived against them. :design means a weak design\n"
+                "cleanly executed; :implementation means a strong design shakily\n"
+                "executed. An observation marked invisibly-incomplete cannot leave the\n"
+                "branch that touches it:\n"
+                (str/join
+                 "\n"
+                 (map (fn [{:keys [id observation axis evidence invisibly-incomplete?]}]
+                        (str "- " id
+                             (when axis (str " [" (name axis) "]"))
+                             (when invisibly-incomplete? " [invisibly incomplete]") "\n"
+                             "    " observation
+                             (when (seq evidence)
+                               (str "\n    read from: " (str/join ", " evidence)))))
+                      h))
+                "\n"))
+         (when-let [u (seq (:unknowns baseline))]
+           (str "\nDECLARED NOT DETERMINED by the survey. Already honest — not a\n"
+                "finding, and not on its own grounds to call the premise wrong:\n"
+                (bullets u) "\n")))))
+
 (defn design-prompt
   "The decision prompt. Derives what can be derived; hands the rest over."
   [{:keys [design baseline stance intent disputes]}]
@@ -392,10 +441,7 @@
      (str "\nHEALTH OBSERVATIONS ROUTED:\n"
           (bullets (map #(str (:health-id %) " → " (name (:to %))
                               (when (:why %) (str " — " (:why %)))) rt)) "\n"))
-   (when baseline
-     (str "\nTHE AREA AS SURVEYED, before this was designed:\n"
-          "Bounded by: " (:bounded-by baseline) "\n"
-          "Load-bearing:\n" (evidenced (:load-bearing baseline) :property) "\n"))
+   (survey-block baseline)
    (when stance (str "\nPROJECT STANCE — framing only:\n" stance "\n"))
    "\nDERIVE THESE FOUR. Each is decidable; none is a matter of taste:\n\n"
    "  relation-honest   — does it stand where it says it stands? A design\n"
@@ -470,6 +516,9 @@
         (keep (fn [f]
                 (let [blocks (str (:blocks f))
                       cites  (into [] (remove str/blank?) (map str (:cites f)))]
+                  ;; "none" is what a FALSIFIED finding carries — strict output
+                  ;; mode requires every property on every finding, so the field
+                  ;; exists on both kinds and this is where it means something.
                   (when (and (derivation-names blocks)
                              (seq cites)
                              (not (str/blank? (str (:needs f)))))
@@ -610,25 +659,68 @@
       {:outcome :no-record :detail "this workstream has no :baseline entry"})
     {:outcome :no-workstream :detail (str "cwd resolves to no nido session: " cwd)}))
 
+(def ^:private verified-verdicts
+  "A verdict that says somebody checked this survey against the code and it held.
+
+   :accurate is the same answer under the question the round asked before it
+   asked about sufficiency. The survey was still checked, and re-checking it
+   under the newer question is the baseline loop's business — not a reason to
+   refuse to decide against it."
+  #{:sufficient :accurate})
+
+(defn unverified-premise
+  "Why this design cannot be judged yet, when the survey it stands on has never
+   been checked — or nil when it has.
+
+   Three of the decision round's four derivations are made AGAINST the survey. On
+   an unverified one the judge cannot tell `the survey is wrong` from `the survey
+   is right and the area is not what I would have described`, and the only
+   recommendation that fits the first is :resurvey. That is not a hypothetical:
+   the first workstream to run this loop recommended :resurvey seven times out of
+   seven and never once reached a decision, each round paying for a full
+   derivation to rediscover that nobody had verified the premise.
+
+   So the order is stated rather than discovered, and it costs nothing to state:
+   nido can read the answer out of its own ledger before it spends a judge on it.
+   Verify the survey, then decide against it.
+
+   A design citing NO survey is not gated. There is no premise to check, the
+   prompt says exactly that, and the round is judged on the design's own merits."
+  [project ws-id design]
+  (when-let [n (get-in design [:baseline :seq])]
+    (when-not (some #(and (= n (:baseline-seq %))
+                          (verified-verdicts (:verdict %)))
+                    (ws/entries-of project ws-id :baseline-review))
+      {:outcome :premise-unverified
+       :detail (str "the design cites the survey at entry " n
+                    ", and no round has found that survey sufficient")})))
+
 (defn design-decision!
   "Run the decision round over this workstream's latest design record. Returns
    the ledger record, or {:outcome <kw> :detail <str>} saying why there is none.
 
-   Single-pass on purpose: it emits a decision, not findings to iterate on."
+   Single-pass on purpose: it emits a decision, not findings to iterate on.
+
+   Three of the no-verdict outcomes are read out of the records before a judge is
+   launched, and cost nothing: no design, a design that says it moves nothing
+   structural, and a design standing on a survey nobody verified. Only the last
+   is new, and it is the one that was previously discovered by paying for the
+   round — see `unverified-premise`."
   [{:keys [cwd run-id label disputes]}]
   (if-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
     (if-let [design (ws/latest-entry project ws-id :design)]
       (if (design-round-worth-running? design)
-        (judged (run-round!
-                 {:cwd cwd :run-id run-id :kind :design-decision
-                  :label label
-                  :prompt (design-prompt
-                           {:design   design
-                            :baseline (stages/discover-baseline cwd design)
-                            :stance   (stages/read-stance project)
-                            :intent   (discover-intent cwd design)
-                            :disputes disputes})})
-                #(parse-design-decision % (:seq design)))
+        (or (unverified-premise project ws-id design)
+            (judged (run-round!
+                     {:cwd cwd :run-id run-id :kind :design-decision
+                      :label label
+                      :prompt (design-prompt
+                               {:design   design
+                                :baseline (stages/discover-baseline cwd design)
+                                :stance   (stages/read-stance project)
+                                :intent   (discover-intent cwd design)
+                                :disputes disputes})})
+                    #(parse-design-decision % (:seq design))))
         {:outcome :not-worth-running
          :detail "the design declares :within on its baseline and :conforms on the stance at a modest effort, with nothing routed away from :fix-here"})
       {:outcome :no-record :detail "this workstream has no :design entry"})
