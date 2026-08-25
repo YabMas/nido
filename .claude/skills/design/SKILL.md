@@ -274,6 +274,13 @@ the two is how a design round spends its rounds auditing SQL.
   > behaviour that honours every one of them and is still wrong indicts the
   > **design**.
 
+  **`:id`** is a short stable slug, and it is what lets a review round mean
+  anything across amendments. Health observations have carried one from the
+  start so a design record can route them; a claim needs one so a *review* can
+  say which claim it refuted, and so the next round can say whether that claim is
+  now right or still wrong. It never changes once written, however much the
+  wording does — a new id means a new claim nobody has judged.
+
   **`:falsified-by`** is required, and names the counterexample: the thing that,
   if it exists, makes this claim false. It replaced a required `file:line`, and
   it is the *harder* obligation — a counterexample has to be constructed, a
@@ -521,10 +528,12 @@ cat > /tmp/baseline.edn <<'EDN'
  :area         "…"
  :bounded-by   "why the boundary sits there"
  :shape        "…"
- :modules      [{:module "…" :hides "the decision nothing outside may depend on"
+ :modules      [{:id "short-stable-slug"
+                 :module "…" :hides "the decision nothing outside may depend on"
                  :interface "what the rest may know"}]
  :composition  "how those produce the required behaviour"
- :load-bearing [{:property "…"
+ :load-bearing [{:id "short-stable-slug"      ; never changes once written
+                 :property "…"
                  :falsified-by "the counterexample that would make this false"
                  :readings [{:lens :tarpit/state :verdict :derived :because "…"}]
                  :evidence ["src/…:41"]        ; optional — where you looked

@@ -9,25 +9,25 @@
 (def modular-baseline
   {:format :baseline
    :area "order totalling" :bounded-by "b" :shape "s"
-   :modules [{:module "calc" :hides "how money is represented" :interface "amounts"}
-             {:module "aggregate" :hides "summing order" :interface "a total"}]
+   :modules [{:id "mod-calc" :module "calc" :hides "how money is represented" :interface "amounts"}
+             {:id "mod-aggregate" :module "aggregate" :hides "summing order" :interface "a total"}]
    :composition "only the aggregate sees lines, so only it sums them"
-   :load-bearing [{:property "amounts are never rounded in place"
+   :load-bearing [{:id "c1" :property "amounts are never rounded in place"
                    :falsified-by "a write of a rounded amount"
                    :readings [{:lens :tarpit/state :verdict :essential :because "cannot be recomputed"}]}
-                  {:property "the aggregate is the only summing path"
+                  {:id "c2" :property "the aggregate is the only summing path"
                    :falsified-by "an outside caller that sums lines"
                    :readings [{:lens :parnas/dependency :verdict :on-interface :because "callers take the total"}
                               {:lens :tarpit/control :verdict :required :because "a total cannot precede its lines"}]}
-                  {:property "a total is derived, never stored"
+                  {:id "c3" :property "a total is derived, never stored"
                    :falsified-by "a stored total edited independently"
                    :readings [{:lens :tarpit/state :verdict :derived :because "computable by summation"}]}]
    :read ["src/order/aggregate.clj"]})
 
 (def base-baseline
   {:format :baseline
-   :load-bearing [{:property "one" :evidence ["src/a.clj:1"]}
-                  {:property "two" :evidence ["src/b.clj:2"]}]
+   :load-bearing [{:id "c4" :property "one" :evidence ["src/a.clj:1"]}
+                  {:id "c5" :property "two" :evidence ["src/b.clj:2"]}]
    :health [{:id "h1" :axis :design :observation "o1" :evidence ["src/a.clj:9"]
              :invisibly-incomplete? true}
             {:id "h2" :axis :implementation :observation "o2" :evidence ["src/b.clj:9"]}]
@@ -39,7 +39,8 @@
 (deftest a-dropped-property-is-a-retreat-and-names-the-evidence-nothing-cites
   (let [curr (update base-baseline :load-bearing pop)
         rs   (retreat/baseline-retreats base-baseline curr)]
-    (is (= #{:load-bearing-fewer :evidence-dropped} (whats rs)))
+    (is (= #{:load-bearing-fewer :evidence-dropped :claim-dropped} (whats rs))
+        "counted, named by id, and its orphaned evidence named too")
     (is (some #(= "src/b.clj:2 is cited by no load-bearing property any more" (:detail %)) rs))))
 
 (deftest rewording-a-property-is-not-a-retreat
@@ -68,7 +69,7 @@
 
 (deftest adding-to-a-baseline-is-never-a-retreat
   (let [curr (-> base-baseline
-                 (update :load-bearing conj {:property "three" :evidence ["src/c.clj:3"]})
+                 (update :load-bearing conj {:id "c6" :property "three" :evidence ["src/c.clj:3"]})
                  (update :health conj {:id "h3" :axis :design :observation "o3"
                                        :evidence ["src/c.clj:9"]}))]
     (is (= [] (retreat/baseline-retreats base-baseline curr)))))
@@ -133,7 +134,7 @@
 ;; ── Evidence is compared by place, not by text ──────────────────────────────
 
 (defn- with-evidence [& refs]
-  (assoc base-baseline :load-bearing [{:property "p" :evidence (vec refs)}]))
+  (assoc base-baseline :load-bearing [{:id "c7" :property "p" :evidence (vec refs)}]))
 
 (deftest annotating-a-citation-is-not-losing-it
   ;; Seen live: one round enriched eight references and the detector called every
@@ -185,7 +186,8 @@
   (let [curr (update modular-baseline :modules pop)
         rs   (retreat/baseline-retreats modular-baseline curr)]
     (is (contains? (whats rs) :module-dropped))
-    (is (some #(re-find #"module aggregate" (:detail %)) rs))))
+    (is (some #(re-find #"mod-aggregate" (:detail %)) rs)
+        "named by id, which a rename cannot move")))
 
 (deftest renaming-a-module-while-the-decomposition-grows-is-not-a-loss
   ;; Watched live: "codex — the judge launch" became "codex — the read-only judge
@@ -196,7 +198,7 @@
   (let [curr (-> modular-baseline
                  (assoc-in [:modules 0 :module] "calc — the money representation")
                  (update :modules conj
-                         {:module "invoice" :hides "layout" :interface "renders a total"}))]
+                         {:id "mod-invoice" :module "invoice" :hides "layout" :interface "renders a total"}))]
     (is (= [] (retreat/baseline-retreats modular-baseline curr)))))
 
 (deftest a-rename-that-hides-a-real-drop-is-still-caught-by-the-count
@@ -248,5 +250,18 @@
 
 (deftest adding-a-module-is-not-a-retreat
   (let [curr (update modular-baseline :modules conj
-                     {:module "invoice" :hides "layout" :interface "renders a total"})]
+                     {:id "mod-invoice" :module "invoice" :hides "layout" :interface "renders a total"})]
     (is (= [] (retreat/baseline-retreats modular-baseline curr)))))
+
+(deftest a-claim-rewritten-beyond-recognition-is-still-the-same-claim
+  ;; The whole reason ids exist. Before them, an amendment rewrote property text
+  ;; AND evidence, so a claim that had been corrected and was still wrong looked
+  ;; like a claim nobody had ever seen.
+  (let [curr (update modular-baseline :load-bearing
+                     (fn [lb] (mapv #(assoc % :property "completely different words"
+                                            :falsified-by "and a different counterexample"
+                                            :evidence ["src/somewhere/else.clj:1"])
+                                    lb)))]
+    (is (empty? (filter (comp #{:claim-dropped} :what)
+                        (retreat/baseline-retreats modular-baseline curr)))
+        "same ids, so no claim was dropped however much the wording moved")))

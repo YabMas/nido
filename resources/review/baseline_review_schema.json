@@ -34,6 +34,7 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
+          "claim-id",
           "blocks",
           "cites",
           "claim",
@@ -72,6 +73,10 @@
             "items": {
               "type": "string"
             }
+          },
+          "claim-id": {
+            "type": "string",
+            "description": "The bracketed id of the claim or module this finding is about, exactly as shown. Empty string only when the finding is about no single one. This is how the next round knows whether a claim you refuted was fixed or is still wrong — without it, an amended claim looks like a new subject."
           }
         }
       }

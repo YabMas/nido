@@ -15,15 +15,15 @@
    :area         "order totalling"
    :bounded-by   "everything that reads or writes a money amount on an order"
    :shape        "The aggregate is the only thing that sums lines."
-   :modules      [{:module "the order aggregate"
+   :modules      [{:id "mod-the-order-aggregate" :module "the order aggregate"
                    :hides "the order in which lines are summed"
                    :interface "an order's total"}
-                  {:module "the invoice reader"
+                  {:id "mod-the-invoice-reader" :module "the invoice reader"
                    :hides "the invoice document's layout"
                    :interface "renders a total it is handed"}]
    :composition  "Only the aggregate can see the lines, so only it can sum them;
                   the invoice reader consumes the total it produces."
-   :load-bearing [{:property "the aggregate is the only summing path"
+   :load-bearing [{:id "c1" :property "the aggregate is the only summing path"
                    :falsified-by "a caller outside the aggregate that reads lines and sums them"
                    :readings [{:lens :parnas/dependency :verdict :on-interface
                                :because "callers take the total, never the lines"}]
@@ -92,7 +92,8 @@
       (is (str/includes? p "COMPOSITION — how those are claimed"))
       (is (str/includes? p "Only the aggregate can see the lines")))
     (testing "each claim arrives with what would refute it, and how it was read"
-      (is (str/includes? p "- the aggregate is the only summing path"))
+      (is (str/includes? p "the aggregate is the only summing path"))
+      (is (re-find #"\[c\d+\] the aggregate" p) "and the claim carries its id")
       (is (str/includes? p "refuted by: a caller outside the aggregate"))
       (is (str/includes? p "read as parnas/dependency = on-interface")))
     (testing "and the perspectives themselves, so both sides read a verdict alike"

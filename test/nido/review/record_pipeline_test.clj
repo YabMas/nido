@@ -33,14 +33,14 @@
 
 (def ^:private a-baseline
   {:format :baseline
-   :modules [{:module "the order aggregate"
+   :modules [{:id "mod-the-order-aggregate" :module "the order aggregate"
               :hides "the order in which lines are summed"
               :interface "an order's total"}]
    :composition "only the aggregate sees the lines, so only it sums them"
    :area "order totalling"
    :bounded-by "money amounts on an order"
    :shape "the aggregate is the only thing that sums lines"
-   :load-bearing [{:property "the aggregate is the only summing path"
+   :load-bearing [{:id "c1" :property "the aggregate is the only summing path"
                    :evidence ["src/order/aggregate.clj:12"]}]
    :health [{:id "invoice-resums" :axis :design :observation "two summing paths"
              :evidence ["src/order/invoice.clj:88"]}]
@@ -477,7 +477,7 @@
   ;; round, so it repaired the follow-up while the design went on citing the
   ;; other. No amount of repair to one answers a design citing the other.
   (let [cited {:format :baseline :area "the one the design cites"
-               :load-bearing [{:property "p" :evidence ["src/cited.clj:1"]}]
+               :load-bearing [{:id "c2" :property "p" :evidence ["src/cited.clj:1"]}]
                :bounded-by "b" :shape "s" :read ["src/cited.clj"]}
         newest (assoc cited :area "a narrow follow-up, appended later")
         seen (atom [])]
@@ -495,7 +495,7 @@
   ;; Same hazard one step later: another session appending a baseline mid-run
   ;; must not hijack the repair.
   (let [start {:format :baseline :area "round one" :bounded-by "b" :shape "s"
-               :load-bearing [{:property "p" :evidence ["src/a.clj:1"]}] :read ["src/a.clj"]}
+               :load-bearing [{:id "c3" :property "p" :evidence ["src/a.clj:1"]}] :read ["src/a.clj"]}
         mine  (assoc start :area "what I amended it to")
         other (assoc start :area "what someone else appended")
         seen  (atom [])]
@@ -546,3 +546,16 @@
                             (ctx :findings [a-finding]))]
     (is (= :amend-invalid (:status out)))
     (is (str/includes? (str (:amend-error out)) "schema said no"))))
+
+(deftest the-amender-is-told-to-leave-unchallenged-claims-alone
+  ;; The arms race this ends, watched across five rounds: each amendment wrote
+  ;; sharper claims to satisfy the last finding, and a sharper claim is a bigger
+  ;; target. Findings went 7, 4, 1, 1, 3 — never to zero, because every round
+  ;; created new refutable surface nobody had asked for.
+  (let [p (record/amend-prompt {:baseline a-baseline :findings [a-finding] :out-path "/x"})]
+    (is (str/includes? p "CHANGE ONLY WHAT WAS REFUTED"))
+    (is (str/includes? p "must come\nback unchanged"))
+    (is (str/includes? p "A sharper claim is a bigger target")
+        "the reason, because a rule without one gets reasoned around")
+    (is (str/includes? p "stays true as the code moves")
+        "and what to prefer when a claim does have to change")))

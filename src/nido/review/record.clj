@@ -203,8 +203,8 @@
     (str "\nMODULES — the decomposition claimed. A module is what it HIDES; its\n"
          "interface is what the rest of the system may depend on:\n"
          (str/join "\n"
-                   (map (fn [{:keys [module hides interface readings]}]
-                          (str "- " module "\n"
+                   (map (fn [{:keys [id module hides interface readings]}]
+                          (str "- " (when id (str "[" id "] ")) module "\n"
                                "    hides:     " hides "\n"
                                "    interface: " interface
                                (readings-lines readings "    ")))
@@ -215,8 +215,8 @@
   [load-bearing]
   (str/join
    "\n"
-   (map (fn [{:keys [property falsified-by readings evidence]}]
-          (str "- " property
+   (map (fn [{:keys [id property falsified-by readings evidence]}]
+          (str "- " (when id (str "[" id "] ")) property
                ;; Only when there is one. A survey written before counterexamples
                ;; were required carries none, and printing the label with nothing
                ;; after it tells the judge a claim is refutable in a way its
@@ -508,6 +508,8 @@
                    (let [cites (into [] (remove str/blank?) (map str (:cites f)))]
                      (when (seq cites)
                        (cond-> {:cites cites :claim (str (:claim f))}
+                     (not (str/blank? (str (:claim-id f))))
+                     (assoc :claim-id (str (:claim-id f)))
                          (seq (:evidence f))
                          (assoc :evidence (mapv str (:evidence f))))))))
         raw))
@@ -766,6 +768,13 @@
 (defn baseline-finding-base-key
   "What makes two baseline findings the same finding.
 
+   The claim's ID when the finding names one, because that is the only handle
+   that survives the claim being amended. Measured before ids existed: over five
+   rounds on one survey, of six claims one kept its text and none kept an
+   evidence reference — so a claim that was fixed and is STILL WRONG produced a
+   key nothing had seen, and the stall detector could not fire on the one case it
+   exists for.
+
    Keyed on the CODE the finding cites, because that is the one thing the
    amender does not move: amending a record rewrites `:cites` — it quotes the
    property text being refuted — while `src/x.clj:41` still says what it said.
@@ -777,9 +786,10 @@
    is the degenerate one, and it is keyed on the unstable thing deliberately —
    a finding that cites no code is one the loop should stop on early."
   [f]
-  (if-let [ev (seq (:evidence f))]
-    [:evidence (vec (sort ev))]
-    [:cites (vec (sort (:cites f)))]))
+  (cond
+    (not (str/blank? (str (:claim-id f)))) [:claim-id (str (:claim-id f))]
+    (seq (:evidence f))                    [:evidence (vec (sort (:evidence f)))]
+    :else                                  [:cites (vec (sort (:cites f)))]))
 
 (defn dispute-aware
   "Fold how many times a finding has been disputed into its identity.
@@ -867,7 +877,14 @@
    "    the survey was genuinely wrong, and expect to have said why.\n\n"
    "Stay at the level the survey is written at: modules, what each hides, and how\n"
    "their composition produces the behaviour. A finding about one line of code\n"
-   "matters here only insofar as it refutes a claim about the decomposition.\n\n"
+   "matters here only insofar as it refutes a claim about the decomposition.\n"
+   "Prefer a claim that stays true as the code moves — what a module HIDES — over\n"
+   "one that counts what it currently contains.\n\n"
+   "KEEP EVERY :id EXACTLY AS IT IS. An id is not a label, it is how the next\n"
+   "round knows whether a claim you corrected is now right or still wrong. Change\n"
+   "one and the correction reads as a new claim nobody has judged, which is how a\n"
+   "loop stops being able to end. New claims get new ids; existing ones keep\n"
+   "theirs however much their wording changes.\n\n"
    ;; The amender is the pass that WRITES readings, and it was the one pass never
    ;; told what a reading may say. It invented verdicts outside a lens's
    ;; vocabulary and lenses outside the registry; the ledger refused the record,
@@ -877,6 +894,13 @@
           "subject it is about. The ledger refuses anything else and the whole record\n"
           "is lost with it, so use these and nothing else:\n"
           (lens-block)))
+   "CHANGE ONLY WHAT WAS REFUTED. A claim nobody challenged this round must come\n"
+   "back unchanged — not restated, not sharpened, not made more precise.\n\n"
+   "That rule is what lets this end. A sharper claim is a bigger target: a survey\n"
+   "saying `publishes ten vars` or `folds five event types` invites the next round\n"
+   "to count, and counting is always available. Rounds have gone by watching one\n"
+   "claim get sharper while another, freshly sharpened, became the next finding.\n"
+   "Fix what was refuted; leave the rest exactly as it stands.\n\n"
    "Read the cited code before you change a word of the record.\n\n"
    "Do NOT edit any source file. This pass writes one file and nothing else.\n\n"
    "THE CURRENT BASELINE:\n\n"

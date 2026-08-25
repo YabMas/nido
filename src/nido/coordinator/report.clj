@@ -495,6 +495,7 @@
    rather than a claim about behaviour, and because it is what the design round's
    `decomposable` check reads."
   [:map {:closed true}
+   [:id        string?]
    [:module    string?]
    [:hides     string?]
    [:interface string?]
@@ -524,6 +525,16 @@
    :evidence stays, and is now optional: where you looked, when there is
    somewhere to look."
   [:map {:closed true}
+   ;; A short stable slug, and the thing that lets any of this converge. Health
+   ;; observations have carried one from the start, so a design record can route
+   ;; them; a claim needs one so a REVIEW can say which claim it refuted, and so
+   ;; the next round can say whether that claim is still wrong.
+   ;;
+   ;; Without it nothing survives an amendment. Measured over five rounds on one
+   ;; survey: of six claims, one kept its text and NONE kept an evidence
+   ;; reference — so "you fixed this and it is still wrong" was indistinguishable
+   ;; from "here is something new", and the stall detector could never fire.
+   [:id           string?]
    [:property     string?]
    [:falsified-by string?]
    [:readings     {:optional true} [:vector ClaimReading]]
@@ -573,6 +584,13 @@
    [:axis        [:enum :design :implementation]]
    [:evidence    [:vector {:min 1} string?]]
    [:invisibly-incomplete? {:optional true} boolean?]])
+
+(defn- distinct-record-ids?
+  "Ids are unique within a survey, per kind. A duplicate makes `which claim did
+   you refute` unanswerable, which is the one question the id exists to answer."
+  [{:keys [load-bearing modules]}]
+  (and (or (< (count load-bearing) 2) (apply distinct? (map :id load-bearing)))
+       (or (< (count modules) 2) (apply distinct? (map :id modules)))))
 
 (defn- distinct-health-ids?
   "Health observation ids are unique within one baseline. A duplicate would make
@@ -629,7 +647,9 @@
     [:read             [:vector {:min 1} string?]]
     [:unknowns         {:optional true} [:vector string?]]]
    [:fn {:error/message "health observation ids must be unique within a baseline"}
-    distinct-health-ids?]])
+    distinct-health-ids?]
+   [:fn {:error/message "claim and module ids must be unique within a baseline"}
+    distinct-record-ids?]])
 
 (def LoadBearingLegacy
   "READ SHAPE — a property from before the survey moved up a level, carrying a
@@ -671,6 +691,46 @@
    [:evidence     {:optional true} [:vector string?]]
    [:drift        {:optional true} string?]])
 
+(def ModuleNoId
+  "READ SHAPE — a module from before claims and modules carried ids."
+  [:map {:closed true}
+   [:module    string?]
+   [:hides     string?]
+   [:interface string?]
+   [:readings  {:optional true} [:vector ModuleReading]]])
+
+(def LoadBearingNoId
+  "READ SHAPE — a claim from before ids, carrying a counterexample and readings
+   but nothing that survives being amended."
+  [:map {:closed true}
+   [:property     string?]
+   [:falsified-by string?]
+   [:readings     {:optional true} [:vector ClaimReading]]
+   [:evidence     {:optional true} [:vector string?]]
+   [:drift        {:optional true} string?]])
+
+(def BaselineNoIds
+  "READ SHAPE — a survey with a decomposition and readings but no ids on its
+   claims or modules. Not writable; the era lasted one afternoon and produced the
+   measurements that ended it."
+  [:and
+   [:map {:closed true}
+    [:format           [:= :baseline]]
+    [:area             string?]
+    [:bounded-by       string?]
+    [:shape            string?]
+    [:modules          [:vector {:min 1} ModuleNoId]]
+    [:composition      string?]
+    [:load-bearing     [:vector {:min 1} LoadBearingNoId]]
+    [:extension-points {:optional true} [:vector ExtensionPoint]]
+    [:health           {:optional true} [:vector HealthObservation]]
+    [:governing        {:optional true} [:vector string?]]
+    [:drift            {:optional true} [:vector string?]]
+    [:read             [:vector {:min 1} string?]]
+    [:unknowns         {:optional true} [:vector string?]]]
+   [:fn {:error/message "health observation ids must be unique within a baseline"}
+    distinct-health-ids?]])
+
 (def BaselineKindEra
   "READ SHAPE — a survey with a decomposition but with :kind on its properties.
    Not writable.
@@ -686,7 +746,7 @@
     [:area             string?]
     [:bounded-by       string?]
     [:shape            string?]
-    [:modules          [:vector {:min 1} Module]]
+    [:modules          [:vector {:min 1} ModuleNoId]]
     [:composition      string?]
     [:load-bearing     [:vector {:min 1} LoadBearingKindEra]]
     [:extension-points {:optional true} [:vector ExtensionPoint]]
@@ -706,10 +766,12 @@
    means it predates readings."
   [:multi {:dispatch (fn [b]
                        (cond
-                         (not (contains? b :modules))          :legacy
-                         (some :kind (:load-bearing b))        :kind-era
-                         :else                                 :current))}
+                         (not (contains? b :modules))            :legacy
+                         (some :kind (:load-bearing b))          :kind-era
+                         (not-every? :id (:load-bearing b))      :no-ids
+                         :else                                   :current))}
    [:current  Baseline]
+   [:no-ids   BaselineNoIds]
    [:kind-era BaselineKindEra]
    [:legacy   BaselineLegacy]])
 
@@ -1178,6 +1240,7 @@
    alternative whose reason no longer holds. A finding citing nothing is not a
    finding, and the schema is where that stops being a hope."
   [:map {:closed true}
+   [:claim-id {:optional true} string?]
    [:cites    [:vector {:min 1} string?]]
    [:claim    string?]
    [:evidence {:optional true} [:vector string?]]])

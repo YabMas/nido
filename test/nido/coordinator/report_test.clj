@@ -723,30 +723,30 @@
                   render layer is out, it only formats what it is handed"
    :shape        "Line items hold exact amounts; the order aggregate is the only
                   thing that sums them; invoices read the aggregate, never lines."
-   :modules      [{:module "calc"
+   :modules      [{:id "mod-calc" :module "calc"
                    :hides "how a money amount is represented and rounded"
                    :interface "exact amounts in, exact amounts out"}
-                  {:module "the order aggregate"
+                  {:id "mod-the-order-aggregate" :module "the order aggregate"
                    :hides "the order in which lines are summed"
                    :interface "an order's total"}
-                  {:module "the invoice reader"
+                  {:id "mod-the-invoice-reader" :module "the invoice reader"
                    :hides "the invoice document's layout"
                    :interface "renders a total it is handed"}]
    :composition  "The aggregate is the only reader of lines and the only writer of
                   a total; the invoice reader consumes that total. One summing
                   path exists because only one module can see the lines."
-   :load-bearing [{:property "a line item's amount is never rounded in place"
+   :load-bearing [{:id "c1" :property "a line item's amount is never rounded in place"
                    :falsified-by "a write path that stores a rounded amount back onto a line"
                    :readings [{:lens :tarpit/state :verdict :essential
                                :because "the amount a customer was charged cannot be recomputed"}]
                    :evidence ["src/order/calc.clj:41"]}
-                  {:property "the aggregate is the only summing path"
+                  {:id "c2" :property "the aggregate is the only summing path"
                    :falsified-by "a caller outside the aggregate that reads lines and sums them"
                    :readings [{:lens :parnas/dependency :verdict :on-interface
                                :because "the invoice reader takes the total; nothing reads lines"}]
                    :evidence ["src/order/aggregate.clj:12" "src/order/invoice.clj:88"]
                    :drift    "invoice.clj re-sums defensively — copied, never decided"}
-                  {:property "an order total is derived, never stored"
+                  {:id "c3" :property "an order total is derived, never stored"
                    :falsified-by "a column or cache holding a total that is edited independently"
                    :readings [{:lens :tarpit/state :verdict :derived
                                :because "computable from the lines by summation"}]}]
@@ -774,14 +774,14 @@
   (is (thrown? clojure.lang.ExceptionInfo
                (report/validate-event
                 :baseline (assoc valid-baseline
-                                 :load-bearing [{:property "totals are exact"}])))
+                                 :load-bearing [{:id "c4" :property "totals are exact"}])))
       "a property nothing could refute is a guess"))
 
 ;; ── Readings — borrowed perspectives, each with a closed vocabulary ─────────
 
 (defn- with-reading [r]
   (assoc valid-baseline
-         :load-bearing [{:property "totals are exact"
+         :load-bearing [{:id "c5" :property "totals are exact"
                          :falsified-by "a rounded total"
                          :readings [r]}]))
 
@@ -825,7 +825,7 @@
   (is (report/validate-event :baseline valid-baseline))
   (is (report/validate-event
        :baseline (assoc valid-baseline
-                        :load-bearing [{:property "p" :falsified-by "q"
+                        :load-bearing [{:id "c6" :property "p" :falsified-by "q"
                                         :readings [{:lens :tarpit/state :verdict :derived
                                                     :because "computable from lines"}
                                                    {:lens :parnas/dependency :verdict :on-interface
@@ -851,7 +851,7 @@
   (is (thrown? clojure.lang.ExceptionInfo
                (report/validate-event
                 :baseline (assoc valid-baseline
-                                 :modules [{:module "calc" :interface "amounts"}])))
+                                 :modules [{:id "mod-calc" :module "calc" :interface "amounts"}])))
       "a module that hides nothing is a file"))
 
 (deftest a-survey-from-the-kind-era-still-reads
@@ -859,6 +859,7 @@
   ;; without a read shape does not error — latest-entry swallows the parse
   ;; failure, so the record stops being there.
   (let [kind-era (assoc valid-baseline
+                        :modules (mapv #(dissoc % :id) (:modules valid-baseline))
                         :load-bearing [{:property "the aggregate is the only summing path"
                                         :kind :module-boundary
                                         :falsified-by "an outside caller that sums lines"
@@ -886,6 +887,7 @@
   ;; without a read shape does not error: latest-entry swallows the parse
   ;; failure, so the record stops being there.
   (let [kind-era (assoc valid-baseline
+                        :modules (mapv #(dissoc % :id) (:modules valid-baseline))
                         :load-bearing [{:property "the aggregate is the only summing path"
                                         :kind :module-boundary
                                         :falsified-by "an outside caller that sums lines"
@@ -899,6 +901,7 @@
 
 (deftest the-three-eras-are-told-apart-by-what-the-record-carries
   (let [kind-era (assoc valid-baseline
+                        :modules (mapv #(dissoc % :id) (:modules valid-baseline))
                         :load-bearing [{:property "p" :kind :derived :falsified-by "q"}])
         legacy   (-> valid-baseline
                      (dissoc :modules :composition)

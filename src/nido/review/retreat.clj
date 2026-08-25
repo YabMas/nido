@@ -108,8 +108,12 @@
    nothing cites any more. A property genuinely corrected keeps pointing at the
    code that corrected it; one quietly dropped takes its evidence with it."
   [prev curr]
-  (let [pmods (into {} (map (juxt :module identity)) (:modules prev))
-        cmods (set (map :module (:modules curr)))
+  (let [;; By id now, not by name. A module renamed while the decomposition grew
+        ;; read as a module lost, because its own description was its identity and
+        ;; the amender rewrites descriptions.
+        id-or-name (fn [m] (or (:id m) (:module m)))
+        pmods (into {} (map (juxt id-or-name identity)) (:modules prev))
+        cmods (set (map id-or-name (:modules curr)))
         mods-gone (remove cmods (keys pmods))
         ;; Readings are where the analysis lives, so losing one loses analysis
         ;; whatever the prose still says. There is no id on a claim to track a
@@ -142,10 +146,16 @@
       ;; that a module lost. The count is the signal that survives a rewording;
       ;; the names are the best detail available once it fires, and offering
       ;; them when it has not is asserting a loss the data does not support.
-      (when (< (count (:modules curr)) (count (:modules prev)))
-        (for [m (sort mods-gone)]
-          (retreat :module-dropped
-                   (str "module " m " is no longer part of the decomposition"))))
+      ;; With ids the count gate is no longer needed to suppress renames — a
+      ;; dropped id is a dropped module whatever else changed.
+      (for [m (sort mods-gone)]
+        (retreat :module-dropped
+                 (str "module " m " is no longer part of the decomposition")))
+      (let [pids (set (keep :id (:load-bearing prev)))
+            cids (set (keep :id (:load-bearing curr)))]
+        (for [c (sort (remove cids pids))]
+          (retreat :claim-dropped
+                   (str "claim " c " is no longer made"))))
       (keep identity
             [(fewer :readings-fewer "readings" (readings prev) (readings curr))])
       (for [l (sort (remove clenses plenses))]

@@ -262,7 +262,7 @@
 
 (def ^:private corrected-baseline
   {:format :baseline :seq 11 :area "a" :bounded-by "b" :shape "s"
-   :load-bearing [{:property "p" :evidence ["src/x.clj:1"]}] :read ["src/x.clj"]})
+   :load-bearing [{:id "c1" :property "p" :evidence ["src/x.clj:1"]}] :read ["src/x.clj"]})
 
 (defn- with-resurvey
   "Stub every seam the two-step re-survey touches. `amends` stands in for what
