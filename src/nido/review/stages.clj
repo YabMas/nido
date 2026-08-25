@@ -508,9 +508,28 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                  ctx'))))})
 
 (defn working-copy-dirty?
-  "True when jj reports working-copy changes in cwd."
+  "True when jj reports working-copy changes in cwd.
+
+   Answers `is there anything uncommitted`, which is what the diff fixer needs:
+   it starts from a restored copy, so anything at all means its fixer wrote."
   [cwd]
   (not (str/blank? (:out (jj/jj! cwd "diff" "--git")))))
+
+(defn working-copy-state
+  "What the working copy currently contains, as a value to compare against later.
+
+   A record round cannot use `working-copy-dirty?`, and the difference is not
+   pedantry. That predicate answers `is anything uncommitted`, and a session
+   worktree almost always carries a human's uncommitted work — so a round that
+   treated dirty-after as a violation would halt on every real session. The
+   guard therefore only fired on a clean-to-dirty transition, which means it did
+   not fire at all in the case that matters: on an already-dirty tree an amender
+   could write code and nothing would notice.
+
+   Comparing the diff itself has neither problem. Whatever was there stays there
+   and compares equal; anything the pass adds does not."
+  [cwd]
+  (str (:out (jj/jj! cwd "diff" "--git"))))
 
 (defn layer-label
   [layer]

@@ -523,12 +523,12 @@
 
   nido:review:baseline
   {:requires ([tasks.nido-review :as nido-review])
-   :doc "Loop the baseline round: judge the survey against the code, amend it, repeat until it holds. Uncapped unless :max-iters. [:cwd <dir>] [:max-iters <n>] [:budget 30m] [:dry-run? true]"
+   :doc "Loop the baseline round: judge the survey against the code, amend it, repeat until it holds. Uncapped unless :max-iters. [:cwd <dir>] [:code-cwd <dir>] [:max-iters <n>] [:budget 30m] [:dry-run? true]"
    :task (apply nido-review/baseline-cmd *command-line-args*)}
 
   nido:review:design
   {:requires ([tasks.nido-review :as nido-review])
-   :doc "Loop the decision round over the latest design record: derive, amend, re-survey if the premise is wrong, escalate only the ask. [:cwd <dir>] [:max-iters <n>] [:budget 30m] [:dry-run? true]"
+   :doc "Loop the decision round over the latest design record: derive, amend, re-survey if the premise is wrong, escalate only the ask. [:cwd <dir>] [:code-cwd <dir>] [:max-iters <n>] [:budget 30m] [:dry-run? true]"
    :task (apply nido-review/design-cmd *command-line-args*)}
 
   nido:work

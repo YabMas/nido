@@ -645,11 +645,11 @@
    re-reads `latest` repairs whichever was appended last, which need not be the
    one anybody asked about. It then cannot converge by construction: the design
    citing the other survey is never answered however long it runs."
-  [{:keys [cwd run-id label disputes baseline]}]
+  [{:keys [cwd code-cwd run-id label disputes baseline]}]
   (if-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
     (if-let [baseline (or baseline (ws/latest-entry project ws-id :baseline))]
       (if (baseline-round-worth-running? baseline)
-        (judged (run-round! {:cwd cwd :run-id run-id :kind :baseline-review
+        (judged (run-round! {:cwd (or code-cwd cwd) :run-id run-id :kind :baseline-review
                              :label label
                              :prompt (baseline-prompt {:baseline baseline
                                                        :disputes disputes})})
@@ -706,13 +706,13 @@
    structural, and a design standing on a survey nobody verified. Only the last
    is new, and it is the one that was previously discovered by paying for the
    round — see `unverified-premise`."
-  [{:keys [cwd run-id label disputes]}]
+  [{:keys [cwd code-cwd run-id label disputes]}]
   (if-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
     (if-let [design (ws/latest-entry project ws-id :design)]
       (if (design-round-worth-running? design)
         (or (unverified-premise project ws-id design)
             (judged (run-round!
-                     {:cwd cwd :run-id run-id :kind :design-decision
+                     {:cwd (or code-cwd cwd) :run-id run-id :kind :design-decision
                       :label label
                       :prompt (design-prompt
                                {:design   design
@@ -899,7 +899,7 @@
   {:name :judge
    :run
    (fn [ctx]
-     (let [{:keys [cwd run-id]} (:config ctx)
+     (let [{:keys [cwd code-cwd run-id]} (:config ctx)
            counts (dispute-counts (:history ctx))
            ;; The record this run is repairing: the one it was pointed at, then
            ;; each amendment it makes itself. Never re-read as "the latest",
@@ -907,7 +907,7 @@
            ;; can change underneath a run in flight.
            target (or (:under-repair ctx) (:baseline (:config ctx)))
            record (baseline-review!
-                   {:cwd cwd :run-id run-id
+                   {:cwd cwd :code-cwd code-cwd :run-id run-id
                     :baseline target
                     :label (str "baseline-review-round-" (:iter ctx))
                     :disputes (disputes-for-judge (:history ctx))})]
@@ -949,7 +949,8 @@
   {:name :amend
    :run
    (fn [ctx]
-     (let [{:keys [cwd run-id budget dry-run?]} (:config ctx)]
+     (let [{:keys [cwd code-cwd run-id budget dry-run?]} (:config ctx)
+           code-cwd (or code-cwd cwd)]
        (if dry-run?
          (assoc ctx :control :stop :status :dry-run)
          (let [[project ws-id] (stages/project+ws-from-cwd cwd)
@@ -961,7 +962,7 @@
                ;; Dirty BEFORE, not dirty after: a session worktree may already
                ;; carry a human's uncommitted work, and calling that a violation
                ;; would halt every loop run outside a clean tree.
-               dirty-before? (stages/working-copy-dirty? cwd)]
+               before (stages/working-copy-state code-cwd)]
            (fs/create-dirs dir)
            ;; "The file is there" is the whole test for whether the amender
            ;; answered, so the round must start with it absent. A leftover from
@@ -969,13 +970,13 @@
            ;; round's answer and appended to the ledger as a superseding record.
            (fs/delete-if-exists out-path)
            (agent/launch!
-            {:run-id run-id :cwd cwd :budget budget
+            {:run-id run-id :cwd code-cwd :budget budget
              :first-message (amend-prompt {:baseline prev
                                            :findings (:findings ctx)
                                            :out-path out-path})
              :err-file (str (fs/path dir (str "amend-round-" (:iter ctx) ".err.log")))})
            (cond
-             (and (not dirty-before?) (stages/working-copy-dirty? cwd))
+             (not= before (stages/working-copy-state code-cwd))
              (assoc ctx :control :stop :status :amend-touched-code)
 
              (not (fs/exists? out-path))
@@ -1159,10 +1160,10 @@
   {:name :judge
    :run
    (fn [ctx]
-     (let [{:keys [cwd run-id]} (:config ctx)
+     (let [{:keys [cwd code-cwd run-id]} (:config ctx)
            counts (dispute-counts (:history ctx))
            record (design-decision!
-                   {:cwd cwd :run-id run-id
+                   {:cwd cwd :code-cwd code-cwd :run-id run-id
                     :label (str "design-decision-round-" (:iter ctx))
                     :disputes (disputes-for-judge (:history ctx))})
            traj   (trajectory (:history ctx))
@@ -1219,7 +1220,7 @@
    stopped getting anywhere. A count would stop it while it was still making
    progress, which is the one thing a convergence loop must not do."
   [ctx]
-  (let [{:keys [cwd run-id budget]} (:config ctx)
+  (let [{:keys [cwd code-cwd run-id budget]} (:config ctx)
         [project ws-id] (stages/project+ws-from-cwd cwd)
         n   (count (filter :resurveyed (:history ctx)))
         ;; The survey the design was JUDGED against, which is the only one whose
@@ -1229,6 +1230,7 @@
         ;; however many rounds it ran.
         cited (stages/discover-baseline cwd (ws/latest-entry project ws-id :design))
         out (rloop/run-loop {:cwd cwd
+                             :code-cwd code-cwd
                              :run-id (str run-id "-resurvey-" (inc n))
                              :budget budget
                              :emit (fn [_])
@@ -1267,15 +1269,16 @@
    amendment is what moves the citation."
   [ctx recommend baseline]
   (let [{:keys [cwd run-id budget]} (:config ctx)
+        code-cwd (or (:code-cwd (:config ctx)) cwd)
         [project ws-id] (stages/project+ws-from-cwd cwd)
         prev     (ws/latest-entry project ws-id :design)
         dir      (cstate/run-dir run-id)
         out-path (str (fs/path dir (str "design-amend-round-" (:iter ctx) ".edn")))
-        dirty-before? (stages/working-copy-dirty? cwd)]
+        before (stages/working-copy-state code-cwd)]
     (fs/create-dirs dir)
     (fs/delete-if-exists out-path)
     (agent/launch!
-     {:run-id run-id :cwd cwd :budget budget
+     {:run-id run-id :cwd code-cwd :budget budget
       :first-message (design-amend-prompt
                       {:design prev
                        :baseline baseline
@@ -1286,7 +1289,7 @@
                        :out-path out-path})
       :err-file (str (fs/path dir (str "design-amend-round-" (:iter ctx) ".err.log")))})
     (cond
-      (and (not dirty-before?) (stages/working-copy-dirty? cwd))
+      (not= before (stages/working-copy-state code-cwd))
       (assoc ctx :control :stop :status :amend-touched-code)
 
       (not (fs/exists? out-path))

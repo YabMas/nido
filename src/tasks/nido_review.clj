@@ -232,10 +232,29 @@
    count uncapped, that per-launch wall clock is the only thing between a hung
    claude and a loop that never returns.
 
+   Two working directories, and keeping them apart is the whole of `:code-cwd`.
+   `:cwd` anchors the LEDGER — it resolves the session and so the workstream
+   whose records this run reads and amends. `:code-cwd` is where the agents
+   read, and it defaults to `:cwd` because they are usually the same tree.
+
+   They are not the same tree when a survey describes an area BEFORE a change
+   that is already written. A baseline is supposed to be fillable without
+   knowing the fix; judged against a worktree that carries the fix, it is told
+   its own subject does not exist — the round reports the change's new modules
+   as things the survey failed to mention, and an amender asked to repair that
+   folds the change INTO the survey it was supposed to be judged against. The
+   record then describes the post-change world, and every relation the design
+   declares to it is answered against a premise that already contains the
+   answer.
+
+   So the revision is an axis of its own, separate from the workstream: point
+   `:code-cwd` at a checkout of the base and the survey is judged against the
+   area as it was, while the ledger stays where the work is.
+
    The final block prints from a `finally`, so a loop that throws still leaves
    its rounds, its weakenings and its objections on screen."
   [{:keys [kind pipeline finding-key remedies epilogue]}
-   {:keys [cwd max-iters dry-run? budget]}]
+   {:keys [cwd code-cwd max-iters dry-run? budget]}]
   (let [cwd    (or cwd (lifecycle/worktree-from-cwd) (System/getProperty "user.dir"))
         run-id (str kind "-loop-" (random-uuid))
         clock  #(Instant/now)
@@ -249,7 +268,8 @@
                  (frontend/with-live-frame
                    {:frame-fn #(render/record-frame @report-atom % {:title title})
                     :clock clock :plain? plain}
-                   #(rloop/run-loop {:cwd cwd :run-id run-id
+                   #(rloop/run-loop {:cwd cwd :code-cwd code-cwd
+                                     :run-id run-id
                                      :max-iters max-iters
                                      :dry-run? (boolean dry-run?)
                                      :budget budget

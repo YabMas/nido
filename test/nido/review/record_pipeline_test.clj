@@ -75,6 +75,29 @@
 
 ;; ── The judge stage ─────────────────────────────────────────────────────────
 
+(deftest the-judge-reads-the-code-cwd-and-the-ledger-reads-the-other-one
+  ;; A survey describes the area BEFORE a change. Judged against a worktree that
+  ;; already carries that change, the round reports the change's own modules as
+  ;; things the survey failed to mention, and the amender folds the change into
+  ;; the record it was supposed to be judged against. So the revision is its own
+  ;; axis: the agents read :code-cwd, the workstream still resolves from :cwd.
+  (let [seen (atom nil)]
+    (with-redefs [record/run-round! (fn [opts] (reset! seen opts) {:ok "{}"})
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry (fn [_ _ _] a-baseline)]
+      (record/baseline-review! {:cwd "/ledger" :code-cwd "/base" :run-id "r1"})
+      (is (= "/base" (:cwd @seen))
+          "the judge reads the base revision, not the tree the work is in"))))
+
+(deftest code-cwd-defaults-to-the-ledger-cwd
+  (let [seen (atom nil)]
+    (with-redefs [record/run-round! (fn [opts] (reset! seen opts) {:ok "{}"})
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry (fn [_ _ _] a-baseline)]
+      (record/baseline-review! {:cwd "/ledger" :run-id "r1"})
+      (is (= "/ledger" (:cwd @seen))
+          "they are the same tree in the ordinary case, and nothing has to say so"))))
+
 (deftest an-accurate-verdict-stops-the-loop
   (with-redefs [record/baseline-review! (fn [_] {:format :baseline-review
                                                  :verdict :sufficient :reason "ok"})
@@ -108,14 +131,15 @@
 
 (defn- with-amend
   "Run amend-stage with every seam stubbed. `writes` is called with the out-path
-   and stands in for what the amender did (or did not) leave behind."
-  [{:keys [prev writes dirty-before? dirty-after? append-throws?]
-    :or {prev a-baseline dirty-before? false dirty-after? false}} c]
-  (let [dirty (atom dirty-before?)
+   and stands in for what the amender did (or did not) leave behind; `tree-before`
+   and `tree-after` are what the working copy's diff contained either side of it."
+  [{:keys [prev writes tree-before tree-after append-throws?]
+    :or {prev a-baseline tree-before "" tree-after nil}} c]
+  (let [tree (atom tree-before)
         appended (atom nil)]
     (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ _] prev)
-                  stages/working-copy-dirty? (fn [_] @dirty)
+                  stages/working-copy-state (fn [_] @tree)
                   ws/append-entry! (fn [_ _ _ payload]
                                      (when append-throws?
                                        (throw (ex-info "schema said no" {})))
@@ -125,7 +149,7 @@
                                   (when writes
                                     (writes (second (re-find #"Write EDN to:\n\n  (\S+)"
                                                              first-message))))
-                                  (reset! dirty dirty-after?)
+                                  (reset! tree (or tree-after @tree))
                                   {:num-turns 3})]
       [(run record/amend-stage c) @appended])))
 
@@ -139,18 +163,32 @@
 (deftest an-amender-that-wrote-code-is-terminal
   ;; No stage of a record loop may touch the working copy. Whatever it wrote is
   ;; left in place — this halts for a human rather than tidying up after it.
-  (let [[out _] (with-amend {:dirty-before? false :dirty-after? true}
+  (let [[out _] (with-amend {:tree-before "" :tree-after "diff --git a/x b/x"}
                             (ctx :findings [a-finding]))]
     (is (= :amend-touched-code (:status out)))
     (is (= :stop (:control out)))))
 
 (deftest an-already-dirty-worktree-is-not-blamed-on-the-amender
-  ;; A session worktree routinely carries a human's uncommitted work.
-  (let [[out appended] (with-amend {:dirty-before? true :dirty-after? true
+  ;; A session worktree routinely carries a human's uncommitted work, and it is
+  ;; still there afterwards. Comparing the diff rather than a dirty flag is what
+  ;; lets that pass while an actual edit does not.
+  (let [[out appended] (with-amend {:tree-before "a human's work"
                                     :writes (fn [p] (spit p (pr-str a-baseline)))}
                                    (ctx :findings [a-finding]))]
     (is (not= :amend-touched-code (:status out)))
     (is (some? appended))))
+
+(deftest an-amender-that-writes-on-top-of-a-dirty-tree-is-caught
+  ;; The hole the boolean left, and the one that mattered: the old guard only
+  ;; fired on a clean-to-dirty transition, so on an already-dirty tree — which is
+  ;; most real sessions — an amender could write code and nothing noticed. Found
+  ;; by a live round judging this very namespace.
+  (let [[out appended] (with-amend {:tree-before "a human's work"
+                                    :tree-after "a human's work\n+ and the amender's"
+                                    :writes (fn [p] (spit p (pr-str a-baseline)))}
+                                   (ctx :findings [a-finding]))]
+    (is (= :amend-touched-code (:status out)))
+    (is (nil? appended) "and the record it returned never reaches the ledger")))
 
 (deftest an-amender-that-wrote-nothing-leaves-the-ledger-alone
   (let [[out appended] (with-amend {} (ctx :findings [a-finding]))]
@@ -227,7 +265,7 @@
                   record/append! (fn [_ _] nil)
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ _] a-baseline)
-                  stages/working-copy-dirty? (fn [_] false)
+                  stages/working-copy-state (fn [_] "")
                   ws/append-entry! (fn [_ _ _ _] "/ws/entries/0002-baseline.edn")
                   agent/launch! (fn [{:keys [first-message]}]
                                   (spit (second (re-find #"Write EDN to:\n\n  (\S+)" first-message))
@@ -249,7 +287,7 @@
                 record/append! (fn [_ _] nil)
                 stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                 ws/latest-entry (fn [_ _ _] a-baseline)
-                stages/working-copy-dirty? (fn [_] false)
+                stages/working-copy-state (fn [_] "")
                 ws/append-entry! (fn [_ _ _ _] "/ws/entries/0002-baseline.edn")
                 agent/launch! (fn [{:keys [first-message]}]
                                 (spit (second (re-find #"Write EDN to:\n\n  (\S+)" first-message))

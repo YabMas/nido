@@ -207,7 +207,7 @@
     (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ _] prev)
                   stages/discover-baseline (fn [_ _] nil)
-                  stages/working-copy-dirty? (fn [_] false)
+                  stages/working-copy-state (fn [_] "")
                   ws/append-entry! (fn [_ _ _ payload]
                                      (when append-throws? (throw (ex-info "schema said no" {})))
                                      (reset! appended payload)
@@ -246,7 +246,7 @@
     (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ _] a-design)
                   stages/discover-baseline (fn [_ _] nil)
-                  stages/working-copy-dirty? (fn [_] false)
+                  stages/working-copy-state (fn [_] "")
                   agent/launch! (fn [{:keys [first-message]}]
                                   (swap! prompts conj first-message) {:num-turns 1})]
       (doseq [r [:amend :recut]]
@@ -274,7 +274,7 @@
                   ws/latest-entry (fn [_ _ kind]
                                     (if (= :baseline kind) corrected-baseline a-design))
                   stages/discover-baseline (fn [_ _] {:format :baseline :seq 8})
-                  stages/working-copy-dirty? (fn [_] false)
+                  stages/working-copy-state (fn [_] "")
                   ws/append-entry! (fn [_ _ _ payload] (reset! appended payload) "/e")
                   agent/launch! (fn [{:keys [first-message]}]
                                   (reset! prompt first-message)
@@ -318,7 +318,7 @@
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ _] a-design)
                   stages/discover-baseline (fn [_ _] {:format :baseline :seq 8})
-                  stages/working-copy-dirty? (fn [_] false)
+                  stages/working-copy-state (fn [_] "")
                   agent/launch! (fn [_] {:num-turns 0})]
       (run record/design-amend-stage
            (assoc (ctx :findings []) :record (decision :resurvey)))
@@ -354,7 +354,7 @@
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ _] a-design)
                   stages/discover-baseline (fn [_ _] nil)
-                  stages/working-copy-dirty? (fn [_] false)
+                  stages/working-copy-state (fn [_] "")
                   agent/launch! (fn [_] {:num-turns 0})]
       (doseq [prior (range 5)]
         (let [hist (vec (repeat prior {:resurveyed :sufficient}))
@@ -376,7 +376,7 @@
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ _] a-design)
                   stages/discover-baseline (fn [_ _] nil)
-                  stages/working-copy-dirty? (fn [_] false)
+                  stages/working-copy-state (fn [_] "")
                   ws/append-entry! (fn [_ _ _ _] "/ws/entries/0005-design.edn")
                   agent/launch! (fn [{:keys [first-message]}]
                                   (spit (second (re-find #"Write EDN to:\n\n  (\S+)" first-message))
@@ -394,7 +394,7 @@
                 stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                 ws/latest-entry (fn [_ _ _] a-design)
                 stages/discover-baseline (fn [_ _] nil)
-                stages/working-copy-dirty? (fn [_] false)
+                stages/working-copy-state (fn [_] "")
                 ws/append-entry! (fn [_ _ _ _] "/ws/entries/0005-design.edn")
                 agent/launch! (fn [{:keys [first-message]}]
                                 (spit (second (re-find #"Write EDN to:\n\n  (\S+)" first-message))
