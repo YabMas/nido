@@ -59,10 +59,16 @@
    — the same handle the stall check uses, so a finding that cannot be told apart
    from round to round cannot silently accumulate here either."
   [finding-key history curr-findings]
-  (let [runs (map #(set (map finding-key (:findings %))) (take-last (dec unfixable-after) history))
-        curr (map finding-key curr-findings)]
+  ;; `butlast` because the amend stage has already appended THIS round to the
+  ;; history by the time this runs. Counting it as one of its own prior
+  ;; appearances made three rounds out of two, and a run that had resolved
+  ;; everything it could in two ended a round early saying so.
+  (let [prior (butlast history)
+        runs  (map #(set (map finding-key (:findings %)))
+                   (take-last (dec unfixable-after) prior))
+        curr  (map finding-key curr-findings)]
     (when (= (count runs) (dec unfixable-after))
-      (seq (filter (fn [k] (every? #(contains? % k) runs)) curr)))))
+      (seq (distinct (filter (fn [k] (every? #(contains? % k) runs)) curr))))))
 
 (defn- run-pipeline
   "Run stages in order over ctx, emitting phase-started before each stage and

@@ -176,3 +176,30 @@
                                       (>= (:iter c) 2) (assoc :control :stop))))]
         out (rloop/run-loop {:run-id "r" :pipeline pipe :emit emit :finding-key :id})]
     (is (= :converged (:status out)))))
+
+(deftest a-finding-in-two-rounds-does-not-end-the-run
+  ;; The off-by-one this pins: the amend stage appends THIS round to history
+  ;; before the check runs, so counting the current round as one of its own prior
+  ;; appearances made three out of two — and a live run that had resolved
+  ;; everything it could in two rounds ended a round early declaring the rest
+  ;; unfixable.
+  (let [[_ emit] (capturing)
+        rounds (atom 0)
+        pipe [(stage :judge (fn [c] (assoc c :findings [{:id "same"}])))
+              (stage :amend (fn [c] (swap! rounds inc)
+                              (cond-> (update c :history (fnil conj [])
+                                              {:iter (:iter c) :findings (:findings c)})
+                                (>= (:iter c) 2) (assoc :control :stop))))]
+        out (rloop/run-loop {:run-id "r" :pipeline pipe :emit emit :finding-key :id})]
+    (is (= :converged (:status out)) "two rounds of the same finding is not a wall")
+    (is (= 2 @rounds))))
+
+(deftest the-same-finding-is-named-once-however-often-it-was-raised
+  (let [[_ emit] (capturing)
+        pipe [(stage :judge (fn [c] (assoc c :findings [{:id "stuck"} {:id "stuck"}
+                                                        {:id (str "fresh-" (:iter c))}])))
+              (stage :amend (fn [c] (update c :history (fnil conj [])
+                                            {:iter (:iter c) :findings (:findings c)})))]
+        out (rloop/run-loop {:run-id "r" :pipeline pipe :emit emit :finding-key :id})]
+    (is (= :unfixable (:status out)))
+    (is (= ["stuck"] (:unfixable out)) "one entry, not one per raising")))

@@ -284,7 +284,10 @@
     (when-let [detail (:amend-error final)]
       (println (str "  " detail)))
     (doseq [k (:unfixable final)]
-      (println (str "  ↯ " (pr-str k) " — raised and re-raised, never resolved")))
+      ;; The key is the pipeline's own identity value, whose shape is its
+      ;; business and not a reader's. Show the name inside it when there is one.
+      (println (str "  ↯ " (or (some #(when (string? %) %) (flatten [k])) (pr-str k))
+                    " — raised and re-raised, never resolved")))
     ;; The pipeline's own remedies first, then the ones every record loop shares.
     ;; A lookup FN rather than a map, because a nested loop's terminal status
     ;; comes through prefixed and the set is open by construction.
