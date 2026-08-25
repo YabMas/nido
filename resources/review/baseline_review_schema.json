@@ -1,37 +1,77 @@
 {
   "type": "object",
   "additionalProperties": false,
-  "required": ["verdict", "reason", "confirmed", "findings"],
+  "required": [
+    "verdict",
+    "reason",
+    "confirmed",
+    "findings"
+  ],
   "properties": {
     "verdict": {
       "type": "string",
-      "enum": ["accurate", "falsified", "underscoped"],
-      "description": "accurate is the expected outcome. falsified: a stated claim is not true of the code. underscoped: the bound excludes something that governs the behaviour."
+      "enum": [
+        "sufficient",
+        "falsified",
+        "insufficient"
+      ],
+      "description": "sufficient is the expected outcome: true, and enough to decide against. falsified: a stated claim is not true of the code. insufficient: true as far as it goes, but a NAMED derivation cannot be made against it. There is no verdict for 'true, but I can think of more to say' — that is not a defect in a survey."
     },
-    "reason": { "type": "string" },
+    "reason": {
+      "type": "string"
+    },
     "confirmed": {
       "type": "array",
       "description": "Claims you actually went and checked, and which held.",
-      "items": { "type": "string" }
+      "items": {
+        "type": "string"
+      }
     },
     "findings": {
       "type": "array",
-      "description": "Empty when the verdict is accurate. Every entry must cite what it falsifies.",
+      "description": "Empty when the verdict is sufficient.",
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["cites", "claim", "evidence"],
+        "required": [
+          "blocks",
+          "cites",
+          "claim",
+          "needs",
+          "evidence"
+        ],
         "properties": {
+          "blocks": {
+            "type": "string",
+            "enum": [
+              "none",
+              "relation-honest",
+              "goal-served",
+              "decomposable",
+              "routing-coherent"
+            ],
+            "description": "Which derivation this gap blocks. 'none' for a FALSIFIED finding, which refutes a claim rather than reporting a gap. On an INSUFFICIENT finding it must name one of the four, because a gap blocking none of them is not a finding. relation-honest: whether a change stands where it says it stands, against this area's modules and load-bearing properties. goal-served: whether a change serves the goal and only the goal. decomposable: whether the change's cut can be stated and follows this area's module boundaries. routing-coherent: whether this area's health observations belong to one story."
+          },
           "cites": {
             "type": "array",
-            "description": "The exact property or observation text this refutes. Never empty.",
-            "items": { "type": "string" }
+            "description": "The exact property, module or composition text this is about. Never empty.",
+            "items": {
+              "type": "string"
+            }
           },
-          "claim": { "type": "string" },
+          "claim": {
+            "type": "string"
+          },
+          "needs": {
+            "type": "string",
+            "description": "On an INSUFFICIENT finding: what the survey would have to say for the blocked derivation to be makeable — the specific missing claim, not 'more detail'. Empty string on a falsified finding."
+          },
           "evidence": {
             "type": "array",
-            "description": "file:line references that support the refutation.",
-            "items": { "type": "string" }
+            "description": "file:line references supporting it. May be empty.",
+            "items": {
+              "type": "string"
+            }
           }
         }
       }

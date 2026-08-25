@@ -77,11 +77,11 @@
 
 (deftest an-accurate-verdict-stops-the-loop
   (with-redefs [record/baseline-review! (fn [_] {:format :baseline-review
-                                                 :verdict :accurate :reason "ok"})
+                                                 :verdict :sufficient :reason "ok"})
                 record/append! (fn [_ _] nil)]
     (let [out (run record/judge-stage (ctx))]
       (is (= :stop (:control out)))
-      (is (= :accurate (:status out)))
+      (is (= :sufficient (:status out)))
       (is (= [] (:findings out))))))
 
 (deftest findings-carry-into-the-context-and-the-loop-continues
@@ -223,7 +223,7 @@
                   (fn [_] (if (= 1 (swap! round inc))
                             {:format :baseline-review :verdict :falsified
                              :findings [a-finding]}
-                            {:format :baseline-review :verdict :accurate :reason "ok"}))
+                            {:format :baseline-review :verdict :sufficient :reason "ok"}))
                   record/append! (fn [_ _] nil)
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ _] a-baseline)
@@ -236,7 +236,7 @@
       (let [out (rloop/run-loop {:run-id "r-conv" :cwd "/w"
                                  :pipeline record/baseline-pipeline
                                  :finding-key record/baseline-finding-key})]
-        (is (= :accurate (:status out)))
+        (is (= :sufficient (:status out)))
         (is (= 2 (:iter out)))))))
 
 (deftest an-amender-that-changes-nothing-stalls-instead-of-spinning
@@ -360,17 +360,17 @@
 
 (deftest a-withdrawn-finding-never-reaches-the-escalation
   (with-redefs [record/baseline-review! (fn [_] {:format :baseline-review
-                                                 :verdict :accurate :reason "ok"})
+                                                 :verdict :sufficient :reason "ok"})
                 record/append! (fn [_ _] nil)]
     (let [out (run record/judge-stage
                    (ctx :history (vec (repeat 2 {:disputes [{:key (record/baseline-finding-base-key a-finding)
                                                              :claim "c" :because "b"}]}))))]
-      (is (= :accurate (:status out)) "withdrawing is the other honest answer"))))
+      (is (= :sufficient (:status out)) "withdrawing is the other honest answer"))))
 
 (deftest standing-objections-reach-the-next-judge
   (let [seen (atom nil)]
     (with-redefs [record/baseline-review! (fn [opts] (reset! seen opts)
-                                            {:format :baseline-review :verdict :accurate})
+                                            {:format :baseline-review :verdict :sufficient})
                   record/append! (fn [_ _] nil)]
       (run record/judge-stage
            (ctx :history [{:disputes [{:key [:evidence ["x"]] :claim "c" :because "b"}]}]))
@@ -442,7 +442,7 @@
     (with-redefs [record/baseline-review!
                   (fn [{:keys [baseline]}]
                     (swap! seen conj (:area baseline))
-                    {:format :baseline-review :verdict :accurate :reason "ok"})
+                    {:format :baseline-review :verdict :sufficient :reason "ok"})
                   record/append! (fn [_ _] nil)
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ _] newest)]
@@ -459,7 +459,7 @@
         seen  (atom [])]
     (with-redefs [record/baseline-review!
                   (fn [{:keys [baseline]}] (swap! seen conj (:area baseline))
-                    {:format :baseline-review :verdict :accurate :reason "ok"})
+                    {:format :baseline-review :verdict :sufficient :reason "ok"})
                   record/append! (fn [_ _] nil)
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ _] other)]

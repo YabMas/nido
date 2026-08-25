@@ -1178,25 +1178,64 @@
    [:claim    string?]
    [:evidence {:optional true} [:vector string?]]])
 
+(def derivations
+  "What a survey exists to let the decision round work out. A survey is
+   SUFFICIENT when these can be derived against it — not when nothing true is
+   left to say about the area, which is never."
+  [:relation-honest :goal-served :decomposable :routing-coherent])
+
+(def BlockedFinding
+  "A gap in a survey, named by the derivation it blocks.
+
+   :blocks is the whole of this record's bounding, and it replaced a bare
+   `:underscoped`. Completeness has no fixed point: measured against an area, a
+   judge finds true things to add forever, and five rounds of exactly that
+   produced twenty-four findings without one repeating. Sufficiency has four,
+   because there are four derivations and a gap either blocks one or is
+   something the survey merely does not mention.
+
+   So a gap must say which derivation cannot be made and what the survey would
+   have to say for it to be. A true observation blocking none of them is not a
+   finding here — at most it is a health observation, and more often it is the
+   next survey's business."
+  [:map {:closed true}
+   [:blocks   (into [:enum] derivations)]
+   [:cites    [:vector {:min 1} string?]]
+   [:claim    string?]
+   [:needs    string?]
+   [:evidence {:optional true} [:vector string?]]])
+
 (def BaselineReview
-  "The verification round over a survey: is this true, and is it complete enough
-   to decide against?
+  "The verification round over a survey: is this true, and is it ENOUGH?
 
-   Near-mechanical by construction — every load-bearing property and health
-   observation carries file:line evidence, so checking one is 'go read it'. That
-   makes this the cheapest and most decidable round in the lifecycle, and the one
-   that protects everything above it: a design can be perfectly sound on a survey
-   that was wrong, and nothing else detects that before the code is written.
+   The second half used to read 'complete enough to decide against', and a judge
+   asked that optimises the completeness and drops the decision. Measured against
+   a real area it is right to do so — there is always another true thing to say —
+   and the round never terminates. So the question is asked the way it is meant:
+   can the decision this survey exists to support be made against it?
 
-   Two failure modes, and they are the two the skill names. :falsified — a stated
-   property is not true of the code. :underscoped — the bound excludes something
-   that governs the behaviour, which is the one that hides design flaws, since
-   the flaw is routinely upstream of the blast radius. Both mean re-survey, never
-   redesign.
+   Three verdicts, and only the middle one is new. :falsified — a stated property
+   is not true of the code; unchanged, and always a defect. :insufficient — the
+   survey is true as far as it goes and a NAMED derivation cannot be made against
+   it. :sufficient — true, and enough; the expected outcome, naming what it
+   CONFIRMED, for the same reason the design verdict's :sound does.
 
-   :accurate is the expected outcome and names what it CONFIRMED, for the same
-   reason the design verdict's :sound does: a clean round should accumulate trust
-   rather than evaporate."
+   Both failures mean re-survey, never redesign."
+  (let [common [[:format       [:= :baseline-review]]
+                [:baseline-seq int?]
+                [:reason       string?]
+                [:confirmed    {:optional true} [:vector string?]]]
+        shape  (fn [verdict & extra]
+                 (into [:map {:closed true}]
+                       (concat common [[:verdict [:= verdict]]] extra)))]
+    [:multi {:dispatch :verdict}
+     [:sufficient   (shape :sufficient)]
+     [:falsified    (shape :falsified    [:findings [:vector {:min 1} RecordFinding]])]
+     [:insufficient (shape :insufficient [:findings [:vector {:min 1} BlockedFinding]])]]))
+
+(def BaselineReviewLegacy
+  "READ SHAPE — a round from before the terminal question was sufficiency, whose
+   verdicts were :accurate and :underscoped. Not writable."
   (let [common [[:format       [:= :baseline-review]]
                 [:baseline-seq int?]
                 [:reason       string?]
@@ -1208,6 +1247,13 @@
      [:accurate    (shape :accurate)]
      [:falsified   (shape :falsified   [:findings [:vector {:min 1} RecordFinding]])]
      [:underscoped (shape :underscoped [:findings [:vector {:min 1} RecordFinding]])]]))
+
+(def BaselineReviewAny
+  "The READ contract for :baseline-review — dispatched on the verdict, which is
+   what the era changed."
+  [:multi {:dispatch (fn [r] (if (#{:accurate :underscoped} (:verdict r)) :legacy :current))}
+   [:current BaselineReview]
+   [:legacy  BaselineReviewLegacy]])
 
 (def DerivedCheck
   "One thing the decision round worked out for itself, so a human does not have
@@ -1432,7 +1478,11 @@
    ;; The survey moved up a level: :modules and :composition became required and
    ;; a load-bearing property gained a kind and a counterexample in place of its
    ;; required coordinate. Every survey written before that is in the old shape.
-   :baseline BaselineAny})
+   :baseline BaselineAny
+   ;; The terminal question became sufficiency, so :accurate and :underscoped
+   ;; stopped being writable. Rounds in that shape exist on every workstream a
+   ;; loop has touched.
+   :baseline-review BaselineReviewAny})
 
 (defn- validate-against
   [schema kind report]

@@ -272,7 +272,8 @@
     status))
 
 (def ^:private baseline-remedies
-  {:accurate "the survey holds against the code"
+  {:sufficient "the survey holds against the code, and a decision can be made against it"
+   :insufficient "a named derivation cannot be made against the survey — see what each finding says it needs"
    :no-record "author the baseline first"
    :nothing-to-check "nothing in the survey is refutable yet"})
 

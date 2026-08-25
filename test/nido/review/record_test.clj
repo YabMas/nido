@@ -101,9 +101,9 @@
       (is (str/includes? p "A READING IS A CLAIM TOO")))
     (testing "the refs are still handed over, as where to look"
       (is (str/includes? p "src/order/aggregate.clj:12")))
-    (is (str/includes? p "ACCURATE IS THE EXPECTED OUTCOME"))
+    (is (str/includes? p "SUFFICIENT IS THE EXPECTED OUTCOME"))
     (is (str/includes? p "MUST cite"))
-    (is (str/includes? p "UNDERSCOPED"))
+    (is (str/includes? p "INSUFFICIENT"))
     (is (str/includes? p "whether the CSV importer bypasses the aggregate")
         "a declared unknown is honesty already recorded, not a finding to make")))
 
@@ -112,7 +112,7 @@
   ;; subsystem, a judge finds true things about it forever. An implementation
   ;; has no fixed point; a decomposition does.
   (let [p (record/baseline-prompt {:baseline baseline})]
-    (is (str/includes? p "not reviewing the code for defects"))
+    (is (str/includes? p "not reviewing the code for\ndefects"))
     (is (str/includes? p "belongs to code\nreview"))
     (is (str/includes? p "does that specific counterexample exist"))
     (is (str/includes? p "Neither is a finding that reports a bug in code the survey"))))
@@ -182,13 +182,13 @@
 
 (defn- baseline-json [m] (json/generate-string m))
 
-(deftest an-accurate-baseline-review-parses-and-needs-no-findings
+(deftest a-sufficient-baseline-review-parses-and-needs-no-findings
   (let [r (record/parse-baseline-review
-           (baseline-json {:verdict "accurate" :reason "both claims held"
+           (baseline-json {:verdict "sufficient" :reason "both claims held"
                            :confirmed ["the aggregate is the only summing path"]
                            :findings []})
            3)]
-    (is (= :accurate (:verdict r)))
+    (is (= :sufficient (:verdict r)))
     (is (= 3 (:baseline-seq r)))
     (is (= ["the aggregate is the only summing path"] (:confirmed r)))
     (is (nil? (:findings r)))

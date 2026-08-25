@@ -180,7 +180,7 @@
   ;; is silent — every record finding collides under the review's key, so the
   ;; loop would stop after one amendment and call it progress.
   (let [seen (atom nil)]
-    (with-redefs [rloop/run-loop (fn [cfg] (reset! seen cfg) {:status :accurate})]
+    (with-redefs [rloop/run-loop (fn [cfg] (reset! seen cfg) {:status :sufficient})]
       (with-out-str (t/baseline-cmd ":cwd" "/w"))
       (is (= record/baseline-pipeline (:pipeline @seen)))
       (is (= record/baseline-finding-key (:finding-key @seen)))
@@ -190,7 +190,7 @@
 
 (deftest baseline-cmd-is-uncapped-unless-asked
   (let [seen (atom nil)]
-    (with-redefs [rloop/run-loop (fn [cfg] (reset! seen cfg) {:status :accurate})]
+    (with-redefs [rloop/run-loop (fn [cfg] (reset! seen cfg) {:status :sufficient})]
       (with-out-str (t/baseline-cmd ":cwd" "/w"))
       (is (nil? (:max-iters @seen)) "no default cap, same as the diff loop")
       (with-out-str (t/baseline-cmd ":cwd" "/w" ":max-iters" "2"))
@@ -200,7 +200,7 @@
 
 (deftest baseline-cmd-resolves-the-worktree-when-cwd-is-absent
   (let [seen (atom nil)]
-    (with-redefs [rloop/run-loop (fn [cfg] (reset! seen cfg) {:status :accurate})
+    (with-redefs [rloop/run-loop (fn [cfg] (reset! seen cfg) {:status :sufficient})
                   lifecycle/worktree-from-cwd (constantly "/resolved")]
       (with-out-str (t/baseline-cmd))
       (is (= "/resolved" (:cwd @seen))))))
@@ -223,7 +223,7 @@
 (deftest a-loop-that-amended-and-gave-nothing-up-says-so-in-words
   ;; That a loop converged WITHOUT claiming less is the single most important
   ;; fact about it, so it is stated rather than left to an absent section.
-  (with-redefs [rloop/run-loop (run-loop-emitting-a-clean-round :accurate)]
+  (with-redefs [rloop/run-loop (run-loop-emitting-a-clean-round :sufficient)]
     (let [out (with-out-str (t/baseline-cmd ":cwd" "/w"))]
       (is (str/includes? out "Weakened:"))
       (is (str/includes? out "(nothing — the record claims everything it claimed at the start)"))
@@ -244,8 +244,8 @@
                   (emit {:event :phase-started :iter 1 :phase :amend :at "2026-01-01T00:00:01Z"})
                   (emit {:event :phase-finished :iter 1 :phase :amend :at "2026-01-01T00:00:02Z"
                          :ctx {:retreats [{:what :veto-lifted :detail "h2 unmarked"}]}})
-                  (emit {:event :run-finalized :status :accurate :ctx {} :at "2026-01-01T00:00:03Z"})
-                  {:status :accurate})]
+                  (emit {:event :run-finalized :status :sufficient :ctx {} :at "2026-01-01T00:00:03Z"})
+                  {:status :sufficient})]
     (let [out (with-out-str (t/baseline-cmd ":cwd" "/w"))]
       (is (str/includes? out "! veto-lifted — h2 unmarked")))))
 
@@ -255,7 +255,7 @@
   ;; to stop, and two of them (:retreated, :amend-touched-code) need a human to
   ;; do something specific.
   (doseq [[status marker]
-          {:accurate           "holds against the code"
+          {:sufficient           "holds against the code"
            :retreated          "below what its own round would check"
            :no-progress        "still open"
            :amend-noop         "nothing was appended"
@@ -282,7 +282,7 @@
   ;; The iteration count is uncapped by design, so the per-launch wall clock is
   ;; the only bound on a single hung round.
   (let [seen (atom nil)]
-    (with-redefs [rloop/run-loop (fn [cfg] (reset! seen cfg) {:status :accurate})]
+    (with-redefs [rloop/run-loop (fn [cfg] (reset! seen cfg) {:status :sufficient})]
       (with-out-str (t/baseline-cmd ":cwd" "/w" ":budget" "30m"))
       (is (= "30m" (:budget @seen)))
       (with-out-str (t/baseline-cmd ":cwd" "/w"))

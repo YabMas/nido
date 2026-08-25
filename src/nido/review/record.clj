@@ -237,10 +237,25 @@
    good` but `does that specific thing exist`."
   [{:keys [baseline disputes]}]
   (str
-   "You are checking whether a SURVEY of an area is true, and whether it is\n"
-   "complete enough to decide against. You are NOT designing anything, you are\n"
-   "not reviewing the code for defects, and you are not judging whether the area\n"
-   "is good — only whether this description of it is accurate.\n\n"
+   "You are checking whether a SURVEY of an area is TRUE, and whether it is\n"
+   "ENOUGH. You are NOT designing anything, you are not reviewing the code for\n"
+   "defects, and you are not judging whether the area is good.\n\n"
+   "ENOUGH FOR WHAT — this is the whole of the second question, and it is not\n"
+   "completeness. A survey exists so a later round can derive four things about a\n"
+   "proposed change:\n"
+   "  relation-honest   does the change stand where it says it stands, against\n"
+   "                    this area's modules and load-bearing properties?\n"
+   "  goal-served       does it serve the goal and only the goal — would a\n"
+   "                    smaller change do?\n"
+   "  decomposable      can its cut be stated, and does it follow this area's\n"
+   "                    module boundaries?\n"
+   "  routing-coherent  do this area's health observations belong to one story?\n\n"
+   "The survey is ENOUGH when those can be derived against it. It does not have\n"
+   "to be everything true about the area, and it never will be: measured against\n"
+   "a real system there is always another true thing to add, so a round that\n"
+   "reports what is missing rather than what is BLOCKED never finishes and never\n"
+   "helps. If you notice something true that blocks none of the four, it is not a\n"
+   "finding. Leave it.\n\n"
    "THE LEVEL THIS OPERATES AT. The survey describes the area as a DECOMPOSITION:\n"
    "which modules exist, what design decision each one hides, and how their\n"
    "composition produces the required behaviour. Judge it there. A defect in one\n"
@@ -301,18 +316,22 @@
    "   from something else the system holds; the `derived` value is also stored\n"
    "   and edited independently; the composition does not produce the behaviour\n"
    "   claimed. Show the counterexample, with where it is.\n"
-   "2. UNDERSCOPED — the decomposition leaves out a module that GOVERNS this\n"
-   "   behaviour, or omits accidental state — a cache, a denormalisation, a\n"
-   "   second derivation of something already derived — that the behaviour\n"
-   "   actually depends on. This is the one that hides design flaws, because the\n"
-   "   flaw is routinely upstream of the code a change would touch.\n\n"
-   "Every finding MUST cite what it falsifies — the exact property, module or\n"
+   "2. INSUFFICIENT — one of the four derivations cannot be made against this\n"
+   "   survey. Say WHICH (`blocks`) and what the survey would have to say for it\n"
+   "   to be makeable (`needs`) — the specific missing claim, not `more detail`.\n"
+   "   A gap that blocks none of the four is not a finding here; at most it is a\n"
+   "   health observation, and more often it is the next survey's business.\n\n"
+   "SUFFICIENT IS THE EXPECTED OUTCOME on any survey that has done its job. It is\n"
+   "not a high bar and it is not praise — it means a decision can be made against\n"
+   "this, which is all a survey is for.\n\n"
+   "Every finding MUST cite what it is about — the exact property, module or\n"
    "composition text. A finding that cites nothing is not a finding; do not\n"
    "report it. Neither is a finding that reports a bug in code the survey\n"
    "correctly describes.\n\n"
-   "ACCURATE IS THE EXPECTED OUTCOME. Populate confirmed with the claims you\n"
-   "actually went and checked, and return accurate when they held. Do not\n"
-   "manufacture findings to look thorough."
+   "Populate confirmed with the claims you actually went and checked, and return\n"
+   "sufficient when they held and the four derivations are makeable. Do not\n"
+   "manufacture findings to look thorough — on this round, thoroughness is\n"
+   "checking the claims that are there, not finding more to say."
    (disputes-block disputes)))
 
 (defn design-prompt
@@ -437,25 +456,52 @@
                          (assoc :evidence (mapv str (:evidence f))))))))
         raw))
 
+(def ^:private derivation-names
+  (into #{} (map name) report/derivations))
+
+(defn- normalize-blocked
+  "An insufficient finding, kept only if it names a derivation it blocks and what
+   the survey would have to say. Those two are the bound: without them
+   `insufficient` is the unbounded bucket `underscoped` was, and the round that
+   produced twenty-four non-repeating findings would simply produce them under a
+   new name."
+  [raw]
+  (into []
+        (keep (fn [f]
+                (let [blocks (str (:blocks f))
+                      cites  (into [] (remove str/blank?) (map str (:cites f)))]
+                  (when (and (derivation-names blocks)
+                             (seq cites)
+                             (not (str/blank? (str (:needs f)))))
+                    (cond-> {:blocks (keyword blocks)
+                             :cites  cites
+                             :claim  (str (:claim f))
+                             :needs  (str (:needs f))}
+                      (seq (:evidence f)) (assoc :evidence (mapv str (:evidence f)))))))
+              raw)))
+
 (defn parse-baseline-review
   "Codex JSON -> a :baseline-review ledger record, or nil when the answer is
-   unusable. nil is a non-answer, never a fabricated :accurate — the caller
+   unusable. nil is a non-answer, never a fabricated :sufficient — the caller
    records nothing rather than inventing trust."
   [json-str baseline-seq]
   (try
     (let [m (json/parse-string json-str true)
           v (keyword (str (:verdict m)))]
-      (when (#{:accurate :falsified :underscoped} v)
-        (let [findings (normalize-findings (:findings m))]
-          ;; A non-accurate verdict with nothing that cites anything is exactly
-          ;; the theatre this round guards against — read it as no answer.
-          (when (or (= :accurate v) (seq findings))
+      (when (#{:sufficient :falsified :insufficient} v)
+        (let [findings (case v
+                         :falsified    (normalize-findings (:findings m))
+                         :insufficient (normalize-blocked (:findings m))
+                         [])]
+          ;; A non-sufficient verdict with nothing usable behind it is exactly the
+          ;; theatre this round guards against — read it as no answer.
+          (when (or (= :sufficient v) (seq findings))
             (cond-> {:format :baseline-review
                      :verdict v
                      :baseline-seq baseline-seq
                      :reason (str (:reason m))}
               (seq (:confirmed m)) (assoc :confirmed (mapv str (:confirmed m)))
-              (not= :accurate v)   (assoc :findings findings))))))
+              (not= :sufficient v) (assoc :findings findings))))))
     (catch Exception _ nil)))
 
 (defn parse-design-decision
@@ -778,8 +824,8 @@
          (:outcome record)
          (assoc ctx :record record :status (:outcome record))
 
-         (= :accurate (:verdict record))
-         (assoc ctx :record record :findings [] :control :stop :status :accurate)
+         (= :sufficient (:verdict record))
+         (assoc ctx :record record :findings [] :control :stop :status :sufficient)
 
          :else
          (let [findings (mapv #(assoc % :disputed-n
@@ -1071,7 +1117,7 @@
    the ledger — every baseline review and every superseding baseline — so the
    trajectory survives where a reader looks for it.
 
-   Any non-:accurate outcome is terminal HERE. A design round cannot proceed on
+   Any non-:sufficient outcome is terminal HERE. A design round cannot proceed on
    a survey the baseline loop could not make true, and re-judging the design
    against it would produce a decision built on the premise that just failed.
 
@@ -1097,7 +1143,7 @@
                              :baseline    cited
                              :pipeline    baseline-pipeline
                              :finding-key baseline-finding-key})]
-        (if (= :accurate (:status out))
+        (if (= :sufficient (:status out))
           ;; No history entry here. The re-survey is only HALF the repair — the
           ;; design still cites the survey that was wrong — so the round is not
           ;; over, and the amendment that finishes it records them together.
