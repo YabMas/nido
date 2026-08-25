@@ -6,6 +6,20 @@
 
 (defn- whats [rs] (set (map :what rs)))
 
+(def modular-baseline
+  {:format :baseline
+   :area "order totalling" :bounded-by "b" :shape "s"
+   :modules [{:module "calc" :hides "how money is represented" :interface "amounts"}
+             {:module "aggregate" :hides "summing order" :interface "a total"}]
+   :composition "only the aggregate sees lines, so only it sums them"
+   :load-bearing [{:property "amounts are never rounded in place"
+                   :kind :essential-state :falsified-by "a write of a rounded amount"}
+                  {:property "the aggregate is the only summing path"
+                   :kind :module-boundary :falsified-by "an outside caller that sums lines"}
+                  {:property "a total is derived, never stored"
+                   :kind :derived :falsified-by "a stored total edited independently"}]
+   :read ["src/order/aggregate.clj"]})
+
 (def base-baseline
   {:format :baseline
    :load-bearing [{:property "one" :evidence ["src/a.clj:1"]}
@@ -160,3 +174,38 @@
 (deftest evidence-that-names-no-file-is-not-a-place
   (is (= [] (retreat/baseline-retreats (with-evidence "the schema comment")
                                        (with-evidence "the schema comment, reworded")))))
+
+;; ── Giving up the decomposition ─────────────────────────────────────────────
+
+(deftest dropping-a-module-is-a-retreat-and-names-it
+  (let [curr (update modular-baseline :modules pop)
+        rs   (retreat/baseline-retreats modular-baseline curr)]
+    (is (contains? (whats rs) :module-dropped))
+    (is (some #(re-find #"module aggregate" (:detail %)) rs))))
+
+(deftest reclassifying-a-constraining-claim-away-is-a-retreat
+  ;; A claim classified :essential-state or :module-boundary says the area
+  ;; CANNOT do something; :accidental says it happens to. Sliding claims between
+  ;; them makes a survey unfalsifiable one reclassification at a time, and no id
+  ;; on a claim would catch it one by one.
+  (let [curr (assoc-in modular-baseline [:load-bearing 1 :kind] :accidental)
+        rs   (retreat/baseline-retreats modular-baseline curr)]
+    (is (= #{:claims-reclassified} (whats rs)))
+    (is (some #(re-find #"module-boundary claims 1 → 0" (:detail %)) rs))))
+
+(deftest rewording-every-claim-while-keeping-the-kinds-is-not-a-retreat
+  ;; The histogram is what survives an amender rewriting every word.
+  (let [curr (update modular-baseline :load-bearing
+                     (fn [lb] (mapv #(assoc % :property (str (:property %) ", restated")
+                                            :falsified-by (str (:falsified-by %) ", restated"))
+                                    lb)))]
+    (is (= [] (retreat/baseline-retreats modular-baseline curr)))))
+
+(deftest strengthening-a-claim-is-not-a-retreat
+  (let [curr (assoc-in modular-baseline [:load-bearing 2 :kind] :module-boundary)]
+    (is (= [] (retreat/baseline-retreats modular-baseline curr)))))
+
+(deftest adding-a-module-is-not-a-retreat
+  (let [curr (update modular-baseline :modules conj
+                     {:module "invoice" :hides "layout" :interface "renders a total"})]
+    (is (= [] (retreat/baseline-retreats modular-baseline curr)))))
