@@ -111,3 +111,52 @@
   (is (re-find #"! effort-lowered — :L → :M"
                (retreat/summary (retreat/design-retreats
                                  base-design (assoc base-design :effort :M))))))
+
+;; ── Evidence is compared by place, not by text ──────────────────────────────
+
+(defn- with-evidence [& refs]
+  (assoc base-baseline :load-bearing [{:property "p" :evidence (vec refs)}]))
+
+(deftest annotating-a-citation-is-not-losing-it
+  ;; Seen live: one round enriched eight references and the detector called every
+  ;; one a weakening. A human reading eight non-events is a human who misses the
+  ;; ninth.
+  (let [prev (with-evidence "src/a/time_series.clj:669")
+        curr (with-evidence "src/a/time_series.clj:669 (period_dialogue_time groups on dcs.created_at)")]
+    (is (= [] (retreat/baseline-retreats prev curr)))))
+
+(deftest a-label-in-front-of-a-citation-is-not-losing-it
+  (let [prev (with-evidence "src/a/learner.clj:25")
+        curr (with-evidence "denominator: src/a/learner.clj:25 progress-denominator, which delegates")]
+    (is (= [] (retreat/baseline-retreats prev curr)))))
+
+(deftest widening-a-line-into-the-range-around-it-is-not-losing-it
+  (let [prev (with-evidence "src/a/discussion.clj:202")
+        curr (with-evidence "src/a/discussion.clj:198-205")]
+    (is (= [] (retreat/baseline-retreats prev curr)))))
+
+(deftest a-bare-line-inside-an-annotation-still-counts-as-a-citation
+  ;; `foo.clj:732 ... joined to :746 at :760-765` points at three places in
+  ;; foo.clj, and reading only the first calls the other two lost.
+  (let [prev (with-evidence "src/a/t.clj:746" "src/a/t.clj:762")
+        curr (with-evidence "src/a/t.clj:732 (ladder inlined) joined to :746 at :760-765")]
+    (is (= [] (retreat/baseline-retreats prev curr)))))
+
+(deftest a-place-nothing-points-at-any-more-is-still-reported
+  (let [prev (with-evidence "src/a/t.clj:729" "src/a/t.clj:800")
+        curr (with-evidence "src/a/t.clj:800 (still here)")
+        rs   (retreat/baseline-retreats prev curr)]
+    (is (= [:evidence-dropped] (map :what rs)))
+    (is (= "src/a/t.clj:729 is cited by no load-bearing property any more"
+           (:detail (first rs))))))
+
+(deftest a-shifted-line-is-reported-because-nothing-can-tell-it-from-a-loss
+  ;; :386 → :390 is either a corrected anchor or a dropped one, and the record
+  ;; carries nothing that distinguishes them. Reporting is the honest answer.
+  (let [prev (with-evidence "src/a/progress.clj:386")
+        curr (with-evidence "src/a/progress.clj:390")]
+    (is (= [:evidence-dropped] (map :what (retreat/baseline-retreats prev curr))))))
+
+(deftest evidence-that-names-no-file-is-not-a-place
+  (is (= [] (retreat/baseline-retreats (with-evidence "the schema comment")
+                                       (with-evidence "the schema comment, reworded")))))

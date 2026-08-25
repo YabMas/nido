@@ -52,8 +52,51 @@
 
 ;; ── Baseline ────────────────────────────────────────────────────────────────
 
-(def ^:private baseline-evidence
-  (comp set (partial mapcat :evidence) :load-bearing))
+(def ^:private ref-re
+  #"([^\s:]+\.[A-Za-z]+):(\d+)(?:-(\d+))?")
+
+(defn- locations
+  "Every PLACE an evidence string points at — [file first-line last-line].
+
+   More than one, because an annotated citation names its file once and then
+   refers to further lines in it bare: `foo.clj:732 (ladder inlined) joined to
+   :746 at :760-765` points at three places in foo.clj, and reading only the
+   first would call the other two lost the moment they stopped being written out
+   in full.
+
+   Compared by place rather than by text because the text is not stable and is
+   not meant to be: an amender that keeps a citation and explains it turns
+   `foo.clj:669` into `foo.clj:669 (period_dialogue_time groups on ...)`, and one
+   that sharpens a line into the range around it turns `:202` into `:198-205`.
+   Both still point where they pointed. Comparing the strings called eight such
+   improvements a loss in one round, which is this detector inverted — a human
+   reading eight non-events is a human who will miss the ninth."
+  [s]
+  (let [s (str s)]
+    (when-let [[m file _ _] (re-find ref-re s)]
+      (let [tail (subs s (+ (.indexOf s ^String m) (count file)))]
+        (distinct
+         (for [[_ a b] (re-seq #":(\d+)(?:-(\d+))?" tail)]
+           [file (parse-long a) (parse-long (or b a))]))))))
+
+(defn- covers?
+  [[file start end] [f s _]]
+  (and (= file f) (<= start s end)))
+
+(defn- baseline-evidence
+  [b]
+  (mapcat locations (mapcat :evidence (:load-bearing b))))
+
+(defn- evidence-lost
+  "Places the old record cited that the new one no longer points at. A place is
+   still cited when ANY remaining reference in that file covers its line, so a
+   widened range keeps everything inside it."
+  [prev curr]
+  (let [now (vec (baseline-evidence curr))]
+    (->> (baseline-evidence prev)
+         (remove (fn [loc] (some #(covers? % loc) now)))
+         distinct
+         (sort-by (juxt first second)))))
 
 (defn baseline-retreats
   "Everything the superseding baseline claims less of than the one before it.
@@ -73,7 +116,7 @@
                        :when (and c (:invisibly-incomplete? p)
                                   (not (:invisibly-incomplete? c)))]
                    id)
-        ev-gone (sort (remove (baseline-evidence curr) (baseline-evidence prev)))]
+        ev-gone (evidence-lost prev curr)]
     (vec
      (concat
       (keep identity
@@ -88,8 +131,10 @@
       (for [id (sort unveiled)]
         (retreat :veto-lifted
                  (str "observation " id " was invisibly-incomplete? and no longer is")))
-      (for [e ev-gone]
-        (retreat :evidence-dropped (str e " is cited by no load-bearing property any more")))))))
+      (for [[file start end] ev-gone]
+        (retreat :evidence-dropped
+                 (str file ":" start (when (not= start end) (str "-" end))
+                      " is cited by no load-bearing property any more")))))))
 
 ;; ── Design ──────────────────────────────────────────────────────────────────
 
