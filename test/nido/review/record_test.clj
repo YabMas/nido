@@ -361,6 +361,26 @@
         "a vocabulary nothing is read through is noise in the prompt")
     (is (not (str/includes? p "A READING IS A CLAIM TOO")))))
 
+(deftest a-decomposition-with-no-analysis-is-told-to-report-itself
+  ;; The gap this closes was watched, not imagined: the first survey authored in
+  ;; this shape carried five modules and zero readings. Gating the vocabulary on
+  ;; readings BEING there hid it from exactly the survey that needed it.
+  (let [no-readings (update baseline :load-bearing
+                            (fn [lb] (mapv #(dissoc % :readings) lb)))
+        p (record/baseline-prompt {:baseline no-readings})]
+    (is (str/includes? p "READS NOTHING THROUGH ANY PERSPECTIVE"))
+    (is (str/includes? p "Report that as UNDERSCOPED"))
+    (is (str/includes? p "THE PERSPECTIVES THIS SURVEY IS READ THROUGH")
+        "the vocabulary is shown, because this record could carry it")
+    (is (not (str/includes? p "A READING IS A CLAIM TOO"))
+        "and it is not told to check readings it does not have")))
+
+(deftest a-survey-that-cannot-carry-readings-is-not-nagged-about-them
+  (let [legacy (dissoc baseline :modules :composition)
+        p (record/baseline-prompt {:baseline legacy})]
+    (is (not (str/includes? p "READS NOTHING THROUGH ANY PERSPECTIVE")))
+    (is (not (str/includes? p "THE PERSPECTIVES THIS SURVEY IS READ THROUGH")))))
+
 (deftest a-current-survey-still-gets-the-full-apparatus
   (let [p (record/baseline-prompt {:baseline baseline})]
     (is (str/includes? p "each with the\ncounterexample that would refute it"))

@@ -250,14 +250,27 @@
    "EVERY CLAIM CARRIES WHAT WOULD REFUTE IT. That is what you go looking for.\n"
    "Not `does this feel right` — `does that specific counterexample exist in the\n"
    "code`. Report a finding only when you found one, and say what it is.\n\n"
-   (when (some (comp seq :readings)
-               (concat (:load-bearing baseline) (:modules baseline)))
-     (str "A READING IS A CLAIM TOO, and refutable on its own terms. State read as\n"
-          "essential is refuted by a derivation that computes it. An ordering read as\n"
-          "required is refuted by showing the two things commute. A module read as\n"
-          "deep is refuted by an interface that costs about what it hides. A\n"
-          "dependency read as on-interface is refuted by a caller reaching past it.\n"
-          "Check the readings as well as the properties.\n"
+   ;; Gated on the survey being ABLE to carry readings, not on it having any.
+   ;; Gating on presence hid the vocabulary from exactly the survey that needed
+   ;; it — one with a decomposition and no analysis — so nothing ever told anyone
+   ;; the perspectives existed. The first real survey written in this shape
+   ;; carried five modules and zero readings.
+   (when (contains? baseline :modules)
+     (str (if (some (comp seq :readings)
+                    (concat (:load-bearing baseline) (:modules baseline)))
+            (str "A READING IS A CLAIM TOO, and refutable on its own terms. State read\n"
+                 "as essential is refuted by a derivation that computes it. An ordering\n"
+                 "read as required is refuted by showing the two things commute. A module\n"
+                 "read as deep is refuted by an interface that costs about what it hides.\n"
+                 "A dependency read as on-interface is refuted by a caller reaching past\n"
+                 "it. Check the readings as well as the properties.\n")
+            (str "THIS SURVEY READS NOTHING THROUGH ANY PERSPECTIVE. It could — the\n"
+                 "vocabulary is below and the record is in a shape that carries readings.\n"
+                 "A decomposition recorded with no reading of it is structure without\n"
+                 "analysis: it says what the parts are and never says whether the problem\n"
+                 "required them, whether an ordering was imposed, or whether a seam pays.\n"
+                 "Report that as UNDERSCOPED, and name the claims most worth reading and\n"
+                 "through which lens.\n"))
           (lens-block)))
    "AREA: " (:area baseline) "\n"
    "BOUNDED BY: " (:bounded-by baseline) "\n"
