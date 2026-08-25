@@ -854,6 +854,58 @@
                                  :modules [{:module "calc" :interface "amounts"}])))
       "a module that hides nothing is a file"))
 
+(deftest a-survey-from-the-kind-era-still-reads
+  ;; Its era lasted hours and a record was written in it. A schema tightened
+  ;; without a read shape does not error — latest-entry swallows the parse
+  ;; failure, so the record stops being there.
+  (let [kind-era (assoc valid-baseline
+                        :load-bearing [{:property "the aggregate is the only summing path"
+                                        :kind :module-boundary
+                                        :falsified-by "an outside caller that sums lines"
+                                        :evidence ["src/order/aggregate.clj:12"]}])]
+    (is (thrown? clojure.lang.ExceptionInfo (report/validate-event :baseline kind-era))
+        "not writable any more")
+    (is (= kind-era (report/parse-event :baseline kind-era))
+        "but still readable")
+    (is (str/includes? (report/report->markdown kind-era)
+                       "the aggregate is the only summing path"))))
+
+(deftest the-three-eras-are-told-apart-by-what-the-record-carries
+  (let [current  valid-baseline
+        kind-era (assoc valid-baseline
+                        :load-bearing [{:property "p" :kind :derived :falsified-by "q"}])
+        legacy   (-> valid-baseline
+                     (dissoc :modules :composition)
+                     (assoc :load-bearing [{:property "p" :evidence ["src/x.clj:1"]}]))]
+    (doseq [[label rec] {"current" current "kind-era" kind-era "legacy" legacy}]
+      (is (some? (report/parse-event :baseline rec)) (str label " must read")))))
+
+(deftest a-survey-from-the-kind-era-still-reads
+  ;; Its era lasted hours and a record was written in it — by someone else, on a
+  ;; live workstream, minutes before the schema moved under them. A tightening
+  ;; without a read shape does not error: latest-entry swallows the parse
+  ;; failure, so the record stops being there.
+  (let [kind-era (assoc valid-baseline
+                        :load-bearing [{:property "the aggregate is the only summing path"
+                                        :kind :module-boundary
+                                        :falsified-by "an outside caller that sums lines"
+                                        :evidence ["src/order/aggregate.clj:12"]}])]
+    (is (thrown? clojure.lang.ExceptionInfo (report/validate-event :baseline kind-era))
+        "not writable any more")
+    (is (= kind-era (report/parse-event :baseline kind-era))
+        "but still readable")
+    (is (str/includes? (report/report->markdown kind-era)
+                       "the aggregate is the only summing path"))))
+
+(deftest the-three-eras-are-told-apart-by-what-the-record-carries
+  (let [kind-era (assoc valid-baseline
+                        :load-bearing [{:property "p" :kind :derived :falsified-by "q"}])
+        legacy   (-> valid-baseline
+                     (dissoc :modules :composition)
+                     (assoc :load-bearing [{:property "p" :evidence ["src/x.clj:1"]}]))]
+    (doseq [[label rec] {"current" valid-baseline "kind-era" kind-era "legacy" legacy}]
+      (is (some? (report/parse-event :baseline rec)) (str label " must read")))))
+
 (deftest a-survey-written-before-the-level-moved-still-reads
   ;; Entries are immutable, so the question is whether it was valid when written.
   (let [legacy (-> valid-baseline

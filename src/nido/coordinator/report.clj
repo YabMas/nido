@@ -652,13 +652,59 @@
    [:fn {:error/message "health observation ids must be unique within a baseline"}
     distinct-health-ids?]])
 
+(def LoadBearingKindEra
+  "READ SHAPE — a property from the brief era between the survey moving up a
+   level and the flat :kind being replaced by readings. It carries a
+   counterexample, like a current one, and a single classification where a
+   current one carries perspectives."
+  [:map {:closed true}
+   [:property     string?]
+   [:kind         [:enum :essential-state :derived :module-boundary :composition :accidental]]
+   [:falsified-by string?]
+   [:evidence     {:optional true} [:vector string?]]
+   [:drift        {:optional true} string?]])
+
+(def BaselineKindEra
+  "READ SHAPE — a survey with a decomposition but with :kind on its properties.
+   Not writable.
+
+   Its era lasted hours, and a record was written in it. That is the whole
+   argument for this file's read shapes existing: entries are immutable, so the
+   reader's question is whether a record was valid when written, and a schema
+   tightened without one silently deletes history — latest-entry swallows a parse
+   failure, so the record does not error, it stops being there."
+  [:and
+   [:map {:closed true}
+    [:format           [:= :baseline]]
+    [:area             string?]
+    [:bounded-by       string?]
+    [:shape            string?]
+    [:modules          [:vector {:min 1} Module]]
+    [:composition      string?]
+    [:load-bearing     [:vector {:min 1} LoadBearingKindEra]]
+    [:extension-points {:optional true} [:vector ExtensionPoint]]
+    [:health           {:optional true} [:vector HealthObservation]]
+    [:governing        {:optional true} [:vector string?]]
+    [:drift            {:optional true} [:vector string?]]
+    [:read             [:vector {:min 1} string?]]
+    [:unknowns         {:optional true} [:vector string?]]]
+   [:fn {:error/message "health observation ids must be unique within a baseline"}
+    distinct-health-ids?]])
+
 (def BaselineAny
-  "The READ contract for :baseline — current shape first, so a survey satisfying
-   both reads as current. Dispatches on :modules, which is what the move up a
-   level added and which no earlier survey carries."
-  [:multi {:dispatch (fn [b] (if (contains? b :modules) :current :legacy))}
-   [:current Baseline]
-   [:legacy  BaselineLegacy]])
+  "The READ contract for :baseline — three eras.
+
+   Dispatch reads the record rather than trusting a version marker: a
+   decomposition means it is not the oldest shape, and a :kind on any property
+   means it predates readings."
+  [:multi {:dispatch (fn [b]
+                       (cond
+                         (not (contains? b :modules))          :legacy
+                         (some :kind (:load-bearing b))        :kind-era
+                         :else                                 :current))}
+   [:current  Baseline]
+   [:kind-era BaselineKindEra]
+   [:legacy   BaselineLegacy]])
 
 (def BaselineRelation
   "How this change relates to the area's CURRENT design — the layer-2 question,
