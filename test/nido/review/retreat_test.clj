@@ -187,6 +187,28 @@
     (is (contains? (whats rs) :module-dropped))
     (is (some #(re-find #"module aggregate" (:detail %)) rs))))
 
+(deftest renaming-a-module-while-the-decomposition-grows-is-not-a-loss
+  ;; Watched live: "codex — the judge launch" became "codex — the read-only judge
+  ;; launch" while two modules were ADDED, and comparing the name strings called
+  ;; that a module dropped. A module's identity is its own description, which the
+  ;; amender rewrites like everything else; the count is what survives a
+  ;; rewording.
+  (let [curr (-> modular-baseline
+                 (assoc-in [:modules 0 :module] "calc — the money representation")
+                 (update :modules conj
+                         {:module "invoice" :hides "layout" :interface "renders a total"}))]
+    (is (= [] (retreat/baseline-retreats modular-baseline curr)))))
+
+(deftest a-rename-that-hides-a-real-drop-is-still-caught-by-the-count
+  (let [curr (-> modular-baseline
+                 (update :modules pop)
+                 (assoc-in [:modules 0 :module] "calc — reworded"))
+        rs   (retreat/baseline-retreats modular-baseline curr)]
+    (is (contains? (whats rs) :modules-fewer)
+        "the count is the reliable signal")
+    (is (contains? (whats rs) :module-dropped)
+        "and once it fires, the names are the best detail available")))
+
 (deftest dropping-a-reading-is-dropping-analysis
   ;; A reading is where the analysis lives, so losing one loses analysis whatever
   ;; the prose still says. No id on a claim would track a reading through a

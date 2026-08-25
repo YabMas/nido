@@ -135,8 +135,17 @@
             [(fewer :load-bearing-fewer "load-bearing" (:load-bearing prev) (:load-bearing curr))
              (fewer :modules-fewer "modules" (:modules prev) (:modules curr))
              (fewer :read-narrowed "read" (:read prev) (:read curr))])
-      (for [m (sort mods-gone)]
-        (retreat :module-dropped (str "module " m " is no longer part of the decomposition")))
+      ;; Named only when the count also fell. A module's identity is its own
+      ;; descriptive name, which the amender rewrites like everything else —
+      ;; "codex — the judge launch" became "codex — the read-only judge launch"
+      ;; while the decomposition GREW by two, and comparing the strings called
+      ;; that a module lost. The count is the signal that survives a rewording;
+      ;; the names are the best detail available once it fires, and offering
+      ;; them when it has not is asserting a loss the data does not support.
+      (when (< (count (:modules curr)) (count (:modules prev)))
+        (for [m (sort mods-gone)]
+          (retreat :module-dropped
+                   (str "module " m " is no longer part of the decomposition"))))
       (keep identity
             [(fewer :readings-fewer "readings" (readings prev) (readings curr))])
       (for [l (sort (remove clenses plenses))]
