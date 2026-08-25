@@ -1,6 +1,6 @@
 ---
 name: drive-home
-description: Take the current nido session's stack home by composing /align (rebase + trivial-conflict resolution), /local-ci (CI + autonomous fix of every failure it can settle), /squash (fold each layer to one commit + regenerate every PR title/description) and /land (ready for review, answer Codex + the PR checks, merge and watch it land), then record completion on the ticket ledger. Halts for human judgement on semantic conflicts, on CI findings that resisted /local-ci's attempts, and on review findings /land could neither fix nor defensibly decline. Usage: /drive-home
+description: Take the current nido session's stack home by composing /align (rebase + trivial-conflict resolution), /local-ci (CI + autonomous fix of every failure it can settle), /squash (fold each layer to one commit + regenerate every PR title/description) and /land (ready for review, answer Codex + the PR checks, collapse the stack to one PR, merge and watch it land), then record completion on the ticket ledger. Halts for human judgement on semantic conflicts, on CI findings that resisted /local-ci's attempts, and on review findings /land could neither fix nor defensibly decline. Usage: /drive-home
 ---
 
 # drive-home
@@ -23,7 +23,8 @@ on the ticket ledger:
 3. `/squash` — fold each layer into one coherent commit and regenerate every
    layer's PR title/description from it,
 4. `/land` — mark every layer ready, answer the Codex review and the PR checks
-   that readiness starts, then merge the stack atomically and watch it land.
+   that readiness starts, then collapse the stack into one PR, merge that and
+   watch it land.
 
 It is **autonomous within a safe boundary** and **stops for a human** the moment
 real judgement is required. It assumes the nido invariant — **one session, one
@@ -189,7 +190,8 @@ title/description. It is mechanical and never halts.
 Reached **only** on green CI with no unresolved conflicts. `cd worktree`, then
 invoke **`/land`**. It marks every layer ready for review — which is what starts
 Codex and the PR's own GitHub checks, neither of which `/local-ci` ran — answers
-what comes back, merges the stack atomically and watches it until it lands.
+what comes back, collapses the reviewed stack into its top PR, merges that one
+PR and watches it until it lands.
 
 It returns a report with `Fixed` / `Declined` / `Unresolved` / `Checks` sections
 and an `Outcome:` line. **`Unresolved` empty ⇒ continue to §7**, whether the

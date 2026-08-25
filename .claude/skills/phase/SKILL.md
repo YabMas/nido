@@ -130,6 +130,15 @@ the backfill in the layer above satisfies the layer rule at every layer and fail
 the phase rule at the first one. Green is a fact about the build; habitable is a
 fact about production.
 
+**And the weaker rule is only safe because something enforces the gap.** A layer
+boundary is never observed by a running system *because `/land` collapses the
+reviewed stack into a single PR before merging it* — not because stacking makes
+merges atomic. A merge queue merges its entries one at a time; a stack enqueued
+as n pull requests lands in pieces, and every layer boundary becomes a deploy
+boundary that was never designed to be one. If you are landing a stack some
+other way, the layer rule is not enough and every boundary owes you the phase
+rule instead.
+
 ### Phases and layers compose
 
 A phase is a shipment, and a shipment may itself be a stack. Phase 2 of a plan
@@ -382,6 +391,9 @@ meanwhile, and its undo — the point of no return in bold.
 - **Reading `/stack`'s independent correctness as independent deployability.**
   Green build ≠ habitable system, and the gap is exactly where a `NOT NULL`
   column with a backfill above it hides (§2).
+- **Assuming a stack lands atomically.** It does so only because `/land`
+  collapses it to one PR first; enqueued as n PRs it lands in pieces, and then
+  every layer boundary is a deploy boundary (§2).
 - **A phase with no exit criterion.** That is a to-do with an ordinal. Same rule
   as `/spin-out`: if you cannot state the acceptance criterion, it is not a task
   (§3).

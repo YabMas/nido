@@ -284,11 +284,14 @@
 
 (def Phase
   "One landing of a phased change — the temporal cut, /phase's unit, sibling of
-   Layer. The two are not the same unit and the difference is sharp: a stack's
-   layers all land in one `gh stack merge`, so no intermediate layer state is
-   ever observed by a running system, and a layer's obligation is only that the
-   build is green there. A phase boundary IS a deploy, so its obligation is that
-   the system is habitable there.
+   Layer. The two are not the same unit and the difference is sharp: /land
+   collapses a stack into a single PR before merging it, so no intermediate
+   layer state is ever observed by a running system, and a layer's obligation is
+   only that the build is green there. (That collapse is what buys the weaker
+   obligation. A merge queue merges its entries one at a time, so a stack
+   enqueued as n PRs lands in pieces and every layer boundary becomes a deploy
+   boundary.) A phase boundary IS a deploy, so its obligation is that the system
+   is habitable there.
 
    :claim is about the RUNNING system, not the diff — what is true in production
    once this lands. One sentence, no \"and\", same test as a layer's.

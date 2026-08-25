@@ -132,10 +132,14 @@ to the same specialist?* Project review lanes are real subject boundaries.
   as such is how a migration blows up. Green build is a fact about CI; habitable
   system is a fact about production. A layer that adds a `NOT NULL` column with
   the backfill in the layer above satisfies this rule at every layer and would
-  take the site down if it shipped alone. It never does — `gh stack merge` lands
-  the whole stack at once, which is exactly why no layer boundary has to be
-  survivable. When one *does* have to be survivable, it is not a layer: it is a
-  phase, and `/phase` §2 is the test.
+  take the site down if it shipped alone. It never does — but **only because
+  `/land` collapses the reviewed stack into one PR before merging it.** That is
+  a step someone has to perform, not a property of stacking: a merge queue
+  merges its entries one at a time, so a stack enqueued as n pull requests lands
+  in pieces the moment anything fails mid-arc. The layer boundary is survivable
+  *because the collapse means no layer boundary is ever a merge boundary*. When
+  a boundary **does** have to be survivable, it is not a layer: it is a phase,
+  and `/phase` §2 is the test.
 - **Size exemptions.** Pure deletions and generated files count toward nothing.
   A 2,000-line supersede layer is a one-minute review.
 
@@ -393,7 +397,6 @@ SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
 SRC=$(cd .jj && cd "$(dirname "$(cat repo)")/.." && pwd)
 TRUNK=$(gh repo view -R "$SLUG" --json defaultBranchRef -q '.defaultBranchRef.name')
 (cd "$SRC" && gh stack link --base "$TRUNK" <session>--<l1> <session>--<l2> <session>--<l3> --open 2>&1); echo "EXIT=$?"
-(cd "$SRC" && gh stack merge <top-pr-number> --yes --squash)
 ```
 
 `--open` flips new and existing PRs from draft to ready for review. Verified:
@@ -404,62 +407,44 @@ names resolve server-side with no local ref needed.
 `--base "$TRUNK"` on this link is the same guard as §4's initial link — see
 above; it is required here too, not just at publish time.
 
-**Do not merge if the `--open` link exited non-zero** — the stack shape on GitHub
-is wrong, and `gh stack merge` would land a mid-stack PR carrying the layer below
-it. Repair with §6 case B first.
+**Do not proceed to the merge if the `--open` link exited non-zero** — the stack
+shape on GitHub is wrong, and the top PR may not carry every layer. Repair with
+§6 case B first.
 
-**Merge by the top layer's PR number.** `gh stack link --help` states the
-guarantee directly: *"Because stack and PR numbers never overlap, a numeric
-first argument is treated as a stack only when it matches an existing stack."*
-A PR number can therefore never collide with a stack number, so `gh stack merge
-<top-pr-number>` is unambiguous. `<top-pr-number>` is the top layer's PR number,
-already in hand from the discovery above (§4) — the shortest path, and the one
-this flow takes.
+#### Merging is not `gh stack merge` — it is `/land` §8's collapse
 
-**The stack number is obtainable too** — `gh api repos/"$SLUG"/stacks` returns it
-(§4), and `gh stack unstack` requires it (§6). Merging by top-PR number is a
-convenience, not a workaround for a number nobody can get.
+**A stack is never enqueued as n pull requests.** `/land` §8 retargets the top
+layer's PR onto trunk so its diff becomes the whole arc, and merges that one PR.
+The layers are a review decomposition; they have done their work by the time
+anything merges, and carrying them into a merge queue is what puts a half-arc on
+trunk.
 
-`gh stack merge` is atomic and all-or-nothing; if any layer cannot merge, none
-do. Verified: a real two-layer merge landed both PRs one second apart from a
-single invocation, with the base branch's final history showing both layer
-commits in order, linear, no merge commits, each carrying exactly its own
-layer's files.
+The reason is that a merge queue has no way to express "these n go together". It
+merges an entry as soon as that entry is green — brian's queue carries
+`minimumEntriesToMerge: 1` — so any failure mid-arc lands the layers below it and
+evicts the rest. Observed 2026-08-24: a seven-layer stack landed layers 1–3 and
+had 4–7 evicted, leaving trunk half-migrated for 2h01m.
 
-**Always pass a method.** With no method flag, `gh stack merge --yes` uses
-*"your last-used merge method"* (`gh stack merge --help`) — mutable,
-per-machine state, not a guaranteed default. Observed: an unflagged call
-merged *"via rebase"* only because that happened to be this machine's
-last-used method. Nothing guarantees the next machine picks the same one, so
-the shape of trunk would depend on who ran the merge. Pin it.
+**`gh stack merge` is genuinely atomic — on the direct-merge path only**, and
+that is the path this skill verified: a real two-layer merge on `YabMas/nido`
+landed both PRs one second apart from a single invocation, history linear
+afterward. `YabMas/nido` has no rulesets and no branch protection, so **no merge
+queue was ever exercised by that test**, and its result was generalised to
+queue-protected repos where it does not hold. `gh stack merge --help` says both
+things in one page: *"a single, all-or-nothing operation: if any PR cannot be
+merged, none are"*, and *"If the base branch uses a merge queue, the stack is
+added to the queue."* Those are two different operations, and every project this
+skill targets uses the second.
 
-**The method does not decide whether the layering survives — all three keep
-it.** Squash is applied per pull request, not per stack: *"Squash creates one
-clean, squashed commit per pull request. Merging n pull requests creates n
-squashed commits on the base branch"*, and *"the resulting commit history is
-the same as merging each pull request individually, starting from the
-bottom"* ([GitHub
-docs](https://docs.github.com/en/pull-requests/reference/stacked-pull-requests)).
-A three-layer stack lands three commits under `--squash` exactly as it does
-under `--rebase`. (An earlier revision of this skill claimed a stray
-`--squash` would collapse the layers into one commit and destroy the
-layering. That was an inference, and it was wrong.)
+**The method flags are moot in the flow that is actually used.** A queue applies
+its own configured `mergeMethod` (brian's is `SQUASH`), and `gh pr merge --auto`
+rejects a method flag on a queue-protected branch. `/land` §8 passes none.
 
-What the method actually decides is *which* commit lands. `--squash` writes
-GitHub's squash commit — titled from the PR, suffixed `(#1234)`, authored by
-the merger. `--rebase` replays your local commit verbatim, carrying no PR
-number. **Pin `--squash`**, because trunk in the projects this skill targets is
-built that way: every commit on brian's `main` reads `title (#4596)` (fifteen
-for fifteen, sampled 2026-08-24). A rebase-landed layer would be the only
-commit in that history with nothing linking it back to the review that cleared
-it.
-
-Per `gh stack merge --help`: *"If the base branch uses a merge queue, the
-stack is added to the queue and merges once the queue processes it; otherwise
-it is merged directly."* **This is vendor-documented, not independently
-verified** — `YabMas/nido` has no rulesets and no branch protection, so no
-merge queue exists here to exercise; only the direct-merge half has been
-observed.
+**What this costs, stated plainly:** the collapsed PR is one queue entry, so it
+lands as **one commit on trunk**, not one per layer. The layer manifest goes in
+the collapsed PR's body, which becomes that commit's body — see `/land` §8. The
+per-layer PRs and their reviews stay readable; they just are not what trunk
+records.
 
 ### `gh stack link` and `gh stack merge` need explicit arguments
 
@@ -751,9 +736,8 @@ well if the stack is being handed to a reviewer before then.
 
 #### After a stack merges — cleaning up the base branch needs a fetch first
 
-`gh stack merge` advances the base branch on the remote as part of the merge.
-If you then try to delete that branch bookmark from the worktree the normal
-way, it fails on stale info:
+The merge advances the base branch on the remote. If you then try to delete that
+branch bookmark from the worktree the normal way, it fails on stale info:
 
 ```
 $ jj git push -b 'glob:<session>--*'
@@ -786,11 +770,12 @@ cleaning up a merged stack's branches.
   had deliberately been created against another base, with no prompt. Harmless
   today only because the bottom layer's base already is `$TRUNK`; pass it
   explicitly anyway so the failure mode can't reappear later (§4).
-- **Omitting the method on `gh stack merge`** — with no method flag it uses
-  whatever was last used on that machine, which is state, not a guarantee, so
-  trunk's shape depends on who ran it. Pin `--squash` (§4).
-- **Believing `--squash` flattens a stack** — it is per pull request: n PRs land
-  n squashed commits, the same shape `--rebase` produces (§4).
+- **Enqueueing the layers as n pull requests** — a merge queue merges its
+  entries one at a time, so any failure mid-arc lands the lower layers and
+  evicts the rest, leaving trunk half-migrated. Collapse first: `/land` §8 (§4).
+- **Generalising `gh stack merge`'s atomicity from a repo with no merge queue** —
+  it holds on the direct-merge path and says nothing about a queued one. That
+  inference is exactly how this skill got it wrong (§4).
 - **Trusting stacks-API discovery without `select(.open)`** — a merged stack
   stays listed forever with `open:false`; unfiltered discovery treats a
   shipped stack as still live and does pointless (though harmless) work
