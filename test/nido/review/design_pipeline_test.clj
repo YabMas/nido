@@ -190,7 +190,7 @@
    the amender wrote after the nested loop came back."
   [{:keys [nested amends]} c]
   (let [prompt (atom nil) appended (atom nil)]
-    (with-redefs [rloop/run-loop (fn [_] {:status nested})
+    (with-redefs [rloop/run-loop (fn [_] {:status nested :under-repair corrected-baseline})
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ kind]
                                     (if (= :baseline kind) corrected-baseline a-design))
@@ -238,11 +238,13 @@
     (with-redefs [rloop/run-loop (fn [cfg] (reset! seen cfg) {:status :accurate})
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ _] a-design)
-                  stages/discover-baseline (fn [_ _] nil)
+                  stages/discover-baseline (fn [_ _] {:format :baseline :seq 8})
                   stages/working-copy-dirty? (fn [_] false)
                   agent/launch! (fn [_] {:num-turns 0})]
       (run record/design-amend-stage
            (assoc (ctx :findings []) :record (decision :resurvey)))
+      (is (= {:format :baseline :seq 8} (:baseline @seen))
+          "the nested loop repairs the survey the design CITES, not the newest one")
       (is (= record/baseline-pipeline (:pipeline @seen)))
       (is (= record/baseline-finding-key (:finding-key @seen)))
       (is (fn? (:emit @seen)))
@@ -252,7 +254,10 @@
   ;; A design round cannot proceed on a survey the baseline loop could not make
   ;; true; re-judging against it would build a decision on the failed premise.
   (doseq [s [:retreated :no-progress :amend-noop]]
-    (with-redefs [rloop/run-loop (fn [_] {:status s})]
+    (with-redefs [rloop/run-loop (fn [_] {:status s})
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry (fn [_ _ _] a-design)
+                  stages/discover-baseline (fn [_ _] {:format :baseline :seq 8})]
       (let [out (run record/design-amend-stage
                      (assoc (ctx :findings []) :record (decision :resurvey)))]
         (is (= (keyword (str "resurvey-" (name s))) (:status out)))
@@ -339,7 +344,10 @@
   ;; Seen live: the terminal said :resurvey-amend-invalid and stopped. A reader
   ;; cannot act on a refusal whose reason stayed inside a loop they never saw.
   (with-redefs [rloop/run-loop (fn [_] {:status :amend-invalid
-                                        :amend-error "{:at [\"disallowed key\"]}"})]
+                                        :amend-error "{:at [\"disallowed key\"]}"})
+                stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                ws/latest-entry (fn [_ _ _] a-design)
+                stages/discover-baseline (fn [_ _] {:format :baseline :seq 8})]
     (let [out (run record/design-amend-stage
                    (assoc (ctx :findings []) :record (decision :resurvey)))]
       (is (= :resurvey-amend-invalid (:status out)))

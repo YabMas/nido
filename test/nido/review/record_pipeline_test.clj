@@ -399,3 +399,49 @@
   (is (= {:format :design :baseline {:seq 8 :relation :within}}
          (ws/unstamp {:format :design :seq 10 :at "t"
                       :baseline {:seq 8 :relation :within}}))))
+
+;; ── Which record a run is repairing ─────────────────────────────────────────
+
+(deftest a-loop-repairs-the-record-it-was-pointed-at-not-the-newest
+  ;; The failure this catches ran for five rounds and could not have converged:
+  ;; a workstream held two surveys of DIFFERENT areas — a narrow follow-up
+  ;; written beside the broad one — and the loop re-read "the latest" every
+  ;; round, so it repaired the follow-up while the design went on citing the
+  ;; other. No amount of repair to one answers a design citing the other.
+  (let [cited {:format :baseline :area "the one the design cites"
+               :load-bearing [{:property "p" :evidence ["src/cited.clj:1"]}]
+               :bounded-by "b" :shape "s" :read ["src/cited.clj"]}
+        newest (assoc cited :area "a narrow follow-up, appended later")
+        seen (atom [])]
+    (with-redefs [record/baseline-review!
+                  (fn [{:keys [baseline]}]
+                    (swap! seen conj (:area baseline))
+                    {:format :baseline-review :verdict :accurate :reason "ok"})
+                  record/append! (fn [_ _] nil)
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry (fn [_ _ _] newest)]
+      (run record/judge-stage (ctx :config {:cwd "/w" :run-id "r1" :baseline cited}))
+      (is (= ["the one the design cites"] @seen)))))
+
+(deftest a-loop-follows-its-own-amendment-rather-than-re-reading-the-ledger
+  ;; Same hazard one step later: another session appending a baseline mid-run
+  ;; must not hijack the repair.
+  (let [start {:format :baseline :area "round one" :bounded-by "b" :shape "s"
+               :load-bearing [{:property "p" :evidence ["src/a.clj:1"]}] :read ["src/a.clj"]}
+        mine  (assoc start :area "what I amended it to")
+        other (assoc start :area "what someone else appended")
+        seen  (atom [])]
+    (with-redefs [record/baseline-review!
+                  (fn [{:keys [baseline]}] (swap! seen conj (:area baseline))
+                    {:format :baseline-review :verdict :accurate :reason "ok"})
+                  record/append! (fn [_ _] nil)
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry (fn [_ _ _] other)]
+      (run record/judge-stage (ctx :under-repair mine))
+      (is (= ["what I amended it to"] @seen)))))
+
+(deftest an-amendment-becomes-the-record-the-next-round-repairs
+  (let [corrected (assoc a-baseline :area "corrected")
+        [out _] (with-amend {:writes (fn [p] (spit p (pr-str {:record corrected})))}
+                            (ctx :findings [a-finding]))]
+    (is (= corrected (:under-repair out)))))

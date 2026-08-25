@@ -425,12 +425,20 @@
     result))
 
 (defn baseline-review!
-  "Verify this workstream's latest baseline against the code. Returns the ledger
-   record, or {:outcome <kw> :detail <str>} saying why there is none — never a
-   bare nil, so a caller can always tell a skipped round from a failed one."
-  [{:keys [cwd run-id label disputes]}]
+  "Verify a baseline against the code. Returns the ledger record, or
+   {:outcome <kw> :detail <str>} saying why there is none — never a bare nil, so
+   a caller can always tell a skipped round from a failed one.
+
+   `:baseline` names WHICH record to verify, and a loop must supply it. The
+   newest entry is only the right answer for a one-shot round on a workstream
+   with one survey. A workstream can hold surveys of DIFFERENT areas — a narrow
+   follow-up written beside the broad one it came out of — and a loop that
+   re-reads `latest` repairs whichever was appended last, which need not be the
+   one anybody asked about. It then cannot converge by construction: the design
+   citing the other survey is never answered however long it runs."
+  [{:keys [cwd run-id label disputes baseline]}]
   (if-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
-    (if-let [baseline (ws/latest-entry project ws-id :baseline)]
+    (if-let [baseline (or baseline (ws/latest-entry project ws-id :baseline))]
       (if (baseline-round-worth-running? baseline)
         (judged (run-round! {:cwd cwd :run-id run-id :kind :baseline-review
                              :label label
@@ -636,8 +644,14 @@
    (fn [ctx]
      (let [{:keys [cwd run-id]} (:config ctx)
            counts (dispute-counts (:history ctx))
+           ;; The record this run is repairing: the one it was pointed at, then
+           ;; each amendment it makes itself. Never re-read as "the latest",
+           ;; which another session — or an earlier round of a different survey —
+           ;; can change underneath a run in flight.
+           target (or (:under-repair ctx) (:baseline (:config ctx)))
            record (baseline-review!
                    {:cwd cwd :run-id run-id
+                    :baseline target
                     :label (str "baseline-review-round-" (:iter ctx))
                     :disputes (disputes-for-judge (:history ctx))})]
        (append! cwd record)
@@ -682,7 +696,9 @@
        (if dry-run?
          (assoc ctx :control :stop :status :dry-run)
          (let [[project ws-id] (stages/project+ws-from-cwd cwd)
-               prev      (ws/latest-entry project ws-id :baseline)
+               prev      (or (:under-repair ctx)
+                             (:baseline (:config ctx))
+                             (ws/latest-entry project ws-id :baseline))
                dir       (cstate/run-dir run-id)
                out-path  (str (fs/path dir (str "amend-round-" (:iter ctx) ".edn")))
                ;; Dirty BEFORE, not dirty after: a session worktree may already
@@ -752,8 +768,9 @@
                                        :disputes disputes
                                        :history (conj (vec (:history ctx)) (entry retreats)))]
                        (if (baseline-round-worth-running? record)
-                         (assoc ctx' :amended? true)
-                         (assoc ctx' :amended? true :control :stop :status :retreated))))))))))))})
+                         (assoc ctx' :amended? true :under-repair record)
+                         (assoc ctx' :amended? true :under-repair record
+                                :control :stop :status :retreated))))))))))))})
 
 (def baseline-pipeline
   "judge -> amend. No warden, no fix: nothing here touches the working copy."
@@ -946,18 +963,32 @@
    progress, which is the one thing a convergence loop must not do."
   [ctx]
   (let [{:keys [cwd run-id budget]} (:config ctx)
+        [project ws-id] (stages/project+ws-from-cwd cwd)
         n   (count (filter :resurveyed (:history ctx)))
+        ;; The survey the design was JUDGED against, which is the only one whose
+        ;; repair can change the verdict. A workstream may hold several — a
+        ;; narrow follow-up written beside the broad survey it came out of — and
+        ;; repairing the newest instead would leave the cited one untouched
+        ;; however many rounds it ran.
+        cited (stages/discover-baseline cwd (ws/latest-entry project ws-id :design))
         out (rloop/run-loop {:cwd cwd
                              :run-id (str run-id "-resurvey-" (inc n))
                              :budget budget
                              :emit (fn [_])
+                             :baseline    cited
                              :pipeline    baseline-pipeline
                              :finding-key baseline-finding-key})]
         (if (= :accurate (:status out))
           ;; No history entry here. The re-survey is only HALF the repair — the
           ;; design still cites the survey that was wrong — so the round is not
           ;; over, and the amendment that finishes it records them together.
-          (assoc ctx :resurveyed (:status out))
+          ;;
+          ;; The corrected survey travels as a VALUE. Reading it back as "the
+          ;; latest baseline" would hand the design amender whatever was
+          ;; appended last, which is how the citation came to point at a survey
+          ;; of a different area in the first place.
+          (assoc ctx :resurveyed (:status out)
+                 :resurveyed-baseline (or (:under-repair out) cited))
           ;; The nested failure's DETAIL travels with its status. Without it the
           ;; terminal says :resurvey-amend-invalid and stops — the one shape a
           ;; judgment surface must not take, since a reader cannot act on a
@@ -1067,8 +1098,7 @@
          (let [ctx' (resurvey! ctx)]
            (if (:status ctx')
              ctx'
-             (amend-design! ctx' :resurvey
-                            (ws/latest-entry project ws-id :baseline))))
+             (amend-design! ctx' :resurvey (:resurveyed-baseline ctx'))))
 
          :else
          (amend-design! ctx recommend
