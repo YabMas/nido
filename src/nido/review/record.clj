@@ -509,7 +509,12 @@
                      (when (seq cites)
                        (cond-> {:cites cites :claim (str (:claim f))}
                      (not (str/blank? (str (:claim-id f))))
-                     (assoc :claim-id (str (:claim-id f)))
+                     ;; Stripped of the brackets the prompt renders around an id.
+                     ;; A judge shown `[engine-names-no-stage] the engine …` cites
+                     ;; it back with them, and an id that is sometimes bracketed
+                     ;; and sometimes not is no identity at all.
+                     (assoc :claim-id (str/replace (str/trim (str (:claim-id f)))
+                                                   #"^\[|\]$" ""))
                          (seq (:evidence f))
                          (assoc :evidence (mapv str (:evidence f))))))))
         raw))

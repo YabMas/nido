@@ -479,3 +479,25 @@
     (is (thrown? clojure.lang.ExceptionInfo (report/validate-event :baseline-review old))
         "not writable any more")
     (is (= old (report/parse-event :baseline-review old)) "but still readable")))
+
+(deftest a-cited-id-is-normalised-to-the-id-itself
+  ;; The prompt renders `[engine-names-no-stage] the engine names no stage`, and
+  ;; a judge told to cite the id "exactly as shown" cites the brackets with it.
+  ;; An id sometimes bracketed and sometimes not is no identity at all, which is
+  ;; the one thing it exists to be.
+  (doseq [cited ["[engine-names-no-stage]" "engine-names-no-stage" "  [engine-names-no-stage] "]]
+    (let [r (record/parse-baseline-review
+             (baseline-json {:verdict "falsified" :reason "r" :confirmed []
+                             :findings [{:claim-id cited :blocks "none" :cites ["c"]
+                                         :claim "x" :needs "" :evidence []}]})
+             3)]
+      (is (= "engine-names-no-stage" (:claim-id (first (:findings r))))
+          (str "from " (pr-str cited))))))
+
+(deftest a-finding-about-no-single-claim-carries-no-id
+  (let [r (record/parse-baseline-review
+           (baseline-json {:verdict "falsified" :reason "r" :confirmed []
+                           :findings [{:claim-id "" :blocks "none" :cites ["c"]
+                                       :claim "x" :needs "" :evidence []}]})
+           3)]
+    (is (nil? (:claim-id (first (:findings r)))))))
