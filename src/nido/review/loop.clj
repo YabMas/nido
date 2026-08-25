@@ -39,6 +39,31 @@
        (= (set (map finding-key curr-findings))
           (set (map finding-key prev-findings)))))
 
+(def ^:private unfixable-after 3)
+
+(defn- unfixable
+  "Findings raised in `unfixable-after` consecutive rounds and never resolved.
+
+   Whole-set repetition is too coarse to end a run that is nearly done. A loop
+   that fixes four findings and cannot fix the fifth produces a DIFFERENT set
+   every round — so `no-progress?` never fires, while the one finding that
+   matters is raised, amended, and raised again indefinitely.
+
+   Watched: a survey reached two findings, resolved one, and re-raised the other
+   under the same key three rounds running. That is not a loop making progress
+   and it is not a loop going nowhere; it is a loop that has finished everything
+   it can and is stuck on the rest, which is a different thing to report and the
+   only one a human can act on.
+
+   Counted per finding rather than per round, and by the pipeline's own identity
+   — the same handle the stall check uses, so a finding that cannot be told apart
+   from round to round cannot silently accumulate here either."
+  [finding-key history curr-findings]
+  (let [runs (map #(set (map finding-key (:findings %))) (take-last (dec unfixable-after) history))
+        curr (map finding-key curr-findings)]
+    (when (= (count runs) (dec unfixable-after))
+      (seq (filter (fn [k] (every? #(contains? % k) runs)) curr)))))
+
 (defn- run-pipeline
   "Run stages in order over ctx, emitting phase-started before each stage and
    phase-finished (or phase-errored) after. Short-circuits (reduced) on a
@@ -98,6 +123,14 @@
 
                     (no-progress? finding-key prev-findings (:findings ctx))
                     (assoc ctx :status :no-progress)
+
+                    ;; Everything fixable is fixed and the rest will not move.
+                    ;; Distinct from :no-progress, which says the round changed
+                    ;; nothing at all — a human reading one needs to know whether
+                    ;; to look at every finding or only at these.
+                    (seq (unfixable finding-key (:history ctx) (:findings ctx)))
+                    (assoc ctx :status :unfixable
+                           :unfixable (vec (unfixable finding-key (:history ctx) (:findings ctx))))
 
                     (and max-iters (>= iter max-iters))
                     (assoc ctx :status :max-iters)

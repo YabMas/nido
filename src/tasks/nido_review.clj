@@ -211,6 +211,7 @@
    unless something insists otherwise."
   {:retreated  "the record was amended below what its own round would check — read the weakenings above before accepting any of it"
    :no-progress "the amender stopped changing anything the judge cares about; the last findings are still open"
+   :unfixable "everything fixable was fixed; what remains was raised three rounds running and did not move — these are for you"
    :disputed   "the judge restated a finding the amender objected to twice — neither can settle it, so you do"
    :amend-noop "the amender produced no record — nothing was appended"
    :amend-unreadable "the amender's answer would not parse as EDN"
@@ -282,6 +283,8 @@
     (println (str kind "-loop: " (name status) " · report " report-path))
     (when-let [detail (:amend-error final)]
       (println (str "  " detail)))
+    (doseq [k (:unfixable final)]
+      (println (str "  ↯ " (pr-str k) " — raised and re-raised, never resolved")))
     ;; The pipeline's own remedies first, then the ones every record loop shares.
     ;; A lookup FN rather than a map, because a nested loop's terminal status
     ;; comes through prefixed and the set is open by construction.

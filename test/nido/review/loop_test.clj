@@ -139,3 +139,40 @@
   ;; stop on its second round no matter what the judge said.
   (is (= (rloop/default-finding-key {:cites ["a"] :claim "one"})
          (rloop/default-finding-key {:cites ["b"] :claim "two"}))))
+
+;; ── A finding nothing can fix ───────────────────────────────────────────────
+
+(deftest a-finding-raised-three-rounds-running-ends-the-run
+  ;; Watched live: a survey got to two findings, resolved one each round and
+  ;; re-raised the other under the same key. The SET differed every round, so
+  ;; no-progress? never fired, while the one finding that mattered went round
+  ;; and round.
+  (let [[_ emit] (capturing)
+        stuck {:id "cannot-fix"}
+        pipe [(stage :judge (fn [c] (assoc c :findings [stuck {:id (str "fresh-" (:iter c))}])))
+              (stage :amend (fn [c] (update c :history (fnil conj [])
+                                            {:iter (:iter c) :findings (:findings c)})))]
+        out (rloop/run-loop {:run-id "r" :pipeline pipe :emit emit :finding-key :id})]
+    (is (= :unfixable (:status out)))
+    (is (= ["cannot-fix"] (:unfixable out))
+        "and it names the finding, not the round")))
+
+(deftest a-run-that-keeps-resolving-findings-is-not-called-unfixable
+  (let [[_ emit] (capturing)
+        pipe [(stage :judge (fn [c] (assoc c :findings [{:id (str "new-" (:iter c))}])))
+              (stage :amend (fn [c] (cond-> (update c :history (fnil conj [])
+                                                    {:iter (:iter c) :findings (:findings c)})
+                                      (>= (:iter c) 6) (assoc :control :stop))))]
+        out (rloop/run-loop {:run-id "r" :pipeline pipe :emit emit :finding-key :id})]
+    (is (= :converged (:status out)) "every finding was different, so nothing is stuck")))
+
+(deftest two-rounds-of-the-same-finding-is-not-yet-unfixable
+  ;; One re-raise is an amendment that missed; three is a wall. Ending on the
+  ;; first repeat would stop loops that were about to succeed.
+  (let [[_ emit] (capturing)
+        pipe [(stage :judge (fn [c] (assoc c :findings [{:id "same"} {:id (str "x" (:iter c))}])))
+              (stage :amend (fn [c] (cond-> (update c :history (fnil conj [])
+                                                    {:iter (:iter c) :findings (:findings c)})
+                                      (>= (:iter c) 2) (assoc :control :stop))))]
+        out (rloop/run-loop {:run-id "r" :pipeline pipe :emit emit :finding-key :id})]
+    (is (= :converged (:status out)))))
