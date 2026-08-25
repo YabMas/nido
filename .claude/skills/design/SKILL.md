@@ -233,16 +233,69 @@ because scoping is the first claim the record makes, and the only guard against
 both failure modes: reading the whole codebase, and reading three files and
 calling it a design.
 
+### The level a survey is written at
+
+**Describe the area as a decomposition, not as an implementation.** This is the
+single decision that determines whether everything downstream works, so it comes
+before the field list.
+
+The frame is *Out of the Tarpit* plus one level down. Of everything in the area,
+which part does the **problem** require and which part is this **solution's**
+doing? And how is it cut into modules — in Parnas's sense, where a module is
+what it **hides**, not what it contains?
+
+- **`:modules`** — one entry per module: what it `:hides` (the design decision
+  nothing outside may depend on — a storage choice, a wire format, an ordering,
+  an algorithm) and its `:interface` (what the rest is allowed to know). A module
+  that hides nothing is a file. Two modules hiding the same decision are one
+  module with a seam drawn through it.
+- **`:composition`** — how those produce the required behaviour. This is where
+  the area's actual design lives: *only the aggregate can see the lines, so only
+  it can sum them*. If you cannot write this sentence, you have a file list.
+
+**Why this and not file-level truth.** A survey pitched at the implementation has
+no fixed point. Ask a judge whether a description of a large subsystem is true
+and it will find true things about it forever — every predicate, every query, an
+unbounded supply. A decomposition is a small closed set of claims, so checking it
+terminates. That is not a stylistic preference; it is the difference between a
+review that converges and one that does not.
+
+It also draws the line that keeps the passes apart: **a bug in code the survey
+correctly describes is not a finding here.** That is code review's job. Confusing
+the two is how a design round spends its rounds auditing SQL.
+
 ### The two lists are what do the work
 
 - **`:load-bearing`** — not what *ought* to hold; what would break if you
-  violated it. Each with `:evidence`, because a property with nothing to point at
-  is a guess. This is what makes the routing question answerable by derivation
+  violated it. This is what makes the routing question answerable by derivation
   rather than taste:
 
   > behaviour that violates one of these is an **implementation** defect;
   > behaviour that honours every one of them and is still wrong indicts the
   > **design**.
+
+  Each carries two required fields.
+
+  **`:kind`** classifies it, and classifying is the work — it is the act that
+  separates what the problem requires from what this solution happens to do:
+
+  | kind | means | refuted by |
+  |---|---|---|
+  | `:essential-state` | an irreducible fact the system must hold | a derivation that computes it |
+  | `:derived` | computed from essential state by a stated relation | finding it independently stored or edited |
+  | `:module-boundary` | a module hides a decision; nothing outside depends on it | a caller that does |
+  | `:composition` | true of how the modules combine, of no module alone | the behaviour arising without it |
+  | `:accidental` | introduced for implementation reasons — a cache, a denormalisation, an ordering, a second derivation | nothing; it is already a concession |
+
+  **`:falsified-by`** names the counterexample: the thing that, if it exists,
+  makes this claim false. It replaced a required `file:line`, and it is the
+  *harder* obligation — a counterexample has to be constructed, a coordinate only
+  located. The old rule quietly meant only claims *with* a coordinate could be
+  made, which excluded every claim about the decomposition, because a composition
+  property is true of no single line.
+
+  `:evidence` is still there and now optional: where you looked, when there is
+  somewhere to look.
 
 - **`:extension-points`** — where the design already admits change, and how. The
   same question asked of a feature: one that lands on an existing point
@@ -430,7 +483,14 @@ cat > /tmp/baseline.edn <<'EDN'
  :area         "…"
  :bounded-by   "why the boundary sits there"
  :shape        "…"
- :load-bearing [{:property "…" :evidence ["src/…:41"] :drift "…"}]
+ :modules      [{:module "…" :hides "the decision nothing outside may depend on"
+                 :interface "what the rest may know"}]
+ :composition  "how those produce the required behaviour"
+ :load-bearing [{:property "…"
+                 :kind :module-boundary        ; or :essential-state :derived :composition :accidental
+                 :falsified-by "the counterexample that would make this false"
+                 :evidence ["src/…:41"]        ; optional — where you looked
+                 :drift "…"}]
  :extension-points [{:at "…" :how "…"}]
  :health       [{:id "short-slug" :axis :design :observation "…"
                  :evidence ["src/…:88"] :invisibly-incomplete? false}]
@@ -494,7 +554,16 @@ Read back what is there with `bb nido:workstream:show :project <p> :ref <ref>`.
 - **Writing the baseline after you know the fix.** It will validate and be worth
   nothing. Every field has to be fillable without knowing the change (§4).
 - **`:load-bearing` full of things that ought to hold.** The question is what
-  breaks if you violate it, and `:evidence` is what keeps the answer honest.
+  breaks if you violate it, and `:falsified-by` is what keeps the answer honest.
+- **A survey that lists files instead of modules.** If `:composition` cannot be
+  written as a sentence about how the modules produce the behaviour, the area has
+  not been understood yet — and every judgement made against that record will be
+  made about the implementation instead.
+- **Classifying everything `:accidental`.** It is the kind that constrains
+  nothing, so a record full of it cannot be refuted and cannot be built on. The
+  amend rounds measure this and report it.
+- **Reporting a code defect as a survey finding.** Real, and not this pass's
+  business. File it; do not let it become a round.
 - **An empty `:unknowns`.** A survey that could determine everything usually did
   not look (§4).
 - **Reading a `:baseline` finding as a wrong design.** The premise was wrong;
