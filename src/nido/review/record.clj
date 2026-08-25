@@ -167,22 +167,63 @@
                disputes))
          "\n")))
 
+(defn- module-block
+  [modules]
+  (when (seq modules)
+    (str "\nMODULES — the decomposition claimed. A module is what it HIDES; its\n"
+         "interface is what the rest of the system may depend on:\n"
+         (str/join "\n"
+                   (map (fn [{:keys [module hides interface]}]
+                          (str "- " module "\n"
+                               "    hides:     " hides "\n"
+                               "    interface: " interface))
+                        modules))
+         "\n")))
+
+(defn- claim-block
+  [load-bearing]
+  (str/join
+   "\n"
+   (map (fn [{:keys [property kind falsified-by evidence]}]
+          (str "- [" (name (or kind :unclassified)) "] " property "\n"
+               "    refuted by: " falsified-by
+               (when (seq evidence)
+                 (str "\n    read from:  " (str/join ", " evidence)))))
+        load-bearing)))
+
 (defn baseline-prompt
-  "The verification prompt. Everything it needs to refute a claim is a file
-   reference the record itself supplied."
+  "The verification prompt.
+
+   Pitched at the decomposition, and deliberately so. Asked to check a survey
+   against a large subsystem, a judge will find true things about it forever —
+   an implementation has no fixed point to converge on, while a decomposition
+   does. What makes that bound real is that each claim arrives with the
+   counterexample that would refute it, so the question is never `is this any
+   good` but `does that specific thing exist`."
   [{:keys [baseline disputes]}]
   (str
    "You are checking whether a SURVEY of an area is true, and whether it is\n"
-   "complete enough to decide against. You are NOT designing anything, and you\n"
-   "are not judging whether the area is good — only whether this description of\n"
-   "it is accurate.\n\n"
-   "Read the code. Every claim below carries the file references it was read\n"
-   "from; going to read them is the whole job.\n\n"
+   "complete enough to decide against. You are NOT designing anything, you are\n"
+   "not reviewing the code for defects, and you are not judging whether the area\n"
+   "is good — only whether this description of it is accurate.\n\n"
+   "THE LEVEL THIS OPERATES AT. The survey describes the area as a DECOMPOSITION:\n"
+   "which modules exist, what design decision each one hides, and how their\n"
+   "composition produces the required behaviour. Judge it there. A defect in one\n"
+   "line of SQL is not a finding here however real it is — that belongs to code\n"
+   "review, and reporting it here is how a round finds true things forever\n"
+   "without ever answering the question that was asked.\n\n"
+   "EVERY CLAIM CARRIES WHAT WOULD REFUTE IT. That is what you go looking for.\n"
+   "Not `does this feel right` — `does that specific counterexample exist in the\n"
+   "code`. Report a finding only when you found one, and say what it is.\n\n"
    "AREA: " (:area baseline) "\n"
    "BOUNDED BY: " (:bounded-by baseline) "\n"
-   "SHAPE: " (:shape baseline) "\n\n"
-   "LOAD-BEARING — claimed to be what would break if violated:\n"
-   (evidenced (:load-bearing baseline) :property) "\n"
+   "SHAPE: " (:shape baseline) "\n"
+   (module-block (:modules baseline))
+   (when-let [c (:composition baseline)]
+     (str "\nCOMPOSITION — how those are claimed to produce the behaviour:\n" c "\n"))
+   "\nLOAD-BEARING — what is claimed to break if violated, each with the\n"
+   "counterexample that would refute it:\n"
+   (claim-block (:load-bearing baseline)) "\n"
    (when-let [h (seq (:health baseline))]
      (str "\nHEALTH — claimed about whether what holds is sound. :design means a\n"
           "weak design cleanly executed; :implementation means a strong design\n"
@@ -194,15 +235,20 @@
    (when-let [u (seq (:unknowns baseline))]
      (str "\nDECLARED NOT DETERMINED — already honest, not findings:\n" (bullets u) "\n"))
    "\nTwo distinct failures, and they have different remedies:\n"
-   "1. FALSIFIED — a stated claim is not true of the code. Cite the claim and\n"
-   "   the file:line that contradicts it.\n"
-   "2. UNDERSCOPED — the bound excludes something that GOVERNS this behaviour.\n"
-   "   This is the one that hides design flaws, because the flaw is routinely\n"
-   "   upstream of the code a change would touch. Scoping to what a diff would\n"
-   "   touch is the failure; scoping to what governs the behaviour is correct.\n\n"
-   "Every finding MUST cite what it falsifies — the exact property or\n"
-   "observation text. A finding that cites nothing is not a finding; do not\n"
-   "report it.\n\n"
+   "1. FALSIFIED — a claim's own counterexample EXISTS. The module hides a\n"
+   "   decision something outside depends on; the `essential` fact is derivable\n"
+   "   from something else the system holds; the `derived` value is also stored\n"
+   "   and edited independently; the composition does not produce the behaviour\n"
+   "   claimed. Show the counterexample, with where it is.\n"
+   "2. UNDERSCOPED — the decomposition leaves out a module that GOVERNS this\n"
+   "   behaviour, or omits accidental state — a cache, a denormalisation, a\n"
+   "   second derivation of something already derived — that the behaviour\n"
+   "   actually depends on. This is the one that hides design flaws, because the\n"
+   "   flaw is routinely upstream of the code a change would touch.\n\n"
+   "Every finding MUST cite what it falsifies — the exact property, module or\n"
+   "composition text. A finding that cites nothing is not a finding; do not\n"
+   "report it. Neither is a finding that reports a bug in code the survey\n"
+   "correctly describes.\n\n"
    "ACCURATE IS THE EXPECTED OUTCOME. Populate confirmed with the claims you\n"
    "actually went and checked, and return accurate when they held. Do not\n"
    "manufacture findings to look thorough."
@@ -274,14 +320,21 @@
    "\nDERIVE THESE FOUR. Each is decidable; none is a matter of taste:\n\n"
    "  relation-honest   — does it stand where it says it stands? A design\n"
    "                      declaring :within whose own shape needs a load-bearing\n"
-   "                      property to move is not what it says it is.\n"
+   "                      property to move is not what it says it is. Read this\n"
+   "                      against the baseline's MODULES: a change that moves a\n"
+   "                      module boundary, or asks a module to stop hiding what\n"
+   "                      it hides, is :revisit however small its diff.\n"
    "  goal-served       — does it serve the goal, and ONLY the goal? Under-\n"
    "                      serving is easy to see. OVER-serving is the common\n"
    "                      one: the goal plus a good deal more, every piece\n"
    "                      individually defensible. Check whether a strictly\n"
    "                      smaller design would do, including one already\n"
    "                      rejected for a reason that no longer holds.\n"
-   "  decomposable      — can the cut be stated? Vertically: layers ordered by\n"
+   "  decomposable      — can the cut be stated, and does it follow the module\n"
+   "                      boundaries the baseline names? A layer that spans two\n"
+   "                      modules, or that splits one module's secret across two\n"
+   "                      layers, is a cut against the grain of the area.\n"
+   "                      Vertically: layers ordered by\n"
    "                      dependency, one claim each with no \"and\", one review\n"
    "                      mode each. Temporally, IF the design is phased: each\n"
    "                      phase a state the system can be left in, with an exit\n"
@@ -596,11 +649,16 @@
    "    actually does, and keep pointing at the evidence that shows it.\n"
    "  - A property that is right but stated so loosely the judge misread it\n"
    "    should get SHARPER evidence, not softer wording.\n"
-   "  - Deleting a property, dropping a health observation, or clearing an\n"
-   "    :invisibly-incomplete? flag makes the next round quieter without making\n"
-   "    the record truer. Every one of those is measured and reported to a human.\n"
-   "    Do it only where the survey was genuinely wrong to claim it, and expect\n"
-   "    to have said why.\n\n"
+   "  - Deleting a property, dropping a module, dropping a health observation,\n"
+   "    or clearing an :invisibly-incomplete? flag makes the next round quieter\n"
+   "    without making the record truer. So does reclassifying a claim to dodge\n"
+   "    its counterexample — calling essential state `accidental` because a\n"
+   "    derivation was found, when what that means is the claim was wrong.\n"
+   "    Every one of those is measured and reported to a human. Do it only where\n"
+   "    the survey was genuinely wrong, and expect to have said why.\n\n"
+   "Stay at the level the survey is written at: modules, what each hides, and how\n"
+   "their composition produces the behaviour. A finding about one line of code\n"
+   "matters here only insofar as it refutes a claim about the decomposition.\n\n"
    "Read the cited code before you change a word of the record.\n\n"
    "Do NOT edit any source file. This pass writes one file and nothing else.\n\n"
    "THE CURRENT BASELINE:\n\n"

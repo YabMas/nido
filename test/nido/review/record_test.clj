@@ -5,7 +5,7 @@
   (:require
    [cheshire.core :as json]
    [clojure.string :as str]
-   [clojure.test :refer [deftest is]]
+   [clojure.test :refer [deftest is testing]]
    [nido.coordinator.report :as report]
    [nido.review.record :as record]))
 
@@ -15,7 +15,17 @@
    :area         "order totalling"
    :bounded-by   "everything that reads or writes a money amount on an order"
    :shape        "The aggregate is the only thing that sums lines."
+   :modules      [{:module "the order aggregate"
+                   :hides "the order in which lines are summed"
+                   :interface "an order's total"}
+                  {:module "the invoice reader"
+                   :hides "the invoice document's layout"
+                   :interface "renders a total it is handed"}]
+   :composition  "Only the aggregate can see the lines, so only it can sum them;
+                  the invoice reader consumes the total it produces."
    :load-bearing [{:property "the aggregate is the only summing path"
+                   :kind :module-boundary
+                   :falsified-by "a caller outside the aggregate that reads lines and sums them"
                    :evidence ["src/order/aggregate.clj:12"]}]
    :health       [{:id "invoice-resums" :axis :design
                    :observation "two summing paths where the design claims one"
@@ -71,16 +81,44 @@
 
 ;; ── What the judge is shown ─────────────────────────────────────────────────
 
-(deftest the-baseline-prompt-hands-over-the-evidence-refs
+(deftest the-baseline-prompt-asks-about-the-decomposition
   (let [p (record/baseline-prompt {:baseline baseline})]
-    (is (str/includes? p "src/order/aggregate.clj:12")
-        "the refs ARE the check — going to read them is the whole job")
-    (is (str/includes? p "src/order/invoice.clj:88"))
+    (testing "the modules and what each hides"
+      (is (str/includes? p "MODULES — the decomposition claimed"))
+      (is (str/includes? p "hides:     the order in which lines are summed"))
+      (is (str/includes? p "interface: an order's total")))
+    (testing "and how they are claimed to produce the behaviour"
+      (is (str/includes? p "COMPOSITION — how those are claimed"))
+      (is (str/includes? p "Only the aggregate can see the lines")))
+    (testing "each claim arrives classified, with what would refute it"
+      (is (str/includes? p "[module-boundary] the aggregate is the only summing path"))
+      (is (str/includes? p "refuted by: a caller outside the aggregate")))
+    (testing "the refs are still handed over, as where to look"
+      (is (str/includes? p "src/order/aggregate.clj:12")))
     (is (str/includes? p "ACCURATE IS THE EXPECTED OUTCOME"))
     (is (str/includes? p "MUST cite"))
     (is (str/includes? p "UNDERSCOPED"))
     (is (str/includes? p "whether the CSV importer bypasses the aggregate")
         "a declared unknown is honesty already recorded, not a finding to make")))
+
+(deftest the-baseline-prompt-refuses-the-plane-that-never-converges
+  ;; The failure this is aimed at: asked to check a survey against a large
+  ;; subsystem, a judge finds true things about it forever. An implementation
+  ;; has no fixed point; a decomposition does.
+  (let [p (record/baseline-prompt {:baseline baseline})]
+    (is (str/includes? p "not reviewing the code for defects"))
+    (is (str/includes? p "belongs to code\nreview"))
+    (is (str/includes? p "does that specific counterexample exist"))
+    (is (str/includes? p "Neither is a finding that reports a bug in code the survey"))))
+
+(deftest a-survey-from-before-the-move-still-makes-a-prompt
+  ;; Legacy records are readable, so a round over one has to be too — it simply
+  ;; has no decomposition to ask about.
+  (let [p (record/baseline-prompt
+           {:baseline (dissoc baseline :modules :composition)})]
+    (is (not (str/includes? p "MODULES —")))
+    (is (not (str/includes? p "COMPOSITION — how those are claimed")))
+    (is (str/includes? p "the aggregate is the only summing path"))))
 
 (deftest the-decision-prompt-carries-the-four-derivations-and-the-answer-key
   (let [p (record/design-prompt
