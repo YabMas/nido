@@ -111,15 +111,15 @@
   (let [pmods (into {} (map (juxt :module identity)) (:modules prev))
         cmods (set (map :module (:modules curr)))
         mods-gone (remove cmods (keys pmods))
-        ;; Constraining kinds only. A claim classified :essential-state or
-        ;; :module-boundary says the area CANNOT do something; :accidental says
-        ;; it happens to. Sliding claims from the first group to the second
-        ;; makes a survey unfalsifiable one reclassification at a time, and
-        ;; there is no id on a claim to catch it one by one — the histogram is
-        ;; what survives an amender rewriting every word.
-        strong #{:essential-state :module-boundary :composition}
-        kinds (fn [b] (frequencies (map :kind (:load-bearing b))))
-        pk (kinds prev) ck (kinds curr)
+        ;; Readings are where the analysis lives, so losing one loses analysis
+        ;; whatever the prose still says. There is no id on a claim to track a
+        ;; reading through a rewrite, so what is counted is how many readings
+        ;; the survey carries and which perspectives it still applies at all —
+        ;; both of which survive an amender rewriting every word.
+        readings (fn [b] (concat (mapcat :readings (:load-bearing b))
+                                 (mapcat :readings (:modules b))))
+        plenses (set (map :lens (readings prev)))
+        clenses (set (map :lens (readings curr)))
         pids  (into {} (map (juxt :id identity)) (:health prev))
         cids  (into {} (map (juxt :id identity)) (:health curr))
         gone  (remove (set (keys cids)) (keys pids))
@@ -137,12 +137,12 @@
              (fewer :read-narrowed "read" (:read prev) (:read curr))])
       (for [m (sort mods-gone)]
         (retreat :module-dropped (str "module " m " is no longer part of the decomposition")))
-      (for [k (sort strong)
-            :let [p (get pk k 0) c (get ck k 0)]
-            :when (< c p)]
-        (retreat :claims-reclassified
-                 (str (name k) " claims " p " → " c
-                      "; a survey that stops constraining stops being refutable")))
+      (keep identity
+            [(fewer :readings-fewer "readings" (readings prev) (readings curr))])
+      (for [l (sort (remove clenses plenses))]
+        (retreat :lens-abandoned
+                 (str "nothing is read through " (namespace l) "/" (name l)
+                      " any more; a perspective dropped is analysis dropped")))
       (for [id (sort gone)]
         (retreat :health-dropped (str "observation " id " is no longer recorded")))
       ;; The veto is the whole reason :invisibly-incomplete? exists — an

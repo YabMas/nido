@@ -41,6 +41,7 @@
    [clojure.java.io :as jio]
    [clojure.string :as str]
    [nido.coordinator.agent :as agent]
+   [nido.coordinator.report :as report]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.workstream :as ws]
    [nido.review.codex :as codex]
@@ -167,16 +168,44 @@
                disputes))
          "\n")))
 
+(defn- readings-lines
+  [readings indent]
+  (apply str (for [{:keys [lens verdict because]} readings]
+               (str "\n" indent "read as " (namespace lens) "/" (name lens)
+                    " = " (name verdict) " — " because))))
+
+(defn lens-block
+  "The perspectives in play, with their verdicts and where each comes from.
+
+   Put in front of the judge rather than assumed, because a verdict is only
+   checkable if both sides are reading it the same way: `accidental` in Out of
+   the Tar Pit's sense is a claim about what the PROBLEM required, not a
+   criticism of the code."
+  []
+  (str "\nTHE PERSPECTIVES THIS SURVEY IS READ THROUGH. Each is one source's view\n"
+       "of one subject, with a closed set of verdicts. A reading is checkable: it\n"
+       "says which verdict holds and why, and you can go and find out.\n\n"
+       (str/join
+        "\n"
+        (for [[lens {:keys [source question verdicts]}] (sort-by key report/lenses)]
+          (str "  " (namespace lens) "/" (name lens) " — " question "\n"
+               "    from " source "\n"
+               (str/join "\n"
+                         (for [[v d] (sort-by key verdicts)]
+                           (str "    " (name v) ": " d))))))
+       "\n"))
+
 (defn- module-block
   [modules]
   (when (seq modules)
     (str "\nMODULES — the decomposition claimed. A module is what it HIDES; its\n"
          "interface is what the rest of the system may depend on:\n"
          (str/join "\n"
-                   (map (fn [{:keys [module hides interface]}]
+                   (map (fn [{:keys [module hides interface readings]}]
                           (str "- " module "\n"
                                "    hides:     " hides "\n"
-                               "    interface: " interface))
+                               "    interface: " interface
+                               (readings-lines readings "    ")))
                         modules))
          "\n")))
 
@@ -184,9 +213,10 @@
   [load-bearing]
   (str/join
    "\n"
-   (map (fn [{:keys [property kind falsified-by evidence]}]
-          (str "- [" (name (or kind :unclassified)) "] " property "\n"
+   (map (fn [{:keys [property falsified-by readings evidence]}]
+          (str "- " property "\n"
                "    refuted by: " falsified-by
+               (readings-lines readings "    ")
                (when (seq evidence)
                  (str "\n    read from:  " (str/join ", " evidence)))))
         load-bearing)))
@@ -215,6 +245,13 @@
    "EVERY CLAIM CARRIES WHAT WOULD REFUTE IT. That is what you go looking for.\n"
    "Not `does this feel right` — `does that specific counterexample exist in the\n"
    "code`. Report a finding only when you found one, and say what it is.\n\n"
+   "A READING IS A CLAIM TOO, and refutable on its own terms. State read as\n"
+   "essential is refuted by a derivation that computes it. An ordering read as\n"
+   "required is refuted by showing the two things commute. A module read as deep\n"
+   "is refuted by an interface that costs about what it hides. A dependency read\n"
+   "as on-interface is refuted by a caller reaching past it. Check the readings\n"
+   "as well as the properties.\n"
+   (lens-block)
    "AREA: " (:area baseline) "\n"
    "BOUNDED BY: " (:bounded-by baseline) "\n"
    "SHAPE: " (:shape baseline) "\n"

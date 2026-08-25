@@ -24,8 +24,9 @@
    :composition  "Only the aggregate can see the lines, so only it can sum them;
                   the invoice reader consumes the total it produces."
    :load-bearing [{:property "the aggregate is the only summing path"
-                   :kind :module-boundary
                    :falsified-by "a caller outside the aggregate that reads lines and sums them"
+                   :readings [{:lens :parnas/dependency :verdict :on-interface
+                               :because "callers take the total, never the lines"}]
                    :evidence ["src/order/aggregate.clj:12"]}]
    :health       [{:id "invoice-resums" :axis :design
                    :observation "two summing paths where the design claims one"
@@ -90,9 +91,14 @@
     (testing "and how they are claimed to produce the behaviour"
       (is (str/includes? p "COMPOSITION — how those are claimed"))
       (is (str/includes? p "Only the aggregate can see the lines")))
-    (testing "each claim arrives classified, with what would refute it"
-      (is (str/includes? p "[module-boundary] the aggregate is the only summing path"))
-      (is (str/includes? p "refuted by: a caller outside the aggregate")))
+    (testing "each claim arrives with what would refute it, and how it was read"
+      (is (str/includes? p "- the aggregate is the only summing path"))
+      (is (str/includes? p "refuted by: a caller outside the aggregate"))
+      (is (str/includes? p "read as parnas/dependency = on-interface")))
+    (testing "and the perspectives themselves, so both sides read a verdict alike"
+      (is (str/includes? p "THE PERSPECTIVES THIS SURVEY IS READ THROUGH"))
+      (is (str/includes? p "from Out of the Tar Pit"))
+      (is (str/includes? p "A READING IS A CLAIM TOO")))
     (testing "the refs are still handed over, as where to look"
       (is (str/includes? p "src/order/aggregate.clj:12")))
     (is (str/includes? p "ACCURATE IS THE EXPECTED OUTCOME"))

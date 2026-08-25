@@ -274,28 +274,64 @@ the two is how a design round spends its rounds auditing SQL.
   > behaviour that honours every one of them and is still wrong indicts the
   > **design**.
 
-  Each carries two required fields.
-
-  **`:kind`** classifies it, and classifying is the work — it is the act that
-  separates what the problem requires from what this solution happens to do:
-
-  | kind | means | refuted by |
-  |---|---|---|
-  | `:essential-state` | an irreducible fact the system must hold | a derivation that computes it |
-  | `:derived` | computed from essential state by a stated relation | finding it independently stored or edited |
-  | `:module-boundary` | a module hides a decision; nothing outside depends on it | a caller that does |
-  | `:composition` | true of how the modules combine, of no module alone | the behaviour arising without it |
-  | `:accidental` | introduced for implementation reasons — a cache, a denormalisation, an ordering, a second derivation | nothing; it is already a concession |
-
-  **`:falsified-by`** names the counterexample: the thing that, if it exists,
-  makes this claim false. It replaced a required `file:line`, and it is the
-  *harder* obligation — a counterexample has to be constructed, a coordinate only
-  located. The old rule quietly meant only claims *with* a coordinate could be
-  made, which excluded every claim about the decomposition, because a composition
-  property is true of no single line.
+  **`:falsified-by`** is required, and names the counterexample: the thing that,
+  if it exists, makes this claim false. It replaced a required `file:line`, and
+  it is the *harder* obligation — a counterexample has to be constructed, a
+  coordinate only located. The old rule quietly meant only claims *with* a
+  coordinate could be made, which excluded every claim about the decomposition,
+  because a composition property is true of no single line.
 
   `:evidence` is still there and now optional: where you looked, when there is
   somewhere to look.
+
+### `:readings` — the borrowed perspectives
+
+This is where the analysis lives, and it replaced a flat `:kind` that had crushed
+three unrelated questions into one enum. `essential / derived / accidental` is
+not a property of design claims in general — **it is Out of the Tar Pit's verdict
+about state**, and it means nothing applied to anything else.
+
+So a claim or a module carries zero or more *readings*, each naming a **lens**: one
+source's view of one subject, with a closed set of verdicts.
+
+```clojure
+{:property     "the denominator is read once per request and applied to every instant"
+ :falsified-by "a caller that re-reads it per instant"
+ :readings [{:lens :tarpit/control :verdict :imposed
+             :because "nothing in the problem requires one read to serve every
+                       instant; it is here because a per-instant read was expensive"}]}
+```
+
+The seeded lenses:
+
+| lens | subject | verdicts | from |
+|---|---|---|---|
+| `:tarpit/state` | a claim about state | `:essential` `:derived` `:accidental` | *Out of the Tar Pit* |
+| `:tarpit/control` | a claim about ordering | `:required` `:imposed` | *Out of the Tar Pit* |
+| `:ousterhout/depth` | a module | `:deep` `:shallow` | *A Philosophy of Software Design* |
+| `:parnas/dependency` | a claim about a dependency | `:on-interface` `:on-secret` `:cyclic` | Parnas, reached via Ousterhout |
+
+Three rules the ledger enforces:
+
+- **A verdict must come from its own lens's vocabulary.** `:accidental` means
+  something precise in Out of the Tar Pit's view of state and nothing at all in
+  Ousterhout's view of a module.
+- **A lens only reads the subject it is about.** Module depth says nothing about
+  a claim; state says nothing about a module.
+- **`:because` is required.** A verdict without a reason is a label, and labels
+  are what reading through a perspective is meant to replace.
+
+**A reading is itself refutable**, which is the point of borrowing a closed
+vocabulary rather than writing prose. State read as `:essential` is refuted by a
+derivation that computes it. An ordering read as `:required` is refuted by
+showing the two things commute. A module read as `:deep` is refuted by an
+interface that costs about what it hides. A dependency read as `:on-interface` is
+refuted by a caller reaching past it.
+
+**The set is extendable, and deliberately small to start.** A lens nobody uses is
+noise in every prompt. `nido.coordinator.report/lenses` is the registry; adding a
+perspective is adding an entry, and the schema, the prompts and the weakening
+detector all derive from it.
 
 - **`:extension-points`** — where the design already admits change, and how. The
   same question asked of a feature: one that lands on an existing point
@@ -487,8 +523,8 @@ cat > /tmp/baseline.edn <<'EDN'
                  :interface "what the rest may know"}]
  :composition  "how those produce the required behaviour"
  :load-bearing [{:property "…"
-                 :kind :module-boundary        ; or :essential-state :derived :composition :accidental
                  :falsified-by "the counterexample that would make this false"
+                 :readings [{:lens :tarpit/state :verdict :derived :because "…"}]
                  :evidence ["src/…:41"]        ; optional — where you looked
                  :drift "…"}]
  :extension-points [{:at "…" :how "…"}]
@@ -559,9 +595,13 @@ Read back what is there with `bb nido:workstream:show :project <p> :ref <ref>`.
   written as a sentence about how the modules produce the behaviour, the area has
   not been understood yet — and every judgement made against that record will be
   made about the implementation instead.
-- **Classifying everything `:accidental`.** It is the kind that constrains
-  nothing, so a record full of it cannot be refuted and cannot be built on. The
-  amend rounds measure this and report it.
+- **Readings that restate the property.** "the total is derived" read as
+  `:tarpit/state :derived` adds nothing. A reading earns its place when it says
+  something the property does not — most often about *necessity*, which is the
+  question the property text usually skips.
+- **Dropping a reading to quiet a round.** Losing one loses analysis whatever the
+  prose still says, and the amend rounds measure it. Changing a verdict is fine
+  and often right; removing the perspective is not.
 - **Reporting a code defect as a survey finding.** Real, and not this pass's
   business. File it; do not let it become a round.
 - **An empty `:unknowns`.** A survey that could determine everything usually did

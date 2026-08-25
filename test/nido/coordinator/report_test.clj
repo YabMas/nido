@@ -736,17 +736,20 @@
                   a total; the invoice reader consumes that total. One summing
                   path exists because only one module can see the lines."
    :load-bearing [{:property "a line item's amount is never rounded in place"
-                   :kind :essential-state
                    :falsified-by "a write path that stores a rounded amount back onto a line"
+                   :readings [{:lens :tarpit/state :verdict :essential
+                               :because "the amount a customer was charged cannot be recomputed"}]
                    :evidence ["src/order/calc.clj:41"]}
                   {:property "the aggregate is the only summing path"
-                   :kind :module-boundary
                    :falsified-by "a caller outside the aggregate that reads lines and sums them"
+                   :readings [{:lens :parnas/dependency :verdict :on-interface
+                               :because "the invoice reader takes the total; nothing reads lines"}]
                    :evidence ["src/order/aggregate.clj:12" "src/order/invoice.clj:88"]
                    :drift    "invoice.clj re-sums defensively — copied, never decided"}
                   {:property "an order total is derived, never stored"
-                   :kind :derived
-                   :falsified-by "a column or cache holding a total that is edited independently"}]
+                   :falsified-by "a column or cache holding a total that is edited independently"
+                   :readings [{:lens :tarpit/state :verdict :derived
+                               :because "computable from the lines by summation"}]}]
    :extension-points [{:at "the aggregate's reducer"
                        :how "a new money kind adds a case; nothing else changes"}]
    :governing    ["two registers of data — values in motion vs state at rest"]
@@ -771,15 +774,69 @@
   (is (thrown? clojure.lang.ExceptionInfo
                (report/validate-event
                 :baseline (assoc valid-baseline
-                                 :load-bearing [{:property "totals are exact"
-                                                 :kind :derived}])))
-      "a property nothing could refute is a guess")
+                                 :load-bearing [{:property "totals are exact"}])))
+      "a property nothing could refute is a guess"))
+
+;; ── Readings — borrowed perspectives, each with a closed vocabulary ─────────
+
+(defn- with-reading [r]
+  (assoc valid-baseline
+         :load-bearing [{:property "totals are exact"
+                         :falsified-by "a rounded total"
+                         :readings [r]}]))
+
+(deftest a-reading-must-use-a-verdict-its-own-lens-defines
+  ;; The whole point of a closed vocabulary per perspective: `accidental` means
+  ;; something in Out of the Tar Pit's view of state and nothing at all in
+  ;; Ousterhout's view of a module.
+  (is (report/validate-event :baseline
+                             (with-reading {:lens :tarpit/state :verdict :accidental
+                                            :because "a cache of the line sum"})))
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event :baseline
+                                      (with-reading {:lens :tarpit/state :verdict :shallow
+                                                     :because "borrowed from another lens"})))))
+
+(deftest a-verdict-without-a-reason-is-a-label
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event :baseline
+                                      (with-reading {:lens :tarpit/state :verdict :derived})))))
+
+(deftest a-lens-only-reads-the-subject-it-is-about
+  ;; Module depth says nothing about a claim, and state says nothing about a
+  ;; module. Attaching either to the wrong subject is refused rather than ignored.
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event :baseline
+                                      (with-reading {:lens :ousterhout/depth :verdict :deep
+                                                     :because "wrong subject"}))))
   (is (thrown? clojure.lang.ExceptionInfo
                (report/validate-event
-                :baseline (assoc valid-baseline
-                                 :load-bearing [{:property "totals are exact"
-                                                 :falsified-by "a second total"}])))
-      "and one that will not say WHICH KIND of claim it is has not done the reading"))
+                :baseline (assoc-in valid-baseline [:modules 0 :readings]
+                                    [{:lens :tarpit/state :verdict :essential
+                                      :because "wrong subject"}])))))
+
+(deftest a-module-reads-through-its-own-lenses
+  (is (report/validate-event
+       :baseline (assoc-in valid-baseline [:modules 0 :readings]
+                           [{:lens :ousterhout/depth :verdict :deep
+                             :because "one entry point over all the money rules"}]))))
+
+(deftest readings-are-optional-and-plural
+  (is (report/validate-event :baseline valid-baseline))
+  (is (report/validate-event
+       :baseline (assoc valid-baseline
+                        :load-bearing [{:property "p" :falsified-by "q"
+                                        :readings [{:lens :tarpit/state :verdict :derived
+                                                    :because "computable from lines"}
+                                                   {:lens :parnas/dependency :verdict :on-interface
+                                                    :because "callers take the total"}]}]))))
+
+(deftest every-registered-lens-declares-what-it-reads-and-where-it-came-from
+  (doseq [[lens spec] report/lenses]
+    (is (qualified-keyword? lens) "a lens names its source in its namespace")
+    (is (contains? #{:claim :module} (:applies-to spec)))
+    (is (string? (:source spec)) (str lens " must say where it was borrowed from"))
+    (is (seq (:verdicts spec)) (str lens " must close its vocabulary"))))
 
 (deftest baseline-requires-the-decomposition-and-what-it-buys
   (doseq [k [:modules :composition]]
@@ -839,8 +896,9 @@
     (is (str/includes? md "interface: an order's total"))
     (is (str/includes? md "## Composition — how they produce the behaviour"))
     (is (str/includes? md "## Load-bearing"))
-    (is (str/includes? md "*(module-boundary)* the aggregate is the only summing path"))
+    (is (str/includes? md "the aggregate is the only summing path"))
     (is (str/includes? md "falsified by: a caller outside the aggregate"))
+    (is (str/includes? md "parnas/dependency → **on-interface** — the invoice reader takes the total"))
     (is (str/includes? md "`src/order/aggregate.clj:12`"))
     (is (str/includes? md "drift from the stance: invoice.clj re-sums"))
     (is (str/includes? md "## Extension points"))

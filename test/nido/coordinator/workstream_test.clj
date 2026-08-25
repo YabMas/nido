@@ -371,8 +371,9 @@
                    :interface "an order's total"}]
    :composition  "Only the aggregate can see the lines, so only it can sum them."
    :load-bearing [{:property "the aggregate is the only summing path"
-                   :kind :module-boundary
                    :falsified-by "a caller outside the aggregate that reads lines and sums them"
+                   :readings [{:lens :parnas/dependency :verdict :on-interface
+                               :because "callers take the total, never the lines"}]
                    :evidence ["src/order/aggregate.clj:12"]}]
    :read         ["src/order/aggregate.clj"]})
 

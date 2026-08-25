@@ -13,11 +13,15 @@
              {:module "aggregate" :hides "summing order" :interface "a total"}]
    :composition "only the aggregate sees lines, so only it sums them"
    :load-bearing [{:property "amounts are never rounded in place"
-                   :kind :essential-state :falsified-by "a write of a rounded amount"}
+                   :falsified-by "a write of a rounded amount"
+                   :readings [{:lens :tarpit/state :verdict :essential :because "cannot be recomputed"}]}
                   {:property "the aggregate is the only summing path"
-                   :kind :module-boundary :falsified-by "an outside caller that sums lines"}
+                   :falsified-by "an outside caller that sums lines"
+                   :readings [{:lens :parnas/dependency :verdict :on-interface :because "callers take the total"}
+                              {:lens :tarpit/control :verdict :required :because "a total cannot precede its lines"}]}
                   {:property "a total is derived, never stored"
-                   :kind :derived :falsified-by "a stored total edited independently"}]
+                   :falsified-by "a stored total edited independently"
+                   :readings [{:lens :tarpit/state :verdict :derived :because "computable by summation"}]}]
    :read ["src/order/aggregate.clj"]})
 
 (def base-baseline
@@ -183,26 +187,41 @@
     (is (contains? (whats rs) :module-dropped))
     (is (some #(re-find #"module aggregate" (:detail %)) rs))))
 
-(deftest reclassifying-a-constraining-claim-away-is-a-retreat
-  ;; A claim classified :essential-state or :module-boundary says the area
-  ;; CANNOT do something; :accidental says it happens to. Sliding claims between
-  ;; them makes a survey unfalsifiable one reclassification at a time, and no id
-  ;; on a claim would catch it one by one.
-  (let [curr (assoc-in modular-baseline [:load-bearing 1 :kind] :accidental)
+(deftest dropping-a-reading-is-dropping-analysis
+  ;; A reading is where the analysis lives, so losing one loses analysis whatever
+  ;; the prose still says. No id on a claim would track a reading through a
+  ;; rewrite; the count and the set of perspectives survive one.
+  (let [curr (update-in modular-baseline [:load-bearing 1] dissoc :readings)
         rs   (retreat/baseline-retreats modular-baseline curr)]
-    (is (= #{:claims-reclassified} (whats rs)))
-    (is (some #(re-find #"module-boundary claims 1 → 0" (:detail %)) rs))))
+    (is (contains? (whats rs) :readings-fewer))))
 
-(deftest rewording-every-claim-while-keeping-the-kinds-is-not-a-retreat
-  ;; The histogram is what survives an amender rewriting every word.
+(deftest abandoning-a-perspective-entirely-is-named
+  (let [curr (update modular-baseline :load-bearing
+                     (fn [lb] (mapv #(update % :readings
+                                             (fn [rs] (vec (remove (comp #{:tarpit/control} :lens) rs))))
+                                    lb)))
+        rs   (retreat/baseline-retreats modular-baseline curr)]
+    (is (contains? (whats rs) :lens-abandoned))
+    (is (some #(re-find #"tarpit/control" (:detail %)) rs))))
+
+(deftest changing-a-verdict-is-a-re-judgement-not-a-retreat
+  ;; Reading something as accidental that was read as essential is what a survey
+  ;; SHOULD do when it finds the derivation. The reading is still there.
+  (let [curr (assoc-in modular-baseline [:load-bearing 0 :readings 0 :verdict] :accidental)]
+    (is (= [] (retreat/baseline-retreats modular-baseline curr)))))
+
+(deftest rewording-every-claim-while-keeping-the-readings-is-not-a-retreat
+  ;; What survives an amender rewriting every word is the count and the set of
+  ;; perspectives, which is why those are what is counted.
   (let [curr (update modular-baseline :load-bearing
                      (fn [lb] (mapv #(assoc % :property (str (:property %) ", restated")
                                             :falsified-by (str (:falsified-by %) ", restated"))
                                     lb)))]
     (is (= [] (retreat/baseline-retreats modular-baseline curr)))))
 
-(deftest strengthening-a-claim-is-not-a-retreat
-  (let [curr (assoc-in modular-baseline [:load-bearing 2 :kind] :module-boundary)]
+(deftest adding-a-reading-is-not-a-retreat
+  (let [curr (update-in modular-baseline [:load-bearing 0 :readings] conj
+                        {:lens :parnas/dependency :verdict :on-interface :because "nothing reaches past calc"})]
     (is (= [] (retreat/baseline-retreats modular-baseline curr)))))
 
 (deftest adding-a-module-is-not-a-retreat

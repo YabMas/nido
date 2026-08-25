@@ -1157,7 +1157,7 @@
     (pr-str {:format :baseline :area "the area" :bounded-by "the bound" :shape "the shape"
              :modules [{:module "m" :hides "how p is stored" :interface "p"}]
              :composition "m is the only reader of p, so p holds"
-             :load-bearing [{:property "p holds" :kind :module-boundary
+             :load-bearing [{:property "p holds"
                              :falsified-by "a caller that reads p without going through m"
                              :evidence ["src/x.clj:1"]}]
              :read ["src/x.clj"]}))

@@ -407,6 +407,74 @@
    [:seq int?]
    [:why string?]])
 
+(def lenses
+  "The borrowed perspectives a survey may read a claim or a module through.
+
+   Each lens is one source's view of ONE subject, with a closed set of verdicts.
+   That shape is the point, and it replaced a single flat :kind that had crushed
+   three unrelated questions into one enum: essential/derived/accidental is not a
+   property of design claims in general, it is Out of the Tar Pit's verdict about
+   STATE, and it means nothing applied to anything else.
+
+   Registered as data so the set is extendable. Adding a perspective is adding an
+   entry — the schema, the prompts and the weakening detector all derive from
+   here, and none of them names a lens.
+
+   Deliberately small to begin with. A lens nobody uses is noise in every prompt,
+   and the four here are the ones with the sharpest verdicts: two for what the
+   parts hold and do, one for the quality of a seam, one for the arrangement —
+   because state, control and depth are all properties of a PART, and a survey
+   that never judges the arrangement has described a list."
+  {:tarpit/state
+   {:source     "Out of the Tar Pit (Moseley & Marks)"
+    :applies-to :claim
+    :question   "does the problem require this state, or is holding it our doing?"
+    :verdicts   {:essential  "irreducible input — cannot be computed from anything else held"
+                 :derived    "computable from essential state by a stated relation"
+                 :accidental "held for implementation reasons: a cache, a denormalisation, a second copy"}}
+
+   :tarpit/control
+   {:source     "Out of the Tar Pit (Moseley & Marks)"
+    :applies-to :claim
+    :question   "did the problem ask for this ordering, or did we impose it?"
+    :verdicts   {:required "the problem itself demands this order"
+                 :imposed  "sequenced because of how it was built; two things ordered that need not be"}}
+
+   :ousterhout/depth
+   {:source     "A Philosophy of Software Design (Ousterhout)"
+    :applies-to :module
+    :question   "is the interface small against what the module does?"
+    :verdicts   {:deep    "a small interface over substantial functionality"
+                 :shallow "the interface costs about what it hides — the seam buys nothing"}}
+
+   :parnas/dependency
+   {:source     "On the Criteria To Be Used in Decomposing Systems into Modules (Parnas);
+                 reached in our stance through Ousterhout's deep modules"
+    :applies-to :claim
+    :question   "does the caller depend on the interface, or on the secret behind it?"
+    :verdicts   {:on-interface "the caller depends only on what the module publishes"
+                 :on-secret    "the caller depends on a decision the module was supposed to hide"
+                 :cyclic       "the dependency runs both ways, so neither module hides anything from the other"}}})
+
+(defn- reading-schema
+  "The Reading shape for a subset of the registry. Built from the data rather
+   than written out, so a new lens needs no schema edit."
+  [subset]
+  (into [:multi {:dispatch :lens}]
+        (for [[lens {:keys [verdicts]}] (sort-by key subset)]
+          [lens [:map {:closed true}
+                 [:lens    [:= lens]]
+                 [:verdict (into [:enum] (sort (keys verdicts)))]
+                 ;; A verdict with no reason is a label, and labels are what
+                 ;; reading through a borrowed perspective is meant to replace.
+                 [:because string?]]])))
+
+(defn- lenses-for [applies-to]
+  (into {} (filter #(= applies-to (:applies-to (val %)))) lenses))
+
+(def ClaimReading  (reading-schema (lenses-for :claim)))
+(def ModuleReading (reading-schema (lenses-for :module)))
+
 (def Module
   "One module of the area's decomposition, in Parnas's sense: a module is what it
    HIDES, not what it contains.
@@ -423,28 +491,8 @@
   [:map {:closed true}
    [:module    string?]
    [:hides     string?]
-   [:interface string?]])
-
-(def claim-kinds
-  "The vocabulary a property is classified by, and the whole reason this record
-   sits where it does.
-
-     :essential-state  an irreducible fact the system must hold — not derivable
-                       from anything else it holds. Falsified by a derivation.
-     :derived          computed from essential state by a stated relation.
-                       Falsified by finding it independently stored or edited.
-     :module-boundary  a module hides a decision; nothing outside depends on it.
-                       Falsified by a caller that does.
-     :composition      a property of how the modules combine to produce the
-                       required behaviour, true of no module alone.
-     :accidental       state or control introduced for implementation reasons —
-                       a cache, a denormalisation, an ordering, a second
-                       derivation of something already derived.
-
-   Classifying is not labelling. It is the act that separates what the problem
-   requires from what this solution happens to do, and a survey that will not
-   commit to which is which has not done the reading."
-  [:essential-state :derived :module-boundary :composition :accidental])
+   [:interface string?]
+   [:readings  {:optional true} [:vector ModuleReading]]])
 
 (def LoadBearing
   "One property the CURRENT code already relies on — not what ought to hold, but
@@ -462,12 +510,17 @@
    false. It is a harder obligation than pointing, not a softer one, because a
    counterexample has to be constructed rather than located.
 
+   :readings are where the analysis lives: this property, read through borrowed
+   perspectives (see `lenses`). Optional and plural — not every claim takes every
+   lens, some take none, and one may take two. What is NOT allowed is a verdict
+   without a reason.
+
    :evidence stays, and is now optional: where you looked, when there is
    somewhere to look."
   [:map {:closed true}
    [:property     string?]
-   [:kind         (into [:enum] claim-kinds)]
    [:falsified-by string?]
+   [:readings     {:optional true} [:vector ClaimReading]]
    [:evidence     {:optional true} [:vector string?]]
    [:drift        {:optional true} string?]])
 
@@ -1522,15 +1575,21 @@
     ["" "## Shape" shape ""]
     (when (seq modules)
       (cons "## Modules — what each one hides"
-            (for [{:keys [module hides interface]} modules]
+            (for [{:keys [module hides interface readings]} modules]
               (str "- **" module "** hides " hides
-                   "\n  - interface: " interface))))
+                   "\n  - interface: " interface
+                   (apply str (for [{:keys [lens verdict because]} readings]
+                                (str "\n  - " (namespace lens) "/" (name lens)
+                                     " → **" (name verdict) "** — " because)))))))
     (when composition
       ["" "## Composition — how they produce the behaviour" composition])
     ["" "## Load-bearing — what breaks if you violate it"]
-    (for [{:keys [property kind falsified-by evidence] lb-drift :drift} load-bearing]
-      (str "- " (when kind (str "*(" (name kind) ")* ")) property
+    (for [{:keys [property falsified-by readings evidence] lb-drift :drift} load-bearing]
+      (str "- " property
            (when falsified-by (str "\n  - falsified by: " falsified-by))
+           (apply str (for [{:keys [lens verdict because]} readings]
+                        (str "\n  - " (namespace lens) "/" (name lens)
+                             " → **" (name verdict) "** — " because)))
            (when (seq evidence)
              (str "\n  - " (str/join ", " (map #(str "`" % "`") evidence))))
            (when lb-drift (str "\n  - drift from the stance: " lb-drift))))
