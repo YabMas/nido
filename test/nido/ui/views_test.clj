@@ -469,6 +469,28 @@
     (is (not (str/includes? html "ledger-row sel")) "no row is highlighted")
     (is (not (str/includes? html "viewer-bar")) "and no viewer is open")))
 
+(deftest workstream-pane-strikes-a-superseded-row-but-keeps-it-reachable
+  ;; A superseded design record stays in the ledger on purpose (/design §5). Two
+  ;; rows both reading "design" read as a double-write, so the amended one is
+  ;; struck and badged — and still clickable, because it is history to read back,
+  ;; not history to hide.
+  (let [html (views/workstream-pane
+              (assoc sample-ws :entries
+                     [{:seq 6 :kind :design :at "2026-08-25T00:00:00Z" :title "With the partition"}
+                      {:seq 5 :kind :design :at "2026-08-25T00:00:00Z" :title "Bespoke replay"
+                       :superseded-by 6}])
+              {})]
+    (is (str/includes? html "ledger-row superseded") "the amended row is marked")
+    (is (str/includes? html "superseded by 6") "and names what replaced it")
+    (is (str/includes? html "?entry=5") "still a click target — it is read-back, not hidden")
+    (is (= 1 (count (re-seq #"ledger-row superseded" html)))
+        "only the amended row; the amending one is current")))
+
+(deftest workstream-pane-leaves-an-unamended-ledger-unmarked
+  (let [html (views/workstream-pane (assoc sample-ws :entries ledger-entries) {})]
+    (is (not (str/includes? html "superseded"))
+        "no back-reference, no badge — the ordinary ledger is untouched")))
+
 (deftest workstream-pane-indexes-a-single-entry-ledger-too
   ;; Nothing opens itself, so the index is the only way in — skipping it for a
   ;; one-entry ledger would strand that entry.

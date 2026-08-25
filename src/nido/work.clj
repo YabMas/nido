@@ -480,18 +480,42 @@
            (some not-empty)))
 
 (defn- index-row
-  "Lightweight index entry for the pane list: {:seq :kind :at :title}. Title is the
-   typed report's :title / markdown's first heading / first line / the kind name —
-   never blank."
+  "Lightweight index entry for the pane list: {:seq :kind :at :title :supersedes}.
+   Title is the typed report's :title / markdown's first heading / first line / the
+   kind name — never blank. :supersedes is the seq this entry AMENDS (nil for the
+   ordinary entry); the report is already hydrated here, so reading it costs
+   nothing."
   [base-dir entry]
   (let [r (entry->report base-dir entry)]
-    {:seq   (:seq entry)
-     :kind  (:kind entry)
-     :at    (:at entry)
-     :title (or (report/report-title r)
-                (not-empty (:title r))
-                (first-line (:markdown r))
-                (name (:kind entry)))}))
+    {:seq        (:seq entry)
+     :kind       (:kind entry)
+     :at         (:at entry)
+     :supersedes (:seq (:supersedes r))
+     :title      (or (report/report-title r)
+                     (not-empty (:title r))
+                     (first-line (:markdown r))
+                     (name (:kind entry)))}))
+
+(defn- mark-superseded
+  "Stamp :superseded-by on every row a LATER row amends (report/Supersedes).
+
+   The amend path appends rather than edits — a superseded design record stays in
+   the ledger on purpose (/design §5), so the reasoning that failed stays
+   recoverable. But the index renders kind + day + title, which makes an amended
+   design and its replacement two rows reading `design`, with the `:supersedes`
+   pointer buried in the body of the one that did the amending. Two identical
+   rows read as a double-write; you had to open the newer entry to learn the
+   older one was dead.
+
+   The back-reference is derived here rather than rendered, because it is a
+   relation between two entries and no single row can see it. `rows` must be
+   OLDEST-FIRST: a target amended more than once keeps its newest superseder,
+   which is the one a reader would follow."
+  [rows]
+  (let [by-target (into {} (keep (fn [{:keys [seq supersedes]}]
+                                   (when supersedes [supersedes seq])))
+                        rows)]
+    (mapv #(assoc % :superseded-by (get by-target (:seq %))) rows)))
 
 (defn- report-at
   "The entry whose :seq is `seq`, rendered via entry->report and hydrated with
@@ -603,7 +627,8 @@
            {:keys [base-dir entries]} (active-ledger project ws-id)
            sel      ((set (map :seq entries)) selected-seq)
            index    (when (seq entries)
-                      (vec (reverse (mapv #(index-row base-dir %) entries))))
+                      ;; mark BEFORE reversing — mark-superseded reads oldest-first
+                      (vec (reverse (mark-superseded (mapv #(index-row base-dir %) entries)))))
            latest?  (or (nil? sel) (= sel (:seq (last entries))))
            ;; The current report, derived from the snapshot `entries` ALREADY
            ;; holds rather than re-read from disk. A second read is a second

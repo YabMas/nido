@@ -1148,6 +1148,73 @@
           (is (nil? (:selected-seq d)) "the index alone — nothing opens itself")
           (is (nil? (:report d)) "and no report until the reader opens one"))))))
 
+(defn- design-ledger!
+  "Seed a workstream whose ledger a :design record may legally join: a :baseline
+   at seq 1 and an :intent at seq 2, the two entries check-baseline-citation!
+   makes every design cite. Returns the ws-id."
+  [id]
+  (workstream/append-entry! :brian id {:kind :baseline}
+    (pr-str {:format :baseline :area "the area" :bounded-by "the bound" :shape "the shape"
+             :load-bearing [{:property "p holds" :evidence ["src/x.clj:1"]}]
+             :read ["src/x.clj"]}))
+  (workstream/append-entry! :brian id {:kind :intent}
+    (pr-str {:format :intent :goal "the goal" :done-when ["it is done"]}))
+  id)
+
+(defn- design-entry
+  "A schema-valid :design citing design-ledger!'s baseline + intent, optionally
+   amending entry `amends`."
+  ([summary] (design-entry summary nil))
+  ([summary amends]
+   (pr-str (cond-> {:format     :design
+                    :summary    summary
+                    :shape      "the shape"
+                    :standing   {:relation :conforms}
+                    :baseline   {:seq 1 :relation :within}
+                    :intent     {:seq 2}
+                    :invariants ["the thing holds"]
+                    :effort     :S}
+             amends (assoc :supersedes {:seq amends :why "the premise moved"})))))
+
+(deftest workstream-index-back-references-a-superseded-entry
+  ;; The amend path appends; the superseded record stays. No single row can see
+  ;; that relation — without the back-reference the index is two rows both
+  ;; reading "design" and the reader has to open the newer one to learn the
+  ;; older is dead.
+  (with-tmp
+    (fn [_]
+      (let [id (design-ledger! (:id (workstream/create! :brian {:stage :in-progress :external-refs []})))]
+        (workstream/append-entry! :brian id {:kind :design} (design-entry "first shape"))
+        (workstream/append-entry! :brian id {:kind :design} (design-entry "better shape" 3))
+        (let [by-seq (into {} (map (juxt :seq identity)) (:entries (work/workstream :brian id)))]
+          (is (= 3 (:supersedes (by-seq 4))) "the amending row carries what it amends")
+          (is (nil? (:superseded-by (by-seq 4))) "nothing replaced it")
+          (is (= 4 (:superseded-by (by-seq 3))) "and the amended row points forward")
+          (is (nil? (:superseded-by (by-seq 1))) "the baseline it cites is not superseded"))))))
+
+(deftest workstream-index-keeps-the-newest-superseder-of-a-twice-amended-entry
+  ;; Two records amending the same seq is the patching /design §5 warns about,
+  ;; but the index must still resolve: a reader follows the newest.
+  (with-tmp
+    (fn [_]
+      (let [id (design-ledger! (:id (workstream/create! :brian {:stage :in-progress :external-refs []})))]
+        (workstream/append-entry! :brian id {:kind :design} (design-entry "first"))
+        (workstream/append-entry! :brian id {:kind :design} (design-entry "second" 3))
+        (workstream/append-entry! :brian id {:kind :design} (design-entry "third" 3))
+        (let [by-seq (into {} (map (juxt :seq identity)) (:entries (work/workstream :brian id)))]
+          (is (= 5 (:superseded-by (by-seq 3))) "newest superseder wins")
+          (is (nil? (:superseded-by (by-seq 5)))))))))
+
+(deftest workstream-index-leaves-an-unamended-ledger-unmarked
+  (with-tmp
+    (fn [_]
+      (let [id (:id (workstream/create! :brian {:stage :scratch :external-refs []}))]
+        (workstream/append-entry! :brian id {:kind :impl} "# One\n\nfirst")
+        (workstream/append-entry! :brian id {:kind :impl} "# Two\n\nsecond")
+        (is (every? #(and (nil? (:supersedes %)) (nil? (:superseded-by %)))
+                    (:entries (work/workstream :brian id)))
+            "markdown entries carry no supersession, and nothing is stamped")))))
+
 (deftest workstream-at-rest-still-carries-the-current-report-for-its-actions
   (with-tmp
     (fn [_]

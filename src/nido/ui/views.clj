@@ -136,6 +136,10 @@
         .ledger-row .lk { font-size:11px; text-transform:uppercase; color:#8a8ab0; min-width:54px; }
         .ledger-row .meta { min-width:78px; }
         .ledger-row .lt { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#e8e8e8; }
+        .ledger-row.superseded .lt { color:#7a7a90; text-decoration:line-through; }
+        .ledger-row.superseded .lk { color:#5f5f78; }
+        .ledger-row .lx { font-size:11px; color:#8a7a50; border:1px solid #443a20; border-radius:4px;
+                          padding:0 6px; white-space:nowrap; }
         .viewer { margin:12px 0 8px; border:1px solid #2a2a4a; border-radius:6px;
                   background:#0f0f1e; overflow:hidden; }
         .viewer-bar { display:flex; gap:10px; align-items:baseline; padding:8px 12px;
@@ -1416,15 +1420,25 @@
    ?entry=<seq>, which OPENS that entry in the viewer below — the ledger itself
    stays put, whole, whether or not something is open. It renders for a
    single-entry ledger too: nothing opens by default now, so the index is the only
-   way to reach the one entry there is."
+   way to reach the one entry there is.
+
+   A row a later entry amended is struck through and badged with the seq that
+   replaced it. It stays clickable and stays in place: a superseded record is
+   history the ledger keeps on purpose (/design §5), so this marks it as read-back
+   rather than hiding it. The relation is computed in work/mark-superseded — no
+   row can see it alone."
   [pos entries]
   (into [:div.ledger-index]
-        (for [{:keys [seq kind at title]} entries]
-          [:a {:class (str "ledger-row" (when (= seq (:entry pos)) " sel"))
+        (for [{:keys [seq kind at title superseded-by]} entries]
+          [:a {:class (str "ledger-row"
+                           (when (= seq (:entry pos)) " sel")
+                           (when superseded-by " superseded"))
                "data-on:click" (pane-fragment (at-entry pos seq))}
            [:span.lk (clojure.core/name kind)]
            [:span.meta (day at)]
-           [:span.lt title]])))
+           [:span.lt title]
+           (when superseded-by
+             [:span.lx (str "superseded by " superseded-by)])])))
 
 (defn- report-viewer
   "The reader for ONE ledger entry — opened from the index, and closable again.
