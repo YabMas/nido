@@ -559,3 +559,40 @@
         "the reason, because a rule without one gets reasoned around")
     (is (str/includes? p "stays true as the code moves")
         "and what to prefer when a claim does have to change")))
+
+;; ── What an earlier round already settled ───────────────────────────────────
+
+(deftest confirmations-travel-to-the-next-judge
+  ;; Measured on a frozen run: three of five findings in one round were against
+  ;; records byte-identical to what the previous round had CONFIRMED. Improving
+  ;; the record could never have fixed that, because the record was already right.
+  (let [seen (atom nil)]
+    (with-redefs [record/baseline-review! (fn [opts] (reset! seen opts)
+                                            {:format :baseline-review :verdict :sufficient :reason "ok"})
+                  record/append! (fn [_ _] nil)
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry (fn [_ _ _] a-baseline)]
+      (run record/judge-stage
+           (ctx :history [{:confirmed ["the aggregate is the only summing path"]}
+                          {:confirmed ["a total is derived, never stored"
+                                       "the aggregate is the only summing path"]}]))
+      (is (= ["the aggregate is the only summing path" "a total is derived, never stored"]
+             (:confirmed @seen))
+          "every distinct confirmation, once"))))
+
+(deftest a-round-records-what-it-confirmed
+  (let [corrected (assoc a-baseline :area "corrected")
+        [out _] (with-amend {:writes (fn [p] (spit p (pr-str {:record corrected})))}
+                            (ctx :findings [a-finding]
+                                 :record {:verdict :falsified
+                                          :confirmed ["p holds" "q holds"]}))]
+    (is (= ["p holds" "q holds"] (:confirmed (first (:history out))))
+        "or nothing travels and the next round may re-litigate it silently")))
+
+(deftest the-judge-may-still-withdraw-a-confirmation-but-must-say-so
+  (let [p (record/baseline-prompt {:baseline {:format :baseline}
+                                   :confirmed ["a claim that held"]})]
+    (is (str/includes? p "ALREADY CONFIRMED"))
+    (is (str/includes? p "You may still refute one"))
+    (is (str/includes? p "cannot converge"))
+    (is (str/includes? p "Spend your effort on what is NOT in this list"))))

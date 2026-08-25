@@ -133,6 +133,42 @@
                            "  [holds always]"))))
                 invariants)))
 
+(defn confirmed-so-far
+  "Every claim an earlier round of this run said it checked and found to hold.
+
+   A judge that confirms a claim and then, on an unchanged record and unchanged
+   code, refutes it has not learned anything — it has looked somewhere else. That
+   is not hypothetical: on one frozen run, three of five findings were against
+   records byte-identical to what the previous round had confirmed, and the loop
+   could not converge however good the record got, because improving the record
+   was never what was wrong.
+
+   So what was confirmed travels forward. Withdrawing a confirmation stays
+   available — a round can be wrong — but it becomes an explicit act with a
+   reason, which is the same bargain the dispute channel strikes with the
+   amender."
+  [history]
+  (vec (distinct (mapcat :confirmed history))))
+
+(defn confirmations-block
+  "What earlier rounds already checked, in front of the judge.
+
+   Not `do not look again` — a confirmation can be wrong and the code it was
+   about can be misread. It is `if you now disagree, say so`, which turns silent
+   re-litigation into something a reader and a stall detector can both see."
+  [confirmed]
+  (when (seq confirmed)
+    (str "\nALREADY CONFIRMED by an earlier round of this run, against this same\n"
+         "record and this same code:\n"
+         (str/join "\n" (map #(str "  ✓ " %) confirmed))
+         "\n\nThese were checked and held. You may still refute one — an earlier round\n"
+         "can be wrong — but say plainly that you are withdrawing a confirmation and\n"
+         "why the earlier reading was mistaken. What you must not do is quietly\n"
+         "report it as a fresh finding: a round that re-litigates what it already\n"
+         "settled cannot converge, and nothing downstream can tell that from\n"
+         "progress.\n"
+         "Spend your effort on what is NOT in this list.\n")))
+
 (defn disputes-block
   "What an earlier round's amender said back, put in front of the judge.
 
@@ -237,7 +273,7 @@
    does. What makes that bound real is that each claim arrives with the
    counterexample that would refute it, so the question is never `is this any
    good` but `does that specific thing exist`."
-  [{:keys [baseline disputes]}]
+  [{:keys [baseline disputes confirmed]}]
   (str
    "You are checking whether a SURVEY of an area is TRUE, and whether it is\n"
    "ENOUGH. You are NOT designing anything, you are not reviewing the code for\n"
@@ -334,6 +370,7 @@
    "sufficient when they held and the four derivations are makeable. Do not\n"
    "manufacture findings to look thorough — on this round, thoroughness is\n"
    "checking the claims that are there, not finding more to say."
+   (confirmations-block confirmed)
    (disputes-block disputes)))
 
 (defn- survey-block
@@ -662,14 +699,15 @@
    re-reads `latest` repairs whichever was appended last, which need not be the
    one anybody asked about. It then cannot converge by construction: the design
    citing the other survey is never answered however long it runs."
-  [{:keys [cwd code-cwd run-id label disputes baseline]}]
+  [{:keys [cwd code-cwd run-id label disputes baseline confirmed]}]
   (if-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
     (if-let [baseline (or baseline (ws/latest-entry project ws-id :baseline))]
       (if (baseline-round-worth-running? baseline)
         (judged (run-round! {:cwd (or code-cwd cwd) :run-id run-id :kind :baseline-review
                              :label label
                              :prompt (baseline-prompt {:baseline baseline
-                                                       :disputes disputes})})
+                                                       :disputes disputes
+                                                       :confirmed confirmed})})
                 #(parse-baseline-review % (:seq baseline)))
         {:outcome :nothing-to-check
          :detail "the baseline records no load-bearing property and no health observation"})
@@ -969,7 +1007,8 @@
                    {:cwd cwd :code-cwd code-cwd :run-id run-id
                     :baseline target
                     :label (str "baseline-review-round-" (:iter ctx))
-                    :disputes (disputes-for-judge (:history ctx))})]
+                    :disputes (disputes-for-judge (:history ctx))
+                    :confirmed (confirmed-so-far (:history ctx))})]
        (append! cwd record)
        (cond
          (:outcome record)
@@ -1050,6 +1089,10 @@
                             {:iter (:iter ctx)
                              :verdict (get-in ctx [:record :verdict])
                              :findings (:findings ctx)
+                             ;; What this round CHECKED and found to hold. Without
+                             ;; it nothing carries forward and the next round is
+                             ;; free to re-litigate it silently.
+                             :confirmed (vec (get-in ctx [:record :confirmed]))
                              :retreats retreats
                              :disputes disputes})]
                (cond
