@@ -1155,7 +1155,11 @@
   [id]
   (workstream/append-entry! :brian id {:kind :baseline}
     (pr-str {:format :baseline :area "the area" :bounded-by "the bound" :shape "the shape"
-             :load-bearing [{:property "p holds" :evidence ["src/x.clj:1"]}]
+             :modules [{:module "m" :hides "how p is stored" :interface "p"}]
+             :composition "m is the only reader of p, so p holds"
+             :load-bearing [{:property "p holds" :kind :module-boundary
+                             :falsified-by "a caller that reads p without going through m"
+                             :evidence ["src/x.clj:1"]}]
              :read ["src/x.clj"]}))
   (workstream/append-entry! :brian id {:kind :intent}
     (pr-str {:format :intent :goal "the goal" :done-when ["it is done"]}))

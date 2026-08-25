@@ -407,6 +407,45 @@
    [:seq int?]
    [:why string?]])
 
+(def Module
+  "One module of the area's decomposition, in Parnas's sense: a module is what it
+   HIDES, not what it contains.
+
+   :hides is the design decision nothing outside may depend on — a storage
+   choice, a wire format, an ordering, an algorithm. :interface is what the rest
+   of the system is allowed to know. A module that hides nothing is a file; two
+   modules that hide the same decision are one module with a seam drawn through
+   it, and both are findings.
+
+   Named separately from :load-bearing because the decomposition is structure
+   rather than a claim about behaviour, and because it is what the design round's
+   `decomposable` check reads."
+  [:map {:closed true}
+   [:module    string?]
+   [:hides     string?]
+   [:interface string?]])
+
+(def claim-kinds
+  "The vocabulary a property is classified by, and the whole reason this record
+   sits where it does.
+
+     :essential-state  an irreducible fact the system must hold — not derivable
+                       from anything else it holds. Falsified by a derivation.
+     :derived          computed from essential state by a stated relation.
+                       Falsified by finding it independently stored or edited.
+     :module-boundary  a module hides a decision; nothing outside depends on it.
+                       Falsified by a caller that does.
+     :composition      a property of how the modules combine to produce the
+                       required behaviour, true of no module alone.
+     :accidental       state or control introduced for implementation reasons —
+                       a cache, a denormalisation, an ordering, a second
+                       derivation of something already derived.
+
+   Classifying is not labelling. It is the act that separates what the problem
+   requires from what this solution happens to do, and a survey that will not
+   commit to which is which has not done the reading."
+  [:essential-state :derived :module-boundary :composition :accidental])
+
 (def LoadBearing
   "One property the CURRENT code already relies on — not what ought to hold, but
    what would break if you violated it. This is the field that makes the routing
@@ -414,12 +453,23 @@
    of these is an implementation defect, and behaviour that honours every one of
    them and is still wrong indicts the design itself.
 
-   :evidence is required and non-empty. A load-bearing property with nothing to
-   point at is a guess, and a guess is exactly what this record exists to replace."
+   :falsified-by is the anti-theatre rule, and it replaced a file:line citation
+   for a reason worth stating. Requiring a coordinate meant only claims WITH a
+   coordinate could be made, which silently excluded every claim about the
+   decomposition — a composition property is true of no single line — and
+   admitted a stream of implementation archaeology instead. So the obligation is
+   now to name the COUNTEREXAMPLE: the thing that, if it exists, makes this
+   false. It is a harder obligation than pointing, not a softer one, because a
+   counterexample has to be constructed rather than located.
+
+   :evidence stays, and is now optional: where you looked, when there is
+   somewhere to look."
   [:map {:closed true}
-   [:property string?]
-   [:evidence [:vector {:min 1} string?]]
-   [:drift    {:optional true} string?]])
+   [:property     string?]
+   [:kind         (into [:enum] claim-kinds)]
+   [:falsified-by string?]
+   [:evidence     {:optional true} [:vector string?]]
+   [:drift        {:optional true} string?]])
 
 (def ExtensionPoint
   "Somewhere the current design already admits extension, and how. The mirror of
@@ -505,6 +555,13 @@
     [:area             string?]
     [:bounded-by       string?]
     [:shape            string?]
+    ;; The decomposition and what it buys. Required, because they are the level
+    ;; this record exists to operate at: a survey that lists properties without
+    ;; saying what the modules are and how they combine has described an
+    ;; implementation, and every judgement made against it will be made about
+    ;; the implementation too.
+    [:modules          [:vector {:min 1} Module]]
+    [:composition      string?]
     [:load-bearing     [:vector {:min 1} LoadBearing]]
     [:extension-points {:optional true} [:vector ExtensionPoint]]
     [:health           {:optional true} [:vector HealthObservation]]
@@ -514,6 +571,42 @@
     [:unknowns         {:optional true} [:vector string?]]]
    [:fn {:error/message "health observation ids must be unique within a baseline"}
     distinct-health-ids?]])
+
+(def LoadBearingLegacy
+  "READ SHAPE — a property from before the survey moved up a level, carrying a
+   required file:line citation and no classification. Not writable."
+  [:map {:closed true}
+   [:property string?]
+   [:evidence [:vector {:min 1} string?]]
+   [:drift    {:optional true} string?]])
+
+(def BaselineLegacy
+  "READ SHAPE — a survey from before :modules, :composition and the claim
+   vocabulary existed, when a load-bearing property was prose plus a coordinate.
+   Not writable; kept so every survey already on a ledger stays readable."
+  [:and
+   [:map {:closed true}
+    [:format           [:= :baseline]]
+    [:area             string?]
+    [:bounded-by       string?]
+    [:shape            string?]
+    [:load-bearing     [:vector {:min 1} LoadBearingLegacy]]
+    [:extension-points {:optional true} [:vector ExtensionPoint]]
+    [:health           {:optional true} [:vector HealthObservation]]
+    [:governing        {:optional true} [:vector string?]]
+    [:drift            {:optional true} [:vector string?]]
+    [:read             [:vector {:min 1} string?]]
+    [:unknowns         {:optional true} [:vector string?]]]
+   [:fn {:error/message "health observation ids must be unique within a baseline"}
+    distinct-health-ids?]])
+
+(def BaselineAny
+  "The READ contract for :baseline — current shape first, so a survey satisfying
+   both reads as current. Dispatches on :modules, which is what the move up a
+   level added and which no earlier survey carries."
+  [:multi {:dispatch (fn [b] (if (contains? b :modules) :current :legacy))}
+   [:current Baseline]
+   [:legacy  BaselineLegacy]])
 
 (def BaselineRelation
   "How this change relates to the area's CURRENT design — the layer-2 question,
@@ -1234,7 +1327,11 @@
    ;; :status replaced :held? on a derived check, adding :underivable as a third
    ;; outcome. Records in the two-outcome shape exist — a round writes them as
    ;; soon as it runs, merged or not.
-   :design-decision DesignDecisionAny})
+   :design-decision DesignDecisionAny
+   ;; The survey moved up a level: :modules and :composition became required and
+   ;; a load-bearing property gained a kind and a counterexample in place of its
+   ;; required coordinate. Every survey written before that is in the old shape.
+   :baseline BaselineAny})
 
 (defn- validate-against
   [schema kind report]
@@ -1412,8 +1509,8 @@
     (when context ["\n## Context" context]))))
 
 (defn- baseline->markdown
-  [{:keys [area bounded-by shape load-bearing extension-points health governing
-           drift read unknowns]}]
+  [{:keys [area bounded-by shape modules composition load-bearing extension-points
+           health governing drift read unknowns]}]
   (str/join
    "\n"
    (concat
@@ -1422,11 +1519,20 @@
      (str "*Bounded by: " bounded-by "*")]
     (when (seq governing)
       [(str "**Governed by:** " (str/join ", " governing))])
-    ["" "## Shape" shape ""
-     "## Load-bearing — what breaks if you violate it"]
-    (for [{:keys [property evidence] lb-drift :drift} load-bearing]
-      (str "- " property
-           " — " (str/join ", " (map #(str "`" % "`") evidence))
+    ["" "## Shape" shape ""]
+    (when (seq modules)
+      (cons "## Modules — what each one hides"
+            (for [{:keys [module hides interface]} modules]
+              (str "- **" module "** hides " hides
+                   "\n  - interface: " interface))))
+    (when composition
+      ["" "## Composition — how they produce the behaviour" composition])
+    ["" "## Load-bearing — what breaks if you violate it"]
+    (for [{:keys [property kind falsified-by evidence] lb-drift :drift} load-bearing]
+      (str "- " (when kind (str "*(" (name kind) ")* ")) property
+           (when falsified-by (str "\n  - falsified by: " falsified-by))
+           (when (seq evidence)
+             (str "\n  - " (str/join ", " (map #(str "`" % "`") evidence))))
            (when lb-drift (str "\n  - drift from the stance: " lb-drift))))
     (when (seq extension-points)
       (cons "\n## Extension points — where the design already admits change"

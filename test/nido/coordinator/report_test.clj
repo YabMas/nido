@@ -723,11 +723,30 @@
                   render layer is out, it only formats what it is handed"
    :shape        "Line items hold exact amounts; the order aggregate is the only
                   thing that sums them; invoices read the aggregate, never lines."
+   :modules      [{:module "calc"
+                   :hides "how a money amount is represented and rounded"
+                   :interface "exact amounts in, exact amounts out"}
+                  {:module "the order aggregate"
+                   :hides "the order in which lines are summed"
+                   :interface "an order's total"}
+                  {:module "the invoice reader"
+                   :hides "the invoice document's layout"
+                   :interface "renders a total it is handed"}]
+   :composition  "The aggregate is the only reader of lines and the only writer of
+                  a total; the invoice reader consumes that total. One summing
+                  path exists because only one module can see the lines."
    :load-bearing [{:property "a line item's amount is never rounded in place"
+                   :kind :essential-state
+                   :falsified-by "a write path that stores a rounded amount back onto a line"
                    :evidence ["src/order/calc.clj:41"]}
                   {:property "the aggregate is the only summing path"
+                   :kind :module-boundary
+                   :falsified-by "a caller outside the aggregate that reads lines and sums them"
                    :evidence ["src/order/aggregate.clj:12" "src/order/invoice.clj:88"]
-                   :drift    "invoice.clj re-sums defensively — copied, never decided"}]
+                   :drift    "invoice.clj re-sums defensively — copied, never decided"}
+                  {:property "an order total is derived, never stored"
+                   :kind :derived
+                   :falsified-by "a column or cache holding a total that is edited independently"}]
    :extension-points [{:at "the aggregate's reducer"
                        :how "a new money kind adds a case; nothing else changes"}]
    :governing    ["two registers of data — values in motion vs state at rest"]
@@ -744,12 +763,51 @@
       "a baseline naming nothing load-bearing cannot answer whether a defect is
        implementation or design — which is the only reason it exists"))
 
-(deftest baseline-requires-evidence-for-every-load-bearing-property
+(deftest baseline-requires-a-counterexample-for-every-load-bearing-property
+  ;; The anti-theatre rule, moved. A required file:line meant only claims WITH a
+  ;; coordinate could be made, which excluded every claim about the decomposition
+  ;; — a composition property is true of no single line — and admitted
+  ;; implementation archaeology in their place.
   (is (thrown? clojure.lang.ExceptionInfo
                (report/validate-event
                 :baseline (assoc valid-baseline
-                                 :load-bearing [{:property "totals are exact" :evidence []}])))
-      "a property with nothing to point at is a guess"))
+                                 :load-bearing [{:property "totals are exact"
+                                                 :kind :derived}])))
+      "a property nothing could refute is a guess")
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event
+                :baseline (assoc valid-baseline
+                                 :load-bearing [{:property "totals are exact"
+                                                 :falsified-by "a second total"}])))
+      "and one that will not say WHICH KIND of claim it is has not done the reading"))
+
+(deftest baseline-requires-the-decomposition-and-what-it-buys
+  (doseq [k [:modules :composition]]
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (report/validate-event :baseline (dissoc valid-baseline k)))
+        (str k " is the level this record exists to operate at")))
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event :baseline (assoc valid-baseline :modules [])))
+      "a survey with no modules has described an implementation"))
+
+(deftest a-module-must-say-what-it-hides
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event
+                :baseline (assoc valid-baseline
+                                 :modules [{:module "calc" :interface "amounts"}])))
+      "a module that hides nothing is a file"))
+
+(deftest a-survey-written-before-the-level-moved-still-reads
+  ;; Entries are immutable, so the question is whether it was valid when written.
+  (let [legacy (-> valid-baseline
+                   (dissoc :modules :composition)
+                   (assoc :load-bearing [{:property "the aggregate is the only summing path"
+                                          :evidence ["src/order/aggregate.clj:12"]}]))]
+    (is (thrown? clojure.lang.ExceptionInfo (report/validate-event :baseline legacy))
+        "not writable any more")
+    (is (= legacy (report/parse-event :baseline legacy))
+        "but still readable")
+    (is (str/includes? (report/report->markdown legacy) "the aggregate is the only summing path"))))
 
 (deftest baseline-requires-what-was-read
   (is (thrown? clojure.lang.ExceptionInfo
@@ -776,8 +834,13 @@
     (is (str/includes? md "**Area:** order totalling"))
     (is (str/includes? md "*Bounded by:"))
     (is (str/includes? md "**Governed by:** two registers"))
+    (is (str/includes? md "## Modules — what each one hides"))
+    (is (str/includes? md "**calc** hides how a money amount is represented"))
+    (is (str/includes? md "interface: an order's total"))
+    (is (str/includes? md "## Composition — how they produce the behaviour"))
     (is (str/includes? md "## Load-bearing"))
-    (is (str/includes? md "the aggregate is the only summing path"))
+    (is (str/includes? md "*(module-boundary)* the aggregate is the only summing path"))
+    (is (str/includes? md "falsified by: a caller outside the aggregate"))
     (is (str/includes? md "`src/order/aggregate.clj:12`"))
     (is (str/includes? md "drift from the stance: invoice.clj re-sums"))
     (is (str/includes? md "## Extension points"))

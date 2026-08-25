@@ -366,7 +366,13 @@
    :area         "order totalling"
    :bounded-by   "everything that reads or writes a money amount on an order"
    :shape        "The aggregate is the only thing that sums lines."
+   :modules      [{:module "the order aggregate"
+                   :hides "the order in which lines are summed"
+                   :interface "an order's total"}]
+   :composition  "Only the aggregate can see the lines, so only it can sum them."
    :load-bearing [{:property "the aggregate is the only summing path"
+                   :kind :module-boundary
+                   :falsified-by "a caller outside the aggregate that reads lines and sums them"
                    :evidence ["src/order/aggregate.clj:12"]}]
    :read         ["src/order/aggregate.clj"]})
 
