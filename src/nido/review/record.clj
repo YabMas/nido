@@ -159,7 +159,7 @@
   [confirmed]
   (when (seq confirmed)
     (str "\nALREADY CONFIRMED by an earlier round of this run, against this same\n"
-         "record and this same code:\n"
+         "record and this same code — by id:\n"
          (str/join "\n" (map #(str "  ✓ " %) confirmed))
          "\n\nThese were checked and held. You may still refute one — an earlier round\n"
          "can be wrong — but say plainly that you are withdrawing a confirmation and\n"
@@ -366,7 +366,12 @@
    "composition text. A finding that cites nothing is not a finding; do not\n"
    "report it. Neither is a finding that reports a bug in code the survey\n"
    "correctly describes.\n\n"
-   "Populate confirmed with the claims you actually went and checked, and return\n"
+   "Populate confirmed with the IDS of the claims and modules you actually went\n"
+   "and checked — the bracketed slugs, without the brackets. Ids, not sentences:\n"
+   "a confirmation worded differently each round cannot be matched to the claim\n"
+   "it is about, so the next round cannot tell what is settled and checks it\n"
+   "again instead of checking what nobody has looked at yet.\n"
+   "Return\n"
    "sufficient when they held and the four derivations are makeable. Do not\n"
    "manufacture findings to look thorough — on this round, thoroughness is\n"
    "checking the claims that are there, not finding more to say."
@@ -603,7 +608,15 @@
                      :verdict v
                      :baseline-seq baseline-seq
                      :reason (str (:reason m))}
-              (seq (:confirmed m)) (assoc :confirmed (mapv str (:confirmed m)))
+              ;; Normalised like a cited id, and for the same reason: an id that
+              ;; is sometimes bracketed is no identity at all.
+              (seq (:confirmed m))
+              (assoc :confirmed (into [] (comp (map #(-> (str %) str/trim
+                                                        (str/replace "[" "")
+                                                        (str/replace "]" "")))
+                                               (remove str/blank?)
+                                               (distinct))
+                                      (:confirmed m)))
               (not= :sufficient v) (assoc :findings findings))))))
     (catch Exception _ nil)))
 

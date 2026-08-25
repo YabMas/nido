@@ -22,7 +22,7 @@
     },
     "confirmed": {
       "type": "array",
-      "description": "Claims you actually went and checked, and which held.",
+      "description": "The IDS of the claims and modules you actually checked and found to hold — the slugs shown in brackets, without the brackets. Ids, not sentences: a confirmation phrased differently each round cannot be matched to the claim it is about, so the next round cannot tell what is already settled and re-examines it instead.",
       "items": {
         "type": "string"
       }

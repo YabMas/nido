@@ -501,3 +501,24 @@
                                        :claim "x" :needs "" :evidence []}]})
            3)]
     (is (nil? (:claim-id (first (:findings r)))))))
+
+(deftest a-confirmation-identifies-a-claim-rather-than-describing-it
+  ;; Measured on a live run: five rounds produced 29 DISTINCT confirmation
+  ;; strings for a survey of 13 claims and modules. Each round reworded them, so
+  ;; the list carried forward could not be matched to anything and the judge
+  ;; re-examined what it had already settled.
+  (let [r (record/parse-baseline-review
+           (baseline-json {:verdict "falsified" :reason "r"
+                           :confirmed ["[engine-names-no-stage]" "judge-never-writes"
+                                       "  [loop-engine] " "engine-names-no-stage" ""]
+                           :findings [{:claim-id "x" :blocks "none" :cites ["c"]
+                                       :claim "y" :needs "" :evidence []}]})
+           3)]
+    (is (= ["engine-names-no-stage" "judge-never-writes" "loop-engine"] (:confirmed r))
+        "normalised, deduplicated, and blanks dropped — so two rounds naming the
+         same claim produce the same entry")))
+
+(deftest the-judge-is-asked-for-ids-not-sentences
+  (let [p (record/baseline-prompt {:baseline {:format :baseline}})]
+    (is (str/includes? p "IDS of the claims and modules"))
+    (is (str/includes? p "cannot be matched to the claim"))))
