@@ -581,12 +581,16 @@
           "every distinct confirmation, once"))))
 
 (deftest a-round-records-what-it-confirmed
+  ;; By id, and only ids the survey actually contains — a confirmation naming
+  ;; nothing confirms nothing, and must not accumulate in the list later rounds
+  ;; are shown.
   (let [corrected (assoc a-baseline :area "corrected")
+        real-id   (:id (first (:load-bearing a-baseline)))
         [out _] (with-amend {:writes (fn [p] (spit p (pr-str {:record corrected})))}
                             (ctx :findings [a-finding]
                                  :record {:verdict :falsified
-                                          :confirmed ["p holds" "q holds"]}))]
-    (is (= ["p holds" "q holds"] (:confirmed (first (:history out))))
+                                          :confirmed [real-id "a sentence about nothing"]}))]
+    (is (= [real-id] (:confirmed (first (:history out))))
         "or nothing travels and the next round may re-litigate it silently")))
 
 (deftest the-judge-may-still-withdraw-a-confirmation-but-must-say-so
@@ -596,3 +600,15 @@
     (is (str/includes? p "You may still refute one"))
     (is (str/includes? p "cannot converge"))
     (is (str/includes? p "Spend your effort on what is NOT in this list"))))
+
+(deftest a-confirmation-naming-nothing-in-the-survey-is-dropped
+  ;; Watched live: a judge asked for ids answered with "design" and
+  ;; "implementation" — health-observation AXIS values, not ids. Kept, those
+  ;; accumulate in the list every later round is shown, and a list that is partly
+  ;; ids and partly not is the prose problem creeping back one entry at a time.
+  (let [rec {:load-bearing [{:id "real-claim"}] :modules [{:id "real-module"}]
+             :health [{:id "real-health"}]}]
+    (is (= ["real-claim" "real-module" "real-health"]
+           (record/confirmed-in rec ["real-claim" "design" "real-module"
+                                     "implementation" "real-health" "real-claim"]))
+        "known ids only, deduplicated, order preserved")))

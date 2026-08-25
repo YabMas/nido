@@ -133,6 +133,24 @@
                            "  [holds always]"))))
                 invariants)))
 
+(defn known-ids
+  "Every id a survey actually contains — claims, modules and health observations."
+  [record]
+  (into #{} (comp cat (keep :id))
+        [(:load-bearing record) (:modules record) (:health record)]))
+
+(defn confirmed-in
+  "The confirmations that name something in `record`, and nothing else.
+
+   A judge asked for ids will occasionally answer with something adjacent — an
+   axis, a phrase, a module's prose name. Kept, those accumulate in the list
+   every later round is shown, and a list that is partly ids and partly not is
+   the prose problem creeping back one entry at a time. Dropped, the worst case
+   is a claim confirmed twice."
+  [record confirmed]
+  (let [ids (known-ids record)]
+    (vec (distinct (filter ids confirmed)))))
+
 (defn confirmed-so-far
   "Every claim an earlier round of this run said it checked and found to hold.
 
@@ -1105,7 +1123,7 @@
                              ;; What this round CHECKED and found to hold. Without
                              ;; it nothing carries forward and the next round is
                              ;; free to re-litigate it silently.
-                             :confirmed (vec (get-in ctx [:record :confirmed]))
+                             :confirmed (confirmed-in prev (get-in ctx [:record :confirmed]))
                              :retreats retreats
                              :disputes disputes})]
                (cond
