@@ -448,8 +448,7 @@
                  :shallow "the interface costs about what it hides — the seam buys nothing"}}
 
    :parnas/dependency
-   {:source     "On the Criteria To Be Used in Decomposing Systems into Modules (Parnas);
-                 reached in our stance through Ousterhout's deep modules"
+   {:source     "On the Criteria To Be Used in Decomposing Systems into Modules (Parnas)"
     :applies-to :claim
     :question   "does the caller depend on the interface, or on the secret behind it?"
     :verdicts   {:on-interface "the caller depends only on what the module publishes"

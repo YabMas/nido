@@ -309,7 +309,7 @@ The seeded lenses:
 | `:tarpit/state` | a claim about state | `:essential` `:derived` `:accidental` | *Out of the Tar Pit* |
 | `:tarpit/control` | a claim about ordering | `:required` `:imposed` | *Out of the Tar Pit* |
 | `:ousterhout/depth` | a module | `:deep` `:shallow` | *A Philosophy of Software Design* |
-| `:parnas/dependency` | a claim about a dependency | `:on-interface` `:on-secret` `:cyclic` | Parnas, reached via Ousterhout |
+| `:parnas/dependency` | a claim about a dependency | `:on-interface` `:on-secret` `:cyclic` | *On the Criteria…* (Parnas) |
 
 Three rules the ledger enforces:
 

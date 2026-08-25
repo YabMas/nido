@@ -78,7 +78,7 @@ something a line of code can violate and it never adjudicates a diff; the lanes
 and `docs/reference/` do that (`/design` §1). Measure the design against it, not
 the code.
 
-## The four that say how
+## The five that say how
 
 The yardstick says what to minimise. These say how it gets built in a Clojure
 system, and each earns its place by materialising one part of it:
@@ -86,9 +86,12 @@ system, and each earns its place by materialising one part of it:
 - ***Domain Modeling Made Functional*** (Wlaschin) — how the essential state and
   its transitions get *shaped*, so that illegal states cannot be represented and
   the reasoning is carried by the data.
-- ***A Philosophy of Software Design*** (Ousterhout) — where the separation
-  happens, and what a boundary has to be worth. Deep modules are the restriction
-  of power applied at the seam.
+- ***On the Criteria To Be Used in Decomposing Systems into Modules*** (Parnas) —
+  **what a boundary is drawn around.** A module is not a step in the processing;
+  it is a *design decision hidden* from everything else, and the decisions worth
+  hiding are the ones most likely to change.
+- ***A Philosophy of Software Design*** (Ousterhout) — **what a boundary has to
+  be worth.** Deep modules are the restriction of power applied at the seam.
 - ***How to Design Programs*** (Felleisen et al.) — how a single function is
   written once its data is defined. Derivation from the shape of the data, at the
   leaf.
@@ -96,9 +99,35 @@ system, and each earns its place by materialising one part of it:
   becomes trusted, past which nothing re-checks. Unparsed input is accidental
   complexity admitted into the core.
 
-Assume familiarity with all five. Nothing here is a summary of any of them — it
+Assume familiarity with all six. Nothing here is a summary of any of them — it
 is a treatment of how to hold them together as one method, and how to resolve the
 calls they individually leave open.
+
+**Parnas and Ousterhout are one idea at two stages, and reading them as
+interchangeable loses the useful half.** Parnas answers *where the seam goes* —
+find the decisions that will change, and put one on each side. Ousterhout answers
+*whether that seam pays* — an interface that costs about what it hides bought
+nothing, however principled its placement. Parnas first: a deep module around the
+wrong secret is still the wrong module.
+
+**The failure Parnas actually names is worth carrying around, because it looks
+like good design.** His counter-example decomposes a system by its processing
+steps — read input, then shift, then alphabetise, then output — which reads as
+the obvious structure and is wrong, because every module knows the data format
+and any change to it touches all of them. In our terms: **a pipeline is not a
+decomposition.** Handler → service → repository, or parse → transform → persist,
+are stages of one computation sharing one representation, not modules hiding
+decisions from each other. When a decomposition can be read off the order things
+happen in, it almost certainly hides nothing.
+
+**Where it meets the yardstick.** The two criteria are on different axes, and
+both are needed. The Tar Pit asks *did the problem require this* — necessity.
+Parnas asks *is this going to change* — volatility. The stance's own ordering
+resolves them: **avoid, then separate.** Complexity you can delete needs no
+module around it, so necessity is asked first; what survives that question gets
+a boundary placed by Parnas's. A module hiding something both essential and
+genuinely stable is often better dissolved than kept — it is a namespace with
+ceremony — and that judgement is only available with both questions asked.
 
 **When they tension, the yardstick decides.** Making illegal states
 unrepresentable can fight keeping a module shallow; a constrained value type can
