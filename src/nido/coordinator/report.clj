@@ -446,7 +446,11 @@
    :ousterhout/depth
    {:source     "A Philosophy of Software Design (Ousterhout)"
     :applies-to :module
-    :question   "is the interface small against what the module does?"
+    :question   (str "is the interface small against what the module does? "
+                     "INTERFACE MEANS WHAT IS DEPENDED ON FROM OUTSIDE — Parnas's "
+                     "'what others may assume' — not what the namespace happens to "
+                     "make public. A var published and called by nobody outside is "
+                     "not interface; it is a visibility choice.")
     :verdicts   {:deep    "a small interface over substantial functionality"
                  :shallow "the interface costs about what it hides — the seam buys nothing"}}
 

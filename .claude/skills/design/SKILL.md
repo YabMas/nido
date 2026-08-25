@@ -309,6 +309,8 @@ The seeded lenses:
 | `:tarpit/state` | a claim about state | `:essential` `:derived` `:accidental` | *Out of the Tar Pit* |
 | `:tarpit/control` | a claim about ordering | `:required` `:imposed` | *Out of the Tar Pit* |
 | `:ousterhout/depth` | a module | `:deep` `:shallow` | *A Philosophy of Software Design* |
+
+**What counts as a module's interface**: what is *depended on from outside* — Parnas's "what others may assume" — not what the namespace makes public. A var published and called by nobody outside is a visibility choice, not interface. Two live rounds were spent on this exact disagreement, one side counting callers and the other counting `defn`s, both correct about different things.
 | `:parnas/dependency` | a claim about a dependency | `:on-interface` `:on-secret` `:cyclic` | *On the Criteria…* (Parnas) |
 
 Three rules the ledger enforces:

@@ -1382,3 +1382,11 @@
 (deftest a-decision-with-no-trajectory-renders-no-section
   (let [md (report/report->markdown a-decision)]
     (is (not (str/includes? md "How this was arrived at")))))
+
+(deftest the-depth-lens-says-what-an-interface-is
+  ;; Two consecutive live rounds disagreed on nothing else: the survey counted
+  ;; what callers depend on, the judge counted what the namespace publishes, and
+  ;; both were right about different things.
+  (let [q (:question (:ousterhout/depth report/lenses))]
+    (is (str/includes? q "DEPENDED ON FROM OUTSIDE"))
+    (is (str/includes? q "not what the namespace happens to"))))
