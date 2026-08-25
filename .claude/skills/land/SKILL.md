@@ -1,6 +1,6 @@
 ---
 name: land
-description: Land the current session's stack — mark every layer ready for review, answer the Codex review and the PR checks that readiness triggers (fixing what it can, declining what it can defensibly decline), merge the stack atomically and watch it until it lands. No ledger events. Run from a session worktree. Usage: /land
+description: Land the current session's stack — mark every layer ready for review, answer the Codex review and the PR checks that readiness triggers (fixing what it can, declining what it can defensibly decline), collapse the stack into its top PR and merge that one PR, watching it until it lands. No ledger events. Run from a session worktree. Usage: /land
 ---
 
 # /land
@@ -16,8 +16,11 @@ The branch's meeting with GitHub. Everything before this happened on your
 machine: `/align` reconciled with trunk, `/local-ci` ran the Docker CI, `/squash`
 shaped the commits. **Marking ready is what starts the review** — Codex reads the
 diff, and the PR's own checks (e2e, integration shards, staging deploy) run for
-the first time. This skill marks ready, answers what comes back, merges, and
-watches the result land.
+the first time. This skill marks ready, answers what comes back, **collapses the reviewed
+stack into a single PR**, merges that, and watches the result land. The
+collapse is not tidiness: a merge queue merges its entries one at a time, so
+a stack that enters it as n pull requests lands in pieces the moment anything
+fails mid-arc (§8).
 
 It is **autonomous within a safe boundary**: it fixes what it can, declines what
 it can defensibly decline, and halts on what needs a human. It writes **no ledger
@@ -135,7 +138,7 @@ protect (`/stack` §4).
 **stderr** — stdout is empty — and exits **5** on a partial failure that it does
 not roll back. A non-zero exit here means the stack shape on GitHub is wrong,
 most often a layer inserted below the top during the work (GitHub locks a stacked
-PR's base, so this call cannot rewire one). **Do not proceed to `gh stack merge`
+PR's base, so this call cannot rewire one). **Do not proceed to §8's collapse
 on a non-zero exit** — merging a mis-shaped stack lands a mid-stack PR whose diff
 swallows the layer below it. Report the stderr text and point at `/stack` §6 case
 B: unstack, then one link. Then re-run `/land`.
@@ -287,80 +290,130 @@ waiting.)
 fix↔review loop is this phase's characteristic failure: every round is cheap
 enough to justify one more, and a reviewer can always find one more thing.
 
-### 8. Merge — enqueue, and watch it land
+### 8. Collapse the stack to one PR, then merge it
 
 Reached only with §3–§7 settled: every layer's Codex verdict answered, and no
-red checks left. Merge:
+red checks left.
+
+**Do not enqueue the layers.** A stack that enters a merge queue as n pull
+requests lands in pieces. The layers were a review decomposition; they have done
+their work by now, and carrying them into the queue is what puts a half-arc on
+`main`.
+
+#### Why a queue cannot merge a stack as a unit
+
+`gh stack merge` really is all-or-nothing — on the **direct-merge** path. Its own
+help text says both halves in one page: *"a single, all-or-nothing operation: if
+any PR cannot be merged, none are"*, and four paragraphs later *"If the base
+branch uses a merge queue, the stack is added to the queue."* Those describe two
+different operations. On a queue-protected branch the call **enqueues n
+entries** and returns; the queue decides what merges, and it decides per entry.
+
+brian's queue configuration, read 2026-08-25:
 
 ```bash
-SRC=$(cd .jj && cd "$(dirname "$(cat repo)")/.." && pwd)
-(cd "$SRC" && gh stack merge <top-pr-number> --yes --squash)
+gh api graphql -f query='{repository(owner:"OWNER",name:"REPO"){
+  mergeQueue(branch:"main"){configuration{
+    mergeMethod mergingStrategy minimumEntriesToMerge maximumEntriesToBuild}}}}'
 ```
 
-**Merge by the top layer's PR number.** `gh stack link --help` states the
-guarantee directly: *"Because stack and PR numbers never overlap, a numeric
-first argument is treated as a stack only when it matches an existing stack."*
-A PR number can therefore never collide with a stack number, so passing one is
-safe. `<top-pr-number>` is the top layer's `number`, already in hand from §1
-(the last entry in the bottom-to-top order) — the shortest path, and
-the one this flow takes. (The stack number is obtainable too — §1's
-`gh api repos/"$SLUG"/stacks` returns it — but nothing here needs it except
-`/stack` §6's repair.)
+> `mergeMethod: SQUASH`, `mergingStrategy: ALLGREEN`,
+> `minimumEntriesToMerge: 1`, `minimumEntriesToMergeWaitTime: 0`,
+> `maximumEntriesToBuild: 5`
 
-`gh stack merge` is all-or-nothing: if any layer cannot merge, none do —
-verified against a real two-layer merge, both landed one second apart from a
-single invocation, base branch history clean and linear afterward.
+**`minimumEntriesToMerge: 1` is the whole story.** The queue merges an entry the
+moment it is green, on its own, with no notion that six others belong with it.
+Nothing in the configuration can express "these n go together" — the grouping
+the stack means simply does not exist at this layer.
 
-**Always pass a method.** With no method flag, `--yes` uses *"your last-used
-merge method"* (`gh stack merge --help`) — mutable, per-machine state, not a
-guarantee. Observed: an unflagged call merged *"via rebase"* only because that
-was this machine's last-used method. Whatever the repo wants, pin it rather than
-inherit it from whoever last merged something on this laptop.
+**Observed, and it is the designed behaviour rather than a fault.** A seven-layer
+stack (brian PRs #4560–#4565 and #4604) enqueued at 13:50 on 2026-08-24.
+Layers 1–3 merged at 14:03; layers 4–7 were evicted, unmerged, at 14:03:58. One
+second after the eviction GitHub emitted `automatic_base_change_succeeded` on
+layer 4, retargeting it onto `main` — **the queue rebasing the survivors of a
+partial merge is a feature it ships**. `main` then carried three of seven layers
+for 2h01m, auto-deploying to staging the whole time, until a human noticed and
+re-enqueued the remainder by hand.
 
-**`--squash` is the pin, and it does not flatten the stack.** Squash is per pull
-request, not per stack: *"Squash creates one clean, squashed commit per pull
-request. Merging n pull requests creates n squashed commits on the base branch"*,
-and *"the resulting commit history is the same as merging each pull request
-individually, starting from the bottom"* ([GitHub
-docs](https://docs.github.com/en/pull-requests/reference/stacked-pull-requests)).
-So a three-layer stack lands three commits under either method — the layering
-survives both. What differs is the commit that lands: `--squash` writes GitHub's
-squash commit, titled from the PR and suffixed `(#1234)`; `--rebase` replays your
-local commit verbatim, with no PR number in it.
+#### The collapse: retarget, never re-create
 
-That suffix is why `--squash` is right for the projects this skill runs against.
-Every commit on brian's `main` reads `title (#4596)` — fifteen for fifteen in a
-sample taken 2026-08-24 — because every single PR merges through a queue that
-squashes. A stack landing under `--rebase` would be the only thing in that
-history with no PR number attached to it, and the layer's commit would no longer
-be traceable to the review that cleared it.
+```bash
+gh pr edit <top-pr-number> -R "$SLUG" --base main
+```
 
-Per `gh stack merge --help`, when the base branch uses a merge queue, the
-stack is added to the queue and lands when the queue processes it; otherwise
-it is merged directly. **This is vendor-documented, not independently
-verified** — `YabMas/nido` has no rulesets or branch protection, so no merge
-queue exists here to exercise; only the direct-merge path has been observed.
-Either way this **replaces** `gh pr merge --auto` entirely; do not call both.
+That is the entire operation. **Retarget the existing top PR — do not open a new
+one.** The top layer's branch already contains every layer beneath it, so moving
+its base to `main` makes its diff the whole arc without touching a commit.
 
-For a single-PR session, `gh pr merge <number> -R "$SLUG" --auto` — again both
-the number and `-R`. **No strategy flag** (`--squash`/`--merge`/`--rebase`): on a
-merge-queue branch `gh pr merge --auto` takes none, and passing one is rejected.
+**The head SHA must not move, and that is what buys you the reviews you already
+have.** Checks are keyed to the head commit, so every green check stays green
+and nothing re-runs. Codex's triggers are "open for review", "mark a draft as
+ready", a `@codex review` comment, and — observed (§7) — a new head commit. A
+base retarget is none of them. So the layer reviews stand and no fresh review of
+the collapsed diff is requested.
 
-#### Watch it to completion
+**This means never pushing after the collapse.** A push is a `synchronize`, and a
+`synchronize` is a new head commit: it re-fires CI and re-fires Codex on the full
+arc, which is exactly the re-review the collapse exists to avoid. If the arc
+genuinely needs another commit, you are back in §5 — fix it in the layer that
+owns it, let that layer be reviewed, and collapse afterwards.
 
-`gh stack merge` and `gh pr merge --auto` both *enqueue* — neither waits. Poll
-until it lands:
+**Nothing gates the collapsed PR on its own, and that is fine.** brian's
+`pull_request.yml` carries `branches: [main]`, so only the bottom layer ever ran
+PR CI at all — every layer above it was gated solely by the queue's own
+`merge_group` build. The collapsed PR inherits that: its gate is the queue
+building the merged result under `ALLGREEN`, which is the authoritative test of
+what actually lands, and `/local-ci` has already run the same content locally
+at the tip.
+
+Confirm the collapse before merging — the diff should equal the arc:
+
+```bash
+gh pr diff <top-pr-number> -R "$SLUG" --name-only | sort > /tmp/pr-files
+jj diff -r "main..<top-layer-rev>" --name-only | sort > /tmp/arc-files
+diff /tmp/pr-files /tmp/arc-files && echo "collapse matches the arc"
+```
+
+#### Rewrite the top PR to describe the arc
+
+The queue squashes, so **the collapsed PR's title and body become the one commit
+that lands on `main`.** That commit is now the only trunk artifact the arc gets —
+the `[1/7] … [7/7]` commits do not land, because only one entry enters the queue.
+
+So the body carries the layer manifest, and the layers stay legible on trunk:
+
+    ## Layers
+
+    1. feat(analytics): add the RELEASED visibility helpers beside the ACTIVE ones (#4560)
+    2. fix(analytics): divide learner progress by RELEASED content, not ACTIVE (#4561)
+    ...
+
+Title: the whole arc's one sentence, no "and", no `[n/m]` prefix. It is not a
+layer any more.
+
+#### Merge and watch — one PR
+
+```bash
+gh pr merge <top-pr-number> -R "$SLUG" --auto
+```
+
+**No strategy flag.** On a merge-queue branch `gh pr merge --auto` takes none and
+rejects one that is passed; the queue's own `mergeMethod` decides, and pinning a
+method here would be pinning a value that is ignored. **`gh stack merge` is not
+used at all in this flow** — do not call both.
+
+`--auto` enqueues; it does not wait. Poll until it lands:
 
 ```bash
 gh pr view <top-pr-number> -R "$SLUG" --json state,mergedAt,mergeStateStatus \
   --jq '"\(.state) merged=\(.mergedAt // "-") \(.mergeStateStatus)"'
 ```
 
-- **`MERGED`** → done. For a stack the top layer's state is the whole stack's:
-  `gh stack merge` is all-or-nothing (above).
+- **`MERGED`** → done. With one entry in the queue this reading is now the whole
+  truth, which it was not while the stack was enqueued as n.
 - **`OPEN`, with a `removed_from_merge_queue` event and no merge** → the queue
-  **kicked it out**. Its own CI run failed against the merged result — something
-  the PR's own checks could not have caught, since they never tested that
+  **kicked it out**. Its build failed against the merged result — something the
+  PR's own checks could not have caught, since they never tested that
   combination. Treat it exactly as §6, fix, and re-enqueue.
 
 ```bash
@@ -373,6 +426,21 @@ merged cleanly, `added_to_merge_queue` then `removed_from_merge_queue` fourteen
 minutes later by `github-merge-queue[bot]`. It is the *absence of a merge beside
 it* that means failure, never the event alone. Judging by the event would report
 every successful merge as a queue rejection.
+
+#### Close the lower layers — after it lands, never before
+
+The lower PRs stay open through the merge. They are the rollback: if the queue
+rejects the collapsed PR and the arc has to go back to being a stack, they are
+still there. Only once the top PR reads `MERGED`:
+
+```bash
+gh pr close <layer-pr-number> -R "$SLUG" \
+  --comment "Landed in #<top-pr-number>, which carries this layer's commits. Reviewed here."
+```
+
+They close **unmerged**, and that is the honest record — their commits reached
+`main` inside the squash, not as themselves. The comment is what keeps each
+layer's review reachable from the commit that landed it.
 
 **Budget the watch, and hand off rather than hold on.** Poll every few minutes
 and give the whole watch a ceiling — an hour is generous. Past it, stop watching
@@ -451,7 +519,10 @@ it, `/drive-home` records the outcome — `:implementation-completed` or
   don't re-request (§3).
 - A finding already replied to or already fixed → skip it. Thread replies are
   additive, so a second pass posts the same reasoning twice (§5).
-- Stack already merged or queued → `gh stack merge` reports it; no second merge.
+- Top PR's base already `main` → the collapse already happened; skip it and go
+  straight to the merge (§8).
+- Top PR already merged or queued → `gh pr merge --auto` reports it; no second
+  merge.
 - Already merged → §8's watch returns immediately; still emit the report.
 
 ## Common mistakes
@@ -471,9 +542,9 @@ it, `/drive-home` records the outcome — `:implementation-completed` or
   one-commit-per-layer. Squash it into the owning layer (§5).
 - **Silently skipping a finding you disagree with** — decline it *on the thread*,
   against something already on the record, or fix it (§5).
-- **Marking only the top PR ready** — every layer must be ready or the stack
-  merge refuses: `✗ pull request #14 cannot be merged yet: #13 below it is a
-  draft`, exit 5. A clean halt, not damage — but a halt (§2).
+- **Marking only the top PR ready** — readiness is what fires Codex, so a layer
+  left as a draft is a layer nobody reviews. The collapse then carries it to
+  trunk unread, and unlike the old stack merge nothing refuses (§2).
 - **Reading `removed_from_merge_queue` as failure** — it fires on success too;
   what distinguishes them is whether a merge landed beside it (§8).
 - **Watching the merge queue indefinitely** — under `nido ship` this runs on a
@@ -482,20 +553,25 @@ it, `/drive-home` records the outcome — `:implementation-completed` or
 - **Omitting `--base "$TRUNK"` on the `gh stack link --open` re-link** —
   force-resets the bottom PR's base to the repo default branch unless given
   explicitly; observed doing this unasked against a non-trunk base (§2).
-- **Omitting the method on `gh stack merge`** — it otherwise falls back to
-  whatever was last used *on this machine*, so the shape of trunk depends on who
-  ran it. Pin `--squash` (§8).
-- **Thinking `--squash` flattens a stack into one commit** — it is per pull
-  request: n PRs land n squashed commits, same shape as `--rebase` (§8).
-- **Merging layer-by-layer with `gh pr merge`** — that abandons atomicity;
-  `gh stack merge` lands the whole stack or none of it (§8).
-- **Calling `gh pr merge --auto` on a stack** — use
-  `gh stack merge <top-pr-number> --yes`; calling both double-enqueues (§8).
+- **Enqueueing the layers instead of collapsing them** — this is the failure this
+  section exists to prevent. A queue merges its entries one at a time, so any
+  failure mid-arc lands the layers below it and evicts the rest, leaving a
+  half-arc on an auto-deploying trunk (§8).
+- **Reading `gh stack merge`'s "all-or-nothing" as covering a queued merge** — it
+  covers the direct-merge path only. On a queue-protected branch the call
+  enqueues n entries and the queue decides per entry (§8).
+- **Pushing after the collapse** — a `synchronize` is a new head commit, which
+  re-fires CI and re-fires Codex on the full arc. The frozen head SHA is the
+  whole reason the layer reviews still stand (§8).
+- **Passing a method flag to `gh pr merge --auto`** — a merge-queue branch
+  rejects one, and the queue's own `mergeMethod` decides anyway (§8).
+- **Closing the lower PRs before the top one lands** — they are the rollback if
+  the queue rejects the collapsed PR (§8).
 - **Bare `jj git push` on a stack** — it also pushes the session bookmark when
   that bookmark is tracked. Scope it: `-b 'glob:<session>--*'` (§2).
-- **Merging a stack whose §2 link exited non-zero** — the shape is wrong on
-  GitHub; `gh stack merge` would land a mid-stack PR carrying the layer below it.
-  Repair via `/stack` §6 case B first (§2).
+- **Collapsing a stack whose §2 link exited non-zero** — the shape is wrong on
+  GitHub, so the top PR may not contain every layer. Repair via `/stack` §6
+  case B first (§2).
 - **Running `gh stack` in the worktree** — it needs a git repository. Run it from
   `$SRC`. (`gh api …/stacks` and `gh pr list` need none and run here.)
 - **Thinking `-R "$SLUG"` alone fixes bare `gh`** — every `gh pr` subcommand that
