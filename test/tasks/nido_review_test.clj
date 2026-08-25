@@ -257,7 +257,7 @@
   (doseq [[status marker]
           {:sufficient           "holds against the code"
            :retreated          "below what its own round would check"
-           :no-progress        "still open"
+           :no-progress        "what it left"
            :amend-noop         "nothing was appended"
            :amend-unreadable   "would not parse as EDN"
            :amend-invalid      "the ledger refused"

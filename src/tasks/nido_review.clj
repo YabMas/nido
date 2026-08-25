@@ -210,7 +210,7 @@
    run and a round that ran and found nothing look identical on a terminal
    unless something insists otherwise."
   {:retreated  "the record was amended below what its own round would check — read the weakenings above before accepting any of it"
-   :no-progress "the amender stopped changing anything the judge cares about; the last findings are still open"
+   :no-progress "the amender stopped changing anything the judge cares about — the findings below are what it left"
    :unfixable "everything fixable was fixed; what remains was raised three rounds running and did not move — these are for you"
    :disputed   "the judge restated a finding the amender objected to twice — neither can settle it, so you do"
    :amend-noop "the amender produced no record — nothing was appended"

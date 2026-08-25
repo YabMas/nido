@@ -203,3 +203,18 @@
         out (rloop/run-loop {:run-id "r" :pipeline pipe :emit emit :finding-key :id})]
     (is (= :unfixable (:status out)))
     (is (= ["stuck"] (:unfixable out)) "one entry, not one per raising")))
+
+(deftest a-stuck-finding-is-named-rather-than-the-round-being-called-stalled
+  ;; Both are true when a run ends holding the same findings, and only one says
+  ;; which. Watched: a survey converged 8 → 1 → 1 with eleven of twelve items
+  ;; confirmed, and reported :no-progress — sending a reader to look at
+  ;; everything when the answer was a single claim.
+  (let [[_ emit] (capturing)
+        pipe [(stage :judge (fn [c] (assoc c :findings [{:id "immovable"}])))
+              (stage :amend (fn [c] (update c :history (fnil conj [])
+                                            {:iter (:iter c) :findings (:findings c)})))]
+        out (rloop/run-loop {:run-id "r" :pipeline pipe :emit emit :finding-key :id})]
+    (is (= :no-progress (:status out))
+        "an identical set trips the stall check at round two, before three rounds pass")
+    (is (= ["immovable"] (:unfixable out))
+        "and it is named — a run that stops holding findings says which")))

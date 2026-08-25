@@ -127,16 +127,29 @@
                     (:status ctx)
                     ctx
 
-                    (no-progress? finding-key prev-findings (:findings ctx))
-                    (assoc ctx :status :no-progress)
-
-                    ;; Everything fixable is fixed and the rest will not move.
-                    ;; Distinct from :no-progress, which says the round changed
-                    ;; nothing at all — a human reading one needs to know whether
-                    ;; to look at every finding or only at these.
+                    ;; BEFORE no-progress?, because both are true of a run that
+                    ;; ends holding the same findings and only this one says
+                    ;; which. :no-progress sends a reader to look at everything;
+                    ;; :unfixable names the two or three that did not move, which
+                    ;; on a converged survey is the whole of what is left.
                     (seq (unfixable finding-key (:history ctx) (:findings ctx)))
                     (assoc ctx :status :unfixable
                            :unfixable (vec (unfixable finding-key (:history ctx) (:findings ctx))))
+
+                    ;; Reached when the round changed nothing AND no single
+                    ;; finding has yet survived long enough to be called stuck —
+                    ;; an amender that stopped working rather than one that ran
+                    ;; out of things it could fix.
+                    (no-progress? finding-key prev-findings (:findings ctx))
+                    ;; Naming what is still open, like :unfixable does. A run
+                    ;; that stops holding findings should say which; the two
+                    ;; statuses differ in how long they persisted, not in whether
+                    ;; a reader is told what they were. An identical set always
+                    ;; trips this at round two, so :unfixable never sees it —
+                    ;; which made "names the findings" a property of the wrong
+                    ;; one of them.
+                    (assoc ctx :status :no-progress
+                           :unfixable (vec (distinct (map finding-key (:findings ctx)))))
 
                     (and max-iters (>= iter max-iters))
                     (assoc ctx :status :max-iters)
