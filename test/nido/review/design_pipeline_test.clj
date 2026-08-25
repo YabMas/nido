@@ -6,12 +6,29 @@
   (:require
    [babashka.fs :as fs]
    [clojure.string :as str]
-   [clojure.test :refer [deftest is testing]]
+   [clojure.test :refer [deftest is testing use-fixtures]]
    [nido.coordinator.agent :as agent]
+   [nido.coordinator.state :as cstate]
    [nido.coordinator.workstream :as ws]
    [nido.review.loop :as rloop]
    [nido.review.record :as record]
    [nido.review.stages :as stages]))
+
+(defn- with-tmp-nido-root
+  "Every stage here writes where the real stage writes — run dirs, answer files
+   — so without this the suite scatters run directories through the user's live
+   ~/.nido/runs/. Redirecting the root is the fix rather than stubbing the calls
+   that bite, because the hazard is structural: the next side effect a stage
+   grows would land there too."
+  [f]
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (cstate/ensure-dirs!)
+        (f))
+      (finally (fs/delete-tree tmp)))))
+
+(use-fixtures :each with-tmp-nido-root)
 
 (def ^:private a-design
   {:format :design

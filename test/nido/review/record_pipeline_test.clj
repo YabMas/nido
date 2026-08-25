@@ -5,14 +5,31 @@
    codex judge through `baseline-review!`, the amender through `agent/launch!` —
    so nothing here spawns a process."
   (:require
+   [babashka.fs :as fs]
    [clojure.string :as str]
-   [clojure.test :refer [deftest is testing]]
+   [clojure.test :refer [deftest is testing use-fixtures]]
    [nido.coordinator.agent :as agent]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.workstream :as ws]
    [nido.review.loop :as rloop]
    [nido.review.record :as record]
    [nido.review.stages :as stages]))
+
+(defn- with-tmp-nido-root
+  "Every stage here writes where the real stage writes — run dirs, answer files
+   — so without this the suite scatters run directories through the user's live
+   ~/.nido/runs/. Redirecting the root is the fix rather than stubbing the calls
+   that bite, because the hazard is structural: the next side effect a stage
+   grows would land there too."
+  [f]
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (cstate/ensure-dirs!)
+        (f))
+      (finally (fs/delete-tree tmp)))))
+
+(use-fixtures :each with-tmp-nido-root)
 
 (def ^:private a-baseline
   {:format :baseline
@@ -136,12 +153,21 @@
     (is (some? appended))))
 
 (deftest an-amender-that-wrote-nothing-leaves-the-ledger-alone
-  ;; Also the staleness guard: these tests share a run-id, so the out-path this
-  ;; round would use still holds an earlier test's record. A round that read it
-  ;; would append someone else's answer to the ledger as a superseding baseline.
   (let [[out appended] (with-amend {} (ctx :findings [a-finding]))]
     (is (= :amend-noop (:status out)))
     (is (nil? appended))))
+
+(deftest a-leftover-answer-is-not-mistaken-for-this-rounds
+  ;; "The file is there" is the whole test for whether the amender answered, so
+  ;; a leftover from an earlier run under this run-id would be appended to the
+  ;; ledger as a superseding baseline nobody wrote this round.
+  (let [dir  (cstate/run-dir "r1")
+        _    (fs/create-dirs dir)
+        _    (spit (str (fs/path dir "amend-round-1.edn"))
+                   (pr-str {:record (assoc a-baseline :area "someone else's answer")}))
+        [out appended] (with-amend {} (ctx :findings [a-finding]))]
+    (is (= :amend-noop (:status out)))
+    (is (nil? appended) "the stale record never reached the ledger")))
 
 (deftest an-unreadable-answer-is-its-own-outcome
   (let [[out appended] (with-amend {:writes (fn [p] (spit p "{:not edn"))}
