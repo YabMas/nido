@@ -858,6 +858,15 @@
    "Stay at the level the survey is written at: modules, what each hides, and how\n"
    "their composition produces the behaviour. A finding about one line of code\n"
    "matters here only insofar as it refutes a claim about the decomposition.\n\n"
+   ;; The amender is the pass that WRITES readings, and it was the one pass never
+   ;; told what a reading may say. It invented verdicts outside a lens's
+   ;; vocabulary and lenses outside the registry; the ledger refused the record,
+   ;; and an otherwise good amendment was thrown away whole.
+   (when (contains? baseline :modules)
+     (str "A reading may only use its own lens's verdicts, and a lens only reads the\n"
+          "subject it is about. The ledger refuses anything else and the whole record\n"
+          "is lost with it, so use these and nothing else:\n"
+          (lens-block)))
    "Read the cited code before you change a word of the record.\n\n"
    "Do NOT edit any source file. This pass writes one file and nothing else.\n\n"
    "THE CURRENT BASELINE:\n\n"
@@ -1138,6 +1147,11 @@
                        (when (seq (:evidence f))
                          (str "\n  evidence: " (str/join ", " (:evidence f))))))
                 findings))))
+   (when (contains? design :modules)
+     (str "\n\nA reading may only use its own lens's verdicts, and a lens only reads the\n"
+          "subject it is about. The ledger refuses anything else and the whole record\n"
+          "is lost with it, so use these and nothing else:\n"
+          (lens-block)))
    "\n\nIF A CHECK IS WRONGLY MARKED BROKEN, SAY SO INSTEAD OF AMENDING FOR IT.\n"
    "You do not settle it — the judge is asked again with your objection in front\n"
    "of it. An objection with no reason is dropped.\n\n"

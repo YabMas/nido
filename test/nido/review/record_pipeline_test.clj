@@ -33,6 +33,10 @@
 
 (def ^:private a-baseline
   {:format :baseline
+   :modules [{:module "the order aggregate"
+              :hides "the order in which lines are summed"
+              :interface "an order's total"}]
+   :composition "only the aggregate sees the lines, so only it sums them"
    :area "order totalling"
    :bounded-by "money amounts on an order"
    :shape "the aggregate is the only thing that sums lines"
@@ -509,3 +513,18 @@
         [out _] (with-amend {:writes (fn [p] (spit p (pr-str {:record corrected})))}
                             (ctx :findings [a-finding]))]
     (is (= corrected (:under-repair out)))))
+
+(deftest the-amender-is-told-what-a-reading-may-say
+  ;; It is the pass that WRITES readings and was the only one never shown the
+  ;; vocabulary. Watched live: it invented a :tarpit/control verdict and a lens
+  ;; outside the registry, the ledger refused the record, and a nineteen-reading
+  ;; amendment was lost whole.
+  (let [p (record/amend-prompt {:baseline a-baseline :findings [a-finding] :out-path "/x"})]
+    (is (str/includes? p "THE PERSPECTIVES THIS SURVEY IS READ THROUGH"))
+    (is (str/includes? p "imposed") "the verdicts themselves, not just the lens names")
+    (is (str/includes? p "the whole record\nis lost with it")
+        "and what it costs to guess"))
+  (testing "a survey that cannot carry readings is not handed a vocabulary it cannot use"
+    (let [p (record/amend-prompt {:baseline (dissoc a-baseline :modules)
+                                  :findings [a-finding] :out-path "/x"})]
+      (is (not (str/includes? p "THE PERSPECTIVES THIS SURVEY IS READ THROUGH"))))))
