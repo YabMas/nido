@@ -342,3 +342,27 @@
           "redesign, recut and re-survey are different instructions; collapsing
            them is worse than saying nothing")
       (is (= r (report/validate-event :design-decision r))))))
+
+(deftest a-prompt-never-promises-what-the-record-does-not-carry
+  ;; The failure this catches is the one the whole arc is against: a header
+  ;; asserting every claim names its counterexample, over claims that name none
+  ;; because they were written before the rule existed.
+  (let [legacy (-> baseline
+                   (dissoc :modules :composition)
+                   (update :load-bearing
+                           (fn [lb] (mapv #(dissoc % :falsified-by :readings) lb))))
+        p (record/baseline-prompt {:baseline legacy})]
+    (is (not (str/includes? p "refuted by:"))
+        "no empty label where the author committed to nothing")
+    (is (str/includes? p "predates the rule"))
+    (is (str/includes? p "treat\na claim you cannot see any way to refute as a finding")
+        "and the gap becomes something to report rather than something to ignore")
+    (is (not (str/includes? p "THE PERSPECTIVES THIS SURVEY IS READ THROUGH"))
+        "a vocabulary nothing is read through is noise in the prompt")
+    (is (not (str/includes? p "A READING IS A CLAIM TOO")))))
+
+(deftest a-current-survey-still-gets-the-full-apparatus
+  (let [p (record/baseline-prompt {:baseline baseline})]
+    (is (str/includes? p "each with the\ncounterexample that would refute it"))
+    (is (str/includes? p "refuted by: a caller outside the aggregate"))
+    (is (str/includes? p "THE PERSPECTIVES THIS SURVEY IS READ THROUGH"))))

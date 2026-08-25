@@ -214,8 +214,13 @@
   (str/join
    "\n"
    (map (fn [{:keys [property falsified-by readings evidence]}]
-          (str "- " property "\n"
-               "    refuted by: " falsified-by
+          (str "- " property
+               ;; Only when there is one. A survey written before counterexamples
+               ;; were required carries none, and printing the label with nothing
+               ;; after it tells the judge a claim is refutable in a way its
+               ;; author never committed to.
+               (when-not (str/blank? (str falsified-by))
+                 (str "\n    refuted by: " falsified-by))
                (readings-lines readings "    ")
                (when (seq evidence)
                  (str "\n    read from:  " (str/join ", " evidence)))))
@@ -245,21 +250,27 @@
    "EVERY CLAIM CARRIES WHAT WOULD REFUTE IT. That is what you go looking for.\n"
    "Not `does this feel right` — `does that specific counterexample exist in the\n"
    "code`. Report a finding only when you found one, and say what it is.\n\n"
-   "A READING IS A CLAIM TOO, and refutable on its own terms. State read as\n"
-   "essential is refuted by a derivation that computes it. An ordering read as\n"
-   "required is refuted by showing the two things commute. A module read as deep\n"
-   "is refuted by an interface that costs about what it hides. A dependency read\n"
-   "as on-interface is refuted by a caller reaching past it. Check the readings\n"
-   "as well as the properties.\n"
-   (lens-block)
+   (when (some (comp seq :readings)
+               (concat (:load-bearing baseline) (:modules baseline)))
+     (str "A READING IS A CLAIM TOO, and refutable on its own terms. State read as\n"
+          "essential is refuted by a derivation that computes it. An ordering read as\n"
+          "required is refuted by showing the two things commute. A module read as\n"
+          "deep is refuted by an interface that costs about what it hides. A\n"
+          "dependency read as on-interface is refuted by a caller reaching past it.\n"
+          "Check the readings as well as the properties.\n"
+          (lens-block)))
    "AREA: " (:area baseline) "\n"
    "BOUNDED BY: " (:bounded-by baseline) "\n"
    "SHAPE: " (:shape baseline) "\n"
    (module-block (:modules baseline))
    (when-let [c (:composition baseline)]
      (str "\nCOMPOSITION — how those are claimed to produce the behaviour:\n" c "\n"))
-   "\nLOAD-BEARING — what is claimed to break if violated, each with the\n"
-   "counterexample that would refute it:\n"
+   "\nLOAD-BEARING — what is claimed to break if violated"
+   (if (some :falsified-by (:load-bearing baseline))
+     ", each with the\ncounterexample that would refute it:\n"
+     (str ".\n\nThis survey predates the rule that a claim must name its own\n"
+          "counterexample, so none of them do. Judge the claims as stated, and treat\n"
+          "a claim you cannot see any way to refute as a finding in its own right.\n"))
    (claim-block (:load-bearing baseline)) "\n"
    (when-let [h (seq (:health baseline))]
      (str "\nHEALTH — claimed about whether what holds is sound. :design means a\n"
