@@ -1,11 +1,24 @@
 (ns nido.coordinator.pickup-test
   (:require
+   [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
    [nido.coordinator.pickup :as pickup]
    [nido.coordinator.queue :as queue]
+   [nido.coordinator.state :as cstate]
+   [nido.coordinator.tickets :as tickets]
    [nido.coordinator.workstream :as ws]
    [nido.notion.client :as client]
    [nido.notion.views :as views]))
+
+(defn- with-tmp
+  "Run `f` against a throwaway nido root. Mandatory for every pickup! test:
+   pickup! now claims the ticket, so an unisolated run writes a real ticket
+   record into the live ~/.nido and parks a phantom drive on the board."
+  [f]
+  (let [tmp (fs/create-temp-dir)]
+    (try (with-redefs [cstate/nido-root (constantly (str tmp))]
+           (cstate/ensure-dirs!) (f))
+         (finally (fs/delete-tree tmp)))))
 
 (deftest extract-page-id-from-urls-and-ids
   (let [pid "2a1b3c4d5e6f7081a2b3c4d5e6f70810"]
@@ -90,14 +103,56 @@
     (is (= {:error :auth} (pickup/resolve-ref :brian "BR-4826" "tok")))))
 
 (deftest pickup-enqueues-plan-bug-for-a-resolved-ref
-  (with-redefs [pickup/resolve-ref (fn [_ _ _] {:id "BR-1" :page-id "pg-1" :url "u" :title "t"})
-                ws/find-by-ref-id (fn [_ _] nil)]
-    (let [captured (atom nil)]
-      (with-redefs [queue/enqueue! (fn [env] (reset! captured env) "/q/x.edn")]
-        (let [r (pickup/pickup! :brian "https://notion.so/x-<id>" "tok")]
-          (is (= :driving (:decision r)))
-          (is (= {:project :brian :trigger :plan-bug} (:target @captured)))
-          (is (= {:id "BR-1" :notion-page-id "pg-1" :url "u" :title "t"} (:payload @captured))))))))
+  (with-tmp
+    (fn []
+      (with-redefs [pickup/resolve-ref (fn [_ _ _] {:id "BR-1" :page-id "pg-1" :url "u" :title "t"})
+                    ws/find-by-ref-id (fn [_ _] nil)]
+        (let [captured (atom nil)]
+          (with-redefs [queue/enqueue! (fn [env] (reset! captured env) "/q/x.edn")]
+            (let [r (pickup/pickup! :brian "https://notion.so/x-<id>" "tok")]
+              (is (= :driving (:decision r)))
+              (is (= {:project :brian :trigger :plan-bug} (:target @captured)))
+              (is (= {:id "BR-1" :page-id "pg-1" :notion-page-id "pg-1" :url "u" :title "t"}
+                     (:payload @captured))
+                  "the page id rides under BOTH keys — notify reads :notion-page-id, external-ref reads :page-id"))))))))
+
+(deftest pickup-claims-the-ticket-so-the-board-reads-it-as-active
+  (with-tmp
+    (fn []
+      (with-redefs [pickup/resolve-ref (fn [_ _ _] {:id "BR-1" :page-id "pg-1" :url "u" :title "t"})
+                    ws/find-by-ref-id  (fn [_ _] nil)
+                    queue/enqueue!     (fn [_env] "/q/x.edn")]
+        (pickup/pickup! :brian "https://notion.so/x" "tok")
+        (is (= :planning (tickets/status :brian "BR-1"))
+            "without the claim the board projects the drive into the :triage band")
+        (let [m (tickets/read-meta :brian "BR-1")]
+          (is (= "pg-1" (:notion-page-id m)))
+          (is (= "t" (:title m)))
+          (is (= :pickup (:opened-by m))))))))
+
+(deftest pickup-does-not-regress-a-ticket-already-being-implemented
+  (with-tmp
+    (fn []
+      (tickets/open! :brian "BR-1" {:notion-page-id "pg-1" :url "u" :title "t"
+                                    :opened-by :triage-new})
+      (tickets/set-status! :brian "BR-1" :implementing)
+      (with-redefs [pickup/resolve-ref (fn [_ _ _] {:id "BR-1" :page-id "pg-1" :url "u" :title "t"})
+                    ws/find-by-ref-id  (fn [_ _] nil)
+                    queue/enqueue!     (fn [_env] "/q/x.edn")]
+        (is (= :driving (:decision (pickup/pickup! :brian "https://notion.so/x" "tok"))))
+        (is (= :implementing (tickets/status :brian "BR-1"))
+            "re-driving a live ticket must not pull it back to :planning")))))
+
+(deftest pickup-claims-a-ticket-that-was-never-triaged-in-nido
+  (with-tmp
+    (fn []
+      (with-redefs [pickup/resolve-ref (fn [_ _ _] {:id "FU-15" :page-id "pg-9" :url "u" :title "t"})
+                    ws/find-by-ref-id  (fn [_ _] nil)
+                    queue/enqueue!     (fn [_env] "/q/x.edn")]
+        (is (nil? (tickets/read-meta :brian "FU-15")) "no record to start from")
+        (pickup/pickup! :brian "https://notion.so/x" "tok")
+        (is (= :planning (tickets/status :brian "FU-15"))
+            "pickup bypasses the triage gate promote enforces — a record-less ticket still claims")))))
 
 (deftest pickup-reports-unresolved
   (with-redefs [pickup/resolve-ref (fn [_ _ _] {:error :not-found})]
@@ -126,21 +181,25 @@
       (is (= :no-token (:error r))))))
 
 (deftest pickup-reports-continuing-when-workstream-exists
-  (with-redefs [pickup/resolve-ref (fn [_ _ _] {:id "BR-1" :page-id "pg-1" :url "u" :title "t"})
-                ws/find-by-ref-id  (fn [_project external-id]
-                                     (is (= "BR-1" external-id))
-                                     {:id "ws-42"})
-                queue/enqueue!     (fn [_env] "/q/x.edn")]
-    (let [r (pickup/pickup! :brian "https://notion.so/x" "tok")]
-      (is (= :driving (:decision r)))
-      (is (true? (:continuing? r)))
-      (is (= "ws-42" (:ws-id r))))))
+  (with-tmp
+    (fn []
+      (with-redefs [pickup/resolve-ref (fn [_ _ _] {:id "BR-1" :page-id "pg-1" :url "u" :title "t"})
+                    ws/find-by-ref-id  (fn [_project external-id]
+                                         (is (= "BR-1" external-id))
+                                         {:id "ws-42"})
+                    queue/enqueue!     (fn [_env] "/q/x.edn")]
+        (let [r (pickup/pickup! :brian "https://notion.so/x" "tok")]
+          (is (= :driving (:decision r)))
+          (is (true? (:continuing? r)))
+          (is (= "ws-42" (:ws-id r))))))))
 
 (deftest pickup-reports-starting-fresh-when-no-workstream
-  (with-redefs [pickup/resolve-ref (fn [_ _ _] {:id "BR-1" :page-id "pg-1" :url "u" :title "t"})
-                ws/find-by-ref-id  (fn [_ _] nil)
-                queue/enqueue!     (fn [_env] "/q/x.edn")]
-    (let [r (pickup/pickup! :brian "https://notion.so/x" "tok")]
-      (is (= :driving (:decision r)))
-      (is (false? (:continuing? r)))
-      (is (nil? (:ws-id r))))))
+  (with-tmp
+    (fn []
+      (with-redefs [pickup/resolve-ref (fn [_ _ _] {:id "BR-1" :page-id "pg-1" :url "u" :title "t"})
+                    ws/find-by-ref-id  (fn [_ _] nil)
+                    queue/enqueue!     (fn [_env] "/q/x.edn")]
+        (let [r (pickup/pickup! :brian "https://notion.so/x" "tok")]
+          (is (= :driving (:decision r)))
+          (is (false? (:continuing? r)))
+          (is (nil? (:ws-id r))))))))
