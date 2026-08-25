@@ -528,3 +528,21 @@
     (let [p (record/amend-prompt {:baseline (dissoc a-baseline :modules)
                                   :findings [a-finding] :out-path "/x"})]
       (is (not (str/includes? p "THE PERSPECTIVES THIS SURVEY IS READ THROUGH"))))))
+
+(deftest the-vocabulary-says-which-subject-each-lens-reads
+  ;; Watched live: an amender attached a claim lens to a module. Only
+  ;; :ousterhout/depth reads a module, the registry has always known it, and the
+  ;; prompt never said so — and the cost of guessing is not a bad field but an
+  ;; invalid dispatch, which refuses the whole record.
+  (let [p (record/amend-prompt {:baseline a-baseline :findings [a-finding] :out-path "/x"})]
+    (is (str/includes? p "a MODULE (never a claim)"))
+    (is (str/includes? p "a LOAD-BEARING CLAIM (never a module)"))))
+
+(deftest a-refused-record-says-which-field-was-wrong
+  ;; "Invalid event report" names nothing an amender could fix, and the explain
+  ;; data was on the exception all along.
+  (let [[out _] (with-amend {:append-throws? true
+                             :writes (fn [p] (spit p (pr-str a-baseline)))}
+                            (ctx :findings [a-finding]))]
+    (is (= :amend-invalid (:status out)))
+    (is (str/includes? (str (:amend-error out)) "schema said no"))))

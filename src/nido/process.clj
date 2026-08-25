@@ -4,6 +4,54 @@
    [babashka.process :refer [shell]]
    [clojure.string :as str]))
 
+(def ^:private live-children
+  "Agent processes this JVM started and is still waiting on.
+
+   nido disables babashka.process's destroy-tree shutdown hook globally, because
+   on macOS it parks forever after a child has already exited and leaves every
+   `bb nido:*` hanging in shutdown. The cost of that cure is orphans: kill a
+   review loop and its judge keeps running, keeps billing, and keeps writing to
+   a run directory nothing will read.
+
+   So the children are tracked instead, and one hook stops the ones that are
+   still alive. It destroys only what is registered — never a process tree — so
+   it cannot reproduce the hang it was written around."
+  (atom #{}))
+
+(defn stop-live-children!
+  "Stop every registered child that is still running. Returns how many it
+   stopped. Called from the shutdown hook, and directly by tests — a reaper that
+   only runs at JVM exit is a reaper nothing can check."
+  []
+  (count
+   (filter true?
+           (for [^Process p @live-children]
+             (try
+               (when (.isAlive p)
+                 (.destroy p)
+                 ;; A judge given no chance to exit leaves a half-written answer
+                 ;; file, which the next round would read as this round's.
+                 (when-not (.waitFor p 5 java.util.concurrent.TimeUnit/SECONDS)
+                   (.destroyForcibly p))
+                 true)
+               (catch Throwable _ nil))))))
+
+(defonce ^:private stop-children-at-exit
+  (delay
+    (.addShutdownHook (Runtime/getRuntime) (Thread. ^Runnable stop-live-children!))
+    true))
+
+(defn with-child-registered
+  "Run `f` with `proc` registered for shutdown, deregistering however f ends.
+
+   Takes the java.lang.Process rather than babashka's map so both launchers can
+   use it — one holds a process map, the other only ever had a shell call."
+  [^Process proc f]
+  @stop-children-at-exit
+  (swap! live-children conj proc)
+  (try (f)
+       (finally (swap! live-children disj proc))))
+
 (defn process-alive? [pid]
   (zero? (:exit (shell {:continue true :out :string :err :string}
                        "kill" "-0" (str pid)))))

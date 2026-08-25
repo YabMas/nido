@@ -3,6 +3,7 @@
 
    See spec §Agent launch."
   (:require
+   [nido.process :as nprocess]
    [babashka.process :as p]
    [cheshire.core :as json]
    [clojure.java.io :as jio]
@@ -130,7 +131,10 @@
                         (Thread/sleep 10000)
                         (when (.isAlive ^Process (:proc proc))
                           (p/destroy-tree proc)))))]
-    (try
+    (nprocess/with-child-registered
+     (:proc proc)
+     (fn []
+      (try
       (with-open [w (jio/writer log-path :append true)]
         (with-open [r (jio/reader (:out proc))]
           (doseq [line (line-seq r)]
@@ -151,4 +155,4 @@
        :timed-out?        @timed-out
        :num-turns         (:num_turns rev)
        :result-error?     (boolean (:is_error rev))
-       :result-text       (:result rev)})))
+       :result-text       (:result rev)})))))

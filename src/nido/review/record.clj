@@ -40,6 +40,7 @@
    [clojure.edn :as edn]
    [clojure.java.io :as jio]
    [clojure.string :as str]
+   [malli.error :as me]
    [nido.coordinator.agent :as agent]
    [nido.coordinator.report :as report]
    [nido.coordinator.state :as cstate]
@@ -179,8 +180,17 @@
        "says which verdict holds and why, and you can go and find out.\n\n"
        (str/join
         "\n"
-        (for [[lens {:keys [source question verdicts]}] (sort-by key report/lenses)]
+        (for [[lens {:keys [source question verdicts applies-to]}] (sort-by key report/lenses)]
           (str "  " (namespace lens) "/" (name lens) " — " question "\n"
+               ;; WHICH SUBJECT, stated first. The registry has always known a
+               ;; lens reads either a claim or a module and the prompt never said
+               ;; so, and an amender that guesses wrong has its whole record
+               ;; refused: a claim lens on a module is an invalid dispatch, not a
+               ;; bad field.
+               "    reads: " (case applies-to
+                               :claim  "a LOAD-BEARING CLAIM (never a module)"
+                               :module "a MODULE (never a claim)"
+                               (name applies-to)) "\n"
                "    from " source "\n"
                (str/join "\n"
                          (for [[v d] (sort-by key verdicts)]
@@ -896,6 +906,17 @@
    "appends it as the superseding baseline. Do not append it yourself and do not\n"
    "commit anything."))
 
+(defn- ledger-refusal
+  "Why the ledger refused a record, in a form somebody can act on.
+
+   `ex-message` alone is \"Invalid event report\", which names no field and tells
+   an amender nothing it could fix. The explain data is already on the exception;
+   this is only a matter of reading it out."
+  [e]
+  (let [explain (:explain (ex-data e))]
+    (str (or (ex-message e) "the ledger refused it")
+         (when explain (str " — " (pr-str (me/humanize explain)))))))
+
 (def judge-stage
   "The same read-only pass the one-shot round ran, with its verdict appended to
    the ledger exactly as before.
@@ -1025,7 +1046,7 @@
                                                   {:kind :baseline}
                                                   (pr-str (ws/unstamp record)))
                                 nil
-                                (catch Exception e (or (ex-message e) "the ledger refused it")))]
+                                (catch Exception e (ledger-refusal e)))]
                    (if err
                      (assoc ctx :control :stop :status :amend-invalid
                             :amend-error err)
@@ -1333,7 +1354,7 @@
                                            {:kind :design}
                                            (pr-str (ws/unstamp record)))
                          nil
-                         (catch Exception e (or (ex-message e) "the ledger refused it")))]
+                         (catch Exception e (ledger-refusal e)))]
             (if err
               (assoc ctx :control :stop :status :amend-invalid :amend-error err)
               (let [retreats (retreat/design-retreats prev record)

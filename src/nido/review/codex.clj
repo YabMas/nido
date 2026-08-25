@@ -3,6 +3,7 @@
    -> normalized findings. nido worktrees are non-colocated jj workspaces, so
    git-coupled `codex review` cannot run there."
   (:require
+   [nido.process :as nprocess]
    [babashka.fs :as fs]
    [babashka.process :as p]
    [cheshire.core :as json]
@@ -69,10 +70,18 @@
 
 (defn run-codex!
   "Run `codex exec` with output-schema. Seam for tests. Returns {:exit <int>}.
-   Writes the final JSON response to :out-path."
+   Writes the final JSON response to :out-path.
+
+   Spawned rather than shelled so the judge can be stopped when this process is.
+   A killed loop used to leave its judge running — still billing, still writing
+   an answer nothing would ever read — because nido disables the destroy-tree
+   hook globally to cure a macOS shutdown hang."
   [opts]
-  (let [res (apply p/shell (codex-argv opts))]
-    {:exit (:exit res)}))
+  (let [[opts' & cmd] (codex-argv opts)
+        proc (apply p/process opts' cmd)]
+    (nprocess/with-child-registered
+      (:proc proc)
+      #(let [res @proc] {:exit (:exit res)}))))
 
 (defn composition-schema
   "The findings schema with the composition pass's two extra fields: the `kind`
