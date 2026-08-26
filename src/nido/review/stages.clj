@@ -29,6 +29,21 @@
    fails on. See `prompts/disposition-vocabulary`."
   (into #{} (map :disposition) prompts/disposition-vocabulary))
 
+(def ^:private settling-dispositions
+  "The dispositions that END a finding — decided, nothing further owed.
+
+   Read off the same list, so convergence and the carried answers cannot come to
+   different views about whether a finding is still open. A finding that is NOT
+   settled is one somebody still owes something on, whether that is a fixer, a
+   human, or a destination this loop does not have yet."
+  (into #{} (comp (filter :settles?) (map :disposition))
+        prompts/disposition-vocabulary))
+
+(defn settled?
+  "Has this finding been decided? See `settling-dispositions`."
+  [f]
+  (contains? settling-dispositions (:disposition f)))
+
 (defn- ruling
   "One per-finding ruling from the warden's JSON. A disposition outside the
    four is read as :fix rather than dropped — the fail-safe direction, and the
@@ -399,8 +414,8 @@
    they were reviewed at.
 
    Owed, not unfixed. A target converges when every finding naming it was
-   CLOSED — decided, by a named authority — not merely when none of them was
-   handed to a fixer. Those two differ for every disposition that is neither,
+   SETTLED — decided, by a disposition that ends it — not merely when none of
+   them was handed to a fixer. Those two differ for every disposition that is neither,
    and the difference is not academic: a finding the loop has no move for is
    still open, and marking its target converged writes that patch into a store
    that only grows, so a later run at the same content skips the target and the
@@ -416,7 +431,7 @@
    changes the patch of every layer above it, so its hash stops matching on its
    own."
   [reviews findings]
-  (let [open   (remove #(= :closed (:disposition %)) findings)
+  (let [open   (remove settled? findings)
         owners (into #{} (map :owner-layer) open)]
     (into []
           (comp (map :target)
@@ -428,13 +443,20 @@
           reviews)))
 
 (defn answered-for
-  "What this target reported and the warden closed. Carried forward under the
+  "What this target reported and the warden SETTLED. Carried forward under the
    patch hash so next round's fresh reviewer, reporting the same thing, gets
-   answered rather than re-adjudicated."
+   answered rather than re-adjudicated.
+
+   Every settling disposition, not only a close. A decline is a decision — the
+   finding is true and this branch is leaving it — and a decision re-argued
+   every round is not one: the reviewer has no memory, so without this the same
+   defect is declined again and again at full cost, and the reason given the
+   first time is never seen by the round that needs it. The disposition rides
+   along so the next warden can tell what kind of answer it is looking at."
   [label findings]
   (into []
-        (comp (filter #(and (= label (:from-layer %)) (= :closed (:disposition %))))
-              (map #(select-keys % [:id :title :authority :because])))
+        (comp (filter #(and (= label (:from-layer %)) (settled? %)))
+              (map #(select-keys % [:id :title :disposition :authority :because])))
         findings))
 
 (defn record-convergence!

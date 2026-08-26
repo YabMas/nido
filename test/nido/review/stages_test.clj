@@ -423,13 +423,22 @@
     (is (= ["b"] (map :label (stages/converged-targets
                               reviews [{:disposition :park :owner-layer "a"}])))
         "a parked finding leaves its owner open, and the stack with it")
+    (is (= ["a" "b" "stack"]
+           (map :label (stages/converged-targets
+                        reviews [{:disposition :deviation :owner-layer "a"}])))
+        "a deviation is a decision, so it settles its target")
     (is (= ["b"] (map :label (stages/converged-targets
-                              reviews [{:disposition :deviation :owner-layer "a"}])))
-        "so does a deviation — neither was settled by a close")
+                              reviews [{:disposition :declined :owner-layer "a"}
+                                       {:disposition :park :owner-layer "a"}])))
+        "and a decline settles, so only the park is still holding a")
     (is (= ["a" "b" "stack"]
            (map :label (stages/converged-targets
                         reviews [{:disposition :closed :owner-layer "a"}])))
-        "a close is a decision by a named authority, so its target converges")))
+        "a close is a decision by a named authority, so its target converges")
+    (is (= ["a" "b" "stack"]
+           (map :label (stages/converged-targets
+                        reviews [{:disposition :declined :owner-layer "a"}])))
+        "so is a decline: the finding is true and we said we are leaving it")))
 
 (deftest converged-targets-hold-the-stack-for-a-finding-that-names-no-layer
   ;; The warden may rule on a finding without giving it an owner. It then names
@@ -447,6 +456,20 @@
                    "a" [{:id "aa11" :from-layer "a" :disposition :closed :authority "design"}
                         {:id "bb22" :from-layer "a" :disposition :fix}
                         {:id "cc33" :from-layer "b" :disposition :closed}])))))
+
+(deftest answered-for-carries-every-decision-not-only-a-close
+  ;; A decline re-argued every round is not a decision: the reviewer has no
+  ;; memory, so the reason given the first time never reaches the round that
+  ;; needs it. A park is NOT carried — nothing was decided about it.
+  (let [out (stages/answered-for
+             "a" [{:id "aa11" :from-layer "a" :disposition :declined
+                   :because "true, and this branch is leaving it"}
+                  {:id "bb22" :from-layer "a" :disposition :deviation :of "the claim"}
+                  {:id "cc33" :from-layer "a" :disposition :park}
+                  {:id "dd44" :from-layer "a" :disposition :fix}])]
+    (is (= ["aa11" "bb22"] (map :id out)))
+    (is (= [:declined :deviation] (map :disposition out))
+        "the disposition rides along so the next warden knows what kind of answer it is")))
 
 (deftest answered-by-layer-reads-each-layers-answers-under-its-own-patch-hash
   ;; They hang off the layer's patch, so a layer whose content changed has no

@@ -129,15 +129,15 @@
                           :answered [{:id "aa11" :title "t"
                                       :authority "out-of-scope"
                                       :because "the layer below owns it"}]}]})]
-    (is (str/includes? out "ALREADY CLOSED IN AN EARLIER ROUND"))
+    (is (str/includes? out "ALREADY SETTLED IN AN EARLIER ROUND"))
     (is (str/includes? out "shape"))
     (is (str/includes? out "aa11"))
     (is (str/includes? out "out-of-scope"))
-    (is (str/includes? out "say why that answer no longer"))))
+    (is (str/includes? out "say why that answer no\nlonger holds"))))
 
 (deftest warden-omits-the-answered-block-when-nothing-was-closed
   (let [out (prompts/warden-prompt {:findings findings :history [] :design design})]
-    (is (not (str/includes? out "ALREADY CLOSED IN AN EARLIER ROUND")))))
+    (is (not (str/includes? out "ALREADY SETTLED IN AN EARLIER ROUND")))))
 
 (deftest warden-is-told-not-to-patch-a-structural-finding-away
   (let [out (prompts/warden-prompt {:findings findings :history [] :design design})]

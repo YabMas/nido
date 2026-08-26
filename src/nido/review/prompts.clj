@@ -63,11 +63,17 @@
 
    `:requires` is the field a disposition is not a decision without. A close with
    no authority and a deviation with no claim are shrugs, and a shrug is how a
-   review quietly stops reviewing."
+   review quietly stops reviewing.
+
+   `:settles?` marks a disposition that ENDS a finding: it was decided, nobody
+   owes anything further, and a later round re-raising it has found nothing new.
+   It is what convergence and the carried answers both read, so the two cannot
+   disagree about whether a finding is still open."
   [{:disposition :fix
     :means (str "a real defect. It will be handed to a fixer working on\n"
                 "  owner_layer.")}
    {:disposition :closed
+    :settles? true
     :requires :authority
     :means (str "no fix, AND you name the authority — duplicate (of another id\n"
                 "  in this round), out-of-scope (a layer's Out of scope names it),\n"
@@ -75,11 +81,21 @@
                 "  already filed as a ref), false-positive (the reviewer is wrong;\n"
                 "  say what they missed).")}
    {:disposition :deviation
+    :settles? true
     :requires :of
     :means (str "the finding shows a layer's stated CLAIM is not true, and it is\n"
                 "  not something to fix — the claim was overstated. Put the claim\n"
                 "  in `of`. The claim is NOT edited: it is what we intended, and\n"
                 "  the deviation is what actually happened. Both are kept.")}
+   {:disposition :declined
+    :settles? true
+    :requires :because
+    :means (str "the finding is TRUE and we are not acting on it. Not a\n"
+                "  duplicate, not out of scope, not wrong — a real defect this\n"
+                "  branch is choosing to leave. Say why in `because`, in one\n"
+                "  sentence a reader who disagrees could argue with. A decline\n"
+                "  without a reason is indistinguishable from an oversight, and\n"
+                "  the next round has no way to tell it was ever decided.")}
    {:disposition :park
     :means (str "no fix, and not closed either — the loop has no move for it. Two\n"
                 "  cases, and only these two. Either the finding contradicts a named\n"
@@ -406,7 +422,7 @@
        stance "\n"))
 
 (defn- answered-block
-  "What earlier rounds already closed, grouped by the layer that reported it.
+  "What earlier rounds already settled, grouped by the layer that reported it.
 
    The reviewer starts fresh every round, so it re-reports what was closed —
    that is not new information, and re-adjudicating it every round is how a
@@ -419,17 +435,18 @@
    one, but it has to say what changed."
   [answered]
   (when (seq answered)
-    (str "ALREADY CLOSED IN AN EARLIER ROUND, against this exact version of each\n"
+    (str "ALREADY SETTLED IN AN EARLIER ROUND, against this exact version of each\n"
          "layer. A reviewer reporting one of these again has not found anything\n"
-         "new. Close it the same way unless you can say why that answer no longer\n"
-         "holds:\n"
+         "new. Answer it the same way unless you can say why that answer no\n"
+         "longer holds:\n"
          (->> answered
               (map (fn [{:keys [label answered]}]
                      (str "· " label "\n"
                           (->> answered
-                               (map (fn [{:keys [id title authority because]}]
+                               (map (fn [{:keys [id title disposition authority because]}]
                                       (str "  - " id " " title
-                                           " → closed (" authority ")"
+                                           " → " (name (or disposition :closed))
+                                           (when authority (str " (" authority ")"))
                                            (when because (str ": " because)))))
                                (str/join "\n")))))
               (str/join "\n"))
