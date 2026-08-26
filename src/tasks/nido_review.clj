@@ -13,6 +13,7 @@
    See docs/superpowers/specs/2026-06-30-review-tui-frontend-design.md."
   (:require
    [babashka.fs :as fs]
+   [clojure.string :as str]
    [nido.coordinator.session :as csession]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.workstream :as ws]
@@ -65,6 +66,57 @@
       (binding [*out* *err*]
         (println (str "review-loop: could not append :review ledger event — "
                       (ex-message e))))
+      nil)))
+
+(defn parked-blocker
+  "Pure: the halt a run holding parked findings owes a human, or nil.
+
+   A park is the one disposition whose answer is not the loop's to give — it
+   means the finding contradicts a named invariant, so the design is in question
+   rather than its execution. Until now that ended as a status the task printed
+   and a report nobody was told to open; a run that takes hours and finishes
+   while nobody is watching has told no one anything.
+
+   The branches are the two the warden could already see, and they are stated as
+   what taking each COSTS rather than as their names: a gate answered on a name
+   alone is how the wrong branch gets taken by a click. `:options` rather than
+   prose because the ledger refuses a choice written as an essay, and rightly —
+   an essay can only be answered by typing one back."
+  [findings]
+  (when-let [parked (seq (filter #(= :park (:disposition %)) findings))]
+    (let [titles (str/join "; " (map :title parked))]
+      {:format  :blocker
+       :summary (str "The review loop is holding " (count parked)
+                     (if (= 1 (count parked)) " finding" " findings")
+                     " it has no move for: " titles)
+       :needs   (str "Each of these says the design is in question rather than its "
+                     "execution, so the loop stopped rather than patching it away. "
+                     "Does the design stand?")
+       :options [{:label "The design stands"
+                  :summary "The findings are answered by the design as written."
+                  :consequence (str "They are declined on the record and stop being "
+                                    "re-raised. If that is wrong, the next round has "
+                                    "no way to tell.")}
+                 {:label "The design is wrong"
+                  :summary "Supersede the design record, then re-run the review."
+                  :consequence (str "Everything judged against the old record is "
+                                    "judged again, including work already fixed.")}]})))
+
+(defn append-blocker!
+  "Append the halt, if there is one. Best-effort for the same reason
+   `append-review-entry!` is: a finished review must not become a failure because
+   a side record could not be written. Returns the blocker, or nil."
+  [cwd final]
+  (try
+    (when-let [blocker (parked-blocker (:findings final))]
+      (when-let [{:keys [project session]} (lifecycle/session-from-cwd cwd)]
+        (when-let [ws-id (csession/workstream-id-for (keyword project) session)]
+          (ws/append-entry! (keyword project) ws-id {:kind :blocker}
+                            (pr-str blocker))
+          blocker)))
+    (catch Exception e
+      (binding [*out* *err*]
+        (println (str "review-loop: could not append the :blocker — " (ex-message e))))
       nil)))
 
 (defn queue-analysis!
@@ -182,6 +234,9 @@
         status (:status final)
         ws-id  (append-review-entry! cwd final @report-atom report-path)]
     (println (str "review-loop: " (name status) " · report " report-path))
+    (when-let [b (append-blocker! cwd final)]
+      (println (str "review-loop: ⚠ " (:summary b)))
+      (println "  → answer it at the workstream gate; the loop has no move for it"))
     (print-verdict! (append-design-verdict! cwd final @report-atom config))
     ;; Last, so the analysis session finds everything this run wrote — the
     ;; report, the :review ledger entry and the design verdict are all on disk

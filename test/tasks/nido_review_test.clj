@@ -3,6 +3,7 @@
    [babashka.fs :as fs]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing use-fixtures]]
+   [nido.coordinator.report :as report]
    [nido.coordinator.session :as csession]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.workstream :as ws]
@@ -483,3 +484,31 @@
                   (fn [_] {:status :no-progress :history [{:iter 1 :amended? false}]})]
       (let [out (with-out-str (t/baseline-cmd ":cwd" "/w"))]
         (is (str/includes? out "amender stopped changing"))))))
+
+;; ---- the halt a parked finding owes a human ------------------------------
+
+(deftest a-run-holding-nothing-parked-owes-no-halt
+  (is (nil? (t/parked-blocker
+             [{:disposition :closed :title "t"}
+              {:disposition :declined :title "u"}
+              {:disposition :recut :title "v"}]))))
+
+(deftest a-parked-finding-becomes-an-answerable-halt
+  ;; The ledger refuses a choice written as prose, and rightly — an essay can
+  ;; only be answered by typing one back. The branches have to be options.
+  (let [b (t/parked-blocker
+           [{:disposition :park :title "the aggregate rounds twice"}
+            {:disposition :fix :title "not this one"}])]
+    (is (= :blocker (:format b)))
+    (is (str/includes? (:summary b) "the aggregate rounds twice"))
+    (is (str/includes? (:summary b) "1 finding") "counts only what is parked")
+    (is (= 2 (count (:options b))))
+    (is (every? :consequence (:options b))
+        "a gate answered on a name alone is how the wrong branch gets clicked")))
+
+(deftest the-halt-validates-against-the-ledger
+  ;; Written by an agent, so it goes through the same write boundary every other
+  ;; typed event does — including the rule that rejects branches written as
+  ;; prose, which is enforced after the schema and only on write.
+  (let [b (t/parked-blocker [{:disposition :park :title "t"}])]
+    (is (= b (report/validate-event :blocker b)))))
