@@ -113,114 +113,212 @@
       (is (not (str/includes? doc "## Services are already running"))))))
 
 ;; ---------------------------------------------------------------------------
-;; Session-home .claude composition (brian entries + nido native skills)
+;; Session-home .claude composition (project entries + nido native skills/agents)
 ;; ---------------------------------------------------------------------------
 
-(deftest compose-claude-dir-merges-brian-and-nido-skills
+(defn- fake-session-home!
+  "A session home with the `worktree` symlink the launcher relies on, plus a
+   worktree `.claude` holding one skill, one agent and one plain settings file.
+   Returns the {:home :wt} paths."
+  [tmp]
+  (let [home (fs/path tmp "home")
+        wt   (fs/path tmp "wt")]
+    (spit (str (fs/path (doto (fs/path wt ".claude") fs/create-dirs) "settings.json")) "{}")
+    (fs/create-dirs (fs/path wt ".claude" "skills" "e2e"))
+    (spit (str (fs/path wt ".claude" "skills" "e2e" "SKILL.md")) "project e2e")
+    (fs/create-dirs (fs/path wt ".claude" "agents"))
+    (spit (str (fs/path wt ".claude" "agents" "lane-malli.md")) "project lane-malli")
+    (fs/create-dirs home)
+    (fs/create-sym-link (fs/path home "worktree") (str wt))
+    {:home home :wt wt}))
+
+(defn- native-skill! [tmp nm body]
+  (let [d (fs/path tmp "nido" "skills" nm)]
+    (fs/create-dirs d)
+    (spit (str (fs/path d "SKILL.md")) body)
+    (str d)))
+
+(defn- native-agent! [tmp nm body]
+  (let [d (fs/path tmp "nido" "agents")]
+    (fs/create-dirs d)
+    (spit (str (fs/path d nm)) body)
+    (str (fs/path d nm))))
+
+(deftest compose-claude-dir-merges-project-and-nido-entries
   (let [tmp (fs/create-temp-dir)]
     (try
-      (let [home       (fs/path tmp "home")
-            wt         (fs/path tmp "wt")
-            nido-skill (fs/path tmp "nido-skills" "local-ci")]
-        ;; fake worktree .claude: a non-skills entry + a settings file + a skill
-        (fs/create-dirs (fs/path wt ".claude" "agents"))
-        (spit (str (fs/path wt ".claude" "settings.json")) "{}")
-        (fs/create-dirs (fs/path wt ".claude" "skills" "e2e"))
-        (spit (str (fs/path wt ".claude" "skills" "e2e" "SKILL.md")) "brian e2e")
-        ;; nido native skill source
-        (fs/create-dirs nido-skill)
-        (spit (str (fs/path nido-skill "SKILL.md")) "nido local-ci")
-        ;; session home with the worktree symlink the launcher relies on
-        (fs/create-dirs home)
-        (fs/create-sym-link (fs/path home "worktree") (str wt))
-
-        (@#'launcher/compose-claude-dir! (str home) [(str nido-skill)])
+      (let [{:keys [home]} (fake-session-home! tmp)
+            skill (native-skill! tmp "local-ci" "nido local-ci")
+            agent (native-agent! tmp "lane-comments.md" "nido lane-comments")]
+        (@#'launcher/compose-claude-dir! (str home) {"skills" [skill] "agents" [agent]})
 
         (testing ".claude is a real directory, not a symlink"
           (is (fs/directory? (fs/path home ".claude")))
           (is (not (fs/sym-link? (fs/path home ".claude")))))
-        (testing "brian non-skills entries link through and resolve"
-          (is (fs/exists? (fs/path home ".claude" "agents")))
+        (testing "unmerged entries link straight through and resolve"
           (is (= "{}" (slurp (str (fs/path home ".claude" "settings.json"))))))
-        (testing "skills/ merges brian's skills with nido's native skills"
-          (is (fs/directory? (fs/path home ".claude" "skills")))
-          (is (= "brian e2e"
+        (testing "skills/ merges the project's with nido's natives"
+          (is (= "project e2e"
                  (slurp (str (fs/path home ".claude" "skills" "e2e" "SKILL.md")))))
           (is (= "nido local-ci"
-                 (slurp (str (fs/path home ".claude" "skills" "local-ci" "SKILL.md")))))))
+                 (slurp (str (fs/path home ".claude" "skills" "local-ci" "SKILL.md"))))))
+        (testing "agents/ is merged the same way, not re-exposed as one symlink"
+          (is (fs/directory? (fs/path home ".claude" "agents")))
+          (is (not (fs/sym-link? (fs/path home ".claude" "agents"))))
+          (is (= "project lane-malli"
+                 (slurp (str (fs/path home ".claude" "agents" "lane-malli.md")))))
+          (is (= "nido lane-comments"
+                 (slurp (str (fs/path home ".claude" "agents" "lane-comments.md")))))))
       (finally (fs/delete-tree tmp)))))
 
-(deftest compose-claude-dir-rebuild-preserves-brian-source
-  ;; CRITICAL: recomposing must NEVER follow the old symlink and destroy the
-  ;; worktree's real .claude. Start from the old single-symlink form, compose,
-  ;; then compose again, and assert brian's source survived both.
+(deftest compose-claude-dir-injects-agents-into-a-project-with-none
+  ;; The claim the merge exists for: a nido-owned reviewer reaches a project
+  ;; that ships no agents of its own (babel, fukan) without that project
+  ;; carrying a copy of it.
   (let [tmp (fs/create-temp-dir)]
     (try
-      (let [home       (fs/path tmp "home")
-            wt         (fs/path tmp "wt")
-            nido-skill (fs/path tmp "nido-skills" "local-ci")]
-        (fs/create-dirs (fs/path wt ".claude" "skills" "e2e"))
-        (spit (str (fs/path wt ".claude" "skills" "e2e" "SKILL.md")) "brian e2e")
-        (fs/create-dirs nido-skill)
-        (spit (str (fs/path nido-skill "SKILL.md")) "nido")
+      (let [home  (fs/path tmp "home")
+            wt    (fs/path tmp "wt")
+            agent (native-agent! tmp "lane-comments.md" "nido lane-comments")]
+        (fs/create-dirs (fs/path wt ".claude"))          ; a .claude with no agents/ at all
         (fs/create-dirs home)
         (fs/create-sym-link (fs/path home "worktree") (str wt))
-        ;; old form: .claude is a single symlink into the worktree
-        (fs/create-sym-link (fs/path home ".claude") "worktree/.claude")
 
-        (@#'launcher/compose-claude-dir! (str home) [(str nido-skill)])  ; convert
-        (@#'launcher/compose-claude-dir! (str home) [(str nido-skill)])  ; rebuild
+        (@#'launcher/compose-claude-dir! (str home) {"agents" [agent]})
 
-        (testing "worktree's source .claude/skills survived both rebuilds"
-          (is (= "brian e2e"
-                 (slurp (str (fs/path wt ".claude" "skills" "e2e" "SKILL.md"))))))
-        (testing "composed skills still resolve after rebuild"
-          (is (= "brian e2e"
-                 (slurp (str (fs/path home ".claude" "skills" "e2e" "SKILL.md")))))
-          (is (fs/exists? (fs/path home ".claude" "skills" "local-ci" "SKILL.md")))))
+        (is (= "nido lane-comments"
+               (slurp (str (fs/path home ".claude" "agents" "lane-comments.md")))))
+        (testing "the project's tree gains nothing — the injection is composition-only"
+          (is (not (fs/exists? (fs/path wt ".claude" "agents"))))))
       (finally (fs/delete-tree tmp)))))
 
-(deftest nido-native-skill-dirs-skips-mirrored-symlinks
+(deftest compose-claude-dir-rebuild-preserves-project-source
+  ;; CRITICAL: a rebuild must NEVER follow a symlink into the worktree and
+  ;; destroy the project's real .claude. Two shapes can point there — `.claude`
+  ;; itself, when a session home still carries the single-symlink form, and
+  ;; every entry of a merged subdir. So this composes from that form, composes
+  ;; again, and asserts the project's own skills AND agents survived both.
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (let [{:keys [home wt]} (fake-session-home! tmp)
+            skill   (native-skill! tmp "local-ci" "nido")
+            agent   (native-agent! tmp "lane-comments.md" "nido")
+            natives {"skills" [skill] "agents" [agent]}]
+        ;; old form: .claude is a single symlink into the worktree
+        (fs/delete-tree (fs/path home ".claude"))
+        (fs/create-sym-link (fs/path home ".claude") "worktree/.claude")
+
+        (@#'launcher/compose-claude-dir! (str home) natives)   ; convert
+        (@#'launcher/compose-claude-dir! (str home) natives)   ; rebuild
+
+        (testing "the worktree's real .claude survived both rebuilds"
+          (is (= "project e2e"
+                 (slurp (str (fs/path wt ".claude" "skills" "e2e" "SKILL.md")))))
+          (is (= "project lane-malli"
+                 (slurp (str (fs/path wt ".claude" "agents" "lane-malli.md"))))))
+        (testing "composed entries still resolve after the rebuild"
+          (is (fs/exists? (fs/path home ".claude" "skills" "local-ci" "SKILL.md")))
+          (is (fs/exists? (fs/path home ".claude" "agents" "lane-comments.md")))
+          (is (= "project lane-malli"
+                 (slurp (str (fs/path home ".claude" "agents" "lane-malli.md")))))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest nido-native-entries-skips-mirrored-symlinks-and-wrong-shapes
   (let [tmp (fs/create-temp-dir)]
     (try
       (let [src   (fs/path tmp "nido")
-            real  (fs/path src ".claude" "skills" "local-ci")
-            other (fs/path tmp "brian-skill")]
-        (fs/create-dirs real)
+            other (fs/path tmp "elsewhere")]
         (fs/create-dirs other)
-        ;; a mirrored skill = symlink in nido's own skills dir → must be skipped
+        (spit (str (fs/path other "mirrored.md")) "project agent")
+        ;; skills/: a native dir, a mirrored symlink, and a stray loose file
+        (fs/create-dirs (fs/path src ".claude" "skills" "local-ci"))
         (fs/create-sym-link (fs/path src ".claude" "skills" "mirrored") (str other))
+        (spit (str (fs/path src ".claude" "skills" "README.md")) "not a skill")
+        ;; agents/: a native file, a mirrored symlink, and a stray directory
+        (fs/create-dirs (fs/path src ".claude" "agents"))
+        (spit (str (fs/path src ".claude" "agents" "lane-comments.md")) "nido")
+        (fs/create-sym-link (fs/path src ".claude" "agents" "mirrored.md")
+                            (str (fs/path other "mirrored.md")))
+        (fs/create-dirs (fs/path src ".claude" "agents" "scratch"))
+
         (with-redefs [core/nido-source-dir (constantly (str src))]
-          (let [dirs (@#'launcher/nido-native-skill-dirs)]
-            (testing "only the native (non-symlink) skill is returned"
+          (testing "a skill is a real directory — mirrors and loose files are skipped"
+            (let [dirs (@#'launcher/nido-native-entries "skills" fs/directory?)]
               (is (= 1 (count dirs)))
-              (is (str/includes? (first dirs) "local-ci"))))))
+              (is (str/includes? (first dirs) "local-ci"))))
+          (testing "an agent is a real file — mirrors and stray dirs are skipped"
+            (let [files (@#'launcher/nido-native-entries "agents" fs/regular-file?)]
+              (is (= 1 (count files)))
+              (is (str/includes? (first files) "lane-comments.md"))))
+          (testing "a subdir nido does not have yields no natives, not a throw"
+            (is (= [] (@#'launcher/nido-native-entries "commands" fs/regular-file?))))))
       (finally (fs/delete-tree tmp)))))
 
-(deftest compose-claude-dir-native-skill-wins-on-name-clash
-  ;; If a nido native skill shares a name with a brian worktree skill, the
-  ;; native one wins and compose must NOT throw (a throw would be swallowed by
-  ;; write-artifacts! and leave the session with no composed .claude at all).
+(deftest agent-definition-requires-frontmatter-that-names-an-agent
+  ;; nido/.claude/agents holds `architect.md`, a prompt with no frontmatter at
+  ;; all. Injecting it would put an entry in every project's composed roster
+  ;; that no session can dispatch, so "is a file" is not the selection rule —
+  ;; "defines an agent" is.
   (let [tmp (fs/create-temp-dir)]
     (try
-      (let [home       (fs/path tmp "home")
-            wt         (fs/path tmp "wt")
-            nido-skill (fs/path tmp "nido-skills" "shared")]
-        (fs/create-dirs (fs/path wt ".claude" "skills" "shared"))
-        (spit (str (fs/path wt ".claude" "skills" "shared" "SKILL.md")) "brian shared")
-        (fs/create-dirs nido-skill)
-        (spit (str (fs/path nido-skill "SKILL.md")) "nido shared")
-        (fs/create-dirs home)
-        (fs/create-sym-link (fs/path home "worktree") (str wt))
+      (let [dir (fs/path tmp "agents")]
+        (fs/create-dirs dir)
+        (spit (str (fs/path dir "defines.md"))
+              "---\nname: lane-x\ndescription: \"x\"\n---\n\n# Lane\n")
+        (spit (str (fs/path dir "prose.md")) "# Architect\n\nYou are an architect.\n")
+        (spit (str (fs/path dir "unnamed.md")) "---\ndescription: \"no name key\"\n---\n")
+        (spit (str (fs/path dir "unterminated.md")) "---\nname: lane-y\n")
+        (fs/create-dirs (fs/path dir "a-directory"))
 
-        (is (nil? (@#'launcher/compose-claude-dir! (str home) [(str nido-skill)]))
+        (is (@#'launcher/agent-definition? (fs/path dir "defines.md")))
+        (testing "a prose document with no frontmatter defines nothing"
+          (is (not (@#'launcher/agent-definition? (fs/path dir "prose.md")))))
+        (testing "frontmatter without a name registers nothing"
+          (is (not (@#'launcher/agent-definition? (fs/path dir "unnamed.md")))))
+        (testing "an unterminated block is not frontmatter"
+          (is (not (@#'launcher/agent-definition? (fs/path dir "unterminated.md")))))
+        (testing "a directory is never an agent"
+          (is (not (@#'launcher/agent-definition? (fs/path dir "a-directory"))))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest nido-native-entries-injects-only-files-that-define-an-agent
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (let [src (fs/path tmp "nido")]
+        (fs/create-dirs (fs/path src ".claude" "agents"))
+        (spit (str (fs/path src ".claude" "agents" "lane-comments.md"))
+              "---\nname: lane-comments\ndescription: \"c\"\n---\n")
+        (spit (str (fs/path src ".claude" "agents" "architect.md"))
+              "# Architect\n\nYou are a systems architect.\n")
+        (with-redefs [core/nido-source-dir (constantly (str src))]
+          (let [files (@#'launcher/nido-native-entries
+                       "agents" @#'launcher/agent-definition?)]
+            (is (= 1 (count files)))
+            (is (str/includes? (first files) "lane-comments.md")))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest compose-claude-dir-native-wins-on-name-clash
+  ;; A nido native sharing a name with one of the project's: the native wins and
+  ;; compose must NOT throw (a throw would be swallowed by write-artifacts! and
+  ;; leave the session with no composed .claude at all).
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (let [{:keys [home wt]} (fake-session-home! tmp)
+            skill (native-skill! tmp "e2e" "nido e2e")
+            agent (native-agent! tmp "lane-malli.md" "nido lane-malli")]
+        (is (nil? (@#'launcher/compose-claude-dir!
+                   (str home) {"skills" [skill] "agents" [agent]}))
             "compose returns without throwing on a name clash")
-        (testing "the nido native skill wins the shared name"
-          (is (= "nido shared"
-                 (slurp (str (fs/path home ".claude" "skills" "shared" "SKILL.md"))))))
-        (testing "brian's source skill is untouched"
-          (is (= "brian shared"
-                 (slurp (str (fs/path wt ".claude" "skills" "shared" "SKILL.md")))))))
+        (testing "the nido native wins the shared name, in both merged subdirs"
+          (is (= "nido e2e"
+                 (slurp (str (fs/path home ".claude" "skills" "e2e" "SKILL.md")))))
+          (is (= "nido lane-malli"
+                 (slurp (str (fs/path home ".claude" "agents" "lane-malli.md"))))))
+        (testing "the project's own sources are untouched"
+          (is (= "project e2e"
+                 (slurp (str (fs/path wt ".claude" "skills" "e2e" "SKILL.md")))))
+          (is (= "project lane-malli"
+                 (slurp (str (fs/path wt ".claude" "agents" "lane-malli.md")))))))
       (finally (fs/delete-tree tmp)))))
 
 ;; ---------------------------------------------------------------------------

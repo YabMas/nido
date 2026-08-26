@@ -515,43 +515,117 @@
     (fs/create-sym-link link worktree)))
 
 (defn nido-add-dirs
-  "Directories to pass to claude's --add-dir so nido's harness skills resolve
-   when the agent boots in the worktree. The nido source dir's .claude/skills
-   carries the harness skills (see nido-native-skill-dirs)."
+  "Directories to pass to claude's --add-dir so nido's harness artifacts resolve
+   when the agent boots in the worktree. The nido source dir's .claude carries
+   them (see nido-native-entries)."
   []
   [(str (core/nido-source-dir))])
 
-(defn- nido-native-skill-dirs
-  "Absolute paths of nido's *native* (real, non-symlink) skill dirs under
-   `nido/.claude/skills` — the harness skills to inject into every session-home
-   `.claude`. Mirrored brian skills (symlinks in nido's tree) are skipped: the
-   session already gets brian's skills directly through the composed `.claude`."
-  []
-  (let [skills-dir (fs/path (core/nido-source-dir) ".claude" "skills")]
-    (if (fs/exists? skills-dir)
-      (->> (fs/list-dir skills-dir)
-           (filter #(and (fs/directory? %) (not (fs/sym-link? %))))
+(def ^:private merged-subdirs
+  "The `.claude` subdirectories composed as REAL directories merging both trees.
+   Every other top-level entry stays one symlink to the worktree's own, because
+   the project owns it whole.
+
+   `agents/` is merged for the same reason `skills/` is: nido ships harness
+   artifacts that have to reach every project it drives, and a project cannot be
+   asked to carry a copy of one — copies drift, and the harness then means
+   different things in different repos. The consequence is deliberate and worth
+   stating plainly, because it surprises a project author: a project's own
+   `.claude/agents` is not the complete roster of what its sessions can
+   dispatch."
+  ["skills" "agents"])
+
+(defn- nido-native-entries
+  "Absolute paths of nido's *native* entries directly under `nido/.claude/<sub>`
+   — the harness artifacts to inject into every session-home `.claude`.
+
+   Native means real, not a symlink. That test is half the selection rule:
+   nido's own tree mirrors a good deal of brian's tooling by symlink, and
+   injecting a mirrored entry would relink the project's own artifact to
+   whatever nido's tree happens to point at. `keep?` is the other half: it says
+   what an artifact of this subdirectory IS — a skill is a directory, an agent
+   is a file that defines one — and it is checked alongside `sym-link?` rather
+   than instead of it, because `directory?` and `regular-file?` both follow
+   links.
+
+   Reads the WORKING TREE at launch time, not a revision, so a stale root
+   checkout starves every session of anything merged since. See CLAUDE.md
+   § Closing a work arc."
+  [sub keep?]
+  (let [dir (fs/path (core/nido-source-dir) ".claude" sub)]
+    (if (fs/exists? dir)
+      (->> (fs/list-dir dir)
+           (filter #(and (keep? %) (not (fs/sym-link? %))))
            (mapv str))
       [])))
 
+(defn- agent-definition?
+  "True when the file at `p` DEFINES a subagent, as against being a prose
+   document that happens to sit beside one. Claude Code registers an agent from
+   YAML frontmatter carrying `name:`; a file without it registers nothing, and
+   injecting one puts an entry in every project's composed roster that no
+   session can dispatch.
+
+   The distinction is real and not hypothetical: `nido/.claude/agents` holds
+   `architect.md`, which is a prompt with no frontmatter at all. It has always
+   been inert, and the point of this predicate is that it stays inert on
+   purpose rather than by accident.
+
+   Frontmatter is the first thing in a file or it is not frontmatter, so only
+   the leading block is read."
+  [p]
+  (and (fs/regular-file? p)
+       (let [head (str/trim (slurp (str p)))]
+         (and (str/starts-with? head "---")
+              (when-let [end (str/index-of head "\n---" 3)]
+                (some? (re-find #"(?m)^name:[ \t]*\S" (subs head 3 end))))))))
+
+(defn- merge-subdir!
+  "Compose `<claude>/<sub>` as a real directory: one relative link per entry of
+   the worktree's own `<sub>` (so a moved worktree is still followed), then one
+   absolute link per nido-native path, nido winning any name clash.
+
+   Removing an existing entry before linking is what makes the clash a rule
+   rather than a throw — and an exception here would be swallowed by
+   `write-artifacts!` and leave the session with no composed `.claude` at all."
+  [claude wt-claude sub native-paths]
+  (let [dir    (fs/path claude sub)
+        wt-sub (fs/path wt-claude sub)]
+    (fs/create-dirs dir)
+    (when (fs/exists? wt-sub)
+      (doseq [entry (fs/list-dir wt-sub)
+              :let  [nm (str (fs/file-name entry))]]
+        (fs/create-sym-link (fs/path dir nm)
+                            (fs/path ".." ".." "worktree" ".claude" sub nm))))
+    (doseq [native native-paths
+            :let   [link (fs/path dir (str (fs/file-name native)))]]
+      (when (or (fs/exists? link) (fs/sym-link? link))
+        (fs/delete link))
+      (fs/create-sym-link link native))))
+
 (defn- compose-claude-dir!
   "Compose `<home>/.claude` as a *real* directory so the in-session agent sees
-   both brian's project tooling and nido's injected harness skills:
+   both the project's own tooling and nido's injected harness artifacts:
 
-   - every top-level entry of the worktree's `.claude` *except* `skills/` is
-     re-exposed as a relative symlink through the session-home `worktree` link
-     (so a moved worktree is still followed — as the old single symlink did);
-   - `skills/` is a real dir symlinking each of the worktree's skills plus each
-     `nido-native-skills` path (absolute).
+   - every top-level entry of the worktree's `.claude` except the
+     `merged-subdirs` is re-exposed as a relative symlink through the
+     session-home `worktree` link, which is what keeps a moved worktree
+     followed;
+   - each merged subdir is rebuilt by `merge-subdir!`.
+
+   `natives` maps each merged subdir's name to the nido-native paths to inject
+   into it; a name it does not carry gets the project's entries alone.
 
    Idempotent. SAFETY: if `<home>/.claude` is currently a *symlink* (the old
    single-link form) it is only unlinked — never `delete-tree`d — so we never
-   follow it into the worktree and destroy brian's real `.claude`. A previously
-   composed real dir contains only our own symlinks, so deleting it removes link
-   entries, not their targets."
-  [home nido-native-skills]
+   follow it into the worktree and destroy the project's real `.claude`. A real
+   dir here holds nothing but symlinks this function made, and `delete-tree`
+   does not follow a symlink, so it removes link entries rather than their
+   targets."
+  [home natives]
   (let [claude    (fs/path home ".claude")
-        wt-claude (fs/path home "worktree" ".claude")]
+        wt-claude (fs/path home "worktree" ".claude")
+        merged?   (set merged-subdirs)]
     (cond
       (fs/sym-link? claude) (fs/delete claude)        ; old single-symlink: unlink only
       (fs/exists? claude)   (fs/delete-tree claude))  ; prior composed dir (our symlinks)
@@ -559,36 +633,21 @@
     (when (fs/exists? wt-claude)
       (doseq [entry (fs/list-dir wt-claude)
               :let  [nm (str (fs/file-name entry))]
-              :when (not= nm "skills")]
+              :when (not (merged? nm))]
         (fs/create-sym-link (fs/path claude nm)
                             (fs/path ".." "worktree" ".claude" nm))))
-    (let [skills    (fs/path claude "skills")
-          wt-skills (fs/path wt-claude "skills")]
-      (fs/create-dirs skills)
-      (when (fs/exists? wt-skills)
-        (doseq [s (fs/list-dir wt-skills)
-                :let [nm (str (fs/file-name s))]]
-          (fs/create-sym-link (fs/path skills nm)
-                              (fs/path ".." ".." "worktree" ".claude" "skills" nm))))
-      (doseq [nido-skill nido-native-skills
-              :let [nm   (str (fs/file-name nido-skill))
-                    link (fs/path skills nm)]]
-        ;; A nido native skill wins over a same-named brian skill linked above.
-        ;; Removing any existing entry first means a name clash can't throw —
-        ;; which would otherwise be swallowed by write-artifacts! and silently
-        ;; leave the session with no composed .claude at all.
-        (when (or (fs/exists? link) (fs/sym-link? link))
-          (fs/delete link))
-        (fs/create-sym-link link nido-skill)))))
+    (doseq [sub merged-subdirs]
+      (merge-subdir! claude wt-claude sub (get natives sub [])))))
 
 (defn- ensure-claude-dir!
-  "Compose the session-home `.claude` (brian's entries + nido's native harness
-   skills). Replaces the old single `.claude` → worktree/.claude symlink so the
-   in-session agent sees nido's injected skills (e.g. local-ci) alongside
-   brian's project-local skills, agents, and commands."
+  "Compose the session-home `.claude` from the project's entries plus nido's
+   native harness skills and agents, so the in-session agent sees nido's
+   injected skills (e.g. local-ci) and its native agents alongside the
+   project's own skills, agents, and commands."
   [project-name session-name]
   (compose-claude-dir! (state/session-home-dir project-name session-name)
-                       (nido-native-skill-dirs)))
+                       {"skills" (nido-native-entries "skills" fs/directory?)
+                        "agents" (nido-native-entries "agents" agent-definition?)}))
 
 (defn- ensure-bb-edn-symlink!
   "Create or refresh a `bb.edn` symlink inside the session-home pointing

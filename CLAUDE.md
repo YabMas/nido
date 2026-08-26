@@ -224,9 +224,11 @@ it.
 
 **End every work arc by rebasing the root `~/Code/nido` checkout onto local `main`** — `jj rebase -d main` (or `jj rebase -r @ -d main@origin` to carry uncommitted working-copy changes forward). Work lands from session worktrees, which share the store but not the root workspace's working copy, so the root checkout stays wherever it was and silently drifts behind `main` as arcs land elsewhere.
 
-This is load-bearing because the **session launcher injects nido's native harness skills by listing the on-disk `~/Code/nido/.claude/skills/` directory** (`nido-native-skill-dirs` → `fs/list-dir`, at runtime — it reads the working tree, not git). A stale root checkout that predates a newly-merged skill therefore starves **every** session of it: the skill is committed, pushed, and in main's tree, yet missing from disk, so it's never composed in. The same hazard applies to any launcher input read from the working tree.
+This is load-bearing because the **session launcher injects nido's native harness artifacts by listing the on-disk `~/Code/nido/.claude/` subdirectories** (`nido-native-entries` → `fs/list-dir`, at runtime — it reads the working tree, not git). Two subdirectories are injected: `skills/` (each native directory) and `agents/` (each native file). A stale root checkout that predates a newly-merged one therefore starves **every** session of it: it is committed, pushed, and in main's tree, yet missing from disk, so it's never composed in. The same hazard applies to any launcher input read from the working tree.
 
-Symptom & fix: a shipped harness skill "missing" from sessions → check `ls ~/Code/nido/.claude/skills/<name>` (on disk, not `jj file list`). Present in main's tree but absent on disk ⇒ stale checkout ⇒ rebase as above, then re-`session:up` the live sessions (or restart the in-session agent) so the launcher recomposes `.claude/skills/`.
+Symptom & fix: a shipped harness skill or reviewer "missing" from sessions → check `ls ~/Code/nido/.claude/skills/<name>` or `ls ~/Code/nido/.claude/agents/<name>.md` (on disk, not `jj file list`). Present in main's tree but absent on disk ⇒ stale checkout ⇒ rebase as above, then re-`session:up` the live sessions (or restart the in-session agent) so the launcher recomposes them.
+
+**A nido-owned agent reaches every project nido drives, and a project's own `.claude/agents` is therefore not the whole roster its sessions can dispatch.** Same rule as skills: a native entry wins a name clash with the project's. Put an agent here only when it is genuinely harness-wide — a project's reviewer belongs in that project's tree.
 
 ## Local merge queue (nido ship)
 
