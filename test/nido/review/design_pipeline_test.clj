@@ -267,13 +267,13 @@
 (defn- with-resurvey
   "Stub every seam the two-step re-survey touches. `amends` stands in for what
    the amender wrote after the nested loop came back."
-  [{:keys [nested amends]} c]
+  [{:keys [nested amends corrected] :or {corrected corrected-baseline}} c]
   (let [prompt (atom nil) appended (atom nil)]
     ;; In :carry, where the engine actually leaves it. Stubbing the old
     ;; top-level shape here is why this test passed against an engine that
     ;; dropped the key every round: the stub asserted a contract nothing kept.
     (with-redefs [rloop/run-loop (fn [_] {:status nested
-                                          :carry {:under-repair corrected-baseline}})
+                                          :carry {:under-repair corrected}})
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ kind]
                                     (if (= :baseline kind) corrected-baseline a-design))
@@ -287,6 +287,38 @@
                                                              first-message))))
                                   {:num-turns 3})]
       [(run record/design-amend-stage c) @prompt @appended])))
+
+(deftest the-amender-is-told-the-number-it-is-asked-to-cite
+  ;; The record below the instruction is printed unstamped — a :seq is the
+  ;; ledger's to give and a record carrying one is refused on write — so an
+  ;; amender told to cite the corrected survey by :seq and shown no :seq
+  ;; anywhere was being asked to guess the one field the ledger checks.
+  (let [[_ prompt _]
+        (with-resurvey {:nested :sufficient}
+                       (assoc (ctx :findings [(check :relation-honest :broken)])
+                              :record (decision :resurvey)))]
+    (is (str/includes? prompt "Set :baseline :seq to 11"))))
+
+(deftest an-unstamped-corrected-survey-does-not-invent-a-number
+  ;; Degraded read-back: better to say "the corrected baseline" than to name an
+  ;; entry that is not the one on disk.
+  (let [[_ prompt _]
+        (with-resurvey {:nested :sufficient
+                        :corrected (dissoc corrected-baseline :seq)}
+                       (assoc (ctx :findings [(check :relation-honest :broken)])
+                              :record (decision :resurvey)))]
+    (is (not (str/includes? prompt "Set :baseline :seq to")))
+    (is (str/includes? prompt "Point :baseline :seq at the corrected baseline"))))
+
+(deftest the-design-amender-is-told-not-to-restate-what-held
+  ;; Same churn guard the survey amender has, and for a sharper reason: every
+  ;; check is re-derived over the whole record, so a rewritten neighbour can
+  ;; break a derivation that was passing.
+  (let [[_ prompt _]
+        (with-resurvey {:nested :sufficient}
+                       (assoc (ctx :findings [(check :relation-honest :broken)])
+                              :record (decision :amend)))]
+    (is (str/includes? prompt "CHANGE ONLY WHAT WAS REFUTED"))))
 
 (deftest a-resurvey-is-only-half-the-repair
   ;; The failure this catches: discover-baseline resolves the CITED baseline, so

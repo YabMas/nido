@@ -1265,8 +1265,18 @@
                     "Re-state this design against it. That is not a re-citation: the\n"
                     "design's claims were made about a reading of the area that has\n"
                     "changed, so each one has to be checked against the new survey and\n"
-                    "may not survive it. Point :baseline :seq at the corrected baseline\n"
-                    "and set :supersedes to the design you are replacing.\n\n"
+                    "may not survive it. "
+                    ;; The number, not "the corrected baseline". The record below
+                    ;; is printed unstamped — :seq is the ledger's and a record
+                    ;; carrying one is refused on write — so an amender told to
+                    ;; cite it by :seq and shown no :seq anywhere is being asked
+                    ;; to guess the one field the citation is checked against.
+                    (if-let [n (:seq baseline)]
+                      (str "Set :baseline :seq to " n " — that is the entry the\n"
+                           "corrected survey was appended as — and set :supersedes to the\n"
+                           "design you are replacing.\n\n")
+                      (str "Point :baseline :seq at the corrected baseline and set\n"
+                           ":supersedes to the design you are replacing.\n\n"))
                     "If a claim no longer holds under the corrected survey, change it.\n"
                     "Re-pointing the citation while leaving the claims untouched asserts\n"
                     "the design still stands on a premise nobody has re-checked it\n"
@@ -1298,11 +1308,22 @@
                        (when (seq (:evidence f))
                          (str "\n  evidence: " (str/join ", " (:evidence f))))))
                 findings))))
+   ;; DORMANT: no :design shape carries :modules, so this never fires today —
+   ;; the decomposition and its readings live in the BASELINE, and a design
+   ;; declares its relation to that. Kept, and kept guarded, because the guard is
+   ;; already the right question: the day a design states modules of its own this
+   ;; is what its amender has to be told, and the ledger refuses a reading
+   ;; outside the registry whichever record it is on.
    (when (contains? design :modules)
      (str "\n\nA reading may only use its own lens's verdicts, and a lens only reads the\n"
           "subject it is about. The ledger refuses anything else and the whole record\n"
           "is lost with it, so use these and nothing else:\n"
           (lens-block)))
+   "\n\nCHANGE ONLY WHAT WAS REFUTED. Every check is re-derived over the WHOLE\n"
+   "record each round, so a part nobody challenged that you restate anyway is a\n"
+   "fresh chance for a check that held to stop holding. Rounds have gone by\n"
+   "watching one derivation get answered while a rewritten neighbour became the\n"
+   "next one to fail. Fix what failed; leave the rest exactly as it stands.\n"
    "\n\nIF A CHECK IS WRONGLY MARKED BROKEN, SAY SO INSTEAD OF AMENDING FOR IT.\n"
    "You do not settle it — the judge is asked again with your objection in front\n"
    "of it. An objection with no reason is dropped.\n\n"
