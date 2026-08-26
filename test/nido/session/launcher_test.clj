@@ -105,11 +105,46 @@
     (testing "the briefing carries the summary, never the whole doctrine"
       ;; A regression here is silent and expensive: it inflates EVERY session's
       ;; context. The doctrine is ~200 lines; anything near that has been pasted.
+      ;; The span ends at the NEXT doctrine section, not at "## Lifecycle" — a
+      ;; sibling landing in between would otherwise be measured as this one.
       (let [start (str/index-of doc "## Comments")
-            end   (str/index-of doc "## Lifecycle")]
+            end   (str/index-of doc "## Commit messages and PR descriptions")]
         (is (and start end (< start end)))
         (is (< (count (str/split-lines (subs doc start end))) 45)
             "the comment section should be a pointer plus a summary")))))
+
+(deftest render-context-includes-description-doctrine
+  (let [doc (@#'launcher/render-context base-ctx)]
+    (testing "the reachability test is stated, with the artifact that inverts it"
+      (is (str/includes? doc "## Commit messages and PR descriptions"))
+      (is (str/includes? doc "cannot get that")
+          "the rule is about what a reader can reach, not about length")
+      (is (str/includes? doc "one laptop's state directory")
+          "the ledger is machine-local, so the body is the only durable copy —
+           this is what stops 'do not repeat yourself' being applied to it"))
+    (testing "the subject-line rules a writer cannot recover afterwards"
+      (is (str/includes? doc "If applied, this commit will"))
+      (is (str/includes? doc "never past 72")))
+    (testing "narration is evicted, but a rejected alternative is not"
+      (is (str/includes? doc "never your route to it"))
+      (is (str/includes? doc "MERITS")
+          "an alternative rejected on the merits is design, not history"))
+    (testing "the budget is a smell, and an overrun can indict the batch"
+      (is (str/includes? doc "never truncate")
+          "the budget is a smell — an overrun is re-read, not cut to fit")
+      (is (str/includes? doc "too big")
+          "an undescribable change is a /stack finding, not a prose finding"))
+    (testing "the pointer resolves from any session, and the gap is stated"
+      (is (str/includes? doc "~/Code/nido/docs/reference/descriptions.md")
+          "the doctrine lives in the root checkout, which is already on --add-dir")
+      (is (str/includes? doc "Nothing\nchecks it")
+          "no lane and no gate — the briefing must say so rather than imply cover"))
+    (testing "the briefing carries the summary, never the whole doctrine"
+      (let [start (str/index-of doc "## Commit messages and PR descriptions")
+            end   (str/index-of doc "## Lifecycle")]
+        (is (and start end (< start end)))
+        (is (< (count (str/split-lines (subs doc start end))) 45)
+            "the description section should be a pointer plus a summary")))))
 
 (deftest render-context-omits-section-when-briefing-absent
   (let [doc (@#'launcher/render-context (assoc base-ctx :project-briefing nil))]

@@ -428,6 +428,52 @@
        "owns the spelling — banned tokens, canonical ref shapes; the doctrine owns\n"
        "the reason.\n"))
 
+(def ^:private description-doctrine-instructions
+  "The pointer to nido's doctrine for commit bodies and PR descriptions.
+
+   Same split as the comment block: the document holds the rules a reviewer
+   cites, this holds what changes behaviour without opening it. Three of these
+   four are applied while WRITING and cannot be recovered afterwards — the
+   reachability test, the ban on narrating the route, and the re-read against
+   the final diff. The fourth, the budget, is what makes 'too long' an argument
+   about a specific line rather than a matter of taste."
+  (str "## Commit messages and PR descriptions\n"
+       "\n"
+       "**A line earns its place if a reader holding this change cannot get that\n"
+       "fact from anything else they can reach.** The diff is attached and the\n"
+       "code is in the tree — never restate either. The design record is NOT:\n"
+       "the ledger is one laptop's state directory, so the conclusions you drew\n"
+       "belong in the body, which is the only copy with the same lifetime as the\n"
+       "code. A body is rarely too long because it is padded; it is too long\n"
+       "because it re-explains the file it ships.\n"
+       "\n"
+       "**Lead with the problem, not with what you built.** What the system did,\n"
+       "why that was wrong, who it bit — then what you did, then why this way,\n"
+       "then the shortcomings you already know about. Subject line: imperative\n"
+       "(*If applied, this commit will* ___), about 50 characters, never past 72,\n"
+       "and no \"and\" — needing one means it is two layers.\n"
+       "\n"
+       "**Describe the change, never your route to it.** The approach you tried\n"
+       "first, what a review round told you, how many rounds it took, what you\n"
+       "learned about the tooling — all out. An alternative you rejected ON THE\n"
+       "MERITS stays, with its reason: that is the boundary of the design, and\n"
+       "the thing a reviewer will otherwise re-propose.\n"
+       "\n"
+       "**About 15 lines of prose, plus about 2 per brief field.** A smell, not\n"
+       "a limit — going over means re-read, never truncate. But read the\n"
+       "overrun: either it restates something reachable, or the change is too big\n"
+       "to describe, and that second one is a finding about the batch, not the\n"
+       "prose. Re-read the body against the FINAL diff before landing — reviews\n"
+       "move the diff underneath a body written earlier, and on a squash-merge\n"
+       "repo that body is what trunk keeps forever.\n"
+       "\n"
+       "Full doctrine — the reachability table, what the four brief fields may\n"
+       "hold, the sources — at `~/Code/nido/docs/reference/descriptions.md`,\n"
+       "after Google's eng-practices, the Linux kernel's SubmittingPatches, Beams\n"
+       "and Pope. `/stack` §5 owns the skeleton and your project owns the\n"
+       "subject's spelling; the doctrine owns what fills the slots. Nothing\n"
+       "checks it — no lane, no gate — so it holds only if you apply it.\n"))
+
 (defn- render-edit-location
   "The 'where do edits land' paragraph, conditioned on vcs-mode so the
    briefing tells the truth for legacy git-worktree sessions inside a
@@ -535,6 +581,8 @@
      shipping-doctrine-instructions
      "\n"
      comment-doctrine-instructions
+     "\n"
+     description-doctrine-instructions
      "\n"
      "## Lifecycle\n"
      "\n"
