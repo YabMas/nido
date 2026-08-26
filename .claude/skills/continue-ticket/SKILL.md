@@ -34,6 +34,34 @@ In order of preference:
 
 If you can't resolve a `BR-####`, ask the user rather than guessing.
 
+## Step 1.5 — Read the ticket. Always, before the ledger.
+
+**Whatever the ledger holds, read the ticket itself first.** It is one command,
+and skipping it is how a session spends an hour deriving a scope the ticket
+states in five bullets.
+
+```bash
+PAGE=$(bb -e "(:notion-page-id (:event-payload (clojure.edn/read-string (slurp \"./run-link/run.edn\"))))")
+notion page markdown "$PAGE"
+notion comment list "$PAGE" --all
+```
+
+Reach Notion through the **`notion` CLI**, never `bb notion:*` and never
+`WebFetch`. `bb notion:*` reads `NOTION_TOKEN`, which a coordinator-spawned Run
+under launchd does not inherit — `NOTION_TOKEN or NOTION_API_TOKEN env var
+required` means *this shell carries no token*, **not** that you have no Notion
+access. The CLI carries its own credential. See
+`~/Code/nido/docs/reference/notion-access.md`.
+
+On a pickup, nido has usually already transcribed the ticket onto the ledger as
+a `:ticket` entry at provision time (`nido.coordinator.brief`) — read that, and
+treat the live ticket as authoritative where they differ.
+
+This is not only for the empty ledger. A triage entry is a twenty-minute
+reading of the ticket, not the ticket; where they disagree, the ticket wins and
+that disagreement is worth recording. **The one thing you may never do is halt
+for scope without having read the body and the comments.**
+
 ## Step 2 — Read the ledger and determine the stage
 
 Read BOTH the ticket ledger and the workstream's active ledger — a staging
@@ -50,14 +78,18 @@ comes *after* the latest recorded entry:
 
 | latest entry | your stage | what to do |
 |---|---|---|
+| *nothing, or only `:ticket`* | **implementation, from the ticket itself** | This workstream was handed to nido directly (`bb nido:pickup`), which bypasses triage on purpose. There is **no `:design-frame` and there never will be** — an empty ledger here is the expected state, not ambiguity, and not a reason to stop. The ticket body you read in Step 1.5 **is** the brief. Author an `:intent` from it (`/design` §7), then survey and proceed exactly as the `:triage` row does, minus the triage findings. Where the ticket is genuinely ambiguous, halt on *that* — quoting the line — not on the ledger being empty. |
 | `:triage` (status `:planning`) | **implementation** | Read the latest `:triage` entry file (`~/.nido/projects/brian/tickets/<BR-####>/entries/NNNN-triage.md`) — the enriched brief, its `:design-frame`, the solution direction(s), and the `file:line` leads it found. The frame says whether this stage is a fix or a decision (Step 3). Start on those findings. |
 | `:proposed-ticket` (Slack-sourced) | **implementation, with no triage behind it** | This workstream came in through `/triage-slack`, whose approved proposal creates the Notion ticket at `Status = Not started` — past the view that fires `/triage-bug`. So there is **no `:design-frame`, and there never will be**. Read the proposal's `:fix` / `:proposed-change` as a *proposal*, not a decision: it was scoped in twenty minutes by an agent that had not read the design. Infer the area yourself (`/design` §4) before committing to a shape, and take `:watch-out` seriously — a boundary-moving flag there is the design question, raised and unanswered. |
 | `:design` with `:phases`, on a workstream reopened after a merge | **the next phase** | This workstream is mid-plan: an earlier phase already shipped and its gate opened. Read the design record's `:phases` and find the first one not yet landed — the ledger's `:merged` entries say how many have. **Do not re-derive the plan**; it is the same design record, and the phase you are on is the claim you are making. Check its `:habitable` against the code before you start: if the state you are in does not match what the record says is live, the plan is wrong or the previous phase did not finish, and that is a `:blocker`, not something to work around. See `/phase` §7. |
 | `:blocker-answered` | **the branch the human chose** | A previous session halted on a choice and died before the answer arrived; nido recorded the human's pick on the ledger rather than losing it. The entry names the letter, the branch and the `:blocker-seq` it answers — read that blocker for the full framing, then **proceed on the chosen branch**. It is a decision, already made: do not re-open it or re-derive the alternatives. If the branch turns out not to hold once you are in the code, that is a NEW `:blocker` naming what broke — see below. |
 | `:findings` with open items | **address findings round N** | This workstream shipped, was reviewed on staging, and reopened. `bb nido:workstream:show` prints the round's items and the ws-id. Work the open items (severity `:blocker` first). Mark each resolved **the moment its fix lands**: `bb nido:findings:resolve :project brian :ws <ws-id> :items [<id>] :by <commit-or-PR>`. Then open a **follow-up PR** — see `/prepare-draft-pr` (its "Follow-up PR on a reopened workstream" section) — and ship with `nido ship` / `/drive-home`. |
 
-If the ledger state is ambiguous (no entries, an unexpected status), say so and
-check with the user — don't invent a stage.
+If the ledger state is genuinely ambiguous — an unexpected status, or a latest
+entry that matches no row — say so and check with the user rather than
+inventing a stage. **An absent ledger is not that case**; it has its own row
+above, and routing a pickup to "check with the user" is how a ticket that was
+explicitly handed to nido to drive comes back unstarted.
 
 ## Step 3 — Set the stage marker
 
@@ -139,7 +171,7 @@ You now know the stage and have the prior stage's findings in front of you. **Ho
 
 Session reminders:
 - **Edit in `./worktree`**, not in nido's tree. The REPL / app / DB are nido-managed — connect to the running services, don't start your own.
-- **Don't touch Notion** — nido already set the ticket's Notion status when this session was provisioned; the triage stage owns the Notion contract, not this one.
+- **Don't WRITE to Notion** — nido already set the ticket's Notion status when this session was provisioned; the triage stage owns the Notion contract, not this one. Reading is not only allowed but required (Step 1.5).
 - If what you find contradicts the prior stage's findings (the bug doesn't reproduce, the root cause is elsewhere), say so plainly and reorient with the user rather than forcing the earlier hypothesis.
 
   Check which layer the contradiction is at. If the code merely differs from what triage expected, amend your design record and carry on. If it invalidates the *design* — the shape you committed to cannot hold — supersede the record rather than editing it (`/design` §5), and treat the open question as a blocker below.
@@ -171,6 +203,12 @@ Session reminders:
   credential, an unavailable environment). A blocker whose answer is "A or B"
   and whose record says so in prose can only be answered by typing an essay
   back at it.
+
+  **Before filing a `:blocker` about scope, check you actually read the ticket
+  (Step 1.5).** A halt whose `:needs` is "what does this ticket mean" and whose
+  session never opened the body is not a decision for the human — it is the
+  first step, skipped. Nor is a credential a blocker on its own: `bb notion:*`
+  reporting no token means *this shell* has none, and `notion` is right there.
 
 - If this is a **findings round**, mark each item resolved the moment its fix
   lands (`bb nido:findings:resolve :project brian :ws <ws-id> :items [<id>] :by <ref>`) —
