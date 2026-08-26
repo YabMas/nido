@@ -21,20 +21,39 @@
 ;; workspace — and drives the project's OWN rule functions over it. The rules
 ;; stay the project's; only the diff comes from here.
 ;;
-;; Classes, blocking first:
+;; Classes, blocking first, each with the owner that can DISCHARGE it:
 ;;   :archaeology   comment narrates the migration that produced the code
+;;                    → this gate. Decidable by token; fix it and re-run.
 ;;   :deleted-ref   comment names a symbol this same diff deletes
+;;                    → this gate, where the project ships one (see below).
 ;;   :ticket-ref    non-canonical ticket-ref shape on an added line
+;;                    → this gate.
+;;   :stray-file    a committed .orig / .rej / .bak / .DS_Store
+;;                    → this gate. Decided by a path suffix; delete the file.
 ;;   :narration     the SOFT archaeology vocabulary (advisory)
-;;   :artifact      debug output, commented-out code, stray files (advisory)
+;;                    → `lane-comments`. Judgement, not a token swap.
+;;   :commented-out a parked block of code, sitting in a comment (advisory)
+;;                    → `lane-comments`. It IS a comment; whether it earns its
+;;                      line is the doctrine's own test.
+;;
+;; Naming an owner per class is the point of the list. A class printed with
+;; nobody named is read as a soft warning and acted on by no one, which is what
+;; `:narration` was for as long as the lane it defers to did not exist.
+;;
+;; There are exactly two owners, and every class has to reach one of them. A
+;; gate BLOCKS what a token or a path suffix decides; `lane-comments` JUDGES
+;; what needs reading the code the comment sits above. A class that can reach
+;; neither does not get a weaker owner invented for it — it leaves, which is
+;; what happened to added debug output (see below).
 ;;
 ;; The first three are the project's own rules, borrowed — except that
 ;; `:archaeology` falls back to a small marker list here when the project ships
-;; no comment-lint at all. `:narration` is the class
-;; brian's comment-lint deliberately refuses to blocker-gate ("handled by review
-;; lanes, NOT this commit blocker") — this IS that review lane, so it reports
-;; and never gates. `:artifact` is likewise advisory: fixing it means editing
-;; code, which puts it outside the comment-only fix the gate can bless.
+;; no comment-lint at all. `:narration` is the class brian's comment-lint
+;; deliberately refuses to blocker-gate ("handled by review lanes, NOT this
+;; commit blocker"): the vocabulary is a prior and the fix is a judgement about
+;; what the comment should say instead, so this reports and `lane-comments`
+;; decides. `:artifact` is likewise advisory: fixing it means editing code,
+;; which puts it outside the comment-only fix the gate can bless.
 ;;
 ;; Exit codes: 0 no blocking violations, 1 blocking violations found,
 ;; 2 mechanics failed (no jj, unreadable revision).
@@ -194,8 +213,12 @@
   "The 'narration to avoid' vocabulary from brian's code-conventions
    § Comments Describe Current Code. Advisory BY DESIGN: English collides with
    several of these ('the list is no longer than five'), and the fix is a
-   judgement about what the comment should say instead — which is exactly the
-   work /clean-pr does by hand, not a token swap."
+   judgement about what the comment should say instead, not a token swap.
+
+   So this list is a PRIOR, not a verdict — it says a reviewer has something to
+   look at. `lane-comments` is what looks, against
+   `~/Code/nido/docs/reference/comments.md` § 4, and it also catches the
+   narration that uses none of these words."
   [#"(?i)\bno longer\b"
    #"(?i)\bpreviously\b"
    #"(?i)\bformerly\b"
@@ -215,33 +238,55 @@
              :when hit]
          {:file file :line line :marker hit :text (str/trim text)})))
 
-;; ── Native class 2: stray artifacts (advisory) ─────────────────────────────
-
-(def ^:private debug-output
-  #"(?<![\w-])(?:println|prn|pprint|clojure\.pprint/pprint|tap>|console\.log|debugger)(?![\w-])")
+;; ── Native classes 2 and 3 ─────────────────────────────────────────────────
+;;
+;; These were one class called `:artifact` until it was asked who could
+;; discharge it, and the answer came back different for each third of it. They
+;; are separated here because a class is defined by what settles it, not by
+;; where it was noticed.
 
 (def ^:private stray-file #"(?i)(\.orig|\.rej|\.bak|~|\.DS_Store|\.swp)$")
 
-(defn- artifact-violations [added files]
-  (vec
-   (concat
-    (for [{:keys [op path]} files
-          :when (and (not= op "D") (re-find stray-file path))]
-      {:kind :stray-file :file path :detail "backup/merge artifact — never commit these"})
+(defn- stray-file-violations
+  "Backup and merge leftovers. BLOCKING, and it belongs with the token classes
+   rather than with the judgement ones: a `.orig` is decided by a path suffix
+   and there is no question of intent to answer, which is the same shape as a
+   banned marker.
 
-    (for [{:keys [file line text]} added
-          :when (and (nil? (comment-text file text))
-                     (re-find debug-output text)
-                     (not (str/includes? file "/test/"))
-                     (not (str/includes? file "/dev/"))
-                     (not (str/starts-with? file "bin/")))]
-      {:kind :debug-output :file file :line line :detail (str/trim text)})
+   Deletions are exempt — removing a `.rej` someone committed is the fix, not
+   the violation."
+  [files]
+  (vec (for [{:keys [op path]} files
+             :when (and (not= op "D") (re-find stray-file path))]
+         {:file path :detail "backup/merge artifact — never commit these"})))
 
-    (for [{:keys [file line text]} added
-          :let [c (comment-text file text)]
-          :when (and c (contains? #{"clj" "cljc" "cljs" "bb"} (ext file))
-                     (re-find #"^\(\s*(?:defn?|let|if|when|do|require|->|->>)\b" c))]
-      {:kind :commented-out-code :file file :line line :detail c}))))
+(defn- commented-out-violations
+  "A parked block of code, sitting in a comment. Advisory, and `lane-comments`
+   owns it: this IS a comment, and whether it earns its line is the doctrine's
+   own §1 test rather than a separate rule. What a scanner cannot tell is
+   whether someone parked it deliberately, which is exactly the judgement the
+   lane is for."
+  [added]
+  (vec (for [{:keys [file line text]} added
+             :let [c (comment-text file text)]
+             :when (and c (contains? #{"clj" "cljc" "cljs" "bb"} (ext file))
+                        (re-find #"^\(\s*(?:defn?|let|if|when|do|require|->|->>)\b" c))]
+         {:file file :line line :detail c})))
+
+;; Added debug output was the third of `:artifact`, and it is gone rather than
+;; rehoused. Neither owner can take it, and the exclusions ARE the rule: a
+;; `println` in a CLI task is the program's output and the same call in a
+;; request handler is noise, so the class turns on which of a project's
+;; directories are which. nido's own `src/tasks` prints deliberately. The
+;; hand-rolled guess this made instead — exempt `/test/`, `/dev/`, `bin/` —
+;; flagged both of the report `println`s below, on the very diff that
+;; introduced this line.
+;;
+;; So the class is A PROJECT'S TO WIRE, in its own linter with its own
+;; pathspecs, the same way its banned-token list is. One pathspec written here
+;; for four projects would be the drift this file already refuses elsewhere:
+;; brian's rule consumed as though it were the general rule. A reader looking
+;; for the class should find this paragraph rather than find nothing.
 
 ;; ── Report ─────────────────────────────────────────────────────────────────
 
@@ -274,8 +319,9 @@
       deleted-ref (if cl (vec ((:deleted-ref cl) diff)) ::unavailable)
       ticket-ref (ticket-ref-violations diff)
       narration (narration-violations added)
-      artifacts (artifact-violations added files)
-      blocking (remove #(= ::unavailable %) [archaeology deleted-ref ticket-ref])
+      stray-files (stray-file-violations files)
+      commented-out (commented-out-violations added)
+      blocking (remove #(= ::unavailable %) [archaeology deleted-ref ticket-ref stray-files])
       blocking-n (reduce + 0 (map count blocking))
       loc (fn [{:keys [file line]}] (str file (when line (str ":" line))))]
   (if edn?
@@ -283,7 +329,8 @@
           :added-lines (count added) :files (count files)
           :blocking blocking-n :archaeology-source archaeology-source
           :archaeology archaeology :deleted-ref deleted-ref :ticket-ref ticket-ref
-          :narration narration :artifact artifacts})
+          :stray-file stray-files :narration narration
+          :commented-out commented-out})
     (do
       (println (str "hygiene-scan: " from " → " to
                     "  (" (count files) " files, " (count added) " added lines)"))
@@ -291,7 +338,8 @@
       (when (= :nido-fallback archaeology-source)
         (println "  note: this project ships no comment-lint of its own. Archaeology is")
         (println "        scanned with nido's fallback marker list; the deleted-symbol")
-        (println "        class needs the project's engine and is NOT scanned.")
+        (println "        class needs the project's engine and is NOT scanned —")
+        (println "        `lane-comments` covers it here instead.")
         (println))
       (when (= ::unavailable ticket-ref)
         (println "  note: no ticket-ref engine resolved — ref canonicalization not scanned.")
@@ -304,13 +352,18 @@
                 #(str (loc %) "  [" (:name %) "]\n      " (clip (:text %))))
       (section! "BLOCKING · non-canonical ticket refs" (when (coll? ticket-ref) ticket-ref)
                 #(str (loc %) "  " (:token %) " -> " (:fix %) "\n      " (clip (:text %))))
-      (section! "advisory · migration narration in comments" narration
+      (section! "BLOCKING · stray artifacts (delete them)" stray-files
+                #(str (:file %) "\n      " (clip (:detail %))))
+      (section! "advisory · migration narration in comments (owner: lane-comments)" narration
                 #(str (loc %) "\n      " (clip (:text %))))
-      (section! "advisory · stray artifacts (needs a CODE edit — report, do not fix)" artifacts
-                #(str (name (:kind %)) "  " (loc %) "\n      " (clip (:detail %))))
+      (section! "advisory · commented-out code (owner: lane-comments)" commented-out
+                #(str (loc %) "\n      " (clip (:detail %))))
       (if (zero? blocking-n)
         (println (str "No blocking violations."
-                      (when (or (seq narration) (seq artifacts))
-                        (str " " (+ (count narration) (count artifacts)) " advisory item(s) above."))))
-        (println (str blocking-n " blocking violation(s) — all fixable inside comments.")))))
+                      (when (or (seq narration) (seq commented-out))
+                        (str " " (+ (count narration) (count commented-out))
+                             " advisory item(s) above — both classes are lane-comments';"
+                             " route them, do not fix them here."))))
+        (println (str blocking-n " blocking violation(s) — the comment ones are fixable"
+                      " inside comments; a stray artifact is fixed by deleting the file.")))))
   (System/exit (if (zero? blocking-n) 0 1)))

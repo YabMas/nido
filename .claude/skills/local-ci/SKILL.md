@@ -78,18 +78,40 @@ Exit 1 ⇒ the `Checks` job **will** fail. Fix these first — inside comments o
 proven by the gate in "## Hygiene fixes" — commit, and re-scan until clean before
 spending a CI cycle. Exit 0 ⇒ proceed.
 
-The scan also reports two **advisory** classes that CI has no check for at all:
+The scan also reports two **advisory** classes that CI has no check for at all.
+Both belong to `lane-comments`, and the scan's own output says so — a class
+printed with nobody named is read as a soft warning and acted on by no one.
 
 - **migration narration** in comments (`no longer`, `previously`, `formerly`,
   `replaces the`) — the soft vocabulary brian's comment-lint deliberately
   refuses to blocker-gate ("handled by review lanes, NOT this commit blocker").
-  This is that review lane. It is also the class human reviewers actually flag.
-- **stray artifacts** — added debug output, commented-out code, `.orig`/`.rej`
-  files.
+  Judged against `~/Code/nido/docs/reference/comments.md` § 4. The word list is
+  a prior, not a verdict: English collides with several of them, and the
+  narration that uses none of them is invisible to the scan and visible to the
+  lane.
+- **commented-out code** — a parked block sitting in a comment. It *is* a
+  comment, so whether it earns its line is the doctrine's § 1 test rather than a
+  separate rule. What the scan cannot tell is whether somebody parked it
+  deliberately, which is the judgement the lane is for.
 
-Fold both into the report (§6). They are findings like any other, and **neither
-is fixed** — every fix for them is a code edit about intent (see
+Fold both into the report (§6) with their owner, and fix neither here (see
 "## Hygiene fixes").
+
+**Two classes changed shape, and it is worth knowing which way.** A committed
+`.orig`/`.rej`/`.bak`/`.DS_Store` is now **blocking** rather than advisory: it
+is decided by a path suffix with no question of intent, which is the same shape
+as a banned token. Its fix is deleting the file, not editing a comment, so
+`no-code-change.bb` will not bless it — delete it, say so in the report, and
+re-scan. Added **debug output** is no longer scanned at all: whether a `println`
+is production noise or a CLI's own output turns on a pathspec only the project
+can write, and the hand-rolled guess made instead (exempt `/test/`, `/dev/`,
+`bin/`) flagged the scan's own report lines. A project that wants that check
+should put it in its own linter, with its own pathspecs.
+
+**This skill does not dispatch `lane-comments` itself.** Naming the owner is not
+the same as spending a review round on comment prose inside a CI skill, and the
+call belongs to whoever is reading the report — the narration items are
+advisory precisely because nothing about them fails CI.
 
 **Why not just run `bb lint:comments`.** In a session worktree those tasks are
 structurally broken, and broken *silently* — see "## Common mistakes".
@@ -298,10 +320,13 @@ and say why in the report.
 and cross-repo backlinks only on the native forms, and the convention exempts
 them on purpose. Canonicalizing them breaks auto-close.
 
-**Advisory classes are reported, never fixed.** Removing an added `println`
-changes what the program emits; deleting a commented-out block is a judgement
-about whether someone parked it there deliberately; deleting a `.orig` changes
-the file set. All three are code edits, so they leave through the report.
+**Advisory classes are reported with their owner, never fixed here.** Whether to
+delete a commented-out block is a judgement about whether somebody parked it
+there deliberately, and rewriting narration is a judgement about what the
+comment should say instead. Both are `lane-comments`' calls, so they leave
+through the report. A blocking stray artifact is the opposite case: delete the
+file and note that you did, since it is the one blocking fix that is not a
+comment edit.
 
 ## Routing (failure class → owner in the fix phase)
 
@@ -313,13 +338,22 @@ here is dispatched (§5). A row naming an agent has never meant "halt".
 |---|---|
 | format / lint (clj-kondo) / lint-deps / shellcheck / css / js build | fix directly (mechanical) |
 | `Comment Lint` / `Ticket Refs` (the diff-scoped hygiene lints) | hygiene fix (gated) — see "## Hygiene fixes" |
-| migration narration / stray artifacts (advisory, no CI check) | report only — never auto-fixed |
+| migration narration in comments (advisory, no CI check) | `lane-comments` — **named in the report, not dispatched**; see below |
+| commented-out code (advisory, no CI check) | `lane-comments` — **named in the report, not dispatched**; see below |
+| stray artifact committed (`.orig`, `.rej`, `.bak`, `.DS_Store`) | blocking — delete the file and re-scan; not a comment fix |
 | i18n / translation | `translate-i18n` skill |
 | migrations | `database-dev` (deploy/safety angle: `lane-db-deploy`) |
 | Allium specs | `allium:weed` |
 | unit / integration test | `test-dev`, or the domain `lane-*` by failing namespace |
 | e2e (Playwright) | `e2e-dev` |
 | version gates / e2e partition rebalance / unclear | surface to the user with the exact `ACTION REQUIRED` instruction; do not guess |
+
+**One row does not dispatch, and it is the exception that proves the rule.**
+Every failure above is a CI failure, so its owner is dispatched (§5). Migration
+narration is not a failure — nothing about it is red, and it reaches this skill
+only because the pre-flight scans for it anyway. Spending a review round on
+comment prose inside a CI skill is a call for whoever reads the report, so this
+row names `lane-comments` and stops there.
 
 ## Common mistakes
 
