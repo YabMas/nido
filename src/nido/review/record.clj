@@ -1296,7 +1296,20 @@
                  (assoc ctx :control :stop :status :amend-noop)
 
                  :else
-                 (let [written (try {:path (ws/append-entry!
+                 ;; The correction names what it corrects. This round is the
+                 ;; only thing that knows the pair — `prev` is the record it was
+                 ;; asked to repair and `record` is the repair — and it is
+                 ;; written rather than derived because taking the newest survey
+                 ;; instead is exactly the recency the ledger's citations exist
+                 ;; to refuse. An amender that supplied its own is left alone:
+                 ;; a citation is the author's, and nothing here overrules one.
+                 (let [record  (cond-> record
+                                 (and (:seq prev) (not (:supersedes record)))
+                                 (assoc :supersedes
+                                        {:seq (:seq prev)
+                                         :why (str "corrected against the code after round "
+                                                   (:iter ctx) " of run " run-id)}))
+                       written (try {:path (ws/append-entry!
                                             project ws-id {:kind :baseline}
                                             (pr-str (ws/unstamp record)))}
                                     (catch Exception e

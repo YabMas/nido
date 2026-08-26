@@ -533,7 +533,12 @@
                          :writes (fn [p] (spit p (pr-str {:record stamped})))}
                         (ctx :findings [a-finding]))]
         (is (nil? (:status out)) "not :amend-invalid")
-        (is (= a-baseline (read-string appended)))))))
+        ;; Everything the amender wrote, minus the stamp — plus the correction
+        ;; citation the round adds naming what it repaired, which is the one
+        ;; field an amendment gains on the way to the ledger.
+        (is (= a-baseline (dissoc (read-string appended) :supersedes)))
+        (is (nil? (:seq (read-string appended))))
+        (is (nil? (:at (read-string appended))))))))
 
 (deftest unstamping-leaves-a-citation-alone
   ;; A design's :baseline :seq is an author's citation, not the reader's stamp,
@@ -787,3 +792,34 @@
         (is (= a-baseline (:as-authored (:carry out2)))
             "still the record the run began with, not the previous round's")
         (is (= second-amend (:under-repair (:carry out2))))))))
+
+;; ── Naming what a correction corrects ───────────────────────────────────────
+
+(deftest a-corrected-survey-names-the-survey-it-corrects
+  ;; The round is the only thing that knows the pair, and the edge is written
+  ;; rather than derived: taking the newest survey instead is exactly the
+  ;; recency the ledger's citations exist to refuse.
+  (let [corrected (assoc a-baseline :area "corrected")
+        [_ appended] (with-amend {:prev (assoc a-baseline :seq 7 :at "t")
+                                  :writes (fn [p] (spit p (pr-str {:record corrected})))}
+                                 (ctx :findings [a-finding]))]
+    (is (= 7 (get-in (read-string appended) [:supersedes :seq])))
+    (is (str/includes? (get-in (read-string appended) [:supersedes :why]) "round 1"))))
+
+(deftest an-amender-that-named-its-own-correction-is-left-alone
+  ;; A citation is the author's, and nothing here overrules one.
+  (let [corrected (assoc a-baseline :area "corrected"
+                         :supersedes {:seq 3 :why "the narrow follow-up, not the broad one"})
+        [_ appended] (with-amend {:prev (assoc a-baseline :seq 7 :at "t")
+                                  :writes (fn [p] (spit p (pr-str {:record corrected})))}
+                                 (ctx :findings [a-finding]))]
+    (is (= 3 (get-in (read-string appended) [:supersedes :seq])))))
+
+(deftest a-survey-with-no-seq-to-name-gains-no-citation
+  ;; The run was pointed at a record that is not in this ledger — a nested
+  ;; loop's value, or a fixture. Inventing a number would be worse than none.
+  (let [corrected (assoc a-baseline :area "corrected")
+        [_ appended] (with-amend {:prev a-baseline
+                                  :writes (fn [p] (spit p (pr-str {:record corrected})))}
+                                 (ctx :findings [a-finding]))]
+    (is (nil? (:supersedes (read-string appended))))))
