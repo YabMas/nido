@@ -1935,12 +1935,17 @@
                    (str "\n  - " (str/join ", " (map #(str "`" % "`") evidence)))))))))
 
 (def verdict-holds
-  "The verdicts that say the survey stands. :accurate is the older one, under the
-   older question; both are success and neither wants a re-survey note under it.
+  "The verdicts that say somebody checked this survey against the code and it
+   held. :accurate is the older one — the same answer under the question the
+   round asked before it asked about sufficiency. The survey was still checked,
+   and re-checking it under the newer question is the baseline loop's business,
+   not a reason to refuse to decide against it.
 
-   Named rather than written inline as `(not= :accurate verdict)`, which is what
-   it was: when :sufficient replaced :accurate the guard was not moved, so the
-   expected outcome of every run rendered with `Re-survey` printed beneath it."
+   Named, and named ONCE, because both readers of it had it as a literal and
+   both were era-lagged: the renderer guarded its re-survey note on
+   `(not= :accurate verdict)`, so the expected outcome of every run printed
+   `Re-survey` beneath it, and the design round's premise gate carried its own
+   copy of the same set."
   #{:sufficient :accurate})
 
 (defn findings-heading

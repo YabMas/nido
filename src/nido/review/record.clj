@@ -773,15 +773,6 @@
       {:outcome :no-record :detail "this workstream has no :baseline entry"})
     {:outcome :no-workstream :detail (str "cwd resolves to no nido session: " cwd)}))
 
-(def ^:private verified-verdicts
-  "A verdict that says somebody checked this survey against the code and it held.
-
-   :accurate is the same answer under the question the round asked before it
-   asked about sufficiency. The survey was still checked, and re-checking it
-   under the newer question is the baseline loop's business — not a reason to
-   refuse to decide against it."
-  #{:sufficient :accurate})
-
 (defn unverified-premise
   "Why this design cannot be judged yet, when the survey it stands on has never
    been checked — or nil when it has.
@@ -803,7 +794,7 @@
   [project ws-id design]
   (when-let [n (get-in design [:baseline :seq])]
     (when-not (some #(and (= n (:baseline-seq %))
-                          (verified-verdicts (:verdict %)))
+                          (report/verdict-holds (:verdict %)))
                     (ws/entries-of project ws-id :baseline-review))
       {:outcome :premise-unverified
        :detail (str "the design cites the survey at entry " n
