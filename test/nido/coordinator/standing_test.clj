@@ -1,0 +1,159 @@
+;; test/nido/coordinator/standing_test.clj
+(ns nido.coordinator.standing-test
+  (:require
+   [babashka.fs :as fs]
+   [clojure.test :refer [deftest is testing]]
+   [nido.coordinator.standing :as standing]
+   [nido.coordinator.state :as cstate]
+   [nido.coordinator.workstream :as ws]
+   [nido.io :as io]))
+
+(defn- with-tmp [f]
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (f tmp))
+      (finally (fs/delete-tree tmp)))))
+
+(def ^:private a-survey
+  {:format :baseline :area "order totalling" :bounded-by "money on an order"
+   :shape "one summing path"
+   :modules [{:id "agg" :module "the aggregate" :hides "the summing order"
+              :interface "an order's total"}]
+   :composition "only the aggregate sees the lines"
+   :load-bearing [{:id "c1" :property "the aggregate is the only summing path"
+                   :falsified-by "a second path that sums lines"
+                   :evidence ["src/a.clj:1"]}]
+   :read ["src/a.clj"]})
+
+(defn- a-design [baseline-seq]
+  {:format :design :summary "s" :shape "sh" :invariants ["one summing path"]
+   :standing {:relation :conforms}
+   :baseline {:seq baseline-seq :relation :within}
+   :intent {:seq 1} :effort :S})
+
+(defn- ledger
+  "A workstream with an intent at seq 1, then whatever `entries` says.
+   Returns [ws-id (fn add [kind record] -> seq)]."
+  []
+  (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+        id (:id w)
+        n  (atom 0)]
+    (ws/append-entry! :brian id {:kind :intent}
+                      (pr-str {:format :intent :goal "g" :done-when ["d"]}))
+    (reset! n 1)
+    [id (fn [kind record]
+          (ws/append-entry! :brian id {:kind kind} (pr-str record))
+          (swap! n inc))]))
+
+(deftest a-design-on-a-verified-survey-is-decidable-and-not-yet-decided
+  (with-tmp
+    (fn [_]
+      (let [[id add] (ledger)
+            b (add :baseline a-survey)
+            _ (add :baseline-review {:format :baseline-review :verdict :sufficient
+                                     :baseline-seq b :reason "it holds"})
+            d (add :design (a-design b))
+            st (standing/of-design :brian id (ws/entry-at-seq :brian id d))]
+        (is (true? (:decidable? st)))
+        (is (false? (:decided? st)))
+        (is (nil? (:blocked st)) "the missing approval is NOT a decidability blocker")
+        (is (= :not-approved (:reason (standing/why-not-decided st))))))))
+
+(deftest an-approval-decides-it
+  (with-tmp
+    (fn [_]
+      (let [[id add] (ledger)
+            b (add :baseline a-survey)
+            _ (add :baseline-review {:format :baseline-review :verdict :sufficient
+                                     :baseline-seq b :reason "ok"})
+            d (add :design (a-design b))
+            a (add :design-approved {:format :design-approved :design {:seq d} :at-seq d})
+            st (standing/of-design :brian id (ws/entry-at-seq :brian id d))]
+        (is (true? (:decided? st)))
+        (is (= a (:approved-by st)))
+        (is (nil? (standing/why-not-decided st)))))))
+
+(deftest retracting-the-premise-stops-a-design-that-was-already-decided
+  ;; The case the whole change exists for.
+  (with-tmp
+    (fn [_]
+      (let [[id add] (ledger)
+            b (add :baseline a-survey)
+            _ (add :baseline-review {:format :baseline-review :verdict :sufficient
+                                     :baseline-seq b :reason "ok"})
+            d (add :design (a-design b))
+            _ (add :design-approved {:format :design-approved :design {:seq d} :at-seq d})
+            st0 (standing/of-design :brian id (ws/entry-at-seq :brian id d))
+            r (add :retraction {:format :retraction :retracts {:seq b}
+                                :because "the invoice renderer sums independently"
+                                :evidence ["src/order/invoice.clj:88"]
+                                :found-during :implementation})
+            st (standing/of-design :brian id (ws/entry-at-seq :brian id d))]
+        (is (true? (:decided? st0)) "decided before the retraction")
+        (is (false? (:decidable? st)) "and undecidable after it")
+        (is (false? (:decided? st)))
+        (is (= :premise-retracted (:reason (:blocked st))))
+        (is (= r (:seq (:blocked st))) "the refusal names the entry responsible")))))
+
+(deftest a-corrected-survey-does-not-block-and-is-reported-as-the-way-back
+  ;; Supersession never blocks: a survey corrected but not retracted still
+  ;; stands. The correction only tells a stuck design what would re-establish it.
+  (with-tmp
+    (fn [_]
+      (let [[id add] (ledger)
+            b1 (add :baseline a-survey)
+            d  (add :design (a-design b1))
+            b2 (add :baseline (assoc a-survey :area "corrected"
+                                     :supersedes {:seq b1 :why "refuted"}))
+            _  (add :baseline-review {:format :baseline-review :verdict :sufficient
+                                      :baseline-seq b2 :reason "ok"})
+            st (standing/of-design :brian id (ws/entry-at-seq :brian id d))]
+        (is (false? (:decidable? st))
+            "the survey it CITES was never found sufficient — the correction's
+             verdict is about a different entry")
+        (is (= :premise-unverified (:reason (:blocked st))))
+        (is (= b2 (:replaced-by (:blocked st)))
+            "and it says which record would re-establish the premise")
+        (is (nil? (:retracted-by (:premise st))) "correction is not retraction")))))
+
+(deftest a-replacement-is-followed-through-the-chain-and-never-inferred
+  (with-tmp
+    (fn [_]
+      (let [[id add] (ledger)
+            b1 (add :baseline a-survey)
+            d  (add :design (a-design b1))
+            b2 (add :baseline (assoc a-survey :area "second"
+                                     :supersedes {:seq b1 :why "r"}))
+            b3 (add :baseline (assoc a-survey :area "third"
+                                     :supersedes {:seq b2 :why "r"}))
+            _  (add :baseline (assoc a-survey :area "an unrelated later survey"))
+            st (standing/of-design :brian id (ws/entry-at-seq :brian id d))]
+        (is (= b3 (:replaced-by (:premise st)))
+            "the chain is followed to its end")
+        (is (not= b3 (inc b3)))
+        (testing "and a survey citing nothing yields no replacement, however new"
+          (let [st2 (standing/of-design
+                     :brian id (assoc (a-design 999) :seq 999))]
+            (is (nil? (:replaced-by (:premise st2))))))))))
+
+(deftest standing-fails-closed-when-a-record-it-depends-on-will-not-read
+  ;; Alone among this ledger's readers. Everything else degrades to nil on an
+  ;; entry it cannot parse; an unreadable retraction that silently does not
+  ;; retract turns a safety check into a formality.
+  (with-tmp
+    (fn [_]
+      (let [[id add] (ledger)
+            b (add :baseline a-survey)
+            _ (add :baseline-review {:format :baseline-review :verdict :sufficient
+                                     :baseline-seq b :reason "ok"})
+            d (add :design (a-design b))
+            r (add :retraction {:format :retraction :retracts {:seq b}
+                                :because "x" :evidence ["src/a.clj:1"]})]
+        (io/write-text! (str (fs/path (cstate/workstream-dir :brian id)
+                                      (format "entries/%04d-retraction.edn" r)))
+                        "{:format :retraction :this-will-not")
+        (let [st (standing/of-design :brian id (ws/entry-at-seq :brian id d))]
+          (is (true? (:indeterminate? st)))
+          (is (= :unreadable-ledger (:reason (:blocked st))))
+          (is (not (:decidable? st)) "and an indeterminate standing blocks"))))))
