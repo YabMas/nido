@@ -128,6 +128,34 @@
     (is (= :max-iters (:status out))
         "a different finding each round is progress, so only the cap ends it")))
 
+(deftest a-stop-holding-an-open-finding-is-not-a-convergence
+  ;; The status a run ends on is what a reader trusts. A run that stops with
+  ;; something nobody acted on must not be able to report what a run that
+  ;; finished everything reports.
+  (let [[_ emit] (capturing)
+        pipe [(stage :review (fn [c] (assoc c :findings [{:title "x" :done? false}])))
+              (stage :warden (fn [c] (assoc c :control :stop)))]
+        out (rloop/run-loop {:run-id "r1" :max-iters 5 :pipeline pipe :emit emit
+                             :open? (complement :done?)})]
+    (is (= :unresolved (:status out)))))
+
+(deftest a-stop-holding-nothing-open-still-converges
+  (let [[_ emit] (capturing)
+        pipe [(stage :review (fn [c] (assoc c :findings [{:title "x" :done? true}])))
+              (stage :warden (fn [c] (assoc c :control :stop)))]
+        out (rloop/run-loop {:run-id "r1" :max-iters 5 :pipeline pipe :emit emit
+                             :open? (complement :done?)})]
+    (is (= :converged (:status out)))))
+
+(deftest a-pipeline-that-does-not-answer-open-keeps-converging
+  ;; The record loops have no notion of an unactioned finding, so the default
+  ;; reading must leave them exactly as they were.
+  (let [[_ emit] (capturing)
+        pipe [(stage :review (fn [c] (assoc c :findings [{:title "x"}])))
+              (stage :warden (fn [c] (assoc c :control :stop)))]
+        out (rloop/run-loop {:run-id "r1" :max-iters 5 :pipeline pipe :emit emit})]
+    (is (= :converged (:status out)))))
+
 (deftest default-finding-key-is-the-handle-the-warden-filed-a-finding-under
   (is (= "h-7"
          (rloop/default-finding-key {:file "a.clj" :line-start 4 :line-end 9

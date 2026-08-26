@@ -168,7 +168,12 @@
                     :max-iters max-iters
                     :dry-run?  (boolean dry-run?)
                     :run-id    run-id
-                    :clock     clock}
+                    :clock     clock
+                    ;; What the engine cannot ask for itself: it never looks
+                    ;; inside a finding, so the pipeline that knows what a
+                    ;; disposition means is the one that says whether anything
+                    ;; is still owed.
+                    :open?     (complement stages/settled?)}
         report-atom (atom (report/init {:run-id run-id :cwd cwd :base base
                                         :started-at (str (clock))}))
         final  (frontend/with-live-display

@@ -1193,7 +1193,7 @@
    at the full report.json rather than embedding it. `:at` is stamped by the ledger."
   [:map {:closed true}
    [:format             [:= :review-report]]
-   [:status             [:enum :converged :escalated :clean :no-progress
+   [:status             [:enum :converged :unresolved :escalated :clean :no-progress
                                :max-iters :review-failed :dry-run
                                :fix-noop :warden-indeterminate
                                ;; pre-rename ledger entries stay readable

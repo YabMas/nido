@@ -132,7 +132,7 @@
    end on, and a run that ends there ends on a judgement rather than on a
    repair — so every repair it reports as failed was actually tested, and it
    spends no round repairing a finding it is about to report as immovable."
-  [ctx pipeline emit clock judged-after end?]
+  [ctx pipeline emit clock judged-after end? open?]
   (reduce
    (fn [ctx stage]
      (emit {:event :phase-started :iter (:iter ctx) :phase (:name stage)
@@ -149,7 +149,15 @@
               :ctx ctx' :at (str (clock))})
        (cond
          (:status ctx')                (reduced ctx')
-         (= :stop (:control ctx'))     (reduced (assoc ctx' :status :converged))
+         ;; A stop is a convergence only if the round is not still holding
+         ;; something. `open?` is the pipeline's own reading of that — the engine
+         ;; must not look inside a finding, which is what keeps it shared with
+         ;; the record loops — and it defaults to "nothing is open", so a
+         ;; pipeline that does not answer the question keeps the old behaviour.
+         (= :stop (:control ctx'))
+         (reduced (assoc ctx' :status (if (some open? (:findings ctx'))
+                                        :unresolved
+                                        :converged)))
          (= :escalate (:control ctx')) (reduced (assoc ctx' :status :escalated))
 
          ;; The history here does not yet count this round — the stage that
@@ -169,16 +177,22 @@
    terminates on its own merits (converged / escalated / clean / no-progress /
    error). A round that changes nothing still ends the run via `no-progress?`,
    so unbounded does not mean non-terminating. Pass :max-iters only to cap it.
-   :pipeline / :emit / :clock / :finding-key are injection seams. :finding-key
-   decides what \"the same finding again\" means and so what no-progress? can
-   detect; it defaults to the diff review's default-finding-key.
+   :pipeline / :emit / :clock / :finding-key / :open? are injection seams.
+   :finding-key decides what \"the same finding again\" means and so what
+   no-progress? can detect; it defaults to the diff review's
+   default-finding-key. :open? decides whether a finding is still owed, and so
+   whether a pipeline saying stop has CONVERGED or merely stopped: a run that
+   ends holding something reports :unresolved instead. It defaults to
+   \"nothing is open\", which is the reading a pipeline with no notion of an
+   unactioned finding wants.
 
    A round's ctx is rebuilt from scratch. `:carry` is the only channel a stage
    has to reach the next round, and it survives onto the terminal ctx too — see
    the comment on ctx0."
-  [{:keys [run-id max-iters pipeline emit clock finding-key judged-after] :as config
+  [{:keys [run-id max-iters pipeline emit clock finding-key judged-after open?] :as config
     :or   {emit (fn [_]) clock #(Instant/now)
-           finding-key default-finding-key}}]
+           finding-key default-finding-key
+           open? (constantly false)}}]
   (let [pipeline (or pipeline default-pipeline)
         impl-session-id (str (random-uuid))]
     (emit {:event :run-started :run-id run-id
@@ -205,7 +219,7 @@
                   :iter iter :max-iters max-iters}
             end? (fn [c prior] (terminal cfg c prior))
             ctx  (try
-                   (run-pipeline ctx0 pipeline emit clock judged-after end?)
+                   (run-pipeline ctx0 pipeline emit clock judged-after end? open?)
                    (catch clojure.lang.ExceptionInfo e
                      (if (= :review-failed (:reason (ex-data e)))
                        (assoc ctx0 :status :review-failed :error (ex-message e))
