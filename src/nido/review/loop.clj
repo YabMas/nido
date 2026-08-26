@@ -106,7 +106,11 @@
    so unbounded does not mean non-terminating. Pass :max-iters only to cap it.
    :pipeline / :emit / :clock / :finding-key are injection seams. :finding-key
    decides what \"the same finding again\" means and so what no-progress? can
-   detect; it defaults to the diff review's default-finding-key."
+   detect; it defaults to the diff review's default-finding-key.
+
+   A round's ctx is rebuilt from scratch. `:carry` is the only channel a stage
+   has to reach the next round, and it survives onto the terminal ctx too — see
+   the comment on ctx0."
   [{:keys [run-id max-iters pipeline emit clock finding-key] :as config
     :or   {emit (fn [_]) clock #(Instant/now)
            finding-key default-finding-key}}]
@@ -114,9 +118,24 @@
         impl-session-id (str (random-uuid))]
     (emit {:event :run-started :run-id run-id
            :cwd (:cwd config) :base (:base config) :at (str (clock))})
-    (loop [iter 1, history [], prev-findings nil]
+    (loop [iter 1, history [], prev-findings nil, carry nil]
       (let [ctx0 {:config (assoc config :impl-session-id impl-session-id)
-                  :iter iter :history history :control :continue}
+                  :iter iter :history history :control :continue
+                  ;; The one thing a round may hand to the next one. Everything
+                  ;; else a stage puts on the ctx is scratch for that round: the
+                  ;; ctx is rebuilt here from :config, :iter, :history and
+                  ;; nothing more, so a stage that stores a value for later and
+                  ;; does not put it here is storing it nowhere.
+                  ;;
+                  ;; Watched: the record pipelines kept "the record this run is
+                  ;; repairing" on the bare ctx. It was dropped every round, so
+                  ;; each judge fell through to its "or the latest entry" default
+                  ;; — the exact re-read that key exists to prevent. The loop
+                  ;; still converged, because on a workstream with one survey the
+                  ;; latest entry IS the amended one, which is why nothing showed
+                  ;; it. The fix belongs here rather than in either pipeline:
+                  ;; there was no seam to put it through.
+                  :carry carry}
             ctx  (try
                    (run-pipeline ctx0 pipeline emit clock)
                    (catch clojure.lang.ExceptionInfo e
@@ -159,4 +178,4 @@
           (do (emit {:event :run-finalized :status (:status final)
                      :ctx final :at (str (clock))})
               final)
-          (recur (inc iter) (:history ctx) (:findings ctx)))))))
+          (recur (inc iter) (:history ctx) (:findings ctx) (:carry ctx)))))))

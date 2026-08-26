@@ -218,3 +218,35 @@
         "an identical set trips the stall check at round two, before three rounds pass")
     (is (= ["immovable"] (:unfixable out))
         "and it is named — a run that stops holding findings says which")))
+
+(deftest a-round-hands-the-next-one-what-it-put-in-carry
+  ;; The record pipelines' whole "repair the record you were pointed at" rule
+  ;; rides on this: without it every judge falls back to re-reading the ledger.
+  (let [seen (atom [])
+        pipe [(stage :judge (fn [c]
+                              (swap! seen conj (:under-repair (:carry c)))
+                              (assoc c :findings [{:title (str "f" (:iter c))}])))
+              (stage :amend (fn [c]
+                              (assoc-in c [:carry :under-repair]
+                                        (str "record-" (:iter c)))))]
+        out (rloop/run-loop {:run-id "carry" :max-iters 3 :pipeline pipe
+                             :finding-key :title})]
+    (is (= [nil "record-1" "record-2"] @seen))
+    ;; and it is still there for whoever reads the terminal ctx
+    (is (= "record-3" (:under-repair (:carry out))))))
+
+(deftest carry-survives-onto-a-ctx-that-stopped-in-the-first-stage
+  ;; The success path of a nested baseline loop is exactly this shape: the judge
+  ;; declares the record sufficient and the amend stage never runs, so a caller
+  ;; reading the corrected record off the result reads it from an earlier round.
+  (let [pipe [(stage :judge (fn [c]
+                              (if (= 2 (:iter c))
+                                (assoc c :control :stop)
+                                (assoc c :findings [{:title "x"}]))))
+              (stage :amend (fn [c]
+                              (assoc-in c [:carry :under-repair]
+                                        (str "record-" (:iter c)))))]
+        out (rloop/run-loop {:run-id "carry2" :max-iters 4 :pipeline pipe
+                             :finding-key :title})]
+    (is (= :converged (:status out)))
+    (is (= "record-1" (:under-repair (:carry out))))))
