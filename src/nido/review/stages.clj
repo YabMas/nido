@@ -388,25 +388,35 @@
 
 
 (defn converged-targets
-  "Pure: the targets this round left with nothing to fix, paired with the patch
+  "Pure: the targets this round left with nothing OWED, paired with the patch
    they were reviewed at.
 
-   A target converged when no :fix finding is OWNED by it — not when none was
-   reported by it. A finding an upper layer reported but a lower one owns leaves
-   the upper layer converged, correctly: nothing about it needs changing. The
-   whole-stack target converges only when nothing anywhere needs fixing, and any
-   fix that does land changes the patch of every layer above it, so its hash
-   stops matching on its own."
+   Owed, not unfixed. A target converges when every finding naming it was
+   CLOSED — decided, by a named authority — not merely when none of them was
+   handed to a fixer. Those two differ for every disposition that is neither,
+   and the difference is not academic: a finding the loop has no move for is
+   still open, and marking its target converged writes that patch into a store
+   that only grows, so a later run at the same content skips the target and the
+   finding is gone. `nido.review.cache` leans toward over-invalidating for
+   exactly this reason — over-invalidating costs one review, and reading
+   `not :fix` as `nothing owed` cost a P1 that no re-run would have shown again.
+
+   A finding an upper layer reported but a lower one owns leaves the upper layer
+   converged, correctly: nothing about it needs changing. A finding the warden
+   gave no owner names no layer, so it blocks none of them — but it is still
+   open, so the whole-stack target holds it, and that target converging on
+   `nothing anywhere is open` is what stops it being lost. Any fix that lands
+   changes the patch of every layer above it, so its hash stops matching on its
+   own."
   [reviews findings]
-  (let [owners (into #{} (comp (filter #(= :fix (:disposition %)))
-                               (map :owner-layer))
-                     findings)]
+  (let [open   (remove #(= :closed (:disposition %)) findings)
+        owners (into #{} (map :owner-layer) open)]
     (into []
           (comp (map :target)
                 (filter (fn [t]
                           (and (:patch-hash t)
                                (if (:stack? t)
-                                 (empty? owners)
+                                 (empty? open)
                                  (not (contains? owners (:label t))))))))
           reviews)))
 

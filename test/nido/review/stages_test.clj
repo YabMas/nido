@@ -367,6 +367,35 @@
     (is (= [] (stages/converged-targets
                reviews [{:disposition :fix :owner-layer "a"}])))))
 
+(deftest converged-targets-hold-a-target-whose-finding-was-not-closed
+  ;; The disposition that is neither :fix nor :closed is what this turns on.
+  ;; Nobody was handed the finding, so nothing about the target will change —
+  ;; and recording it converged writes the patch into an append-only store, so a
+  ;; later run at the same content skips the target and the finding is gone.
+  (let [reviews [{:target {:label "a" :patch-hash "h-a"}}
+                 {:target {:label "b" :patch-hash "h-b"}}
+                 {:target {:label "stack" :patch-hash "h-s" :stack? true}}]]
+    (is (= ["b"] (map :label (stages/converged-targets
+                              reviews [{:disposition :park :owner-layer "a"}])))
+        "a parked finding leaves its owner open, and the stack with it")
+    (is (= ["b"] (map :label (stages/converged-targets
+                              reviews [{:disposition :deviation :owner-layer "a"}])))
+        "so does a deviation — neither was settled by a close")
+    (is (= ["a" "b" "stack"]
+           (map :label (stages/converged-targets
+                        reviews [{:disposition :closed :owner-layer "a"}])))
+        "a close is a decision by a named authority, so its target converges")))
+
+(deftest converged-targets-hold-the-stack-for-a-finding-that-names-no-layer
+  ;; The warden may rule on a finding without giving it an owner. It then names
+  ;; no layer, so it blocks none of them — the whole-stack target is the only
+  ;; thing holding it, which is why that target turns on `nothing is open`
+  ;; rather than on ownership.
+  (let [reviews [{:target {:label "a" :patch-hash "h-a"}}
+                 {:target {:label "stack" :patch-hash "h-s" :stack? true}}]]
+    (is (= ["a"] (map :label (stages/converged-targets
+                              reviews [{:disposition :park :owner-layer nil}]))))))
+
 (deftest answered-for-carries-only-what-that-target-reported-and-lost
   (is (= ["aa11"]
          (map :id (stages/answered-for
