@@ -99,67 +99,32 @@ Advance the ticket to the stage you're starting. This also tells nido's coordina
 bb nido:ticket:status :project brian :br <BR-####> :status implementing
 ```
 
-Then two ledger events, **in this order** — the durable artifacts this session
-produces before any code.
+Then the ledger events this session owes before any code. **`/design` §7 owns
+them and what goes in them — read it and follow it there.** Three appends, in
+order: `:intent`, then `:baseline`, then `:design`, each written to a temp file
+and appended with `bb nido:ticket:append :project brian :br <BR-####> :kind
+<kind> :session <session> :run-id <run-id> :file /tmp/<kind>.edn`.
 
-### First the baseline: what is already there
+This section used to restate the design record's shape, and drifted from the
+schema the moment `:intent` became required — an agent following the copy here
+wrote a record the append boundary rejected. It is a pointer now for that
+reason: there is one write contract, and one place that teaches it.
 
-Survey the area and append a `:baseline` event **before you decide anything**.
-Read `/design` §4 for the doctrine; the short version is that every field must be
-fillable without knowing the fix, because an inference made by someone who
-already knows the fix is bent toward it.
+Two things about the appends are specific to *this* stage, and are not in
+`/design`:
 
-Triage's `:design-frame` is a **provisional read, not a verdict**. It was made in
+**Skip `:intent` only when a `:triage` entry already states the goal** — the
+design may cite that entry instead. A pickup has neither, so it authors one from
+the ticket body you read in Step 1.5. Nothing else is citable.
+
+**Triage's `:design-frame` is a provisional read, not a verdict.** It was made in
 twenty minutes, often on a shallow route, by an agent that had not surveyed. Use
 its `:trail` and `:violated` as leads — they say where to look — and let the
 survey confirm or overturn the frame. **When they disagree, say so in the design
 record's `:baseline :note`.** That disagreement is worth more than either reading
 alone: it is the only thing that measures whether triage's design reading is
-worth anything.
-
-Scope by what *governs* the behaviour, not by the files you expect to touch —
-`:violated` cites the checkable layer, which is a good starting point and a bad
-boundary.
-
-### Then the design: how the change stands to it
-
-The `:design` event states what the change commits to, cites the baseline by
-`:seq`, and resolves any triage `:squirrel` into a concrete effort — sizing
-follows from the design, not the other way round. Claims about structure, not a
-plan of action; there is no step list and the schema rejects one.
-
-The `:baseline :relation` is the job, and now you can derive it rather than guess:
-
-| relation | what you are doing |
-|---|---|
-| `:within` | every load-bearing property survives. A defect here is an **implementation** defect — a fix. `:shape` restates the design the code should have had; the invariants are the ones it already broke. |
-| `:extends` | the change lands on an existing extension point, or adds one that contradicts nothing load-bearing. Say which, in `:at`. |
-| `:revisit` | a load-bearing property has to change — a **decision**, and where a `:squirrel` came from. Name the properties in `:breaks`, say what the new shape is, and check whether it also needs `:extends` or `:challenges` against the *stance*. |
-
-`:violated` names rules you are now on the hook for, so they usually belong in
-`:invariants`.
-
-```bash
-cat > /tmp/design.edn <<'EDN'
-{:format     :design
- :summary    "<2–4 sentences: what this change makes true of the system>"
- :shape      "<the structural claim: which parts exist, where the boundaries
-                fall, what crosses them>"
- :invariants ["<what must hold once this lands — checkable; at least one>"]
- :standing   {:relation :conforms}   ; :extends / :challenges MUST carry :note
- :baseline   {:seq 2 :relation :within}  ; :seq = the baseline you just filed;
-                                         ; :revisit MUST carry :breaks
- :rejected   [{:alternative "<…>" :why-not "<…>"}]                  ; optional
- :layers     [{:claim "<one sentence, no \"and\">" :mode :judgment}]  ; optional
- :effort     :M}          ; concrete :XS :S :M :L :XL — resolve a :squirrel here
-EDN
-bb nido:ticket:append :project brian :br <BR-####> :kind design \
-  :session <session> :run-id <run-id> :file /tmp/design.edn
-```
-
-The append validates against nido's `DesignVision` schema and rejects a malformed
-record (non-zero exit + explain) — fix and retry. Derive `<session>`/`<run-id>`
-from the cwd and the `./run-link/` symlink target.
+worth anything. The same holds when the *ticket* disagrees with triage — there,
+the ticket wins outright.
 
 If you cannot yet state the shape or name an invariant, that is a finding rather
 than a formality — the design question triage deferred is still open. Put it in
