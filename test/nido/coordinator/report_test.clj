@@ -1393,3 +1393,42 @@
   (let [q (:question (:ousterhout/depth report/lenses))]
     (is (str/includes? q "DEPENDED ON FROM OUTSIDE"))
     (is (str/includes? q "not what the namespace happens to"))))
+
+;; ── The shapes standing needs ───────────────────────────────────────────────
+
+(deftest a-retraction-must-carry-its-counterexample
+  ;; The guard against this becoming noise. A retraction cascades — everything
+  ;; standing on the record stops being decidable and work citing it cannot
+  ;; land — and a judgement with that reach must carry what earned it. An
+  ;; assertion should not be able to stop a branch.
+  (let [ok {:format :retraction :retracts {:seq 13}
+            :because "the aggregate is not the only summing path"
+            :evidence ["src/order/invoice.clj:88"]}]
+    (is (some? (report/entry-payload :retraction (pr-str ok))))
+    (is (thrown? Exception (report/entry-payload :retraction (pr-str (assoc ok :evidence [])))))
+    (is (thrown? Exception (report/entry-payload :retraction (pr-str (dissoc ok :evidence)))))
+    (is (thrown? Exception (report/entry-payload :retraction (pr-str (dissoc ok :because)))))))
+
+(deftest an-approval-names-the-design-and-the-position-it-was-read-at
+  ;; :at-seq is what makes the grant honest rather than merely durable — a
+  ;; decision made against a stale page is not a decision about what is there.
+  (let [ok {:format :design-approved :design {:seq 34} :at-seq 35}]
+    (is (some? (report/entry-payload :design-approved (pr-str ok))))
+    (is (thrown? Exception (report/entry-payload :design-approved (pr-str (dissoc ok :at-seq)))))
+    (is (thrown? Exception (report/entry-payload :design-approved (pr-str (dissoc ok :design)))))))
+
+(deftest a-survey-may-name-the-survey-it-corrects-and-need-not
+  ;; Optional is the load-bearing half: every survey already written carries
+  ;; none, and that absence is what stops a reader inferring the edge from
+  ;; append order.
+  (let [b {:format :baseline :area "a" :bounded-by "b" :shape "s"
+           :modules [{:id "m" :module "m" :hides "h" :interface "i"}]
+           :composition "c"
+           :load-bearing [{:id "c1" :property "p" :falsified-by "f"
+                           :evidence ["src/a.clj:1"]}]
+           :read ["src/a.clj"]}]
+    (is (some? (report/entry-payload :baseline (pr-str b))))
+    (is (some? (report/entry-payload
+                :baseline (pr-str (assoc b :supersedes {:seq 9 :why "corrected"})))))
+    (is (thrown? Exception (report/entry-payload
+                            :baseline (pr-str (assoc b :supersedes {:seq 9})))))))

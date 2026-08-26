@@ -645,7 +645,18 @@
     [:governing        {:optional true} [:vector string?]]
     [:drift            {:optional true} [:vector string?]]
     [:read             [:vector {:min 1} string?]]
-    [:unknowns         {:optional true} [:vector string?]]]
+    [:unknowns         {:optional true} [:vector string?]]
+    ;; The survey this one corrects, when it corrects one. Optional, and every
+    ;; survey written before this field existed carries none — which is the
+    ;; case that matters, because it is what stops a reader inferring the edge
+    ;; from append order instead.
+    ;;
+    ;; The baseline round already appends a corrected survey per amendment and
+    ;; said nothing about what it corrected, so a design citing the survey the
+    ;; round has since repaired had no way to be told which record would
+    ;; re-establish its premise. Same {:seq :why} a design already carries: an
+    ;; author names what they superseded, and nobody derives it.
+    [:supersedes       {:optional true} Supersedes]]
    [:fn {:error/message "health observation ids must be unique within a baseline"}
     distinct-health-ids?]
    [:fn {:error/message "claim and module ids must be unique within a baseline"}
@@ -675,7 +686,18 @@
     [:governing        {:optional true} [:vector string?]]
     [:drift            {:optional true} [:vector string?]]
     [:read             [:vector {:min 1} string?]]
-    [:unknowns         {:optional true} [:vector string?]]]
+    [:unknowns         {:optional true} [:vector string?]]
+    ;; The survey this one corrects, when it corrects one. Optional, and every
+    ;; survey written before this field existed carries none — which is the
+    ;; case that matters, because it is what stops a reader inferring the edge
+    ;; from append order instead.
+    ;;
+    ;; The baseline round already appends a corrected survey per amendment and
+    ;; said nothing about what it corrected, so a design citing the survey the
+    ;; round has since repaired had no way to be told which record would
+    ;; re-establish its premise. Same {:seq :why} a design already carries: an
+    ;; author names what they superseded, and nobody derives it.
+    [:supersedes       {:optional true} Supersedes]]
    [:fn {:error/message "health observation ids must be unique within a baseline"}
     distinct-health-ids?]])
 
@@ -727,7 +749,18 @@
     [:governing        {:optional true} [:vector string?]]
     [:drift            {:optional true} [:vector string?]]
     [:read             [:vector {:min 1} string?]]
-    [:unknowns         {:optional true} [:vector string?]]]
+    [:unknowns         {:optional true} [:vector string?]]
+    ;; The survey this one corrects, when it corrects one. Optional, and every
+    ;; survey written before this field existed carries none — which is the
+    ;; case that matters, because it is what stops a reader inferring the edge
+    ;; from append order instead.
+    ;;
+    ;; The baseline round already appends a corrected survey per amendment and
+    ;; said nothing about what it corrected, so a design citing the survey the
+    ;; round has since repaired had no way to be told which record would
+    ;; re-establish its premise. Same {:seq :why} a design already carries: an
+    ;; author names what they superseded, and nobody derives it.
+    [:supersedes       {:optional true} Supersedes]]
    [:fn {:error/message "health observation ids must be unique within a baseline"}
     distinct-health-ids?]])
 
@@ -754,7 +787,18 @@
     [:governing        {:optional true} [:vector string?]]
     [:drift            {:optional true} [:vector string?]]
     [:read             [:vector {:min 1} string?]]
-    [:unknowns         {:optional true} [:vector string?]]]
+    [:unknowns         {:optional true} [:vector string?]]
+    ;; The survey this one corrects, when it corrects one. Optional, and every
+    ;; survey written before this field existed carries none — which is the
+    ;; case that matters, because it is what stops a reader inferring the edge
+    ;; from append order instead.
+    ;;
+    ;; The baseline round already appends a corrected survey per amendment and
+    ;; said nothing about what it corrected, so a design citing the survey the
+    ;; round has since repaired had no way to be told which record would
+    ;; re-establish its premise. Same {:seq :why} a design already carries: an
+    ;; author names what they superseded, and nobody derives it.
+    [:supersedes       {:optional true} Supersedes]]
    [:fn {:error/message "health observation ids must be unique within a baseline"}
     distinct-health-ids?]])
 
@@ -1501,6 +1545,57 @@
    [:report-path      {:optional true} [:maybe string?]]
    [:artifact         {:optional true} string?]])
 
+(def Retraction
+  "A named earlier entry is not true, and here is what shows it.
+
+   The one thing the ledger's vocabulary could not say. Supersession says a
+   record is BETTER than its predecessor and is silent about whether the
+   predecessor was wrong — so nothing distinguished a survey polished by a
+   review round from one abandoned as false, and no reader could tell a live
+   premise from a dead one.
+
+   :evidence is required and non-empty on purpose, and it is the whole guard
+   against this becoming noise. A retraction cascades: everything standing on
+   the retracted record stops being decidable, and work that cites it cannot
+   land. A judgement with that reach must carry the counterexample that earned
+   it, the same way a load-bearing property carries what would falsify it. A
+   retraction nobody could check is an assertion, and an assertion should not
+   be able to stop a branch.
+
+   Deliberate only. Nothing infers one from a record being superseded,
+   corrected, aged, or from the code having changed underneath it — see the
+   design at ws-20260825-3f2464. A version-strict rule would fire on every
+   amendment a review round makes and be switched off inside a week."
+  [:map {:closed true}
+   [:format   [:= :retraction]]
+   [:retracts [:map {:closed true} [:seq int?]]]
+   [:because  string?]
+   [:evidence [:vector {:min 1} string?]]
+   [:found-during {:optional true}
+    [:enum :survey :design :implementation :review :landing]]])
+
+(def DesignApproved
+  "A human approved this design, at this position in the ledger.
+
+   Before this, approval existed only as an argument to a resume: work/approve
+   resumed the parked agent and wrote nothing, so `was this decided` was nowhere
+   a reader could ask it. A landing gate needs that answer, and a decision whose
+   only record is a live process is lost when the process dies.
+
+   :at-seq is the entry the Approve was RENDERED from, and it is what makes the
+   grant honest rather than merely durable. A decision made against a stale page
+   is not a decision about what is there now — so the click carries the position
+   it was read at, and a grant whose position is no longer the ledger's latest
+   is refused naming what moved rather than appended.
+
+   :design names what was approved, by number. Not `the latest design`, for the
+   same reason no other citation in this ledger is."
+  [:map {:closed true}
+   [:format  [:= :design-approved]]
+   [:design  [:map {:closed true} [:seq int?]]]
+   [:at-seq  int?]
+   [:note    {:optional true} string?]])
+
 (def event-schemas
   "Entry :kind → its Malli schema. Drives ledger-boundary validation + rendering.
    A :kind absent here is stored as verbatim markdown (legacy / freeform)."
@@ -1521,7 +1616,9 @@
    :design-verdict           DesignVerdict
    :findings                 FindingsRound
    :review-analysis          ReviewAnalysis
-   :proposed-ticket          ProposedTicket})
+   :proposed-ticket          ProposedTicket
+   :retraction               Retraction
+   :design-approved          DesignApproved})
 
 (def read-schemas
   "Kinds whose READ contract is wider than their write contract, because records
