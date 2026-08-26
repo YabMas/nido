@@ -3,7 +3,8 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [nido.coordinator.agent :as agent]
-            [nido.coordinator.resume :as resume]
+            [nido.coordinator.executor :as ex]
+   [nido.coordinator.resume :as resume]
             [nido.coordinator.runs :as runs]
             [nido.coordinator.session :as session]
             [nido.coordinator.state :as cstate]
@@ -70,19 +71,52 @@
         (is (= :parked (get-in (first (session/list-sessions :brian (:id w))) [:autonomy :phase]))
             "re-parks even when the launch throws")))))
 
-(deftest resume!-flips-running-and-spawns-turn
+(deftest resume!-flips-running-then-hands-the-turn-to-the-executor
+  ;; The turn used to run on a bare future beside the executor, so the cap
+  ;; bounded the sessions nido had STARTED rather than the agents it was running.
   (with-tmp
     (fn []
       (let [w (ws/create! :brian {:stage :triaging :external-refs []})
-            spawned (atom nil)]
+            ran (atom nil)]
         (session/create! :brian (:id w)
                          {:name "auto" :weight :heavy :autonomy autonomy-parked})
         (write-run! "r1" (:id w) "auto" "sid-9")
-        (with-redefs [resume/run-turn! (fn [& args] (reset! spawned (vec args)))]
-          (is (= {:resumed "auto"} (resume/resume! :brian (:id w) "go"))))
+        (ex/clear!)
+        (ex/configure! {:global-cap 2})
+        (ex/tick! (fn [_]) {})                    ; this process now drives one
+        (with-redefs [resume/run-turn! (fn [& args] (reset! ran (vec args)))]
+          (let [r (resume/resume! :brian (:id w) "go")]
+            (is (= "auto" (:resumed r)))
+            (is (true? (:queued? r)) "queued rather than launched beside the executor"))
+          (is (nil? @ran) "and it has not run yet — it is waiting for its slot")
+          (is (= 1 (:queued (ex/snapshot))))
+          (ex/tick! (fn [_]) {})
+          (Thread/sleep 250)
+          (is (some? @ran) "the executor ran it once a slot was free"))
         ;; resume! sets :running synchronously before handing off to the turn.
         (is (= :running (get-in (first (session/list-sessions :brian (:id w)))
                                 [:autonomy :phase])))))))
+
+(deftest resume!-runs-inline-and-says-so-when-nothing-ticks-this-process
+  ;; A standalone `bb nido:ui` starts the gate surface without the daemon. Queued
+  ;; there, the turn would park forever in an atom nobody promotes from and say
+  ;; nothing. Running it is right; letting the caller believe it was slot-accounted
+  ;; is not.
+  (with-tmp
+    (fn []
+      (let [w (ws/create! :brian {:stage :triaging :external-refs []})
+            ran (atom nil)]
+        (session/create! :brian (:id w)
+                         {:name "auto" :weight :heavy :autonomy autonomy-parked})
+        (write-run! "r1" (:id w) "auto" "sid-9")
+        (ex/clear!)                                ; nothing has ticked
+        (is (false? (ex/driven?)))
+        (with-redefs [resume/run-turn! (fn [& args] (reset! ran (vec args)))]
+          (let [r (resume/resume! :brian (:id w) "go")]
+            (is (false? (:queued? r)))
+            (is (true? (:unaccounted? r)) "and it says the slot was not taken"))
+          (Thread/sleep 250)
+          (is (some? @ran) "it ran rather than parking in a queue nobody drains"))))))
 
 (deftest resume!-throws-when-not-parked
   (with-tmp

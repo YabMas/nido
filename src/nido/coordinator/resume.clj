@@ -10,6 +10,7 @@
    [clojure.string :as str]
    [nido.coordinator.agent :as agent]
    [nido.coordinator.clock :as clock]
+   [nido.coordinator.executor :as executor]
    [nido.coordinator.runs :as runs]
    [nido.coordinator.session :as session]
    [nido.session.state :as session-state]))
@@ -109,9 +110,18 @@
 
 (defn resume!
   "Re-engage a parked session under `ws-id` with `input`. Flips the session to
-   :running synchronously, then runs one resume turn on a background thread.
-   Returns {:resumed <session-name>}; throws ex-info (with :reason) when there is
-   no parked session (:not-parked) or no recoverable conversation (:no-claude-session).
+   :running synchronously, then hands one turn to the executor, which runs it when
+   a slot frees.
+
+   Returns {:resumed <session-name> :queued? <bool>}, and :unaccounted? true in
+   the one case where the turn ran outside the executor because nothing in this
+   process ticks it. Throws ex-info (with :reason) when there is no parked session
+   (:not-parked) or no recoverable conversation (:no-claude-session).
+
+   The turn is no longer immediate, and that is the point rather than a
+   regression: it waits for a slot exactly as a spawn does. The caller could not
+   observe the work finishing before this either — it was already a background
+   thread — so what changed is when it starts, not what the caller may assume.
 
    The claude-session-id and limits are resolved from the parked session first
    (`:autonomy :claude-session-id` / `:autonomy :limits`), with the run.edn as a
@@ -134,5 +144,28 @@
         (throw (ex-info "No resumable conversation — open the session in the terminal"
                         {:reason :no-claude-session :project project :ws-id ws-id})))
       (session/set-phase! project ws-id (:name s) :running)
-      (future (run-turn! project ws-id (:name s) s run input))
-      {:resumed (:name s)})))
+      ;; Through the executor, so this turn takes a slot like every other agent
+      ;; launch. It used to run on a bare `future` beside it, which meant the cap
+      ;; bounded the sessions nido had STARTED rather than the agents it was
+      ;; running — and a workstream could hold as many concurrent claudes as
+      ;; there were people clicking Reply.
+      ;;
+      ;; Keyed per turn, because a Run is spawned once and resumed any number of
+      ;; times; keyed on the run-id alone submit!'s idempotence would swallow
+      ;; every reply after the first.
+      (let [turn (str (random-uuid))
+            body #(run-turn! project ws-id (:name s) s run input)]
+        (if (executor/driven?)
+          (do (executor/submit-turn!
+               {:run-id        (or (:id run) (str "session-" (:name s)))
+                :turn          turn
+                :trigger       (:trigger run)
+                :max-in-flight (:max-in-flight run)
+                :body          body})
+              {:resumed (:name s) :queued? true})
+          ;; Nobody ticks the executor in this process — a standalone `bb nido:ui`
+          ;; rather than the daemon — so queueing would park the turn forever and
+          ;; say nothing. Run it, and SAY that it was not slot-accounted rather
+          ;; than letting the caller assume it was.
+          (do (future (body))
+              {:resumed (:name s) :queued? false :unaccounted? true}))))))
