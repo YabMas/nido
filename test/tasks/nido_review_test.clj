@@ -468,12 +468,18 @@
   ;; Measured: two rounds on one survey, shape and composition refuted twice,
   ;; each time by a DIFFERENT counterexample, the record amended both times.
   ;; Telling that reader the amender stopped working is false.
+  ;; From the history, not the terminal ctx: a run that ends on a judgement
+  ;; never reaches an amend stage, so the ctx cannot say whether earlier rounds
+  ;; repaired anything.
   (testing "amended, and refuted again anyway"
-    (with-redefs [rloop/run-loop (fn [_] {:status :no-progress :amended? true})]
+    (with-redefs [rloop/run-loop
+                  (fn [_] {:status :no-progress
+                           :history [{:iter 1 :amended? true} {:iter 2 :amended? true}]})]
       (let [out (with-out-str (t/baseline-cmd ":cwd" "/w"))]
         (is (str/includes? out "refuted again after being corrected"))
         (is (not (str/includes? out "amender stopped changing"))))))
   (testing "nothing was amended"
-    (with-redefs [rloop/run-loop (fn [_] {:status :no-progress})]
+    (with-redefs [rloop/run-loop
+                  (fn [_] {:status :no-progress :history [{:iter 1 :amended? false}]})]
       (let [out (with-out-str (t/baseline-cmd ":cwd" "/w"))]
         (is (str/includes? out "amender stopped changing"))))))

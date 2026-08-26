@@ -250,3 +250,68 @@
                              :finding-key :title})]
     (is (= :converged (:status out)))
     (is (= "record-1" (:under-repair (:carry out))))))
+
+;; ── Ending on a judgement ───────────────────────────────────────────────────
+
+(defn- judged-run
+  "A record-shaped pipeline: a judge reporting whatever `stuck?` says for the
+   round PLUS a finding unique to that round, and an amend that appends to
+   history the way the real one does.
+
+   The per-round finding is what makes this the case `unfixable` exists for: a
+   set that repeats trips `no-progress?` at round two and the per-finding check
+   never gets to run. Returns [result judge-calls amend-calls]."
+  [stuck? & {:as extra}]
+  (let [judges (atom 0) amends (atom 0)
+        pipe [(stage :judge (fn [c]
+                              (swap! judges inc)
+                              (assoc c :findings
+                                     (cond-> [{:title (str "round-" (:iter c))}]
+                                       (stuck? (:iter c)) (conj {:title "x"})))))
+              (stage :amend (fn [c]
+                              (swap! amends inc)
+                              (update c :history (fnil conj [])
+                                      {:iter (:iter c) :findings (:findings c)
+                                       :amended? true})))]
+        out (rloop/run-loop (merge {:run-id "j" :max-iters 12 :pipeline pipe
+                                    :judged-after :judge :finding-key :title}
+                                   extra))]
+    [out @judges @amends]))
+
+(deftest a-finding-is-given-three-repairs-and-every-one-is-judged
+  ;; It was two, and the third — untested — was reported as having failed.
+  ;; Twice in one day that third attempt was the one that worked.
+  (let [[out judges amends] (judged-run (constantly true))]
+    (is (= :unfixable (:status out)))
+    (is (= ["x"] (:unfixable out)))
+    (is (= 4 judges) "raised in four rounds")
+    (is (= 3 amends) "and every repair between them was judged by the next round")))
+
+(deftest a-run-that-ends-on-a-judgement-does-not-repair-what-it-is-about-to-report
+  ;; The amend that would answer the final judgement never runs: its result
+  ;; would be reported as a failure without anything having tested it.
+  (let [[_ judges amends] (judged-run (constantly true))]
+    (is (= (dec judges) amends))))
+
+(deftest a-third-repair-that-works-is-not-called-unfixable
+  ;; The exact shape that was misreported: raised three rounds running, fixed on
+  ;; the third repair, clean on the fourth judgement.
+  (let [[out judges amends] (judged-run #(< % 4) :max-iters 4)]
+    (is (not= :unfixable (:status out)))
+    (is (= 4 judges))
+    (is (= 3 amends))))
+
+(deftest a-pipeline-that-names-no-judged-stage-still-ends-after-its-last-stage
+  ;; The diff loop passes none: its last stage does work rather than reporting,
+  ;; and nothing has shown the same cost there.
+  (let [fixes (atom 0)
+        pipe [(stage :review (fn [c] (assoc c :findings
+                                            [{:title (str "round-" (:iter c))}
+                                             {:title "x"}])))
+              (stage :fix (fn [c] (swap! fixes inc)
+                            (update c :history (fnil conj [])
+                                    {:iter (:iter c) :findings (:findings c)})))]
+        out (rloop/run-loop {:run-id "nj" :max-iters 12 :pipeline pipe
+                             :finding-key :title})]
+    (is (= :unfixable (:status out)))
+    (is (= 4 @fixes) "every round ran its last stage, as before")))

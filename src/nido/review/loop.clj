@@ -39,7 +39,16 @@
        (= (set (map finding-key curr-findings))
           (set (map finding-key prev-findings)))))
 
-(def ^:private unfixable-after 3)
+(def ^:private unfixable-after
+  "How many rounds a finding may be raised in before the run gives up on it.
+
+   Four, so that THREE repairs are attempted and every one of them is judged.
+   It was three, which bought two tested repairs — and twice in one day the
+   third attempt was the one that worked: a survey's reading corrected on the
+   third try was reported as never resolved, and a re-run found it clean. A
+   convergence loop must not stop while it is still making progress, and the
+   evidence says the third attempt is often where progress is."
+  4)
 
 (defn- unfixable
   "Findings raised in `unfixable-after` consecutive rounds and never resolved.
@@ -58,23 +67,60 @@
    Counted per finding rather than per round, and by the pipeline's own identity
    — the same handle the stall check uses, so a finding that cannot be told apart
    from round to round cannot silently accumulate here either."
-  [finding-key history curr-findings]
-  ;; `butlast` because the amend stage has already appended THIS round to the
-  ;; history by the time this runs. Counting it as one of its own prior
-  ;; appearances made three rounds out of two, and a run that had resolved
-  ;; everything it could in two ended a round early saying so.
-  (let [prior (butlast history)
-        runs  (map #(set (map finding-key (:findings %)))
+  [finding-key prior curr-findings]
+  ;; `prior` is the history NOT counting this round, and the caller says what
+  ;; that is: after a judgement the round has appended nothing yet, after a
+  ;; whole pipeline it has. Computing it here — with a `butlast` that is right
+  ;; for one caller and wrong for the other — is how this came to make three
+  ;; rounds out of two.
+  (let [runs  (map #(set (map finding-key (:findings %)))
                    (take-last (dec unfixable-after) prior))
         curr  (map finding-key curr-findings)]
     (when (= (count runs) (dec unfixable-after))
       (seq (distinct (filter (fn [k] (every? #(contains? % k) runs)) curr))))))
 
+(defn- terminal
+  "The status this round ends on, or nil to keep going.
+
+   `prior` is every round before this one. Split out of `run-loop` because it is
+   now asked at two moments — after the stage that produces the judgement, and
+   after the whole pipeline — and the two disagree about what history holds."
+  [{:keys [finding-key prev-findings iter max-iters]} ctx prior]
+  (cond
+    ;; BEFORE no-progress?, because both are true of a run that ends holding the
+    ;; same findings and only this one says which. :no-progress sends a reader
+    ;; to look at everything; :unfixable names the two or three that did not
+    ;; move, which on a converged survey is the whole of what is left.
+    (seq (unfixable finding-key prior (:findings ctx)))
+    (assoc ctx :status :unfixable
+           :unfixable (vec (unfixable finding-key prior (:findings ctx))))
+
+    ;; Reached when the round changed nothing AND no single finding has yet
+    ;; survived long enough to be called stuck — an amender that stopped working
+    ;; rather than one that ran out of things it could fix.
+    (no-progress? finding-key prev-findings (:findings ctx))
+    ;; Naming what is still open, like :unfixable does. A run that stops holding
+    ;; findings should say which; the two statuses differ in how long they
+    ;; persisted, not in whether a reader is told what they were.
+    (assoc ctx :status :no-progress
+           :unfixable (vec (distinct (map finding-key (:findings ctx)))))
+
+    (and max-iters (>= iter max-iters))
+    (assoc ctx :status :max-iters)
+
+    :else nil))
+
 (defn- run-pipeline
   "Run stages in order over ctx, emitting phase-started before each stage and
    phase-finished (or phase-errored) after. Short-circuits (reduced) on a
-   terminal :status or terminal :control. Stage-agnostic — never names a stage."
-  [ctx pipeline emit clock]
+   terminal :status or terminal :control.
+
+   Stage-agnostic still: it never names a stage, it is TOLD one. `judged-after`
+   is the pipeline saying which of its stages produces the judgement a run may
+   end on, and a run that ends there ends on a judgement rather than on a
+   repair — so every repair it reports as failed was actually tested, and it
+   spends no round repairing a finding it is about to report as immovable."
+  [ctx pipeline emit clock judged-after end?]
   (reduce
    (fn [ctx stage]
      (emit {:event :phase-started :iter (:iter ctx) :phase (:name stage)
@@ -93,6 +139,13 @@
          (:status ctx')                (reduced ctx')
          (= :stop (:control ctx'))     (reduced (assoc ctx' :status :converged))
          (= :escalate (:control ctx')) (reduced (assoc ctx' :status :escalated))
+
+         ;; The history here does not yet count this round — the stage that
+         ;; appends it has not run — so it is already the `prior` the check
+         ;; wants.
+         (and judged-after (= judged-after (:name stage)))
+         (if-let [final (end? ctx' (:history ctx'))] (reduced final) ctx')
+
          :else                         ctx')))
    ctx
    pipeline))
@@ -111,7 +164,7 @@
    A round's ctx is rebuilt from scratch. `:carry` is the only channel a stage
    has to reach the next round, and it survives onto the terminal ctx too — see
    the comment on ctx0."
-  [{:keys [run-id max-iters pipeline emit clock finding-key] :as config
+  [{:keys [run-id max-iters pipeline emit clock finding-key judged-after] :as config
     :or   {emit (fn [_]) clock #(Instant/now)
            finding-key default-finding-key}}]
   (let [pipeline (or pipeline default-pipeline)
@@ -136,44 +189,23 @@
                   ;; it. The fix belongs here rather than in either pipeline:
                   ;; there was no seam to put it through.
                   :carry carry}
+            cfg  {:finding-key finding-key :prev-findings prev-findings
+                  :iter iter :max-iters max-iters}
+            end? (fn [c prior] (terminal cfg c prior))
             ctx  (try
-                   (run-pipeline ctx0 pipeline emit clock)
+                   (run-pipeline ctx0 pipeline emit clock judged-after end?)
                    (catch clojure.lang.ExceptionInfo e
                      (if (= :review-failed (:reason (ex-data e)))
                        (assoc ctx0 :status :review-failed :error (ex-message e))
                        (throw e))))
-            final (cond
-                    (:status ctx)
-                    ctx
-
-                    ;; BEFORE no-progress?, because both are true of a run that
-                    ;; ends holding the same findings and only this one says
-                    ;; which. :no-progress sends a reader to look at everything;
-                    ;; :unfixable names the two or three that did not move, which
-                    ;; on a converged survey is the whole of what is left.
-                    (seq (unfixable finding-key (:history ctx) (:findings ctx)))
-                    (assoc ctx :status :unfixable
-                           :unfixable (vec (unfixable finding-key (:history ctx) (:findings ctx))))
-
-                    ;; Reached when the round changed nothing AND no single
-                    ;; finding has yet survived long enough to be called stuck —
-                    ;; an amender that stopped working rather than one that ran
-                    ;; out of things it could fix.
-                    (no-progress? finding-key prev-findings (:findings ctx))
-                    ;; Naming what is still open, like :unfixable does. A run
-                    ;; that stops holding findings should say which; the two
-                    ;; statuses differ in how long they persisted, not in whether
-                    ;; a reader is told what they were. An identical set always
-                    ;; trips this at round two, so :unfixable never sees it —
-                    ;; which made "names the findings" a property of the wrong
-                    ;; one of them.
-                    (assoc ctx :status :no-progress
-                           :unfixable (vec (distinct (map finding-key (:findings ctx)))))
-
-                    (and max-iters (>= iter max-iters))
-                    (assoc ctx :status :max-iters)
-
-                    :else nil)]
+            final (or (when (:status ctx) ctx)
+                      ;; The whole pipeline ran without ending. `butlast`
+                      ;; because a stage after the judgement has since appended
+                      ;; this round to the history. A pipeline that named a
+                      ;; judged-after stage has already asked and been told no,
+                      ;; on the same findings and the same prior — so this
+                      ;; cannot contradict it.
+                      (terminal cfg ctx (butlast (:history ctx))))]
         (if final
           (do (emit {:event :run-finalized :status (:status final)
                      :ctx final :at (str (clock))})

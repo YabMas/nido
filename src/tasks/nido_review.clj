@@ -247,7 +247,10 @@
    points them at the wrong thing: what they have is a claim that cannot be made
    true by re-wording, which is a decision about the code."
   [status final]
-  (if (and (= :no-progress status) (:amended? final))
+  ;; From the HISTORY, not the terminal ctx: a run that ends on a judgement
+  ;; never reaches an amend stage, so the ctx cannot say whether earlier rounds
+  ;; repaired anything and would report every such run as an amender that quit.
+  (if (and (= :no-progress status) (some :amended? (:history final)))
     (shared-remedies ::still-refuted)
     (shared-remedies status)))
 
@@ -327,6 +330,13 @@
                                              :budget budget
                                              :clock clock :emit emit
                                              :pipeline pipeline
+                                             ;; Both record pipelines judge in
+                                             ;; their first stage. The diff loop
+                                             ;; passes none: its last stage does
+                                             ;; work rather than reporting, and
+                                             ;; nothing has shown the same cost
+                                             ;; there.
+                                             :judged-after :judge
                                              :finding-key finding-key}
                                       baseline (assoc :baseline baseline))))
                  (finally

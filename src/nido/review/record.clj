@@ -1263,9 +1263,16 @@
                    answer (parse-amend-answer raw (:findings ctx)
                                               baseline-finding-base-key)
                    {:keys [record disputes]} answer
-                   entry  (fn [retreats]
+                   entry  (fn [retreats amended?]
                             {:iter (:iter ctx)
                              :verdict (get-in ctx [:record :verdict])
+                             ;; Whether this round repaired anything. Read after
+                             ;; the run to tell an amender that stopped working
+                             ;; from one that worked and was refuted anyway —
+                             ;; and the terminal ctx cannot answer it, because a
+                             ;; run that ends on a judgement never reaches an
+                             ;; amend stage to set it.
+                             :amended? (boolean amended?)
                              :findings (:findings ctx)
                              ;; What this round CHECKED and found to hold. Without
                              ;; it nothing carries forward and the next round is
@@ -1283,7 +1290,7 @@
                  ;; the objection in front of the judge.
                  (and (nil? record) (seq disputes))
                  (assoc ctx :disputes disputes :retreats []
-                        :history (conj (vec (:history ctx)) (entry [])))
+                        :history (conj (vec (:history ctx)) (entry [] false)))
 
                  (nil? record)
                  (assoc ctx :control :stop :status :amend-noop)
@@ -1308,7 +1315,7 @@
                            ctx' (assoc ctx
                                        :retreats retreats
                                        :disputes disputes
-                                       :history (conj (vec (:history ctx)) (entry retreats)))]
+                                       :history (conj (vec (:history ctx)) (entry retreats true)))]
                        ;; :as-authored is set once and never overwritten — it is
                        ;; the record the RUN started from, which is what growth
                        ;; is measured against. Set here rather than at run start
@@ -1553,6 +1560,7 @@
                              :emit (fn [_])
                              :baseline    cited
                              :pipeline    baseline-pipeline
+                             :judged-after :judge
                              :finding-key baseline-finding-key})]
         (if (= :sufficient (:status out))
           ;; No history entry here. The re-survey is only HALF the repair — the
