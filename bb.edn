@@ -328,11 +328,13 @@
    :task (apply nido-slack/auth-check *command-line-args*)}
 
   nido:slack:react
-  {:doc "React to a Slack message. :channel <C> :ts <ts> [:name eyes]"
+  {:requires ([tasks.nido-slack :as nido-slack])
+   :doc "React to a Slack message. :channel <C> :ts <ts> [:name eyes]"
    :task (apply nido-slack/react *command-line-args*)}
 
   nido:slack:reply
-  {:doc "Post a threaded reply. :channel <C> :thread-ts <ts> :text \"...\""
+  {:requires ([tasks.nido-slack :as nido-slack])
+   :doc "Post a threaded reply. :channel <C> :thread-ts <ts> :text \"...\""
    :task (apply nido-slack/reply *command-line-args*)}
 
   nido:notion:views:check
