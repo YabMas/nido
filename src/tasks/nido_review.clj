@@ -218,7 +218,7 @@
    :amend-invalid "the ledger refused the amended record"
    :amend-touched-code "a record pass wrote to the working copy; whatever it wrote is still there"
    :dry-run    "nothing was amended"
-   :no-workstream "run this from a nido session worktree"
+   :no-workstream "run this from a nido session — its worktree or its session home"
    :codex-failed "the judge did not run — this is NOT a clean result"
    :no-output  "the judge ran and wrote nothing — NOT a clean result"
    :unusable-answer "the judge answered, but not in a form a record accepts"
@@ -256,7 +256,15 @@
    its rounds, its weakenings and its objections on screen."
   [{:keys [kind pipeline finding-key remedies epilogue]}
    {:keys [cwd code-cwd max-iters dry-run? budget]}]
-  (let [cwd    (or cwd (lifecycle/worktree-from-cwd) (System/getProperty "user.dir"))
+  (let [;; Through the home-aware union whether the caller named a directory or
+        ;; not. A session home is a place an agent legitimately stands — it is
+        ;; where the briefing and the MCP config are, and every other cwd-based
+        ;; verb accepts one — but `project+ws-from-cwd` resolves only inside the
+        ;; worktree. Passing :cwd explicitly used to skip the union entirely, so
+        ;; naming a home that the no-argument form would have accepted failed as
+        ;; :no-workstream, advising the caller to go somewhere they already were.
+        given  (or cwd (System/getProperty "user.dir"))
+        cwd    (or (lifecycle/worktree-from-cwd given) given)
         run-id (str kind "-loop-" (random-uuid))
         clock  #(Instant/now)
         title  (record-loop-title cwd kind)

@@ -205,6 +205,25 @@
       (with-out-str (t/baseline-cmd))
       (is (= "/resolved" (:cwd @seen))))))
 
+(deftest baseline-cmd-takes-a-session-home-as-readily-as-a-worktree
+  ;; A session home is a place an agent legitimately stands. Naming one used to
+  ;; skip the home-aware union that the no-argument form goes through, so the
+  ;; run died as :no-workstream telling the caller to go where they already were.
+  (let [seen (atom nil)]
+    (with-redefs [rloop/run-loop (fn [cfg] (reset! seen cfg) {:status :sufficient})
+                  lifecycle/worktree-from-cwd
+                  (fn [given] (when (= "/home/p/s" given) "/wt/s"))]
+      (with-out-str (t/baseline-cmd ":cwd" "/home/p/s"))
+      (is (= "/wt/s" (:cwd @seen))))))
+
+(deftest a-cwd-that-belongs-to-no-session-is-passed-through-as-given
+  ;; So the failure names what the caller actually typed.
+  (let [seen (atom nil)]
+    (with-redefs [rloop/run-loop (fn [cfg] (reset! seen cfg) {:status :sufficient})
+                  lifecycle/worktree-from-cwd (fn [_] nil)]
+      (with-out-str (t/baseline-cmd ":cwd" "/somewhere/else"))
+      (is (= "/somewhere/else" (:cwd @seen))))))
+
 (defn- run-loop-emitting-a-clean-round
   "A stubbed engine that emits the events a real round would, so the report the
    command renders from is the shape the fold actually produces."
@@ -262,7 +281,7 @@
            :amend-unreadable   "would not parse as EDN"
            :amend-invalid      "the ledger refused"
            :amend-touched-code "still there"
-           :no-workstream      "session worktree"
+           :no-workstream      "nido session"
            :no-record          "author the baseline first"
            :nothing-to-check   "refutable"
            :codex-failed       "NOT a clean result"}]
