@@ -481,6 +481,37 @@
                 "finding, and not on its own grounds to call the premise wrong:\n"
                 (bullets u) "\n")))))
 
+(defn- qualifiers
+  "The fields that make a declared relation checkable, under the relation that
+   names it.
+
+   A relation is a one-word claim and the fields beside it are the whole of its
+   substance: a :revisit says WHICH load-bearing properties it breaks, an
+   :extends says WHERE it lands, and both carry the note that argues for it. The
+   prompt rendered the keyword alone — so `relation-honest`, the check that is
+   entirely about these two declarations, derived over a word.
+
+   Watched: a design declared :revisit and named the two properties it breaks,
+   in the field the closed schema requires them in — it could not have been
+   appended without them. The round reported it as failing to name them, three
+   times, and sent the amender to write the same two strings into the field they
+   already occupied. Four rounds, partly spent on an artifact of this function
+   not existing.
+
+   Third time today this shape has cost a round: health observations were shown
+   by their axis rather than their id, :shape and :composition carried no id at
+   all, and now this. A pass asked to derive something over a prompt that does
+   not show it reports the record as missing what the record contains."
+  [m]
+  (apply str
+         (concat
+          (when-let [b (seq (:breaks m))]
+            [(str "\n    breaks: " (str/join "; " b))])
+          (when-let [a (:at m)] [(str "\n    at: " a)])
+          (when-let [p (seq (:principles m))]
+            [(str "\n    principles: " (str/join "; " p))])
+          (when-let [n (:note m)] [(str "\n    because: " n)]))))
+
 (defn design-prompt
   "The decision prompt. Derives what can be derived; hands the rest over."
   [{:keys [design baseline stance intent disputes]}]
@@ -508,14 +539,16 @@
    "Shape: " (:shape design) "\n"
    "Effort: " (name (:effort design)) "\n"
    "Invariants:\n" (invariant-lines (:invariants design)) "\n"
-   "Declared against the stance: " (name (get-in design [:standing :relation])) "\n"
+   "Declared against the stance: " (name (get-in design [:standing :relation]))
+   (qualifiers (:standing design)) "\n"
    ;; A design written before the baseline event existed carries no :baseline at
    ;; all, and it still qualifies for a round — its absent relation is not
    ;; :within. Saying so is the degrade this area takes everywhere else; calling
    ;; `name` on the nil would throw HERE, while building the prompt, which is
    ;; outside run-round!'s catch and so would take the whole task down.
    (if-let [r (get-in design [:baseline :relation])]
-     (str "Declared against the baseline: " (name r) "\n")
+     (str "Declared against the baseline: " (name r)
+          (qualifiers (:baseline design)) "\n")
      (str "Declared against the baseline: NOTHING. This design predates the\n"
           "baseline event, so it was judged against no survey. Weigh its claims\n"
           "on their own merits; the absence is not itself a finding.\n"))

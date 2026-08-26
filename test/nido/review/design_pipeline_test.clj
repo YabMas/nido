@@ -467,3 +467,45 @@
                    (assoc (ctx :findings []) :record (decision :resurvey)))]
       (is (= :resurvey-amend-invalid (:status out)))
       (is (= "{:at [\"disallowed key\"]}" (:amend-error out))))))
+
+;; ── What a declared relation actually says ──────────────────────────────────
+
+(deftest a-declared-relation-is-shown-with-what-makes-it-checkable
+  ;; relation-honest is entirely about these two declarations, and the prompt
+  ;; rendered each as a bare keyword. Watched: a design declared :revisit and
+  ;; named the two properties it breaks — in the field the closed schema
+  ;; requires them in, so it could not have been appended without them — and the
+  ;; round reported it as failing to name them, three rounds running, sending
+  ;; the amender to rewrite the field it already occupied.
+  (let [d (assoc a-design
+                 :standing {:relation :challenges :note "the stance is wrong here"
+                            :principles ["one" "two"]}
+                 :baseline {:seq 3 :relation :revisit
+                            :breaks ["aggregate-is-the-only-summing-path"]
+                            :note "the boundary has to move"})
+        p (record/design-prompt {:design d})]
+    (testing "the baseline declaration"
+      (is (str/includes? p "Declared against the baseline: revisit"))
+      (is (str/includes? p "breaks: aggregate-is-the-only-summing-path"))
+      (is (str/includes? p "because: the boundary has to move")))
+    (testing "the stance declaration"
+      (is (str/includes? p "Declared against the stance: challenges"))
+      (is (str/includes? p "principles: one; two"))
+      (is (str/includes? p "because: the stance is wrong here")))))
+
+(deftest an-extends-declaration-says-where-it-lands
+  (let [d (assoc a-design :baseline {:seq 3 :relation :extends
+                                     :at "the lens registry" :note "a new lens"})
+        p (record/design-prompt {:design d})]
+    (is (str/includes? p "at: the lens registry"))))
+
+(deftest a-declaration-with-nothing-to-qualify-it-renders-bare
+  ;; :within needs no note and usually carries none; a label with nothing after
+  ;; it would read as a field the author left empty.
+  (let [d (assoc a-design :baseline {:seq 3 :relation :within})
+        p (record/design-prompt {:design d})]
+    ;; The line ends right after the relation. Checked that way rather than by
+    ;; the absence of "because:", which the stance declaration also uses.
+    (is (str/includes? p "Declared against the baseline: within\n"))
+    (is (not (str/includes? p "breaks:")))
+    (is (not (str/includes? p "at:")))))
