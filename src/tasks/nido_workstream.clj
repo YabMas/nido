@@ -72,10 +72,27 @@
         ;; to pick, so it names what it wants.
         (println (report/report->markdown (work/latest-report p ws-id)))))))
 
-(defn- run* [f args]
-  (let [[_ opts] (task-args/split-args args)]
-    (f opts)
-    (println "ok")))
+(def ^:private ref-raw-string-keys
+  "Kwarg keys on `ref:add` that must reach us verbatim.
+
+   A stack PR's title starts with `[n/N]` — /prepare-draft-pr mandates that
+   shape — and parse-token reads `[2/2]` as a vector holding the ratio 2/2,
+   i.e. `[1]`. The Workstream schema then rejects the whole record, so the
+   stamp fails on exactly the PRs the stack path exists to stamp.
+
+   The other three are prose-by-luck rather than by design: a URL and a
+   sentence both start with something read-string returns as a symbol, and
+   the symbol carve-out hands back the original string. Nothing rescues a
+   leading bracket, brace, digit or quote — so the keys carrying free text
+   say so instead of relying on their first character."
+  #{:id :url :title :summary})
+
+(defn- run*
+  ([f args] (run* f args #{}))
+  ([f args raw-keys]
+   (let [[_ opts] (task-args/split-args args raw-keys)]
+     (f opts)
+     (println "ok"))))
 
 (defn entry-add
   "bb nido:workstream:entry:add :project <p> (:ws-id <id> | :ref BR-####)
@@ -94,7 +111,7 @@
         (System/exit 1)))))
 (defn stage-advance [& args] (run* stage-advance* args))
 (defn close-cmd     [& args] (run* close* args))
-(defn ref-add       [& args] (run* ref-add* args))
+(defn ref-add       [& args] (run* ref-add* args ref-raw-string-keys))
 
 (defn show-cmd [& args]
   (let [[_ opts] (task-args/split-args args)]

@@ -1,6 +1,7 @@
 (ns tasks.nido-workstream-test
   (:require
    [babashka.fs :as fs]
+   [clojure.string :as str]
    [clojure.test :refer [deftest is]]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.workstream :as ws]
@@ -153,3 +154,42 @@
           (is (= "found a bug in the parser"
                  (slurp (str (fs/path (cstate/workstream-dir :brian (:id w)) (:file e)))))
               "an untyped body is still stored verbatim, not EDN-mangled"))))))
+
+(deftest ref-add-keeps-a-stack-pr-title-verbatim
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :in-progress
+                                  :external-refs [{:adapter :notion :id "BR-77"}]})]
+        ;; Through the CLI arg path, not ref-add* — the bug was in parsing.
+        ;; "[2/2] …" read as EDN is a vector holding the ratio 2/2, i.e. [1],
+        ;; and the Workstream schema then rejects the whole record. Every stack
+        ;; PR above the bottom carries this title shape (/prepare-draft-pr §3).
+        (task/ref-add ":project" "brian" ":ref" "BR-77"
+                      ":adapter" "github" ":id" "brian-study/brian#4696"
+                      ":url" "https://github.com/brian-study/brian/pull/4696"
+                      ":title" "[2/2] feat(course): let a course be taught in the language it teaches")
+        (let [r (->> (:external-refs (ws/read-ws :brian (:id w)))
+                     (filter #(= :github (:adapter %)))
+                     first)]
+          (is (= "[2/2] feat(course): let a course be taught in the language it teaches"
+                 (:title r)))
+          (is (= "https://github.com/brian-study/brian/pull/4696" (:url r))))))))
+
+(deftest ref-add-keeps-a-summary-that-opens-with-a-number
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :in-progress
+                                  :external-refs [{:adapter :notion :id "BR-78"}]})]
+        ;; The symbol carve-out rescues prose starting with a letter; a summary
+        ;; opening on a digit is read as a number and everything after it lost.
+        (task/ref-add ":project" "brian" ":ref" "BR-78"
+                      ":adapter" "github" ":id" "brian-study/brian#1"
+                      ":url" "https://github.com/brian-study/brian/pull/1"
+                      ":title" "Some PR"
+                      ":summary" "2 layers: copy, then behaviour. Refs BR-78")
+        (let [e (last (:entries (ws/read-ws :brian (:id w))))]
+          (is (= :pr-opened (:kind e)))
+          (is (str/includes?
+                (slurp (str (fs/path (cstate/workstream-dir :brian (:id w)) (:file e))))
+                "2 layers: copy, then behaviour")
+              "the whole sentence survives, not the leading 2"))))))
