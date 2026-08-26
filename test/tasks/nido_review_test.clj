@@ -2,7 +2,7 @@
   (:require
    [babashka.fs :as fs]
    [clojure.string :as str]
-   [clojure.test :refer [deftest is use-fixtures]]
+   [clojure.test :refer [deftest is testing use-fixtures]]
    [nido.coordinator.session :as csession]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.workstream :as ws]
@@ -462,3 +462,18 @@
                            :carry {:as-authored r :under-repair r}})]
       (let [out (with-out-str (t/baseline-cmd ":cwd" "/w"))]
         (is (not (str/includes? out "Grown past checking")))))))
+
+(deftest a-repeated-finding-set-says-which-of-its-two-causes-it-was
+  ;; With a record loop's identity, "the same findings again" has two causes.
+  ;; Measured: two rounds on one survey, shape and composition refuted twice,
+  ;; each time by a DIFFERENT counterexample, the record amended both times.
+  ;; Telling that reader the amender stopped working is false.
+  (testing "amended, and refuted again anyway"
+    (with-redefs [rloop/run-loop (fn [_] {:status :no-progress :amended? true})]
+      (let [out (with-out-str (t/baseline-cmd ":cwd" "/w"))]
+        (is (str/includes? out "refuted again after being corrected"))
+        (is (not (str/includes? out "amender stopped changing"))))))
+  (testing "nothing was amended"
+    (with-redefs [rloop/run-loop (fn [_] {:status :no-progress})]
+      (let [out (with-out-str (t/baseline-cmd ":cwd" "/w"))]
+        (is (str/includes? out "amender stopped changing"))))))

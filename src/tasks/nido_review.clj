@@ -212,6 +212,9 @@
    unless something insists otherwise."
   {:retreated  "the record was amended below what its own round would check — read the weakenings above before accepting any of it"
    :no-progress "the amender stopped changing anything the judge cares about — the findings below are what it left"
+   ;; See `shared-remedy`: :no-progress has two causes and they ask different
+   ;; things of a reader. This is the one where nothing was amended.
+   ::still-refuted "the same claims are refuted again after being corrected — the amender did its work and the judge found another way each one is false, so these are not going to be settled by wording"
    :unfixable "everything fixable was fixed; what remains was raised three rounds running and did not move — these are for you"
    :disputed   "the judge restated a finding the amender objected to twice — neither can settle it, so you do"
    :amend-noop "the amender produced no record — nothing was appended"
@@ -229,6 +232,24 @@
    :no-output  "the judge ran and wrote nothing — NOT a clean result"
    :unusable-answer "the judge answered, but not in a form a record accepts"
    :round-crashed "the round threw before it could degrade"})
+
+(defn- shared-remedy
+  "The shared line, plus the one status whose meaning depends on what the round
+   actually did.
+
+   :no-progress means the finding set repeated, and with a record loop's
+   identity that has two causes. An amender that produced nothing is the one the
+   default line describes. The other is an amender that corrected exactly what
+   was named, and a judge that came back with a DIFFERENT way the same claim is
+   false — measured: two rounds on one survey, shape and composition both
+   refuted twice, each time by a distinct counterexample, the record amended
+   both times. Telling that reader the amender stopped working is false and
+   points them at the wrong thing: what they have is a claim that cannot be made
+   true by re-wording, which is a decision about the code."
+  [status final]
+  (if (and (= :no-progress status) (:amended? final))
+    (shared-remedies ::still-refuted)
+    (shared-remedies status)))
 
 (defn- finding-name
   "What to call a finding that is only known here by its identity key.
@@ -335,7 +356,7 @@
     ;; A lookup FN rather than a map, because a nested loop's terminal status
     ;; comes through prefixed and the set is open by construction.
     (println (str "  → " (or (and remedies (remedies status))
-                             (shared-remedies status)
+                             (shared-remedy status final)
                              (str "unrecognised terminal status: " status))))
     (when epilogue (epilogue final))
     status))
