@@ -73,7 +73,7 @@ bb nido:ticket:status :project brian :br <slack-id> :status investigating
 **Read the stance before you scope anything:**
 
 ```bash
-cat .claude/skills/design/stances/brian.md
+cat .claude/skills/design/stances/default.md
 ```
 
 Two things make this matter more here than it looks.

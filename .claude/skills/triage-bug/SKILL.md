@@ -136,7 +136,7 @@ frame confidently wrong is worse than `:unknown`.
 An implementation defect is a fix. A design defect is a decision, and sizing a
 decision before it is made is exactly what `:squirrel` exists for.
 
-**Read the stance first** — `cat .claude/skills/design/stances/brian.md`. It is what
+**Read the stance first** — `cat .claude/skills/design/stances/default.md`. It is what
 makes the question answerable at all: which register the data is in, whether a
 boundary is carrying its weight, whether what you are reading is intent or drift. It
 primes the reading. It is never something you cite against a line of code.

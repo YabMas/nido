@@ -1,9 +1,11 @@
 ;; test/nido/review/stages_test.clj
 (ns nido.review.stages-test
   (:require
+   [babashka.fs :as fs]
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
    [nido.coordinator.agent :as agent]
+   [nido.core :as core]
    [nido.review.codex :as codex]
    [nido.review.layers :as layers]
    [nido.review.prompts :as prompts]
@@ -633,3 +635,23 @@
                          :layers ["lower" "upper"]}]}]
     (with-redefs [stages/session-stack (fn [_ _] two-layer-stack)]
       (is (nil? (:reshape ((:run stages/reshape-stage) ctx)))))))
+
+(deftest stance-path-falls-back-to-the-common-stance
+  ;; Every project reaches a stance. Before the fallback, a project with no file
+  ;; of its own left the relation-honest derivation :underivable — a verdict
+  ;; naming a missing document, which no amender can repair.
+  (let [dir (fs/path (core/nido-source-dir) ".claude" "skills" "design" "stances")]
+    (is (= (str (fs/path dir "default.md"))
+           (str (stages/stance-path :a-project-with-no-stance-file))))
+    (is (seq (stages/read-stance :a-project-with-no-stance-file)))))
+
+(deftest stance-path-prefers-a-projects-own-file
+  ;; The override is how a project DECLARES that it diverges, so it has to win.
+  (let [dir  (fs/path (core/nido-source-dir) ".claude" "skills" "design" "stances")
+        own  (fs/path dir "stance-override-probe.md")]
+    (try
+      (spit (str own) "# diverges\n")
+      (is (= (str own) (str (stages/stance-path :stance-override-probe))))
+      (is (str/starts-with? (stages/read-stance :stance-override-probe) "# diverges"))
+      (finally (fs/delete-if-exists own)))))
+

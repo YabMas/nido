@@ -1,8 +1,11 @@
 # Domain Modeling & System Design
 
-> **brian's stance.** Read before designing anything in brian. Housed here in
-> nido for now; it belongs in brian's own repo, and moving it changes one path
-> in `/design` §1.
+> **The common stance.** Read before designing anything, in any project. A
+> project that genuinely diverges overrides this with its own
+> `stances/<project>.md`, and adding one is a design act — it declares the
+> divergence. Housed here in nido for now; a divergent stance belongs in the
+> repo whose architecture it describes, and moving one changes one path in
+> `/design` §1.
 
 **This document primes design reasoning. It is not a conformance checklist, and
 nothing in it is a rule to check a diff against** — the review lanes and
@@ -156,9 +159,9 @@ them is the most common failure, and it looks like this: a domain union persiste
 as a discriminator column beside a row of nullable fields, or a database row
 travelling into domain logic unparsed.
 
-**A workflow is a typed function, and here the type is a malli schema at the
-boundary, written before the body.** Design the input shape → output shape first,
-then write to it. That is the declarative level, taken because it is available.
+**A workflow is a typed function, and the type is written at the boundary before
+the body** — a malli schema in the Clojure projects, whatever states a shape
+where it is not. Design the input shape → output shape first, then write to it. That is the declarative level, taken because it is available.
 Enumerate the failures as data in that output rather than raising them; a failure the shape
 doesn't name is one the caller cannot be expected to handle, and a thrown one is
 control flow the problem never asked for. Compose by matching shapes, each stage's

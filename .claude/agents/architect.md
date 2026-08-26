@@ -13,10 +13,10 @@ That third line is *Out of the Tar Pit*'s test, and it is not one consideration 
 
 ## The stance
 
-The project's durable architectural convictions live at `.claude/skills/design/stances/<project>.md` — what the system is *for*, which instinct governs, which readings have been ruled out. Read it first:
+The project's durable architectural convictions live at `.claude/skills/design/stances/default.md` (a project that diverges overrides it with its own `<project>.md`) — what the system is *for*, which instinct governs, which readings have been ruled out. Read it first:
 
 ```bash
-cat .claude/skills/design/stances/brian.md
+cat .claude/skills/design/stances/default.md
 ```
 
 It **primes** your reasoning; it is not a checklist and you never cite it against a specific line. But it is what turns "I would have done this differently" into an architectural argument, and it is the thing your justifications should be in terms of.

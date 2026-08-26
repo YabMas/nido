@@ -370,6 +370,25 @@
 
 (def ^:private stance-char-cap 12000)
 
+(defn stance-path
+  "Where `project`'s stance text lives: its own file if it has one, otherwise the
+   common `default.md`.
+
+   Falling back rather than requiring a file per project is what makes the
+   yardstick reachable at all. The relation-honest derivation is made against the
+   stance, and a project without one made it :underivable — a verdict naming a
+   missing document, which no amender can repair and which therefore escalated to
+   a human every round. A default answers it instead.
+
+   The override still wins, and that is the point of keeping one: a project with
+   its own file has DECLARED that it diverges, where a project with none is
+   declaring that the common stance governs it. Both are now statements; before,
+   the second was silence."
+  [project]
+  (let [dir (fs/path (core/nido-source-dir) ".claude" "skills" "design" "stances")
+        own (fs/path dir (str (name project) ".md"))]
+    (if (fs/exists? own) own (fs/path dir "default.md"))))
+
 (defn read-stance
   "The project's stance text, from nido's own tree, capped so it can't blow up the
    warden prompt. Read from the source dir rather than cwd: the review runs in the
@@ -379,8 +398,7 @@
   [project]
   (when project
     (try
-      (let [f (fs/path (core/nido-source-dir) ".claude" "skills" "design"
-                       "stances" (str (name project) ".md"))]
+      (let [f (stance-path project)]
         (when (fs/exists? f)
           (let [s (slurp (str f))]
             (if (> (count s) stance-char-cap)
