@@ -281,6 +281,45 @@
         (is (= :sufficient (:status out)))
         (is (= 2 (:iter out)))))))
 
+(deftest a-nested-loop-launched-on-a-named-survey-still-follows-its-amendments
+  ;; This is the shape a re-survey runs in, and it could not converge. Given an
+  ;; explicit :baseline, every round after the first fell back to it — the
+  ;; amendment was never judged — so the run re-raised its findings and stalled
+  ;; at round two. The design loop treats any non-:sufficient nested outcome as
+  ;; terminal, so :resurvey could never once complete.
+  ;;
+  ;; The CLI hid it: it passes no :baseline, so the same fallthrough landed on
+  ;; "the latest entry", which IS the amendment. Only the nested caller broke.
+  (let [start  (assoc a-baseline :area "the survey the design cites")
+        fixed  (assoc a-baseline :area "corrected")
+        judged (atom [])
+        round  (atom 0)]
+    (with-redefs [record/baseline-review!
+                  (fn [{:keys [baseline]}]
+                    (swap! judged conj (:area baseline))
+                    (if (= 1 (swap! round inc))
+                      {:format :baseline-review :verdict :falsified
+                       :findings [a-finding]}
+                      {:format :baseline-review :verdict :sufficient :reason "ok"}))
+                  record/append! (fn [_ _] nil)
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry (fn [_ _ _] (throw (ex-info "must not be consulted" {})))
+                  ws/entry-at-seq (fn [_ _ n] (assoc fixed :seq n :at "t"))
+                  stages/working-copy-state (fn [_] "")
+                  ws/append-entry! (fn [_ _ _ _] "/ws/entries/0007-baseline.edn")
+                  agent/launch! (fn [{:keys [first-message]}]
+                                  (spit (second (re-find #"Write EDN to:\n\n  (\S+)" first-message))
+                                        (pr-str fixed))
+                                  {:num-turns 3})]
+      (let [out (rloop/run-loop {:run-id "r-nested" :cwd "/w"
+                                 :baseline start
+                                 :pipeline record/baseline-pipeline
+                                 :finding-key record/baseline-finding-key})]
+        (is (= ["the survey the design cites" "corrected"] @judged))
+        (is (= :sufficient (:status out)))
+        (testing "and the corrected survey comes back carrying the seq a design must cite"
+          (is (= 7 (:seq (:under-repair (:carry out))))))))))
+
 (deftest an-amender-that-changes-nothing-stalls-instead-of-spinning
   ;; Uncapped. The only thing that ends this is the injected identity seeing the
   ;; same finding twice — which is what the diff review's key could never do
