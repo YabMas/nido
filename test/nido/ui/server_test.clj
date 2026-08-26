@@ -627,3 +627,20 @@
                      "already"))
   (is (str/includes? (server/resolve-failure-msg {:decision :unresolved :error :no-token})
                      "no-token")))
+
+(deftest resolve-failure-msg-covers-the-approval-decisions
+  ;; A grant is the one click on this surface that writes a durable decision, so
+  ;; a refusal that reads as success is worse here than anywhere else.
+  (is (nil? (server/resolve-failure-msg {:decision :approved})))
+  (is (nil? (server/resolve-failure-msg {:decision :approved-unresumed}))
+      "granted with nobody listening is a real outcome, not a failure — the
+       record stands and the next session reads it")
+  (is (str/includes? (server/resolve-failure-msg {:decision :approval-stale})
+                     "were not looking at"))
+  (is (str/includes? (server/resolve-failure-msg {:decision :no-design}) "no design"))
+  (let [msg (server/resolve-failure-msg
+             {:decision :approval-refused
+              :because {:reason :premise-retracted
+                        :detail "the survey at entry 2 was retracted by entry 9"}})]
+    (is (str/includes? msg "no longer stands"))
+    (is (str/includes? msg "entry 9") "naming the entry is what a reader can act on")))

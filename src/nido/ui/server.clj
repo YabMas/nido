@@ -236,13 +236,21 @@
    that leaves the '✓ Restored'/'✓ Dismissed' toast standing as the last word.
    :already-in-flight counts as a failure for the same reason — the click added
    nothing, so the '✓' toast must not stand as the last word."
-  [{:keys [decision error status]}]
+  [{:keys [decision error status because]}]
   (case decision
     :no-workstream          "Nothing happened — no workstream or ticket behind this row."
     :no-trigger             "No triage trigger configured for this project."
     :already-in-flight      "Skipped — a session for this ticket is already in flight."
     :option-stale           (str "That option is no longer on the table — the report "
                                  "moved on since this page rendered. Re-read the gate.")
+    :no-design              "Nothing to approve — this workstream holds no design."
+    :approval-stale         (str "Not approved — the ledger moved on since this page "
+                                 "rendered, so this would have granted a design you "
+                                 "were not looking at. Re-read the gate.")
+    ;; The premise went while it was being read. Naming the entry is the whole
+    ;; of what a reader can act on, and `because` carries it up from standing.
+    :approval-refused       (str "Not approved — the design no longer stands"
+                                 (when-let [d (:detail because)] (str ": " d)))
     :unresolved             (str "Couldn't resolve the ticket in Notion"
                                  (when error (str ": " (name error))))
     (:notion-failed :error) (str "Apply failed"

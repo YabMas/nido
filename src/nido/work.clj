@@ -28,6 +28,7 @@
    [nido.coordinator.tickets :as tickets]
    [nido.coordinator.triggers :as triggers]
    [nido.io :as io]
+   [nido.coordinator.standing :as standing]
    [nido.coordinator.workstream :as cws]
    [nido.coordinator.workstreams-view :as wsv]
    [nido.notion.client :as notion]
@@ -241,7 +242,15 @@
                           ;; for it would put every reader's band mapping at risk for
                           ;; something the report already distinguishes.
                           (and parked? (= :design-decision report-format))
-                          [{:id :approve :label "Approve" :kind :mutation :style :primary}
+                          ;; Approve carries the ledger position it was rendered
+                          ;; from, exactly as an option button does and for the
+                          ;; same reason one round further on: a grant made
+                          ;; against a stale page is not a grant about what is
+                          ;; there now. Omitted when unknown, which fails closed
+                          ;; in approve! rather than granting blind.
+                          [(cond-> {:id :approve :label "Approve"
+                                    :kind :mutation :style :primary}
+                             entry-seq (assoc :seq entry-seq))
                            {:id :reply   :label "Reply"   :kind :resume  :style :default}]
 
                           ;; A blocker that named its branches is the same shape of
@@ -1206,6 +1215,59 @@
           {:decision :answered-unresumed}))
       {:decision :option-stale})))
 
+(defn- approve!
+  "GRANT the design, then tell whoever is listening.
+
+   Same order and the same reason as choose-option!: the grant is written to the
+   ledger first and only then is a parked agent resumed, because the two have
+   different lifetimes. Approval used to be an argument to a resume and nothing
+   more — so `was this decided` was nowhere a reader could ask it, a landing
+   gate had nothing to read, and a resume that died mid-turn swallowed the
+   decision. Recorded, the grant stands with nobody listening: the next session
+   picking the workstream up reads it, the way an answered blocker already is.
+
+   Two refusals, and they are different questions.
+
+   The POSITION, exactly as an option click is checked: an Approve carries the
+   entry it was rendered from, and one whose position is no longer the ledger's
+   latest is refused. A decision made against a stale page is not a decision
+   about what is there now — a retraction appended since, another tab's
+   approval, or a second click of the same button all land here. After granting,
+   the approval IS the latest entry, so the double-click refuses on the same
+   check.
+
+   The PREMISE, which an option click has no equivalent of: the gate is asked
+   again at the moment of the grant. The design round said this design could be
+   decided when it ran, and standing is a statement about now — so a design
+   whose survey was retracted between the round and the click is refused here
+   rather than granted, and no approval is ever written for a premise that is
+   already gone."
+  [project ws-id entry-seq]
+  (let [design (cws/latest-entry project ws-id :design)]
+    (cond
+      (nil? design) {:decision :no-design}
+
+      (or (nil? entry-seq)
+          (not= entry-seq (:seq (latest-report project ws-id))))
+      {:decision :approval-stale}
+
+      :else
+      (let [st (standing/of-design project ws-id design)]
+        (if-not (:decidable? st)
+          {:decision :approval-refused :because (:blocked st)}
+          (let [parked (parked-session project ws-id)]
+            (cws/append-entry!
+             project ws-id {:kind :design-approved}
+             (pr-str {:format :design-approved
+                      :design {:seq (:seq design)}
+                      :at-seq entry-seq}))
+            (if parked
+              (assoc (resume/resume! project ws-id approval-input) :decision :approved)
+              ;; Nobody to tell, and that is a real outcome rather than a
+              ;; failure: the grant is on the ledger and the next session reads
+              ;; it — see ui.server/resolve-failure-msg.
+              {:decision :approved-unresumed})))))))
+
 (defn resolve-gate!
   "Apply a gate follow-action, dispatching on `action-id`. A workstream-less ws-id
    (e.g. a bare watched-view row) is a no-op — {:decision :no-workstream} — for
@@ -1214,7 +1276,8 @@
      :promote -> set-stage! :in-progress   :dismiss -> off-radar (ticket + ws :dismissed)
      :drop    -> close! :dropped            :done    -> set-stage! :done
      :apply   -> apply! (ticket:complete)   :reply   -> resume! the parked agent with `payload`
-     :approve -> resume! the parked agent with `approval-input` (a design gate)
+     :approve -> record the grant (:design-approved) and resume, iff `payload`
+                 still names the latest report AND the design still stands
      :option-a … :option-f -> resume! with the blocker branch that letter names,
                               iff `payload` still names the latest report
      :restore -> restore! (clear ticket status + reopen at :triaging)
@@ -1222,8 +1285,8 @@
 
    `payload` is whatever the click carried besides its id, and what that is
    depends on the action: the reply text for :reply, the :seq of the report the
-   button was rendered from for :option-*. Every other action resolves entirely
-   nido-side and ignores it.
+   button was rendered from for :option-* and :approve. Every other action
+   resolves entirely nido-side and ignores it.
    Returns the resolver's result map."
   ([project ws-id action-id] (resolve-gate! project ws-id action-id nil))
   ([project ws-id action-id payload]
@@ -1249,7 +1312,7 @@
        :drop    (do (cws/close! project ws-id :dropped) {:decision :dropped})
        :apply   (apply! project ws-id)
        :reply   (resume/resume! project ws-id payload)
-       :approve (resume/resume! project ws-id approval-input)
+       :approve (approve! project ws-id payload)
        (throw (ex-info "Unknown gate action" {:action-id action-id :ws-id ws-id}))))))
 
 (defn new!

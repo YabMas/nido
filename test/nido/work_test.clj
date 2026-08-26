@@ -667,21 +667,98 @@
       "Approve resumes a parked agent, so it needs a workstream; the two-way
        membership hazard documented on that set is why this is pinned"))
 
-(deftest approving-resumes-the-parked-agent-with-a-canned-input
+(def ^:private approvable-survey
+  {:format :baseline :area "a" :bounded-by "b" :shape "s"
+   :modules [{:id "m" :module "m" :hides "h" :interface "i"}]
+   :composition "c"
+   :load-bearing [{:id "c1" :property "p" :falsified-by "f" :evidence ["src/a.clj:1"]}]
+   :read ["src/a.clj"]})
+
+(defn- approvable
+  "A workstream whose latest entry is a design decision on a verified survey —
+   the one gate that offers Approve. Returns [ws-id design-seq decision-seq]."
+  []
+  (let [w  (workstream/create! :brian {:stage :in-progress :external-refs []})
+        id (:id w)
+        add (fn [kind r] (workstream/append-entry! :brian id {:kind kind} (pr-str r))
+              (count (:entries (workstream/read-ws :brian id))))]
+    (add :intent {:format :intent :goal "g" :done-when ["d"]})
+    (let [b (add :baseline approvable-survey)
+          _ (add :baseline-review {:format :baseline-review :verdict :sufficient
+                                   :baseline-seq b :reason "ok"})
+          d (add :design {:format :design :summary "s" :shape "sh"
+                          :invariants ["one path"] :standing {:relation :conforms}
+                          :baseline {:seq b :relation :within} :intent {:seq 1}
+                          :effort :S})
+          dd (add :design-decision {:format :design-decision :recommend :proceed
+                                    :design-seq d :reason "r"
+                                    :checks [{:check :goal-served :status :held :note "n"}]
+                                    :asks "worth doing now?"})]
+      [id b d dd])))
+
+(deftest approving-records-the-grant-then-resumes
+  ;; The order is the point, and the same one choose-option! holds: approval used
+  ;; to be an argument to a resume and nothing more, so "was this decided" was
+  ;; nowhere a reader could ask it and a resume that died swallowed the decision.
   (with-tmp
     (fn [_]
-      (let [w      (workstream/create! :brian {:stage :in-progress :external-refs []})
-            got    (atom nil)]
-        (with-redefs [resume/resume! (fn [_ _ input]
-                                       (reset! got input)
-                                       {:decision :resumed})]
-          (is (= {:decision :resumed}
-                 (work/resolve-gate! :brian (:id w) :approve)))
+      (let [[id _ d dd] (approvable)
+            got (atom nil)]
+        (with-redefs [resume/resume! (fn [_ _ input] (reset! got input)
+                                       {:decision :resumed})
+                      work/parked-session (constantly {:name "auto"})]
+          (is (= :approved (:decision (work/resolve-gate! :brian id :approve dd))))
+          (let [granted (workstream/latest-entry :brian id :design-approved)]
+            (is (= d (get-in granted [:design :seq])) "it names the design")
+            (is (= dd (:at-seq granted)) "and the position it was granted at"))
           (is (str/includes? @got "APPROVED"))
           (is (str/includes? @got "not a plan"))
           (is (str/includes? @got "amend or supersede")
               "an approval that reads as a freeze is how the design stops being
                able to receive what the code teaches"))))))
+
+(deftest a-grant-with-nobody-listening-is-still-a-grant
+  (with-tmp
+    (fn [_]
+      (let [[id _ d dd] (approvable)]
+        (with-redefs [work/parked-session (constantly nil)]
+          (is (= :approved-unresumed (:decision (work/resolve-gate! :brian id :approve dd))))
+          (is (= d (get-in (workstream/latest-entry :brian id :design-approved)
+                           [:design :seq]))))))))
+
+(deftest an-approval-granted-against-a-page-the-ledger-has-moved-past-is-refused
+  ;; A retraction appended since, another tab's grant, or a second click of the
+  ;; same button all land here. After granting, the approval IS the latest entry.
+  (with-tmp
+    (fn [_]
+      (let [[id _ _ dd] (approvable)]
+        (with-redefs [resume/resume! (fn [& _] {:decision :resumed})
+                      work/parked-session (constantly {:name "auto"})]
+          (is (= :approval-stale (:decision (work/resolve-gate! :brian id :approve nil)))
+              "a click carrying no position fails closed")
+          (is (= :approval-stale (:decision (work/resolve-gate! :brian id :approve (dec dd)))))
+          (is (= :approved (:decision (work/resolve-gate! :brian id :approve dd))))
+          (is (= :approval-stale (:decision (work/resolve-gate! :brian id :approve dd)))
+              "the double click refuses on the same check"))))))
+
+(deftest an-approval-is-refused-when-the-premise-went-while-you-were-reading
+  ;; The check an option click has no equivalent of. The round said this could be
+  ;; decided when it ran; standing is a statement about now.
+  (with-tmp
+    (fn [_]
+      (let [[id b _ dd] (approvable)]
+        (workstream/append-entry! :brian id {:kind :retraction}
+                                  (pr-str {:format :retraction :retracts {:seq b}
+                                           :because "the survey is not true of the code"
+                                           :evidence ["src/a.clj:9"]}))
+        (with-redefs [resume/resume! (fn [& _] {:decision :resumed})
+                      work/parked-session (constantly {:name "auto"})]
+          (let [out (work/resolve-gate! :brian id :approve dd)]
+            ;; The retraction moved the ledger on, so the position check catches
+            ;; it first — which is the same refusal, arrived at one step sooner.
+            (is (contains? #{:approval-stale :approval-refused} (:decision out)))
+            (is (nil? (workstream/latest-entry :brian id :design-approved))
+                "and no approval is ever written for a premise that is gone")))))))
 
 (deftest approving-a-workstream-that-does-not-exist-is-a-no-op
   (with-tmp
