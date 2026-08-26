@@ -247,6 +247,11 @@
    :doc "Run a project-declared command in a session worktree: :project <p> <session> <command-ref>"
    :task (apply nido-run/run *command-line-args*)}
 
+  nido:land:check
+  {:requires ([tasks.nido-land :as nido-land])
+   :doc "Refuse a landing whose design does not stand: retracted, never decided, or decided on a survey retracted since. Exits non-zero and prints the way out. [:cwd <dir>]"
+   :task (apply nido-land/cmd *command-line-args*)}
+
   nido:test
   {:requires ([tasks.nido-test :as nido-test])
    :doc "Run unit tests. Optional :only <ns-prefix> to filter."

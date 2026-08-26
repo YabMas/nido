@@ -1,0 +1,110 @@
+;; src/tasks/nido_land.clj
+(ns tasks.nido-land
+  "The landing gate: refuse a branch whose design does not stand right now.
+
+   Takes the pre-push position beside `bb nido:test`, and for the same reason —
+   this repo has no CI and no merge queue, so what runs before the fast-forward
+   is the only gate there is. The test suite asks whether the code works. This
+   asks whether anyone still believes the premise it was written against.
+
+   It refuses by exit code, not by a paragraph in a recipe. A rule that lives
+   only in prose is followed by whoever read the prose."
+  (:require
+   [clojure.string :as str]
+   [nido.coordinator.standing :as standing]
+   [nido.coordinator.workstream :as cws]
+   [nido.review.stages :as stages]
+   [nido.session.lifecycle :as lifecycle]
+   [nido.task-args :as task-args]))
+
+(defn- way-out
+  "What to DO about a refusal, as commands rather than advice.
+
+   Every refusal here stops an agent mid-landing, and an agent told only that it
+   is blocked will either guess or stop. Each reason has one route back and it
+   is short; spelling it at the point of refusal is the difference between a
+   gate that teaches the workflow and one that merely enforces it."
+  [{:keys [reason seq replaced-by]}]
+  (case reason
+    :premise-unverified
+    (str "  1. bb nido:review:baseline :seq " seq " — until it answers `sufficient`\n"
+         (when replaced-by
+           (str "     (entry " replaced-by " already corrects it; verify THAT one\n"
+                "      and cite it below — this one is not what a design should stand on)\n"))
+         "  2. supersede the design so it cites the survey that held:\n"
+         "     a new :design entry with :baseline {:seq <the verified one> …}\n"
+         "     and :supersedes {:seq <this design> :why \"…\"}\n"
+         "  3. bb nido:review:design\n"
+         "  4. Approve it in the gate inbox")
+
+    :premise-retracted
+    (str "  The survey is not merely stale, somebody found it FALSE — read entry "
+         seq "\n  for the counterexample before you touch anything.\n"
+         "  1. survey the area again and append a new :baseline (/design §4)\n"
+         (when replaced-by
+           (str "     (entry " replaced-by " corrects it — start from there)\n"))
+         "  2. bb nido:review:baseline — until it answers `sufficient`\n"
+         "  3. supersede the design so it cites the corrected survey\n"
+         "  4. bb nido:review:design, then Approve it in the gate inbox")
+
+    :design-retracted
+    (str "  Somebody found this design untrue — read entry " seq " first.\n"
+         "  Write a superseding :design, run bb nido:review:design, and have it\n"
+         "  approved. Do not amend the retracted one: it stays in the ledger.")
+
+    :no-premise
+    (str "  This design cites no survey — it predates the baseline event.\n"
+         "  1. survey the area and append a :baseline (/design §4)\n"
+         "  2. bb nido:review:baseline\n"
+         "  3. supersede the design so it cites it, then re-decide and approve")
+
+    :not-approved
+    (str "  The design stands and nobody has granted it. If no :design-decision\n"
+         "  exists yet, run bb nido:review:design first; then Approve it in the\n"
+         "  gate inbox (http://localhost:8800), which is what records the grant.")
+
+    :unreadable-ledger
+    (str "  An entry this depends on will not parse, so standing cannot be\n"
+         "  derived — and it fails closed rather than waving the branch through.\n"
+         "  Find the unreadable entry under the workstream's entries/ and repair\n"
+         "  it; a ledger nobody can read is not a ledger anybody may land on.")
+
+    (str "  No route recorded for " reason " — say so rather than working around it.")))
+
+(defn check
+  "Refuse unless this session's design stands: not retracted, approved, and the
+   exact survey it cites still live.
+
+   A workstream with NO design passes. Most do not have one — scratch
+   workstreams, pickups mid-flight — and a gate that demanded a design of every
+   branch would stop the work that has not reached one yet, which is not what
+   this is for."
+  [& args]
+  (let [[_ opts] (task-args/split-args args)
+        given (or (:cwd opts) (System/getProperty "user.dir"))
+        cwd   (or (lifecycle/worktree-from-cwd given) given)]
+    (if-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
+      (if-let [design (cws/latest-entry project ws-id :design)]
+        (let [st (standing/of-design project ws-id design)]
+          (if (:decided? st)
+            (do (println (str "land:check ok · design at entry " (:seq design)
+                              " stands, approved at entry " (:approved-by st)))
+                0)
+            (let [b (or (:blocked st)
+                        {:reason :not-approved :seq (:seq design)})]
+              (println (str "land:check REFUSED · " (name (:reason b))))
+              (when-let [d (:detail b)] (println (str "  " d)))
+              (println "\nHow to clear it:")
+              (println (way-out b))
+              1)))
+        (do (println "land:check ok · this workstream holds no design to stand on")
+            0))
+      (do (println (str "land:check ok · " cwd " is no nido session — nothing to check"))
+          0))))
+
+(defn cmd
+  "bb entry point: exits non-zero on a refusal, so a recipe that runs it before
+   the push stops there without anyone having to read the output."
+  [& args]
+  (let [code (apply check args)]
+    (when-not (zero? code) (System/exit code))))
