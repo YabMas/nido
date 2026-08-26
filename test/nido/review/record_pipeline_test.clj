@@ -756,3 +756,15 @@
     (is (str/includes? p "[composition]"))
     (is (str/includes? p "[invoice-resums]"))
     (is (str/includes? p "[c1]"))))
+
+(deftest the-amender-is-told-to-replace-a-claim-not-annotate-it
+  ;; "Change only what was refuted" says WHICH statements to touch; it never
+  ;; said how. Measured over six rounds on one survey: the composition went 405
+  ;; characters to 4091 because every correction was hung off the sentence that
+  ;; was wrong, and each added clause became the next round's finding — the same
+  ;; field refuted three rounds running for three different reasons.
+  (let [p (record/amend-prompt {:baseline a-baseline :findings [a-finding]
+                                :out-path "/x"})]
+    (is (str/includes? p "REPLACE IT"))
+    (is (str/includes? p "cannot converge"))
+    (is (str/includes? p "about the length it was"))))

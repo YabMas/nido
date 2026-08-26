@@ -1030,6 +1030,23 @@
           "unchanged — not restated, not sharpened, not made more precise.\n\n")
      (str "CHANGE ONLY WHAT WAS REFUTED. A claim nobody challenged this round must come\n"
           "back unchanged — not restated, not sharpened, not made more precise.\n\n"))
+   ;; The rule above says WHICH statements to touch. This one says HOW, and its
+   ;; absence is what actually ran this loop out. Measured over six rounds on
+   ;; one survey: the composition went 405 characters to 4091 and the shape 271
+   ;; to 2671, because every correction was appended as an exception to the
+   ;; sentence that was wrong rather than replacing it. Each appended clause was
+   ;; then the next round's finding — the same field was refuted three rounds
+   ;; running, for three DIFFERENT reasons, each one about something the
+   ;; previous amendment had added.
+   "AND WHEN YOU CORRECT SOMETHING, REPLACE IT. Re-state the claim so that it is\n"
+   "simply true. Do not keep the sentence that was wrong and hang an exception\n"
+   "off it, and do not add a paragraph explaining the case the judge found.\n\n"
+   "A record that grows every round cannot converge, and not because anyone is\n"
+   "sloppy: every clause you add is another statement the next round has to\n"
+   "check, so a correction made by appending REPLACES one finding with several.\n"
+   "If a claim needs a page of qualification to stay true, it was the wrong\n"
+   "claim — say the simpler true thing instead, even if it says less. Expect a\n"
+   "corrected record to be about the length it was.\n\n"
    "That rule is what lets this end. A sharper claim is a bigger target: a survey\n"
    "saying `publishes ten vars` or `folds five event types` invites the next round\n"
    "to count, and counting is always available. Rounds have gone by watching one\n"
