@@ -48,6 +48,73 @@
      "  place that got special handling, not to reopen the decision. A\n"
      "  `judgment` layer owns a decision: weigh it.\n\n")))
 
+(def disposition-vocabulary
+  "What may become of a finding. One entry per destination: the word the warden
+   answers with, what it means, and the extra field it may not omit.
+
+   Data rather than prose because the vocabulary has two halves that have to
+   agree — what the warden is TOLD a disposition means, published here into its
+   prompt, and what the code ACCEPTS as one, read off this same list by
+   `nido.review.stages`. Kept apart, they drift: a word can be offered to the
+   warden that no consumer recognises, or accepted by a consumer that the warden
+   is never told to use, and neither shows up as a failure. Same arrangement, and
+   for the same reason, as `composition-kinds` and the schema codex builds from
+   it.
+
+   `:requires` is the field a disposition is not a decision without. A close with
+   no authority and a deviation with no claim are shrugs, and a shrug is how a
+   review quietly stops reviewing."
+  [{:disposition :fix
+    :means (str "a real defect. It will be handed to a fixer working on\n"
+                "  owner_layer.")}
+   {:disposition :closed
+    :requires :authority
+    :means (str "no fix, AND you name the authority — duplicate (of another id\n"
+                "  in this round), out-of-scope (a layer's Out of scope names it),\n"
+                "  design (the record puts it behind a boundary), spun-out (it is\n"
+                "  already filed as a ref), false-positive (the reviewer is wrong;\n"
+                "  say what they missed).")}
+   {:disposition :deviation
+    :requires :of
+    :means (str "the finding shows a layer's stated CLAIM is not true, and it is\n"
+                "  not something to fix — the claim was overstated. Put the claim\n"
+                "  in `of`. The claim is NOT edited: it is what we intended, and\n"
+                "  the deviation is what actually happened. Both are kept.")}
+   {:disposition :park
+    :means (str "no fix, and not closed either — the loop has no move for it. Two\n"
+                "  cases, and only these two. Either the finding contradicts a named\n"
+                "  invariant of the design (the escalate case, for the human). Or its\n"
+                "  `kind` is misplaced-seam or order-dependence: those say the CUT is\n"
+                "  in the wrong place or the layers are in the wrong ORDER, and this\n"
+                "  loop can fix a line but cannot re-cut a stack. Sending either to\n"
+                "  a fixer buys a patch on one side of a bad seam — which\n"
+                "  makes the bad seam permanent and lets the round converge\n"
+                "  reporting success.")}])
+
+(defn- disposition-block
+  "The vocabulary rendered for the warden, plus the rule that binds it.
+
+   The count comes off the list rather than being written out: a destination
+   added without the sentence following it would tell the warden that every
+   finding gets one of four while offering it five."
+  []
+  (str "Then exactly one disposition:\n"
+       (->> disposition-vocabulary
+            (map (fn [{:keys [disposition means]}]
+                   (str "- " (name disposition) ": " means "\n")))
+            (apply str))
+       "\n"
+       "**Nothing is dropped.** Every finding gets one of those "
+       (count disposition-vocabulary) ", and\n"
+       (->> disposition-vocabulary
+            (filter :requires)
+            (map #(name (:disposition %)))
+            (clojure.string/join " and "))
+       " each require their extra field. A `closed` with no authority, or\n"
+       "a `deviation` with no claim in `of`, is not a decision — it is a shrug,\n"
+       "and it is how a review quietly stops reviewing. If you cannot name one,\n"
+       "the answer is fix.\n\n"))
+
 (def composition-kinds
   "The kinds of defect that exist ONLY in the composition of layers, each paired
    with the check that finds it.
@@ -406,7 +473,9 @@
    "               \"same_as\": \"<id of the earlier-round finding this is the\n"
    "                             same defect as, or null>\",\n"
    "               \"owner_layer\": \"<layer label from the stack below>\",\n"
-   "               \"disposition\": \"fix|closed|deviation|park\",\n"
+   "               \"disposition\": \""
+   (clojure.string/join "|" (map (comp name :disposition) disposition-vocabulary))
+   "\",\n"
    "               \"authority\": \"duplicate|out-of-scope|design|spun-out|false-positive\",\n"
    "               \"of\": \"<the claim a deviation departs from>\",\n"
    "               \"because\": \"<one sentence>\"}]}\n"
@@ -438,29 +507,7 @@
    "This is what lets the loop tell a defect it cannot move from a run that is\n"
    "still making progress. Guessing costs more than leaving it null: two defects\n"
    "welded together are reported as one, and the second is never fixed.\n\n"
-   "Then exactly one disposition:\n"
-   "- fix: a real defect. It will be handed to a fixer working on owner_layer.\n"
-   "- closed: no fix, AND you name the authority — duplicate (of another id in\n"
-   "  this round), out-of-scope (a layer's Out of scope names it), design (the\n"
-   "  record puts it behind a boundary), spun-out (it is already filed as a ref),\n"
-   "  false-positive (the reviewer is wrong; say what they missed).\n"
-   "- deviation: the finding shows a layer's stated CLAIM is not true, and it is\n"
-   "  not something to fix — the claim was overstated. Put the claim in `of`.\n"
-   "  The claim is NOT edited: it is what we intended, and the deviation is what\n"
-   "  actually happened. Both are kept.\n"
-   "- park: no fix, and not closed either — the loop has no move for it. Two\n"
-   "  cases, and only these two. Either the finding contradicts a named\n"
-   "  invariant of the design (the escalate case, for the human). Or its `kind`\n"
-   "  is misplaced-seam or order-dependence: those say the CUT is in the wrong\n"
-   "  place or the layers are in the wrong ORDER, and this loop can fix a line\n"
-   "  but cannot re-cut a stack. Sending either to a fixer buys a patch on one\n"
-   "  side of a bad seam — which makes the bad seam permanent and lets the\n"
-   "  round converge reporting success.\n\n"
-   "**Nothing is dropped.** Every finding gets one of those four, and closed and\n"
-   "deviation each require their extra field. A `closed` with no authority, or a\n"
-   "`deviation` with no claim in `of`, is not a decision — it is a shrug, and it\n"
-   "is how a review quietly stops reviewing. If you cannot name one, the answer\n"
-   "is fix.\n\n"
+   (disposition-block)
    "Each finding carries a reach the reviewer assigned: local (a defect inside\n"
    "the current design), structural (about where a boundary sits — the reviewer\n"
    "could see shape but not intent), or unclear. It is not a severity.\n"

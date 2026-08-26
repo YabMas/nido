@@ -6,6 +6,7 @@
    [nido.coordinator.agent :as agent]
    [nido.review.codex :as codex]
    [nido.review.layers :as layers]
+   [nido.review.prompts :as prompts]
    [nido.review.stages :as stages]
    [nido.vsdd.jj :as jj]))
 
@@ -158,6 +159,16 @@
         (is (= :stop (:control ctx)))
         (is (= :dry-run (:status ctx)))
         (is (false? @launched))))))
+
+(deftest every-disposition-the-warden-is-offered-is-one-the-parser-accepts
+  ;; The accepted half of the contract. A word offered to the warden that the
+  ;; parser silently rewrites to :fix is a destination nobody can reach.
+  (doseq [{:keys [disposition]} prompts/disposition-vocabulary]
+    (let [d (stages/parse-warden-decision
+             (str "```json\n{\"decision\":\"continue\",\"findings\":"
+                  "[{\"id\":\"aa11\",\"disposition\":\"" (name disposition) "\"}]}\n```"))]
+      (is (= disposition (:disposition (first (:rulings d))))
+          (str (name disposition) " survives the parser")))))
 
 (deftest apply-rulings-defaults-an-unruled-finding-to-fix
   ;; "Nothing is dropped" has to survive a malformed answer: a finding the

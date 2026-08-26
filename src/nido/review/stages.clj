@@ -21,7 +21,13 @@
 
 (def ^:private fenced-json-re #"(?s)```json\s*(\{.*?\})\s*```")
 
-(def ^:private dispositions #{:fix :closed :deviation :park})
+(def ^:private dispositions
+  "What the parser accepts, read off the same list the warden is told.
+
+   Derived rather than restated: a word offered to the warden that no consumer
+   recognises, or accepted here and never offered, is a drift neither side
+   fails on. See `prompts/disposition-vocabulary`."
+  (into #{} (map :disposition) prompts/disposition-vocabulary))
 
 (defn- ruling
   "One per-finding ruling from the warden's JSON. A disposition outside the

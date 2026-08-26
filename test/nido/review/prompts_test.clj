@@ -83,6 +83,21 @@
     (is (str/includes? out "Nothing is dropped"))
     (is (str/includes? out "it is a shrug"))))
 
+(deftest every-disposition-in-the-vocabulary-reaches-the-warden
+  ;; The published half of the contract. A destination added to the list but not
+  ;; rendered is one the warden is never told it may use, which is the drift the
+  ;; list exists to make impossible.
+  (let [out (prompts/warden-prompt {:findings findings :history [] :design design})]
+    (doseq [{:keys [disposition]} prompts/disposition-vocabulary]
+      (is (str/includes? out (str "- " (name disposition) ":"))
+          (str (name disposition) " is offered in the prompt")))
+    (is (str/includes? out (str/join "|" (map (comp name :disposition)
+                                              prompts/disposition-vocabulary)))
+        "the answer shape's enum is the list itself, in order"))
+  (is (str/includes? (prompts/warden-prompt {:findings findings :history []})
+                     (str "one of those " (count prompts/disposition-vocabulary)))
+      "the count is read off the list, so a new destination cannot leave it stale"))
+
 (deftest warden-prompt-assigns-a-composition-finding-to-the-highest-layer
   (let [out (prompts/warden-prompt {:findings findings :history [] :design design})]
     (is (str/includes? out "assign it to the HIGHEST layer involved"))))
