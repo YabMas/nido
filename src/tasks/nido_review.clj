@@ -218,6 +218,11 @@
    :amend-invalid "the ledger refused the amended record"
    :amend-touched-code "a record pass wrote to the working copy; whatever it wrote is still there"
    :dry-run    "nothing was amended"
+   ;; Only reachable when a caller asked for a cap. The loop has no default one
+   ;; — it ends on its own merits — so this is the reader's own bound coming
+   ;; back, and saying so is the difference between "it stopped" and "you
+   ;; stopped it".
+   :max-iters  "the cap you passed was reached — this is not convergence, and the findings below were still open"
    :no-workstream "run this from a nido session — its worktree or its session home"
    :codex-failed "the judge did not run — this is NOT a clean result"
    :no-output  "the judge ran and wrote nothing — NOT a clean result"
@@ -326,8 +331,10 @@
     status))
 
 (def ^:private baseline-remedies
+  "Only :sufficient ends a run. :insufficient is a VERDICT and never a status —
+   a gap is something an amender can answer, so the round that reports one keeps
+   going. It had a line here, which said the loop can end that way; it cannot."
   {:sufficient "the survey holds against the code, and a decision can be made against it"
-   :insufficient "a named derivation cannot be made against the survey — see what each finding says it needs"
    :no-record "author the baseline first"
    :nothing-to-check "nothing in the survey is refutable yet"})
 

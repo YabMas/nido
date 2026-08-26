@@ -285,7 +285,17 @@
            :no-workstream      "nido session"
            :no-record          "author the baseline first"
            :nothing-to-check   "refutable"
-           :codex-failed       "NOT a clean result"}]
+           :codex-failed       "NOT a clean result"
+           ;; The rest of the ways a record loop can stop. This list is
+           ;; hand-kept, which is how :max-iters — a documented flag — came to
+           ;; print "unrecognised terminal status" instead of a remedy.
+           :unfixable          "raised three rounds running"
+           :disputed           "neither can settle it"
+           :dry-run            "nothing was amended"
+           :max-iters          "not convergence"
+           :no-output          "wrote nothing"
+           :unusable-answer    "not in a form a record accepts"
+           :round-crashed      "threw before it could degrade"}]
     (with-redefs [rloop/run-loop (fn [_] {:status status})]
       (let [out (with-out-str (t/baseline-cmd ":cwd" "/w"))]
         (is (str/includes? out marker) (str status " must say what to do about it"))
@@ -419,3 +429,12 @@
                                   :detail "the design cites the survey at entry 4, and no round has found that survey sufficient"}})]
     (let [out (with-out-str (t/design-cmd ":cwd" "/w"))]
       (is (str/includes? out "the survey at entry 4")))))
+
+(deftest a-capped-run-says-the-cap-was-the-reader-s-own
+  ;; The loop has no default cap — it ends on its own merits — so :max-iters is
+  ;; only ever the caller's bound coming back, and it printed "unrecognised
+  ;; terminal status" instead of saying so.
+  (with-redefs [rloop/run-loop (fn [_] {:status :max-iters})]
+    (let [out (with-out-str (t/baseline-cmd ":cwd" "/w" ":max-iters" "2"))]
+      (is (not (str/includes? out "unrecognised terminal status")))
+      (is (str/includes? out "not convergence")))))
