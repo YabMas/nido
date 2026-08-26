@@ -8,6 +8,7 @@
    [nido.coordinator.workstream :as ws]
    [nido.review.loop :as rloop]
    [nido.review.record :as record]
+   [nido.review.stages :as stages]
    [nido.session.lifecycle :as lifecycle]
    [tasks.nido-review :as t]))
 
@@ -375,3 +376,46 @@
     (is (= "decomposable"       (f [[:blocks :decomposable] 1])))
     (is (= "routing-coherent"   (f [[:check :routing-coherent] 0])))
     (is (= "src/a.clj:1"        (f [[:evidence ["src/a.clj:1"]] 0])))))
+
+(deftest baseline-cmd-can-name-which-survey-to-verify
+  ;; A workstream can hold surveys of different areas and a design cites one
+  ;; specifically. Without this the only reachable survey is the newest, so the
+  ;; advice a blocked design gives — verify the survey it cites — names a
+  ;; command that verifies the other one and leaves the design blocked.
+  (let [seen (atom nil)
+        cited {:format :baseline :area "the one the design cites" :seq 7}]
+    (with-redefs [rloop/run-loop (fn [cfg] (reset! seen cfg) {:status :sufficient})
+                  lifecycle/worktree-from-cwd (fn [g] g)
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/entry-at-seq (fn [_ _ n] (when (= 7 n) cited))]
+      (with-out-str (t/baseline-cmd ":cwd" "/wt" ":seq" "7"))
+      (is (= cited (:baseline @seen))))))
+
+(deftest a-seq-naming-no-entry-is-refused-rather-than-falling-back
+  ;; Falling back to the newest would verify the same wrong survey with no way
+  ;; to tell it had happened.
+  (with-redefs [lifecycle/worktree-from-cwd (fn [g] g)
+                stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                ws/entry-at-seq (fn [_ _ _] nil)]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"entry 99"
+                          (t/baseline-cmd ":cwd" "/wt" ":seq" "99")))))
+
+(deftest a-seq-naming-the-wrong-kind-of-entry-is-refused-and-says-which
+  ;; The likelier typo: a workstream's baselines and their reviews interleave
+  ;; and sit one apart, so an off-by-one lands on a review. Verifying a review
+  ;; is not a smaller mistake than verifying nothing.
+  (with-redefs [lifecycle/worktree-from-cwd (fn [g] g)
+                stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                ws/entry-at-seq (fn [_ _ _] {:format :baseline-review :seq 55})]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"it is a :baseline-review"
+                          (t/baseline-cmd ":cwd" "/wt" ":seq" "55")))))
+
+(deftest a-no-verdict-outcome-says-which-record-it-was-about
+  ;; The status names the failure; only the detail names the entry, and a reader
+  ;; cannot act on the first without the second.
+  (with-redefs [rloop/run-loop
+                (fn [_] {:status :premise-unverified
+                         :record {:outcome :premise-unverified
+                                  :detail "the design cites the survey at entry 4, and no round has found that survey sufficient"}})]
+    (let [out (with-out-str (t/design-cmd ":cwd" "/w"))]
+      (is (str/includes? out "the survey at entry 4")))))

@@ -271,7 +271,7 @@
    The final block prints from a `finally`, so a loop that throws still leaves
    its rounds, its weakenings and its objections on screen."
   [{:keys [kind pipeline finding-key remedies epilogue]}
-   {:keys [cwd code-cwd max-iters dry-run? budget]}]
+   {:keys [cwd code-cwd max-iters dry-run? budget baseline]}]
   (let [;; Through the home-aware union whether the caller named a directory or
         ;; not. A session home is a place an agent legitimately stands — it is
         ;; where the briefing and the MCP config are, and every other cwd-based
@@ -293,19 +293,25 @@
                  (frontend/with-live-frame
                    {:frame-fn #(render/record-frame @report-atom % {:title title})
                     :clock clock :plain? plain}
-                   #(rloop/run-loop {:cwd cwd :code-cwd code-cwd
-                                     :run-id run-id
-                                     :max-iters max-iters
-                                     :dry-run? (boolean dry-run?)
-                                     :budget budget
-                                     :clock clock :emit emit
-                                     :pipeline pipeline
-                                     :finding-key finding-key}))
+                   #(rloop/run-loop (cond-> {:cwd cwd :code-cwd code-cwd
+                                             :run-id run-id
+                                             :max-iters max-iters
+                                             :dry-run? (boolean dry-run?)
+                                             :budget budget
+                                             :clock clock :emit emit
+                                             :pipeline pipeline
+                                             :finding-key finding-key}
+                                      baseline (assoc :baseline baseline))))
                  (finally
                    (println (render/record-final @report-atom {:title title}))))
         status (:status final)]
     (println (str kind "-loop: " (name status) " · report " report-path))
-    (when-let [detail (:amend-error final)]
+    ;; :amend-error is one of two ways a run explains itself. The other is the
+    ;; :detail on a no-verdict outcome, and it was never printed — so a run that
+    ;; stopped because the design cites an unverified survey said which status it
+    ;; ended in and never said WHICH survey, which is the only part a reader
+    ;; needs to act.
+    (when-let [detail (or (:amend-error final) (get-in final [:record :detail]))]
       (println (str "  " detail)))
     (doseq [k (:unfixable final)]
       (println (str "  ↯ " (finding-name k)
@@ -325,20 +331,54 @@
    :no-record "author the baseline first"
    :nothing-to-check "nothing in the survey is refutable yet"})
 
+(defn- baseline-at
+  "The survey named by :seq, or nil for `whichever is newest`.
+
+   A workstream can hold surveys of DIFFERENT areas — a narrow follow-up beside
+   the broad one it came out of — and a design cites one of them specifically.
+   Without this the only survey reachable from the command line is the newest,
+   so the advice a blocked design gives (`verify the survey it cites first`)
+   names a command that cannot verify that survey. It runs, it verifies the
+   other one, and the design stays blocked with nothing to show for it.
+
+   A :seq naming no entry is refused rather than silently falling back to the
+   newest, which would be the same wrong survey with no way to tell."
+  [cwd n]
+  (when n
+    (let [n (long n)
+          [project ws-id] (or (stages/project+ws-from-cwd cwd)
+                              (throw (ex-info (str "no nido session at " cwd) {})))]
+      ;; A readable entry is not enough — an entry of the wrong KIND is the
+      ;; likelier typo, since a workstream's baselines and their reviews
+      ;; interleave and sit one apart. Handing the loop a review to verify is
+      ;; not a smaller mistake than handing it nothing.
+      (let [e (ws/entry-at-seq project ws-id n)]
+        (or (when (= :baseline (:format e)) e)
+            (throw (ex-info (str "entry " n " is not a readable :baseline on this workstream"
+                                 (when-let [f (:format e)] (str " — it is a " f)))
+                            {:seq n :format (:format e)})))))))
+
 (defn baseline-cmd*
-  "Verify the workstream's latest baseline against the code, and keep correcting
-   it until the code stops refuting it."
-  [opts]
+  "Verify a baseline against the code, and keep correcting it until the code
+   stops refuting it. :seq names WHICH survey; the default is the newest."
+  ;; `seq-n`, not `seq` — destructuring the key by its own name would shadow
+  ;; clojure.core/seq for the whole body.
+  [{:keys [cwd] seq-n :seq :as opts}]
   (record-loop-cmd* {:kind "baseline"
                      :pipeline    record/baseline-pipeline
                      :finding-key record/baseline-finding-key
                      :remedies    baseline-remedies}
-                    opts))
+                    (cond-> opts
+                      seq-n (assoc :baseline
+                                   (baseline-at (or (some-> cwd lifecycle/worktree-from-cwd)
+                                                    cwd
+                                                    (lifecycle/worktree-from-cwd))
+                                                seq-n)))))
 
 (def ^:private design-remedies
   {:proceed "nothing derivable blocks it — what is left is the part only you can answer"
    :underivable "a check has no yardstick to derive against, which is not a defect an amender can repair"
-   :premise-unverified "verify the survey it cites first — `bb nido:review:baseline` — then decide against it"
+   :premise-unverified "verify the survey it cites first — `bb nido:review:baseline :seq <that entry>` — then decide against it"
    :no-record "author the design first"
    :not-worth-running "the design declares it moves nothing structural, so a decision round would not pay"})
 

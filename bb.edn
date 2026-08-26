@@ -523,7 +523,7 @@
 
   nido:review:baseline
   {:requires ([tasks.nido-review :as nido-review])
-   :doc "Loop the baseline round: judge the survey against the code, amend it, repeat until it holds. Uncapped unless :max-iters. [:cwd <dir>] [:code-cwd <dir>] [:max-iters <n>] [:budget 30m] [:dry-run? true]"
+   :doc "Loop the baseline round: judge the survey against the code, amend it, repeat until it holds. Uncapped unless :max-iters. :seq names WHICH survey when the workstream holds more than one; the default is the newest. [:cwd <dir>] [:code-cwd <dir>] [:seq <n>] [:max-iters <n>] [:budget 30m] [:dry-run? true]"
    :task (apply nido-review/baseline-cmd *command-line-args*)}
 
   nido:review:design
