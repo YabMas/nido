@@ -126,6 +126,26 @@ a future reader reads the inconsistency as intentional. This is `/stack`'s
 independent-correctness rule applied to the ship boundary instead of the layer
 boundary.
 
+**The second veto: what your own change made dead goes with it.** Code that
+existed only to serve the thing you removed is not a deferral candidate at any
+size. A filter that no longer filters, a parameter nobody reads, a patch that
+re-renders an identical list — these are not "unrelated cleanup found nearby",
+they are the other half of the edit, and the branch is not done while they
+stand. Deferring one is invisibly incomplete by construction: the next reader
+finds machinery whose purpose is gone and cannot tell, without archaeology,
+whether it is load-bearing.
+
+The test is causal, not topical: **would this still be here if I had not made
+this change?** No → it is yours to delete now. Yes → it is pre-existing, and the
+axes below decide it like anything else. That line is what separates the two
+halves of an "out of scope" list — a coupling this branch merely revealed is a
+genuine spin-out; a fragment this branch stranded is not.
+
+Following the chain is the work. Deleting one dead thing routinely reveals the
+next — its callers, their parameters, the config key that fed them. Stop when
+the next thing would have existed anyway, not when the diff starts feeling
+large.
+
 **Visible incompleteness is a design decision, so declare it as one.** A seam you
 are deliberately leaving goes in the design record's `:seams`, with what makes it
 visible to a reader. That is the difference between a seam and a defect: the
@@ -289,6 +309,10 @@ reasons. A routing decision nobody can see is indistinguishable from an
 oversight.
 
 ## Common mistakes
+
+- **Filing your own debris as a spin-out, or naming it in a PR's Out of scope.**
+  "Removing it is the next layer" is an intention, not a route. If it would not
+  exist but for this change, it is not out of scope — it is unfinished (§3).
 
 - **Deferring something that leaves the branch untrue** — a half-applied
   invariant is a veto, not a trade-off (§3).
