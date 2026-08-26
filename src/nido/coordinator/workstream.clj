@@ -286,6 +286,53 @@
                                            (filter #(#{:intent :triage} (:kind %)))
                                            (mapv (juxt :seq :kind)))}))))))))
 
+(defn- cites!
+  "`record`'s citation at `path` names an entry of one of `kinds`, or nothing.
+
+   The rule `check-baseline-citation!` already applies to a design's :baseline
+   and :intent, factored out because `standing` walks four more edges and each
+   one has to be resolvable for the same reason: a :seq pointing at nothing
+   reads downstream exactly like one pointing at a real record, so a retracted
+   premise reached through a dangling edge would answer `no retraction found`
+   rather than `this edge is broken`.
+
+   Only the edges standing follows. The sequence references it never reads —
+   :blocker-seq among them — are left exactly as they are: validating every
+   number in the ledger is a different change, and one this design turned down."
+  [w record path kinds what]
+  (when-let [n (get-in record path)]
+    (let [e (->> (:entries w) (filter #(= n (:seq %))) first)]
+      (when-not (contains? kinds (:kind e))
+        (throw (ex-info (str what " cites entry " n ", which is "
+                             (if e (str "a " (:kind e)) "not on this workstream")
+                             " — expected " (str/join " or " (sort (map str kinds))))
+                        {:seq n :kind (:kind e)
+                         :citable (->> (:entries w)
+                                       (filter #(contains? kinds (:kind %)))
+                                       (mapv (juxt :seq :kind)))}))))))
+
+(defn- check-standing-citations!
+  "Every edge `standing` walks resolves to an entry of the kind it expects.
+
+   Four of them, and they arrived with this change: a :retraction's target and
+   a :design-approved's design are new kinds entirely, while a design's and a
+   survey's :supersedes were both writable and neither was ever checked. That
+   last pair is why this exists at all — :supersedes was the one citation in
+   the ledger nothing had an opinion about, recorded in the survey this change
+   was designed against as an invisibly-incomplete health observation."
+  [w kind payload]
+  (when (#{:retraction :design-approved :design :baseline} kind)
+    (let [r (edn/read-string payload)]
+      (case kind
+        :retraction      (cites! w r [:retracts :seq]
+                                 #{:baseline :design :intent :triage}
+                                 "Retraction")
+        :design-approved (cites! w r [:design :seq] #{:design} "Approval")
+        :design          (cites! w r [:supersedes :seq] #{:design}
+                                 "Design :supersedes")
+        :baseline        (cites! w r [:supersedes :seq] #{:baseline}
+                                 "Baseline :supersedes")))))
+
 (defn- check-seam-phase-ref!
   "A seam that says a phase closes it names that phase by its :claim. Malli sees
    the seam and the phase list in the same record but cannot express \"this string
@@ -321,6 +368,7 @@
         seq-n (inc (count (:entries w)))
         [ext payload] (report/entry-payload (:kind entry) content)
         _     (check-baseline-citation! w (:kind entry) payload)
+        _     (check-standing-citations! w (:kind entry) payload)
         _     (check-seam-phase-ref! (:kind entry) payload)
         fname (format "%04d-%s.%s" seq-n (name (:kind entry)) ext)
         rel   (str "entries/" fname)

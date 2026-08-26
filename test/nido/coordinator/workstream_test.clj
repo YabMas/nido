@@ -692,3 +692,46 @@
              following a :seq cannot be latest-entry")
         (is (nil? (ws/entry-at-seq :brian (:id w) 9))
             "a reader following a citation must find nothing without crashing")))))
+
+;; ── The edges standing walks ───────────────────────────────────────────────
+
+(deftest every-edge-standing-walks-must-resolve
+  ;; A :seq pointing at nothing reads downstream exactly like one pointing at a
+  ;; real record, so a retracted premise reached through a dangling edge would
+  ;; answer "no retraction found" rather than "this edge is broken".
+  (with-tmp
+    (fn [_]
+      (let [w   (ws/create! :brian {:stage :in-progress :external-refs []})
+            id  (:id w)
+            add #(ws/append-entry! :brian id {:kind %1} (pr-str %2))]
+        (add :baseline a-baseline)                                    ; seq 1
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"Retraction cites entry 99"
+             (add :retraction {:format :retraction :retracts {:seq 99}
+                               :because "b" :evidence ["src/a.clj:1"]}))
+            "a retraction naming no entry")
+        (is (some? (add :retraction {:format :retraction :retracts {:seq 1}
+                                     :because "b" :evidence ["src/a.clj:1"]}))
+            "and one naming a real survey is fine")
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"Approval cites entry 1, which is a :baseline"
+             (add :design-approved {:format :design-approved :design {:seq 1} :at-seq 2}))
+            "an approval must name a design, and the refusal says what it found")
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"Baseline :supersedes cites entry 2"
+             (add :baseline (assoc a-baseline :supersedes {:seq 2 :why "corrected"})))
+            "a survey correcting a retraction is not a correction")
+        (is (some? (add :baseline (assoc a-baseline :supersedes {:seq 1 :why "corrected"})))
+            "a survey correcting a survey is")))))
+
+(deftest a-citation-standing-never-reads-is-left-alone
+  ;; Validating every number in the ledger is a different change, and one the
+  ;; design turned down: :blocker-seq is not an edge standing follows.
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+        (is (some? (ws/append-entry!
+                    :brian (:id w) {:kind :blocker-answered}
+                    (pr-str {:format :blocker-answered :blocker-seq 99
+                             :letter "a" :label "go ahead"
+                             :summary "the option the human picked"}))))))))
