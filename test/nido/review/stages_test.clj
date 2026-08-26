@@ -17,7 +17,7 @@
                  "```\n")
         d   (stages/parse-warden-decision txt)]
     (is (= :continue (:decision d)))
-    (is (= [{:id "aa11" :owner-layer "drop-legacy" :disposition :fix
+    (is (= [{:id "aa11" :same-as nil :owner-layer "drop-legacy" :disposition :fix
              :authority nil :of nil :because "real"}]
            (:rulings d)))))
 
@@ -163,10 +163,44 @@
   ;; "Nothing is dropped" has to survive a malformed answer: a finding the
   ;; warden forgot is worked on, not silently discarded.
   (let [out (stages/apply-rulings [{:id "aa11" :title "t"} {:id "bb22" :title "u"}]
-                                  [{:id "aa11" :disposition :closed :authority "duplicate"}])]
+                                  [{:id "aa11" :disposition :closed :authority "duplicate"}]
+                                  {})]
     (is (= :closed (:disposition (first out))))
     (is (= :fix (:disposition (second out))))
-    (is (str/includes? (:because (second out)) "did not rule"))))
+    (is (str/includes? (:because (second out)) "did not rule"))
+    (is (= ["aa11" "bb22"] (map :handle out))
+        "a finding the warden did not file keeps its own id as its handle")))
+
+(deftest a-finding-the-warden-calls-a-restatement-is-filed-under-the-original
+  ;; The whole point: a reviewer's new words must not produce a new identity.
+  (let [round2 (stages/apply-rulings
+                [{:id "new1" :title "Put the removal below the enablement"}]
+                [{:id "new1" :same-as "old1" :disposition :park}]
+                {"old1" "old1"})]
+    (is (= ["old1"] (map :handle round2)))))
+
+(deftest a-chain-of-restatements-collapses-onto-the-first-raising
+  ;; Not onto its immediate predecessor: a defect restated in every round of a
+  ;; long run has to stay one handle, or a stall check never sees a repeat.
+  (let [round3 (stages/apply-rulings
+                [{:id "new2" :title "Move the cleanup below the dropdown"}]
+                [{:id "new2" :same-as "new1" :disposition :park}]
+                {"old1" "old1" "new1" "old1"})]
+    (is (= ["old1"] (map :handle round3)))))
+
+(deftest a-same-as-naming-an-id-this-run-never-issued-is-refused
+  (let [out (stages/apply-rulings [{:id "new3" :title "t"}]
+                                  [{:id "new3" :same-as "hallucinated" :disposition :fix}]
+                                  {"old1" "old1"})]
+    (is (= ["new3"] (map :handle out))
+        "an invented link welds two defects into one; its own id is the safe answer")))
+
+(deftest seen-findings-lists-each-earlier-finding-once-at-the-round-it-arrived
+  (is (= [{:round 1 :id "aa11" :title "t"}
+          {:round 2 :id "bb22" :title "u"}]
+         (stages/seen-findings
+          [{:iter 1 :findings [{:id "aa11" :title "t"}]}
+           {:iter 2 :findings [{:id "aa11" :title "t"} {:id "bb22" :title "u"}]}]))))
 
 (deftest fix-plan-groups-by-owner-and-orders-bottom-to-top
   (let [stack [{:bookmark "s--a" :slug "a"} {:bookmark "s--b" :slug "b"}]

@@ -30,6 +30,7 @@
   [r]
   (let [d (some-> (:disposition r) keyword)]
     {:id          (:id r)
+     :same-as     (:same_as r)
      :owner-layer (:owner_layer r)
      :disposition (if (contains? dispositions d) d :fix)
      :authority   (:authority r)
@@ -454,24 +455,69 @@
                           converged)]
           (cache/write! project ws-id c))))))
 
+(defn resolve-handle
+  "The identity a finding is filed under: the handle of the finding the warden
+   says it restates, or its own id when it restates nothing.
+
+   `handles` maps a finding id to the handle it was filed under, and every entry
+   in it is already resolved — so one lookup is enough, and a chain of
+   restatements collapses onto the FIRST raising rather than onto its immediate
+   predecessor. That is what makes a handle stable across a run rather than
+   merely between two rounds.
+
+   A `same_as` naming an id this run never issued resolves to nothing and the
+   finding keeps its own. Strict on purpose, and in the cheap direction: a link
+   missed costs one round of not recognising a repeat, while a link invented
+   welds two defects into one and the second is never fixed."
+  [handles {:keys [id same-as]}]
+  (or (get handles same-as) id))
+
 (defn apply-rulings
-  "Merge the warden's per-finding rulings onto the findings.
+  "Merge the warden's per-finding rulings onto the findings, and file each under
+   the identity the warden gave it.
 
    A finding the warden did not rule on defaults to :fix. That is the fail-safe
    direction and it is what keeps \"nothing is dropped\" true of a malformed
-   answer: an omitted finding is worked on, never silently discarded."
-  [findings rulings]
+   answer: an omitted finding is worked on, never silently discarded. It keeps
+   its own id as its handle for the same reason — an unrecognised repeat costs a
+   round, an invented one loses a defect."
+  [findings rulings handles]
   (let [by-id (into {} (map (juxt :id identity)) rulings)]
     (mapv (fn [f]
-            (let [r (get by-id (:id f))]
-              (merge f
-                     {:owner-layer (:owner-layer r)
-                      :disposition (or (:disposition r) :fix)
-                      :authority   (:authority r)
-                      :of          (:of r)
-                      :because     (or (:because r)
-                                       (when-not r "the warden did not rule on this finding"))})))
+            (let [r (get by-id (:id f))
+                  merged (merge f
+                                {:same-as     (:same-as r)
+                                 :owner-layer (:owner-layer r)
+                                 :disposition (or (:disposition r) :fix)
+                                 :authority   (:authority r)
+                                 :of          (:of r)
+                                 :because     (or (:because r)
+                                                  (when-not r "the warden did not rule on this finding"))})]
+              (assoc merged :handle (resolve-handle handles merged))))
           findings)))
+
+(defn seen-findings
+  "Every finding an earlier round raised, oldest first, as {:round :id :title}.
+
+   This is the pool the warden's `same_as` points into, and it cannot come from
+   the round history beside it in the prompt: that carries what each round
+   DECIDED, and deciding whether this defect is that one needs the defect.
+
+   First raising wins on a repeated id, so a finding that survived three rounds
+   unchanged appears once, at the round it arrived."
+  [history]
+  (:out (reduce (fn [acc h]
+                  (reduce (fn [{:keys [seen] :as a} f]
+                            (if (contains? seen (:id f))
+                              a
+                              {:seen (conj seen (:id f))
+                               :out  (conj (:out a) {:round (:iter h)
+                                                     :id    (:id f)
+                                                     :title (:title f)})}))
+                          acc
+                          (:findings h)))
+                {:seen #{} :out []}
+                history)))
 
 (def warden-stage
   "The one reader with a view across layers, so attribution is its job.
@@ -493,8 +539,10 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
   {:name :warden
    :run  (fn [ctx]
            (let [{:keys [cwd run-id budget]} (:config ctx)
+                 handles (get-in ctx [:carry :handles] {})
                  prompt (prompts/warden-prompt
                          {:findings (:findings ctx)
+                          :seen     (seen-findings (:history ctx))
                           :history  (mapv #(dissoc % :findings) (:history ctx))
                           :design   (discover-design-record cwd)
                           :stance   (read-stance (first (project+ws-from-cwd cwd)))
@@ -510,9 +558,21 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                      (= :indeterminate (:decision decision)))
                (assoc ctx :warden decision :control :stop
                       :status :warden-indeterminate)
-               (let [ctx' (assoc ctx
+               (let [ruled (apply-rulings (:findings ctx) (:rulings decision) handles)
+                     ctx' (assoc ctx
                                  :warden  decision
-                                 :findings (apply-rulings (:findings ctx) (:rulings decision))
+                                 :findings ruled
+                                 ;; The handles have to reach the next round, and
+                                 ;; :carry is the only thing here that does —
+                                 ;; every other key is rebuilt from :config,
+                                 ;; :iter and :history. Merged rather than
+                                 ;; replaced, so a finding that stops being
+                                 ;; reported keeps its filing for a later round
+                                 ;; that raises it again.
+                                 :carry (assoc (:carry ctx) :handles
+                                               (into handles
+                                                     (map (juxt :id :handle))
+                                                     ruled))
                                  :control  (:decision decision))]
                  (record-convergence! cwd ctx')
                  ctx'))))})

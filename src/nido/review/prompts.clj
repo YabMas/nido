@@ -368,6 +368,25 @@
               (str/join "\n"))
          "\n\n")))
 
+(defn- seen-block
+  "Every finding an earlier round raised, by id and title, oldest first.
+
+   The `same_as` question cannot be answered from the round history beside it in
+   this prompt: that carries what each round DECIDED, and deciding whether this
+   defect is that one needs the defect. Titles only — a body per finding per
+   round would grow the prompt without helping, because what a fresh reviewer
+   rewrites between rounds is exactly the title."
+  [seen]
+  (when (seq seen)
+    (str "ALREADY RAISED IN AN EARLIER ROUND — the pool `same_as` points into.\n"
+         "A finding here was seen before; whether it is the same DEFECT as one\n"
+         "below is what you are being asked.\n"
+         (->> seen
+              (map (fn [{:keys [round id title]}]
+                     (str "  r" round " " id "  " title)))
+              (str/join "\n"))
+         "\n\n")))
+
 (defn warden-prompt
   "Build the warden prompt. The warden is the only thing in the loop with a
    view across layers, so attribution — which layer a finding BELONGS to, as
@@ -376,7 +395,7 @@
    Report-only (no tools): everything it reasons from is inlined here. That is
    deliberate and load-bearing. It is the component that decides to interrupt a
    human, so its inputs have to be reconstructable from the report afterwards."
-  [{:keys [findings history design stance toc answered]}]
+  [{:keys [findings history design stance toc answered seen]}]
   (str
    "You are the WARDEN of an automated code-review loop over a STACK of layers.\n"
    "You are the only reader with a view across all of them.\n\n"
@@ -384,6 +403,8 @@
    "{\"decision\": \"continue|stop|escalate\",\n"
    " \"reason\": \"...\",\n"
    " \"findings\": [{\"id\": \"<finding id>\",\n"
+   "               \"same_as\": \"<id of the earlier-round finding this is the\n"
+   "                             same defect as, or null>\",\n"
    "               \"owner_layer\": \"<layer label from the stack below>\",\n"
    "               \"disposition\": \"fix|closed|deviation|park\",\n"
    "               \"authority\": \"duplicate|out-of-scope|design|spun-out|false-positive\",\n"
@@ -407,6 +428,16 @@
    "individually fine. A `stack` finding that spans only ONE layer is by its own\n"
    "account not a composition defect — that layer's own review holds it, so\n"
    "close it `duplicate` unless nothing from that layer reported it.\n\n"
+   "SAME_AS — is this a defect we have already seen?\n"
+   "A reviewer starts fresh every round and writes its own words, so one defect\n"
+   "comes back under a new title, at a line the last round's fixes moved. You are\n"
+   "the only reader who sees this round beside every earlier one, so recognising\n"
+   "it is yours. When a finding below is the SAME DEFECT as one already seen —\n"
+   "not merely similar, not merely the same file — put that earlier id in\n"
+   "`same_as`. Otherwise null.\n"
+   "This is what lets the loop tell a defect it cannot move from a run that is\n"
+   "still making progress. Guessing costs more than leaving it null: two defects\n"
+   "welded together are reported as one, and the second is never fixed.\n\n"
    "Then exactly one disposition:\n"
    "- fix: a real defect. It will be handed to a fixer working on owner_layer.\n"
    "- closed: no fix, AND you name the authority — duplicate (of another id in\n"
@@ -446,6 +477,7 @@
    (when stance (str (stance-block stance) "\n"))
    (when-let [t (toc-block toc)] (str t "\n"))
    (answered-block answered)
+   (seen-block seen)
    "History of prior rounds (findings + what was fixed):\n"
    (pr-str history) "\n\n"
    "THIS ROUND'S FINDINGS:\n\n"
