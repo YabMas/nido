@@ -576,9 +576,20 @@ Derive `<session>` from cwd and `<run-id>` from the `./run-link/` symlink target
 Then verify what you wrote before building on it:
 
 ```bash
-bb nido:review:baseline    # is the survey true, and complete enough to decide against?
+bb nido:review:baseline    # is the survey true, and does it say ENOUGH to decide against?
 bb nido:review:design      # given all of it, should we execute on this?
 ```
+
+Not "complete". Completeness has no fixed point — measured against a real area
+there is always another true thing to add, and a round asked for it never
+finishes. The question is whether the four derivations the design round makes
+can be made against this survey; a gap that blocks none of them is not a
+finding.
+
+Both loop. They judge, repair what is derivable, and come back — so a run ends
+either holding nothing, or naming the two or three things only you can settle.
+Add `:seq <n>` to the baseline loop when the workstream holds more than one
+survey and you mean a particular one; the default is the newest.
 
 Read back what is there with `bb nido:workstream:show :project <p> :ref <ref>`.
 
