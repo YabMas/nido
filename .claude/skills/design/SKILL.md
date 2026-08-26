@@ -426,12 +426,27 @@ workstream that touches it. Baselines accumulate in ledgers, and a written
 current design can be harvested from them later if it is ever wanted — that is a
 different decision, not this one.
 
-### When the review says the baseline was wrong
+### When a survey turns out to be wrong
 
-The verdict can classify a finding as `:baseline`: a property you claimed is
-simply not true of the code. **That is not the design being wrong.** The design
-may be sound on a bad premise, and the remedy is to re-survey, not to supersede.
-Getting these two confused is how a sound design gets thrown away.
+Two different things say so, at two different moments, and they are not
+interchangeable.
+
+**The survey's own round, before anything is built.** `bb nido:review:baseline`
+checks each claim against the code and answers `sufficient`, `falsified` (a
+stated property is not true) or `insufficient` (every claim holds and a named
+derivation still cannot be made against it). Both failures are repaired in
+place: the round amends the survey and judges again, and only what it cannot
+settle reaches you. This is the ordinary path and §7 has the mechanics.
+
+**The code review's classification, after.** A `:review` verdict can classify a
+finding as `:baseline` — the implementation ran into something the survey said
+was not so. **That is not the design being wrong.** The design may be sound on a
+bad premise, and the remedy is to re-survey, not to supersede. Getting these two
+confused is how a sound design gets thrown away.
+
+The second one is expensive precisely because it arrives late, which is the
+argument for running the first one properly. A survey nobody judged is not a
+premise, it is a guess with a schema.
 
 ## 5. Amending a design
 
@@ -550,9 +565,40 @@ bb nido:ticket:append :project brian :br <BR-####> :kind baseline \
   :session <session> :run-id <run-id> :file /tmp/baseline.edn
 ```
 
-Note the `:seq` it prints back — the design record cites it.
+**Then verify it, BEFORE the design cites it:**
 
-**Then the design**, declaring how the change stands to it:
+```bash
+bb nido:review:baseline    # is the survey true, and does it say ENOUGH to decide against?
+```
+
+Not "complete". Completeness has no fixed point — measured against a real area
+there is always another true thing to add, and a round asked for it never
+finishes. The question is whether the four derivations the design round makes
+can be made against this survey; a gap that blocks none of them is not a
+finding.
+
+It loops: it judges, amends what it can, and comes back — so it ends either
+holding nothing, or naming the two or three things only you can settle. **Each
+amendment appends a superseding `:baseline`**, so the seq you started from is
+not the seq you finish with. Read the final one back; that is what the design
+cites:
+
+```bash
+bb nido:workstream:show :project brian :ref <BR-####>
+```
+
+**This order is load-bearing, and getting it backwards is not recoverable by
+running the rounds later.** A `:baseline-review` names the seq it actually
+judged. The design round then looks for a `sufficient` review *of the seq the
+design cites* — so a design written first, citing the survey as it stood before
+the loop corrected it, cites a seq whose only reviews are the `:falsified` ones
+that caused the correction. `bb nido:review:design` answers
+`:premise-unverified` and there is nothing further it can do: `discover-baseline`
+resolves the citation rather than the newest entry, deliberately, so that a later
+survey cannot silently change what an already-judged design was judged against.
+The only repair is a superseding design that cites the corrected survey.
+
+**Then the design**, declaring how the change stands to the survey that held:
 
 ```bash
 cat > /tmp/design.edn <<'EDN'
@@ -573,23 +619,20 @@ bb nido:ticket:append :project brian :br <BR-####> :kind design \
 
 Derive `<session>` from cwd and `<run-id>` from the `./run-link/` symlink target.
 
-Then verify what you wrote before building on it:
+**Then decide against it:**
 
 ```bash
-bb nido:review:baseline    # is the survey true, and does it say ENOUGH to decide against?
 bb nido:review:design      # given all of it, should we execute on this?
 ```
 
-Not "complete". Completeness has no fixed point — measured against a real area
-there is always another true thing to add, and a round asked for it never
-finishes. The question is whether the four derivations the design round makes
-can be made against this survey; a gap that blocks none of them is not a
-finding.
+This one loops too, and it can conclude the PREMISE was wrong rather than the
+commitment — in which case it re-runs the survey and re-states the design
+against the corrected one. Everything derivable is derived, so what reaches you
+at the end is only the judgement that could not be.
 
-Both loop. They judge, repair what is derivable, and come back — so a run ends
-either holding nothing, or naming the two or three things only you can settle.
 Add `:seq <n>` to the baseline loop when the workstream holds more than one
-survey and you mean a particular one; the default is the newest.
+survey and you mean a particular one; the default is the newest, which is the
+wrong one whenever a narrow follow-up was written beside a broad survey.
 
 Read back what is there with `bb nido:workstream:show :project <p> :ref <ref>`.
 

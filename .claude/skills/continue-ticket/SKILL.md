@@ -106,6 +106,24 @@ order: `:intent`, then `:baseline`, then `:design`, each written to a temp file
 and appended with `bb nido:ticket:append :project brian :br <BR-####> :kind
 <kind> :session <session> :run-id <run-id> :file /tmp/<kind>.edn`.
 
+**With the survey verified between the second and the third**, not after both:
+
+```bash
+bb nido:review:baseline    # loops until the code stops refuting the survey
+# …read the FINAL seq back; the loop appends a superseding :baseline per amendment
+bb nido:review:design      # then decide against the survey that held
+```
+
+This is not optional polish and the order is not cosmetic. The design round
+looks for a `sufficient` review *of the seq the design cites*, so a design
+written before the survey was verified cites a seq whose only reviews are the
+`:falsified` ones that caused the corrections — `bb nido:review:design` answers
+`:premise-unverified` and no amount of running it later helps. The repair is a
+superseding design. `/design` §7 has the full reason.
+
+Neither round writing code and neither touching the working copy: they judge the
+records, amend them, and hand you what only you can settle.
+
 This section used to restate the design record's shape, and drifted from the
 schema the moment `:intent` became required — an agent following the copy here
 wrote a record the append boundary rejected. It is a pointer now for that
