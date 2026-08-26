@@ -735,3 +735,44 @@
                     (pr-str {:format :blocker-answered :blocker-seq 99
                              :letter "a" :label "go ahead"
                              :summary "the option the human picked"}))))))))
+
+;; ── Concurrent appends ──────────────────────────────────────────────────────
+
+(deftest concurrent-appends-each-take-their-own-sequence-number
+  ;; The failure this guards is a LOST UPDATE, not a torn write. Two writers read
+  ;; the same index, derive the same :seq, write the same filename — the second
+  ;; over the first — and each write an index claiming that count. One append
+  ;; vanishes and the ledger looks consistent afterwards, which is what makes it
+  ;; worth a test: nothing downstream can notice.
+  ;;
+  ;; Threads rather than processes, deliberately. A file lock is held PER JVM, so
+  ;; threads are the half it does not cover on its own — without the interned
+  ;; monitor beside it the second thread raises OverlappingFileLockException
+  ;; instead of queueing.
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [cstate/nido-root (constantly (str tmp))]
+        (let [id  (:id (ws/create! :brian {:stage :in-progress :external-refs []}))
+              n   12
+              res (->> (range n)
+                       (mapv (fn [i]
+                               (future
+                                 (try (ws/append-entry! :brian id
+                                                        {:kind (keyword (str "note" i))}
+                                                        (str "body " i))
+                                      (catch Throwable t (str "THREW " (ex-message t)))))))
+                       (mapv deref))
+              w   (ws/read-ws :brian id)]
+          (is (empty? (filter string? (filter #(str/starts-with? (str %) "THREW") res)))
+              "no writer was refused")
+          (is (= n (count (:entries w))))
+          (is (= n (count (distinct (map :seq (:entries w)))))
+              "every append took its own sequence number")
+          (is (= (set (range 1 (inc n))) (set (map :seq (:entries w))))
+              "the sequence is dense — no number skipped, none reused")
+          (is (= n (count (fs/list-dir (fs/path (cstate/workstream-dir :brian id) "entries"))))
+              "one file per append, none written over")
+          (is (= (set (map #(keyword (str "note" %)) (range n)))
+                 (set (map :kind (:entries w))))
+              "every writer's own payload survived")))
+      (finally (fs/delete-tree tmp)))))

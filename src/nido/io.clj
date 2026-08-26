@@ -1,7 +1,57 @@
 (ns nido.io
   (:require [babashka.fs :as fs]
             [cheshire.core :as json]
-            [clojure.edn :as edn]))
+            [clojure.edn :as edn])
+  (:import [java.nio.channels FileChannel]
+           [java.nio.file Paths StandardOpenOption]))
+
+;; ── Exclusion across processes AND threads ──────────────────────────────────
+
+(defonce ^:private monitors
+  (atom {}))
+
+(defn- monitor-for
+  "One canonical object per lock path, so `locking` on it means the same thing
+   from every thread. Interned rather than created per call — two threads
+   synchronising on two different objects synchronise on nothing."
+  [path]
+  (or (get @monitors path)
+      (get (swap! monitors update path #(or % (Object.))) path)))
+
+(defn with-file-lock
+  "Run `f` holding an exclusive lock on `lock-path`, then release. Returns f's
+   value; the lock is released whether f returns or throws.
+
+   TWO locks, because one is not enough and each covers what the other cannot.
+   The OS file lock excludes other PROCESSES — nido's writers are separate ones
+   (bb tasks, the daemon, review loops), which is the case a JVM monitor cannot
+   see at all. But a file lock is held per-JVM, so two threads in the daemon
+   asking for the same file do not queue: the second gets an
+   OverlappingFileLockException rather than waiting. The monitor is what makes
+   them queue, and it has to be interned per path or it synchronises nothing.
+
+   Released by closing the channel rather than by releasing the lock, because
+   babashka does not admit methods on FileLockImpl — and closing is the stronger
+   guarantee anyway: the OS drops the lock when the process dies, so a crash
+   mid-append cannot wedge every later writer the way a stale lock DIRECTORY
+   would."
+  [lock-path f]
+  (let [p (str lock-path)]
+    (when-let [parent (fs/parent p)] (fs/create-dirs parent))
+    ;; clj-kondo reads this as locking on something local, which is the right
+    ;; thing to flag in general and wrong here: monitor-for INTERNS one object
+    ;; per path, so every thread asking about the same path gets the same
+    ;; object. Locking on a fresh one would synchronise nothing at all.
+    #_{:clj-kondo/ignore [:locking-suspicious-lock]}
+    (locking (monitor-for p)
+      (let [ch (FileChannel/open
+                (Paths/get p (into-array String []))
+                (into-array StandardOpenOption
+                            [StandardOpenOption/CREATE StandardOpenOption/WRITE]))]
+        (try
+          (.lock ch)
+          (f)
+          (finally (.close ch)))))))
 
 (defn read-edn
   "Read an EDN file, returning nil if it doesn't exist."

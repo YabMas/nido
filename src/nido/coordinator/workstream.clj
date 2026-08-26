@@ -359,24 +359,51 @@
                          :named        (mapv :phase orphan)
                          :phases       (vec claims)}))))))
 
+(defn append-lock-path
+  "The lock that serialises appends to one workstream. Per workstream rather than
+   global: two ledgers have no sequence to contend over, and a global lock would
+   queue every writer in nido behind whichever one is slowest."
+  [project ws-id]
+  (str (fs/path (cstate/workstream-dir project ws-id) ".append.lock")))
+
 (defn append-entry!
   "Write an immutable entry file under entries/ and record it in :entries.
-   `entry` = {:kind <kw> :session <str>?}. Returns the absolute file path."
+   `entry` = {:kind <kw> :session <str>?}. Returns the absolute file path.
+
+   SERIALISED, and the whole read-derive-write has to be inside the lock rather
+   than any one write of it. :seq is derived from the index count and the
+   filename from the :seq, so two writers reading the same index both compute the
+   same number, both write `entries/000N-…` — the second over the first — and
+   both then write an index claiming N entries. The surviving payload is decided
+   by write order, one append is lost outright, and the ledger looks consistent
+   afterwards: the count matches, and nothing records that anything went missing.
+   That is not a torn write, which write-edn!'s temp-and-rename already prevents;
+   it is a lost update, which nothing prevented.
+
+   Nothing raced before this because a human drove the stages one at a time.
+   :seq is the identity every citation in the ledger is keyed on, so an
+   unattended driver appending beside a session agent is exactly the condition
+   under which `it does not in fact race` stops being a property of the system
+   and starts being a property of the operator."
   [project ws-id entry content]
-  (let [w     (or (read-ws project ws-id)
-                  (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))
-        seq-n (inc (count (:entries w)))
-        [ext payload] (report/entry-payload (:kind entry) content)
-        _     (check-baseline-citation! w (:kind entry) payload)
-        _     (check-standing-citations! w (:kind entry) payload)
-        _     (check-seam-phase-ref! (:kind entry) payload)
-        fname (format "%04d-%s.%s" seq-n (name (:kind entry)) ext)
-        rel   (str "entries/" fname)
-        abs   (str (fs/path (cstate/workstream-dir project ws-id) rel))]
-    (io/write-text! abs payload)
-    (write! (update w :entries (fnil conj [])
-                    (assoc entry :seq seq-n :at (clock/now-iso) :file rel)))
-    abs))
+  (io/with-file-lock
+    (append-lock-path project ws-id)
+    (fn []
+      (let [w     (or (read-ws project ws-id)
+                      (throw (ex-info "Workstream not found"
+                                      {:project project :ws-id ws-id})))
+            seq-n (inc (count (:entries w)))
+            [ext payload] (report/entry-payload (:kind entry) content)
+            _     (check-baseline-citation! w (:kind entry) payload)
+            _     (check-standing-citations! w (:kind entry) payload)
+            _     (check-seam-phase-ref! (:kind entry) payload)
+            fname (format "%04d-%s.%s" seq-n (name (:kind entry)) ext)
+            rel   (str "entries/" fname)
+            abs   (str (fs/path (cstate/workstream-dir project ws-id) rel))]
+        (io/write-text! abs payload)
+        (write! (update w :entries (fnil conj [])
+                        (assoc entry :seq seq-n :at (clock/now-iso) :file rel)))
+        abs))))
 
 (defn latest-entry
   "The most recent typed entry of `kind` on this workstream — parsed, validated,
