@@ -10,6 +10,7 @@
    [nido.coordinator.agent :as agent]
    [nido.coordinator.anomaly :as anomaly]
    [nido.coordinator.breakers :as breakers]
+   [nido.coordinator.brief :as brief]
    [nido.coordinator.clock :as clock]
    [nido.coordinator.events :as events]
    [nido.coordinator.halt :as halt]
@@ -36,6 +37,7 @@
    [nido.coordinator.intake :as intake]
    [nido.coordinator.ship :as ship]
    [nido.github.config :as gh-config]
+   [nido.notion.client :as client]
    [nido.notion.views :as views]
    [nido.coordinator.triggers :as triggers]
    [nido.core :as nido-core]
@@ -531,6 +533,21 @@
                        (try
                          (runs/spawn-session-for-run! run)
                          (notify/on-plan-spawn! run)        ; Notion nudge; no-op for the GitHub leg
+                         ;; A pickup bypasses triage, so its workstream starts
+                         ;; with an empty ledger and the ticket body is the only
+                         ;; statement of scope anywhere. Transcribe it onto the
+                         ;; ledger from the DAEMON's keychain credential, before
+                         ;; the agent starts: a Run under launchd inherits no
+                         ;; NOTION_TOKEN, and sessions have read that as having
+                         ;; no Notion access and parked on a scope the ticket
+                         ;; stated. No-op on a promoted ticket (its :triage entry
+                         ;; already states the goal) and best-effort throughout —
+                         ;; it must never fail a run that is otherwise fine.
+                         (when-not (= :plan-github-issue (:skill run))
+                           (brief/ensure-ticket-brief! (:project run)
+                                                       (:workstream-id run)
+                                                       (:event-payload run)
+                                                       (client/keychain-token)))
                          ;; Notion leg → /continue-ticket (NOT the run's "/plan-bug …"
                          ;; first-message; see note above). GitHub leg → the issue body
                          ;; itself as the brief (no ledger to continue from).

@@ -446,3 +446,37 @@
                         (recur next_cursor acc')
                         acc'))))))]
       (visit root-id 0))))
+
+(defn list-comments
+  "GET /v1/comments?block_id=<page-id>, following pagination. Returns
+     {:status 200 :results [...]}
+     {:status N   :error :auth|:server|:network|:http}
+
+   A comment thread is where a ticket's scope most often gets amended, so this
+   is read alongside the body rather than instead of it. Notion gates comment
+   reads behind their own integration capability, so :http here means 'this
+   token may not read comments' at least as often as it means a real fault —
+   callers treat an unreadable thread as absent, never as a failure."
+  [page-id token]
+  (loop [cursor nil
+         acc    []]
+    (let [base (str "https://api.notion.com/v1/comments?block_id=" page-id "&page_size=100")
+          url  (if cursor (str base "&start_cursor=" cursor) base)
+          resp (try
+                 (http-request
+                   :get url
+                   {:headers {"Authorization"  (str "Bearer " token)
+                              "Notion-Version" notion-api-version}
+                    :timeout 10000})
+                 (catch Exception _e {:status 0}))
+          {:keys [status body]} resp]
+      (cond
+        (= status 200)  (let [parsed (json/parse-string body true)
+                              acc'   (into acc (:results parsed))]
+                          (if (and (:has_more parsed) (:next_cursor parsed))
+                            (recur (:next_cursor parsed) acc')
+                            {:status 200 :results acc'}))
+        (= status 401)  {:status status :error :auth}
+        (>= status 500) {:status status :error :server}
+        (= status 0)    {:status 0     :error :network}
+        :else           {:status status :error :http}))))
