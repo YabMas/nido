@@ -1146,3 +1146,32 @@
     (is (not (str/includes? html "older than the entry"))
         "restarting fixes an unknown kind and does nothing for a mismatch —
          saying the wrong remedy is worse than saying none")))
+
+(defn- baseline-review-pane
+  "The workstream pane rendered around one baseline-review record."
+  [record]
+  (views/workstream-pane (assoc sample-ws :report record) {}))
+
+(deftest a-survey-that-holds-is-not-told-to-re-survey
+  ;; The guard named :accurate, the verdict that :sufficient replaced, so the
+  ;; EXPECTED outcome of every run rendered with "Re-survey" printed under it.
+  (let [html (baseline-review-pane {:format :baseline-review :verdict :sufficient
+                           :baseline-seq 3 :reason "it holds"})]
+    (is (not (str/includes? html "Re-survey")))))
+
+(deftest a-falsified-survey-still-is
+  (let [html (baseline-review-pane {:format :baseline-review :verdict :falsified
+                           :baseline-seq 3 :reason "no"
+                           :findings [{:cites ["c"] :claim "x"}]})]
+    (is (str/includes? html "Re-survey"))
+    (is (str/includes? html "Claims the code does not support"))))
+
+(deftest a-gap-shows-what-it-blocks-and-what-it-needs
+  (let [html (baseline-review-pane {:format :baseline-review :verdict :insufficient
+                           :baseline-seq 3 :reason "true, and not enough"
+                           :findings [{:blocks :decomposable :cites ["c"] :claim "x"
+                                       :needs "what the renderer hides"}]})]
+    (is (str/includes? html "Derivations this survey cannot support"))
+    (is (str/includes? html "decomposable"))
+    (is (str/includes? html "what the renderer hides"))
+    (is (not (str/includes? html "Claims the code does not support")))))

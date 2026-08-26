@@ -1091,9 +1091,13 @@
    what separates a finding from an opinion here."
   [findings]
   (into [:ul]
-        (for [{:keys [cites claim evidence]} findings]
+        (for [{:keys [cites claim evidence blocks needs]} findings]
           [:li [:strong (str/join "; " cites)]
            [:div claim]
+           ;; A gap says which derivation it blocks and what the survey would
+           ;; have to say; without those two a reader sees a claim and no reason.
+           (when blocks
+             [:div "blocks " [:code (name blocks)] " — needs " needs])
            (when (seq evidence)
              [:div.meta (str/join ", " evidence)])])))
 
@@ -1106,11 +1110,9 @@
     [:span.meta "of entry " baseline-seq]]
    (md/render reason)
    (when (seq findings)
-     [:div [:h3 (if (= :underscoped verdict)
-                  "What the bound leaves out"
-                  "Claims the code does not support")]
+     [:div [:h3 (report/findings-heading verdict)]
       (record-findings-list findings)])
-   (when (not= :accurate verdict)
+   (when-not (report/verdict-holds verdict)
      [:blockquote "Re-survey — the design may be sound on a bad premise."])
    (when (seq confirmed)
      [:details.trail

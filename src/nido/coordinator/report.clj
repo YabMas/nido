@@ -1924,10 +1924,34 @@
   [heading findings]
   (when (seq findings)
     (cons (str "\n## " heading)
-          (for [{:keys [cites claim evidence]} findings]
+          (for [{:keys [cites claim evidence blocks needs]} findings]
             (str "- **" (str/join "; " cites) "** — " claim
+                 ;; A gap's whole content is which derivation it blocks and what
+                 ;; the survey would have to say. Both were on the record and
+                 ;; neither reached a reader.
+                 (when blocks
+                   (str "\n  - blocks `" (name blocks) "` — needs " needs))
                  (when (seq evidence)
                    (str "\n  - " (str/join ", " (map #(str "`" % "`") evidence)))))))))
+
+(def verdict-holds
+  "The verdicts that say the survey stands. :accurate is the older one, under the
+   older question; both are success and neither wants a re-survey note under it.
+
+   Named rather than written inline as `(not= :accurate verdict)`, which is what
+   it was: when :sufficient replaced :accurate the guard was not moved, so the
+   expected outcome of every run rendered with `Re-survey` printed beneath it."
+  #{:sufficient :accurate})
+
+(defn findings-heading
+  "What the findings under a verdict ARE. :insufficient does not report claims
+   the code refuses — every claim held — so heading them that way tells a reader
+   the opposite of what the round found."
+  [verdict]
+  (case verdict
+    :insufficient "Derivations this survey cannot support"
+    :underscoped  "What the bound leaves out"
+    "Claims the code does not support"))
 
 (defn- baseline-review->markdown
   [{:keys [verdict baseline-seq reason confirmed findings]}]
@@ -1941,12 +1965,8 @@
       (when (seq confirmed)
         (cons "\n## Confirmed against the code"
               (for [c confirmed] (str "- " c))))
-      (record-findings->markdown
-       (case verdict
-         :underscoped "What the bound leaves out"
-         "Claims the code does not support")
-       findings)
-      (when (not= :accurate verdict)
+      (record-findings->markdown (findings-heading verdict) findings)
+      (when-not (verdict-holds verdict)
         ["\n> Re-survey — the design may be sound on a bad premise."])))))
 
 (defn- trajectory->markdown
