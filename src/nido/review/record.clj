@@ -133,10 +133,28 @@
                            "  [holds always]"))))
                 invariants)))
 
+(def whole-record-ids
+  "Ids for the survey's un-id'd single fields.
+
+   :shape and :composition are the two claims a decomposition-level round is
+   most likely to challenge — one says what the area's organising idea is, the
+   other says those parts produce the behaviour — and neither is an item in a
+   vector, so neither has an :id to carry. A finding about one therefore arrived
+   with no claim-id and fell back to being keyed on the evidence it happened to
+   cite, which the amendment answering it moves. Reserving the field NAME as the
+   id costs nothing and closes the last hole: every subject a finding can be
+   about is now nameable in the same way."
+  {:shape       :shape
+   :composition :composition})
+
 (defn known-ids
-  "Every id a survey actually contains — claims, modules and health observations."
+  "Every id a survey actually contains — claims, modules, health observations,
+   and the reserved name of each whole-record field the survey fills in."
   [record]
-  (into #{} (comp cat (keep :id))
+  (into (into #{} (comp (filter (fn [[_ k]] (some? (get record k))))
+                        (map (comp name key)))
+              whole-record-ids)
+        (comp cat (keep :id))
         [(:load-bearing record) (:modules record) (:health record)]))
 
 (defn confirmed-in
@@ -345,10 +363,14 @@
           (lens-block)))
    "AREA: " (:area baseline) "\n"
    "BOUNDED BY: " (:bounded-by baseline) "\n"
-   "SHAPE: " (:shape baseline) "\n"
+   ;; Bracketed like every other subject. An id the judge is never shown is one
+   ;; it cannot cite back, and these two are the ones a decomposition round
+   ;; challenges most.
+   "SHAPE: [shape] " (:shape baseline) "\n"
    (module-block (:modules baseline))
    (when-let [c (:composition baseline)]
-     (str "\nCOMPOSITION — how those are claimed to produce the behaviour:\n" c "\n"))
+     (str "\nCOMPOSITION — how those are claimed to produce the behaviour:\n"
+          "[composition] " c "\n"))
    "\nLOAD-BEARING — what is claimed to break if violated"
    (if (some :falsified-by (:load-bearing baseline))
      ", each with the\ncounterexample that would refute it:\n"
@@ -360,7 +382,12 @@
      (str "\nHEALTH — claimed about whether what holds is sound. :design means a\n"
           "weak design cleanly executed; :implementation means a strong design\n"
           "shakily executed. A mis-axed observation is a finding:\n"
-          (bullets (map #(str "[" (name (:axis %)) "] " (:observation %)
+          ;; Its id first, and it was the one subject with an id that the prompt
+          ;; never printed — so a judge asked to confirm by id could not confirm
+          ;; a health observation at all, and `confirmed-in` dropped whatever it
+          ;; said instead.
+          (bullets (map #(str (when (:id %) (str "[" (:id %) "] "))
+                              "[" (name (:axis %)) "] " (:observation %)
                               " [" (str/join ", " (:evidence %)) "]")
                         h))
           "\n"))
@@ -384,14 +411,15 @@
    "composition text. A finding that cites nothing is not a finding; do not\n"
    "report it. Neither is a finding that reports a bug in code the survey\n"
    "correctly describes.\n\n"
-   "Populate confirmed with the IDS of the claims and modules you actually went\n"
-   "and checked — the bracketed slugs, without the brackets. Ids, not sentences:\n"
-   "a confirmation worded differently each round cannot be matched to the claim\n"
-   "it is about, so the next round cannot tell what is settled and checks it\n"
-   "again instead of checking what nobody has looked at yet.\n"
-   "Return\n"
-   "sufficient when they held and the four derivations are makeable. Do not\n"
-   "manufacture findings to look thorough — on this round, thoroughness is\n"
+   "Populate confirmed with the IDS of what you actually went and checked — the\n"
+   "bracketed slugs, without the brackets. Every subject carries one: claims,\n"
+   "modules, health observations, and [shape] and [composition] too.\n\n"
+   "Ids, not sentences. A confirmation worded differently each round cannot be\n"
+   "matched to the claim it is about, so the next round cannot tell what is\n"
+   "settled and checks it again instead of checking what nobody has looked at\n"
+   "yet.\n\n"
+   "Return sufficient when they held and the four derivations are makeable. Do\n"
+   "not manufacture findings to look thorough — on this round, thoroughness is\n"
    "checking the claims that are there, not finding more to say."
    (confirmations-block confirmed)
    (disputes-block disputes)))

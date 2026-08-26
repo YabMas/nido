@@ -520,5 +520,5 @@
 
 (deftest the-judge-is-asked-for-ids-not-sentences
   (let [p (record/baseline-prompt {:baseline {:format :baseline}})]
-    (is (str/includes? p "IDS of the claims and modules"))
-    (is (str/includes? p "cannot be matched to the claim"))))
+    (is (str/includes? p "IDS of what you actually went and checked"))
+    (is (str/includes? p "cannot be\nmatched to the claim"))))

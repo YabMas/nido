@@ -76,7 +76,7 @@
           },
           "claim-id": {
             "type": "string",
-            "description": "The id of the claim or module this finding is about — the slug shown in brackets before it, WITHOUT the brackets. Empty string only when the finding is about no single one. This is how the next round knows whether a claim you refuted was fixed or is still wrong; without it an amended claim looks like a new subject."
+            "description": "The id of the claim, module, health observation or whole-record field this finding is about — the slug shown in brackets before it, WITHOUT the brackets. That includes [shape] and [composition], which are bracketed for exactly this reason. Empty string only when the finding is about no single one. This is how the next round knows whether a claim you refuted was fixed or is still wrong; without it an amended claim looks like a new subject."
           }
         }
       }

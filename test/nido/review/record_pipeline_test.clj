@@ -725,3 +725,34 @@
 (deftest a-gap-and-a-refutation-are-never-the-same-finding
   (is (not= (record/baseline-finding-base-key a-gap)
             (record/baseline-finding-base-key a-finding))))
+
+;; ── The subjects a finding can name ─────────────────────────────────────────
+
+(deftest every-subject-in-a-survey-is-nameable
+  ;; A finding keyed on the evidence it happens to cite is keyed on something
+  ;; the amendment answering it moves — the identity-by-description failure this
+  ;; loop has already paid for three times. :shape and :composition are not
+  ;; items in a vector and so carry no :id of their own, and they are the two a
+  ;; decomposition-level round challenges most.
+  (let [ids (record/known-ids a-baseline)]
+    (is (contains? ids "shape"))
+    (is (contains? ids "composition"))
+    (is (contains? ids "c1") "the claim ids are still there")
+    (is (contains? ids "invoice-resums") "and the health observation ids")))
+
+(deftest a-reserved-id-is-only-known-when-the-survey-fills-it-in
+  (is (not (contains? (record/known-ids (dissoc a-baseline :composition))
+                      "composition"))))
+
+(deftest a-confirmation-may-name-a-whole-record-field
+  (is (= ["composition"] (record/confirmed-in a-baseline ["composition"]))))
+
+(deftest the-judge-is-shown-the-ids-it-is-asked-to-cite
+  ;; An id in the record and not in the prompt cannot be cited back. Health
+  ;; observations carried one all along and it was the one subject never
+  ;; printed, so `confirmed-in` dropped whatever the judge said about them.
+  (let [p (record/baseline-prompt {:baseline a-baseline})]
+    (is (str/includes? p "[shape]"))
+    (is (str/includes? p "[composition]"))
+    (is (str/includes? p "[invoice-resums]"))
+    (is (str/includes? p "[c1]"))))
