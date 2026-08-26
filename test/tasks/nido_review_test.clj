@@ -364,3 +364,14 @@
   (doseq [cmd [t/baseline-cmd t/design-cmd]]
     (with-redefs [rloop/run-loop (fn [_] {:status :amend-touched-code})]
       (is (str/includes? (with-out-str (cmd ":cwd" "/w")) "still there")))))
+
+(deftest a-stuck-finding-is-named-by-its-subject-not-its-tag
+  ;; Every identity key names its subject somewhere inside, but the two
+  ;; closed-vocabulary keys — a design check and a survey gap — carry it as the
+  ;; keyword after a tag. Printing the tag names the mechanism instead of the
+  ;; thing the run could not resolve.
+  (let [f #'tasks.nido-review/finding-name]
+    (is (= "judge-never-writes" (f [[:claim-id "judge-never-writes"] 0])))
+    (is (= "decomposable"       (f [[:blocks :decomposable] 1])))
+    (is (= "routing-coherent"   (f [[:check :routing-coherent] 0])))
+    (is (= "src/a.clj:1"        (f [[:evidence ["src/a.clj:1"]] 0])))))

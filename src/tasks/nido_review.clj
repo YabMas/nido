@@ -224,6 +224,22 @@
    :unusable-answer "the judge answered, but not in a form a record accepts"
    :round-crashed "the round threw before it could degrade"})
 
+(defn- finding-name
+  "What to call a finding that is only known here by its identity key.
+
+   The key is the pipeline's own value and its shape is its business, not a
+   reader's — but every shape it takes names its subject somewhere inside. A
+   claim key carries the id as a string; the two closed-vocabulary keys, a
+   design check and a survey gap, carry it as the keyword after the tag. The
+   tag is skipped: `blocks` and `check` say which KIND of handle this is, and
+   printing that instead of `decomposable` names the mechanism rather than the
+   thing the run could not resolve."
+  [k]
+  (let [parts (flatten [k])]
+    (or (some #(when (string? %) %) parts)
+        (some #(when (keyword? %) (name %)) (rest parts))
+        (pr-str k))))
+
 (defn- record-loop-cmd*
   "Drive a record pipeline through the engine inside the live frame.
 
@@ -292,9 +308,7 @@
     (when-let [detail (:amend-error final)]
       (println (str "  " detail)))
     (doseq [k (:unfixable final)]
-      ;; The key is the pipeline's own identity value, whose shape is its
-      ;; business and not a reader's. Show the name inside it when there is one.
-      (println (str "  ↯ " (or (some #(when (string? %) %) (flatten [k])) (pr-str k))
+      (println (str "  ↯ " (finding-name k)
                     " — raised and re-raised, never resolved")))
     ;; The pipeline's own remedies first, then the ones every record loop shares.
     ;; A lookup FN rather than a map, because a nested loop's terminal status
