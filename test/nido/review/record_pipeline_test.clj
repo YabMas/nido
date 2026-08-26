@@ -768,3 +768,22 @@
     (is (str/includes? p "REPLACE IT"))
     (is (str/includes? p "cannot converge"))
     (is (str/includes? p "about the length it was"))))
+
+(deftest the-record-a-run-started-from-is-kept-for-the-whole-run
+  ;; Growth is a property of the RUN, not of one amendment: 400 characters to
+  ;; 800 is a correction and six of those in a row is a claim nobody can check,
+  ;; so the comparison has to be against what was there at the start.
+  (let [first-amend (assoc a-baseline :area "round one")
+        second-amend (assoc a-baseline :area "round two")]
+    (with-redefs [ws/entry-at-seq (fn [_ _ _] nil)]
+      (let [[out1 _] (with-amend {:writes (fn [p] (spit p (pr-str {:record first-amend})))}
+                                 (ctx :findings [a-finding]))
+            ;; the next round, carrying what the first one left
+            [out2 _] (with-amend {:prev first-amend
+                                  :writes (fn [p] (spit p (pr-str {:record second-amend})))}
+                                 (assoc (ctx :findings [a-finding])
+                                        :carry (:carry out1)))]
+        (is (= a-baseline (:as-authored (:carry out1))))
+        (is (= a-baseline (:as-authored (:carry out2)))
+            "still the record the run began with, not the previous round's")
+        (is (= second-amend (:under-repair (:carry out2))))))))

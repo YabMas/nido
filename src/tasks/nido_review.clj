@@ -21,6 +21,7 @@
    [nido.review.record :as record]
    [nido.review.loop :as rloop]
    [nido.review.render :as render]
+   [nido.review.retreat :as retreat]
    [nido.review.stages :as stages]
    [nido.review.report :as report]
    [nido.review.verdict :as verdict]
@@ -321,6 +322,15 @@
     (doseq [k (:unfixable final)]
       (println (str "  ↯ " (finding-name k)
                     " — raised and re-raised, never resolved")))
+    ;; The other way an amendment costs something, and the one the Weakened
+    ;; section cannot report: it answers "did the record claim LESS", and a
+    ;; record talked out of checkability claims more. A run reported that it had
+    ;; given nothing up while its composition went from four sentences to a page.
+    (when-let [g (retreat/growth-summary
+                  (retreat/growth (get-in final [:carry :as-authored])
+                                  (get-in final [:carry :under-repair])))]
+      (println "  Grown past checking — a claim this long is one nobody can check:")
+      (println g))
     ;; The pipeline's own remedies first, then the ones every record loop shares.
     ;; A lookup FN rather than a map, because a nested loop's terminal status
     ;; comes through prefixed and the set is open by construction.

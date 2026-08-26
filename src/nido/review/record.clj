@@ -1276,12 +1276,17 @@
                                        :retreats retreats
                                        :disputes disputes
                                        :history (conj (vec (:history ctx)) (entry retreats)))]
-                       (if (baseline-round-worth-running? record)
-                         (assoc-in (assoc ctx' :amended? true)
-                                   [:carry :under-repair] stamped)
-                         (-> (assoc ctx' :amended? true
-                                    :control :stop :status :retreated)
-                             (assoc-in [:carry :under-repair] stamped)))))))))))))})
+                       ;; :as-authored is set once and never overwritten — it is
+                       ;; the record the RUN started from, which is what growth
+                       ;; is measured against. Set here rather than at run start
+                       ;; because this is the first place that has it, and
+                       ;; `prev` on the first round is exactly it.
+                       (-> (assoc ctx' :amended? true)
+                           (update :carry #(-> (or % {})
+                                               (assoc :under-repair stamped)
+                                               (update :as-authored (fn [x] (or x prev)))))
+                           (cond-> (not (baseline-round-worth-running? record))
+                             (assoc :control :stop :status :retreated)))))))))))))})
 
 (def baseline-pipeline
   "judge -> amend. No warden, no fix: nothing here touches the working copy."

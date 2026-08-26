@@ -438,3 +438,27 @@
     (let [out (with-out-str (t/baseline-cmd ":cwd" "/w" ":max-iters" "2"))]
       (is (not (str/includes? out "unrecognised terminal status")))
       (is (str/includes? out "not convergence")))))
+
+(deftest a-record-talked-out-of-checkability-is-reported
+  ;; The Weakened section answers "did the record claim LESS", and a record that
+  ;; grew claims more — so a run whose composition went from four sentences to a
+  ;; page reported that it had given nothing up, which was true and told the
+  ;; reader the opposite of what had happened.
+  (let [authored {:format :baseline :composition (apply str (repeat 400 "x"))
+                  :shape "one boundary"}
+        final-rec (assoc authored :composition (apply str (repeat 4000 "x")))]
+    (with-redefs [rloop/run-loop
+                  (fn [_] {:status :unfixable
+                           :carry {:as-authored authored :under-repair final-rec}})]
+      (let [out (with-out-str (t/baseline-cmd ":cwd" "/w"))]
+        (is (str/includes? out "Grown past checking"))
+        (is (str/includes? out "composition"))
+        (is (str/includes? out "×10.0"))))))
+
+(deftest a-record-that-stayed-its-size-says-nothing-about-growth
+  (let [r {:format :baseline :composition "short and true" :shape "one boundary"}]
+    (with-redefs [rloop/run-loop
+                  (fn [_] {:status :sufficient
+                           :carry {:as-authored r :under-repair r}})]
+      (let [out (with-out-str (t/baseline-cmd ":cwd" "/w"))]
+        (is (not (str/includes? out "Grown past checking")))))))

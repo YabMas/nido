@@ -270,6 +270,49 @@
       (blanked "the design's baseline relation"
                (:baseline prev) (:baseline curr) [:note])))))
 
+(def ^:private grew-by
+  "How much longer a field has to get before it is worth reporting.
+
+   A correction changes length; a record being talked out of checkability
+   multiplies it. Doubling is the line because a claim re-stated so it is simply
+   true lands about where it started, and the observed failure was nowhere near
+   the boundary: 405 characters to 4091 over six rounds, and 271 to 2671 beside
+   it. A floor as well, so a two-word field going to five words is not news."
+  {:factor 2.0 :floor 400})
+
+(defn growth
+  "Prose fields that have grown past checking since the run began.
+
+   NOT a retreat, and reported apart from them for that reason: a field that
+   tripled claims MORE, not less, and calling it a weakening would be false.
+   It is the other way an amendment can cost something, and the one nothing
+   measured — a run whose composition went from four sentences to a page
+   reported that the record still claims everything it claimed at the start,
+   which was true and told the reader the opposite of what had happened.
+
+   Compared against the record AS AUTHORED rather than against last round.
+   Growth is a property of the run: 400 characters to 800 is a correction, and
+   six of those in a row is a claim nobody can check. Per-round comparison sees
+   only the corrections."
+  [as-authored curr]
+  (vec
+   (for [f [:shape :composition :bounded-by]
+         :let [a (count (str (get as-authored f)))
+               c (count (str (get curr f)))]
+         :when (and (pos? a)
+                    (>= (- c a) (:floor grew-by))
+                    (>= (/ (double c) a) (:factor grew-by)))]
+     {:field f :from a :to c})))
+
+(defn growth-summary
+  [growth]
+  (when (seq growth)
+    (str/join "\n"
+              (map (fn [{:keys [field from to]}]
+                     (format "  ↑ %s — %d characters at the start, %d now (×%.1f)"
+                             (name field) from to (/ (double to) from)))
+                   growth))))
+
 ;; ── Reporting ───────────────────────────────────────────────────────────────
 
 (defn summary
