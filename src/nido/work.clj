@@ -33,6 +33,7 @@
    [nido.coordinator.workstreams-view :as wsv]
    [nido.notion.client :as notion]
    [nido.notion.views :as views]
+   [nido.pipeline :as pipeline]
    [nido.slack.client :as slack]
    [nido.process :as proc]
    [nido.project :as project]
@@ -610,6 +611,53 @@
      :environment   nil
      :sessions      []}))
 
+(defn holds
+  "The three records that CURRENTLY hold — what this workstream is for, what it
+   found, and what it committed to — each with how many revisions it took to get
+   there.
+
+   The pane used to answer this by rendering every revision of each and leaving
+   the reader to work out which one was live. On a workstream whose survey took
+   seven rounds that is fourteen rows saying one thing, and the one thing is the
+   only thing a reader wanted. So: the standing record, plus a count of what it
+   supersedes, and the log underneath for anyone who needs the trail.
+
+   :verified? and :decided? are asked of the modules that own them — nothing here
+   re-derives whether a survey held or a design was granted, because a second
+   implementation of that join is a second answer to it."
+  [project ws-id]
+  (let [entries (:entries (cws/read-ws project ws-id))
+        ;; Counted by the ledger KIND, never by the record's :format — a triage
+        ;; entry is kind :triage carrying format :triage-report, and counting by
+        ;; the latter silently matches nothing.
+        n-of    (fn [kind] (count (filter #(= kind (:kind %)) entries)))
+        [i-kind
+         intent] (if-let [i (cws/latest-entry project ws-id :intent)]
+                   [:intent i]
+                   [:triage (cws/latest-entry project ws-id :triage)])
+        survey  (cws/latest-entry project ws-id :baseline)
+        design  (cws/latest-entry project ws-id :design)
+        st      (when design (standing/of-design project ws-id design))]
+    (cond-> {}
+      intent (assoc :intent {:seq (:seq intent) :at (:at intent)
+                             :kind i-kind
+                             :revisions (n-of i-kind)
+                             :record intent})
+      survey (assoc :survey {:seq (:seq survey) :at (:at survey)
+                             :revisions (n-of :baseline)
+                             :verified? (boolean (pipeline/survey-verified? project ws-id))
+                             :record survey})
+      design (assoc :design {:seq (:seq design) :at (:at design)
+                             :revisions (n-of :design)
+                             ;; The premise this design cites, which need not be
+                             ;; the survey above: a workstream can survey again
+                             ;; after deciding, and the design was judged against
+                             ;; the one it named.
+                             :premise (:seq (:premise st))
+                             :decided? (boolean (:decided? st))
+                             :blocked (:blocked st)
+                             :record design}))))
+
 (defn workstream
   "Full detail for one workstream: origin, spine stage, label, a light ledger
    facet, a newest-first entry INDEX, the report of the entry `selected-seq` names
@@ -657,6 +705,12 @@
         :label        (:label row)
         :links        (:links row)
         :ledger       (ledger-summary project (:br-id row))
+        ;; What the pane LEADS with: where this is, what currently holds, and the
+        ;; arc at stage granularity. The entry index below stays exactly as it
+        ;; was — it is the log underneath, not the answer.
+        :position     (pipeline/of project ws-id)
+        :holds        (holds project ws-id)
+        :arc          (pipeline/history project ws-id)
         :entries      index
         :selected-seq sel
         ;; Nothing open, or the open entry is the CURRENT one. Live actions are

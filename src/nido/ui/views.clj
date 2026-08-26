@@ -127,6 +127,37 @@
                         font-size:12.5px; line-height:1.6; }
         .rv-prose .md p { margin:3px 0; }
         .pane { padding:18px 24px; overflow:auto; }
+        .posn { display:flex; gap:10px; align-items:baseline; flex-wrap:wrap;
+                margin:10px 0 4px; }
+        .posn .at { font-size:15px; color:#e8e8e8; font-weight:600; }
+        .posn .nx { font-size:12px; color:#9a9ac0; border:1px solid #2a2a4a;
+                    border-radius:4px; padding:1px 8px; }
+        .posn .nx b { color:#cdcde0; font-weight:600; }
+        .posn .md { font-size:11px; text-transform:uppercase; letter-spacing:.04em;
+                    color:#7a7a95; }
+        .posn .why { flex-basis:100%; font-size:12px; color:#8a7a50; }
+        .holds { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
+                 gap:10px; margin:12px 0; }
+        .hold { border:1px solid #2a2a4a; border-radius:6px; background:#16213e;
+                padding:10px 12px; min-width:0; }
+        .hold .hh { display:flex; gap:8px; align-items:baseline; margin-bottom:5px; }
+        .hold .hk { font-size:11px; text-transform:uppercase; color:#8a8ab0; }
+        .hold .hs { font-size:11px; color:#666; }
+        .hold .hb { font-size:12.5px; line-height:1.5; color:#cdcde0;
+                    display:-webkit-box; -webkit-line-clamp:4; -webkit-box-orient:vertical;
+                    overflow:hidden; }
+        .hold .hf { margin-top:6px; font-size:11px; }
+        .hold .ok { color:#6a9a6a; }
+        .hold .no { color:#a07a4a; }
+        .hold.empty { border-style:dashed; background:none; }
+        .hold.empty .hb { color:#5f5f78; }
+        .arc { display:flex; flex-wrap:wrap; gap:6px; margin:12px 0 4px; align-items:center; }
+        .arc .st { display:flex; gap:7px; align-items:baseline; border:1px solid #24243c;
+                   border-radius:4px; padding:3px 9px; background:#12122a; }
+        .arc .st .sn { font-size:11px; text-transform:uppercase; color:#a0a0c0; }
+        .arc .st .sc { font-size:11px; color:#666; }
+        .arc .st.now { border-color:#3a4a7a; background:#1a2238; }
+        .arc .sep { color:#3a3a55; }
         .ledger-index { margin:14px 0 8px; border:1px solid #20203a; border-radius:6px; overflow:hidden; }
         .ledger-row { display:flex; gap:10px; align-items:baseline; padding:7px 12px;
                       border-bottom:1px solid #1a1a30; color:#cdcde0; cursor:pointer; }
@@ -1417,6 +1448,144 @@
 
 (defn- day [at] (when at (let [s (str at)] (subs s 0 (min 10 (count s))))))
 
+(def ^:private position-label
+  "What each position reads as to a person. The keyword is the value's, this is
+   the reader's — a pane that printed `:premise-retracted` would be leaking a
+   vocabulary at somebody who only wants to know what is going on."
+  {:intake            "Not started"
+   :intent-stated     "Intent stated"
+   :surveyed          "Surveyed"
+   :survey-verified   "Survey verified"
+   :designed          "Designed"
+   :design-decided    "Decision made"
+   :design-approved   "Approved"
+   :implemented       "Implemented"
+   :reviewed          "Reviewed"
+   :phase-landed      "Phase landed"
+   :published         "Draft PR open"
+   :shipped           "Merged"
+   :findings-open     "Findings open"
+   :blocked           "Blocked"
+   :premise-retracted "Premise retracted"
+   :unplaceable       "Cannot place"})
+
+(def ^:private stage-label
+  {:establish-intent      "establish intent"
+   :survey                "survey the area"
+   :verify-survey         "verify the survey"
+   :design                "write the design"
+   :decide-design         "decide on it"
+   :approve-design        "your approval"
+   :implement             "implement it"
+   :review-implementation "review the diff"
+   :publish-draft-pr      "open the draft PR"
+   :resurvey              "re-survey"
+   :address-findings      "address findings"
+   :answer-blocker        "your answer"})
+
+(defn- position-line
+  "Where this workstream is and what comes next — the pane's first line, and the
+   one thing a reader wants before anything else.
+
+   The mode is shown beside the stage because it says WHO does it: a stage in
+   :human mode is waiting on the person reading this, and one in any other mode
+   is not. That distinction was previously only inferable from which buttons
+   happened to render."
+  [{:keys [at next why]}]
+  [:div.posn
+   [:span.at (get position-label at (name at))]
+   (if next
+     (list [:span.nx "next · " [:b (get stage-label (:stage next) (name (:stage next)))]]
+           [:span.md (case (:mode next)
+                       :human        "waiting on you"
+                       :mechanical   "a task"
+                       :authoring    "writes records"
+                       :working-copy "changes code"
+                       (name (:mode next)))])
+     [:span.md "nothing further"])
+   (when why [:span.why why])])
+
+(defn- hold-card
+  "One standing record: what it is, which entry it is, how many revisions it took,
+   and a line of what it says. `foot` is the record-specific verdict line."
+  [k {:keys [seq revisions]} body foot]
+  [:div.hold
+   [:div.hh [:span.hk k]
+    [:span.hs (str "entry " seq
+                   (when (and revisions (> revisions 1))
+                     (str " · " revisions " revisions")))]]
+   [:div.hb body]
+   (when foot [:div.hf foot])])
+
+(defn- holds-block
+  "The intent, the survey and the design that CURRENTLY hold.
+
+   Three cards, never three lists. A survey that took seven rounds appended seven
+   superseding records and the reader wants the seventh; the other six are in the
+   log below, marked superseded, exactly where they were. An absent record renders
+   as an empty card rather than vanishing, so the shape of the arc is legible from
+   what is missing as much as from what is there."
+  [{:keys [intent survey design]}]
+  [:div.holds
+   (if intent
+     (hold-card "intent" intent
+                (or (get-in intent [:record :goal])
+                    (get-in intent [:record :title])
+                    "—")
+                (when (= :triage (:kind intent))
+                  [:span.meta "from triage — the design may cite it"]))
+     [:div.hold.empty [:div.hh [:span.hk "intent"]] [:div.hb "not stated"]])
+   (if survey
+     (hold-card "survey" survey
+                (or (get-in survey [:record :area]) "—")
+                (if (:verified? survey)
+                  [:span.ok "✓ verified — a decision can be made against it"]
+                  [:span.no "not verified — a design citing it cannot be decided"]))
+     [:div.hold.empty [:div.hh [:span.hk "survey"]] [:div.hb "not surveyed"]])
+   (if design
+     (hold-card "design" design
+                (or (get-in design [:record :summary]) "—")
+                (cond
+                  (:blocked design)
+                  [:span.no (or (:detail (:blocked design)) "does not stand")]
+                  (:decided? design)
+                  [:span.ok (str "✓ approved"
+                                 (when-let [p (:premise design)]
+                                   (str " · on the survey at entry " p)))]
+                  :else
+                  [:span.no "not yet approved"]))
+     [:div.hold.empty [:div.hh [:span.hk "design"]] [:div.hb "nothing committed to"]])])
+
+(defn- arc-strip
+  "The arc, one chip per stage rather than one row per entry.
+
+   This is the whole point of the stage cut. A converged survey appends a review
+   and a superseding record per round, so seven rounds is fourteen ledger rows
+   that say `survey` fourteen times; here they say it once, with the count. A
+   stage RE-ENTERED after a retraction gets its own chip rather than merging with
+   the first — coming back is the most interesting thing a ledger records.
+
+   The last chip is the current one, and marking it that way needs no comparison
+   against the position: the arc is in ledger order, so the stage the newest entry
+   belongs to IS where the ledger last was. Matching a position keyword against a
+   stage keyword would be comparing two vocabularies that deliberately differ —
+   :design-approved is a position, :approval is a stage — and would simply never
+   fire."
+  [arc]
+  (when (seq arc)
+    (let [last-i (dec (count arc))]
+      (into [:div.arc]
+            (interpose
+             [:span.sep "›"]
+             (map-indexed
+              (fn [i {:keys [stage from to entries]}]
+                [:span.st {:class (when (= i last-i) "now")}
+                 [:span.sn (name stage)]
+                 [:span.sc (str "entry " from (when (not= from to) (str "–" to))
+                                (when (> (count entries) 1)
+                                  (str " · " (count entries) " records")))]])
+              arc))))))
+
 (defn- ledger-index
   "The workstream's ledger: every entry, newest first. A row @gets the pane with
    ?entry=<seq>, which OPENS that entry in the viewer below — the ledger itself
@@ -1586,7 +1755,7 @@
    — see pane-fragment), so transient dev-env states (starting…) self-advance
    without the refresh closing whatever the reader has open."
   ([ws session-dev-states] (workstream-pane ws session-dev-states {}))
-  ([{:keys [project ws-id origin stage label links ledger report action-report entries selected-seq open-rounds sessions environment on-latest? error-msg bare? br-id notion-status]
+  ([{:keys [project ws-id origin stage label links ledger report action-report entries selected-seq open-rounds sessions environment on-latest? error-msg bare? br-id notion-status position holds arc]
      :or {on-latest? true}} session-dev-states machine-facts]
    (let [pos {:project project :ws-id ws-id :entry selected-seq :rounds open-rounds}]
      (str
@@ -1601,6 +1770,12 @@
             (pane-heading origin label links)
             [:p.meta (name stage)]
             (links-row links)
+            ;; What currently holds, before the log of how it got there. The
+            ;; ledger index is still below, whole and unchanged — this is the
+            ;; answer, that is the evidence.
+            (when position (position-line position))
+            (when (seq holds) (holds-block holds))
+            (arc-strip arc)
             (when ledger
               [:div.card [:strong "ledger "] (:key ledger) " · " (some-> ledger :status name)
                " · " (:report-count ledger) " report(s)"])

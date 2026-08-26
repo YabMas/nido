@@ -1175,3 +1175,72 @@
     (is (str/includes? html "decomposable"))
     (is (str/includes? html "what the renderer hides"))
     (is (not (str/includes? html "Claims the code does not support")))))
+
+;; ── The pane leads with what currently holds ────────────────────────────────
+
+(def ^:private a-pane
+  "A workstream mid-arc: a survey that took four revisions and held, a design
+   approved on it. The shape the pane exists to make legible."
+  {:ws-id "ws-1" :project "nido" :origin :notion :stage :in-progress
+   :label "the pipeline"
+   :position {:at :design-approved
+              :next {:stage :implement :mode :working-copy}
+              :intake :pickup}
+   :holds {:intent {:seq 1 :revisions 1 :kind :intent
+                    :record {:goal "drive a workstream to a draft PR"}}
+           :survey {:seq 8 :revisions 4 :verified? true
+                    :record {:area "how position is represented"}}
+           :design {:seq 10 :revisions 2 :premise 8 :decided? true
+                    :record {:summary "one projection, one driver"}}}
+   :arc [{:stage :intent :from 1 :to 1 :entries [:intent]}
+         {:stage :survey :from 2 :to 9 :entries (vec (repeat 8 :baseline))}
+         {:stage :design :from 10 :to 11 :entries [:design :design-decision]}]
+   :entries [] :sessions [] :on-latest? true})
+
+(deftest the-pane-states-the-position-and-who-the-next-stage-waits-on
+  (let [html (views/workstream-pane a-pane {})]
+    (is (str/includes? html "Approved"))
+    (is (str/includes? html "implement it"))
+    (is (str/includes? html "changes code")
+        "the mode says WHO acts, which was previously only inferable from the buttons")))
+
+(deftest the-pane-states-each-standing-record-once-with-its-revision-count
+  (let [html (views/workstream-pane a-pane {})]
+    (is (str/includes? html "drive a workstream to a draft PR"))
+    (is (str/includes? html "how position is represented"))
+    (is (str/includes? html "one projection, one driver"))
+    (is (str/includes? html "entry 8 · 4 revisions")
+        "the count stands in for the four superseded records, which stay in the log")
+    (is (str/includes? html "verified"))
+    (is (str/includes? html "approved"))))
+
+(deftest an-absent-record-renders-as-a-gap-rather-than-vanishing
+  ;; The shape of the arc has to be legible from what is MISSING too — a
+  ;; workstream with no design should not look like one whose design is offscreen.
+  (let [html (views/workstream-pane (update a-pane :holds dissoc :design) {})]
+    (is (str/includes? html "nothing committed to"))
+    (is (str/includes? html "hold empty"))))
+
+(deftest an-unverified-survey-says-what-it-costs
+  (let [html (views/workstream-pane
+              (assoc-in a-pane [:holds :survey :verified?] false) {})]
+    (is (str/includes? html "not verified"))
+    (is (str/includes? html "cannot be decided"))))
+
+(deftest the-arc-reads-one-chip-per-stage-and-marks-the-current-one
+  (let [html (views/workstream-pane a-pane {})]
+    (is (str/includes? html "entry 2–9 · 8 records")
+        "eight ledger rows, one chip")
+    (is (str/includes? html "class=\"st now\"")
+        "the last chip is where the ledger last was")))
+
+(deftest the-entry-by-entry-ledger-survives-underneath
+  ;; The stage view is the answer; the log is the evidence, and removing it would
+  ;; make a superseded record unreachable.
+  (let [html (views/workstream-pane
+              (assoc a-pane :entries
+                     [{:seq 2 :kind :baseline :at "2026-08-01T00:00:00Z"
+                       :title "survey" :superseded-by 4}])
+              {})]
+    (is (str/includes? html "ledger-index"))
+    (is (str/includes? html "superseded by 4"))))
