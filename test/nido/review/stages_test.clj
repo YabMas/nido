@@ -585,3 +585,51 @@
       ((:run stages/review-stage) {:config {:cwd "/w" :base "main" :run-id "r"} :iter 1})
       (is (= {"a" false "b" false "stack" true} @seen)
           "only the pass that composes layers is primed to compose them"))))
+
+;; ---- reshaping the stack when the remedy is its shape ---------------------
+
+(def ^:private two-layer-stack
+  [{:bookmark "s--lower" :slug "lower"} {:bookmark "s--upper" :slug "upper"}])
+
+(deftest an-order-dependence-plans-the-upper-layer-below-the-lower
+  ;; `across` is in stack order, so the upper layer is the one reaching for
+  ;; something the lower does not supply — moving it down is the repair.
+  (is (= {:remedy :reorder :lower (first two-layer-stack) :upper (second two-layer-stack)}
+         (stages/reshape-plan two-layer-stack
+                              {:kind :order-dependence :layers ["lower" "upper"]}))))
+
+(deftest a-seam-or-a-duplication-plans-a-fold
+  (doseq [k [:misplaced-seam :duplicated-across-layers]]
+    (is (= :fold (:remedy (stages/reshape-plan two-layer-stack
+                                               {:kind k :layers ["lower" "upper"]})))
+        (str (name k) " has no order to correct — the boundary is the defect"))))
+
+(deftest a-finding-naming-fewer-than-two-layers-of-this-stack-has-no-plan
+  (is (nil? (stages/reshape-plan two-layer-stack
+                                 {:kind :order-dependence :layers ["lower"]}))
+      "one layer is by its own account not a composition defect")
+  (is (nil? (stages/reshape-plan two-layer-stack
+                                 {:kind :order-dependence :layers ["lower" "gone"]}))
+      "a label this stack does not have cannot be acted on without guessing")
+  (is (nil? (stages/reshape-plan two-layer-stack
+                                 {:kind :broken-intermediate :layers ["lower" "upper"]}))
+      "a kind whose remedy is to complete a layer is not a reshape"))
+
+(deftest a-defect-is-reshaped-once-per-run
+  ;; It comes back next round under new words if the reshape did not clear it,
+  ;; and without the handle it would be reshaped again every round for as long
+  ;; as the run lasted.
+  (let [ctx {:config {:cwd "/w" :base "main"}
+             :carry  {:reshaped #{"h-1"}}
+             :findings [{:handle "h-1" :disposition :recut :kind :order-dependence
+                         :layers ["lower" "upper"]}]}]
+    (with-redefs [stages/session-stack (fn [_ _] two-layer-stack)]
+      (is (nil? (:reshape ((:run stages/reshape-stage) ctx)))
+          "already attempted, so nothing is tried again"))))
+
+(deftest a-dry-run-reshapes-nothing
+  (let [ctx {:config {:cwd "/w" :base "main" :dry-run? true}
+             :findings [{:handle "h-1" :disposition :recut :kind :order-dependence
+                         :layers ["lower" "upper"]}]}]
+    (with-redefs [stages/session-stack (fn [_ _] two-layer-stack)]
+      (is (nil? (:reshape ((:run stages/reshape-stage) ctx)))))))

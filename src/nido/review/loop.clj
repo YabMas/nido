@@ -10,11 +10,13 @@
    [java.time Instant]))
 
 (def default-pipeline
-  "review (fan out) -> warden (fan in) -> fix (serial).
+  "review (fan out) -> warden (fan in) -> reshape -> fix (serial).
    The warden is the round barrier: no fix runs until every finding has an
    owner, so a fixer never starts against a layer the warden is about to
-   reassign work to."
-  [stages/review-stage stages/warden-stage stages/fix-stage])
+   reassign work to. Reshape sits between the two because it rewrites the layers
+   a fixer is about to be positioned on — the other order lands a fix on a layer
+   that is about to move."
+  [stages/review-stage stages/warden-stage stages/reshape-stage stages/fix-stage])
 
 (defn default-finding-key
   "How the DIFF review tells one finding from another: the handle the warden

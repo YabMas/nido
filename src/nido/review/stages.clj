@@ -633,6 +633,93 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
   [layer]
   (or (:slug layer) (:bookmark layer)))
 
+(def ^:private remedy-by-kind
+  "Which reshape a composition defect's own kind calls for, read off the
+   taxonomy the reviewer was taught. A kind with no remedy named is not one this
+   stage can act on."
+  (into {} (keep (fn [{:keys [kind remedy]}]
+                   (when remedy [(keyword kind) remedy])))
+        prompts/composition-kinds))
+
+(defn reshape-plan
+  "What to do about one finding whose remedy is the stack's shape, or nil.
+
+   `across` names the layers the defect spans, in stack order, so the lower one
+   is first and the upper one last. For an order-dependence that is the whole
+   instruction: the upper layer reaches for something the lower one does not
+   supply, so it belongs below it. For a seam or a duplication there is no order
+   to correct — the boundary itself is the defect — so the two are folded into
+   one.
+
+   nil when the finding names fewer than two layers of this stack. A composition
+   finding that spans one layer is by its own account not a composition defect,
+   and one naming a label the stack does not have cannot be acted on without
+   guessing which layer was meant."
+  [stack finding]
+  (let [by-label (into {} (map (juxt layer-label identity)) stack)
+        named    (keep by-label (:layers finding))]
+    (when (<= 2 (count named))
+      (let [lower (first named)
+            upper (last named)]
+        (when-let [remedy (remedy-by-kind (:kind finding))]
+          {:remedy remedy :lower lower :upper upper})))))
+
+(defn- reshape!
+  "Carry out one plan. A reorder that will not apply falls back to a fold, which
+   removes the boundary instead of moving it — the defect is real either way,
+   and jj refusing the reorder is jj saying the layers genuinely depend on each
+   other, which is a reason to merge them rather than to give up."
+  [cwd base {:keys [remedy lower upper]}]
+  (if (= :fold remedy)
+    (assoc (layers/fold! cwd base upper lower) :did :fold)
+    (let [r (layers/reorder! cwd base upper lower)]
+      (if (:ok? r)
+        (assoc r :did :reorder)
+        (assoc (layers/fold! cwd base upper lower) :did :fold
+               :after-reorder-refused (:reason r))))))
+
+(def reshape-stage
+  "Findings whose remedy is the shape of the stack, acted on once each.
+
+   Between the warden and the fixers, because a reshape rewrites the layers a
+   fixer is about to be positioned on — running one after a fix would land the
+   fix on a layer that is about to move, and running both in one round is only
+   safe in this order.
+
+   Once per defect per run, keyed on the handle rather than on the finding. That
+   is what makes the attempt safe to make on a maybe: a defect the reshape did
+   not clear comes back next round under new words, and without the handle it
+   would be reshaped again every round for as long as the run lasted. The set
+   rides in :carry, which is the only thing a round hands the next one."
+  {:name :reshape
+   :run  (fn [ctx]
+           (let [{:keys [cwd base dry-run?]} (:config ctx)
+                 tried (get-in ctx [:carry :reshaped] #{})
+                 stack (session-stack cwd base)
+                 todo  (into []
+                             (comp (filter #(= :recut (:disposition %)))
+                                   (remove #(contains? tried (:handle %)))
+                                   (keep (fn [f]
+                                           (when-let [p (reshape-plan stack f)]
+                                             (assoc p :finding f)))))
+                             (:findings ctx))]
+             (if (or dry-run? (empty? todo))
+               ctx
+               ;; One per round. A second reshape would be planned against a
+               ;; stack the first one just rewrote, and the labels it resolved
+               ;; are already stale.
+               (let [{:keys [finding] :as plan} (first todo)
+                     result (reshape! cwd base plan)]
+                 (layers/restore-top! cwd (session-stack cwd base))
+                 (-> ctx
+                     (update-in [:carry :reshaped] (fnil conj #{}) (:handle finding))
+                     (assoc :reshape (merge {:handle (:handle finding)
+                                             :title  (:title finding)
+                                             :lower  (layer-label (:lower plan))
+                                             :upper  (layer-label (:upper plan))}
+                                            result)))))))})
+
+
 (defn fix-plan
   "Findings the warden dispositioned :fix, grouped by the layer that OWNS them,
    ordered bottom→top.

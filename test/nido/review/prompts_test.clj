@@ -45,14 +45,14 @@
     (is (str/includes? out "do NOT park anything for contradicting an invariant"))
     (is (not (str/includes? out "Invariants:")))))
 
-(deftest warden-prompt-without-a-design-record-still-parks-a-bad-cut
-  ;; The two entrances to park are independent. One turns on a named invariant
-  ;; and is unavailable with no design record; the other says the loop has no
-  ;; move for the finding, which is true whether or not anyone wrote a design
+(deftest warden-prompt-without-a-design-record-still-recuts-a-bad-cut
+  ;; The two destinations are independent. Park turns on a named invariant and
+  ;; is unavailable with no design record; recut says the remedy is the stack's
+  ;; shape, which is true whether or not anyone wrote a design
   ;; down. Collapsing them would send every seam finding to a fixer on exactly
   ;; the workstreams with the least written down about their shape.
   (let [out (prompts/warden-prompt {:findings findings :history [] :design nil})]
-    (is (str/includes? out "misplaced-seam or order-dependence finding still parks"))
+    (is (str/includes? out "misplaced-seam or order-dependence finding is still `recut`"))
     (is (str/includes? out "does not turn on the design record"))))
 
 (deftest warden-prompt-marks-the-stance-as-framing-not-checklist
@@ -141,7 +141,7 @@
 
 (deftest warden-is-told-not-to-patch-a-structural-finding-away
   (let [out (prompts/warden-prompt {:findings findings :history [] :design design})]
-    (is (str/includes? out "patching a design\nquestion makes it disappear without anyone deciding it"))))
+    (is (str/includes? out "patching a\ndesign question makes it disappear without anyone deciding it"))))
 
 
 (deftest layer-brief-block-states-out-of-scope-as-a-prohibition
@@ -237,12 +237,13 @@ layers, it is not yours"))
               :history [] :design design})]
     (is (str/includes? out "reported-by stack · misplaced-seam · across series + banner"))))
 
-(deftest warden-prompt-parks-a-bad-cut-instead-of-handing-it-to-a-fixer
+(deftest warden-prompt-recuts-a-bad-cut-instead-of-handing-it-to-a-fixer
   ;; A fixer can only patch one side of a seam, and a patched seam converges —
   ;; so the round reports success and the wrong cut ships.
   (let [out (prompts/warden-prompt {:findings findings :history [] :design design})]
-    (is (str/includes? out "cannot re-cut a stack"))
-    (is (str/includes? out "makes the bad seam permanent"))))
+    (is (str/includes? out "the remedy is the SHAPE of the stack"))
+    (is (str/includes? out "makes the bad seam permanent"))
+    (is (str/includes? out "will move or merge them"))))
 
 (deftest warden-prompt-attributes-a-composition-finding-by-what-it-spans
   ;; The highest-layer rule itself is guarded above; this is the new half — the

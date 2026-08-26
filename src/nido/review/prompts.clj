@@ -96,16 +96,20 @@
                 "  sentence a reader who disagrees could argue with. A decline\n"
                 "  without a reason is indistinguishable from an oversight, and\n"
                 "  the next round has no way to tell it was ever decided.")}
+   {:disposition :recut
+    :means (str "the remedy is the SHAPE of the stack rather than a line in it.\n"
+                "  Its `kind` is order-dependence, misplaced-seam or\n"
+                "  duplicated-across-layers, and its `across` names the layers it\n"
+                "  spans. The loop will move or merge them and let the next round\n"
+                "  judge the result. Do NOT send one of these to a fixer: a patch\n"
+                "  on one side of a bad seam makes the bad seam permanent and lets\n"
+                "  the round converge reporting success.")}
    {:disposition :park
-    :means (str "no fix, and not closed either — the loop has no move for it. Two\n"
-                "  cases, and only these two. Either the finding contradicts a named\n"
-                "  invariant of the design (the escalate case, for the human). Or its\n"
-                "  `kind` is misplaced-seam or order-dependence: those say the CUT is\n"
-                "  in the wrong place or the layers are in the wrong ORDER, and this\n"
-                "  loop can fix a line but cannot re-cut a stack. Sending either to\n"
-                "  a fixer buys a patch on one side of a bad seam — which\n"
-                "  makes the bad seam permanent and lets the round converge\n"
-                "  reporting success.")}])
+    :means (str "no fix, and nothing above fits: the finding contradicts a named\n"
+                "  invariant of the design, so it is a decision rather than a\n"
+                "  repair, and it is for the human. Reach for this only there —\n"
+                "  a defect whose remedy is the stack's shape is `recut`, and one\n"
+                "  that is true and not worth doing is `declined`.")}])
 
 (defn- disposition-block
   "The vocabulary rendered for the warden, plus the rule that binds it.
@@ -164,13 +168,13 @@
                "  that did change.")
     :how  (str "read each layer's claims, then read the layers above it for code\n"
                "  that only makes sense if that claim is false. Name the claim.")}
-   {:kind "duplicated-across-layers" :asks :cut
+   {:kind "duplicated-across-layers" :asks :cut :remedy :fold
     :what (str "two layers independently introduce the same thing — a helper, a\n"
                "  guard, a migration step — because bounded review guaranteed\n"
                "  neither could see the other.")
     :how  (str "for each thing a layer ADDS, look through the other layers for a\n"
                "  near-twin. The names will differ; the shape will not.")}
-   {:kind "order-dependence" :asks :wiring
+   {:kind "order-dependence" :asks :wiring :remedy :reorder
     :what (str "a layer depends on something a layer ABOVE it establishes, so the\n"
                "  stack is in the wrong order. Distinct from broken-intermediate:\n"
                "  there the repair is to complete a layer, here it is to move one.")
@@ -183,7 +187,7 @@
                "  are the only one that reads all the exclusions at once.")
     :how  (str "read the `out of scope` lines above as one set, and ask what in\n"
                "  the branch falls through all of them.")}
-   {:kind "misplaced-seam" :asks :cut
+   {:kind "misplaced-seam" :asks :cut :remedy :fold
     :what (str "the cut itself is wrong: one idea split so neither side is\n"
                "  coherent alone, or a layer boundary running through the middle\n"
                "  of a thing. **Report the seam, not a patch.** Saying where the\n"
@@ -528,16 +532,16 @@
    "Each finding carries a reach the reviewer assigned: local (a defect inside\n"
    "the current design), structural (about where a boundary sits — the reviewer\n"
    "could see shape but not intent), or unclear. It is not a severity.\n"
-   "A structural finding is where park lives, and it is the one you must NOT\n"
-   "hand to a fixer when it contradicts an invariant below: patching a design\n"
-   "question makes it disappear without anyone deciding it.\n\n"
+   "A structural finding is where park and recut live, and it is the one you\n"
+   "must NOT hand to a fixer when it contradicts an invariant below: patching a\n"
+   "design question makes it disappear without anyone deciding it.\n\n"
    (if design
      (str (design-block design) "\n")
      (str "No design record on this workstream. Weigh the findings on their own\n"
           "merits, and do NOT park anything for contradicting an invariant: with\n"
           "no stated invariant there is nothing for a finding to contradict. A\n"
-          "misplaced-seam or order-dependence finding still parks — that case\n"
-          "does not turn on the design record.\n\n"))
+          "misplaced-seam or order-dependence finding is still `recut` — that\n"
+          "case does not turn on the design record.\n\n"))
    (when stance (str (stance-block stance) "\n"))
    (when-let [t (toc-block toc)] (str t "\n"))
    (answered-block answered)
