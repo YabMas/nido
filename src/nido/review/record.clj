@@ -1015,6 +1015,26 @@
     (str (or (ex-message e) "the ledger refused it")
          (when explain (str " — " (pr-str (me/humanize explain)))))))
 
+(defn- appended
+  "The record as a READER will find it: what was just written, stamped with the
+   :seq the ledger gave it.
+
+   An amender hands back a record with no :seq — it cannot know one, and the
+   write schemas are closed so it must not invent one. But everything downstream
+   of the append identifies the record BY that number: the review verdict is
+   labelled `:baseline-seq`, a design cites its survey as `:baseline {:seq n}`,
+   and the precondition that a design's premise was verified is a join between
+   the two. Carrying the unstamped record forward makes all three unanswerable
+   about the record actually on disk.
+
+   Degrades to the unstamped record rather than throwing. A stamp that could not
+   be read back is a worse answer than no stamp, not a reason to lose a round
+   whose work is already committed to the ledger."
+  [project ws-id path record]
+  (or (some->> path fs/file-name (re-find #"^(\d+)-") second parse-long
+               (ws/entry-at-seq project ws-id))
+      record))
+
 (def judge-stage
   "The same read-only pass the one-shot round ran, with its verdict appended to
    the ledger exactly as before.
@@ -1032,8 +1052,9 @@
            ;; The record this run is repairing: the one it was pointed at, then
            ;; each amendment it makes itself. Never re-read as "the latest",
            ;; which another session — or an earlier round of a different survey —
-           ;; can change underneath a run in flight.
-           target (or (:under-repair ctx) (:baseline (:config ctx)))
+           ;; can change underneath a run in flight. It rides in :carry because
+           ;; that is the only part of the ctx that outlives a round.
+           target (or (:under-repair (:carry ctx)) (:baseline (:config ctx)))
            record (baseline-review!
                    {:cwd cwd :code-cwd code-cwd :run-id run-id
                     :baseline target
@@ -1083,7 +1104,7 @@
        (if dry-run?
          (assoc ctx :control :stop :status :dry-run)
          (let [[project ws-id] (stages/project+ws-from-cwd cwd)
-               prev      (or (:under-repair ctx)
+               prev      (or (:under-repair (:carry ctx))
                              (:baseline (:config ctx))
                              (ws/latest-entry project ws-id :baseline))
                dir       (cstate/run-dir run-id)
@@ -1142,26 +1163,32 @@
                  (assoc ctx :control :stop :status :amend-noop)
 
                  :else
-                 ;; A sentinel, not the return value: append-entry! answers with
-                 ;; the path it wrote, so "it came back a string" is what SUCCESS
-                 ;; looks like here.
-                 (let [err (try (ws/append-entry! project ws-id
-                                                  {:kind :baseline}
-                                                  (pr-str (ws/unstamp record)))
-                                nil
-                                (catch Exception e (ledger-refusal e)))]
-                   (if err
+                 (let [written (try {:path (ws/append-entry!
+                                            project ws-id {:kind :baseline}
+                                            (pr-str (ws/unstamp record)))}
+                                    (catch Exception e
+                                      {:err (ledger-refusal e)}))]
+                   (if-let [err (:err written)]
                      (assoc ctx :control :stop :status :amend-invalid
                             :amend-error err)
                      (let [retreats (retreat/baseline-retreats prev record)
+                           ;; Stamped, not as the amender wrote it. The judge
+                           ;; labels its verdict with the :seq of the record it
+                           ;; read, and the design loop's re-survey hands this
+                           ;; record on to be CITED by :seq — neither of which a
+                           ;; record still in the shape it was written in can
+                           ;; answer, since :seq is the ledger's to give.
+                           stamped  (appended project ws-id (:path written) record)
                            ctx' (assoc ctx
                                        :retreats retreats
                                        :disputes disputes
                                        :history (conj (vec (:history ctx)) (entry retreats)))]
                        (if (baseline-round-worth-running? record)
-                         (assoc ctx' :amended? true :under-repair record)
-                         (assoc ctx' :amended? true :under-repair record
-                                :control :stop :status :retreated))))))))))))})
+                         (assoc-in (assoc ctx' :amended? true)
+                                   [:carry :under-repair] stamped)
+                         (-> (assoc ctx' :amended? true
+                                    :control :stop :status :retreated)
+                             (assoc-in [:carry :under-repair] stamped)))))))))))))})
 
 (def baseline-pipeline
   "judge -> amend. No warden, no fix: nothing here touches the working copy."
@@ -1385,7 +1412,7 @@
           ;; appended last, which is how the citation came to point at a survey
           ;; of a different area in the first place.
           (assoc ctx :resurveyed (:status out)
-                 :resurveyed-baseline (or (:under-repair out) cited))
+                 :resurveyed-baseline (or (:under-repair (:carry out)) cited))
           ;; The nested failure's DETAIL travels with its status. Without it the
           ;; terminal says :resurvey-amend-invalid and stops — the one shape a
           ;; judgment surface must not take, since a reader cannot act on a

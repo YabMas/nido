@@ -505,14 +505,39 @@
                   record/append! (fn [_ _] nil)
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ _] other)]
-      (run record/judge-stage (ctx :under-repair mine))
+      (run record/judge-stage (ctx :carry {:under-repair mine}))
       (is (= ["what I amended it to"] @seen)))))
 
 (deftest an-amendment-becomes-the-record-the-next-round-repairs
   (let [corrected (assoc a-baseline :area "corrected")
         [out _] (with-amend {:writes (fn [p] (spit p (pr-str {:record corrected})))}
                             (ctx :findings [a-finding]))]
-    (is (= corrected (:under-repair out)))))
+    ;; In :carry, because that is the only part of the ctx the engine hands to
+    ;; the next round.
+    (is (= corrected (:under-repair (:carry out))))))
+
+(deftest the-record-carried-on-is-the-one-the-ledger-stamped
+  ;; The amender cannot write a :seq and must not invent one, but everything
+  ;; downstream identifies the record by exactly that number — the verdict is
+  ;; labelled with it and a design cites its survey by it. Carrying the record
+  ;; as written leaves all of that pointing at nothing.
+  (let [corrected (assoc a-baseline :area "corrected")]
+    (with-redefs [ws/entry-at-seq (fn [_ _ n] (assoc corrected :seq n :at "t"))]
+      (let [[out _] (with-amend {:writes (fn [p] (spit p (pr-str {:record corrected})))}
+                                (ctx :findings [a-finding]))]
+        (is (= 2 (:seq (:under-repair (:carry out))))
+            "the seq append-entry! answered with, read back off the path")))))
+
+(deftest a-stamp-that-cannot-be-read-back-does-not-cost-the-round
+  ;; Degrading beats throwing: the amendment is already committed to the ledger
+  ;; by the time this runs, so a failed read-back must not turn a good round
+  ;; into a terminal failure.
+  (let [corrected (assoc a-baseline :area "corrected")]
+    (with-redefs [ws/entry-at-seq (fn [_ _ _] nil)]
+      (let [[out _] (with-amend {:writes (fn [p] (spit p (pr-str {:record corrected})))}
+                                (ctx :findings [a-finding]))]
+        (is (nil? (:status out)))
+        (is (= corrected (:under-repair (:carry out))))))))
 
 (deftest the-amender-is-told-what-a-reading-may-say
   ;; It is the pass that WRITES readings and was the only one never shown the

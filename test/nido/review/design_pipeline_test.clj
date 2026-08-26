@@ -269,7 +269,11 @@
    the amender wrote after the nested loop came back."
   [{:keys [nested amends]} c]
   (let [prompt (atom nil) appended (atom nil)]
-    (with-redefs [rloop/run-loop (fn [_] {:status nested :under-repair corrected-baseline})
+    ;; In :carry, where the engine actually leaves it. Stubbing the old
+    ;; top-level shape here is why this test passed against an engine that
+    ;; dropped the key every round: the stub asserted a contract nothing kept.
+    (with-redefs [rloop/run-loop (fn [_] {:status nested
+                                          :carry {:under-repair corrected-baseline}})
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (fn [_ _ kind]
                                     (if (= :baseline kind) corrected-baseline a-design))
