@@ -307,3 +307,19 @@
         whats (set (map :what (retreat/baseline-retreats full-survey curr)))]
     (is (contains? whats :module-dropped))
     (is (not (contains? whats :emptied)))))
+
+(deftest a-design-that-stops-saying-anything-is-a-retreat-too
+  ;; Same hole, same fields typed `string?`. It does not even quiet the round —
+  ;; the worth-running gate reads the relations — so it is pure loss.
+  (let [prev {:format :design :summary "rounding moves to one point"
+              :shape "one rounding boundary" :effort :M
+              :standing {:relation :extends :note "n"}
+              :baseline {:seq 1 :relation :within :note "m"}}
+        curr (-> prev (assoc :shape "") (assoc-in [:baseline :note] ""))
+        details (map :detail (filter #(= :emptied (:what %))
+                                     (retreat/design-retreats prev curr)))]
+    (is (= ["the design's shape now says nothing"
+            "the design's baseline relation note now says nothing"]
+           details))
+    (is (empty? (filter #(= :emptied (:what %))
+                        (retreat/design-retreats prev prev))))))

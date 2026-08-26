@@ -98,6 +98,21 @@
          distinct
          (sort-by (juxt first second)))))
 
+(defn- blanked
+  "The fields of `p` that said something and say nothing in `c`.
+
+   Present-and-blank, not absent. A field that is simply gone is either a schema
+   violation the ledger already refuses or a record from an era before that
+   field existed, and calling either one a weakening reports a loss that never
+   happened. Blank is the case an amender can actually reach and the ledger
+   will actually accept."
+  [subject p c fields]
+  (for [f fields
+        :when (and (not (str/blank? (str (get p f))))
+                   (contains? c f)
+                   (str/blank? (str (get c f))))]
+    (retreat :emptied (str subject " " (name f) " now says nothing"))))
+
 (defn- emptied
   "Fields that said something and now say nothing.
 
@@ -112,11 +127,7 @@
    report the good version of the edit alongside the bad one. Blank is the
    unambiguous case and the only one worth naming."
   [prev curr]
-  (let [gone (fn [subject p c fields]
-               (for [f fields
-                     :when (and (not (str/blank? (str (get p f))))
-                                (str/blank? (str (get c f))))]
-                 (retreat :emptied (str subject " " (name f) " now says nothing"))))
+  (let [gone blanked
         by-id (fn [xs] (into {} (keep #(when (:id %) [(:id %) %])) xs))
         within (fn [k subject fields]
                  (let [cm (by-id (get curr k))]
@@ -249,7 +260,15 @@
       (for [[hid to] (sort-by key croutes)
             :let [was (proutes hid)]
             :when (and was (= :fix-here was) (not= :fix-here to))]
-        (retreat :route-deferred (str hid ": :fix-here → " to)))))))
+        (retreat :route-deferred (str hid ": :fix-here → " to)))
+      ;; Same hole the survey had: these are typed `string?`, so a record whose
+      ;; shape and summary say nothing at all is a record the ledger accepts and
+      ;; nothing here counted. It does not quiet the round — the gate reads the
+      ;; relations — so it is pure loss, which is the clearest case there is.
+      (blanked "the design's" prev curr [:summary :shape])
+      (blanked "the design's standing" (:standing prev) (:standing curr) [:note])
+      (blanked "the design's baseline relation"
+               (:baseline prev) (:baseline curr) [:note])))))
 
 ;; ── Reporting ───────────────────────────────────────────────────────────────
 
