@@ -37,14 +37,14 @@
    Returns [ws-id (fn add [kind record] -> seq)]."
   []
   (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
-        id (:id w)
-        n  (atom 0)]
+        id (:id w)]
     (ws/append-entry! :brian id {:kind :intent}
                       (pr-str {:format :intent :goal "g" :done-when ["d"]}))
-    (reset! n 1)
+    ;; The seq comes back from the ledger rather than a counter here, so a test
+    ;; that also writes an entry another way cannot get out of step with it.
     [id (fn [kind record]
           (ws/append-entry! :brian id {:kind kind} (pr-str record))
-          (swap! n inc))]))
+          (count (:entries (ws/read-ws :brian id))))]))
 
 (deftest a-design-on-a-verified-survey-is-decidable-and-not-yet-decided
   (with-tmp
@@ -157,3 +157,50 @@
           (is (true? (:indeterminate? st)))
           (is (= :unreadable-ledger (:reason (:blocked st))))
           (is (not (:decidable? st)) "and an indeterminate standing blocks"))))))
+
+(deftest a-review-of-a-different-survey-does-not-verify-this-one
+  ;; A workstream holds several surveys and several reviews. The one that counts
+  ;; names the survey the design stands on — reading "the latest review" would
+  ;; let a survey of another area vouch for this one.
+  (with-tmp
+    (fn [_]
+      (let [[id add] (ledger)
+            b1 (add :baseline a-survey)
+            b2 (add :baseline (assoc a-survey :area "a different area"))
+            d  (add :design (a-design b1))
+            _  (add :baseline-review {:format :baseline-review :verdict :sufficient
+                                      :baseline-seq b2 :reason "the other one holds"})
+            _  (add :baseline-review {:format :baseline-review :verdict :falsified
+                                      :baseline-seq b1 :reason "this one does not"
+                                      :findings [{:cites ["c"] :claim "x"}]})
+            st (standing/of-design :brian id (ws/entry-at-seq :brian id d))]
+        (is (false? (:decidable? st)))
+        (is (= :premise-unverified (:reason (:blocked st)))
+            "checked and found wrong is not checked and found sound")))))
+
+(defn- add-from-an-older-era!
+  "Write an entry the write contract no longer accepts, the way a ledger from
+   that era actually holds it — file plus index row. `append-entry!` cannot: it
+   validates against what is writable NOW, which is the point of the read eras."
+  [ws-id kind record]
+  (let [w (ws/read-ws :brian ws-id)
+        n (inc (count (:entries w)))
+        f (format "entries/%04d-%s.edn" n (name kind))]
+    (io/write-text! (str (fs/path (cstate/workstream-dir :brian ws-id) f)) (pr-str record))
+    (ws/write! (update w :entries conj {:kind kind :seq n :at "2026-01-01T00:00:00Z" :file f}))
+    n))
+
+(deftest a-survey-checked-under-the-older-question-was-still-checked
+  ;; :accurate is what :sufficient replaced, and it is read-only now — a ledger
+  ;; carrying one was verified, and re-asking it under the newer question is the
+  ;; baseline loop's business, not a reason to refuse to decide against it.
+  (with-tmp
+    (fn [_]
+      (let [[id add] (ledger)
+            b (add :baseline a-survey)
+            _ (add-from-an-older-era! id :baseline-review
+                                      {:format :baseline-review :verdict :accurate
+                                       :baseline-seq b :reason "ok"})
+            d (add :design (a-design b))
+            st (standing/of-design :brian id (ws/entry-at-seq :brian id d))]
+        (is (true? (:decidable? st)))))))

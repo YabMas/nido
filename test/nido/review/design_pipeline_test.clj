@@ -9,6 +9,7 @@
    [clojure.test :refer [deftest is testing use-fixtures]]
    [nido.coordinator.agent :as agent]
    [nido.coordinator.state :as cstate]
+   [nido.coordinator.standing :as standing]
    [nido.coordinator.workstream :as ws]
    [nido.review.loop :as rloop]
    [nido.review.record :as record]
@@ -50,34 +51,42 @@
 ;; exit seven times out of seven and never reached a decision, paying for a full
 ;; derivation each time to rediscover something already legible in the ledger.
 
-(deftest a-survey-nobody-verified-is-not-something-to-decide-against
-  (with-redefs [ws/entries-of (constantly [])]
-    (let [out (record/unverified-premise :nido "ws-1" a-design)]
-      (is (= :premise-unverified (:outcome out)))
-      (is (str/includes? (:detail out) "entry 1")
-          "which survey went unverified is the whole of what the reader has to act on"))))
 
-(deftest a-review-of-a-DIFFERENT-survey-does-not-verify-this-one
-  ;; A workstream can hold several surveys and several reviews. The one that
-  ;; counts is the one naming the survey the design stands on — reading `the
-  ;; latest review` would let a survey of another area vouch for this one.
-  (with-redefs [ws/entries-of (constantly [{:format :baseline-review
-                                            :verdict :sufficient :baseline-seq 7}])]
-    (is (some? (record/unverified-premise :nido "ws-1" a-design))))
-  (with-redefs [ws/entries-of (constantly [{:format :baseline-review
-                                            :verdict :falsified :baseline-seq 1}])]
-    (is (some? (record/unverified-premise :nido "ws-1" a-design))
-        "checked and found wrong is not checked and found sound")))
+;; The join itself now lives in `standing`, which asks two questions where this
+;; asked one — verified, and not retracted since — and is tested there against a
+;; real ledger. What is left here is the adaptation: the gate asks, and reports
+;; what it is told in the shape a round's outcome takes.
 
-(deftest a-verified-survey-clears-the-gate-under-either-question
-  (doseq [v [:sufficient :accurate]]
-    (with-redefs [ws/entries-of (constantly [{:format :baseline-review
-                                              :verdict v :baseline-seq 1}])]
-      (is (nil? (record/unverified-premise :nido "ws-1" a-design))
-          "a survey checked under the older question was still checked"))))
+(defn- gate-says [st]
+  (with-redefs [standing/of-design (constantly st)]
+    (record/unverified-premise :nido "ws-1" a-design)))
+
+(deftest an-undecidable-premise-becomes-the-round-s-outcome
+  (let [out (gate-says {:decidable? false
+                        :blocked {:reason :premise-unverified :seq 1
+                                  :detail "the design cites the survey at entry 1, and no round has found that survey sufficient"}})]
+    (is (= :premise-unverified (:outcome out)))
+    (is (str/includes? (:detail out) "entry 1")
+        "which survey went unverified is the whole of what the reader has to act on")))
+
+(deftest a-retracted-premise-keeps-its-own-name
+  ;; Not collapsed to :premise-unverified. A survey nobody checked and a survey
+  ;; somebody found false want different things from a reader, and the remedy
+  ;; line is chosen by this keyword.
+  (let [out (gate-says {:decidable? false
+                        :blocked {:reason :premise-retracted :seq 9
+                                  :detail "the survey at entry 1 was retracted by entry 9"}})]
+    (is (= :premise-retracted (:outcome out)))
+    (is (str/includes? (:detail out) "entry 9"))))
+
+(deftest a-decidable-premise-does-not-gate
+  (is (nil? (gate-says {:decidable? true})))
+  (is (nil? (gate-says {:decidable? true :approved-by nil}))
+      "an unapproved design is decidable — approval comes after this round, and a
+       gate that wanted it first would make the round unreachable"))
 
 (deftest a-design-citing-no-survey-is-not-gated
-  (with-redefs [ws/entries-of (constantly [])]
+  (with-redefs [standing/of-design (fn [& _] (throw (ex-info "must not be asked" {})))]
     (is (nil? (record/unverified-premise :nido "ws-1" (dissoc a-design :baseline)))
         "there is no premise to verify, and the prompt says so")))
 
@@ -87,7 +96,9 @@
               (reset! launched 0)
               (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                             ws/latest-entry (fn [_ _ k] (when (= :design k) a-design))
-                            ws/entries-of (constantly entries)
+                            standing/of-design (constantly {:decidable? (boolean (seq entries))
+                                                            :blocked {:reason :premise-unverified
+                                                                      :detail "stub"}})
                             stages/read-stance (constantly nil)
                             record/discover-intent (constantly nil)
                             record/run-round! (fn [_] (swap! launched inc)

@@ -43,6 +43,7 @@
    [malli.error :as me]
    [nido.coordinator.agent :as agent]
    [nido.coordinator.report :as report]
+   [nido.coordinator.standing :as standing]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.workstream :as ws]
    [nido.review.codex :as codex]
@@ -807,31 +808,36 @@
     {:outcome :no-workstream :detail (str "cwd resolves to no nido session: " cwd)}))
 
 (defn unverified-premise
-  "Why this design cannot be judged yet, when the survey it stands on has never
-   been checked — or nil when it has.
+  "Why this design cannot be judged yet, or nil when nothing stops it.
 
-   Three of the decision round's four derivations are made AGAINST the survey. On
-   an unverified one the judge cannot tell `the survey is wrong` from `the survey
-   is right and the area is not what I would have described`, and the only
-   recommendation that fits the first is :resurvey. That is not a hypothetical:
-   the first workstream to run this loop recommended :resurvey seven times out of
-   seven and never once reached a decision, each round paying for a full
-   derivation to rediscover that nobody had verified the premise.
+   Three of the decision round's four derivations are made AGAINST the survey.
+   On an unverified one the judge cannot tell `the survey is wrong` from `the
+   survey is right and the area is not what I would have described`, and only
+   the first has a remedy. That is not hypothetical: the first workstream to run
+   this loop recommended :resurvey seven times out of seven and never once
+   reached a decision, each round paying for a full derivation to rediscover
+   that nobody had verified the premise.
 
    So the order is stated rather than discovered, and it costs nothing to state:
-   nido can read the answer out of its own ledger before it spends a judge on it.
-   Verify the survey, then decide against it.
+   nido can read the answer out of its own ledger before it spends a judge on
+   it. Verify the survey, then decide against it.
 
-   A design citing NO survey is not gated. There is no premise to check, the
-   prompt says exactly that, and the round is judged on the design's own merits."
+   The join used to live here, and lives in `standing` now — which asks two
+   questions where this asked one: has the survey been verified, and has anyone
+   RETRACTED it since. A design decided on a survey somebody later found false
+   is the case this round could not see, and the reason it could not is that a
+   verdict is a permanent record of a past reading while a retraction is a
+   statement about now.
+
+   A design citing NO survey is still not gated: there is no premise to check,
+   the prompt says exactly that, and the round is judged on the design's own
+   merits."
   [project ws-id design]
-  (when-let [n (get-in design [:baseline :seq])]
-    (when-not (some #(and (= n (:baseline-seq %))
-                          (report/verdict-holds (:verdict %)))
-                    (ws/entries-of project ws-id :baseline-review))
-      {:outcome :premise-unverified
-       :detail (str "the design cites the survey at entry " n
-                    ", and no round has found that survey sufficient")})))
+  (when (get-in design [:baseline :seq])
+    (let [st (standing/of-design project ws-id design)]
+      (when-not (:decidable? st)
+        {:outcome (or (:reason (:blocked st)) :premise-unverified)
+         :detail  (:detail (:blocked st))}))))
 
 (defn design-decision!
   "Run the decision round over this workstream's latest design record. Returns
