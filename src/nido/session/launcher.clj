@@ -383,6 +383,50 @@
        "already a heap — and a design written then is a description, not a\n"
        "decision.\n"))
 
+(def ^:private comment-doctrine-instructions
+  "The pointer to nido's comment doctrine, not the doctrine itself.
+
+   A rule that has to be cited against a line wants more room than every
+   session's context can afford, and it wants stable anchors a reviewer can name
+   — so the doctrine is a document (`nido-add-dirs` already puts the root
+   checkout in reach) and this is the summary that decides whether to open it.
+   Kept to what changes behaviour without reading further: the test a comment
+   has to pass, the one rule an implementer will otherwise never apply (because
+   it asks them to stop writing prose and change the code instead), and the
+   scope rule — which has to be here rather than in the document, because it is
+   the one an implementer needs BEFORE deciding whether to open anything."
+  (str "## Comments\n"
+       "\n"
+       "**A comment earns its line by carrying what the code cannot** — precision\n"
+       "the signature omits (units, whether a bound is inclusive, whether nil is\n"
+       "legal, what holds if it throws, what the caller must not do) or intuition\n"
+       "the code cannot state (what this is for, why this shape, what breaks if\n"
+       "someone changes it back). If the comment's words are the identifiers\n"
+       "rearranged, delete it.\n"
+       "\n"
+       "**Write the interface comment first, and believe it when it resists.** A\n"
+       "comment that is long, awkward, or has to enumerate the caller's cases is\n"
+       "telling you the abstraction is wrong — not that your prose is. Fix the\n"
+       "interface; a fluent rewrite seals the design defect under good English and\n"
+       "the next reader has no way to recover the signal.\n"
+       "\n"
+       "**Describe what is, never what happened.** A comment must read correctly\n"
+       "to someone who never saw the previous version of the file. The transition\n"
+       "story belongs in the commit message, the PR body and the tests.\n"
+       "\n"
+       "**What you touch, you own — and only what you touch.** When you change\n"
+       "code, fix the comments on what you changed in the same edit: wrong,\n"
+       "missing the fact you just had to work out, or only restating the code.\n"
+       "Then stop at the edge of it. The next function is not yours, and a comment\n"
+       "sweep is a different change that buries the claim this one came to make.\n"
+       "\n"
+       "Full doctrine — levels, references, staleness, when a MISSING comment is\n"
+       "the finding — at `~/Code/nido/docs/reference/comments.md`, after\n"
+       "Ousterhout, *A Philosophy of Software Design*, ch. 12–16. It is what a\n"
+       "comment finding cites. Your project's own rule (brian:\n"
+       "`docs/reference/code-conventions.md`) still owns the spelling — banned\n"
+       "tokens, canonical ref shapes; the doctrine owns the reason.\n"))
+
 (defn- render-edit-location
   "The 'where do edits land' paragraph, conditioned on vcs-mode so the
    briefing tells the truth for legacy git-worktree sessions inside a
@@ -488,6 +532,8 @@
        "## Lite session\n\nThis is a lite session with no background services. The worktree is a\nread-only symlink to the project source directory.\n\n")
      (when-not (str/blank? project-briefing) (str project-briefing "\n"))
      shipping-doctrine-instructions
+     "\n"
+     comment-doctrine-instructions
      "\n"
      "## Lifecycle\n"
      "\n"

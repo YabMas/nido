@@ -81,6 +81,35 @@
         (is (< doctrine-idx lifecycle-idx)
             "doctrine must precede lifecycle")))))
 
+(deftest render-context-includes-comment-doctrine
+  (let [doc (@#'launcher/render-context base-ctx)]
+    (testing "the summary states what a comment must CARRY, not only what it must not say"
+      (is (str/includes? doc "## Comments"))
+      (is (str/includes? doc "carrying what the code cannot"))
+      (is (str/includes? doc "precision"))
+      (is (str/includes? doc "intuition")))
+    (testing "the abstraction test is present — the one rule that changes the code"
+      (is (str/includes? doc "the abstraction is wrong")
+          "an awkward interface comment must indict the abstraction, not the prose"))
+    (testing "the repair scope is bounded in both directions"
+      (is (str/includes? doc "What you touch, you own")
+          "a change must fix the comments on the code it changed")
+      (is (str/includes? doc "stop at the edge")
+          "and must not sweep past it — the bound is what makes the rule safe"))
+    (testing "the pointer resolves from any session"
+      (is (str/includes? doc "~/Code/nido/docs/reference/comments.md")
+          "the doctrine lives in the root checkout, which is already on --add-dir"))
+    (testing "spelling stays the project's"
+      (is (str/includes? doc "owns the spelling")))
+    (testing "the briefing carries the summary, never the whole doctrine"
+      ;; A regression here is silent and expensive: it inflates EVERY session's
+      ;; context. The doctrine is ~200 lines; anything near that has been pasted.
+      (let [start (str/index-of doc "## Comments")
+            end   (str/index-of doc "## Lifecycle")]
+        (is (and start end (< start end)))
+        (is (< (count (str/split-lines (subs doc start end))) 45)
+            "the comment section should be a pointer plus a summary")))))
+
 (deftest render-context-omits-section-when-briefing-absent
   (let [doc (@#'launcher/render-context (assoc base-ctx :project-briefing nil))]
     (is (not (str/includes? doc "## Project: brian"))
