@@ -431,6 +431,41 @@
 (deftest no-objections-puts-nothing-in-the-prompt
   (is (nil? (record/disputes-block []))))
 
+(def ^:private a-gap
+  {:blocks :decomposable
+   :cites ["the aggregate is the only summing path"]
+   :claim "the aggregate is the only summing path"
+   :needs "what the invoice renderer hides, so the two can be told apart"
+   :evidence ["src/order/invoice.clj:88"]})
+
+(deftest a-gap-is-not-shown-to-the-amender-as-a-refutation
+  ;; :falsified and :insufficient are opposite repairs — one says a claim is
+  ;; wrong, the other says every claim is right and something is missing — and
+  ;; the two fields that say which, :blocks and :needs, were on the record and
+  ;; printed nowhere. An amender shown a gap under the word "refutes" corrects a
+  ;; claim that was already true.
+  (let [p (record/amend-prompt {:baseline a-baseline :findings [a-gap]
+                                :out-path "/run/amend-round-1.edn"})]
+    (testing "the round is described as what it was"
+      (is (str/includes? p "found the survey TRUE"))
+      (is (str/includes? p "make the survey SAY ENOUGH"))
+      (is (not (str/includes? p "refuted part of it"))))
+    (testing "the derivation it blocks and what it needs are both in front of it"
+      (is (str/includes? p "blocks:  decomposable"))
+      (is (str/includes? p "what the invoice renderer hides")))
+    (testing "the bound is stated, because completeness has no fixed point"
+      (is (str/includes? p "Add what the derivation needs and stop")))
+    (testing "and the objection route is the one that fits a gap"
+      (is (str/includes? p "IF A DERIVATION CAN BE MADE ALREADY")))))
+
+(deftest a-refutation-round-is-worded-exactly-as-it-was
+  ;; The falsified wording is the one that converged. The gap branch is additive.
+  (let [p (record/amend-prompt {:baseline a-baseline :findings [a-finding]
+                                :out-path "/x"})]
+    (is (str/includes? p "refuted part of it"))
+    (is (str/includes? p "CHANGE ONLY WHAT WAS REFUTED"))
+    (is (not (str/includes? p "blocks:")))))
+
 (deftest the-amend-prompt-offers-the-objection-route-and-names-its-worst-abuse
   (let [p (record/amend-prompt {:baseline a-baseline :findings [a-finding]
                                 :out-path "/run/a.edn"})]
@@ -637,3 +672,17 @@
            (record/confirmed-in rec ["real-claim" "design" "real-module"
                                      "implementation" "real-health" "real-claim"]))
         "known ids only, deduplicated, order preserved")))
+
+(deftest a-gap-is-keyed-on-the-derivation-it-blocks
+  ;; The one handle an amendment cannot move. A gap carries no :claim-id — the
+  ;; schema has no room for one — so without this it falls back to the evidence
+  ;; or the cited text, both of which the answer to the gap rewrites.
+  (is (= [:blocks :decomposable] (record/baseline-finding-base-key a-gap)))
+  (is (= (record/baseline-finding-base-key a-gap)
+         (record/baseline-finding-base-key
+          (assoc a-gap :cites ["something else entirely"]
+                 :needs "worded differently" :evidence ["src/other.clj:3"])))))
+
+(deftest a-gap-and-a-refutation-are-never-the-same-finding
+  (is (not= (record/baseline-finding-base-key a-gap)
+            (record/baseline-finding-base-key a-finding))))

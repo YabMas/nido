@@ -861,6 +861,13 @@
    a finding that cites no code is one the loop should stop on early."
   [f]
   (cond
+    ;; A GAP is named by the derivation it blocks, which is one of four closed
+    ;; values and the only handle on it that no amendment can move — the same
+    ;; reason the design round keys on its check names. Two rounds both saying
+    ;; `decomposable cannot be derived` are the same finding however differently
+    ;; they word it or whatever they cite, and collapsing them is the point: a
+    ;; key that never collides is a stall detector that never fires.
+    (:blocks f)                            [:blocks (:blocks f)]
     (not (str/blank? (str (:claim-id f)))) [:claim-id (str (:claim-id f))]
     (seq (:evidence f))                    [:evidence (vec (sort (:evidence f)))]
     :else                                  [:cites (vec (sort (:cites f)))]))
@@ -925,30 +932,61 @@
   (vec (mapcat :disputes history)))
 
 (defn amend-prompt
-  "Instruction to correct a survey the code refuted.
+  "Instruction to repair a survey the round found wanting.
 
    States the one thing that makes the loop worth running at all: the job is to
    make the record TRUE, and making the findings go away is not the same job.
    The distinction has a cheap wrong answer — delete the property, drop the
    observation, clear the flag — which is why nido measures the result rather
-   than trusting this paragraph (see `retreat`)."
+   than trusting this paragraph (see `retreat`).
+
+   Two shapes, because the round has two failures and they want opposite repairs.
+   :falsified says a stated property is not true of the code; :insufficient says
+   every property IS true and a named derivation still cannot be made. An amender
+   handed the second under the first's wording corrects a claim that was already
+   right — and the fields that say which it is, :blocks and :needs, were on the
+   record and printed nowhere. Only the gap branch is new; the refutation wording
+   is the one that converged and is left alone."
   [{:keys [baseline findings out-path]}]
-  (str
-   "A read-only judge checked this workstream's BASELINE — the survey of how the\n"
-   "area works today — against the code, and refuted part of it.\n\n"
-   "Your job is to make the survey TRUE. That is not the same job as making the\n"
-   "findings go away, and the difference is the whole point of this pass:\n\n"
-   "  - A property the code does not have should be CORRECTED to what the code\n"
-   "    actually does, and keep pointing at the evidence that shows it.\n"
-   "  - A property that is right but stated so loosely the judge misread it\n"
-   "    should get SHARPER evidence, not softer wording.\n"
-   "  - Deleting a property, dropping a module, dropping a health observation,\n"
-   "    or clearing an :invisibly-incomplete? flag makes the next round quieter\n"
-   "    without making the record truer. So does reclassifying a claim to dodge\n"
-   "    its counterexample — calling essential state `accidental` because a\n"
-   "    derivation was found, when what that means is the claim was wrong.\n"
-   "    Every one of those is measured and reported to a human. Do it only where\n"
-   "    the survey was genuinely wrong, and expect to have said why.\n\n"
+  (let [gaps? (boolean (some :blocks findings))]
+   (str
+   (if gaps?
+     (str "A read-only judge checked this workstream's BASELINE — the survey of how\n"
+          "the area works today — against the code. It found the survey TRUE, and\n"
+          "found it does not say enough to derive something a decision needs.\n\n"
+          "So nothing below is a correction. Each one names a derivation that cannot\n"
+          "be made against the survey as it stands, and what the survey would have to\n"
+          "say for it to be. Answer THOSE. Do not restate, sharpen or re-evidence a\n"
+          "claim the judge did not name: it already holds, and a survey grows without\n"
+          "limit if completeness is the target — which is the failure the named\n"
+          "derivation exists to bound. Add what the derivation needs and stop.\n\n")
+     (str "A read-only judge checked this workstream's BASELINE — the survey of how the\n"
+          "area works today — against the code, and refuted part of it.\n\n"))
+   (if gaps?
+     (str "Your job is to make the survey SAY ENOUGH. That is not the same job as\n"
+          "making the findings go away, and the difference is the whole point of\n"
+          "this pass:\n\n"
+          "  - A derivation that cannot be made should be ANSWERED by stating what\n"
+          "    the survey was missing, with evidence, at the level it is written at.\n"
+          "  - Nothing here says a claim is wrong. Correct one only if reading the\n"
+          "    code for this gap showed you it is, and say so.\n"
+          "  - Deleting a property, dropping a module, dropping a health observation,\n"
+          "    or clearing an :invisibly-incomplete? flag is measured and reported to\n"
+          "    a human. A round that asked for MORE and got less is the loudest\n"
+          "    version of that, and the one most likely to be an accident.\n\n")
+     (str "Your job is to make the survey TRUE. That is not the same job as making the\n"
+          "findings go away, and the difference is the whole point of this pass:\n\n"
+          "  - A property the code does not have should be CORRECTED to what the code\n"
+          "    actually does, and keep pointing at the evidence that shows it.\n"
+          "  - A property that is right but stated so loosely the judge misread it\n"
+          "    should get SHARPER evidence, not softer wording.\n"
+          "  - Deleting a property, dropping a module, dropping a health observation,\n"
+          "    or clearing an :invisibly-incomplete? flag makes the next round quieter\n"
+          "    without making the record truer. So does reclassifying a claim to dodge\n"
+          "    its counterexample — calling essential state `accidental` because a\n"
+          "    derivation was found, when what that means is the claim was wrong.\n"
+          "    Every one of those is measured and reported to a human. Do it only where\n"
+          "    the survey was genuinely wrong, and expect to have said why.\n\n"))
    "Stay at the level the survey is written at: modules, what each hides, and how\n"
    "their composition produces the behaviour. A finding about one line of code\n"
    "matters here only insofar as it refutes a claim about the decomposition.\n"
@@ -968,28 +1006,47 @@
           "subject it is about. The ledger refuses anything else and the whole record\n"
           "is lost with it, so use these and nothing else:\n"
           (lens-block)))
-   "CHANGE ONLY WHAT WAS REFUTED. A claim nobody challenged this round must come\n"
-   "back unchanged — not restated, not sharpened, not made more precise.\n\n"
+   (if gaps?
+     (str "CHANGE ONLY WHAT WAS ASKED FOR. A claim nobody named must come back\n"
+          "unchanged — not restated, not sharpened, not made more precise.\n\n")
+     (str "CHANGE ONLY WHAT WAS REFUTED. A claim nobody challenged this round must come\n"
+          "back unchanged — not restated, not sharpened, not made more precise.\n\n"))
    "That rule is what lets this end. A sharper claim is a bigger target: a survey\n"
    "saying `publishes ten vars` or `folds five event types` invites the next round\n"
    "to count, and counting is always available. Rounds have gone by watching one\n"
    "claim get sharper while another, freshly sharpened, became the next finding.\n"
-   "Fix what was refuted; leave the rest exactly as it stands.\n\n"
+   (if gaps?
+     "Answer what was asked; leave the rest exactly as it stands.\n\n"
+     "Fix what was refuted; leave the rest exactly as it stands.\n\n")
    "Read the cited code before you change a word of the record.\n\n"
    "Do NOT edit any source file. This pass writes one file and nothing else.\n\n"
    "THE CURRENT BASELINE:\n\n"
    (pr-str (ws/unstamp baseline))
-   "\n\nWHAT THE JUDGE REFUTED — numbered, and you answer them by number:\n\n"
+   (if gaps?
+     "\n\nWHAT THE JUDGE COULD NOT DERIVE — numbered, and you answer them by number:\n\n"
+     "\n\nWHAT THE JUDGE REFUTED — numbered, and you answer them by number:\n\n")
    (str/join
     "\n\n"
     (map-indexed
      (fn [i f]
-       (str (inc i) ". refutes: " (str/join "; " (:cites f)) "\n"
-            "   claim:   " (:claim f)
+       (str (inc i) ". "
+            ;; A gap and a refutation are different answers and want different
+            ;; repairs, and the two fields that say which — :blocks and :needs —
+            ;; were on the record and printed nowhere. An amender shown a gap
+            ;; under the word "refutes" corrects a claim that was already true.
+            (if (:blocks f)
+              (str "blocks:  " (name (:blocks f)) "\n"
+                   "   needs:   " (:needs f) "\n"
+                   "   about:   " (:claim f) "\n"
+                   "   in:      " (str/join "; " (:cites f)))
+              (str "refutes: " (str/join "; " (:cites f)) "\n"
+                   "   claim:   " (:claim f)))
             (when (seq (:evidence f))
               (str "\n   evidence: " (str/join ", " (:evidence f))))))
      findings))
-   "\n\nIF A FINDING IS WRONG ABOUT THE CODE, SAY SO INSTEAD OF AMENDING FOR IT.\n"
+   (if gaps?
+     "\n\nIF A DERIVATION CAN BE MADE ALREADY, SAY SO INSTEAD OF ADDING FOR IT.\n"
+     "\n\nIF A FINDING IS WRONG ABOUT THE CODE, SAY SO INSTEAD OF AMENDING FOR IT.\n")
    "You do not settle it — the judge is asked again with your objection in front\n"
    "of it, and has to withdraw the finding or answer your evidence. An objection\n"
    "with no reason is dropped, because it cannot be answered. Amending a record\n"
@@ -1002,7 +1059,7 @@
    "change. Omit :disputes if you accepted all of them. The record must satisfy\n"
    "the same schema the current one does; nido reads this file, validates it, and\n"
    "appends it as the superseding baseline. Do not append it yourself and do not\n"
-   "commit anything."))
+   "commit anything.")))
 
 (defn- ledger-refusal
   "Why the ledger refused a record, in a form somebody can act on.
