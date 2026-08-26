@@ -243,3 +243,104 @@
                              " `jj new " (:bookmark top) "` before reviewing again,"
                              " or the next run will see a truncated stack.")
                         {:reason :review-failed :cwd cwd :layer top}))))))
+
+;; ── Reshaping the stack ─────────────────────────────────────────────────────
+;;
+;; Two operations, and one rule that makes them safe to attempt: an attempt that
+;; does not come out clean leaves the stack exactly as it was. jj supplies both
+;; halves — the operation log is an exact undo, and whether a reorder was legal
+;; is a question it answers rather than one anybody has to judge.
+
+(defn current-op
+  "The id of jj's latest operation — the point a reshape can be rolled back to."
+  [cwd]
+  (let [{:keys [exit out]} (jj/jj! cwd "op" "log" "--no-graph" "-T" "id.short()"
+                                   "--limit" "1")]
+    (when (and (zero? exit) (not (str/blank? out)))
+      (str/trim (first (str/split-lines out))))))
+
+(defn conflicted
+  "Change ids in this stack that jj left conflicted, or [].
+
+   The `conflicts()` revset, and NOT `jj resolve --list`. That command inspects
+   one revision — the working copy by default — and an illegal reorder puts its
+   conflict on a rewritten commit MID-STACK, so it answers `No conflicts found`
+   for the legal and the illegal case alike. Measured on jj 0.42 against two
+   probe stacks: identical output, identical exit code, opposite truth.
+
+   Scoped to `<base>..@` because the revset is repo-wide, and this repo holds a
+   dozen workspaces whose conflicts are not ours to read."
+  [cwd base]
+  (let [{:keys [exit out]} (jj/jj! cwd "log" "-r" (str "conflicts() & (" base "..@)")
+                                   "--no-graph" "-T" "change_id.short() ++ \"\\n\"")]
+    (if (zero? exit)
+      (vec (remove str/blank? (str/split-lines out)))
+      [])))
+
+(defn restore-op!
+  "Put the repo back as it was at `op`. Best-effort: this runs on the failure
+   path, and a restore that also fails must not replace the diagnosis."
+  [cwd op]
+  (when op
+    (try (jj/jj! cwd "op" "restore" op) (catch Throwable _ nil))))
+
+(defn attempt-reshape!
+  "Run `f`, and keep what it did only if the stack came out clean.
+
+   Returns {:ok? true} or {:ok? false :reason \"…\"}, never throws for a reshape
+   that simply would not apply — an attempt is meant to be cheap enough to make
+   on a maybe, and its failure is information rather than an error. What makes
+   that true is the rollback: whatever f did is undone by operation id, so a
+   refused attempt costs nothing but the seconds it took.
+
+   The conflict check is the point. A reorder jj can replay cleanly is one the
+   layers did not actually depend on each other for; a conflict is jj saying the
+   dependency is real and the original order was right. That is a mechanical
+   answer to a question that would otherwise be a judgement call, which is the
+   whole reason this can run without asking anyone."
+  [cwd base f]
+  (let [op (current-op cwd)
+        {:keys [exit err]} (f)]
+    (cond
+      (not (zero? exit))
+      (do (restore-op! cwd op)
+          {:ok? false :reason (str "jj refused it: " (first (str/split-lines (str err))))})
+
+      (seq (conflicted cwd base))
+      (do (restore-op! cwd op)
+          {:ok? false :reason (str "it conflicts: the layers depend on each other, "
+                                   "so the order they are in is the order they need")})
+
+      :else {:ok? true})))
+
+(defn reorder!
+  "Move `layer` to sit directly below `other`. Both are layers of this stack.
+
+   The remedy an order-dependence finding names: a layer reaching for something
+   a layer above it supplies is in the wrong place, and moving it is the repair
+   rather than patching either side."
+  [cwd base layer other]
+  (attempt-reshape!
+   cwd base
+   #(jj/jj! cwd "rebase" "-r" (:bookmark layer) "--insert-before" (:bookmark other))))
+
+(defn fold!
+  "Squash `layer` into `into-layer`, leaving one layer where there were two.
+
+   Always legal where a reorder may not be — folding removes a boundary rather
+   than moving one, so there is no dependency for it to violate. It is therefore
+   the answer when a reorder is refused and the defect is still real.
+
+   Deletes the absorbed bookmark, which is not tidying. jj leaves both bookmarks
+   on the squashed commit, and `layer-bookmark` takes the first match — so a
+   fold that left them both would hide one of the two layers from every later
+   read of the stack, while whatever that bookmark had published stayed
+   published."
+  [cwd base layer into-layer]
+  (let [r (attempt-reshape!
+           cwd base
+           #(jj/jj! cwd "squash" "--from" (:bookmark layer)
+                    "--into" (:bookmark into-layer) "--use-destination-message"))]
+    (when (:ok? r)
+      (jj/jj! cwd "bookmark" "delete" (:bookmark layer)))
+    r))

@@ -214,3 +214,73 @@
     (with-redefs [jj/jj! (stub-log "" calls)]
       (is (nil? (layers/restore-top! "/w" [])))
       (is (empty? @calls)))))
+
+;; ---- reshaping the stack -------------------------------------------------
+
+(defn- scripted
+  "jj/jj! stub answering each command from `answers` (keyed by the first arg),
+   recording every call. Anything unscripted succeeds silently."
+  [answers calls]
+  (fn [_dir & args]
+    (swap! calls conj (vec args))
+    (get answers (first args) {:exit 0 :out "" :err ""})))
+
+(deftest conflicted-asks-the-conflicts-revset-not-resolve
+  ;; `jj resolve --list` inspects ONE revision, and an illegal reorder leaves
+  ;; its conflict on a rewritten commit mid-stack — so it answers "no conflicts"
+  ;; for the legal and the illegal case alike. Scoped to this stack because the
+  ;; revset is repo-wide.
+  (let [calls (atom [])]
+    (with-redefs [jj/jj! (scripted {"log" {:exit 0 :out "abc\ndef" :err ""}} calls)]
+      (is (= ["abc" "def"] (layers/conflicted "/w" "main"))))
+    (is (= ["log" "-r" "conflicts() & (main..@)"] (take 3 (first @calls))))
+    (is (not-any? #(some #{"resolve"} %) @calls))))
+
+(deftest a-reshape-that-conflicts-leaves-the-stack-as-it-was
+  (let [calls (atom [])]
+    (with-redefs [jj/jj! (scripted {"op"  {:exit 0 :out "op42" :err ""}
+                                    "log" {:exit 0 :out "abc" :err ""}} calls)]
+      (let [r (layers/attempt-reshape! "/w" "main" (fn [] {:exit 0 :out "" :err ""}))]
+        (is (false? (:ok? r)))
+        (is (str/includes? (:reason r) "the order they are in is the order they need"))))
+    (is (some #{["op" "restore" "op42"]} @calls) "rolled back by operation id")))
+
+(deftest a-reshape-jj-refuses-leaves-the-stack-as-it-was
+  (let [calls (atom [])]
+    (with-redefs [jj/jj! (scripted {"op" {:exit 0 :out "op42" :err ""}} calls)]
+      (let [r (layers/attempt-reshape! "/w" "main"
+                                       (fn [] {:exit 1 :out "" :err "no such bookmark"}))]
+        (is (false? (:ok? r)))
+        (is (str/includes? (:reason r) "no such bookmark"))))
+    (is (some #{["op" "restore" "op42"]} @calls))))
+
+(deftest a-clean-reshape-is-kept
+  (let [calls (atom [])]
+    (with-redefs [jj/jj! (scripted {"op"  {:exit 0 :out "op42" :err ""}
+                                    "log" {:exit 0 :out "" :err ""}} calls)]
+      (is (:ok? (layers/attempt-reshape! "/w" "main" (fn [] {:exit 0 :out "" :err ""})))))
+    (is (not-any? #{["op" "restore" "op42"]} @calls) "nothing to roll back")))
+
+(deftest a-fold-deletes-the-bookmark-it-absorbed
+  ;; jj leaves both bookmarks on the squashed commit and layer-bookmark takes
+  ;; the first match, so leaving them would hide one layer from every later read
+  ;; while whatever it published stayed published.
+  (let [calls (atom [])]
+    (with-redefs [jj/jj! (scripted {"op"  {:exit 0 :out "op42" :err ""}
+                                    "log" {:exit 0 :out "" :err ""}} calls)]
+      (is (:ok? (layers/fold! "/w" "main" {:bookmark "s--upper"} {:bookmark "s--lower"}))))
+    (is (some #{["bookmark" "delete" "s--upper"]} @calls))))
+
+(deftest a-fold-that-did-not-apply-deletes-nothing
+  (let [calls (atom [])]
+    (with-redefs [jj/jj! (scripted {"op"     {:exit 0 :out "op42" :err ""}
+                                    "squash" {:exit 1 :out "" :err "nope"}} calls)]
+      (is (false? (:ok? (layers/fold! "/w" "main" {:bookmark "s--upper"} {:bookmark "s--lower"})))))
+    (is (not-any? #(= ["bookmark" "delete" "s--upper"] %) @calls))))
+
+(deftest reorder-moves-the-layer-below-the-other
+  (let [calls (atom [])]
+    (with-redefs [jj/jj! (scripted {"op"  {:exit 0 :out "op42" :err ""}
+                                    "log" {:exit 0 :out "" :err ""}} calls)]
+      (is (:ok? (layers/reorder! "/w" "main" {:bookmark "s--upper"} {:bookmark "s--lower"}))))
+    (is (some #{["rebase" "-r" "s--upper" "--insert-before" "s--lower"]} @calls))))
