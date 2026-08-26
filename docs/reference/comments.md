@@ -2,7 +2,8 @@
 
 **Harness-side doctrine, owned by nido.** It reaches every session because the
 root nido checkout is on `--add-dir`; read it at
-`~/Code/nido/docs/reference/comments.md`.
+`~/Code/nido/docs/reference/comments.md`. `lane-comments` is the only thing that
+judges a line against it.
 
 After John Ousterhout, *A Philosophy of Software Design*, ch. 12–16.
 
@@ -141,7 +142,7 @@ contract, and neither is a violation:
 **The token lists are the project's.** Where a project ships a commit gate, that
 gate's banned tokens are the mechanical floor and this section is the rule the
 gate approximates. A comment can honour every token list and still be pure
-archaeology; that residue is what a review lane is for.
+archaeology; that residue is what `lane-comments` is for.
 
 **Write the comment, don't redact it.** Deleting the offending word leaves a
 comment that still narrates a transition, just more vaguely — which passes the

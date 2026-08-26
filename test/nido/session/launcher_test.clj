@@ -96,9 +96,10 @@
           "a change must fix the comments on the code it changed")
       (is (str/includes? doc "stop at the edge")
           "and must not sweep past it — the bound is what makes the rule safe"))
-    (testing "the pointer resolves from any session"
+    (testing "the pointer resolves from any session, and names what reviews against it"
       (is (str/includes? doc "~/Code/nido/docs/reference/comments.md")
-          "the doctrine lives in the root checkout, which is already on --add-dir"))
+          "the doctrine lives in the root checkout, which is already on --add-dir")
+      (is (str/includes? doc "lane-comments")))
     (testing "spelling stays the project's"
       (is (str/includes? doc "owns the spelling")))
     (testing "the briefing carries the summary, never the whole doctrine"

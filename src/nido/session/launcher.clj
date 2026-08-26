@@ -422,10 +422,11 @@
        "\n"
        "Full doctrine — levels, references, staleness, when a MISSING comment is\n"
        "the finding — at `~/Code/nido/docs/reference/comments.md`, after\n"
-       "Ousterhout, *A Philosophy of Software Design*, ch. 12–16. It is what a\n"
-       "comment finding cites. Your project's own rule (brian:\n"
-       "`docs/reference/code-conventions.md`) still owns the spelling — banned\n"
-       "tokens, canonical ref shapes; the doctrine owns the reason.\n"))
+       "Ousterhout, *A Philosophy of Software Design*, ch. 12–16. It is what\n"
+       "`lane-comments` reviews against, and what a comment finding cites. Your\n"
+       "project's own rule (brian: `docs/reference/code-conventions.md`) still\n"
+       "owns the spelling — banned tokens, canonical ref shapes; the doctrine owns\n"
+       "the reason.\n"))
 
 (defn- render-edit-location
   "The 'where do edits land' paragraph, conditioned on vcs-mode so the
