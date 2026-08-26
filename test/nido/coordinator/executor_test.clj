@@ -196,3 +196,50 @@
     (ex/tick! (fn [rid] (swap! spawned conj rid)) {:merge 1})
     (Thread/sleep 50)
     (is (= [] @spawned))))
+
+;; ── Turns against an already-spawned Run ────────────────────────────────────
+
+(deftest a-turn-runs-its-own-body-instead-of-on-spawn
+  (ex/clear!)
+  (ex/configure! {:global-cap 4})
+  (let [spawned (atom []) ran (atom [])]
+    (ex/submit-turn! {:run-id "r1" :turn "a"
+                            :body #(swap! ran conj :a)})
+    (ex/tick! (fn [rid] (swap! spawned conj rid)) {})
+    (Thread/sleep 200)
+    (is (= [:a] @ran) "the turn's own body ran")
+    (is (= [] @spawned) "and on-spawn was not called for it")))
+
+(deftest two-turns-against-one-run-are-two-units-of-work
+  ;; submit!'s idempotence exists to stop one Run being SPAWNED twice. Keyed on
+  ;; the run-id alone it would also swallow a human's second reply, which is the
+  ;; opposite of what anybody wants.
+  (ex/clear!)
+  (ex/configure! {:global-cap 4})
+  (let [ran (atom [])]
+    (ex/submit-turn! {:run-id "r1" :turn "a" :body #(swap! ran conj :a)})
+    (ex/submit-turn! {:run-id "r1" :turn "b" :body #(swap! ran conj :b)})
+    (ex/tick! (fn [_]) {})
+    (Thread/sleep 200)
+    (is (= #{:a :b} (set @ran)))))
+
+(deftest a-turn-waits-for-a-slot-like-everything-else
+  ;; The point of the layer: a resumed turn used to launch on a bare future
+  ;; beside the executor, so the cap counted sessions started rather than agents
+  ;; running.
+  (ex/clear!)
+  (ex/configure! {:global-cap 1})
+  (let [ran   (atom [])
+        gate  (promise)]
+    (ex/submit-turn! {:run-id "r1" :turn "a"
+                            :body (fn [] @gate (swap! ran conj :a))})
+    (ex/submit-turn! {:run-id "r2" :turn "b" :body #(swap! ran conj :b)})
+    (ex/tick! (fn [_]) {})
+    (Thread/sleep 150)
+    (is (= 1 (:in-flight (ex/snapshot))) "one slot, one turn running")
+    (is (= 1 (:queued (ex/snapshot))) "the other is waiting, not launched")
+    (deliver gate true)
+    (Thread/sleep 150)
+    (ex/tick! (fn [_]) {})
+    (Thread/sleep 200)
+    (is (= #{:a :b} (set @ran)) "and it runs once the slot frees")))
