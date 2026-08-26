@@ -17,16 +17,28 @@
   [stages/review-stage stages/warden-stage stages/fix-stage])
 
 (defn default-finding-key
-  "How the DIFF review tells one finding from another: the place in the code it
-   is about, plus its title. Correct there because a fix moves code and the
-   finding follows it, so a finding that survives a round is recognisable.
+  "How the DIFF review tells one finding from another: the handle the warden
+   filed it under.
 
-   It is wrong for a pass that judges a RECORD. Those findings carry no file and
-   no line, and the text they do carry is the very text their fixer rewrites — so
-   a record pipeline injects its own, keyed on something its amender cannot
-   move. See `run-loop`'s :finding-key."
+   Not the place in the code plus the title, which is what a reviewer reports
+   and therefore what a fresh reviewer rewrites. A fix moves the code, so the
+   file and line move with it; the title is prose, and the same defect described
+   again next round is described in different words. Identity derived from any
+   of the three is stable only while nothing is happening — and a defect the loop
+   cannot move is exactly the one that gets restated, so the check that exists to
+   notice it was blind in the one case it was for.
+
+   The handle is assigned once per round, by the only reader that can tell two
+   findings are the same defect, and carried forward. The triple survives as the
+   fallback for a finding that never reached that reader — an unrecognised repeat
+   costs a round, which is the cheaper failure.
+
+   Still wrong for a pass that judges a RECORD: those findings carry no file, no
+   line and no handle, and the text they do carry is the very text their fixer
+   rewrites — so a record pipeline injects its own, keyed on something its
+   amender cannot move. See `run-loop`'s :finding-key."
   [f]
-  [(:file f) (:line-start f) (:title f)])
+  (or (:handle f) [(:file f) (:line-start f) (:title f)]))
 
 (defn- no-progress?
   "The same findings again, by whatever identity this pipeline keys on.
