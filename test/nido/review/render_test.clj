@@ -178,16 +178,31 @@
     (is (not (str/includes? s "to rule on")) "no per-layer rows survive")
     (is (not (str/includes? s "disposition")) "and no summary is invented for it")))
 
+(defn- report-of
+  "A finished report in the shape the event fold actually produces: a review
+   phase holding the findings as the REVIEW stage left them — no dispositions,
+   because the warden has not run when that phase folds — and a warden phase
+   holding what was decided, separately, as rulings.
+
+   Every test below builds through this. One that embeds a disposition in a
+   review finding is testing a shape the fold never emits, which is how a
+   closing block that showed no fate at all passed a test asserting it did."
+  [findings rulings]
+  {:target {:cwd "/x/feat/thing" :base "main"}
+   :status "converged" :started-at "2026-01-01T00:00:00Z"
+   :ended-at "2026-01-01T00:01:00Z"
+   :rounds [{:round 1
+             :phases [{:phase "review" :status "ok" :started-at "2026-01-01T00:00:00Z"
+                       :findings findings}
+                      {:phase "warden" :status "ok" :started-at "2026-01-01T00:00:30Z"
+                       :decision "stop" :rulings rulings}]}]})
+
 (deftest final-says-what-was-decided-about-each-finding
-  (let [r {:target {:cwd "/x/feat/thing" :base "main"}
-           :status "converged" :started-at "2026-01-01T00:00:00Z"
-           :ended-at "2026-01-01T00:01:00Z"
-           :rounds [{:round 1
-                     :phases [{:phase "review" :status "ok" :started-at "2026-01-01T00:00:00Z"
-                               :findings [{:priority 1 :title "t" :file "a.clj" :line-start 1
-                                           :line-end 2 :disposition :closed :authority "out-of-scope"
-                                           :from-layer "widen" :owner-layer "drop-legacy"}]}]}]}
-        s (render/final r)]
+  (let [s (render/final
+           (report-of [{:id "aa11" :priority 1 :title "t" :file "a.clj"
+                        :line-start 1 :line-end 2 :from-layer "widen"}]
+                      [{:id "aa11" :disposition :closed :authority "out-of-scope"
+                        :owner-layer "drop-legacy"}]))]
     (is (str/includes? s "→ closed"))
     (is (str/includes? s "out-of-scope"))
     (is (str/includes? s "reported by widen") "attribution is visible when it moved")))
@@ -195,19 +210,33 @@
 (deftest final-says-what-kind-of-composition-defect-a-parked-finding-is
   ;; `park` alone cannot tell a reader whether an invariant is in question or
   ;; the cut is — and those ask very different things of them.
-  (let [r {:target {:cwd "/x/feat/thing" :base "main"}
-           :status "converged" :started-at "2026-01-01T00:00:00Z"
-           :ended-at "2026-01-01T00:01:00Z"
-           :rounds [{:round 1
-                     :phases [{:phase "review" :status "ok" :started-at "2026-01-01T00:00:00Z"
-                               :findings [{:priority 2 :title "t" :file "a.clj" :line-start 1
-                                           :line-end 2 :disposition :park
-                                           :kind :misplaced-seam
-                                           :layers ["series" "banner"]
-                                           :from-layer "stack" :owner-layer "banner"}]}]}]}
-        s (render/final r)]
+  (let [s (render/final
+           (report-of [{:id "bb22" :priority 2 :title "t" :file "a.clj"
+                        :line-start 1 :line-end 2 :kind :misplaced-seam
+                        :layers ["series" "banner"] :from-layer "stack"}]
+                      [{:id "bb22" :disposition :park :owner-layer "banner"}]))]
     (is (str/includes? s "misplaced-seam across series + banner"))
     (is (str/includes? s "→ park"))))
+
+(deftest final-tallies-what-became-of-the-findings
+  ;; The status says how the run ended; this says what it did. Holding one
+  ;; finding out of thirty and holding thirty read identically without it.
+  (let [s (render/final
+           (report-of [{:id "a" :priority 1 :title "one" :file "a.clj" :line-start 1}
+                       {:id "b" :priority 1 :title "two" :file "b.clj" :line-start 1}
+                       {:id "c" :priority 2 :title "three" :file "c.clj" :line-start 1}]
+                      [{:id "a" :disposition :fix}
+                       {:id "b" :disposition :fix}
+                       {:id "c" :disposition :park}]))]
+    (is (str/includes? s "2 fix, 1 park") "commonest first")))
+
+(deftest final-shows-no-fate-when-no-warden-ruled
+  ;; A run that died before its first warden has nothing to say about fates, and
+  ;; must not invent one.
+  (let [s (render/final
+           (report-of [{:id "a" :priority 1 :title "one" :file "a.clj" :line-start 1}] []))]
+    (is (str/includes? s "one"))
+    (is (not (str/includes? s "\n      → ")) "no fate line without a ruling")))
 
 ;; ---- what a run that has not finished reviewing yet shows ----------------
 

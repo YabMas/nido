@@ -240,15 +240,50 @@
                          (not= (:from-layer f) (:owner-layer f)))
                 (str " · reported by " (:from-layer f)))))))
 
+(defn- rulings-by-id
+  "Every ruling the run made, by finding id, last round winning.
+
+   The report keeps a review phase's findings as the REVIEW stage left them —
+   the warden has not run when that phase folds — and keeps what it decided
+   separately, under its own phase. So a finding read out of a review phase
+   carries no disposition, and the line that renders one never had a value:
+   every finding of every round printed as though nothing had been decided about
+   it. Joining the two here rather than stamping the fold keeps each phase a
+   record of what that stage actually said."
+  [report]
+  (into {}
+        (comp (mapcat :phases)
+              (filter #(= "warden" (:phase %)))
+              (mapcat :rulings)
+              (map (juxt :id identity)))
+        (:rounds report)))
+
+(defn- fate-tally
+  "One line of what became of the findings, by disposition, commonest first.
+
+   The status says how the run ended; this says what it did. A run can end
+   :unresolved holding one finding out of thirty and the difference between that
+   and holding thirty is the whole of what a reader wants to know next."
+  [findings]
+  (let [by (frequencies (keep #(some-> (:disposition %) name) findings))]
+    (when (seq by)
+      (str "  ·  "
+           (->> by
+                (sort-by (juxt (comp - val) key))
+                (map (fn [[d n]] (str n " " d)))
+                (str/join ", "))))))
+
 (defn final
   "Printed once at the end: the live frame's static form + findings detail +
    terminal status + where the full report lives."
   [report]
-  (let [findings (->> (:rounds report)
+  (let [ruled    (rulings-by-id report)
+        findings (->> (:rounds report)
                       (mapcat :phases)
                       (filter #(= "review" (:phase %)))
                       (mapcat :findings)
-                      distinct)]
+                      distinct
+                      (map (fn [f] (merge f (get ruled (:id f))))))]
     (str (frame report (Instant/parse (or (:ended-at report)
                                           (:started-at report))))
          "\n\n  Findings:\n"
@@ -258,6 +293,7 @@
          "\n\n  Status: " (:status report)
          (when-let [s (:summary report)]
            (str "  ·  " (:rounds s) " round(s), " (:findings-fixed s) " fixed"))
+         (fate-tally findings)
          "\n  Full report: <run-dir>/report.json")))
 
 (defn plain-line
