@@ -18,7 +18,21 @@
    [:filter      {:optional true} [:map-of keyword? any?]]
    [:payload-key {:optional true} keyword?]
    [:agent       {:optional true} keyword?]
-   [:limits      {:optional true} [:map-of keyword? any?]]
+   ;; REQUIRED, and :budget inside it is required too. A trigger is the place a
+   ;; unit of autonomous work declares its brakes, and this schema used to
+   ;; constrain neither whether they were declared nor what they contained — so
+   ;; omitting :budget was not an error anywhere, and agent/launch! read the
+   ;; resulting nil as infinite. brian's :plan-bug omitted it for months while a
+   ;; comment above it asserted it ran nothing headlessly.
+   ;;
+   ;; Refused HERE rather than only at launch, because here nothing has been
+   ;; spawned yet: a bad trigger fails when the config is read, not after a
+   ;; session, a worktree and a database have been provisioned for it. The
+   ;; launch-time refusal stays as the backstop for every caller that reaches an
+   ;; agent without a trigger behind it.
+   [:limits      [:map
+                  [:budget string?]
+                  [:max-failures {:optional true} pos-int?]]]
    [:priority       {:optional true} int?]
    [:priority-from  {:optional true} [:map [:property string?]]]
    [:session-profile {:optional true} keyword?]

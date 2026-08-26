@@ -55,6 +55,7 @@
                         :cwd           (str tmp)
                         :first-message "/x"
                         :claude-bin    fake-claude
+                        :budget "5m"
                         :claude-session-id "preset-id"
                         :env           {"FAKE_CLAUDE_SESSION_ID" "ignored-emitted-id"}})]
           (is (= "preset-id" (:claude-session-id result))
@@ -71,6 +72,7 @@
                         :cwd           (str tmp)
                         :first-message "/x hi"
                         :claude-bin    fake-claude
+                        :budget        "5m"
                         :env           {"FAKE_CLAUDE_SESSION_ID" "session-xyz"}})]
           (is (= 0 (:exit-code result)))
           (is (= "session-xyz" (:claude-session-id result)))
@@ -88,12 +90,14 @@
         (let [worked (agent/launch!
                        {:run-id "r1" :cwd (str tmp) :first-message "/x"
                         :claude-bin fake-claude
+                        :budget "5m"
                         :env {"FAKE_CLAUDE_SESSION_ID" "s" "FAKE_CLAUDE_NUM_TURNS" "4"}})]
           (is (= 4 (:num-turns worked)) "captures num_turns from the result event")
           (is (false? (:result-error? worked))))
         (let [no-op (agent/launch!
                       {:run-id "r1" :cwd (str tmp) :first-message "/triage-bug x"
                        :claude-bin fake-claude
+                       :budget "5m"
                        :env {"FAKE_CLAUDE_SESSION_ID" "s" "FAKE_CLAUDE_NUM_TURNS" "0"
                              "FAKE_CLAUDE_RESULT_TEXT" "Unknown command: /triage-bug"}})]
           (is (= 0 (:num-turns no-op)) "zero turns surfaced for a no-op exit")
@@ -110,6 +114,7 @@
                         :cwd           (str tmp)
                         :first-message "/x"
                         :claude-bin    fake-claude
+                        :budget        "5m"
                         :env           {"FAKE_CLAUDE_EXIT_CODE" "7"}})]
           (is (= 7 (:exit-code result)))))
       (finally (fs/delete-tree tmp)))))
@@ -134,7 +139,7 @@
           (is (< elapsed 12000) (str "took " elapsed "ms"))))
       (finally (fs/delete-tree tmp)))))
 
-(deftest launch!-no-timeout-by-default
+(deftest launch!-does-not-time-out-inside-its-budget
   (let [tmp (fs/create-temp-dir)]
     (try
       (with-redefs [cstate/nido-root (constantly (str tmp))]
@@ -144,9 +149,28 @@
                         :cwd           (str tmp)
                         :first-message "/x"
                         :claude-bin    fake-claude
+                        :budget        "5m"
                         :env           {"FAKE_CLAUDE_SESSION_ID" "s"}})]
           (is (false? (:timed-out? result)))))
       (finally (fs/delete-tree tmp)))))
+
+(deftest launch!-refuses-an-undeclared-or-unreadable-budget
+  ;; This replaces a test called launch!-no-timeout-by-default, which asserted
+  ;; the behaviour being removed: no budget meant no timer, so the default was
+  ;; unbounded. The refusal has to happen BEFORE the spawn — parsed beside the
+  ;; timer it arms, it would throw with claude already running and nothing left
+  ;; to stop it, which is the state being refused plus an orphan.
+  (doseq [[label b reason] [["absent"     nil          :budget-undeclared]
+                            ["blank"      ""           :budget-undeclared]
+                            ["wrong unit" "1w"         :budget-unreadable]
+                            ["prose"      "30 minutes" :budget-unreadable]]]
+    (let [e (try (agent/parse-budget-ms b) nil
+                 (catch clojure.lang.ExceptionInfo e e))]
+      (is (some? e) (str label " must be refused"))
+      (is (= reason (:reason (ex-data e))) label)
+      (is (seq (:hint (ex-data e))) (str label " must say what to do"))))
+  (is (= 28800000 (agent/parse-budget-ms "8h")))
+  (is (= 1000 (agent/parse-budget-ms "1s"))))
 
 (deftest build-cmd-includes-mcp-and-add-dirs-when-given
   (let [cmd (#'agent/build-cmd {:claude-bin "claude" :first-message "hi"
@@ -166,6 +190,7 @@
       (let [err-path (str (fs/path tmp "agent.err.log"))]
         (agent/launch! {:run-id "r-err" :cwd (str tmp)
                         :first-message "/x" :claude-bin fake-claude
+                        :budget "5m"
                         :claude-session-id "sid" :err-file err-path})
         (is (fs/exists? err-path) "stderr is captured to the given file")))))
 

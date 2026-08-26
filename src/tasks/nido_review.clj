@@ -205,7 +205,24 @@
       (when-let [n (:needs v)] (println (str "  needs: " n)))
       (println "  → supersede the design record (/design §5) or accept it explicitly"))))
 
-(defn loop-cmd* [{:keys [cwd base max-iters dry-run?]}]
+(def default-launch-budget
+  "The wall clock every agent launch a review loop makes, when the caller names none.
+
+   A DEFAULT, not a cap on the run: the loops are deliberately uncapped in
+   ROUNDS — they end when they converge, escalate, retreat or stall — and this
+   bounds one launch inside a round. The two are not substitutes. With rounds
+   uncapped, a single hung claude is the one failure the loop cannot detect on
+   its own merits, because a round that never returns never reports anything to
+   stall on.
+
+   It exists because agent/launch! now refuses an undeclared budget. Before that,
+   omitting it here meant every warden, fixer and amender ran with no timer at
+   all — which the record loop's own docstring already assumed was impossible,
+   calling this per-launch wall clock \"the only thing between a hung claude and a
+   loop that never returns.\""
+  "30m")
+
+(defn loop-cmd* [{:keys [cwd base max-iters dry-run? budget]}]
   (let [cwd        (or cwd
                        (lifecycle/worktree-from-cwd)
                        (System/getProperty "user.dir"))
@@ -218,6 +235,9 @@
                     ;; escalates, or stops making progress. :max-iters only
                     ;; caps it when the caller explicitly asks for a cap.
                     :max-iters max-iters
+                    ;; The per-launch wall clock, which is a different thing and
+                    ;; DOES default — see default-launch-budget.
+                    :budget    (or budget default-launch-budget)
                     :dry-run?  (boolean dry-run?)
                     :run-id    run-id
                     :clock     clock
@@ -361,7 +381,8 @@
    The final block prints from a `finally`, so a loop that throws still leaves
    its rounds, its weakenings and its objections on screen."
   [{:keys [kind pipeline finding-key remedies epilogue]}
-   {:keys [cwd code-cwd max-iters dry-run? budget baseline]}]
+   {:keys [cwd code-cwd max-iters dry-run? budget baseline]
+    :or   {budget default-launch-budget}}]
   (let [;; Through the home-aware union whether the caller named a directory or
         ;; not. A session home is a place an agent legitimately stands — it is
         ;; where the briefing and the MCP config are, and every other cwd-based

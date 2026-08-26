@@ -7,6 +7,7 @@
    [babashka.process :as p]
    [cheshire.core :as json]
    [clojure.java.io :as jio]
+   [clojure.string :as str]
    [nido.coordinator.state :as cstate]))
 
 (defn- parse-event [^String line]
@@ -21,20 +22,39 @@
 (defn- result-event? [event]
   (= "result" (:type event)))
 
-(defn- parse-budget-ms
-  "Parse a budget string like '30m', '45m', '2h' into milliseconds.
-   nil → no budget (treat as infinite)."
+(defn parse-budget-ms
+  "Parse a budget string like '30m', '45m', '2h' into milliseconds, or throw.
+
+   REFUSES rather than degrading, and that is the change. It used to answer nil
+   for an absent budget and — quietly — for an unparseable one too, and the sole
+   reader armed a kill timer only `when budget-ms`. So nil meant no timer at all:
+   an agent launched with no budget, or with `1w`, or with `30 minutes`, ran
+   until it finished or the machine did.
+
+   That was not theoretical. brian's :plan-bug trigger declared
+   {:max-failures 3} and no :budget, above a comment asserting it ran nothing
+   headlessly — while core.clj's provision-only? branch launched /continue-ticket
+   under a prompt telling it to work unattended. Every promote started an
+   implementation agent with no wall clock, and the config said the opposite.
+
+   A brake that silently is not there is worse than no brake, because the
+   surrounding text goes on claiming it. So an undeclared or unreadable budget is
+   now an error at the point of launch, where the caller can be named."
   [s]
-  (when s
-    (let [[_ n unit] (re-matches #"(\d+)([smhd])" s)]
-      (when n
-        (let [n  (Long/parseLong n)
-              ms (case unit
-                   "s" 1000
-                   "m" 60000
-                   "h" 3600000
-                   "d" 86400000)]
-          (* n ms))))))
+  (when (or (nil? s) (and (string? s) (str/blank? s)))
+    (throw (ex-info "no wall-clock budget declared — refusing to launch unbounded"
+                    {:reason :budget-undeclared
+                     :hint (str "declare :limits {:budget \"8h\"} on the trigger, or pass "
+                                ":budget to launch!. A missing budget used to mean "
+                                "infinite; it now means refuse.")})))
+  (let [[_ n unit] (re-matches #"(\d+)([smhd])" (str s))]
+    (when-not n
+      (throw (ex-info (str "unreadable wall-clock budget " (pr-str s)
+                           " — refusing to launch unbounded")
+                      {:reason :budget-unreadable :budget s
+                       :hint "expected <digits><s|m|h|d>, e.g. 30m, 2h, 8h"})))
+    (* (Long/parseLong n)
+       (case unit "s" 1000 "m" 60000 "h" 3600000 "d" 86400000))))
 
 (defn- build-cmd
   "Assemble the claude command vector. With :claude-session-id, the run is
@@ -86,7 +106,9 @@
      :system-prompt — optional --append-system-prompt content
      :claude-bin    — path/name of the claude binary (override for tests)
      :env           — extra env vars to merge into the child's environment
-     :budget        — string like \"30m\" / \"2h\". nil → no budget.
+     :budget        — REQUIRED. String like \"30m\" / \"2h\"; absent or
+                      unreadable is refused before anything is spawned, rather
+                      than silently meaning no budget at all.
      :resume?       — optional; nil/false records a new transcript under
                       --session-id, true continues the recorded one via --resume
                       (a gate reply). Requires :claude-session-id.
@@ -103,7 +125,12 @@
   [{:keys [run-id cwd first-message system-prompt claude-bin env budget claude-session-id resume?
            mcp-config add-dirs tools err-file]
     :or   {claude-bin "claude"}}]
-  (let [log-path  (cstate/run-agent-log run-id)
+  (let [;; BEFORE the spawn, and that ordering is the whole point. Parsed where
+        ;; it used to be — beside the timer it arms — the refusal would fire with
+        ;; claude already running and no timer to stop it, which is the exact
+        ;; state being refused, now with an orphan attached.
+        budget-ms (parse-budget-ms budget)
+        log-path  (cstate/run-agent-log run-id)
         cmd       (build-cmd {:claude-bin claude-bin :first-message first-message
                               :system-prompt system-prompt :claude-session-id claude-session-id
                               :resume? resume? :mcp-config mcp-config :add-dirs add-dirs
@@ -119,7 +146,6 @@
                                    err-file (assoc :err-file (jio/file err-file))))
         session   (atom nil)
         result-ev (atom nil)
-        budget-ms (parse-budget-ms budget)
         timed-out (atom false)
         timer     (when budget-ms
                     (future

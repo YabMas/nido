@@ -11,7 +11,8 @@
   {:name    :investigate-bug
    :source  {:type :manual}
    :skill   :investigate-bug
-   :payload "{{event/url}}"})
+   :payload "{{event/url}}"
+    :limits {:budget "8h"}})
 
 (deftest schema-accepts-minimal-trigger
   (is (m/validate triggers/Trigger minimal-trigger)))
@@ -100,6 +101,7 @@
            :source {:type :notion-view}
            :skill :triage-bug
            :payload ""
+    :limits {:budget "8h"}
            :preprocess [:notion-ticket]}]
     (is (m/validate triggers/Trigger t))))
 
@@ -108,6 +110,7 @@
            :source {:type :notion-view}
            :skill :triage-bug
            :payload ""
+    :limits {:budget "8h"}
            :preprocess ["notion-ticket"]}]
     (is (not (m/validate triggers/Trigger t)))))
 
@@ -115,11 +118,13 @@
   (let [t {:name :smoke
            :source {:type :smoke}
            :skill :smoke
-           :payload ""}]
+           :payload ""
+    :limits {:budget "8h"}}]
     (is (m/validate triggers/Trigger t))))
 
 (deftest max-in-flight-is-an-optional-pos-int
-  (let [base {:name :t :source {:type :notion-view} :skill :triage-bug :payload "p"}]
+  (let [base {:name :t :source {:type :notion-view} :skill :triage-bug :payload "p"
+    :limits {:budget "8h"}}]
     (is (m/validate triggers/Trigger (assoc base :max-in-flight 5)))
     (is (m/validate triggers/Trigger base) "absent is fine")
     (is (not (m/validate triggers/Trigger (assoc base :max-in-flight 0))) "must be positive")
@@ -129,6 +134,7 @@
   (is (m/validate triggers/Trigger
                   {:name :plan-bug :source {:type :manual} :skill :plan-bug
                    :payload "Plan {{event/title}}"
+    :limits {:budget "8h"}
                    :session-profile :full
                    :session-name-prefix "impl-"
                    :on-promote {:notion-status "In progress"}})))
@@ -136,7 +142,8 @@
 (deftest trigger-rejects-bad-session-name-prefix
   (is (not (m/validate triggers/Trigger
                        {:name :plan-bug :source {:type :manual} :skill :plan-bug
-                        :payload "x" :session-name-prefix 42}))))
+                        :payload "x"
+    :limits {:budget "8h"} :session-name-prefix 42}))))
 
 (deftest placeholder-keys-extracts-ordered-distinct-event-keys
   (is (= [:url :note]
@@ -153,6 +160,7 @@
                                        :source {:type :slack-channel :channel "C"}
                                        :skill :triage-bug
                                        :payload "Triage {{event/title}}"
+    :limits {:budget "8h"}
                                        :intake :queue}]}))
           (let [t (triggers/find-by-name (triggers/load-for-project :brian)
                                          :triage-slack-bugs)]

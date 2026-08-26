@@ -81,7 +81,8 @@
                        {:triggers [{:name    :investigate-bug
                                     :source  {:type :manual}
                                     :skill   :investigate-bug
-                                    :payload "url={{event/url}}"}]})
+                                    :payload "url={{event/url}}"
+                                    :limits  {:budget "8h"}}]})
         ;; 2. enqueue an envelope
         (cstate/ensure-dirs!)
         (queue/enqueue! {:target  {:project :brian :trigger :investigate-bug}
@@ -123,7 +124,8 @@
                        {:triggers [{:name    :failing
                                     :source  {:type :manual}
                                     :skill   :foo
-                                    :payload ""}]})
+                                    :payload ""
+                                    :limits  {:budget "8h"}}]})
         (cstate/ensure-dirs!)
         (dotimes [_ 3]
           (queue/enqueue! {:target  {:project :brian :trigger :failing}

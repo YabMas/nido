@@ -311,13 +311,19 @@
 
 (deftest baseline-cmd-passes-a-budget-through-to-the-amender
   ;; The iteration count is uncapped by design, so the per-launch wall clock is
-  ;; the only bound on a single hung round.
+  ;; the only bound on a single hung round — which is why it now DEFAULTS rather
+  ;; than being absent. This test previously asserted "none by default, same as
+  ;; the diff loop" directly beneath that same comment, which is the hole stated
+  ;; in two sentences that contradict each other: the only bound there is, and
+  ;; there is none unless you ask.
   (let [seen (atom nil)]
     (with-redefs [rloop/run-loop (fn [cfg] (reset! seen cfg) {:status :sufficient})]
       (with-out-str (t/baseline-cmd ":cwd" "/w" ":budget" "30m"))
-      (is (= "30m" (:budget @seen)))
+      (is (= "30m" (:budget @seen)) "an explicit budget wins")
       (with-out-str (t/baseline-cmd ":cwd" "/w"))
-      (is (nil? (:budget @seen)) "none by default, same as the diff loop"))))
+      (is (= t/default-launch-budget (:budget @seen))
+          "and one is declared when the caller names none")
+      (is (some? t/default-launch-budget)))))
 
 ;; ── The design loop ─────────────────────────────────────────────────────────
 
