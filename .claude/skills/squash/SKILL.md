@@ -152,7 +152,7 @@ colocated source repo — it cannot run in this worktree. Re-derive `$SRC` here:
 SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
         | sed -E 's#^git@github\.com:##; s#^https://github\.com/##; s#\.git$##')
 SRC=$(cd .jj && cd "$(dirname "$(cat repo)")/.." && pwd)
-TRUNK=$(gh repo view -R "$SLUG" --json defaultBranchRef -q '.defaultBranchRef.name')
+TRUNK=$(gh repo view "$SLUG" --json defaultBranchRef -q '.defaultBranchRef.name')
 (cd "$SRC" && gh stack link --base "$TRUNK" <session>--<l1> <session>--<l2> <session>--<l3> 2>&1); echo "EXIT=$?"
 ```
 

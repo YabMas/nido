@@ -289,7 +289,7 @@ called. For `gh`, read the name from the repo:
 ```bash
 SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
         | sed -E 's#^git@github\.com:##; s#^https://github\.com/##; s#\.git$##')
-TRUNK=$(gh repo view -R "$SLUG" --json defaultBranchRef -q '.defaultBranchRef.name')
+TRUNK=$(gh repo view "$SLUG" --json defaultBranchRef -q '.defaultBranchRef.name')
 ```
 
 `$TRUNK` is the bottom layer's `--base` and the `baseRefName` that identifies the
@@ -304,7 +304,7 @@ Derive `$SLUG`/`$SRC` in this block — they do not survive from any earlier one
 SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
         | sed -E 's#^git@github\.com:##; s#^https://github\.com/##; s#\.git$##')
 SRC=$(cd .jj && cd "$(dirname "$(cat repo)")/.." && pwd)
-TRUNK=$(gh repo view -R "$SLUG" --json defaultBranchRef -q '.defaultBranchRef.name')
+TRUNK=$(gh repo view "$SLUG" --json defaultBranchRef -q '.defaultBranchRef.name')
 
 # 1. jj pushes the layers (from the worktree)
 jj git push -b 'glob:<session>--*'
@@ -395,7 +395,7 @@ earlier one:
 SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
         | sed -E 's#^git@github\.com:##; s#^https://github\.com/##; s#\.git$##')
 SRC=$(cd .jj && cd "$(dirname "$(cat repo)")/.." && pwd)
-TRUNK=$(gh repo view -R "$SLUG" --json defaultBranchRef -q '.defaultBranchRef.name')
+TRUNK=$(gh repo view "$SLUG" --json defaultBranchRef -q '.defaultBranchRef.name')
 (cd "$SRC" && gh stack link --base "$TRUNK" <session>--<l1> <session>--<l2> <session>--<l3> --open 2>&1); echo "EXIT=$?"
 ```
 
@@ -619,7 +619,7 @@ Link incrementally. No unstacking; this path is verified to extend a live stack:
 SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
         | sed -E 's#^git@github\.com:##; s#^https://github\.com/##; s#\.git$##')
 SRC=$(cd .jj && cd "$(dirname "$(cat repo)")/.." && pwd)
-TRUNK=$(gh repo view -R "$SLUG" --json defaultBranchRef -q '.defaultBranchRef.name')
+TRUNK=$(gh repo view "$SLUG" --json defaultBranchRef -q '.defaultBranchRef.name')
 jj git push -b 'glob:<session>--*'
 (cd "$SRC" && gh stack link --base "$TRUNK" <session>--<l1> <session>--<l2> <session>--<l3> 2>&1); echo "EXIT=$?"
 ```
@@ -649,7 +649,7 @@ Dissolving the stack object releases the base lock, and then a **single**
 SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
         | sed -E 's#^git@github\.com:##; s#^https://github\.com/##; s#\.git$##')
 SRC=$(cd .jj && cd "$(dirname "$(cat repo)")/.." && pwd)
-TRUNK=$(gh repo view -R "$SLUG" --json defaultBranchRef -q '.defaultBranchRef.name')
+TRUNK=$(gh repo view "$SLUG" --json defaultBranchRef -q '.defaultBranchRef.name')
 jj git push -b 'glob:<session>--*'
 # scope to THIS session's stack — the repo holds other sessions' stacks too
 STACKNUM=$(gh api repos/"$SLUG"/stacks \
@@ -753,6 +753,11 @@ succeeds. Not something to design around, just an expected extra step when
 cleaning up a merged stack's branches.
 
 ## Common mistakes
+
+- **`gh repo view -R "$SLUG"`** — `gh repo view` takes the repo as a
+  POSITIONAL argument, unlike every other `gh` command here. With `-R` it
+  exits `unknown shorthand flag: 'R'`, `$TRUNK` comes out empty, and the next
+  command goes out as `--base ""`. Write `gh repo view "$SLUG"`.
 
 - **Running `gh stack` in the worktree** — it needs a git repository; a
   non-colocated jj workspace has none. Run it from `$SRC` (§4). (`gh api …/stacks`

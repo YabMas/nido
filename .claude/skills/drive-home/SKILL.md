@@ -105,7 +105,7 @@ single-PR session, and of layers created but never linked. Fall back to
 ```bash
 SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
         | sed -E 's#^git@github\.com:##; s#^https://github\.com/##; s#\.git$##')
-TRUNK=$(gh repo view -R "$SLUG" --json defaultBranchRef -q '.defaultBranchRef.name')
+TRUNK=$(gh repo view "$SLUG" --json defaultBranchRef -q '.defaultBranchRef.name')
 gh pr list -R "$SLUG" --state open --limit 50 \
   --json number,url,headRefName,baseRefName,isDraft,mergeStateStatus \
   --jq '.[] | select(.headRefName == "<session>" or (.headRefName | startswith("<session>--")))'

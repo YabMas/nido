@@ -103,7 +103,7 @@ poller needs to react when the PR later merges.
    ```bash
    SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
            | sed -E 's#^git@github\.com:##; s#^https://github\.com/##; s#\.git$##')
-   TRUNK=$(gh repo view -R "$SLUG" --json defaultBranchRef -q '.defaultBranchRef.name')
+   TRUNK=$(gh repo view "$SLUG" --json defaultBranchRef -q '.defaultBranchRef.name')
    gh pr create -R "$SLUG" --base "$TRUNK" --head '<session>' --draft \
      --title "<title>" --body "<body>"
    ```
@@ -232,7 +232,7 @@ that commit's message body and its review brief.
 ```bash
 SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
         | sed -E 's#^git@github\.com:##; s#^https://github\.com/##; s#\.git$##')
-TRUNK=$(gh repo view -R "$SLUG" --json defaultBranchRef -q '.defaultBranchRef.name')
+TRUNK=$(gh repo view "$SLUG" --json defaultBranchRef -q '.defaultBranchRef.name')
 gh pr create -R "$SLUG" --base "$TRUNK"          --head <session>--<l1> --draft \
   --title "[1/3] <subject>" --body "<generated body>"
 gh pr create -R "$SLUG" --base <session>--<l1>   --head <session>--<l2> --draft \
@@ -262,7 +262,7 @@ that layer on its own, which is the entire point of stacking it.
 SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
         | sed -E 's#^git@github\.com:##; s#^https://github\.com/##; s#\.git$##')
 SRC=$(cd .jj && cd "$(dirname "$(cat repo)")/.." && pwd)
-TRUNK=$(gh repo view -R "$SLUG" --json defaultBranchRef -q '.defaultBranchRef.name')
+TRUNK=$(gh repo view "$SLUG" --json defaultBranchRef -q '.defaultBranchRef.name')
 (cd "$SRC" && gh stack link --base "$TRUNK" <n1> <n2> <n3> 2>&1); echo "EXIT=$?"
 ```
 
@@ -365,6 +365,7 @@ the fix is a **new** PR — not an edit of the merged one:
   `-b` implies it (step 3, §2).
 - **Capturing `gh stack link`'s stdout, or ignoring its exit code** — it prints
   to **stderr** and exits 5 on a partial, non-rolled-back failure (§4).
+- **`gh repo view -R "$SLUG"`** — `gh repo view` takes the repo as a POSITIONAL argument, unlike every other `gh` command here. With `-R` it exits `unknown shorthand flag: 'R'`, `$TRUNK` comes out empty, and the next command goes out as `--base ""`. Write `gh repo view "$SLUG"`.
 - **Hardcoding `--base main`** — read the default branch into `$TRUNK` (step 3,
   §3).
 - **Thinking `-R "$SLUG"` is enough for every `gh pr` command** — it is not for
