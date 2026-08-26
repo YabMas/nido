@@ -98,6 +98,37 @@
          distinct
          (sort-by (juxt first second)))))
 
+(defn- emptied
+  "Fields that said something and now say nothing.
+
+   Every other detector here measures something with a natural cardinality —
+   how many modules, which ids, which file:line references. A survey's prose
+   fields have none, so blanking one is claiming less in the one way nothing
+   counted: the schema types them `string?`, so \"\" validates, the ledger
+   accepts it, and the round that follows has nothing left to refute.
+
+   Only blank-from-non-blank. Shortening is not measured and must not be — an
+   amender tightening a claim is doing the job, and a length threshold would
+   report the good version of the edit alongside the bad one. Blank is the
+   unambiguous case and the only one worth naming."
+  [prev curr]
+  (let [gone (fn [subject p c fields]
+               (for [f fields
+                     :when (and (not (str/blank? (str (get p f))))
+                                (str/blank? (str (get c f))))]
+                 (retreat :emptied (str subject " " (name f) " now says nothing"))))
+        by-id (fn [xs] (into {} (keep #(when (:id %) [(:id %) %])) xs))
+        within (fn [k subject fields]
+                 (let [cm (by-id (get curr k))]
+                   (mapcat (fn [[id p]]
+                             (when-let [c (cm id)]
+                               (gone (str subject " " id "'s") p c fields)))
+                           (sort-by key (by-id (get prev k))))))]
+    (concat
+     (gone "the survey's" prev curr [:shape :composition :bounded-by :area])
+     (within :modules      "module" [:module :hides :interface])
+     (within :load-bearing "claim"  [:property :falsified-by]))))
+
 (defn baseline-retreats
   "Everything the superseding baseline claims less of than the one before it.
 
@@ -174,7 +205,8 @@
       (for [[file start end] ev-gone]
         (retreat :evidence-dropped
                  (str file ":" start (when (not= start end) (str "-" end))
-                      " is cited by no load-bearing property any more")))))))
+                      " is cited by no load-bearing property any more")))
+      (emptied prev curr)))))
 
 ;; ── Design ──────────────────────────────────────────────────────────────────
 

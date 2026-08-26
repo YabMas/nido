@@ -265,3 +265,45 @@
     (is (empty? (filter (comp #{:claim-dropped} :what)
                         (retreat/baseline-retreats modular-baseline curr)))
         "same ids, so no claim was dropped however much the wording moved")))
+
+;; ── Prose that stops saying anything ────────────────────────────────────────
+
+(def ^:private full-survey
+  {:format :baseline :area "orders" :bounded-by "money on an order"
+   :shape "one rounding boundary" :composition "only the aggregate sees the lines"
+   :read ["src/a.clj"]
+   :modules [{:id "m1" :module "the aggregate" :hides "the summing order"
+              :interface "an order's total"}]
+   :load-bearing [{:id "c1" :property "the aggregate is the only summing path"
+                   :falsified-by "a second path that sums lines"
+                   :evidence ["src/a.clj:1"]}]})
+
+(deftest a-field-that-stops-saying-anything-is-a-retreat
+  ;; Every other detector counts something. Prose has no cardinality, the schema
+  ;; types these `string?` so "" validates, and the ledger accepts it — so
+  ;; blanking a field claimed less in the one way nothing measured, and the next
+  ;; round had nothing left to refute.
+  (let [curr (-> full-survey
+                 (assoc :composition "")
+                 (assoc-in [:modules 0 :hides] "")
+                 (assoc-in [:load-bearing 0 :falsified-by] ""))
+        details (map :detail (filter #(= :emptied (:what %))
+                                     (retreat/baseline-retreats full-survey curr)))]
+    (is (= ["the survey's composition now says nothing"
+            "module m1's hides now says nothing"
+            "claim c1's falsified-by now says nothing"]
+           details))))
+
+(deftest shortening-prose-is-not-a-retreat
+  ;; An amender tightening a claim is doing the job. Only blank-from-non-blank
+  ;; is unambiguous; a length threshold would report the good edit too.
+  (let [curr (assoc full-survey :composition "only the aggregate sums")]
+    (is (empty? (filter #(= :emptied (:what %))
+                        (retreat/baseline-retreats full-survey curr))))))
+
+(deftest a-dropped-module-is-not-also-reported-as-emptied
+  ;; It is already named as dropped; saying it twice reads as two losses.
+  (let [curr (assoc full-survey :modules [])
+        whats (set (map :what (retreat/baseline-retreats full-survey curr)))]
+    (is (contains? whats :module-dropped))
+    (is (not (contains? whats :emptied)))))
