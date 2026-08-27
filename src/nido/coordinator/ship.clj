@@ -55,6 +55,11 @@
                 :limits            {:budget merge-budget :max-failures 3}
                 :priority          0
                 :session-profile   :full
+                ;; What the daemon selects this Run's body by. It used to be
+                ;; recognised by its :trigger, which meant the one lane that
+                ;; needed a different body was named twice — here and in the
+                ;; daemon's branch.
+                :mode              :merge
                 :uncapped?         true
                 :state             :queued
                 :state-history     [{:at (clock/now-iso) :state :queued}]

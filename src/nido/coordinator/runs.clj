@@ -51,6 +51,15 @@
    [:limits            [:map-of keyword? any?]]
    [:priority          int?]
    [:session-profile   keyword?]
+   ;; How this Run EXECUTES — which body the daemon hands it to. An execution
+   ;; selector, deliberately not a position: where a workstream stands is
+   ;; nido.pipeline's question and is derived, while this is a fact about one
+   ;; Run, written when it is minted.
+   ;;
+   ;; It replaces a hardcoded test on :trigger = :merge. Optional because every
+   ;; Run written before it exists carries none, and absent means the ordinary
+   ;; spawn — so old run.edn files keep executing exactly as they did.
+   [:mode              {:optional true} [:maybe keyword?]]
    [:on-promote        {:optional true} [:maybe [:map-of keyword? any?]]]
    [:uncapped?         boolean?]
    [:state             (into [:enum] states)]

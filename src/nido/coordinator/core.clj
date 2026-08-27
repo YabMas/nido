@@ -748,6 +748,32 @@
     (ship/handle-ship! env)
     (process-envelope! env triggers-by-project)))
 
+(def execution-bodies
+  "Execution mode → the body that runs a Run of that mode.
+
+   This replaced a hardcoded `(if (= :merge (:trigger run)) …)`. The branch was
+   fine while exactly one lane needed a different body and stopped being fine the
+   moment a second did: every new mode meant editing a conditional in the daemon,
+   and the lane that needed it was named twice — once where the Run is minted and
+   once in the test that recognised it.
+
+   A mode absent from this map falls to the ordinary spawn, which is also what a
+   Run carrying NO mode gets. That is the fail-safe direction and it is what keeps
+   every run.edn written before the field existed executing exactly as it did.
+
+   Deliberately an EXECUTION selector and not a position. Where a workstream
+   stands is nido.pipeline's question, derived on read; this is a fact about one
+   Run, written when it is minted."
+  {:merge (fn [rid] (ship/drive-home-blocking! rid))})
+
+(defn execute!
+  "Hand `rid` to the body its mode selects."
+  [rid]
+  (let [mode (:mode (runs/read-run rid))]
+    (if-let [body (get execution-bodies mode)]
+      (body rid)
+      (run-blocking! rid))))
+
 (defn tick!
   "One iteration of the main loop. Public for testability."
   []
@@ -770,10 +796,7 @@
         ;; free slots. on-spawn dispatches :merge Runs to drive-home-blocking!
         ;; and everything else to run-blocking!.
         (review/sweep-resolved!)
-        (let [on-spawn (fn [rid]
-                         (if (= :merge (:trigger (runs/read-run rid)))
-                           (ship/drive-home-blocking! rid)
-                           (run-blocking! rid)))
+        (let [on-spawn (fn [rid] (execute! rid))
               ;; :merge Runs reuse an existing session whose autonomy :trigger is
               ;; NOT :merge, so session-based gating can't see them — count :merge
               ;; from Run state instead (no double-count: no session carries :merge).

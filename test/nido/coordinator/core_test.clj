@@ -789,3 +789,33 @@
       (#'core/maybe-adopt! (* 10 60 1000))
       (is (= [:pruned :adopted] @calls)
           "the registry is cleaned before adoption reads it, in the same sweep"))))
+
+;; ── Which body a Run executes under ─────────────────────────────────────────
+
+(deftest a-runs-mode-selects-its-body
+  ;; It used to be a hardcoded test on :trigger = :merge, which named the one
+  ;; lane needing a different body twice — where the Run is minted and again in
+  ;; the daemon's branch.
+  (let [went (atom nil)]
+    (with-redefs [runs/read-run (constantly {:id "r1" :mode :merge})
+                  core/execution-bodies {:merge (fn [rid] (reset! went [:merge rid]))}]
+      (core/execute! "r1")
+      (is (= [:merge "r1"] @went)))))
+
+(deftest a-run-with-no-mode-takes-the-ordinary-spawn
+  ;; Every run.edn written before the field existed carries none, and must keep
+  ;; executing exactly as it did.
+  (let [spawned (atom nil)]
+    (with-redefs [runs/read-run (constantly {:id "r2"})
+                  core/run-blocking! (fn [rid] (reset! spawned rid))]
+      (core/execute! "r2")
+      (is (= "r2" @spawned)))))
+
+(deftest a-mode-nothing-registers-falls-back-rather-than-failing
+  ;; The fail-safe direction: an unrecognised mode spawns the ordinary way
+  ;; instead of leaving the Run with no body at all.
+  (let [spawned (atom nil)]
+    (with-redefs [runs/read-run (constantly {:id "r3" :mode :something-unregistered})
+                  core/run-blocking! (fn [rid] (reset! spawned rid))]
+      (core/execute! "r3")
+      (is (= "r3" @spawned)))))
