@@ -30,6 +30,7 @@
    [nido.coordinator.sources.slack-reaction :as slack-reaction-source]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.status-file :as status-file]
+   [nido.coordinator.drive :as drive]
    [nido.coordinator.executor :as executor]
    [nido.coordinator.github-merge :as github-merge]
    [nido.coordinator.github-issue-intake :as github-issue-intake]
@@ -764,7 +765,17 @@
    Deliberately an EXECUTION selector and not a position. Where a workstream
    stands is nido.pipeline's question, derived on read; this is a fact about one
    Run, written when it is minted."
-  {:merge (fn [rid] (ship/drive-home-blocking! rid))})
+  {:merge (fn [rid] (ship/drive-home-blocking! rid))
+   ;; The driven stage. Its body runs the stage in-process inside the slot the
+   ;; executor gave it, submits nothing and waits on nothing — which is what
+   ;; keeps a driven chain from wedging against another at a cap of two.
+   :mechanical
+   (fn [rid]
+     (let [r (runs/read-run rid)
+           stage (keyword (:stage (:event-payload r)))]
+       (runs/transition! rid :running)
+       (try (drive/run-stage! (:project r) (:workstream-id r) stage)
+            (finally (runs/transition! rid :done)))))})
 
 (defn execute!
   "Hand `rid` to the body its mode selects."
@@ -796,6 +807,13 @@
         ;; free slots. on-spawn dispatches :merge Runs to drive-home-blocking!
         ;; and everything else to run-blocking!.
         (review/sweep-resolved!)
+        ;; Advance the workstreams on the driver's allow-list. Empty by default,
+        ;; so landing this drives nothing until somebody names a workstream.
+        (try (drive/tick!)
+             (catch Throwable t
+               (binding [*err* *err*]
+                 (.println ^java.io.PrintWriter *err*
+                           (str "nido drive: tick failed — " (ex-message t))))))
         (let [on-spawn (fn [rid] (execute! rid))
               ;; :merge Runs reuse an existing session whose autonomy :trigger is
               ;; NOT :merge, so session-based gating can't see them — count :merge

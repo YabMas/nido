@@ -7,7 +7,8 @@
    [nido.coordinator.drive :as drive]
    [nido.coordinator.session :as session]
    [nido.coordinator.state :as cstate]
-   [nido.coordinator.workstream :as ws]))
+   [nido.coordinator.workstream :as ws]
+   [nido.pipeline :as pipeline]))
 
 (defn- with-tmp [f]
   (let [tmp (fs/create-temp-dir)]
@@ -21,6 +22,13 @@
    :trigger :plan-bug :limits {:budget "8h"} :priority 0 :uncapped? false
    :on-promote nil :phase :running
    :phase-history [{:at "2026-08-27T00:00:00Z" :phase :running}] :error nil})
+
+(def ^:private a-survey
+  {:format :baseline :area "a" :bounded-by "b" :shape "s"
+   :modules [{:id "m" :module "m" :hides "h" :interface "i"}]
+   :composition "c"
+   :load-bearing [{:id "c1" :property "p" :falsified-by "f"}]
+   :read ["src/a.clj"]})
 
 (defn- a-ws []
   (:id (ws/create! :brian {:stage :in-progress :external-refs []})))
@@ -128,3 +136,176 @@
           (is (= :escalate (:disposition r)))
           (is (some? (:seq r)))
           (is (some? (ws/latest-entry :brian id :blocker))))))))
+
+;; ── The allow-list is the safety ────────────────────────────────────────────
+
+(deftest nobody-is-driven-by-default
+  ;; Landing the driver must not start advancing every open workstream at once.
+  (with-tmp (fn [] (is (= #{} (drive/driven))))))
+
+(deftest a-workstream-is-driven-only-once-named-and-stops-when-unnamed
+  (with-tmp
+    (fn []
+      (let [id (a-ws)]
+        (is (false? (drive/driving? :brian id)))
+        (drive/drive! :brian id)
+        (is (true? (drive/driving? :brian id)))
+        (drive/undrive! :brian id)
+        (is (false? (drive/driving? :brian id))
+            "the cheapest undo a phase with none can have")))))
+
+;; ── What the driver decides to fire ─────────────────────────────────────────
+
+(deftest only-a-mechanical-stage-with-a-runner-is-fired
+  (is (= :verify-survey (:fire (drive/fireable
+                                {:next {:stage :verify-survey :mode :mechanical}}))))
+  (is (= :decide-design (:fire (drive/fireable
+                                {:next {:stage :decide-design :mode :mechanical}})))))
+
+(deftest the-driver-declines-everything-it-is-not-for
+  (is (= :terminal (:skip (drive/fireable {:next nil}))))
+  (is (= :waiting-on-a-human
+         (:skip (drive/fireable {:next {:stage :approve-design :mode :human}})))
+      "a human gate is not something to fire past")
+  (is (= :not-mechanical
+         (:skip (drive/fireable {:next {:stage :survey :mode :authoring}})))
+      "authoring is a later phase")
+  (is (= :not-mechanical
+         (:skip (drive/fireable {:next {:stage :implement :mode :working-copy}}))))
+  (is (= :no-runner
+         (:skip (drive/fireable {:next {:stage :publish-draft-pr :mode :mechanical}})))
+      "the projection can name a stage this phase cannot run"))
+
+;; ── Firing ──────────────────────────────────────────────────────────────────
+
+(deftest the-tick-fires-nothing-for-a-workstream-nobody-named
+  (with-tmp
+    (fn []
+      (let [id (a-ws)
+            submitted (atom [])]
+        (ws/append-entry! :brian id {:kind :intent}
+                          (pr-str {:format :intent :goal "g" :done-when ["d"]}))
+        (is (= [] (drive/tick! #(swap! submitted conj %))))
+        (is (= [] @submitted))))))
+
+(deftest the-tick-submits-one-run-and-does-not-wait-for-it
+  ;; Fire-and-forget is what keeps a driven chain from wedging: with
+  ;; :global-parallel-cap at 2, a driver that held a slot while waiting on one
+  ;; would deadlock against a second chain doing the same.
+  (with-tmp
+    (fn []
+      (let [id (a-ws)
+            submitted (atom [])]
+        (session/create! :brian id {:name "auto" :weight :heavy
+                                    :autonomy a-running-agent})
+        (ws/append-entry! :brian id {:kind :intent}
+                          (pr-str {:format :intent :goal "g" :done-when ["d"]}))
+        (ws/append-entry! :brian id {:kind :baseline} (pr-str a-survey))
+        (drive/drive! :brian id)
+        (let [out (drive/tick! #(swap! submitted conj %))]
+          (is (= 1 (count out)))
+          (is (= :verify-survey (:fired (first out)))
+              "a survey with no verdict is at :surveyed, whose next act is mechanical")
+          (is (= 1 (count @submitted)))
+          (is (= :drive (:trigger (first @submitted))))
+          (is (false? (:uncapped? (first @submitted)))
+              "a driven stage takes a slot like everything else"))))))
+
+(deftest the-tick-does-not-fire-a-second-stage-while-one-is-running
+  ;; The projection still reports the OLD position until the stage writes its
+  ;; record, so an unguarded tick would re-fire the same stage every second.
+  (with-tmp
+    (fn []
+      (let [id (a-ws)
+            submitted (atom [])]
+        (session/create! :brian id {:name "auto" :weight :heavy
+                                    :autonomy a-running-agent})
+        (ws/append-entry! :brian id {:kind :intent}
+                          (pr-str {:format :intent :goal "g" :done-when ["d"]}))
+        (ws/append-entry! :brian id {:kind :baseline} (pr-str a-survey))
+        (drive/drive! :brian id)
+        (drive/tick! #(swap! submitted conj %))
+        (let [out (drive/tick! #(swap! submitted conj %))]
+          (is (= :already-running (:skipped (first out))))
+          (is (= 1 (count @submitted)) "still one, not two"))))))
+
+;; ── Retries are bounded ─────────────────────────────────────────────────────
+
+(defn- stage-returning
+  "A mechanical stage whose task returns the given statuses in turn, counting
+   calls. Sleeps are captured rather than taken."
+  [statuses]
+  (let [calls (atom 0) slept (atom [])]
+    {:calls calls :slept slept
+     :run (fn [project ws-id]
+            (with-redefs [drive/mechanical-stages
+                          {:verify-survey {:task ::fake :label "baseline"}}
+                          requiring-resolve
+                          (fn [_] (fn [_] (let [i @calls]
+                                            (swap! calls inc)
+                                            (nth statuses (min i (dec (count statuses)))))))]
+              ;; :cwd injected — a real session home is not what these tests
+              ;; are about, and run-stage!'s own no-session branch is covered
+              ;; separately.
+              (drive/run-stage! project ws-id :verify-survey
+                                {:cwd "/tmp" :sleep-fn #(swap! slept conj %)})))}))
+
+(deftest a-machine-failure-is-retried-and-then-stops
+  ;; :codex-failed says the machinery failed, not that the round decided
+  ;; something. Trying again is right; trying forever is not.
+  (with-tmp
+    (fn []
+      (let [id (a-ws)
+            f  (stage-returning [:codex-failed])
+            r  ((:run f) :brian id)]
+        (is (= drive/max-attempts @(:calls f)) "tried exactly max-attempts times")
+        (is (true? (:exhausted? r)))
+        (is (= 2 (count @(:slept f))) "backed off between attempts, not after the last")
+        (is (some? (:seq r)) "and parked")
+        (let [e (ws/latest-entry :brian id :blocker)]
+          (is (= 3 (count (:tried e))) "every attempt is on the halt")
+          (is (str/includes? (:summary e) "failed to run 3 times"))
+          (is (str/includes? (:needs e) "machinery")))))))
+
+(deftest a-transient-failure-that-clears-is-not-parked
+  (with-tmp
+    (fn []
+      (let [id (a-ws)
+            f  (stage-returning [:codex-failed :sufficient])
+            r  ((:run f) :brian id)]
+        (is (= 2 @(:calls f)) "one retry, then it worked")
+        (is (nil? (:exhausted? r)))
+        (is (= :advance (:disposition r)))
+        (is (nil? (ws/latest-entry :brian id :blocker))
+            "nothing to tell a human about")))))
+
+(deftest a-decided-round-is-never-run-twice
+  ;; :disputed is the round SAYING something. Retrying it would run a decided
+  ;; stage again and could only produce the same answer.
+  (with-tmp
+    (fn []
+      (let [id (a-ws)
+            f  (stage-returning [:disputed])
+            r  ((:run f) :brian id)]
+        (is (= 1 @(:calls f)))
+        (is (= [] @(:slept f)) "no backoff for something that was not a failure")
+        (is (= :escalate (:disposition r)))
+        (is (some? (ws/latest-entry :brian id :blocker)))))))
+
+(deftest parking-is-itself-the-stop
+  ;; The driver needs no rule about leaving parked workstreams alone: a halt
+  ;; makes the position :blocked, whose next action is a person's, so fireable
+  ;; skips it. This is what bounds a retry loop across ticks as well as within
+  ;; one — once it parks, nothing fires it again.
+  (with-tmp
+    (fn []
+      (let [id (a-ws)]
+        (ws/append-entry! :brian id {:kind :intent}
+                          (pr-str {:format :intent :goal "g" :done-when ["d"]}))
+        (ws/append-entry! :brian id {:kind :baseline} (pr-str a-survey))
+        (is (= :verify-survey (:fire (drive/fireable (pipeline/of :brian id))))
+            "fireable before the halt")
+        (drive/park! :brian id {:stage :verify-survey :outcome :codex-failed})
+        (let [pos (pipeline/of :brian id)]
+          (is (= :blocked (:at pos)))
+          (is (= :waiting-on-a-human (:skip (drive/fireable pos)))))))))

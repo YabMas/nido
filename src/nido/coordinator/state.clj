@@ -43,6 +43,11 @@
 (defn config-path []
   (str (fs/path (coordinator-root) "config.edn")))
 
+(defn driving-path
+  "The allow-list of workstreams the driver may advance. Absent = nobody."
+  []
+  (str (fs/path (coordinator-dir) "driving.edn")))
+
 (defn breakers-path []
   (str (fs/path (coordinator-root) "breakers.edn")))
 

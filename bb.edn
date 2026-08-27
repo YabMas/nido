@@ -412,6 +412,21 @@
    :doc "Drive a Notion ticket by URL or id: :project <p> <notion-url-or-BR-####>"
    :task (apply nido-pickup/pickup *command-line-args*)}
 
+  nido:drive:list
+  {:requires ([tasks.nido-drive :as nido-drive])
+   :doc "List the workstreams the coordinator's driver may advance (empty by default)."
+   :task (apply nido-drive/list-cmd *command-line-args*)}
+
+  nido:drive:add
+  {:requires ([tasks.nido-drive :as nido-drive])
+   :doc "Let the driver advance one workstream: :project <p> :ws-id <id>"
+   :task (apply nido-drive/add-cmd *command-line-args*)}
+
+  nido:drive:remove
+  {:requires ([tasks.nido-drive :as nido-drive])
+   :doc "Stop driving one workstream: :project <p> :ws-id <id>"
+   :task (apply nido-drive/remove-cmd *command-line-args*)}
+
   nido:findings:file
   {:requires ([tasks.nido-findings :as nido-findings])
    :doc "File a staging findings round on a shipped workstream (reopens it)."
