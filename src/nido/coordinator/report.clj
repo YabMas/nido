@@ -1091,6 +1091,24 @@
   [i]
   (get option-letters i))
 
+(def Attempt
+  "One thing the machinery already did about this halt, before it gave up.
+
+   A halt says what it NEEDS. It did not say what had already been tried, and the
+   difference is what makes an escalation actionable: `the design round ran four
+   rounds and ended :disputed on decomposable` and `the design round refused to
+   start` are the same question with completely different answers, and a human
+   handed only the question cannot tell them apart. Without this they read the
+   run log to find out, which is the work the halt exists to save.
+
+   :outcome is the terminal itself rather than a paraphrase of it, so the record
+   a human reads and the value the driver classified are the same thing."
+  [:map {:closed true}
+   [:stage   keyword?]
+   [:outcome keyword?]
+   [:rounds  {:optional true} pos-int?]
+   [:detail  {:optional true} string?]])
+
 (def BlockerOption
   "One answerable branch of a blocker — what the human is picking BETWEEN.
 
@@ -1124,6 +1142,11 @@
    [:format  [:= :blocker]]
    [:summary string?]
    [:needs   string?]
+   ;; What was already attempted. Optional because a halt raised at hour zero has
+   ;; tried nothing and should not have to claim otherwise — but a halt the
+   ;; machinery reached after four rounds says so here, and a reader can tell the
+   ;; two apart without opening a run log.
+   [:tried   {:optional true} [:vector Attempt]]
    [:options {:optional true}
     [:vector {:min 2 :max (count option-letters)} BlockerOption]]])
 
@@ -1965,10 +1988,22 @@
                   (for [d deviations] (str "- " d)))))))
      (when (seq open) (concat ["" "## Still open"] (for [o open] (str "- " o)))))))
 
-(defn- blocker->markdown [{:keys [summary needs options]}]
+(defn- blocker->markdown [{:keys [summary needs tried options]}]
   (str/join "\n"
     (concat
      ["# Blocker" "" summary "" "## Needs" needs]
+     ;; Before the options, because it is context for the choice rather than a
+     ;; footnote to it — the same reason a design decision prints its trajectory
+     ;; above its ask. A reader who has already been asked the question is
+     ;; answering it.
+     (when (seq tried)
+       (cons "\n## Already tried"
+             (map (fn [{:keys [stage outcome rounds detail]}]
+                    (str "- **" (name stage) "** → `" (name outcome) "`"
+                         (when rounds (str " after " rounds " round"
+                                           (when (not= 1 rounds) "s")))
+                         (when detail (str " — " detail))))
+                  tried)))
      (when (seq options)
        (cons "\n## Options"
              (map-indexed

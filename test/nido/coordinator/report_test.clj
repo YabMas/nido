@@ -1432,3 +1432,52 @@
                 :baseline (pr-str (assoc b :supersedes {:seq 9 :why "corrected"})))))
     (is (thrown? Exception (report/entry-payload
                             :baseline (pr-str (assoc b :supersedes {:seq 9})))))))
+
+;; ── A halt says what was already tried ──────────────────────────────────────
+
+(def ^:private a-driven-halt
+  {:format :blocker
+   :summary "the decision round could not settle the decomposition"
+   :needs   "which way to cut phase three"
+   :tried   [{:stage :verify-survey :outcome :sufficient :rounds 7}
+             {:stage :decide-design :outcome :disputed :rounds 4
+              :detail "decomposable, raised three rounds running"}]
+   :options [{:label "recut" :summary "split the layer"}
+             {:label "ship as is" :summary "accept the cut"}]})
+
+(deftest a-halt-may-carry-what-was-already-attempted
+  (is (= a-driven-halt (report/validate-event :blocker a-driven-halt))))
+
+(deftest a-halt-that-tried-nothing-is-still-valid
+  ;; A blocker raised at hour zero has attempted nothing and must not have to
+  ;; claim otherwise — the field distinguishes the two, so requiring it would
+  ;; destroy the distinction it exists to make.
+  (is (report/validate-event :blocker
+                             {:format :blocker :summary "no stripe key"
+                              :needs "the STRIPE_SECRET for the sandbox"})))
+
+(deftest an-attempt-names-the-terminal-itself-not-a-paraphrase
+  ;; So the record a human reads and the value the driver classified are the
+  ;; same thing, and a reader can look the outcome up rather than guess at it.
+  (is (thrown? Exception
+               (report/validate-event
+                :blocker (assoc a-driven-halt
+                                :tried [{:stage :decide-design
+                                         :outcome "it got stuck"}])))))
+
+(deftest what-was-tried-renders-above-the-choice
+  ;; Context for the answer rather than a footnote to it — a reader who has
+  ;; already been asked the question is answering it.
+  (let [md (report/report->markdown a-driven-halt)]
+    (is (str/includes? md "## Already tried"))
+    (is (str/includes? md "**decide-design** → `disputed` after 4 rounds"))
+    (is (str/includes? md "decomposable, raised three rounds running"))
+    (is (str/includes? md "after 7 rounds"))
+    (is (< (str/index-of md "## Already tried") (str/index-of md "## Options"))
+        "before the branches, not after them")))
+
+(deftest a-single-round-is-not-pluralised
+  (let [md (report/report->markdown
+            (assoc a-driven-halt :tried [{:stage :design :outcome :recut :rounds 1}]))]
+    (is (str/includes? md "after 1 round"))
+    (is (not (str/includes? md "after 1 rounds")))))
