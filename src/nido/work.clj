@@ -320,13 +320,42 @@
         (assoc :origin origin :stage stage)
         (dissoc :source))))
 
+(def ^:private unrendered-bands
+  "Bands the board does not draw a row for, and so does not need a position for.
+   :done is dropped by grouped-by-stage outright; :dismissed renders its own
+   muted row with one action and nothing about where the work stood."
+  #{:done :dismissed})
+
+(defn- with-position
+  "Stamp the pipeline position on a row the board will actually render.
+
+   Here rather than in `to-spine`, which both row paths share: to-spine is pure,
+   and the detail pane already asks pipeline/of for itself — stamping there would
+   make every pane read the ledger twice to answer one question.
+
+   Skipped for the bands nothing draws. It costs a ledger read and a standing
+   closure per row (~4ms measured across brian's 45 open workstreams, ~190ms for
+   the board), which is affordable against a multi-second poll and worth not
+   paying 150 times over for rows in :done."
+  [project row]
+  (cond-> row
+    (not (contains? unrendered-bands (:stage row)))
+    (assoc :position (pipeline/of project (:ws-id row)))))
+
 (defn list-workstreams
   "All of a project's workstreams as enriched rows on the single spine. `live-names`
    (optional set of session names actually holding ports) is threaded into the
-   engagement projection — pass it so a downed one-off reads idle."
+   engagement projection — pass it so a downed one-off reads idle.
+
+   Each rendered row carries :position — where the pipeline says it is and what
+   would happen next. The board used to show only which BAND a workstream was in,
+   so everything between authoring an intent and opening a draft PR looked
+   identical: forty rows reading :in-progress, saying nothing about which of them
+   was waiting on a survey and which on a human."
   ([project] (list-workstreams project nil))
   ([project live-names]
-   (mapv to-spine (wsv/workstream-rows project live-names))))
+   (mapv #(with-position project (to-spine %))
+         (wsv/workstream-rows project live-names))))
 
 (defn winding-down
   "Workstreams of `project` that are FINISHED and still holding ≥1 live session —

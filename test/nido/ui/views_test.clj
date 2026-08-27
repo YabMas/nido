@@ -1244,3 +1244,44 @@
               {})]
     (is (str/includes? html "ledger-index"))
     (is (str/includes? html "superseded by 4"))))
+
+;; ── The board row says where the pipeline is ────────────────────────────────
+
+(def ^:private a-board-screen
+  {:surface :workstreams :scope "all" :tab :active :selection nil})
+
+(defn- board-row
+  [position]
+  (#'views/ws-list-row a-board-screen nil "nido"
+   (cond-> {:ws-id "ws-1" :origin :notion :label "the pipeline" :stage :in-progress}
+     position (assoc :position position))))
+
+(deftest a-row-states-its-position-and-what-would-move-it
+  ;; The band could not: everything from authoring an intent to opening a draft
+  ;; PR is :in-progress, so rows waiting on a survey, on a decision and on a
+  ;; person all read the same.
+  (let [html (str (h/html (board-row {:at :survey-verified
+                                      :next {:stage :design :mode :authoring}})))]
+    (is (str/includes? html "Survey verified"))
+    (is (str/includes? html "write the design"))))
+
+(deftest a-row-waiting-on-a-human-is-lit-and-one-that-is-not-is-muted
+  (let [mine  (str (h/html (board-row {:at :design-decided
+                                       :next {:stage :approve-design :mode :human}})))
+        nido' (str (h/html (board-row {:at :surveyed
+                                       :next {:stage :verify-survey :mode :mechanical}})))]
+    (is (str/includes? mine "pos pos-you")
+        "the next move is a person's — that is what a board is scanned for")
+    (is (not (str/includes? nido' "pos-you")))))
+
+(deftest a-terminal-row-names-no-next-stage
+  (let [html (str (h/html (board-row {:at :published :next nil})))]
+    (is (str/includes? html "Draft PR open"))
+    (is (not (str/includes? html "→")))))
+
+(deftest a-row-with-no-position-renders-as-it-always-did
+  ;; A bare watched page has no workstream to place, and a band nothing draws
+  ;; gets no projection computed for it.
+  (let [html (str (h/html (board-row nil)))]
+    (is (str/includes? html "the pipeline"))
+    (is (not (str/includes? html "class=\"pos")))))

@@ -127,6 +127,11 @@
                         font-size:12.5px; line-height:1.6; }
         .rv-prose .md p { margin:3px 0; }
         .pane { padding:18px 24px; overflow:auto; }
+        .pos { display:inline-flex; gap:6px; align-items:baseline; margin-left:8px; }
+        .pos .pos-at { font-size:11px; color:#8a8ab0; }
+        .pos .pos-nx { font-size:11px; color:#5f5f78; }
+        .pos.pos-you .pos-at { color:#c9a227; }
+        .pos.pos-you .pos-nx { color:#a08a4a; }
         .posn { display:flex; gap:10px; align-items:baseline; flex-wrap:wrap;
                 margin:10px 0 4px; }
         .posn .at { font-size:15px; color:#e8e8e8; font-weight:600; }
@@ -1324,11 +1329,67 @@
   (for [[stage rows] (work/tab-bands tab grouped)]
     {:project project :stage stage :rows rows}))
 
+(def ^:private position-label
+  "What each position reads as to a person. The keyword is the value's, this is
+   the reader's — a pane that printed `:premise-retracted` would be leaking a
+   vocabulary at somebody who only wants to know what is going on."
+  {:intake            "Not started"
+   :intent-stated     "Intent stated"
+   :surveyed          "Surveyed"
+   :survey-verified   "Survey verified"
+   :designed          "Designed"
+   :design-decided    "Decision made"
+   :design-approved   "Approved"
+   :implemented       "Implemented"
+   :reviewed          "Reviewed"
+   :phase-landed      "Phase landed"
+   :published         "Draft PR open"
+   :shipped           "Merged"
+   :findings-open     "Findings open"
+   :blocked           "Blocked"
+   :premise-retracted "Premise retracted"
+   :unplaceable       "Cannot place"})
+
+(def ^:private stage-label
+  {:establish-intent      "establish intent"
+   :survey                "survey the area"
+   :verify-survey         "verify the survey"
+   :design                "write the design"
+   :decide-design         "decide on it"
+   :approve-design        "your approval"
+   :implement             "implement it"
+   :review-implementation "review the diff"
+   :publish-draft-pr      "open the draft PR"
+   :resurvey              "re-survey"
+   :address-findings      "address findings"
+   :answer-blocker        "your answer"})
+
+(defn- position-chip
+  "Where the pipeline says this row is, and what would move it — the one thing a
+   board row could not say before.
+
+   The band alone could not say it. Everything between authoring an intent and
+   opening a draft PR is :in-progress, so forty rows read identically while one
+   waited on a survey, one on a decision and one on a person. The chip is muted
+   by default and lit only when the next move is a HUMAN's, because that is the
+   distinction a board is scanned for.
+
+   Renders nothing for a row with no position — a bare watched page, or a band
+   the projection is not computed for."
+  [{:keys [at next] :as position}]
+  (when position
+    (let [human? (= :human (:mode next))]
+      [:span {:class (str "pos" (when human? " pos-you"))}
+       [:span.pos-at (get position-label at (name at))]
+       (when next
+         [:span.pos-nx (str "→ " (get stage-label (:stage next) (name (:stage next))))])])))
+
 (defn- ws-list-row
   "One selectable list row. Its link carries the view-state (scope + selection),
    so selecting a workstream lands on the SAME list. `sel-id` highlights the
    open row (threaded from the screen so a poll preserves it)."
-  [screen sel-id project {:keys [ws-id origin label needs-you stage ship-substate open-findings]}]
+  [screen sel-id project {:keys [ws-id origin label needs-you stage ship-substate open-findings
+                                 position]}]
   [:a {:class (str "gate-card" (when (= sel-id ws-id) " sel"))
        :href  (str "/workstreams" (screen-query screen {:sel (str project ":" ws-id)}))}
    [:div.gate-top (origin-badge origin) [:span.lbl label]
@@ -1342,7 +1403,7 @@
          :driving        "driving"
          :awaiting-merge "awaiting merge"
          "queued")])]
-   [:div.gate-sub [:span project]]])
+   [:div.gate-sub [:span project] (position-chip position)]])
 
 (defn- winddown-row
   "One winding-down row: closed workstream still holding live sessions. Muted;
@@ -1447,41 +1508,6 @@
       [:button.btn.btn-primary {"data-on:click" (act "start")} "start"])))
 
 (defn- day [at] (when at (let [s (str at)] (subs s 0 (min 10 (count s))))))
-
-(def ^:private position-label
-  "What each position reads as to a person. The keyword is the value's, this is
-   the reader's — a pane that printed `:premise-retracted` would be leaking a
-   vocabulary at somebody who only wants to know what is going on."
-  {:intake            "Not started"
-   :intent-stated     "Intent stated"
-   :surveyed          "Surveyed"
-   :survey-verified   "Survey verified"
-   :designed          "Designed"
-   :design-decided    "Decision made"
-   :design-approved   "Approved"
-   :implemented       "Implemented"
-   :reviewed          "Reviewed"
-   :phase-landed      "Phase landed"
-   :published         "Draft PR open"
-   :shipped           "Merged"
-   :findings-open     "Findings open"
-   :blocked           "Blocked"
-   :premise-retracted "Premise retracted"
-   :unplaceable       "Cannot place"})
-
-(def ^:private stage-label
-  {:establish-intent      "establish intent"
-   :survey                "survey the area"
-   :verify-survey         "verify the survey"
-   :design                "write the design"
-   :decide-design         "decide on it"
-   :approve-design        "your approval"
-   :implement             "implement it"
-   :review-implementation "review the diff"
-   :publish-draft-pr      "open the draft PR"
-   :resurvey              "re-survey"
-   :address-findings      "address findings"
-   :answer-blocker        "your answer"})
 
 (defn- position-line
   "Where this workstream is and what comes next — the pane's first line, and the
