@@ -3,6 +3,8 @@
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is testing]]
+   [malli.core :as m]
+   [nido.coordinator.report :as report]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.workstream :as ws]
    [nido.pipeline :as p]))
@@ -367,3 +369,52 @@
                           {:round 1 :items {"f1" {:id "f1" :severity :blocker
                                                   :summary "still broken"}}})
         (is (= :findings-open (:at (p/of :brian id))))))))
+
+;; ── What a finished stage means ─────────────────────────────────────────────
+
+(defn- ledger-review-statuses
+  "The diff loop's terminals, read off the schema that stores them rather than
+   copied into this test. A hand-kept list is the thing that drifts."
+  []
+  (->> (m/children report/ReviewReport)
+       (some (fn [[k _ s]] (when (= :status k) (m/children s))))))
+
+(deftest every-diff-loop-terminal-is-classified
+  ;; Not via the fallback — the fallback exists for a status nobody has thought
+  ;; about, and every status in the ledger's own enum has been thought about.
+  (doseq [s (ledger-review-statuses)]
+    (is (contains? p/dispositions (p/disposition s)) (str s " must classify"))
+    (is (contains? @#'p/disposition-of-status s)
+        (str s " is in the ledger enum and must be named in the table, not defaulted"))))
+
+(deftest every-record-loop-terminal-is-classified
+  ;; The record pipelines' statuses and the outcomes a round that could not run
+  ;; reports in their place. Gathered from what the loops actually set.
+  (doseq [s [:sufficient :proceed :disputed :underivable :retreated
+             :amend-noop :amend-invalid :amend-touched-code :amend-unreadable
+             :codex-failed :no-output :round-crashed :unusable-answer
+             :nothing-to-check :no-record :no-workstream :not-worth-running
+             :premise-unverified :premise-retracted :design-retracted
+             :no-premise :unreadable-ledger :dry-run]]
+    (is (contains? @#'p/disposition-of-status s)
+        (str s " must be named in the table"))))
+
+(deftest an-unknown-terminal-escalates-rather-than-advancing
+  ;; The fail-safe direction. Advancing on an outcome nobody has understood is
+  ;; how a pipeline steps forward over a thing that went wrong.
+  (is (= :escalate (p/disposition :something-nobody-has-classified)))
+  (is (= :escalate (p/disposition nil))))
+
+(deftest the-four-kinds-of-silence-stay-apart
+  ;; outcome-tagged, carried into the driver: a round that could not run must
+  ;; never mean what a round that ran and found nothing means.
+  (is (= :advance    (p/disposition :sufficient)))
+  (is (= :retry      (p/disposition :codex-failed)))
+  (is (= :route-back (p/disposition :premise-unverified)))
+  (is (= :escalate   (p/disposition :disputed))))
+
+(deftest a-finding-that-contradicts-an-invariant-routes-back-rather-than-escalating
+  ;; The warden already makes this derivation every round — a finding that
+  ;; contradicts a named invariant puts the DESIGN in question, not its
+  ;; execution — and until now nothing consumed it.
+  (is (= :route-back (p/disposition :escalated))))

@@ -314,6 +314,91 @@
     (cond-> a
       (= :establish-intent (:stage a)) (assoc :from kind))))
 
+;; ── What a finished stage means ─────────────────────────────────────────────
+
+(def dispositions
+  "What a driver may do about a stage that has finished.
+
+   :advance     the stage did its job — take the next position
+   :retry       the machinery failed, not the work; the same stage again
+   :route-back  an EARLIER record is at fault, and that stage is where to go
+   :escalate    a human has to decide; nothing further is derivable
+
+   Four, and the classification into them must be total: this is the join that
+   turns a terminal status into a cause. Before it there was exactly one place in
+   the tree where a status became something that happened next — analysis.clj
+   enqueuing an envelope — and everywhere else a loop reported to a human's
+   terminal and stopped."
+  #{:advance :retry :route-back :escalate})
+
+(def ^:private disposition-of-status
+  "Every terminal a stage can end on, and what it means for the workstream.
+
+   The set is not invented here. It is what the loops actually produce: the diff
+   engine's statuses, the record pipelines', and the round outcomes that become
+   statuses when a round could not run at all. Keeping them in ONE table is the
+   point — a reader can see that :sufficient and :codex-failed are not the same
+   kind of silence, which is the distinction `outcome-tagged` exists to preserve
+   and which a driver would otherwise have to re-derive at every call site."
+  {;; ── the work succeeded ──
+   :sufficient           :advance   ; the survey holds; a design may be decided against it
+   :clean                :advance   ; the diff review found nothing
+   :converged            :advance   ; it found things and they were all fixed
+   :not-worth-running    :advance   ; the records say this round would not pay — nothing to do
+
+   ;; ── the machinery failed, not the work ──
+   :codex-failed         :retry
+   :no-output            :retry
+   :round-crashed        :retry
+   :unusable-answer      :retry
+   :review-failed        :retry
+
+   ;; ── an earlier record is at fault, and it is nameable ──
+   :premise-unverified   :route-back  ; go verify the survey this design cites
+   :premise-retracted    :route-back
+   :design-retracted     :route-back
+   :no-premise           :route-back  ; the design cites no survey at all
+   :nothing-to-check     :route-back  ; the survey recorded nothing checkable; it is too thin
+   ;; The diff warden's escalate: a finding CONTRADICTS a named invariant, so the
+   ;; design is in question rather than its execution. That derivation was being
+   ;; made every round already and consumed by nothing — this is the wire.
+   :escalated            :route-back
+
+   ;; ── only a human can settle it ──
+   :proceed              :escalate  ; the design round's ask; the whole point of it
+   :disputed             :escalate  ; judge and amender deadlocked
+   :underivable          :escalate  ; no yardstick to derive against
+   :unfixable            :escalate  ; raised every round and never moved
+   :no-progress          :escalate
+   :unresolved           :escalate  ; the run ended still holding findings
+   :retreated            :escalate  ; the record shrank below its own worth
+   :amend-touched-code   :escalate  ; a record round wrote code; whatever it wrote is still there
+   :amend-noop           :escalate
+   :amend-invalid        :escalate
+   :amend-unreadable     :escalate
+   :fix-noop             :escalate
+   :max-iters            :escalate  ; a cap somebody asked for was reached
+   :warden-indeterminate :escalate
+   :arbiter-indeterminate :escalate  ; pre-rename, still readable in old ledgers
+   :judge-indeterminate  :escalate
+   :no-record            :escalate  ; misconfigured: nothing of that kind to judge
+   :no-workstream        :escalate
+   :unreadable-ledger    :escalate  ; standing is indeterminate, so nothing may proceed
+   ;; A driver never asks for one, so a dry run reaching this table means
+   ;; something upstream is misconfigured — which is a human's to see, not a
+   ;; thing to advance past.
+   :dry-run              :escalate})
+
+(defn disposition
+  "What `status` means for the workstream it finished on.
+
+   An unrecognised status is :escalate, and that is the fail-safe direction: a
+   terminal nobody classified is exactly one a person should look at. The
+   alternative — treating it as :advance — would step the pipeline forward on an
+   outcome no one has understood."
+  [status]
+  (get disposition-of-status status :escalate))
+
 ;; ── The arc, at stage granularity ───────────────────────────────────────────
 
 (def ^:private stage-of-kind
