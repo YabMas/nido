@@ -1,4 +1,4 @@
-(ns nido.ship
+(ns tasks.nido-ship
   "CLI entrypoint: hand the current session's branch to nido's merge lane.
    `nido ship` resolves the session from cwd (home-aware), writes a :ship
    envelope to the coordinator queue, and returns immediately — the daemon

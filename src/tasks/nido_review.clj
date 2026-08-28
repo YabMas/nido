@@ -51,7 +51,7 @@
    :report-path        report-path})
 
 (defn append-review-entry!
-  "Resolve cwd → session → workstream (the nido.ship path) and append one :review
+  "Resolve cwd → session → workstream (the tasks.nido-ship path) and append one :review
    entry. Best-effort: a ledger-write failure must never turn a completed review
    into a failure exit — visibility is a side record, not part of the review. No-op
    returning nil when cwd maps to no workstream or the append fails. Returns ws-id."

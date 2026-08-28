@@ -238,7 +238,7 @@
    :task (apply nido-vsdd/sweep *command-line-args*)}
 
   nido:ship
-  {:requires ([nido.ship :as nido-ship])
+  {:requires ([tasks.nido-ship :as nido-ship])
    :doc "Hand the current session's branch to nido's merge lane (drives /drive-home autonomously, serialized). Run from the session home/worktree."
    :task (apply nido-ship/ship *command-line-args*)}
 

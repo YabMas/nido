@@ -1,8 +1,8 @@
-(ns nido.ship-test
+(ns tasks.nido-ship-test
   (:require
    [clojure.test :refer [deftest is]]
    [nido.coordinator.queue :as queue]
-   [nido.ship :as sut]))
+   [tasks.nido-ship :as sut]))
 
 (deftest enqueue-ship-writes-a-ship-envelope
   (let [written (atom nil)]
