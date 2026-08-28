@@ -14,8 +14,10 @@
    [nido.session.service :as service]
    ;; Load service implementations (must be loaded before state for the
    ;; defmethods to register; state itself has no transitive deps on them).
+   ;; `eval` is additionally aliased: the idempotent up path calls its app
+   ;; toggle directly (see `reconcile-app!`).
    nido.session.services.config-file
-   nido.session.services.eval
+   [nido.session.services.eval :as eval-svc]
    nido.session.services.postgresql
    nido.session.services.process
    [nido.session.state :as state]))
@@ -434,12 +436,39 @@
     (print-session-summary session-data final-ctx)
     session-data))
 
-(defn- session-alive? [session]
+(defn- session-alive?
+  "Is any of this session's PROCESSES still running? Deliberately narrow: it
+   decides only whether re-provisioning would duplicate a live process. The
+   :eval service owns no process at all (it is mount state inside the repl
+   JVM), so it is invisible here by construction — `reconcile-app!` covers it."
+  [session]
   (let [svc-states (:service-states session)]
     (some (fn [[_ s]]
             (when-let [pid (:pid s)]
               (proc/process-alive? pid)))
           svc-states)))
+
+(defn reconcile-app!
+  "Re-start any :eval service of an already-running session whose app is no
+   longer listening.
+
+   Without this, a session whose app died inside a living JVM — a failed
+   auto-reload, a stray `development/stop` — was unrecoverable: `session-alive?`
+   saw the repl pid and short-circuited, so the start-form was never evaluated
+   by `up` nor by the dashboard's retry, which then blamed a timeout that had
+   not happened.
+
+   `start-app!` is itself idempotent (an open port returns immediately), so the
+   healthy case is a no-op. Exceptions propagate, matching `start-service! :eval`
+   on a fresh boot, so the caller reports the real cause. A service with no saved
+   state was never started for this session (a profile that excludes the app), so
+   it is skipped rather than provisioned here."
+  [existing]
+  (doseq [svc-def (:service-defs existing)
+          :when   (= :eval (:type svc-def))
+          :let    [saved-state (get (:service-states existing) (:name svc-def))]
+          :when   saved-state]
+    (eval-svc/start-app! svc-def saved-state (:context existing))))
 
 (defn start-session!
   "Start a session for a project directory using its session.edn definition.
@@ -469,6 +498,9 @@
                  (catch Exception e
                    (core/log-step (str "warning: refresh launcher artifacts: "
                                        (ex-message e)))))
+            ;; ...then converge the one piece of the session that "already
+            ;; running" says nothing about: the app inside the live JVM.
+            (reconcile-app! existing)
             nil)
         (start-services! project-dir project-name instance-id session-edn opts))
       (start-services! project-dir project-name instance-id session-edn opts))))

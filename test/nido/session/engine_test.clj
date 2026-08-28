@@ -4,7 +4,11 @@
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
    [nido.core :as core]
-   [nido.session.engine :as engine]))
+   [nido.process :as proc]
+   [nido.session.engine :as engine]
+   [nido.session.launcher :as launcher]
+   [nido.session.services.eval :as eval-svc]
+   [nido.session.state :as state]))
 
 (def fake-services
   [{:type :postgresql :name :pg}
@@ -82,3 +86,67 @@
         report (#'engine/start-failure-report e 0)]
     (is (not (str/includes? report "last output"))
         "whitespace-only tail is treated as no tail")))
+
+;; ---------------------------------------------------------------------------
+;; App reconciliation on the idempotent `up` path
+;; ---------------------------------------------------------------------------
+
+(def ^:private live-jvm-dead-app
+  "A session as it looks on disk after its app died inside a JVM that kept
+   running: the repl pid is alive, the :eval service holds saved state, and
+   nothing is listening on the app port."
+  {:service-defs    [{:type :process :name :repl}
+                     {:type :eval :name :app :start-form "(start)"}]
+   :service-states  {:repl {:pid 4242}
+                     :app  {:app-port 3646 :nrepl-port 53250 :host "s.p.localhost"}}
+   :context         {:session {:instance-id "p--s"}
+                     :app {:port 3646}}})
+
+(defn- start-session-on-live-session!
+  "Drive `start-session!` down its idempotent branch, collecting the
+   `start-app!` calls it makes. Returns the collected argument vectors."
+  [existing]
+  (let [calls (atom [])]
+    (with-redefs [engine/resolve-project-name (constantly "p")
+                  engine/resolve-instance-id  (constantly "p--s")
+                  engine/load-session-edn     (constantly {:services []})
+                  state/read-session          (constantly existing)
+                  proc/process-alive?         (constantly true)
+                  launcher/write-artifacts!   (fn [& _] nil)
+                  eval-svc/start-app!         (fn [& args] (swap! calls conj (vec args)) true)]
+      (engine/start-session! "/tmp/wt" {}))
+    @calls))
+
+(deftest idempotent-up-restarts-an-app-that-died-inside-a-live-jvm
+  ;; The regression: `session-alive?` answers a question about processes, and
+  ;; the :eval service owns none — so `up` (and the dashboard retry behind it)
+  ;; short-circuited on the live repl pid and never evaluated the start-form.
+  (let [calls (start-session-on-live-session! live-jvm-dead-app)]
+    (is (= 1 (count calls))
+        "the app is started even though the session is 'already running'")
+    (let [[svc-def saved-state session-ctx] (first calls)]
+      (is (= "(start)" (:start-form svc-def)))
+      (is (= 3646 (:app-port saved-state))
+          "hands over the saved state, so the app returns on its own port")
+      (is (= 53250 (:nrepl-port saved-state))
+          "targets the JVM that is still running, not a fresh one")
+      (is (= (:context live-jvm-dead-app) session-ctx)
+          "substitutes the start-form against the persisted session context"))))
+
+(deftest idempotent-up-leaves-a-session-without-an-app-alone
+  (testing "no :eval service at all (an nrepl-only project)"
+    (is (empty? (start-session-on-live-session!
+                 (-> live-jvm-dead-app
+                     (update :service-defs #(filterv (comp #{:process} :type) %))
+                     (update :service-states dissoc :app))))))
+  (testing ":eval service the session's profile never started"
+    (is (empty? (start-session-on-live-session!
+                 (update live-jvm-dead-app :service-states dissoc :app)))
+        "no saved state means no reserved port — provisioning is not this path's job")))
+
+(deftest reconcile-app-lets-the-real-failure-through
+  ;; `dev-action!` turns a thrown cause into the message it shows; swallowing
+  ;; here is what produced the fabricated "did not open its port" report.
+  (with-redefs [eval-svc/start-app! (fn [& _] (throw (ex-info "nREPL is not listening" {})))]
+    (is (thrown-with-msg? Exception #"nREPL is not listening"
+                          (engine/reconcile-app! live-jvm-dead-app)))))
