@@ -1340,3 +1340,24 @@
     (is (not (re-find #"\.posn \.nx \{[^}]*border" css)) "no pill around it")
     (is (not (str/includes? html "class=\"at\""))
         "and the position is not repeated in the body")))
+
+(deftest the-mode-clause-does-not-borrow-the-markdown-card
+  ;; It was rendered as class="md", which is this stylesheet's RENDERED-MARKDOWN
+  ;; block — a bordered card with 16px of padding and a bare rule to match. The
+  ;; clause inherited the box. Visible from the first screenshot of this pane and
+  ;; missed every time, because a stray border reads as someone's design choice.
+  (let [html (views/workstream-pane a-pane {})]
+    (is (str/includes? html "class=\"mode\""))
+    (is (not (re-find #"<span class=\"md\"" html))
+        "no element in this pane may take the markdown block's name")))
+
+(deftest no-pane-class-silently-inherits-a-bare-rule
+  ;; The general form of the bug: a short class name that some other component
+  ;; already owns. Every class the status line and the standing cards introduce
+  ;; is asserted to be scoped under its own parent in the stylesheet.
+  (let [css (views/shell {:body "" :title "t"})]
+    (doseq [c ["nx" "mode" "why" "hk" "hs" "hb" "hf"]]
+      (is (not (re-find (re-pattern (str "(?m)^\\s*\\." c " \\{")) css))
+          (str "." c " must not have a bare rule of its own"))
+      (is (re-find (re-pattern (str "\\.(posn|hold) \\." c " \\{")) css)
+          (str "." c " must be scoped to the component that owns it")))))

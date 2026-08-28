@@ -141,7 +141,11 @@
         .posn .nx { font-size:13px; color:#9a9ac0; }
         .posn .nx b { color:#cdcde0; font-weight:600; }
         .posn .nx.done { color:#6f6f88; font-style:italic; }
-        .posn .md { color:#7a7a95; }
+        /* NOT .md — that is the rendered-markdown block, a bordered card with
+           16px of padding, and a bare `.md` rule this would inherit. Naming a
+           one-word span after an existing component is how a clause acquires a
+           box. */
+        .posn .mode { color:#7a7a95; }
         .posn .why { margin-top:4px; font-size:12px; color:#8a7a50; }
         /* One per row, full text. Three columns fitted the cards on screen and
            made the RECORDS unreadable: a baseline's area or a design's summary is
@@ -1537,7 +1541,7 @@
   [:div.posn
    (if next
      [:div.nx "next · " [:b (get stage-label (:stage next) (name (:stage next)))]
-      [:span.md (case (:mode next)
+      [:span.mode (case (:mode next)
                   :human        " — waiting on you"
                   :mechanical   " — a task nido runs"
                   :authoring    " — nido writes the record"
