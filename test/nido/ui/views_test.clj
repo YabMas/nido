@@ -1290,3 +1290,35 @@
         "and no clamp anywhere — the records are the point of the pane")
     (is (not (str/includes? css "white-space:pre-wrap"))
         "collapsed, because a record's line breaks come from the EDN a human typed")))
+
+(deftest the-pane-separates-what-is-true-now-from-what-happened
+  ;; They were one stream, so the standing records and the log of every
+  ;; superseded revision of them read as the same kind of thing — which is the
+  ;; confusion the standing records were added to end.
+  (let [html (views/workstream-pane
+              (assoc a-pane :entries
+                     [{:seq 2 :kind :baseline :at "2026-08-01T00:00:00Z"
+                       :title "baseline"}])
+              {})
+        at   (fn [h] (str/index-of html (str "<h2>" h "</h2>")))]
+    (is (every? some? [(at "Now") (at "History") (at "Environment")])
+        "three sections")
+    (is (< (at "Now") (at "History") (at "Environment")) "in that order")
+    ;; what currently holds is above the log of how it got there
+    (is (< (str/index-of html "class=\"posn\"") (at "History")))
+    (is (< (str/index-of html "class=\"holds\"") (at "History")))
+    (is (> (str/index-of html "ledger-index") (at "History")))))
+
+(deftest the-actions-sit-with-the-state-they-act-on
+  ;; pane-action-bar reads the CURRENT report, never the entry a reader happens
+  ;; to have open. Under the log they would read as actions on the thing being
+  ;; read, which is the one thing they are not.
+  (let [html (views/workstream-pane
+              (assoc a-pane
+                     :sessions [{:name "auto" :parked? true}]
+                     :entries [{:seq 2 :kind :baseline :at "2026-08-01T00:00:00Z"
+                                :title "baseline"}])
+              {})]
+    (when-let [bar (str/index-of html "action-bar")]
+      (is (< bar (str/index-of html "<h2>History</h2>"))
+          "actions belong to Now"))))

@@ -127,6 +127,11 @@
                         font-size:12.5px; line-height:1.6; }
         .rv-prose .md p { margin:3px 0; }
         .pane { padding:18px 24px; overflow:auto; }
+        /* A rule per section, so the pane reads as areas rather than as one
+           scroll. The first carries none — there is nothing above it to be
+           separated from. */
+        .pane h2 { border-top:1px solid #20203a; padding-top:16px; }
+        .pane h2:first-of-type { border-top:none; padding-top:0; }
         .pos { display:inline-flex; gap:6px; align-items:baseline; margin-left:8px; }
         .pos .pos-at { font-size:11px; color:#8a8ab0; }
         .pos .pos-nx { font-size:11px; color:#5f5f78; }
@@ -1773,23 +1778,31 @@
             (pane-heading origin label links)
             [:p.meta (name stage)]
             (links-row links)
-            ;; What currently holds, before the log of how it got there. The
-            ;; ledger index is still below, whole and unchanged — this is the
-            ;; answer, that is the evidence.
+
+            ;; Two sections, and the split is the pane's whole claim: what is
+            ;; TRUE of this workstream, and what HAPPENED to it. They were one
+            ;; stream, so the standing records and the log of every superseded
+            ;; revision of them read as the same kind of thing — which is exactly
+            ;; the confusion the standing records were added to end.
+            [:h2 "Now"]
             (when position (position-line position))
             (when (seq holds) (holds-block holds))
+            ;; The actions belong HERE and not under the log, because they act on
+            ;; the workstream as it stands — pane-action-bar reads :action-report,
+            ;; the CURRENT report, never the entry a reader happens to have open.
+            ;; Left below the ledger they read as actions on the thing being read,
+            ;; which is the one thing they are not.
+            (when (and on-latest? error-msg)
+              [:div.action-err "⚠ " error-msg])
+            (when on-latest? (pane-action-bar project ws-id origin stage sessions action-report))
+            (when (= :done stage) (file-findings-form project ws-id))
+
+            [:h2 "History"]
             (when ledger
               [:div.card [:strong "ledger "] (:key ledger) " · " (some-> ledger :status name)
                " · " (:report-count ledger) " report(s)"])
             (ledger-browser pos entries report)
-            ;; Live actions only on the current ledger entry — older entries are read-back.
-            (when (and on-latest? error-msg)
-              [:div.action-err "⚠ " error-msg])
-            ;; The ACTIONS read :action-report, not the open entry: at rest nothing
-            ;; is open, and a parked blocker's branches are still what there is to
-            ;; answer.
-            (when on-latest? (pane-action-bar project ws-id origin stage sessions action-report))
-            (when (= :done stage) (file-findings-form project ws-id))
+
             [:h2 "Environment"]
             (if-let [env-name (:name environment)]
               (let [dev (get session-dev-states env-name)
