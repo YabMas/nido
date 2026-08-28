@@ -1167,6 +1167,43 @@
                (ws/entry-at-seq project ws-id))
       record))
 
+(defn- run-judge-stage
+  [ctx]
+  (let [{:keys [cwd code-cwd run-id]} (:config ctx)
+        counts (dispute-counts (:history ctx))
+        ;; The record this run is repairing: the one it was pointed at, then
+        ;; each amendment it makes itself. Never re-read as "the latest",
+        ;; which another session — or an earlier round of a different baseline —
+        ;; can change underneath a run in flight. It rides in :carry because
+        ;; that is the only part of the ctx that outlives a round.
+        target (or (:under-repair (:carry ctx)) (:baseline (:config ctx)))
+        record (baseline-review!
+                {:cwd cwd :code-cwd code-cwd :run-id run-id
+                 :baseline target
+                 :label (str "baseline-review-round-" (:iter ctx))
+                 :disputes (disputes-for-judge (:history ctx))
+                 :confirmed (confirmed-so-far (:history ctx))})]
+    (append! cwd record)
+    (cond
+      (:outcome record)
+      (assoc ctx :record record :status (:outcome record))
+
+      (= :sufficient (:verdict record))
+      (assoc ctx :record record :findings [] :control :stop :status :sufficient)
+
+      :else
+      (let [findings (mapv #(assoc % :disputed-n
+                                   (get counts (baseline-finding-base-key %) 0))
+                           (:findings record))]
+        ;; Twice objected to and stated a third time. Neither side is giving
+        ;; way and neither can settle it: the judge cannot be overruled by the
+        ;; pass it is judging, and that pass may not amend a record it believes
+        ;; is already true. That is a human's call, not another round's.
+        (if (some #(>= (:disputed-n %) 2) findings)
+          (assoc ctx :record record :findings findings
+                 :control :escalate :status :disputed)
+          (assoc ctx :record record :findings findings))))))
+
 (def judge-stage
   "The same read-only pass the one-shot round ran, with its verdict appended to
    the ledger exactly as before.
@@ -1178,41 +1215,125 @@
    is not convergence."
   {:name :judge
    :run
-   (fn [ctx]
-     (let [{:keys [cwd code-cwd run-id]} (:config ctx)
-           counts (dispute-counts (:history ctx))
-           ;; The record this run is repairing: the one it was pointed at, then
-           ;; each amendment it makes itself. Never re-read as "the latest",
-           ;; which another session — or an earlier round of a different baseline —
-           ;; can change underneath a run in flight. It rides in :carry because
-           ;; that is the only part of the ctx that outlives a round.
-           target (or (:under-repair (:carry ctx)) (:baseline (:config ctx)))
-           record (baseline-review!
-                   {:cwd cwd :code-cwd code-cwd :run-id run-id
-                    :baseline target
-                    :label (str "baseline-review-round-" (:iter ctx))
-                    :disputes (disputes-for-judge (:history ctx))
-                    :confirmed (confirmed-so-far (:history ctx))})]
-       (append! cwd record)
-       (cond
-         (:outcome record)
-         (assoc ctx :record record :status (:outcome record))
+   run-judge-stage})
 
-         (= :sufficient (:verdict record))
-         (assoc ctx :record record :findings [] :control :stop :status :sufficient)
+(defn- run-amend-stage
+  [ctx]
+  (let [{:keys [cwd code-cwd run-id budget dry-run?]} (:config ctx)
+        code-cwd (or code-cwd cwd)]
+    (if dry-run?
+      (assoc ctx :control :stop :status :dry-run)
+      (let [[project ws-id] (stages/project+ws-from-cwd cwd)
+            prev      (or (:under-repair (:carry ctx))
+                          (:baseline (:config ctx))
+                          (ws/latest-entry project ws-id :baseline))
+            dir       (cstate/run-dir run-id)
+            out-path  (str (fs/path dir (str "amend-round-" (:iter ctx) ".edn")))
+            ;; Dirty BEFORE, not dirty after: a session worktree may already
+            ;; carry a human's uncommitted work, and calling that a violation
+            ;; would halt every loop run outside a clean tree.
+            before (stages/working-copy-state code-cwd)]
+        (fs/create-dirs dir)
+        ;; "The file is there" is the whole test for whether the amender
+        ;; answered, so the round must start with it absent. A leftover from
+        ;; an earlier run under this run-id would otherwise be read as this
+        ;; round's answer and appended to the ledger as a superseding record.
+        (fs/delete-if-exists out-path)
+        (agent/launch!
+         {:run-id run-id :cwd code-cwd :budget budget
+          :first-message (amend-prompt {:baseline prev
+                                        :findings (:findings ctx)
+                                        :out-path out-path})
+          :err-file (str (fs/path dir (str "amend-round-" (:iter ctx) ".err.log")))})
+        (cond
+          (not= before (stages/working-copy-state code-cwd))
+          (assoc ctx :control :stop :status :amend-touched-code)
 
-         :else
-         (let [findings (mapv #(assoc % :disputed-n
-                                      (get counts (baseline-finding-base-key %) 0))
-                              (:findings record))]
-           ;; Twice objected to and stated a third time. Neither side is giving
-           ;; way and neither can settle it: the judge cannot be overruled by the
-           ;; pass it is judging, and that pass may not amend a record it believes
-           ;; is already true. That is a human's call, not another round's.
-           (if (some #(>= (:disputed-n %) 2) findings)
-             (assoc ctx :record record :findings findings
-                    :control :escalate :status :disputed)
-             (assoc ctx :record record :findings findings))))))})
+          (not (fs/exists? out-path))
+          (assoc ctx :control :stop :status :amend-noop)
+
+          :else
+          (let [raw    (try (edn/read-string (slurp out-path)) (catch Exception _ nil))
+                answer (parse-amend-answer raw (:findings ctx)
+                                           baseline-finding-base-key)
+                {:keys [record disputes]} answer
+                entry  (fn [retreats amended?]
+                         {:iter (:iter ctx)
+                          :verdict (get-in ctx [:record :verdict])
+                          ;; Whether this round repaired anything. Read after
+                          ;; the run to tell an amender that stopped working
+                          ;; from one that worked and was refuted anyway —
+                          ;; and the terminal ctx cannot answer it, because a
+                          ;; run that ends on a judgement never reaches an
+                          ;; amend stage to set it.
+                          :amended? (boolean amended?)
+                          :findings (:findings ctx)
+                          ;; What this round CHECKED and found to hold. Without
+                          ;; it nothing carries forward and the next round is
+                          ;; free to re-litigate it silently.
+                          :confirmed (confirmed-in prev (get-in ctx [:record :confirmed]))
+                          :retreats retreats
+                          :disputes disputes})]
+            (cond
+              (nil? answer)
+              (assoc ctx :control :stop :status :amend-unreadable)
+
+              ;; Objections and no amendment is a COMPLETE answer, not an
+              ;; empty one: the amender read the code and says the record is
+              ;; already right. The ledger is untouched and the next round puts
+              ;; the objection in front of the judge.
+              (and (nil? record) (seq disputes))
+              (assoc ctx :disputes disputes :retreats []
+                     :history (conj (vec (:history ctx)) (entry [] false)))
+
+              (nil? record)
+              (assoc ctx :control :stop :status :amend-noop)
+
+              :else
+              ;; The correction names what it corrects. This round is the
+              ;; only thing that knows the pair — `prev` is the record it was
+              ;; asked to repair and `record` is the repair — and it is
+              ;; written rather than derived because taking the newest baseline
+              ;; instead is exactly the recency the ledger's citations exist
+              ;; to refuse. An amender that supplied its own is left alone:
+              ;; a citation is the author's, and nothing here overrules one.
+              (let [record  (cond-> record
+                              (and (:seq prev) (not (:supersedes record)))
+                              (assoc :supersedes
+                                     {:seq (:seq prev)
+                                      :why (str "corrected against the code after round "
+                                                (:iter ctx) " of run " run-id)}))
+                    written (try {:path (ws/append-entry!
+                                         project ws-id {:kind :baseline}
+                                         (pr-str (ws/unstamp record)))}
+                                 (catch Exception e
+                                   {:err (ledger-refusal e)}))]
+                (if-let [err (:err written)]
+                  (assoc ctx :control :stop :status :amend-invalid
+                         :amend-error err)
+                  (let [retreats (retreat/baseline-retreats prev record)
+                        ;; Stamped, not as the amender wrote it. The judge
+                        ;; labels its verdict with the :seq of the record it
+                        ;; read, and the design loop's re-survey hands this
+                        ;; record on to be CITED by :seq — neither of which a
+                        ;; record still in the shape it was written in can
+                        ;; answer, since :seq is the ledger's to give.
+                        stamped  (appended project ws-id (:path written) record)
+                        ctx' (assoc ctx
+                                    :retreats retreats
+                                    :disputes disputes
+                                    :history (conj (vec (:history ctx)) (entry retreats true)))]
+                    ;; :as-authored is set once and never overwritten — it is
+                    ;; the record the RUN started from, which is what growth
+                    ;; is measured against. Set here rather than at run start
+                    ;; because this is the first place that has it, and
+                    ;; `prev` on the first round is exactly it.
+                    (-> (assoc ctx' :amended? true)
+                        (update :carry #(-> (or % {})
+                                            (assoc :under-repair stamped)
+                                            (update :as-authored (fn [x] (or x prev)))))
+                        (cond-> (not (baseline-round-worth-running? record))
+                          (assoc :control :stop :status :retreated)))))))))))))
 
 (def amend-stage
   "Correct the baseline, then measure what the correction cost.
@@ -1230,122 +1351,7 @@
        deleting what it was asked to defend would otherwise report success."
   {:name :amend
    :run
-   (fn [ctx]
-     (let [{:keys [cwd code-cwd run-id budget dry-run?]} (:config ctx)
-           code-cwd (or code-cwd cwd)]
-       (if dry-run?
-         (assoc ctx :control :stop :status :dry-run)
-         (let [[project ws-id] (stages/project+ws-from-cwd cwd)
-               prev      (or (:under-repair (:carry ctx))
-                             (:baseline (:config ctx))
-                             (ws/latest-entry project ws-id :baseline))
-               dir       (cstate/run-dir run-id)
-               out-path  (str (fs/path dir (str "amend-round-" (:iter ctx) ".edn")))
-               ;; Dirty BEFORE, not dirty after: a session worktree may already
-               ;; carry a human's uncommitted work, and calling that a violation
-               ;; would halt every loop run outside a clean tree.
-               before (stages/working-copy-state code-cwd)]
-           (fs/create-dirs dir)
-           ;; "The file is there" is the whole test for whether the amender
-           ;; answered, so the round must start with it absent. A leftover from
-           ;; an earlier run under this run-id would otherwise be read as this
-           ;; round's answer and appended to the ledger as a superseding record.
-           (fs/delete-if-exists out-path)
-           (agent/launch!
-            {:run-id run-id :cwd code-cwd :budget budget
-             :first-message (amend-prompt {:baseline prev
-                                           :findings (:findings ctx)
-                                           :out-path out-path})
-             :err-file (str (fs/path dir (str "amend-round-" (:iter ctx) ".err.log")))})
-           (cond
-             (not= before (stages/working-copy-state code-cwd))
-             (assoc ctx :control :stop :status :amend-touched-code)
-
-             (not (fs/exists? out-path))
-             (assoc ctx :control :stop :status :amend-noop)
-
-             :else
-             (let [raw    (try (edn/read-string (slurp out-path)) (catch Exception _ nil))
-                   answer (parse-amend-answer raw (:findings ctx)
-                                              baseline-finding-base-key)
-                   {:keys [record disputes]} answer
-                   entry  (fn [retreats amended?]
-                            {:iter (:iter ctx)
-                             :verdict (get-in ctx [:record :verdict])
-                             ;; Whether this round repaired anything. Read after
-                             ;; the run to tell an amender that stopped working
-                             ;; from one that worked and was refuted anyway —
-                             ;; and the terminal ctx cannot answer it, because a
-                             ;; run that ends on a judgement never reaches an
-                             ;; amend stage to set it.
-                             :amended? (boolean amended?)
-                             :findings (:findings ctx)
-                             ;; What this round CHECKED and found to hold. Without
-                             ;; it nothing carries forward and the next round is
-                             ;; free to re-litigate it silently.
-                             :confirmed (confirmed-in prev (get-in ctx [:record :confirmed]))
-                             :retreats retreats
-                             :disputes disputes})]
-               (cond
-                 (nil? answer)
-                 (assoc ctx :control :stop :status :amend-unreadable)
-
-                 ;; Objections and no amendment is a COMPLETE answer, not an
-                 ;; empty one: the amender read the code and says the record is
-                 ;; already right. The ledger is untouched and the next round puts
-                 ;; the objection in front of the judge.
-                 (and (nil? record) (seq disputes))
-                 (assoc ctx :disputes disputes :retreats []
-                        :history (conj (vec (:history ctx)) (entry [] false)))
-
-                 (nil? record)
-                 (assoc ctx :control :stop :status :amend-noop)
-
-                 :else
-                 ;; The correction names what it corrects. This round is the
-                 ;; only thing that knows the pair — `prev` is the record it was
-                 ;; asked to repair and `record` is the repair — and it is
-                 ;; written rather than derived because taking the newest baseline
-                 ;; instead is exactly the recency the ledger's citations exist
-                 ;; to refuse. An amender that supplied its own is left alone:
-                 ;; a citation is the author's, and nothing here overrules one.
-                 (let [record  (cond-> record
-                                 (and (:seq prev) (not (:supersedes record)))
-                                 (assoc :supersedes
-                                        {:seq (:seq prev)
-                                         :why (str "corrected against the code after round "
-                                                   (:iter ctx) " of run " run-id)}))
-                       written (try {:path (ws/append-entry!
-                                            project ws-id {:kind :baseline}
-                                            (pr-str (ws/unstamp record)))}
-                                    (catch Exception e
-                                      {:err (ledger-refusal e)}))]
-                   (if-let [err (:err written)]
-                     (assoc ctx :control :stop :status :amend-invalid
-                            :amend-error err)
-                     (let [retreats (retreat/baseline-retreats prev record)
-                           ;; Stamped, not as the amender wrote it. The judge
-                           ;; labels its verdict with the :seq of the record it
-                           ;; read, and the design loop's re-survey hands this
-                           ;; record on to be CITED by :seq — neither of which a
-                           ;; record still in the shape it was written in can
-                           ;; answer, since :seq is the ledger's to give.
-                           stamped  (appended project ws-id (:path written) record)
-                           ctx' (assoc ctx
-                                       :retreats retreats
-                                       :disputes disputes
-                                       :history (conj (vec (:history ctx)) (entry retreats true)))]
-                       ;; :as-authored is set once and never overwritten — it is
-                       ;; the record the RUN started from, which is what growth
-                       ;; is measured against. Set here rather than at run start
-                       ;; because this is the first place that has it, and
-                       ;; `prev` on the first round is exactly it.
-                       (-> (assoc ctx' :amended? true)
-                           (update :carry #(-> (or % {})
-                                               (assoc :under-repair stamped)
-                                               (update :as-authored (fn [x] (or x prev)))))
-                           (cond-> (not (baseline-round-worth-running? record))
-                             (assoc :control :stop :status :retreated)))))))))))))})
+   run-amend-stage})
 
 (def baseline-pipeline
   "judge -> amend. No warden, no fix: nothing here touches the working copy."
@@ -1492,6 +1498,50 @@
    "validates it, and appends it as the superseding design. Do not append it\n"
    "yourself and do not commit anything."))
 
+(defn- run-design-judge-stage
+  [ctx]
+  (let [{:keys [cwd code-cwd run-id]} (:config ctx)
+        counts (dispute-counts (:history ctx))
+        record (design-decision!
+                {:cwd cwd :code-cwd code-cwd :run-id run-id
+                 :label (str "design-decision-round-" (:iter ctx))
+                 :disputes (disputes-for-judge (:history ctx))})
+        traj   (trajectory (:history ctx))
+        final! (fn [c] (append! cwd (cond-> record (seq traj) (assoc :trajectory traj))) c)]
+    (cond
+      (:outcome record)
+      (do (append! cwd record)
+          (assoc ctx :record record :status (:outcome record)))
+
+      (= :proceed (:recommend record))
+      (final! (assoc ctx :record record :findings []
+                     :underivable (underivable-checks record)
+                     :control :escalate :status :proceed))
+
+      :else
+      (let [findings (mapv #(assoc % :disputed-n
+                                   (get counts (design-finding-base-key %) 0))
+                           (broken-checks record))]
+        (cond
+          (some #(>= (:disputed-n %) 2) findings)
+          (final! (assoc ctx :record record :findings findings
+                         :underivable (underivable-checks record)
+                         :control :escalate :status :disputed))
+
+          ;; Nothing derivable failed, yet the round will not say proceed —
+          ;; so what is left is a yardstick it could not reach. An amender
+          ;; asked to fix that would amend a true record until the complaint
+          ;; stopped.
+          (empty? findings)
+          (final! (assoc ctx :record record :findings []
+                         :underivable (underivable-checks record)
+                         :control :escalate :status :underivable))
+
+          :else
+          (do (append! cwd record)
+              (assoc ctx :record record :findings findings
+                     :underivable (underivable-checks record))))))))
+
 (def design-judge-stage
   "Derive everything derivable, and stop the moment nothing is left.
 
@@ -1502,48 +1552,7 @@
    escalates. Everything else is another round."
   {:name :judge
    :run
-   (fn [ctx]
-     (let [{:keys [cwd code-cwd run-id]} (:config ctx)
-           counts (dispute-counts (:history ctx))
-           record (design-decision!
-                   {:cwd cwd :code-cwd code-cwd :run-id run-id
-                    :label (str "design-decision-round-" (:iter ctx))
-                    :disputes (disputes-for-judge (:history ctx))})
-           traj   (trajectory (:history ctx))
-           final! (fn [c] (append! cwd (cond-> record (seq traj) (assoc :trajectory traj))) c)]
-       (cond
-         (:outcome record)
-         (do (append! cwd record)
-             (assoc ctx :record record :status (:outcome record)))
-
-         (= :proceed (:recommend record))
-         (final! (assoc ctx :record record :findings []
-                        :underivable (underivable-checks record)
-                        :control :escalate :status :proceed))
-
-         :else
-         (let [findings (mapv #(assoc % :disputed-n
-                                      (get counts (design-finding-base-key %) 0))
-                              (broken-checks record))]
-           (cond
-             (some #(>= (:disputed-n %) 2) findings)
-             (final! (assoc ctx :record record :findings findings
-                            :underivable (underivable-checks record)
-                            :control :escalate :status :disputed))
-
-             ;; Nothing derivable failed, yet the round will not say proceed —
-             ;; so what is left is a yardstick it could not reach. An amender
-             ;; asked to fix that would amend a true record until the complaint
-             ;; stopped.
-             (empty? findings)
-             (final! (assoc ctx :record record :findings []
-                            :underivable (underivable-checks record)
-                            :control :escalate :status :underivable))
-
-             :else
-             (do (append! cwd record)
-                 (assoc ctx :record record :findings findings
-                        :underivable (underivable-checks record))))))))})
+   run-design-judge-stage})
 
 (defn- resurvey!
   "Repair the premise by running the baseline loop, then come back.
@@ -1675,6 +1684,26 @@
                   (assoc ctx' :amended? true)
                   (assoc ctx' :amended? true :control :stop :status :retreated))))))))))
 
+(defn- run-design-amend-stage
+  [ctx]
+  (let [{:keys [cwd dry-run?]} (:config ctx)
+        recommend (get-in ctx [:record :recommend])
+        [project ws-id] (stages/project+ws-from-cwd cwd)]
+    (cond
+      dry-run?
+      (assoc ctx :control :stop :status :dry-run)
+
+      (= :resurvey recommend)
+      (let [ctx' (resurvey! ctx)]
+        (if (:status ctx')
+          ctx'
+          (amend-design! ctx' :resurvey (:resurveyed-baseline ctx'))))
+
+      :else
+      (amend-design! ctx recommend
+                     (stages/discover-baseline
+                      cwd (ws/latest-entry project ws-id :design))))))
+
 (def design-amend-stage
   "Repair whatever the recommendation named — the record, the cut, or the
    premise.
@@ -1690,24 +1719,7 @@
    finishes the repair."
   {:name :amend
    :run
-   (fn [ctx]
-     (let [{:keys [cwd dry-run?]} (:config ctx)
-           recommend (get-in ctx [:record :recommend])
-           [project ws-id] (stages/project+ws-from-cwd cwd)]
-       (cond
-         dry-run?
-         (assoc ctx :control :stop :status :dry-run)
-
-         (= :resurvey recommend)
-         (let [ctx' (resurvey! ctx)]
-           (if (:status ctx')
-             ctx'
-             (amend-design! ctx' :resurvey (:resurveyed-baseline ctx'))))
-
-         :else
-         (amend-design! ctx recommend
-                        (stages/discover-baseline
-                         cwd (ws/latest-entry project ws-id :design))))))})
+   run-design-amend-stage})
 
 (def design-pipeline
   "judge -> amend, where amend may be a whole baseline loop."

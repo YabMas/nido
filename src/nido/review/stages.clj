@@ -300,6 +300,61 @@
 ;; both stages that can end a round holding nothing owed — see its docstring.
 (declare record-convergence!)
 
+(defn- run-review-stage
+  [ctx]
+  (let [{:keys [cwd base run-id]} (:config ctx)
+        [project ws-id] (project+ws-from-cwd cwd)
+        cached  (if ws-id (cache/read-cache project ws-id) {})
+        all     (with-patch-hashes cwd (review-targets cwd base))
+        {:keys [review skipped]} (to-review cached all)
+        targets review
+        _       (announce-targets! ctx {:review review :skipped skipped})
+        results (in-parallel
+                 max-concurrent-reviews
+                 (map (fn [t]
+                        #(do
+                           (announce-target! ctx "running" t nil)
+                           (let [r (assoc (codex/review!
+                                           {:cwd cwd :run-id run-id :iter (:iter ctx)
+                                            :from (:from t) :to (:to t)
+                                            :label (:label t) :brief (:brief t)
+                                            :composition (:composition t)})
+                                          :target t)]
+                             (announce-target! ctx "reviewed" t
+                                               {:findings (count (:findings r))})
+                             r)))
+                      targets))
+        whole    (or (first (filter #(:stack? (:target %)) results))
+                     (first results))
+        ;; The mechanical reviewer joins the fan-out, but not the layer bookkeeping:
+        ;; it reports on the worktree rather than on a range, so it is no layer and
+        ;; belongs in neither :reviews nor the toc. Its findings are ordinary
+        ;; findings from here on — handled, ruled on, owned and fixed like any other.
+        conform  (when project
+                   {:target   {:label "design"}
+                    :findings (conformance/findings project cwd)})
+        findings (collect-findings (cond-> (vec results)
+                                     (seq (:findings conform)) (conj conform)))]
+    (if (empty? findings)
+      ;; Nothing was reported anywhere, so nothing is owed anywhere and
+      ;; every target reviewed at this patch has converged. Recorded
+      ;; here because this branch is terminal: the engine stops on
+      ;; :control :stop, so the warden — which is where convergence is
+      ;; otherwise written — never runs for a round that starts clean.
+      (let [ctx' (assoc ctx :findings [] :reviews results :skipped skipped
+                        :control :stop :status :clean)]
+        (record-convergence! cwd ctx')
+        ctx')
+      (assoc ctx
+             :findings findings
+             :reviews results
+             :skipped skipped
+             :cache cached
+             :toc (build-toc results)
+             :overall-correctness (:overall-correctness whole)
+             :base-rev (:base-rev whole)
+             :manifest (:manifest whole)))))
+
 (def review-stage
   "Every layer and the whole stack, reviewed in one round.
 
@@ -308,59 +363,7 @@
    touches the working copy, and file content is read at each target's own
    revision, so concurrent reviews cannot see each other's state."
   {:name :review
-   :run  (fn [ctx]
-           (let [{:keys [cwd base run-id]} (:config ctx)
-                 [project ws-id] (project+ws-from-cwd cwd)
-                 cached  (if ws-id (cache/read-cache project ws-id) {})
-                 all     (with-patch-hashes cwd (review-targets cwd base))
-                 {:keys [review skipped]} (to-review cached all)
-                 targets review
-                 _       (announce-targets! ctx {:review review :skipped skipped})
-                 results (in-parallel
-                          max-concurrent-reviews
-                          (map (fn [t]
-                                 #(do
-                                    (announce-target! ctx "running" t nil)
-                                    (let [r (assoc (codex/review!
-                                                    {:cwd cwd :run-id run-id :iter (:iter ctx)
-                                                     :from (:from t) :to (:to t)
-                                                     :label (:label t) :brief (:brief t)
-                                                     :composition (:composition t)})
-                                                   :target t)]
-                                      (announce-target! ctx "reviewed" t
-                                                        {:findings (count (:findings r))})
-                                      r)))
-                               targets))
-                 whole    (or (first (filter #(:stack? (:target %)) results))
-                              (first results))
-                 ;; The mechanical reviewer joins the fan-out, but not the layer bookkeeping:
-                 ;; it reports on the worktree rather than on a range, so it is no layer and
-                 ;; belongs in neither :reviews nor the toc. Its findings are ordinary
-                 ;; findings from here on — handled, ruled on, owned and fixed like any other.
-                 conform  (when project
-                            {:target   {:label "design"}
-                             :findings (conformance/findings project cwd)})
-                 findings (collect-findings (cond-> (vec results)
-                                              (seq (:findings conform)) (conj conform)))]
-             (if (empty? findings)
-               ;; Nothing was reported anywhere, so nothing is owed anywhere and
-               ;; every target reviewed at this patch has converged. Recorded
-               ;; here because this branch is terminal: the engine stops on
-               ;; :control :stop, so the warden — which is where convergence is
-               ;; otherwise written — never runs for a round that starts clean.
-               (let [ctx' (assoc ctx :findings [] :reviews results :skipped skipped
-                                 :control :stop :status :clean)]
-                 (record-convergence! cwd ctx')
-                 ctx')
-               (assoc ctx
-                      :findings findings
-                      :reviews results
-                      :skipped skipped
-                      :cache cached
-                      :toc (build-toc results)
-                      :overall-correctness (:overall-correctness whole)
-                      :base-rev (:base-rev whole)
-                      :manifest (:manifest whole)))))})
+   :run  run-review-stage})
 
 (defn discover-design-record
   "This workstream's latest :design record, or nil.
@@ -595,6 +598,47 @@
                 {:seen #{} :out []}
                 history)))
 
+(defn- run-warden-stage
+  [ctx]
+  (let [{:keys [cwd run-id budget]} (:config ctx)
+        handles (get-in ctx [:carry :handles] {})
+        prompt (prompts/warden-prompt
+                {:findings (:findings ctx)
+                 :seen     (seen-findings (:history ctx))
+                 :history  (mapv #(dissoc % :findings) (:history ctx))
+                 :design   (discover-design-record cwd)
+                 :stance   (read-stance (first (project+ws-from-cwd cwd)))
+                 :toc      (:toc ctx)
+                 :answered (answered-by-layer ctx)})
+        {:keys [num-turns result-error? result-text]}
+        (agent/launch! {:run-id run-id :cwd cwd
+                        :first-message prompt :budget budget
+                        :tools ""
+                        :err-file (str (fs/path (cstate/run-dir run-id) "agent.err.log"))})
+        decision (parse-warden-decision result-text)]
+    (if (or (zero? (or num-turns 0)) result-error?
+            (= :indeterminate (:decision decision)))
+      (assoc ctx :warden decision :control :stop
+             :status :warden-indeterminate)
+      (let [ruled (apply-rulings (:findings ctx) (:rulings decision) handles)
+            ctx' (assoc ctx
+                        :warden  decision
+                        :findings ruled
+                        ;; The handles have to reach the next round, and
+                        ;; :carry is the only thing here that does —
+                        ;; every other key is rebuilt from :config,
+                        ;; :iter and :history. Merged rather than
+                        ;; replaced, so a finding that stops being
+                        ;; reported keeps its filing for a later round
+                        ;; that raises it again.
+                        :carry (assoc (:carry ctx) :handles
+                                      (into handles
+                                            (map (juxt :id :handle))
+                                            ruled))
+                        :control  (:decision decision))]
+        (record-convergence! cwd ctx')
+        ctx'))))
+
 (def warden-stage
   "The one reader with a view across layers, so attribution is its job.
 
@@ -613,45 +657,7 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
    report afterwards. What genuinely accumulates across rounds is carried as an
    inspectable value (history, answered), never as a resumed conversation."
   {:name :warden
-   :run  (fn [ctx]
-           (let [{:keys [cwd run-id budget]} (:config ctx)
-                 handles (get-in ctx [:carry :handles] {})
-                 prompt (prompts/warden-prompt
-                         {:findings (:findings ctx)
-                          :seen     (seen-findings (:history ctx))
-                          :history  (mapv #(dissoc % :findings) (:history ctx))
-                          :design   (discover-design-record cwd)
-                          :stance   (read-stance (first (project+ws-from-cwd cwd)))
-                          :toc      (:toc ctx)
-                          :answered (answered-by-layer ctx)})
-                 {:keys [num-turns result-error? result-text]}
-                 (agent/launch! {:run-id run-id :cwd cwd
-                                 :first-message prompt :budget budget
-                                 :tools ""
-                                 :err-file (str (fs/path (cstate/run-dir run-id) "agent.err.log"))})
-                 decision (parse-warden-decision result-text)]
-             (if (or (zero? (or num-turns 0)) result-error?
-                     (= :indeterminate (:decision decision)))
-               (assoc ctx :warden decision :control :stop
-                      :status :warden-indeterminate)
-               (let [ruled (apply-rulings (:findings ctx) (:rulings decision) handles)
-                     ctx' (assoc ctx
-                                 :warden  decision
-                                 :findings ruled
-                                 ;; The handles have to reach the next round, and
-                                 ;; :carry is the only thing here that does —
-                                 ;; every other key is rebuilt from :config,
-                                 ;; :iter and :history. Merged rather than
-                                 ;; replaced, so a finding that stops being
-                                 ;; reported keeps its filing for a later round
-                                 ;; that raises it again.
-                                 :carry (assoc (:carry ctx) :handles
-                                               (into handles
-                                                     (map (juxt :id :handle))
-                                                     ruled))
-                                 :control  (:decision decision))]
-                 (record-convergence! cwd ctx')
-                 ctx'))))})
+   :run  run-warden-stage})
 
 (defn working-copy-dirty?
   "True when jj reports working-copy changes in cwd.
@@ -726,6 +732,34 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
         (assoc (layers/fold! cwd base upper lower) :did :fold
                :after-reorder-refused (:reason r))))))
 
+(defn- run-reshape-stage
+  [ctx]
+  (let [{:keys [cwd base dry-run?]} (:config ctx)
+        tried (get-in ctx [:carry :reshaped] #{})
+        stack (session-stack cwd base)
+        todo  (into []
+                    (comp (filter #(= :recut (:disposition %)))
+                          (remove #(contains? tried (:handle %)))
+                          (keep (fn [f]
+                                  (when-let [p (reshape-plan stack f)]
+                                    (assoc p :finding f)))))
+                    (:findings ctx))]
+    (if (or dry-run? (empty? todo))
+      ctx
+      ;; One per round. A second reshape would be planned against a
+      ;; stack the first one just rewrote, and the labels it resolved
+      ;; are already stale.
+      (let [{:keys [finding] :as plan} (first todo)
+            result (reshape! cwd base plan)]
+        (layers/restore-top! cwd (session-stack cwd base))
+        (-> ctx
+            (update-in [:carry :reshaped] (fnil conj #{}) (:handle finding))
+            (assoc :reshape (merge {:handle (:handle finding)
+                                    :title  (:title finding)
+                                    :lower  (layer-label (:lower plan))
+                                    :upper  (layer-label (:upper plan))}
+                                   result)))))))
+
 (def reshape-stage
   "Findings whose remedy is the shape of the stack, acted on once each.
 
@@ -740,32 +774,7 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
    would be reshaped again every round for as long as the run lasted. The set
    rides in :carry, which is the only thing a round hands the next one."
   {:name :reshape
-   :run  (fn [ctx]
-           (let [{:keys [cwd base dry-run?]} (:config ctx)
-                 tried (get-in ctx [:carry :reshaped] #{})
-                 stack (session-stack cwd base)
-                 todo  (into []
-                             (comp (filter #(= :recut (:disposition %)))
-                                   (remove #(contains? tried (:handle %)))
-                                   (keep (fn [f]
-                                           (when-let [p (reshape-plan stack f)]
-                                             (assoc p :finding f)))))
-                             (:findings ctx))]
-             (if (or dry-run? (empty? todo))
-               ctx
-               ;; One per round. A second reshape would be planned against a
-               ;; stack the first one just rewrote, and the labels it resolved
-               ;; are already stale.
-               (let [{:keys [finding] :as plan} (first todo)
-                     result (reshape! cwd base plan)]
-                 (layers/restore-top! cwd (session-stack cwd base))
-                 (-> ctx
-                     (update-in [:carry :reshaped] (fnil conj #{}) (:handle finding))
-                     (assoc :reshape (merge {:handle (:handle finding)
-                                             :title  (:title finding)
-                                             :lower  (layer-label (:lower plan))
-                                             :upper  (layer-label (:upper plan))}
-                                            result)))))))})
+   :run  run-reshape-stage})
 
 
 (defn fix-plan
@@ -833,6 +842,52 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
       (try (layers/restore-top! cwd stack) (catch Throwable _ nil))
       (throw t))))
 
+(defn- run-fix-stage
+  [ctx]
+  (if (:dry-run? (:config ctx))
+    (assoc ctx :control :stop :status :dry-run)
+    (let [{:keys [cwd base run-id budget impl-session-id]} (:config ctx)
+          stack (session-stack cwd base)
+          plan  (fix-plan stack (:findings ctx))]
+      (if (empty? plan)
+        (assoc ctx :control :stop :status :fix-noop)
+        (let [ctx'
+              (with-working-copy-restored
+               cwd stack
+               #(reduce
+               (fn [acc {:keys [label layer findings]}]
+                 (layers/position-for-fix! cwd layer)
+                 (let [{:keys [num-turns]}
+                       (agent/launch!
+                        {:run-id run-id :cwd cwd
+                         :first-message (prompts/fix-prompt {:findings findings})
+                         :budget budget
+                         :claude-session-id (layer-fixer-session impl-session-id label)
+                         :resume? (fixed-before? (:history ctx) label)
+                         :err-file (str (fs/path (cstate/run-dir run-id)
+                                                 (format "fix-%s-round-%d.err.log"
+                                                         (codex/safe-label label)
+                                                         (or (:iter ctx) 1))))})]
+                   (if (or (zero? (or num-turns 0)) (not (working-copy-dirty? cwd)))
+                     (do (layers/restore-top! cwd stack) acc)
+                     (let [cid (layers/land-fix!
+                                cwd layer
+                                (str "review-loop: iter " (:iter ctx) " fixes"
+                                     (when label (str " (" label ")"))))]
+                       (layers/restore-top! cwd stack)
+                       (update acc :fixes (fnil conj [])
+                               {:layer label :commit cid
+                                :fixed-count (count findings)})))))
+                 ctx plan))]
+          (if (empty? (:fixes ctx'))
+            (assoc ctx' :control :stop :status :fix-noop)
+            (update ctx' :history (fnil conj [])
+                    {:iter (:iter ctx')
+                     :fixes (:fixes ctx')
+                     :fixed-count (reduce + 0 (map :fixed-count (:fixes ctx')))
+                     :findings (:findings ctx')
+                     :warden (:warden ctx')})))))))
+
 (def fix-stage
   "Fixes run only after every finding has an owner, one layer at a time,
    bottom→top.
@@ -842,47 +897,4 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
    own layer and moves that layer's bookmark, so it reaches that layer's PR
    rather than riding up into the one above."
   {:name :fix
-   :run  (fn [ctx]
-           (if (:dry-run? (:config ctx))
-             (assoc ctx :control :stop :status :dry-run)
-             (let [{:keys [cwd base run-id budget impl-session-id]} (:config ctx)
-                   stack (session-stack cwd base)
-                   plan  (fix-plan stack (:findings ctx))]
-               (if (empty? plan)
-                 (assoc ctx :control :stop :status :fix-noop)
-                 (let [ctx'
-                       (with-working-copy-restored
-                        cwd stack
-                        #(reduce
-                        (fn [acc {:keys [label layer findings]}]
-                          (layers/position-for-fix! cwd layer)
-                          (let [{:keys [num-turns]}
-                                (agent/launch!
-                                 {:run-id run-id :cwd cwd
-                                  :first-message (prompts/fix-prompt {:findings findings})
-                                  :budget budget
-                                  :claude-session-id (layer-fixer-session impl-session-id label)
-                                  :resume? (fixed-before? (:history ctx) label)
-                                  :err-file (str (fs/path (cstate/run-dir run-id)
-                                                          (format "fix-%s-round-%d.err.log"
-                                                                  (codex/safe-label label)
-                                                                  (or (:iter ctx) 1))))})]
-                            (if (or (zero? (or num-turns 0)) (not (working-copy-dirty? cwd)))
-                              (do (layers/restore-top! cwd stack) acc)
-                              (let [cid (layers/land-fix!
-                                         cwd layer
-                                         (str "review-loop: iter " (:iter ctx) " fixes"
-                                              (when label (str " (" label ")"))))]
-                                (layers/restore-top! cwd stack)
-                                (update acc :fixes (fnil conj [])
-                                        {:layer label :commit cid
-                                         :fixed-count (count findings)})))))
-                          ctx plan))]
-                   (if (empty? (:fixes ctx'))
-                     (assoc ctx' :control :stop :status :fix-noop)
-                     (update ctx' :history (fnil conj [])
-                             {:iter (:iter ctx')
-                              :fixes (:fixes ctx')
-                              :fixed-count (reduce + 0 (map :fixed-count (:fixes ctx')))
-                              :findings (:findings ctx')
-                              :warden (:warden ctx')})))))))})
+   :run  run-fix-stage})
