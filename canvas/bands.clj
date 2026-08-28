@@ -96,11 +96,12 @@
   "The daemon composition root: it wires the other bands together, and is reached
    by nothing but the task that starts it.
 
-   It does NOT declare a dependency on Surface. A composition root sits above
-   everything, so `Surface :may-depend [Boot]` is the direction that holds — a
-   task starting the daemon is what tasks are for. The reverse is not free: the
-   daemon currently starts and stops the dashboard HTTP server itself, which is
-   the one edge this declaration deliberately leaves red. A task can start both."
+   It does NOT declare a dependency on Surface, and that omission is the point. A
+   composition root sits above everything, so `Surface :may-depend [Boot]` is the
+   direction that holds — a task starting the daemon is what tasks are for. The
+   daemon used to start and stop the dashboard HTTP server itself, which made the
+   reverse edge real; it now takes a dashboard lifecycle as an argument and the
+   task supplies both. The declaration is what forced that."
   {:prefix ["nido.boot."]
    :may-depend [Platform Integration Session Coordination Vsdd Review]})
 
