@@ -116,10 +116,17 @@
               :error  (or (:error report) (str/trim (str err)) (str "exit " exit))})))))))
 
 (defn offender-line
-  "One offender row as a line. A row is a TUPLE — a law binding an edge carries both ends and
-   the bands they sit in — so it renders as its parts joined, not as its first element."
-  [row]
-  (str/join " → " row))
+  "One offender row as a line, its columns LABELLED by the law's own offender var names.
+
+   A row is a tuple — a law binding an edge carries both ends and the bands they sit in — and
+   four names in a line read as a four-hop chain, which is not what they are. The labels come
+   from the law rather than from a per-law renderer here, so nido never holds a second, drifting
+   copy of what each law's columns mean. A law that named its vars poorly renders poorly; a law
+   that named them well is legible without nido knowing anything about it."
+  [vars row]
+  (if (= (count vars) (count row))
+    (str/join "  " (map (fn [v x] (str (str/replace (str v) #"^\?" "") "=" x)) vars row))
+    (str/join " · " row)))
 
 (defn violation-text
   "The findings as text for a human or an agent to read. Empty string when there is nothing to
@@ -130,6 +137,7 @@
     :undecidable (str "The design check did not complete: " error "\n")
     :violated
     (str/join "\n"
-              (for [{:keys [law offenders]} violations]
+              (for [{:keys [law vars offenders]} violations]
                 (str "✗ " law "\n"
-                     (str/join "\n" (for [row offenders] (str "    " (offender-line row)))))))))
+                     (str/join "\n" (for [row offenders]
+                                       (str "    " (offender-line vars row)))))))))

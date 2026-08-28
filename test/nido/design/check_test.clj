@@ -76,13 +76,24 @@
             "exit 1 with an unreadable report decided nothing either"))
       (finally (fs/delete-tree wt)))))
 
-(deftest an-offender-row-renders-as-the-whole-tuple
-  (let [text (design/violation-text
-              {:status :violated
-               :violations [{:law "no undeclared edge"
-                             :offenders [["a.b" "c.d" "Review" "Vsdd"]]}]})]
-    (is (str/includes? text "a.b → c.d → Review → Vsdd")
-        "the second half of an edge is the half that says what to do about it"))
+(deftest an-offender-row-is-labelled-by-the-law-s-own-var-names
+  (testing "four names in a line read as a four-hop chain, which is not what they are. The
+            labels come from the law, so nido never holds a second, drifting copy of what
+            each law's columns mean."
+    (let [text (design/violation-text
+                {:status :violated
+                 :violations [{:law "no undeclared edge"
+                               :vars ["?from" "?to" "?from-band" "?to-band"]
+                               :offenders [["a.b" "c.d" "Review" "Vsdd"]]}]})]
+      (is (str/includes? text "from=a.b  to=c.d  from-band=Review  to-band=Vsdd"))))
+
+  (testing "a law that named no vars still renders every column — the second half of an edge
+            is the half that says what to do about it"
+    (let [text (design/violation-text
+                {:status :violated
+                 :violations [{:law "no undeclared edge" :offenders [["a.b" "c.d"]]}]})]
+      (is (str/includes? text "a.b · c.d"))))
+
   (is (= "" (design/violation-text {:status :satisfied}))
       "nothing to say renders as nothing, so a caller can splice it in unconditionally"))
 

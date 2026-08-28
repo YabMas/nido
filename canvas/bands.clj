@@ -35,17 +35,21 @@
    :may-depend [:* Band]}     ; the bands it may depend on (declared intent)
 
   (law "every cross-band namespace dependency follows a declared :may-depend edge"
-    ;; The offender is the whole EDGE, plus the two bands it crosses. A law that named only
-    ;; ?a would report that nido.review.loop is in the wrong without saying which of its
+    ;; The offender is the whole EDGE, plus the two bands it crosses. A law naming only the
+    ;; caller would report that nido.review.loop is in the wrong without saying which of its
     ;; requires is the wrong one — true, and useless to whoever has to act on it. All four
-    ;; vars are bound in the body already; carrying them costs nothing and is the difference
-    ;; between a finding an agent can fix and one it has to investigate.
+    ;; vars are bound in the body already, so carrying them costs nothing.
+    ;;
+    ;; The var NAMES are load-bearing too: they travel with the rows (fukan's `:vars`) and are
+    ;; what a consumer labels the columns with, so `?from`/`?to` renders as a finding an agent
+    ;; can act on where `?a`/`?b` renders as four names in a line.
     {:scope :global
-     :offenders [?a ?b ?s ?t]
+     :offenders [?from ?to ?from-band ?to-band]
      :rules [[(declared-dep ?s ?t) (is ?s ::Band) (may-depend ?s ?t)]]
-     :where [(ns-depends ?a ?b)
-             (in-band ?a ?s) (in-band ?b ?t) [(not= ?s ?t)]
-             (not (declared-dep ?s ?t))]})
+     :where [(ns-depends ?from ?to)
+             (in-band ?from ?from-band) (in-band ?to ?to-band)
+             [(not= ?from-band ?to-band)]
+             (not (declared-dep ?from-band ?to-band))]})
 
   (law "every namespace belongs to a band"
     ;; Without this the whole design is opt-in. `in-band` is derived from the path, so a
@@ -58,10 +62,10 @@
      :where [(is ?ns Ns) (not-join [?ns] (in-band ?ns ?b))]})
 
   (law "the :may-depend graph is acyclic — no band transitively depends on itself"
-    {:offenders [?s]
+    {:offenders [?band]
      :rules [[(band-reaches ?s ?t) (may-depend ?s ?t)]
              [(band-reaches ?s ?t) (may-depend ?s ?mid) (band-reaches ?mid ?t)]]
-     :where [(band-reaches ?s ?s)]}))
+     :where [(band-reaches ?band ?band)]}))
 
 (s/defrelation :in-band
   "Code namespace ?ns belongs to Band ?b — DERIVED from the namespace path: ?ns's
