@@ -358,7 +358,7 @@
 
    `nil` renders as unavailable rather than as an empty fleet — a probe that
    failed must not read as a machine with nothing on it."
-  [{:keys [sessions in-use machine over? candidates] :as fleet}]
+  [{:keys [sessions in-use machine over? candidates signals-ok?] :as fleet}]
   [:div.card {:class (when over? "fleet-over")}
    [:strong "Fleet"]
    (if (nil? fleet)
@@ -372,7 +372,8 @@
          [:span.fleet-pct.meta (when frac (str (Math/round (* 100.0 frac)) "%"))]]
         [:div.fleet-bar [:span {:style (str "width:" (Math/round (* 100.0 (or frac 0))) "%")}]]
         [:div.meta (str sessions " live session" (when (not= 1 sessions) "s"))]
-        (if (seq candidates)
+        (cond
+          (seq candidates)
           (list
            [:div.meta {:style "margin-top:7px"} "Nothing driving these:"]
            (for [c (take 3 candidates)]
@@ -380,6 +381,14 @@
               [:span.nm (str (:project c) "/" (:session c))]
               [:span.sz (process/human-bytes (:bytes c)) " · " (fleet-idle-str c)]])
            (when (pos? more) [:div.meta (str "+" more " more")]))
+
+          ;; A blind probe also produces no candidates, and "nothing is idle" is a
+          ;; claim the snapshot cannot make from an absent signal. Same defect as
+          ;; the predicate's, one layer up: silence must not be read as an answer.
+          (false? signals-ok?)
+          [:div.meta {:style "margin-top:7px"} "Idle check unavailable."]
+
+          :else
           [:div.meta {:style "margin-top:7px"} "Nothing idle — every session was touched today."]))))])
 
 (defn ops-panel-fragment

@@ -173,8 +173,9 @@
     (let [rows (fleet/snapshot)
           t    (fleet/totals rows nil)]
       (assoc (select-keys t [:sessions :fleet :in-use :machine])
-             :over?      (fleet/over-budget? t)
-             :candidates (fleet/candidates rows)))
+             :over?       (fleet/over-budget? t)
+             :signals-ok? (fleet/signals-ok? rows)
+             :candidates  (fleet/candidates rows)))
     (catch Throwable _ nil)))
 
 (defn- ops-context []

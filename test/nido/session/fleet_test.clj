@@ -10,6 +10,10 @@
 
 (def ^:private hour (* 60 60 1000))
 
+(def ^:private all-answered
+  "Every activity probe answered. The state a candidate must be judged in."
+  {:transcripts? true :presence? true :sockets? true})
+
 (defn- row
   "A snapshot row. Defaults describe a session nobody is driving and whose
    agent last spoke two days ago — the one shape that should be a candidate."
@@ -23,42 +27,63 @@
 ;; ---------------------------------------------------------------------------
 
 (deftest candidate-requires-a-long-silence
-  (is (sut/candidate? (row) true)
+  (is (sut/candidate? (row) all-answered)
       "48h since the agent last spoke, nothing attached — a candidate")
 
   (testing "the threshold is a day, not the half-hour that got the watchdog removed"
-    (is (not (sut/candidate? (row :idle-ms (* 2 hour)) true))
+    (is (not (sut/candidate? (row :idle-ms (* 2 hour)) all-answered))
         "two hours idle is an ordinary gap in a session being worked on")
-    (is (not (sut/candidate? (row :idle-ms (* 23 hour)) true))
+    (is (not (sut/candidate? (row :idle-ms (* 23 hour)) all-answered))
         "still inside the window at 23h")
-    (is (sut/candidate? (row :idle-ms (* 25 hour)) true)
+    (is (sut/candidate? (row :idle-ms (* 25 hour)) all-answered)
         "past a full day it qualifies")))
 
 (deftest process-signals-only-ever-veto
   (testing "a process sitting in the session vetoes however old the transcript is"
-    (is (not (sut/candidate? (row :foreign 1 :idle-ms (* 200 hour)) true))
+    (is (not (sut/candidate? (row :foreign 1 :idle-ms (* 200 hour)) all-answered))
         "an agent or shell in the worktree means hands off"))
 
   (testing "an attached nREPL vetoes"
-    (is (not (sut/candidate? (row :nrepl? true) true))))
+    (is (not (sut/candidate? (row :nrepl? true) all-answered))))
 
   (testing "their absence is not evidence of anything"
     ;; A closed tab is not an abandoned session. Without this, every session
     ;; the user is not looking at RIGHT NOW becomes a candidate.
-    (is (not (sut/candidate? (row :foreign 0 :nrepl? false :idle-ms (* 2 hour)) true))
+    (is (not (sut/candidate? (row :foreign 0 :nrepl? false :idle-ms (* 2 hour)) all-answered))
         "no processes attached, but the agent spoke two hours ago — not a candidate")))
 
 (deftest a-blind-signal-yields-no-candidates
   ;; The dangerous direction. If Claude Code moves where it writes transcripts,
   ;; every session reads as never-driven; that must produce silence, not a list
   ;; naming the whole fleet.
-  (is (not (sut/candidate? (row) false))
+  (is (not (sut/candidate? (row) (assoc all-answered :transcripts? false)))
       "unreadable transcript signal disqualifies every row")
-  (is (not (sut/candidate? (row :agent-seen-ms nil :idle-ms nil) false))
+  (is (not (sut/candidate? (row :agent-seen-ms nil :idle-ms nil) (assoc all-answered :transcripts? false)))
       "including the rows that look most abandoned"))
 
+(deftest a-blind-veto-probe-yields-no-candidates
+  ;; The direction that shipped broken. A blind transcript merely withholds a
+  ;; promotion; a blind `lsof` DELETES the veto — `foreign` reads 0 and `nrepl?`
+  ;; false for every session at once. Measured against the live fleet with lsof
+  ;; stubbed out, a session with 25 agent processes working in it reported
+  ;; foreign=0, and this predicate promoted it.
+  (testing "process-presence unreadable"
+    (is (not (sut/candidate? (row) (assoc all-answered :presence? false)))))
+  (testing "socket probe unreadable"
+    (is (not (sut/candidate? (row) (assoc all-answered :sockets? false)))))
+  (testing "a row that LOOKS idle is exactly the row this must refuse"
+    ;; foreign 0 / nrepl? false is what a blind probe reports for everything,
+    ;; so the most-abandoned-looking row is the least trustworthy one.
+    (is (not (sut/candidate? (row :foreign 0 :nrepl? false :idle-ms (* 200 hour))
+                             (assoc all-answered :presence? false))))))
+
+(deftest signals-ok?-reports-snapshot-wide-probe-health
+  (is (sut/signals-ok? [{:signals-ok? true} {:signals-ok? true}]))
+  (is (not (sut/signals-ok? [{:signals-ok? true} {:signals-ok? false}])))
+  (is (sut/signals-ok? []) "an empty fleet is not a broken probe"))
+
 (deftest a-session-no-agent-ever-touched-is-a-candidate
-  (is (sut/candidate? (row :agent-seen-ms nil :idle-ms nil) true)
+  (is (sut/candidate? (row :agent-seen-ms nil :idle-ms nil) all-answered)
       "signal readable and this session has no transcript at all"))
 
 ;; ---------------------------------------------------------------------------

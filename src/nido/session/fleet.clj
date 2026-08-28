@@ -199,19 +199,37 @@
 (defn candidate?
   "Whether nobody appears to be driving this session.
 
-   `signal-readable?` is the transcript signal's own health, and it gates
-   everything: when the signal is blind every session looks untouched, so a
-   blind read yields no candidates rather than all of them.
+   `signals` reports which probes actually answered — `{:transcripts? :presence?
+   :sockets?}` — and EVERY one must have. That is not symmetry for its own sake.
+   A blind probe fails toward candidacy in both directions, and the second
+   direction is the dangerous one: a blind transcript merely makes every session
+   look never-driven, but a blind `lsof` makes `foreign` zero and `nrepl?` false
+   for the entire fleet, which does not withhold a promotion — it DELETES the
+   veto. Measured with lsof stubbed out: a session with 25 agent processes
+   working in it reported `foreign=0`.
 
-   Both process signals are VETOES and never evidence of idleness — a closed
-   tab is not an abandoned session, and the only thing that can promote a row
-   is the transcript clock running past `stale-agent-ms`."
-  [{:keys [foreign nrepl? idle-ms agent-seen-ms]} signal-readable?]
-  (boolean (and signal-readable?
+   The shape, which this namespace shipped twice before catching it: a guard
+   that reads a POSITIVE signal is disarmed by the very failure that suppresses
+   that signal, and disarmed silently. Absence has to block, not clear. The
+   probes deliberately require a zero exit rather than salvaging partial output
+   for the same reason — half an `lsof` is half a veto."
+  [{:keys [foreign nrepl? idle-ms agent-seen-ms]}
+   {:keys [transcripts? presence? sockets?]}]
+  (boolean (and transcripts? presence? sockets?
                 (zero? (or foreign 0))
                 (not nrepl?)
                 (or (nil? agent-seen-ms)
                     (> (or idle-ms 0) stale-agent-ms)))))
+
+(defn signals-ok?
+  "Whether every activity probe answered for this snapshot.
+
+   Snapshot-wide, carried on each row because rows are what travel to callers.
+   A surface that reports \"nothing is idle\" needs this: with the probes blind
+   there are no candidates either, and the two states must not be told to a
+   human in the same words."
+  [rows]
+  (every? :signals-ok? rows))
 
 (defn snapshot
   "Every live session with what it costs and what has touched it lately.
@@ -228,7 +246,10 @@
         cwds    (cwd-index)
         socks   (socket-index)
         rss     (rss-index)
-        seen?   (transcripts-available?)
+        signals {:transcripts? (transcripts-available?)
+                 :presence?    (some? cwds)
+                 :sockets?     (some? socks)}
+        seen?   (:transcripts? signals)
         now     (System/currentTimeMillis)
         entries (->> (state/read-registry) vals (filter :repl-pid))
         own     (into #{} (map (comp str :repl-pid)) entries)]
@@ -247,7 +268,9 @@
                             :nrepl?        (established-on? socks nrepl-port)
                             :agent-seen-ms seen
                             :idle-ms       (when seen (- now seen))}]
-                  (assoc row :candidate? (candidate? row seen?)))))
+                  (assoc row
+                         :signals-ok? (every? true? (vals signals))
+                         :candidate?  (candidate? row signals)))))
          (sort-by (comp - #(or % 0) :bytes))
          vec)))
 

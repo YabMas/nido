@@ -84,3 +84,14 @@
     (is (str/includes? out "unavailable"))
     (is (str/includes? out "Halt") "halt survives a fleet probe that failed")
     (is (str/includes? out "Breakers"))))
+
+(deftest a-blind-probe-does-not-claim-the-fleet-is-busy
+  ;; No candidates has two causes — nothing is idle, or nothing could be
+  ;; measured — and only one of them is a fact about the fleet.
+  (let [out (render (assoc roomy :candidates [] :signals-ok? false))]
+    (is (str/includes? out "Idle check unavailable"))
+    (is (not (str/includes? out "Nothing idle")))
+    (is (str/includes? out "25.0 GB / 48.0 GB")
+        "the aggregate still stands — it does not depend on the activity probes"))
+  (let [out (render (assoc roomy :candidates [] :signals-ok? true))]
+    (is (str/includes? out "Nothing idle"))))
