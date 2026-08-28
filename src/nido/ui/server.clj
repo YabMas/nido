@@ -12,6 +12,7 @@
             [nido.notion.client :as client]
             [nido.platform.process :as proc]
             [nido.platform.project :as project]
+            [nido.session.fleet :as fleet]
             [nido.ui.dev :as dev]
             [nido.ui.health :as health]
             [nido.ui.views :as views]
@@ -154,9 +155,32 @@
          (views/rail-status-fragment {:needs-count (:needs-count screen)
                                       :daemon (read-rail-daemon)})))))
 
+(defn- fleet-context
+  "The fleet card's facts, or nil if they could not be gathered.
+
+   Wrapped because this is the only entry in the ops context that shells out
+   (`lsof` twice, `ps` once, ~150ms). The panel it rides in carries halt/resume
+   and breaker-clear — the levers you reach for when something is already
+   wrong — so a memory readout that threw would take the emergency controls
+   down with it. Failing to nil costs one card.
+
+   `totals` is asked for no project on purpose: its `:typical` estimates the
+   cost of an INCOMING session, and this card is not about one. Without it
+   `over-budget?` reads as \"the machine is already past the line\", which is
+   what ambient chrome should say."
+  []
+  (try
+    (let [rows (fleet/snapshot)
+          t    (fleet/totals rows nil)]
+      (assoc (select-keys t [:sessions :fleet :in-use :machine])
+             :over?      (fleet/over-budget? t)
+             :candidates (fleet/candidates rows)))
+    (catch Throwable _ nil)))
+
 (defn- ops-context []
   {:daemon   (read-rail-daemon)
    :halt     (halt/read-halt-info)
+   :fleet    (fleet-context)
    :breakers (breakers/tripped-triggers)
    :triggers (into {}
                    (for [[pname _] (project/list-projects)]

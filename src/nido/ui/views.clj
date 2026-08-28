@@ -245,6 +245,16 @@
      .ops-panel .fire-row input { background:#0f0f1e; border:1px solid #2a2a4a;
                                    border-radius:4px; color:#fff; font:inherit;
                                    font-size:12px; padding:4px 8px; width:100px; }
+     .ops-panel .fleet-head { display:flex; justify-content:space-between; align-items:baseline; gap:8px; }
+     .ops-panel .fleet-bar { height:4px; border-radius:2px; background:#2a2a4a;
+                             margin:7px 0 6px; overflow:hidden; }
+     .ops-panel .fleet-bar span { display:block; height:100%; background:#4ade80; }
+     .ops-panel .fleet-over .fleet-bar span { background:#fb923c; }
+     .ops-panel .fleet-over .fleet-pct { color:#fb923c; }
+     .ops-panel .fleet-cand { display:flex; justify-content:space-between; gap:8px;
+                              font-size:12px; margin-top:3px; }
+     .ops-panel .fleet-cand .nm { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+     .ops-panel .fleet-cand .sz { color:#9a9ac0; white-space:nowrap; }
      .dot { width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:6px; }
      .dot-up { background:#4ade80; box-shadow:0 0 6px #4ade80; }
      .dot-halted { background:#f87171; box-shadow:0 0 6px #f87171; }
@@ -325,12 +335,59 @@
   (str "fire_" (str/replace (name trigger-name) "-" "_")
        "_" (str/replace (name k) "-" "_")))
 
+(defn- fleet-idle-str [{:keys [idle-ms]}]
+  (if (nil? idle-ms)
+    "no agent"
+    (let [h (quot idle-ms 3600000)]
+      (if (>= h 48) (str (quot h 24) "d") (str h "h")))))
+
+(defn fleet-card
+  "Fleet memory: what every live session costs together, and what is idle enough
+   to reclaim.
+
+   Deliberately carries NO per-session memory column. `work/all-machine-rows`
+   already owns that number and already renders it on the workstream pane and
+   the winding-down band; a third copy here would drift from the two already on
+   the board. What this card knows that the board cannot is the AGGREGATE — the
+   machine total every session adds up against — and which sessions nothing is
+   driving. That is the question the board has no way to ask.
+
+   This is where the 2026-07-21 dissolve-system design put it: `/system` was the
+   only surface that revealed the RAM-eater, and its global, not-per-workstream
+   residue was rehomed to exactly this ambient chrome.
+
+   `nil` renders as unavailable rather than as an empty fleet — a probe that
+   failed must not read as a machine with nothing on it."
+  [{:keys [sessions in-use machine over? candidates] :as fleet}]
+  [:div.card {:class (when over? "fleet-over")}
+   [:strong "Fleet"]
+   (if (nil? fleet)
+     [:div [:span.meta "unavailable"]]
+     (let [frac (when (and in-use machine (pos? machine))
+                  (min 1.0 (/ (double in-use) machine)))
+           more (max 0 (- (count candidates) 3))]
+       (list
+        [:div.fleet-head
+         [:span (process/human-bytes in-use) " / " (process/human-bytes machine)]
+         [:span.fleet-pct.meta (when frac (str (Math/round (* 100.0 frac)) "%"))]]
+        [:div.fleet-bar [:span {:style (str "width:" (Math/round (* 100.0 (or frac 0))) "%")}]]
+        [:div.meta (str sessions " live session" (when (not= 1 sessions) "s"))]
+        (if (seq candidates)
+          (list
+           [:div.meta {:style "margin-top:7px"} "Nothing driving these:"]
+           (for [c (take 3 candidates)]
+             [:div.fleet-cand
+              [:span.nm (str (:project c) "/" (:session c))]
+              [:span.sz (process/human-bytes (:bytes c)) " · " (fleet-idle-str c)]])
+           (when (pos? more) [:div.meta (str "+" more " more")]))
+          [:div.meta {:style "margin-top:7px"} "Nothing idle — every session was touched today."]))))])
+
 (defn ops-panel-fragment
   "The ambient ops chrome: daemon state, halt/resume, open breakers with
    per-trigger clear, and a fire form per manual trigger (placeholder-less →
    one click; placeholder-carrying → one input per {{event/*}} key, signals
    fire_<trigger>_<key>). No route of its own — lives behind the rail dot."
-  [{:keys [daemon halt breakers triggers]}]
+  [{:keys [daemon halt breakers triggers fleet]}]
   (str
    (h/html
     [:div {:id "ops-panel" :class "ops-panel"}
@@ -345,6 +402,7 @@
               [:button.btn.btn-primary {"data-on:click" "@post('/ops/resume')"} "Resume"])
         (list [:span "running"]
               [:button.btn.btn-danger {"data-on:click" "@post('/ops/halt')"} "Halt"]))]
+     (fleet-card fleet)
      [:div.card
       [:strong "Breakers"]
       (if (seq breakers)
