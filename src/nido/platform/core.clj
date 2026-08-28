@@ -2,13 +2,15 @@
   (:require [babashka.fs :as fs]
             [clojure.java.io :as io]))
 
-(defn nido-home
+(defn ^{:malli/schema [:=> [:cat] :string]}
+  nido-home
   "Returns the nido home directory. Defaults to ~/.nido, overridable via $NIDO_HOME."
   []
   (or (System/getenv "NIDO_HOME")
       (str (fs/path (System/getProperty "user.home") ".nido"))))
 
-(defn nido-source-dir
+(defn ^{:malli/schema [:=> [:cat] :string]}
+  nido-source-dir
   "The directory containing nido's bb.edn — i.e. the nido project root.
    Derived at runtime from where this namespace was loaded so the value is
    correct regardless of the caller's cwd. Resolves
@@ -26,7 +28,8 @@
         .getParentFile      ; project root
         .getAbsolutePath)))
 
-(defn nido-root
+(defn ^{:malli/schema [:=> [:cat] :string]}
+  nido-root
   "The nido home, as the single redirect seam. Production code reads it
    exactly like nido-home; tests with-redefs THIS var to point a whole run
    at a temp dir. It is deliberately distinct from nido-home: the session
@@ -35,7 +38,8 @@
   []
   (str (nido-home)))
 
-(defn project-file
+(defn ^{:malli/schema [:=> [:cat [:or :string :keyword] :string] :string]}
+  project-file
   "Path to a per-project definition file under ~/.nido/projects/<project>/.
    Every band addresses that directory -- notion-views.edn, github.edn,
    session-profiles.edn -- so the shape belongs here rather than being
@@ -45,7 +49,8 @@
 
 (def ^:private log-lock (Object.))
 
-(defn log-step
+(defn ^{:malli/schema [:=> [:cat :string] :nil]}
+  log-step
   "Print a single nido status line. Synchronised so concurrent step-run
    futures can't interleave their messages — without the lock, parallel
    `println` calls corrupt each other (\"[nido] step-run a starting[nido] step-run b starting\")."
@@ -54,7 +59,8 @@
     (println (str "[nido] " message))
     (flush)))
 
-(defn now-iso []
+(defn ^{:malli/schema [:=> [:cat] :string]}
+  now-iso []
   (str (java.time.Instant/now)))
 
 (def skeleton-dirs
@@ -62,7 +68,8 @@
    "definitions/skills" "definitions/agents"
    "projects" "state"])
 
-(defn ensure-nido-home!
+(defn ^{:malli/schema [:=> [:cat] :string]}
+  ensure-nido-home!
   "Creates the ~/.nido/ skeleton directory structure."
   []
   (let [home (nido-home)]

@@ -18,7 +18,8 @@
    it cannot reproduce the hang it was written around."
   (atom #{}))
 
-(defn stop-live-children!
+(defn ^{:malli/schema [:=> [:cat] :int]}
+  stop-live-children!
   "Stop every registered child that is still running. Returns how many it
    stopped. Called from the shutdown hook, and directly by tests — a reaper that
    only runs at JVM exit is a reaper nothing can check."
@@ -41,7 +42,8 @@
     (.addShutdownHook (Runtime/getRuntime) (Thread. ^Runnable stop-live-children!))
     true))
 
-(defn with-child-registered
+(defn ^{:malli/schema [:=> [:cat :any [:=> [:cat] :any]] :any]}
+  with-child-registered
   "Run `f` with `proc` registered for shutdown, deregistering however f ends.
 
    Takes the java.lang.Process rather than babashka's map so both launchers can
@@ -52,11 +54,13 @@
   (try (f)
        (finally (swap! live-children disj proc))))
 
-(defn process-alive? [pid]
+(defn ^{:malli/schema [:=> [:cat :int] :boolean]}
+  process-alive? [pid]
   (zero? (:exit (shell {:continue true :out :string :err :string}
                        "kill" "-0" (str pid)))))
 
-(defn stop-process! [pid]
+(defn ^{:malli/schema [:=> [:cat :int] :any]}
+  stop-process! [pid]
   (when (process-alive? pid)
     (shell {:continue true} "kill" (str pid))
     (loop [attempt 0]
@@ -74,7 +78,8 @@
   (:exit (shell {:continue true :out :string :err :string}
                 "kill" (str "-" signal) "--" (str "-" pgid))))
 
-(defn stop-process-group!
+(defn ^{:malli/schema [:=> [:cat :int] :any]}
+  stop-process-group!
   "SIGTERM the whole process group pgid, escalating to SIGKILL after a
    grace period. Returns:
      :stopped — leader exited cleanly after SIGTERM
@@ -98,7 +103,8 @@
             (if (zero? (kill-pg! "KILL" pgid)) :killed :gone)
             :else (do (Thread/sleep 100) (recur (inc attempt)))))))))
 
-(defn port-free? [port]
+(defn ^{:malli/schema [:=> [:cat :int] :boolean]}
+  port-free? [port]
   (try
     (with-open [socket (java.net.ServerSocket.)]
       (.setReuseAddress socket false)
@@ -107,7 +113,8 @@
     (catch Exception _
       false)))
 
-(defn tcp-open? [port]
+(defn ^{:malli/schema [:=> [:cat :int] :boolean]}
+  tcp-open? [port]
   (try
     (with-open [socket (java.net.Socket.)]
       (.connect socket (java.net.InetSocketAddress. "127.0.0.1" port) 500)
@@ -115,7 +122,8 @@
     (catch Exception _
       false)))
 
-(defn deterministic-port
+(defn ^{:malli/schema [:=> [:cat :string :int :int] :int]}
+  deterministic-port
   "Compute a deterministic port from a seed string within [low, high)."
   [seed low high]
   (let [h (-> seed hash long (bit-and 0x7fffffff))]
@@ -149,7 +157,8 @@
     6665 6666 6667 6668 6669 6679 6697  ; irc
     10080})   ; amanda
 
-(defn find-available-port
+(defn ^{:malli/schema [:=> [:cat :int :int] :int]}
+  find-available-port
   "The first port at or above `preferred-port` that is free AND openable by a
    browser. See `browser-blocked-ports` for why free is not sufficient."
   [preferred-port max-attempts]
@@ -166,10 +175,12 @@
 
       :else (recur (inc port) (inc attempts)))))
 
-(defn quoted [s]
+(defn ^{:malli/schema [:=> [:cat :string] :string]}
+  quoted [s]
   (str "'" (str/replace s "'" "'\"'\"'") "'"))
 
-(defn log-tail [path lines]
+(defn ^{:malli/schema [:=> [:cat :string :int] :string]}
+  log-tail [path lines]
   (if-not (fs/exists? path)
     ""
     (->> (slurp path)
@@ -177,7 +188,8 @@
          (take-last lines)
          (str/join "\n"))))
 
-(defn rss-bytes
+(defn ^{:malli/schema [:=> [:cat :int] [:or :int :nil]]}
+  rss-bytes
   "Resident set size of a pid in bytes, via `ps -o rss= -p <pid>`. The
    `ps` column is KiB on Darwin and Linux, multiplied here by 1024.
    Returns nil if the pid is missing or ps fails."
@@ -188,7 +200,8 @@
       (when (zero? exit)
         (some-> out str/trim parse-long (* 1024))))))
 
-(defn human-bytes
+(defn ^{:malli/schema [:=> [:cat [:or :int :nil]] :string]}
+  human-bytes
   "Format a byte count as a short human-readable string (e.g. \"1.8 GB\").
    Returns \"—\" when v is nil."
   [v]

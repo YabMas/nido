@@ -18,7 +18,8 @@
   (or (get @monitors path)
       (get (swap! monitors update path #(or % (Object.))) path)))
 
-(defn with-file-lock
+(defn ^{:malli/schema [:=> [:cat :string [:=> [:cat] :any]] :any]}
+  with-file-lock
   "Run `f` holding an exclusive lock on `lock-path`, then release. Returns f's
    value; the lock is released whether f returns or throws.
 
@@ -53,13 +54,15 @@
           (f)
           (finally (.close ch)))))))
 
-(defn read-edn
+(defn ^{:malli/schema [:=> [:cat :string] :any]}
+  read-edn
   "Read an EDN file, returning nil if it doesn't exist."
   [path]
   (when (fs/exists? path)
     (edn/read-string (slurp path))))
 
-(defn write-edn!
+(defn ^{:malli/schema [:=> [:cat :string :any] :any]}
+  write-edn!
   "Atomically write EDN to path: writes to a unique temp file then atomically
   renames it into place. Creates parent dirs as needed. Protects readers from
   observing torn writes — the file is always either the previous good content or
@@ -73,7 +76,8 @@
     (spit tmp (str (pr-str data) "\n"))
     (fs/move tmp path-s {:replace-existing true})))
 
-(defn read-json
+(defn ^{:malli/schema [:=> [:cat :string] :any]}
+  read-json
   "Read a JSON file into keyword-keyed maps, returning nil if it doesn't exist.
   Throws on malformed JSON — callers that read files they don't own should
   guard."
@@ -81,20 +85,23 @@
   (when (fs/exists? path)
     (json/parse-string (slurp (str path)) keyword)))
 
-(defn write-json!
+(defn ^{:malli/schema [:=> [:cat :string :any] :any]}
+  write-json!
   "Write data as JSON to path, creating parent dirs."
   [path data]
   (when-let [parent (fs/parent path)]
     (fs/create-dirs parent))
   (spit path (json/generate-string data {:pretty true})))
 
-(defn read-text
+(defn ^{:malli/schema [:=> [:cat :string] [:or :string :nil]]}
+  read-text
   "Read a text file, returning nil if it doesn't exist."
   [path]
   (when (fs/exists? path)
     (slurp path)))
 
-(defn write-text!
+(defn ^{:malli/schema [:=> [:cat :string :string] :any]}
+  write-text!
   "Write text to path, creating parent dirs."
   [path text]
   (when-let [parent (fs/parent path)]

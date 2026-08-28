@@ -3,7 +3,8 @@
             [nido.platform.config :as config]
             [nido.platform.core :as core]))
 
-(defn add!
+(defn ^{:malli/schema [:=> [:cat :string :string] :map]}
+  add!
   "Register a project. Creates project definition dir under ~/.nido/projects/<name>/."
   [name directory]
   (let [directory (str (fs/absolutize (fs/path directory)))
@@ -18,12 +19,14 @@
     (core/log-step (str "Added project '" name "' -> " directory))
     entry))
 
-(defn list-projects
+(defn ^{:malli/schema [:=> [:cat] :map]}
+  list-projects
   "Return the projects map."
   []
   (config/read-projects))
 
-(defn remove!
+(defn ^{:malli/schema [:=> [:cat :string] :boolean]}
+  remove!
   "Unregister a project. Does not delete definitions."
   [name]
   (let [projects (config/read-projects)]
@@ -36,7 +39,8 @@
         (core/log-step (str "Project '" name "' not found"))
         false))))
 
-(defn get-project
+(defn ^{:malli/schema [:=> [:cat :string] [:or :map :nil]]}
+  get-project
   "Get a project entry by name, or nil."
   [name]
   (get (config/read-projects) name))

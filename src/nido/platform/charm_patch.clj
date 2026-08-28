@@ -37,7 +37,8 @@
 
 (defonce ^:private installed? (atom false))
 
-(defn install!
+(defn ^{:malli/schema [:=> [:cat] :any]}
+  install!
   "Idempotently wrap charm.render.core/create-renderer to capture each renderer
    it returns. Safe to call repeatedly (e.g. once per run-once) — only the first
    call wraps."
@@ -51,7 +52,8 @@
            (reset! renderer-ref r)
            r))))))
 
-(defn clear-on-resize!
+(defn ^{:malli/schema [:=> [:cat] :any]}
+  clear-on-resize!
   "Physically wipe the alt-screen and invalidate JLine's diff cache so the next
    render! repaints the full frame from home instead of stranding the previous
    frame. Call from the TUI's window-size handler. No-op until a renderer has
