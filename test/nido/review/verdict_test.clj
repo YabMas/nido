@@ -62,13 +62,26 @@
   (is (not (verdict/decision? {:verdict :strained})))
   (is (verdict/decision? {:verdict :invalidated})))
 
-(deftest verdict-only-runs-when-there-were-findings-to-judge
-  (is (nido-review/verdict-worth-running? :converged {:findings [{:title "x"}]}))
-  (is (nido-review/verdict-worth-running? :max-iters {:history [{:iter 1}]}))
-  (is (not (nido-review/verdict-worth-running? :clean {:findings [] :history []}))
-      "a clean review produced no evidence either way")
-  (is (not (nido-review/verdict-worth-running? :review-failed {:findings [{:title "x"}]})))
-  (is (not (nido-review/verdict-worth-running? :dry-run {:findings [{:title "x"}]}))))
+(deftest verdict-runs-when-there-is-anything-to-judge
+  (is (nido-review/verdict-worth-running? :converged {:findings [{:title "x"}]} nil))
+  (is (nido-review/verdict-worth-running? :max-iters {:history [{:iter 1}]} nil))
+  (is (not (nido-review/verdict-worth-running? :clean {:findings [] :history []} nil))
+      "no findings and no design to check against is no evidence either way")
+  ;; The case the findings-only gate could not reach. Confirming an invariant
+  ;; needs the code, not a finding — and on a clean run this pass is the only
+  ;; thing that reads the change against what it committed to.
+  (is (nido-review/verdict-worth-running?
+       :clean {:findings [] :history []}
+       {:invariants ["the fragment endpoint refuses exactly what the page refuses"]})
+      "a clean review still has the design's invariants left to confirm")
+  (is (not (nido-review/verdict-worth-running? :clean {:findings [] :history []} {:invariants []}))
+      "a design naming no invariants leaves a clean run nothing to confirm")
+  ;; Status still decides first: neither of these produced anything to judge,
+  ;; whatever the design claims.
+  (is (not (nido-review/verdict-worth-running? :review-failed {:findings [{:title "x"}]} nil)))
+  (is (not (nido-review/verdict-worth-running? :dry-run {:findings [{:title "x"}]} nil)))
+  (is (not (nido-review/verdict-worth-running? :dry-run {} {:invariants ["x"]}))
+      "a dry run changed nothing, so there is nothing to confirm an invariant against"))
 
 (deftest verdict-prompt-foregrounds-structural-findings
   (let [p (verdict/build-prompt

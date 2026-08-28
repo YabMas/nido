@@ -144,13 +144,23 @@
       :reviewed-ws-id     ws-id})))
 
 (defn verdict-worth-running?
-  "The verdict pass judges findings against the design, so it needs findings.
-   A failed review has nothing to judge; a dry run made no changes; a review that
-   never surfaced anything has no evidence either way — and paying for an agent to
-   conclude nothing would make the verdict noise rather than signal."
-  [status final]
+  "Whether the verdict pass has anything to judge.
+
+   It makes two different kinds of check, and only one of them needs findings.
+   Classifying what the review found does; confirming the design's invariants
+   held, and testing what it assumed, does not — that pass runs with tools and
+   reads the code, so it can answer against a clean review as well as a noisy
+   one. Gating the whole pass on findings meant a run that found nothing never
+   compared the change to the design it committed to, which is the case where
+   the comparison is the only evidence there is.
+
+   So: a design carrying invariants is enough on its own. A failed review still
+   has nothing to judge, and a dry run changed nothing to judge."
+  [status final design]
   (and (not (#{:review-failed :dry-run} status))
-       (boolean (or (seq (:findings final)) (seq (:history final))))))
+       (boolean (or (seq (:findings final))
+                    (seq (:history final))
+                    (seq (:invariants design))))))
 
 (defn append-design-verdict!
   "Run the design verdict and append it as a ledger event. Best-effort throughout,
@@ -159,7 +169,10 @@
    map, or nil when it did not run or produced no answer."
   [cwd final report config]
   (try
-    (when (verdict-worth-running? (:status final) final)
+    ;; Read here to answer `is there anything to judge`; verdict/run! resolves it
+    ;; again for the prompt. One extra ledger read, against not handing run! a
+    ;; record it is the authority on finding.
+    (when (verdict-worth-running? (:status final) final (stages/discover-design-record cwd))
       (when-let [v (verdict/run! {:cwd cwd
                                   :run-id (:run-id config)
                                   :budget (:budget config)
