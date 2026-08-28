@@ -1,4 +1,4 @@
-(ns nido.coordinator.shim
+(ns nido.session.resume-shim
   "Resume shim + run-link symlink for Run-owned sessions.
 
    Writes <session-home>/bin/claude (executable) and

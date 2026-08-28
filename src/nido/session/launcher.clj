@@ -15,8 +15,7 @@
    [clojure.java.io :as jio]
    [clojure.string :as str]
    [nido.platform.config :as config]
-   [nido.coordinator.shim :as coord-shim]
-   [nido.coordinator.state :as cstate]
+   [nido.session.resume-shim :as resume-shim]
    [nido.platform.core :as core]
    [nido.platform.io :as io]
    [nido.session.agent-guidance :as agent-guidance]
@@ -26,13 +25,15 @@
 
 (defn- run-workstream-context
   "Given a run-id or a session-home path, return {:workstream-id … :br-id …}
-   for embedding in the briefing. Returns an empty map when no run is found or
+   for embedding in the briefing. Takes a run DIRECTORY, not a run-id: resolving
+   an id is coordination's job and it hands the resolved path down on the
+   session-edn. Returns an empty map when no run is found or
    the run carries no :workstream-id — so callers can always safely merge the
    result without nil-checking. Safe to call on human/dry-run sessions."
-  [& {:keys [run-id session-home]}]
+  [& {:keys [run-dir session-home]}]
   (let [run (cond
-              run-id
-              (let [path (cstate/run-edn-path run-id)]
+              run-dir
+              (let [path (str (fs/path run-dir "run.edn"))]
                 (when (fs/exists? path)
                   (io/read-edn path)))
 
@@ -793,8 +794,8 @@
     (let [profile      (read-profile-for-session instance-id)
           home         (state/session-home-dir project-name session-name)
           link-entries (when instance-id (links/read-links instance-id))
-          ws-ctx       (when-let [run-id (:owned-by-run session-edn)]
-                         (run-workstream-context :run-id run-id))
+          ws-ctx       (when-let [run-dir (:run-dir session-edn)]
+                         (run-workstream-context :run-dir run-dir))
           ctx-doc      (render-context (merge {:session-name     session-name
                                                :project-name     project-name
                                                :worktree         worktree
@@ -841,9 +842,9 @@
         (purge-legacy-artifacts! (get-in ctx [:session :instance-id]))
         (catch Exception e
           (core/log-step (str "warning: purge legacy artifacts: " (ex-message e)))))
-      (when-let [run-id (:owned-by-run session-edn)]
+      (when-let [run-dir (:run-dir session-edn)]
         (try
-          (coord-shim/write! home (cstate/run-dir run-id))
+          (resume-shim/write! home run-dir)
           (core/log-step (str "Wrote " home "/bin/claude (resume shim) + run-link"))
           (catch Exception e
             (core/log-step (str "warning: run-shim: " (ex-message e)))))))))

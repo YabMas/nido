@@ -274,8 +274,8 @@
 
 (defn spawn-session-for-run!
   "Bring up a session for the given Run, marked :owned-by-run. The launcher
-   picks up :owned-by-run in the session-edn and writes the resume shim +
-   run-link via nido.coordinator.shim. After session-up, also writes the
+   picks up the :run-dir we resolve here and writes the resume shim +
+   run-link via nido.session.resume-shim. After session-up, also writes the
    reverse `<run-dir>/session-home` symlink the coordinator uses to locate
    the worktree (per spec §Runs / Identity & storage). Returns whatever
    session-lifecycle/up! returns."
@@ -284,6 +284,7 @@
         result       (session-lifecycle/up! session-name
                                             {:project         project
                                              :owned-by-run    id
+                                             :run-dir         (cstate/run-dir id)
                                              :session-profile session-profile})
         session-home (session-state/session-home-dir (name project) session-name)
         link-path    (cstate/run-session-home-link id)]

@@ -1,9 +1,9 @@
-(ns nido.coordinator.shim-test
+(ns nido.session.resume-shim-test
   (:require
    [babashka.fs :as fs]
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
-   [nido.coordinator.shim :as shim]))
+   [nido.session.resume-shim :as shim]))
 
 (deftest write-shim!-creates-executable-script-and-symlink
   (let [tmp           (fs/create-temp-dir)
