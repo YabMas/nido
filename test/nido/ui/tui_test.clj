@@ -12,7 +12,7 @@
    [nido.coordinator.workstream :as workstream]
    [nido.notion.client :as client]
    [nido.platform.project :as project]
-   [nido.session.dev]
+   [nido.ui.dev]
    [nido.session.lifecycle :as lifecycle]
    [nido.ui.tui :as tui]
    [nido.coordinator.work]))
@@ -311,7 +311,7 @@
 (deftest workstream-o-opens-browser-when-running
   (let [opened (atom nil)]
     (with-redefs [nido.coordinator.work/environment (fn [_ _] {:name "impl-br-1"})
-                  nido.session.dev/session-dev-state (fn [_ _] {:state :running :url "http://localhost:3100"})
+                  nido.ui.dev/session-dev-state (fn [_ _] {:state :running :url "http://localhost:3100"})
                   nido.ui.tui/open-browser! (fn [url] (reset! opened url))]
       (let [st (assoc (board-state :all) :screen :workstream :project "brian" :ws-id "w1")
             [s' _] (#'tui/update-workstream st (msg/key-press "o"))]
@@ -321,7 +321,7 @@
 (deftest workstream-o-hints-when-no-url
   (let [opened (atom :not-called)]
     (with-redefs [nido.coordinator.work/environment (fn [_ _] {:name "impl-br-1"})
-                  nido.session.dev/session-dev-state (fn [_ _] {:state :down})
+                  nido.ui.dev/session-dev-state (fn [_ _] {:state :down})
                   nido.ui.tui/open-browser! (fn [url] (reset! opened url))]
       (let [st (assoc (board-state :all) :screen :workstream :project "brian" :ws-id "w1")
             [s' _] (#'tui/update-workstream st (msg/key-press "o"))]
@@ -331,7 +331,7 @@
 (deftest workstream-d-stops-and-r-restarts-the-environment
   (let [calls (atom [])]
     (with-redefs [nido.coordinator.work/environment (fn [_ _] {:name "impl-br-1"})
-                  nido.session.dev/dev-action! (fn [p w s a] (swap! calls conj [p w s a]) (future nil))]
+                  nido.ui.dev/dev-action! (fn [p w s a] (swap! calls conj [p w s a]) (future nil))]
       (let [st (assoc (board-state :all) :screen :workstream :project "brian" :ws-id "w1")]
         (#'tui/update-workstream st (msg/key-press "d"))
         (#'tui/update-workstream st (msg/key-press "r"))
@@ -348,7 +348,7 @@
 (deftest workstream-u-starts-the-environment
   (let [calls (atom [])]
     (with-redefs [nido.coordinator.work/environment (fn [_ _] {:name "impl-br-1"})
-                  nido.session.dev/dev-action! (fn [p w s a] (swap! calls conj [p w s a]) (future nil))]
+                  nido.ui.dev/dev-action! (fn [p w s a] (swap! calls conj [p w s a]) (future nil))]
       (let [st (assoc (board-state :all) :screen :workstream :project "brian" :ws-id "w1")]
         (#'tui/update-workstream st (msg/key-press "u"))
         (is (= [["brian" "w1" "impl-br-1" "start"]] @calls) "u starts the environment via dev-action")))))
@@ -367,7 +367,7 @@
 
 (deftest environment-block-renders-resolved-session-facts
   (with-redefs [nido.coordinator.work/environment (fn [_ _] {:name "impl-br-1" :weight :heavy})
-                nido.session.dev/session-dev-state (fn [_ _] {:state :running :url "http://localhost:3100"})
+                nido.ui.dev/session-dev-state (fn [_ _] {:state :running :url "http://localhost:3100"})
                 nido.session.lifecycle/list-all-data
                 (fn [_] {:sessions [{:name "impl-br-1" :app-port 3100 :pg-port 5500
                                      :nrepl-port 6100 :worktree "/wt/impl-br-1"}]})
@@ -554,7 +554,7 @@
 
 (deftest dev-start-key-runs-dev-action
   (let [calls (atom [])]
-    (with-redefs [nido.session.dev/dev-action!
+    (with-redefs [nido.ui.dev/dev-action!
                   (fn [p w s a] (swap! calls conj [p w s a]) (future nil))]
       (#'nido.ui.tui/dev-start! "brian" "ws-1" "impl-br-1")
       (is (= [["brian" "ws-1" "impl-br-1" "start"]] @calls)))))

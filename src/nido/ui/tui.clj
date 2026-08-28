@@ -37,7 +37,7 @@
    [nido.notion.client :as client]
    [nido.platform.project :as project]
    [nido.coordinator.work :as work]
-   [nido.session.dev :as dev]
+   [nido.ui.dev :as dev]
    [nido.session.engine :as engine]
    [nido.session.lifecycle :as lifecycle]
    [nido.session.links :as links]

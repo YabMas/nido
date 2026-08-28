@@ -1,4 +1,4 @@
-(ns nido.session.dev
+(ns nido.ui.dev
   "Dev-environment state + action primitives shared across nido surfaces
    (web dashboard, TUI). Owns the in-flight app-states atom and every
    function that reads or mutates dev-resource state for a session."

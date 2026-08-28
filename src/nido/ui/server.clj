@@ -12,7 +12,7 @@
             [nido.notion.client :as client]
             [nido.platform.process :as proc]
             [nido.platform.project :as project]
-            [nido.session.dev :as dev]
+            [nido.ui.dev :as dev]
             [nido.ui.health :as health]
             [nido.ui.views :as views]
             [nido.ui.view-state :as view-state]

@@ -1,6 +1,6 @@
-(ns nido.session.dev-test
+(ns nido.ui.dev-test
   (:require [clojure.test :refer [deftest is]]
-            [nido.session.dev :as dev]))
+            [nido.ui.dev :as dev]))
 
 (deftest dev-state-running-when-probe-open
   (is (= {:state :running :url "http://x"}

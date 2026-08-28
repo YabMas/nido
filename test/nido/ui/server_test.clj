@@ -6,7 +6,7 @@
             [nido.coordinator.breakers]
             [nido.coordinator.halt]
             [nido.coordinator.triggers]
-            [nido.session.dev :as dev]
+            [nido.ui.dev :as dev]
             [nido.session.engine]
             [nido.session.lifecycle :as lifecycle]
             [nido.session.state]
@@ -22,7 +22,7 @@
 (deftest home-route-renders-needs-page
   (with-redefs [nido.coordinator.work/all-gates (fn [] [])
                 nido.coordinator.work/all-grouped (fn [] [])
-                nido.session.dev/pending-resolve-keys (fn [] #{})
+                nido.ui.dev/pending-resolve-keys (fn [] #{})
                 project/list-projects (fn [] {"brian" {:directory "/x"}})
                 nido.ui.server/read-rail-daemon (fn [] {:state :up})]
     (let [resp (server/handle-request {:request-method :get :uri "/"})]
@@ -32,7 +32,7 @@
 (deftest needs-fragment-route-is-sse-and-patches-rail
   (with-redefs [nido.coordinator.work/all-gates (fn [] [])
                 nido.coordinator.work/all-grouped (fn [] [])
-                nido.session.dev/pending-resolve-keys (fn [] #{})
+                nido.ui.dev/pending-resolve-keys (fn [] #{})
                 project/list-projects (fn [] {"brian" {:directory "/x"}})
                 nido.ui.server/read-rail-daemon (fn [] {:state :up})]
     (let [resp (server/handle-request {:request-method :get :uri "/_fragment/needs"})]
@@ -44,7 +44,7 @@
            :label "BR-7" :report nil :actions [] :session nil}]
     (with-redefs [nido.coordinator.work/all-gates (fn [] [g])
                   nido.coordinator.work/all-grouped (fn [] [])
-                  nido.session.dev/pending-resolve-keys (fn [] #{})
+                  nido.ui.dev/pending-resolve-keys (fn [] #{})
                   project/list-projects (fn [] {"brian" {:directory "/x"}})
                   nido.ui.server/read-rail-daemon (fn [] {:state :up})]
       (let [resp (server/handle-request {:request-method :get :uri "/gate/brian/ws-1"})]
@@ -211,8 +211,8 @@
                                              :stage :triage :label "L" :report nil
                                              :actions [] :session nil}])
                 nido.coordinator.work/all-grouped (fn [] [])
-                nido.session.dev/pending-resolve-keys (fn [] #{})
-                nido.session.dev/failed-ws-errors (fn [] {"brian/ws-1" "Apply failed: http 400"})]
+                nido.ui.dev/pending-resolve-keys (fn [] #{})
+                nido.ui.dev/failed-ws-errors (fn [] {"brian/ws-1" "Apply failed: http 400"})]
     (let [gate (first (:gates (server/derive-screen {:scope "all" :surface :needs})))]
       (is (= "Apply failed: http 400" (:error-msg gate)))
       (is (str/includes? (views/gate-pane (assoc gate :actions [{:id :apply :label "Apply"
@@ -225,8 +225,8 @@
                                              :stage :triage :label "L" :report nil
                                              :actions [] :session nil}])
                 nido.coordinator.work/all-grouped (fn [] [])
-                nido.session.dev/pending-resolve-keys (fn [] #{"brian/ws-1"})
-                nido.session.dev/failed-ws-errors (fn [] {"brian/ws-1" "Apply failed: http 400"})]
+                nido.ui.dev/pending-resolve-keys (fn [] #{"brian/ws-1"})
+                nido.ui.dev/failed-ws-errors (fn [] {"brian/ws-1" "Apply failed: http 400"})]
     (is (nil? (:error-msg (first (:gates (server/derive-screen {:scope "all" :surface :needs})))))
         "a retry in flight supersedes the previous failure")))
 
@@ -244,7 +244,7 @@
                                             {:ws-id "b" :project "foo" :origin :notion :stage :triage
                                              :label "FOO-1" :report nil :actions [] :session nil}])
                 nido.coordinator.work/all-grouped (fn [] [])
-                nido.session.dev/pending-resolve-keys (fn [] #{})
+                nido.ui.dev/pending-resolve-keys (fn [] #{})
                 nido.ui.server/read-rail-daemon (fn [] {:state :up})
                 project/list-projects (fn [] {"brian" {:directory "/x"} "foo" {:directory "/y"}})]
     (let [resp (server/handle-request {:request-method :get :uri "/" :query-string "scope=brian"})]
@@ -291,8 +291,8 @@
                   nido.coordinator.work/all-gates   (fn [] [])
                   nido.coordinator.work/workstream  (fn [_ _ _] {:project "brian" :ws-id "r1" :origin :notion
                                                      :stage :ready :label "BR-1" :sessions []})
-                  nido.session.dev/pending-resolve-keys (fn [] #{})
-                  nido.session.dev/ws-session-dev-states (fn [_ _] {})
+                  nido.ui.dev/pending-resolve-keys (fn [] #{})
+                  nido.ui.dev/ws-session-dev-states (fn [_ _] {})
                   project/list-projects (fn [] {"brian" {:directory "/x"}})
                   nido.ui.server/read-rail-daemon (fn [] {:state :up})]
       (let [over (:body (server/handle-request {:request-method :get :uri "/workstreams"
@@ -350,7 +350,7 @@
                                :sessions [{:name "me" :autonomy-level :interactive
                                            :parked? false :status :up :brakes nil}]})
                 nido.session.state/read-registry (fn [] {})
-                nido.session.dev/session-dev-state
+                nido.ui.dev/session-dev-state
                 (fn [_ _ & _] {:state :running :url "http://me.brian.localhost:3142"})]
     (let [resp (server/handle-request {:request-method :get :uri "/_fragment/workstream/brian/ws-1"})]
       (is (= 200 (:status resp)))
@@ -367,7 +367,7 @@
                   nido.coordinator.work/ensure-open! (fn [& _] false)
                   nido.session.lifecycle/up! (fn [s opts] (swap! calls conj [:up s (:profile opts)]))
                   nido.platform.process/tcp-open? (fn [_] true)
-                  nido.session.dev/app-port-for-instance (fn [_] 4096)
+                  nido.ui.dev/app-port-for-instance (fn [_] 4096)
                   nido.coordinator.work/workstream
                   (fn [_ _ & _] {:project "brian" :ws-id "ws-1" :origin :notion
                                  :stage :triage :label "BR-7 · t" :ledger nil :report nil :sessions []})]
@@ -464,23 +464,23 @@
       (is (= [["brian" "ws-1" :drop nil]] @calls)))))
 
 (deftest pending-resolve-keys-returns-slash-keys
-  (nido.session.dev/set-app-state! "brian/ws-9" :resuming)
+  (nido.ui.dev/set-app-state! "brian/ws-9" :resuming)
   (try
-    (is (contains? (nido.session.dev/pending-resolve-keys) "brian/ws-9"))
-    (finally (nido.session.dev/clear-app-state! "brian/ws-9"))))
+    (is (contains? (nido.ui.dev/pending-resolve-keys) "brian/ws-9"))
+    (finally (nido.ui.dev/clear-app-state! "brian/ws-9"))))
 
 (deftest pending-resolve-keys-excludes-failed-and-instance-ids
   ;; a :failed resolve is not mid-flight — it must drop out so the gate stays
   ;; retryable; a slashed-session instance-id key must never count as pending.
-  (nido.session.dev/set-app-state! "brian/ws-failed" :failed "boom")
-  (nido.session.dev/set-app-state! "brian--fix/foo" :starting)
+  (nido.ui.dev/set-app-state! "brian/ws-failed" :failed "boom")
+  (nido.ui.dev/set-app-state! "brian--fix/foo" :starting)
   (try
-    (let [ks (nido.session.dev/pending-resolve-keys)]
+    (let [ks (nido.ui.dev/pending-resolve-keys)]
       (is (not (contains? ks "brian/ws-failed")) ":failed is not mid-flight")
       (is (not (contains? ks "brian--fix/foo")) "an instance-id key is never pending"))
     (finally
-      (nido.session.dev/clear-app-state! "brian/ws-failed")
-      (nido.session.dev/clear-app-state! "brian--fix/foo"))))
+      (nido.ui.dev/clear-app-state! "brian/ws-failed")
+      (nido.ui.dev/clear-app-state! "brian--fix/foo"))))
 
 ;; ---------------------------------------------------------------------------
 ;; POST /workstreams/:project/:ws-id/winddown — bring a closed workstream's
@@ -562,7 +562,7 @@
                                :br-id "BR-5569" :notion-status "Needs verification"
                                :ledger nil :entries nil :report nil
                                :environment nil :sessions [] :on-latest? true})
-                nido.session.dev/failed-ws-errors (fn [] {})]
+                nido.ui.dev/failed-ws-errors (fn [] {})]
     (let [resp (server/handle-request
                 {:request-method :get :uri "/_fragment/workstream/brian/pg-bare"})]
       (is (= 200 (:status resp)))
@@ -573,7 +573,7 @@
   ;; The double-click guard. Task 3's ref-dedup cannot fire on a bare row's first
   ;; click, so this is what prevents two triage sessions on one ticket.
   (let [calls (atom 0)]
-    (with-redefs [nido.session.dev/pending-resolve-keys (fn [] #{"brian/pg-bare"})
+    (with-redefs [nido.ui.dev/pending-resolve-keys (fn [] #{"brian/pg-bare"})
                   nido.coordinator.work/resolve-gate! (fn [& _] (swap! calls inc) {:decision :triaging})]
       (let [resp (server/handle-request
                   {:request-method :post
@@ -585,7 +585,7 @@
 (deftest gate-resolve-runs-when-no-key-is-in-flight
   ;; The guard must not deadlock the normal path.
   (let [calls (atom 0)]
-    (with-redefs [nido.session.dev/pending-resolve-keys (fn [] #{})
+    (with-redefs [nido.ui.dev/pending-resolve-keys (fn [] #{})
                   nido.coordinator.work/resolve-gate! (fn [& _] (swap! calls inc) {:decision :triaging})]
       (server/handle-request {:request-method :post
                               :uri "/workstreams/brian/pg-bare/gate/start-triage"})
@@ -598,7 +598,7 @@
 ;; regardless of whether gate-resolve! actually started anything, so the click
 ;; looked like it worked when it did nothing at all.
 (deftest post-gate-action-while-another-is-in-flight-shows-skip-not-success
-  (with-redefs [nido.session.dev/pending-resolve-keys (fn [] #{"brian/pg-bare"})
+  (with-redefs [nido.ui.dev/pending-resolve-keys (fn [] #{"brian/pg-bare"})
                 nido.coordinator.work/resolve-gate! (fn [& _] {:decision :dismissed})]
     (let [resp (server/handle-request
                 {:request-method :post
@@ -610,7 +610,7 @@
           "must not claim the dismiss succeeded when it never ran"))))
 
 (deftest post-gate-action-with-nothing-in-flight-still-shows-success
-  (with-redefs [nido.session.dev/pending-resolve-keys (fn [] #{})
+  (with-redefs [nido.ui.dev/pending-resolve-keys (fn [] #{})
                 nido.coordinator.work/resolve-gate! (fn [& _] {:decision :dismissed})]
     (let [resp (server/handle-request
                 {:request-method :post
