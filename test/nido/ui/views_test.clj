@@ -225,7 +225,7 @@
 (deftest workstream-pane-shows-ledger-report-and-environment
   ;; The pane shows the ledger summary + report, and — bound to the resolved
   ;; environment session — its Open-app link. One environment, no session table.
-  (let [ws   (assoc sample-ws :environment {:name "auto"}
+  (let [ws   (assoc sample-ws :environment {:name "auto"} :history? true
                     :report {:format :markdown :kind :triage :at "t" :title "Verdict"
                              :markdown "# Verdict\n\nbug — reproduced."})
         html (views/workstream-pane ws {"auto" {:state :running :url "http://auto.brian.localhost:3142"}})]
@@ -458,9 +458,9 @@
    {:seq 1 :kind :triage :at "2026-06-18T00:00:00Z" :title "Verdict"}])
 
 (deftest workstream-pane-shows-the-ledger-with-nothing-open
-  ;; The pane's resting state: the ledger, whole, and no viewer. work/workstream
+  ;; With History expanded: the ledger, whole, and no viewer. work/workstream
   ;; hands over no :report unless the reader asked for one.
-  (let [html (views/workstream-pane (assoc sample-ws :entries ledger-entries) {})]
+  (let [html (views/workstream-pane (assoc sample-ws :entries ledger-entries :history? true) {})]
     (is (str/includes? html "ledger-index"))
     (is (str/includes? html "Draft PR"))
     (is (str/includes? html "Verdict"))
@@ -475,7 +475,7 @@
   ;; struck and badged — and still clickable, because it is history to read back,
   ;; not history to hide.
   (let [html (views/workstream-pane
-              (assoc sample-ws :entries
+              (assoc sample-ws :history? true :entries
                      [{:seq 6 :kind :design :at "2026-08-25T00:00:00Z" :title "With the partition"}
                       {:seq 5 :kind :design :at "2026-08-25T00:00:00Z" :title "Bespoke replay"
                        :superseded-by 6}])
@@ -487,7 +487,7 @@
         "only the amended row; the amending one is current")))
 
 (deftest workstream-pane-leaves-an-unamended-ledger-unmarked
-  (let [html (views/workstream-pane (assoc sample-ws :entries ledger-entries) {})]
+  (let [html (views/workstream-pane (assoc sample-ws :entries ledger-entries :history? true) {})]
     (is (not (str/includes? html "superseded"))
         "no back-reference, no badge — the ordinary ledger is untouched")))
 
@@ -495,13 +495,15 @@
   ;; Nothing opens itself, so the index is the only way in — skipping it for a
   ;; one-entry ledger would strand that entry.
   (let [html (views/workstream-pane
-              (assoc sample-ws :entries [{:seq 1 :kind :impl :at "t" :title "Solo"}]) {})]
+              (assoc sample-ws :history? true
+                     :entries [{:seq 1 :kind :impl :at "t" :title "Solo"}]) {})]
     (is (str/includes? html "ledger-index"))
     (is (str/includes? html "Solo"))))
 
 (deftest workstream-pane-opens-a-report-in-a-closable-viewer
   (let [ws   (assoc sample-ws
                     :selected-seq 2
+                    :history? true
                     :entries ledger-entries
                     :report {:format :markdown :kind :impl :at "t" :title "Draft PR"
                              :markdown "# Draft PR\n\nopened it."})
@@ -511,8 +513,8 @@
     (is (str/includes? html "viewer-bar"))
     (is (str/includes? html "opened it.") "the open report's body")
     (is (str/includes? html "viewer-close"))
-    (is (str/includes? html "@get(&apos;/_fragment/workstream/brian/ws-1&apos;)")
-        "closing @gets the pane with no ?entry — back to the ledger alone")))
+    (is (str/includes? html "viewer-close\" data-on:click=\"@get(&apos;/_fragment/workstream/brian/ws-1?history=1&apos;)")
+        "closing drops ?entry and keeps the rest of the position — History stays open")))
 
 (deftest workstream-pane-poll-url-carries-the-reading-position
   (let [ws   (assoc sample-ws :selected-seq 2 :open-rounds #{3 1} :entries ledger-entries)
@@ -1228,7 +1230,7 @@
   ;; The stage view is the answer; the log is the evidence, and removing it would
   ;; make a superseded record unreachable.
   (let [html (views/workstream-pane
-              (assoc a-pane :entries
+              (assoc a-pane :history? true :entries
                      [{:seq 2 :kind :baseline :at "2026-08-01T00:00:00Z"
                        :title "baseline" :superseded-by 4}])
               {})]
@@ -1291,12 +1293,108 @@
     (is (not (str/includes? css "white-space:pre-wrap"))
         "collapsed, because a record's line breaks come from the EDN a human typed")))
 
+(def ^:private an-arc
+  {:stages [{:stage :intent  :state :done    :entries 1  :visits 1 :last-seq 1 :seqs [1]}
+            {:stage :baseline :state :done   :entries 4  :visits 2 :last-seq 8
+             :seqs [2 3 7 8]}
+            {:stage :design  :state :current :entries 2  :visits 1 :last-seq 10
+             :seqs [9 10]}
+            {:stage :approval :state :skipped :entries 0 :visits 0}
+            {:stage :implementation :state :ahead :entries 0 :visits 0}
+            {:stage :review  :state :ahead   :entries 0  :visits 0}
+            {:stage :publication :state :ahead :entries 0 :visits 0}
+            {:stage :shipping :state :ahead  :entries 0  :visits 0}]
+   :excursions [{:stage :halt :entries 2 :last-seq 6 :seqs [5 6]}]})
+
+(deftest the-arc-leads-the-pane-and-the-log-sits-under-history
+  (let [html (views/workstream-pane (assoc a-pane :arc an-arc) {})
+        at   (fn [h] (str/index-of html (str "<h2>" h)))]
+    (is (< (at "Status") (str/index-of html "class=\"arc\"") (at "History"))
+        "the arc is what the pane leads with, above the log of how it got there")
+    (is (< (str/index-of html "class=\"arc\"") (str/index-of html "class=\"holds\""))
+        "and above the standing records, which are what each stage produced")))
+
+(deftest every-stage-renders-including-the-ones-with-nothing-in-them
+  ;; A stage that produced nothing is a fact about the arc. Rendering only the
+  ;; stages that fired would draw a shorter arc for every workstream and make the
+  ;; shape unreadable across two of them.
+  (let [html (views/workstream-pane (assoc a-pane :arc an-arc) {})]
+    (doseq [s ["Intent" "Baseline" "Design" "Approval" "Implementation"
+               "Review" "Publication" "Shipping"]]
+      (is (str/includes? html s) (str s " has a row")))))
+
+(deftest a-revisited-stage-says-so-and-a-once-through-stage-does-not
+  ;; The count is the arc's reason to exist. Printing it on every row would bury
+  ;; the one case it is for, because one visit is what almost every row says.
+  (let [html (views/workstream-pane (assoc a-pane :arc an-arc) {})]
+    (is (str/includes? html "2 visits") "baseline was returned to")
+    (is (= 1 (count (re-seq #"arc-v" html)))
+        "and nothing else claims a re-entry")))
+
+(deftest an-empty-stage-is-not-a-click-target
+  (let [html (views/workstream-pane (assoc a-pane :arc an-arc) {})]
+    (is (str/includes? html "stage=baseline") "a stage with records opens")
+    (is (not (str/includes? html "stage=review"))
+        "one with none does not — the click would promise a section that opens empty")))
+
+(deftest a-stage-the-work-went-past-reads-differently-from-one-not-reached
+  (let [html (views/workstream-pane (assoc a-pane :arc an-arc) {})]
+    (is (str/includes? html "arc-row skipped"))
+    (is (str/includes? html "not written"))
+    (is (str/includes? html "arc-row ahead"))))
+
+(deftest an-excursion-is-reported-beside-the-arc-not-in-it
+  (let [html (views/workstream-pane (assoc a-pane :arc an-arc) {})]
+    (is (str/includes? html "off the arc"))
+    (is (str/includes? html "halt ×2"))
+    (is (not (str/includes? html "arc-n\">halt"))
+        "a halt is something that happened, not a place the work reached")))
+
+(deftest an-expanded-stage-lists-its-own-records-and-nothing-else
+  (let [html (views/workstream-pane
+              (assoc a-pane :arc an-arc :open-stage :baseline
+                     :entries [{:seq 10 :kind :design   :at "t" :title "the design"}
+                               {:seq 8  :kind :baseline :at "t" :title "baseline four"}
+                               {:seq 2  :kind :baseline :at "t" :title "baseline one"}])
+              {})]
+    (is (str/includes? html "arc-sub"))
+    (is (str/includes? html "baseline four"))
+    (is (str/includes? html "baseline one"))
+    (is (not (str/includes? html "the design"))
+        "the design entry belongs to another stage's slice")))
+
+(deftest history-is-collapsed-by-default-and-says-how-much-is-behind-it
+  (let [ws   (assoc a-pane :entries [{:seq 2 :kind :baseline :at "t" :title "b"}
+                                     {:seq 1 :kind :intent :at "t" :title "i"}])
+        html (views/workstream-pane ws {})]
+    (is (str/includes? html "hist-head"))
+    (is (str/includes? html "2 ledger entries"))
+    (is (not (str/includes? html "ledger-index"))
+        "the log is what a reader opens, not what they scroll past")
+    (is (str/includes? html "history=1") "and one click away"))
+  (let [html (views/workstream-pane
+              (assoc a-pane :entries [{:seq 1 :kind :intent :at "t" :title "i"}]) {})]
+    (is (str/includes? html "1 ledger entry") "singular")))
+
+(deftest the-poll-carries-the-stage-and-the-history-fold
+  ;; Everything the reader can move has to survive the 3s refresh, or the pane
+  ;; closes what they opened under their cursor.
+  (let [html (views/workstream-pane
+              (assoc a-pane :arc an-arc :open-stage :design :history? true) {})]
+    (is (str/includes? html "data-on-interval__duration.3s=\"@get(&apos;/_fragment/workstream/nido/ws-1?stage=design&amp;history=1&apos;)"))))
+
+(deftest a-workstream-with-no-placeable-record-renders-no-arc
+  ;; A legacy ledger the vocabulary cannot read gets no arc rather than an arc of
+  ;; eight empty stages, which would claim the work has not started.
+  (let [html (views/workstream-pane (assoc a-pane :arc {:stages [] :excursions []}) {})]
+    (is (not (str/includes? html "class=\"arc\"")))))
+
 (deftest the-pane-separates-what-is-true-now-from-what-happened
   ;; They were one stream, so the standing records and the log of every
   ;; superseded revision of them read as the same kind of thing — which is the
   ;; confusion the standing records were added to end.
   (let [html (views/workstream-pane
-              (assoc a-pane :entries
+              (assoc a-pane :history? true :entries
                      [{:seq 2 :kind :baseline :at "2026-08-01T00:00:00Z"
                        :title "baseline"}])
               {})
@@ -1353,11 +1451,26 @@
 
 (deftest no-pane-class-silently-inherits-a-bare-rule
   ;; The general form of the bug: a short class name that some other component
-  ;; already owns. Every class the status line and the standing cards introduce
-  ;; is asserted to be scoped under its own parent in the stylesheet.
+  ;; already owns. Every SHORT class the pane's own components introduce is
+  ;; asserted to be scoped under its parent in the stylesheet, so it cannot
+  ;; inherit a rule written for something else.
   (let [css (views/shell {:body "" :title "t"})]
-    (doseq [c ["nx" "mode" "why" "hk" "hs" "hb" "hf"]]
+    (doseq [c ["nx" "mode" "why" "hk" "hs" "hb" "hf" "hc"]]
       (is (not (re-find (re-pattern (str "(?m)^\\s*\\." c " \\{")) css))
           (str "." c " must not have a bare rule of its own"))
-      (is (re-find (re-pattern (str "\\.(posn|hold) \\." c " \\{")) css)
+      (is (re-find (re-pattern (str "\\.(posn|hold|hist-head) \\." c " \\{")) css)
           (str "." c " must be scoped to the component that owns it")))))
+
+(deftest the-arc-owns-every-name-it-styles-unscoped
+  ;; The other half of the same rule. A class the arc styles at the top level is
+  ;; allowed to be unscoped only if the name is the arc's alone — otherwise it is
+  ;; a short name in a shared namespace, which is how `md` picked up the markdown
+  ;; card's border. Asserted on the whole stylesheet, because the collision is
+  ;; between components that never appear in the same function.
+  (let [css (views/shell {:body "" :title "t"})]
+    (doseq [c ["arc" "arc-row" "arc-g" "arc-n" "arc-m" "arc-v" "arc-sub" "hist-head"]]
+      (is (re-find #"^(arc|hist)" c)
+          (str "." c " carries no component prefix, so it is a name in the shared
+                namespace and must be scoped instead"))
+      (is (not (re-find (re-pattern (str "(?m)^\\s*\\.[a-z-]+ \\." c " \\{")) css))
+          (str "." c " is styled unscoped, so no other component may also scope it")))))

@@ -757,6 +757,15 @@
         ;; entry index below stays exactly as it was — it is the log underneath,
         ;; not the answer.
         :position     (pipeline/of project ws-id)
+        ;; The trail, at the granularity work actually moves in. Folded from the
+        ;; snapshot `entries` already holds rather than re-read, for the reason
+        ;; :report is: a second read is a second moment, and an arc built from a
+        ;; later ledger than the index below it would disagree with the rows a
+        ;; reader is looking at.
+        ;; :closed? is passed rather than re-derived: it is the same fact
+        ;; pipeline/place reads to answer :shipped, from the same record, so the
+        ;; heading and the arc under it cannot disagree about whether this is over.
+        :arc          (pipeline/arc entries {:closed? (some? (:closed w))})
         :holds        (holds project ws-id)
         :entries      index
         :selected-seq sel

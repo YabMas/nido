@@ -242,8 +242,18 @@
    should see, and folding it into :ahead would claim a stage is still owed when
    the work went past it. When the trail ends on an excursion no spine stage is
    current, and nothing is skipped: what a blocked workstream was in the middle of
-   is a question the position answers, not one to guess at from a record order."
-  [entries]
+   is a question the position answers, not one to guess at from a record order.
+
+   `closed?` is the one fact the arc cannot read off the ledger and cannot do
+   without. Closure lives on the workstream record, so a merged workstream whose
+   last entry was a design leaves the record trail ending mid-arc — and the arc
+   would then mark every later stage as one the work has not reached, on a
+   workstream that has finished. The pane showed exactly that: `Status — Merged`
+   above an arc claiming Shipping was still ahead. It is the same fact `place`
+   reads to answer :shipped, taken from the same place, so the two cannot come
+   apart."
+  ([entries] (arc entries {}))
+  ([entries {:keys [closed?]}]
   (let [staged  (keep (fn [e]
                         (when-let [st (stage-of (:kind e))]
                           (assoc e :stage st)))
@@ -265,16 +275,20 @@
     {:stages (mapv (fn [st]
                      (let [es (get held st)]
                        (assoc (facet st es)
-                              :state (cond (= st current) :current
-                                           (seq es)       :done
-                                           (past? st)     :skipped
-                                           :else          :ahead))))
+                              ;; A closed workstream has no current stage and
+                              ;; nothing still ahead of it: it is over, whatever
+                              ;; the last record happened to be about.
+                              :state (cond (seq es)                     (if (and (= st current)
+                                                                                 (not closed?))
+                                                                          :current :done)
+                                           (or closed? (past? st))      :skipped
+                                           :else                        :ahead))))
                    arc-stages)
      :excursions (->> (filter #(off-arc (:stage %)) staged)
                       (group-by :stage)
                       (mapv (fn [[st es]] (facet st es)))
                       (sort-by :last-seq)
-                      vec)}))
+                      vec)})))
 
 (defn- open-findings?
   "True when a findings round left items nobody has resolved.

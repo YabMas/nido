@@ -1,7 +1,9 @@
 (ns nido.ui.view-state
   "Parse a dashboard request into the single view-state value every render
    site derives from. Pure given the request map — no IO."
-  (:require [clojure.string :as str]))
+  (:require
+   [clojure.string :as str]
+   [nido.coordinator.pipeline :as pipeline]))
 
 (defn- pairs [query-string]
   (when query-string
@@ -45,6 +47,25 @@
   (when-let [raw (some (fn [[k v]] (when (= k "rounds") v)) ps)]
     (not-empty (into #{} (keep parse-long) (str/split (decode raw) #",")))))
 
+(defn- stage
+  "`?stage=design` -> :design: which arc stage the workstream pane has expanded.
+
+   Validated against the arc rather than passed through, because unlike a fold
+   this value names a section that must exist: an unknown keyword would expand
+   nothing while every stage row still offered to close it. A bad one reads as
+   no stage open, which is the pane's resting state."
+  [ps]
+  (when-let [raw (some (fn [[k v]] (when (= k "stage") v)) ps)]
+    (let [k (keyword (decode raw))]
+      (when (some #{k} pipeline/arc-stages) k))))
+
+(defn- history?
+  "`?history=1` -> true: whether the pane's raw ledger index is expanded. Absent
+   is the resting state — the arc above it is the reading a driver wants, and the
+   entry-by-entry log is what they open when it is not."
+  [ps]
+  (boolean (some (fn [[k v]] (and (= k "history") (= "1" v))) ps)))
+
 (defn parse
   "Request map -> view-state:
      {:surface :needs|:workstreams|:other
@@ -52,6 +73,8 @@
       :selection {:project _ :ws-id _}|nil
       :entry   <long>|nil
       :rounds  #{<long>}|nil
+      :stage   <arc-stage keyword>|nil
+      :history? <boolean>
       :tab     :intake|:active}
 
    No source/facet filtering: the board shows every origin, and its tabs select
@@ -64,5 +87,7 @@
      :selection (selection ps)
      :entry     (some (fn [[k v]] (when (= k "entry") (parse-long v))) ps)
      :rounds    (rounds ps)
+     :stage     (stage ps)
+     :history?  (history? ps)
      :tab       (let [t (some (fn [[k v]] (when (= k "tab") (keyword v))) ps)]
                   (if (some #{t} tabs) t default-tab))}))

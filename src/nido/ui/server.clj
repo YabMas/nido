@@ -96,7 +96,9 @@
                  (let [ws (when (= :workstreams (:surface view-state))
                             (work/workstream (:project sel) (:ws-id sel) (:entry view-state)))]
                    (cond-> {:project (:project sel) :ws-id (:ws-id sel)}
-                     ws (assoc :ws (cond-> (assoc ws :open-rounds (:rounds view-state))
+                     ws (assoc :ws (cond-> (assoc ws :open-rounds (:rounds view-state)
+                                                     :open-stage  (:stage view-state)
+                                                     :history?    (:history? view-state))
                                      (get ws-errors (str (:project sel) "/" (:ws-id sel)))
                                      (assoc :error-msg (get ws-errors (str (:project sel) "/" (:ws-id sel)))))
                                :dev-states (dev/ws-session-dev-states (:project sel) ws)
@@ -220,18 +222,22 @@
   "SSE that patches #ws-pane with a freshly-rendered workstream pane (ws detail +
    per-session dev-env state). `pos` is the reader's position in the pane, straight
    off the query string: `:entry` is the ledger entry open in the viewer (nil — the
-   default — opens nothing), `:rounds` the review rounds unfolded inside it. A
+   default — opens nothing), `:rounds` the review rounds unfolded inside it,
+   `:stage` the arc stage expanded, `:history?` whether the raw ledger index is
+   showing. A
    failed gate action rides along as :error-msg — this poll is what replaces the
    optimistic confirm fragment, so it has to carry the bad news too."
   ([project ws-id] (ws-pane-fragment-response project ws-id nil))
-  ([project ws-id {:keys [entry rounds]}]
+  ([project ws-id {:keys [entry rounds stage history?]}]
    (let [ws  (work/workstream project ws-id entry)
          err (get (dev/failed-ws-errors) (str project "/" ws-id))]
      (sse-response
       (sse-fragment
        (views/workstream-pane (cond-> ws
-                                rounds (assoc :open-rounds rounds)
-                                err    (assoc :error-msg err))
+                                rounds   (assoc :open-rounds rounds)
+                                stage    (assoc :open-stage stage)
+                                history? (assoc :history? true)
+                                err      (assoc :error-msg err))
                               (dev/ws-session-dev-states project ws)
                               (work/machine-facts project (map :name (:sessions ws)))))))))
 

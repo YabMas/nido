@@ -389,6 +389,22 @@
     (is (= p/arc-stages (mapv :stage (:stages a))))
     (is (empty? (:excursions a)))))
 
+(deftest a-closed-workstream-has-nothing-still-ahead-of-it
+  ;; Closure is on the workstream record, not in the ledger, so a merged
+  ;; workstream whose last entry was a design leaves the record trail ending
+  ;; mid-arc. Read from the entries alone the arc then called every later stage
+  ;; one the work had not reached — which the live pane showed as `Status —
+  ;; Merged` above an arc claiming Shipping was still to come.
+  (let [es (kinds->entries [:intent :baseline :design])
+        open   (into {} (map (juxt :stage :state)) (:stages (p/arc es)))
+        closed (into {} (map (juxt :stage :state)) (:stages (p/arc es {:closed? true})))]
+    (is (= :ahead (open :shipping))   "still open: the arc has not reached it")
+    (is (= :skipped (closed :shipping)) "closed: it is over, record or no record")
+    (is (not-any? #(= :ahead %) (vals closed)))
+    (is (= :current (open :design))   "still open: the trail ends on the design")
+    (is (= :done (closed :design))
+        "closed: nothing is current, whatever the last record happened to be about")))
+
 (deftest arc-carries-the-seqs-a-reader-would-open
   (let [m (stage-map (kinds->entries [:intent :baseline :baseline-review :design]))]
     (is (= [2 3] (:seqs (m :baseline))))

@@ -169,6 +169,35 @@
         .hold .no { color:#a07a4a; }
         .hold.empty { border-style:dashed; background:none; }
         .hold.empty .hb { color:#5f5f78; }
+        /* The arc. A vertical list rather than a horizontal track, for the
+           reason the holds are: a stage carries several facts and a lane wide
+           enough for eight of them leaves room for none of them. It is also not
+           a progress bar — a bar draws a walk that only goes forward, and the
+           re-entry count is the one thing here a forward-only shape cannot
+           show. */
+        .arc { margin:12px 0 4px; border:1px solid #20203a; border-radius:6px; overflow:hidden; }
+        .arc-row { display:flex; gap:10px; align-items:baseline; padding:7px 12px;
+                   border-bottom:1px solid #1a1a30; color:#cdcde0; }
+        .arc-row:last-child { border-bottom:none; }
+        .arc-row.live { cursor:pointer; }
+        .arc-row.live:hover { background:#1b1b33; }
+        .arc-row.open { background:#1b1b33; }
+        .arc-g { width:12px; text-align:center; color:#5f5f78; font-size:12px; }
+        .arc-n { min-width:118px; font-size:13px; color:#9a9ac0; }
+        .arc-m { font-size:11.5px; color:#6f6f88; }
+        .arc-v { font-size:11.5px; color:#c9a227; }
+        .arc-row.done .arc-g { color:#6a9a6a; }
+        .arc-row.done .arc-n { color:#cdcde0; }
+        .arc-row.current .arc-g { color:#7a9ad0; }
+        .arc-row.current .arc-n { color:#e6e6f5; font-weight:600; }
+        .arc-row.skipped .arc-n { color:#7a6f55; }
+        .arc-row.skipped .arc-m { color:#7a6f55; }
+        .arc-row.ahead .arc-n { color:#5f5f78; }
+        .arc-sub { padding:2px 0 8px; background:#141428; border-bottom:1px solid #1a1a30; }
+        .hist-head { display:inline-flex; gap:7px; align-items:baseline; cursor:pointer;
+                     font-size:12.5px; color:#8a8ab0; padding:3px 0; }
+        .hist-head:hover { color:#cdcde0; }
+        .hist-head .hc { color:#5f5f78; }
         .ledger-index { margin:14px 0 8px; border:1px solid #20203a; border-radius:6px; overflow:hidden; }
         .ledger-row { display:flex; gap:10px; align-items:baseline; padding:7px 12px;
                       border-bottom:1px solid #1a1a30; color:#cdcde0; cursor:pointer; }
@@ -534,11 +563,13 @@
                 sel (conj (str "sel=" sel)))]
     (if (seq pairs) (str "?" (str/join "&" pairs)) "")))
 
-;; The workstream pane's READING POSITION — {:project :ws-id :entry :rounds} —
-;; and the one expression that navigates to it. Everything the reader can move
-;; is in that map: which ledger entry is open (nil = none, the resting state)
-;; and which of its review rounds are unfolded. Every affordance in the pane
-;; (an index row, a round's fold, the viewer's close, the 3s poll) is the same
+;; The workstream pane's READING POSITION —
+;; {:project :ws-id :entry :rounds :stage :history?} — and the one expression
+;; that navigates to it. Everything the reader can move is in that map: which
+;; ledger entry is open (nil = none, the resting state), which of its review
+;; rounds are unfolded, which arc stage is expanded, and whether the raw ledger
+;; index is showing. Every affordance in the pane
+;; (an index row, a stage, a round's fold, the viewer's close, the 3s poll) is the same
 ;; position with one field changed, so none of them can disagree about where the
 ;; reader is — and the poll, which re-renders the whole pane, lands them back
 ;; exactly where they were rather than resetting the fold under their cursor.
@@ -547,10 +578,12 @@
   "`@get(…)` expression for the pane fragment at reading position `pos`. Omits
    whatever is at rest, so a pane nobody has opened anything in polls the bare
    URL."
-  [{:keys [project ws-id entry rounds]}]
+  [{:keys [project ws-id entry rounds stage history?]}]
   (let [ps (cond-> []
              entry        (conj (str "entry=" entry))
-             (seq rounds) (conj (str "rounds=" (str/join "," (sort rounds)))))]
+             (seq rounds) (conj (str "rounds=" (str/join "," (sort rounds))))
+             stage        (conj (str "stage=" (name stage)))
+             history?     (conj "history=1"))]
     (str "@get('/_fragment/workstream/" project "/" ws-id
          (when (seq ps) (str "?" (str/join "&" ps))) "')")))
 
@@ -567,6 +600,21 @@
   [pos n]
   (let [open (set (:rounds pos))]
     (assoc pos :rounds (if (open n) (disj open n) (conj open n)))))
+
+(defn- at-stage
+  "`pos` with arc stage `st` expanded, or collapsed again when it already was.
+   Clears any open entry: the entry a reader had open belonged to the stage they
+   just closed, and leaving it open would strand a viewer under a section that is
+   no longer on the page."
+  [pos st]
+  (assoc pos :stage (when-not (= st (:stage pos)) st) :entry nil :rounds nil))
+
+(defn- toggle-history
+  "`pos` with the raw ledger index shown or hidden. Independent of everything else
+   in the position — the log is a second way to reach the same entries, not a
+   different place to be."
+  [pos]
+  (update pos :history? not))
 
 (defn- gate-card
   "One inbox row; links to the gate pane. `sel?` highlights the open gate. `href`
@@ -1734,15 +1782,108 @@
                              :title "close"} "✕"]])
    (report-body report pos)])
 
-(defn- ledger-browser
-  "The ledger, then — only once the reader opens one — the entry they opened.
-   `entries` is the newest-first index; `report` is the open entry's report, nil
-   when nothing is open."
-  [pos entries report]
+(def ^:private arc-label
+  "Arc stage -> its heading. A separate vocabulary from `stage-label`, which names
+   the NEXT ACTION (`:verify-baseline`, `:decide-design`) rather than the place a
+   record belongs to. They read alike and answer different questions, so they are
+   kept apart rather than merged into a table that would have to mean both."
+  {:intent         "Intent"
+   :baseline       "Baseline"
+   :design         "Design"
+   :approval       "Approval"
+   :implementation "Implementation"
+   :review         "Review"
+   :publication    "Publication"
+   :shipping       "Shipping"})
+
+(def ^:private arc-glyph
+  "Stage state -> its mark. Four marks because there are four states, and the two
+   empty ones are not the same: `⊘` is a stage the work went past without writing
+   one, `·` is one it has not reached."
+  {:done "✓" :current "●" :skipped "⊘" :ahead "·"})
+
+(defn- arc-meta
+  "The one line of detail a stage row carries, or nil when it holds nothing worth
+   a phrase. Never the stage's own name reworded — a row whose detail restates its
+   label is the arc line that was removed for exactly that."
+  [{:keys [entries state]}]
+  (cond
+    (pos? entries) (str entries " record" (when (not= 1 entries) "s"))
+    (= :skipped state) "not written"
+    :else nil))
+
+(defn- arc-row
+  "One stage of the arc. Clickable only when it holds records — an empty stage has
+   nothing to expand, and offering the click would promise a section that opens
+   empty.
+
+   The re-entry count renders only above one, and in the colour the pane already
+   uses for `needs you`. A stage entered once is the ordinary case and saying so
+   on every row would bury the case that matters: `2 visits` on a baseline means a
+   later stage sent the work back to it, which is the fact the ledger index cannot
+   show and a forward-only track cannot show either."
+  [pos {:keys [stage state visits] :as facet}]
+  (let [live? (pos? (:entries facet))
+        open? (= stage (:stage pos))]
+    [:div (cond-> {:class (str "arc-row " (name state)
+                              (when live? " live") (when open? " open"))}
+            live? (assoc "data-on:click" (pane-fragment (at-stage pos stage))))
+     [:span.arc-g (get arc-glyph state "·")]
+     [:span.arc-n (get arc-label stage (name stage))]
+     (when-let [m (arc-meta facet)] [:span.arc-m m])
+     (when (> visits 1)
+       [:span.arc-v {:title "the work left this stage and came back"}
+        (str "· " visits " visits")])]))
+
+(defn- arc-entry-rows
+  "The entries of one stage, newest first, as rows that open into the viewer. The
+   same affordance the ledger index offers, over a stage's slice of it — which is
+   the whole of what `history at stage granularity` means here."
+  [pos entries seqs]
+  (let [want (set seqs)]
+    (into [:div.ledger-index]
+          (for [{:keys [seq kind at title superseded-by]} entries
+                :when (want seq)]
+            [:a {:class (str "ledger-row" (when (= seq (:entry pos)) " sel")
+                             (when superseded-by " superseded"))
+                 "data-on:click" (pane-fragment (at-entry pos seq))}
+             [:span.lk (clojure.core/name kind)]
+             [:span.meta (day at)]
+             [:span.lt title]
+             (when superseded-by [:span.lx (str "superseded by " superseded-by)])]))))
+
+(defn- arc-block
+  "The arc: every stage in order, the expanded one showing its records, and the
+   open record shown under the stage it belongs to.
+
+   This is what the pane leads with. The Status heading above says where the
+   workstream IS; this says how it got there — which stages produced something,
+   which were skipped, and which it has been sent back to. The two are the same
+   ledger read two ways and cannot disagree, because both fold the one
+   correspondence nido.coordinator.pipeline keeps.
+
+   `report-here?` says whether the open entry belongs to the expanded stage. When
+   it does the viewer renders inside the expansion, next to the row that opened
+   it; when it does not, the entry was reached from the raw index and the viewer
+   renders down there instead. One viewer either way — reading an entry twice on
+   one page is worse than reaching it from two places."
+  [pos {:keys [stages excursions]} entries report report-here?]
   [:div
-   (when (seq entries) (ledger-index pos entries))
-   (when report
-     (report-viewer pos (first (filter #(= (:entry pos) (:seq %)) entries)) report))])
+   (into [:div.arc]
+         (mapcat (fn [{:keys [stage seqs] :as facet}]
+                   (cond-> [(arc-row pos facet)]
+                     (= stage (:stage pos))
+                     (conj [:div.arc-sub
+                            (arc-entry-rows pos entries seqs)
+                            (when report-here?
+                              (report-viewer pos (first (filter #(= (:entry pos) (:seq %)) entries))
+                                             report))])))
+                 stages))
+   (when (seq excursions)
+     [:p.meta "off the arc · "
+      (str/join " · " (map (fn [{:keys [stage entries]}]
+                             (str (name stage) " ×" entries))
+                           excursions))])])
 
 (defn- pane-route
   "POST target for the pane-scoped resolve route — responses patch #ws-pane so the
@@ -1858,9 +1999,18 @@
    — see pane-fragment), so transient dev-env states (starting…) self-advance
    without the refresh closing whatever the reader has open."
   ([ws session-dev-states] (workstream-pane ws session-dev-states {}))
-  ([{:keys [project ws-id origin stage label links ledger report action-report entries selected-seq open-rounds sessions environment on-latest? error-msg bare? br-id notion-status position holds]
+  ([{:keys [project ws-id origin stage label links ledger report action-report entries selected-seq open-rounds open-stage history? sessions environment on-latest? error-msg bare? br-id notion-status position holds arc]
      :or {on-latest? true}} session-dev-states machine-facts]
-   (let [pos {:project project :ws-id ws-id :entry selected-seq :rounds open-rounds}]
+   (let [pos  {:project project :ws-id ws-id :entry selected-seq :rounds open-rounds
+               :stage open-stage :history? history?}
+         ;; Does the open entry belong to the expanded stage? Decides which of the
+         ;; two places that can reach an entry renders the viewer, so that opening
+         ;; one never shows it twice and never shows it somewhere the reader is
+         ;; not looking.
+         in-stage? (boolean (and report selected-seq open-stage
+                                 (some #(and (= open-stage (:stage %))
+                                             (some #{selected-seq} (:seqs %)))
+                                       (:stages arc))))]
      (str
       (h/html
        (if-not label
@@ -1881,6 +2031,10 @@
             ;; the confusion the standing records were added to end.
             [:h2 (status-heading position)]
             (when position (position-line position))
+            ;; The arc leads. The heading above states where the workstream is;
+            ;; this states how it got there, and it is the one thing on the page
+            ;; that can show the work having been sent back to an earlier stage.
+            (when (seq (:stages arc)) (arc-block pos arc entries report in-stage?))
             (when (seq holds) (holds-block holds))
             ;; The actions belong HERE and not under the log, because they act on
             ;; the workstream as it stands — pane-action-bar reads :action-report,
@@ -1892,11 +2046,25 @@
             (when on-latest? (pane-action-bar project ws-id origin stage sessions action-report))
             (when (= :done stage) (file-findings-form project ws-id))
 
+            ;; Collapsed by default. The arc above is the reading a driver
+            ;; wants — the raw log is one row per append, which is the ledger's
+            ;; own order rather than the work's, and it is what you open when the
+            ;; arc is not enough rather than what you scroll past to reach it.
             [:h2 "History"]
-            (when ledger
-              [:div.card [:strong "ledger "] (:key ledger) " · " (some-> ledger :status name)
-               " · " (:report-count ledger) " report(s)"])
-            (ledger-browser pos entries report)
+            [:span.hist-head {"data-on:click" (pane-fragment (toggle-history pos))}
+             (if history? "▾" "▸")
+             [:span.hc (str (count entries) " ledger entr"
+                            (if (= 1 (count entries)) "y" "ies"))]
+             (when ledger [:span.hc (str "· " (:report-count ledger) " report(s)")])]
+            (when history?
+              [:div
+               (when ledger
+                 [:div.card [:strong "ledger "] (:key ledger) " · " (some-> ledger :status name)])
+               (when (seq entries) (ledger-index pos entries))])
+            ;; Reached from the raw index rather than from a stage — the arc
+            ;; showed it already when it could.
+            (when (and report (not in-stage?))
+              (report-viewer pos (first (filter #(= (:entry pos) (:seq %)) entries)) report))
 
             [:h2 "Environment"]
             (if-let [env-name (:name environment)]
