@@ -45,7 +45,6 @@
    [nido.platform.project :as project]
    [nido.session.reclaim :as reclaim]
    [nido.session.profiles :as profiles]
-   [nido.ui.server :as ui-server]
    [nido.coordinator.work :as work]))
 
 (def ^:private defaults
@@ -124,6 +123,11 @@
 ;; Resolved dashboard port for the running daemon (nil when disabled). Recorded
 ;; in the heartbeat so `status` can report + probe the right port.
 (defonce ^:private !dashboard-port (atom nil))
+
+;; The dashboard's start!/stop! pair, supplied by whoever starts the daemon.
+;; The daemon owns WHEN the dashboard goes up and down; it does not own WHAT the
+;; dashboard is, so it holds two functions rather than importing a surface.
+(defonce ^:private !dashboard-lifecycle (atom nil))
 
 (defn dashboard-config
   "Resolve {:enabled? :port} for the in-process dashboard from run! opts over
@@ -882,7 +886,8 @@
     (Runtime/getRuntime)
     (Thread.
       (fn []
-        (try (ui-server/stop!) (catch Exception _ nil))
+        (when-let [stop! (:stop! @!dashboard-lifecycle)]
+          (try (stop!) (catch Exception _ nil)))
         (doseq [hash (keys @!source-instances)]
           (stop-source! hash))
         (try (heartbeat/write! {:status :stopped :slots-in-use 0})
@@ -912,16 +917,21 @@
   "Start the foreground loop. Blocks until interrupted.
    Also installs the daemon lifecycle: writes coordinator.pid, runs the
    crash-recovery reconcile pass, starts the in-process dashboard, and
-   registers a JVM shutdown hook."
-  [& {:keys [poll-ms] :as opts :or {poll-ms (:poll-ms defaults)}}]
+   registers a JVM shutdown hook.
+
+   `:dashboard {:start! f :stop! g}` supplies the dashboard server. Omitted, the
+   daemon runs without one -- it never imports a surface to find it."
+  [& {:keys [poll-ms dashboard] :as opts :or {poll-ms (:poll-ms defaults)}}]
   (cstate/ensure-dirs!)
   (println "nido coordinator: starting (poll" poll-ms "ms)")
   (reconcile/reconcile!)
   (resubmit-queued! (load-all-triggers))
-  (let [{:keys [enabled? port]} (dashboard-config opts)]
-    (reset! !dashboard-port (when enabled? port))
-    (when enabled?
-      (try (ui-server/start! {:port port})
+  (reset! !dashboard-lifecycle dashboard)
+  (let [{:keys [enabled? port]} (dashboard-config opts)
+        start!                  (:start! dashboard)]
+    (reset! !dashboard-port (when (and enabled? start!) port))
+    (when (and enabled? start!)
+      (try (start! {:port port})
            (catch Throwable t
              (reset! !dashboard-port nil)
              (binding [*err* *err*]

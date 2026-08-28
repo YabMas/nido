@@ -16,6 +16,7 @@
    [nido.coordinator.launchctl :as lc]
    [nido.coordinator.sources.state :as sst]
    [nido.platform.io :as io]
+   [nido.ui.server :as ui-server]
    [nido.platform.process :as proc]
    [clojure.string :as str]
    [nido.platform.task-args :as task-args]))
@@ -25,7 +26,8 @@
         ms        (some-> (:poll-ms opts) str parse-long)
         dport     (some-> (:dashboard-port opts) str parse-long)
         no-dash?  (= true (:no-dashboard opts))]
-    (apply core/run! (cond-> []
+    (apply core/run! (cond-> [:dashboard {:start! ui-server/start!
+                                          :stop!  ui-server/stop!}]
                        ms       (into [:poll-ms ms])
                        dport    (into [:dashboard-port dport])
                        no-dash? (into [:no-dashboard true])))))
