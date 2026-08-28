@@ -22,9 +22,12 @@
        (sort-by (fn [[_ {:keys [directory]}]] (- (count (str directory)))))
        ffirst))
 
-(defn- coords
+(defn coords
   "[project worktree] for `cwd`: a nido session's if cwd is inside one, otherwise the project's
-   own checkout. Returns nil when cwd belongs to no registered project at all."
+   own checkout. Returns nil when cwd belongs to no registered project at all.
+
+   Public because the landing gate asks the same question, and two answers to \"whose design is
+   this?\" would eventually disagree about a nested checkout."
   [cwd]
   (if-let [{:keys [project worktree]} (try (lifecycle/session-from-cwd cwd) (catch Throwable _ nil))]
     [project worktree]

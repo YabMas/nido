@@ -12,6 +12,8 @@
   (:require
    [clojure.string :as str]
    [nido.coordinator.standing :as standing]
+   [nido.design.check :as design]
+   [tasks.nido-design :as nido-design]
    [nido.coordinator.workstream :as cws]
    [nido.review.stages :as stages]
    [nido.session.lifecycle :as lifecycle]
@@ -71,36 +73,83 @@
 
     (str "  No route recorded for " reason " — say so rather than working around it.")))
 
-(defn check
-  "Refuse unless this session's design stands: not retracted, approved, and the
-   exact baseline it cites still live.
+(defn- standing-check
+  "Refuse unless this session's design DECISION stands: not retracted, approved,
+   and the exact baseline it cites still live.
 
    A workstream with NO design passes. Most do not have one — scratch
    workstreams, pickups mid-flight — and a gate that demanded a design of every
    branch would stop the work that has not reached one yet, which is not what
    this is for."
+  [cwd]
+  (if-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
+    (if-let [design (cws/latest-entry project ws-id :design)]
+      (let [st (standing/of-design project ws-id design)]
+        (if (:decided? st)
+          (do (println (str "land:check ok · design at entry " (:seq design)
+                            " stands, approved at entry " (:approved-by st)))
+              0)
+          (let [b (or (:blocked st)
+                      {:reason :not-approved :seq (:seq design)})]
+            (println (str "land:check REFUSED · " (name (:reason b))))
+            (when-let [d (:detail b)] (println (str "  " d)))
+            (println "\nHow to clear it:")
+            (println (way-out b))
+            1)))
+      (do (println "land:check ok · this workstream holds no design to stand on")
+          0))
+    (do (println (str "land:check ok · " cwd " is no nido session — nothing to stand on"))
+        0)))
+
+(defn- structure-check
+  "Refuse unless the CODE still obeys the structure the project declared.
+
+   A different question from the one above, and the reason both are here. Standing
+   asks whether anyone still believes the premise this branch was written against.
+   This asks whether the branch left the codebase in the shape the project says it
+   has — a `canvas/` model, checked by fukan against the extracted call graph.
+
+   A branch can pass one and fail the other in either direction, so neither
+   substitutes for the other, and neither belongs in a recipe: a rule that lives
+   only in prose is followed by whoever read the prose."
+  [cwd]
+  (if-let [[project worktree] (nido-design/coords cwd)]
+    (let [result (design/check project worktree)]
+      (case (:status result)
+        :unmodelled  (do (println (str "land:check ok · " project " declares no structure to check"))
+                         0)
+        :satisfied   (do (println (str "land:check ok · the code obeys " project "'s declared structure"))
+                         0)
+        :violated    (let [n (reduce + (map (comp count :offenders) (:violations result)))]
+                       (println (str "land:check REFUSED · " n " violation" (when (not= 1 n) "s")
+                                     " of " project "'s declared structure\n"))
+                       (println (design/violation-text result))
+                       (println "\nHow to clear it:")
+                       (println (str "  Either the code moves or the declaration does — one of them\n"
+                                     "  is wrong, and landing is where that gets decided rather than\n"
+                                     "  inherited. The declaration is in "
+                                     (str/join ", " (:files (design/design-of project worktree))) ".\n"
+                                     "  Re-run with bb nido:design:check."))
+                       1)
+        :undecidable (do (println (str "land:check REFUSED · the structure check did not complete: "
+                                       (:error result)))
+                         (println "\nHow to clear it:")
+                         (println (str "  This is not a clean bill of health, it is nobody being able\n"
+                                       "  to tell. Fix the checker — bb nido:design:check reproduces\n"
+                                       "  it — rather than landing on an answer that was never given."))
+                         2)))
+    0))
+
+(defn check
+  "The landing gate: both questions, and a refusal from either is a refusal.
+
+   Every check runs even when an earlier one refuses. An agent that has to
+   discover its blockers one push at a time will make one trip per blocker."
   [& args]
   (let [[_ opts] (task-args/split-args args)
         given (or (:cwd opts) (System/getProperty "user.dir"))
         cwd   (or (lifecycle/worktree-from-cwd given) given)]
-    (if-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
-      (if-let [design (cws/latest-entry project ws-id :design)]
-        (let [st (standing/of-design project ws-id design)]
-          (if (:decided? st)
-            (do (println (str "land:check ok · design at entry " (:seq design)
-                              " stands, approved at entry " (:approved-by st)))
-                0)
-            (let [b (or (:blocked st)
-                        {:reason :not-approved :seq (:seq design)})]
-              (println (str "land:check REFUSED · " (name (:reason b))))
-              (when-let [d (:detail b)] (println (str "  " d)))
-              (println "\nHow to clear it:")
-              (println (way-out b))
-              1)))
-        (do (println "land:check ok · this workstream holds no design to stand on")
-            0))
-      (do (println (str "land:check ok · " cwd " is no nido session — nothing to check"))
-          0))))
+    (apply max (mapv #(% cwd) [standing-check structure-check]))))
 
 (defn cmd
   "bb entry point: exits non-zero on a refusal, so a recipe that runs it before

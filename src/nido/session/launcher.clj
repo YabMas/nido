@@ -566,9 +566,10 @@
          "\n"
          "This is not documentation. It is a model your code is CHECKED against:\n"
          "`bb nido:design:check` exits non-zero the moment the code stops obeying\n"
-         "it. Read it before you add a namespace or a require — nearly every\n"
-         "violation is one import that should have gone the other way, and it is\n"
-         "far cheaper to not write than to unpick.\n"
+         "it, and `bb nido:land:check` refuses the landing. Read it before you add\n"
+         "a namespace or a require — nearly every violation is one import that\n"
+         "should have gone the other way, and it is far cheaper to not write than\n"
+         "to unpick.\n"
          "\n"
          "```clojure\n"
          (design/declaration-text design)

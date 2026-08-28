@@ -5,19 +5,27 @@
    [clojure.test :refer [deftest is testing]]
    [nido.coordinator.standing :as standing]
    [nido.coordinator.workstream :as cws]
+   [nido.design.check :as design]
    [nido.review.stages :as stages]
    [nido.session.lifecycle :as lifecycle]
+   [tasks.nido-design :as nido-design]
    [tasks.nido-land :as land]))
 
 (def ^:private a-design {:format :design :seq 4 :summary "s"})
 
-(defn- run [{:keys [session? design standing]}]
+(defn- run
+  "Drive the gate with both halves stubbed. `structure` defaults to nil = the cwd belongs to no
+   registered project, which is what every standing-only case wants."
+  [{:keys [session? design standing structure]}]
   (let [out (java.io.StringWriter.)]
     (binding [*out* out]
       (with-redefs [lifecycle/worktree-from-cwd (fn [g] g)
                     stages/project+ws-from-cwd (fn [_] (when session? [:nido "ws-1"]))
                     cws/latest-entry (fn [& _] design)
-                    standing/of-design (constantly standing)]
+                    standing/of-design (constantly standing)
+                    nido-design/coords (fn [_] (when structure [:nido "/wt"]))
+                    design/check (constantly structure)
+                    design/design-of (constantly {:files ["/wt/canvas/bands.clj"]})]
         [(land/check ":cwd" "/wt") (str out)]))))
 
 (deftest a-standing-approved-design-lands
@@ -78,3 +86,45 @@
         (is (< 40 (count txt)) (str reason " must say more than a sentence fragment"))))
     (testing "and an unrecognised one says so rather than pretending"
       (is (str/includes? (way-out {:reason :something-new}) "No route recorded")))))
+
+;; ── the second question: does the code still obey the declared structure? ──────
+;; Standing asks whether anyone still believes the premise this branch was written
+;; against. Structure asks whether the branch left the codebase in the shape the
+;; project says it has. A branch can pass one and fail the other in either
+;; direction, so neither substitutes for the other.
+
+(deftest a-project-with-no-declared-structure-lands
+  (let [[code out] (run {:session? true :design nil :structure {:status :unmodelled}})]
+    (is (zero? code))
+    (is (str/includes? out "no structure to check"))))
+
+(deftest code-that-broke-the-declared-structure-is-refused-with-the-offending-edge
+  (let [[code out] (run {:session? true :design nil
+                         :structure {:status :violated
+                                     :violations [{:law "no undeclared edge"
+                                                   :vars ["?from" "?to"]
+                                                   :offenders [["a.b" "c.d"]]}]}})]
+    (is (= 1 code))
+    (is (str/includes? out "REFUSED"))
+    (is (str/includes? out "from=a.b  to=c.d") "the finding, not just its count")
+    (is (str/includes? out "canvas/bands.clj") "and where the declaration lives")))
+
+(deftest a-structure-check-that-did-not-complete-refuses-rather-than-waving-through
+  (let [[code out] (run {:session? true :design nil
+                         :structure {:status :undecidable :error "a law would not compile"}})]
+    (is (= 2 code) "distinct from a violation: nobody could tell, which is not a clean bill")
+    (is (str/includes? out "did not complete"))
+    (is (str/includes? out "Fix the checker"))))
+
+(deftest both-questions-are-asked-even-when-the-first-one-refuses
+  ;; An agent that has to discover its blockers one push at a time makes one trip
+  ;; per blocker.
+  (let [[code out] (run {:session? true :design a-design
+                         :standing {:decidable? true :decided? false}
+                         :structure {:status :violated
+                                     :violations [{:law "no undeclared edge"
+                                                   :vars ["?from" "?to"]
+                                                   :offenders [["a.b" "c.d"]]}]}})]
+    (is (= 1 code))
+    (is (str/includes? out "not-approved") "the standing refusal")
+    (is (str/includes? out "from=a.b  to=c.d") "and the structural one, in the same run")))
