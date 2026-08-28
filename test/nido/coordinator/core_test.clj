@@ -3,6 +3,7 @@
    Also covers the triage pre-spawn gate (Task 4)."
   (:require
    [babashka.fs :as fs]
+   [clojure.string :as str]
    [clojure.test :refer [deftest is use-fixtures]]
    [nido.coordinator.agent :as agent]
    [nido.coordinator.events]
@@ -819,3 +820,27 @@
                   core/run-blocking! (fn [rid] (reset! spawned rid))]
       (core/execute! "r3")
       (is (= "r3" @spawned)))))
+
+;; ── The driver's decisions are legible from outside ─────────────────────────
+
+(deftest a-fired-stage-is-logged
+  ;; The driver is the one part of nido that acts without being asked, so "it
+  ;; ran and chose to do nothing" and "it never ran" have to be distinguishable
+  ;; from outside.
+  (let [line (core/drive-log-line {:ws-id "ws-1" :at :surveyed
+                                   :fired :verify-survey :run-id "r-1"})]
+    (is (str/includes? line "ws-1"))
+    (is (str/includes? line "firing verify-survey"))
+    (is (str/includes? line "r-1"))))
+
+(deftest an-actionable-skip-is-logged
+  (is (str/includes? (core/drive-log-line {:ws-id "ws-4" :at :surveyed
+                                           :skipped :no-session})
+                     "no-session")))
+
+(deftest the-resting-states-are-not-logged-every-tick
+  ;; A workstream skipped :not-mechanical every second would fill the log with
+  ;; the fact that a later phase has not happened yet.
+  (doseq [s [:waiting-on-a-human :not-mechanical :terminal :already-running]]
+    (is (nil? (core/drive-log-line {:ws-id "ws-2" :at :design-approved :skipped s}))
+        (str s " is a resting state, not news"))))

@@ -13,13 +13,28 @@
   (or (some-> (get opts k) name)
       (throw (ex-info (str "Missing " k) {:hint (str "pass " k " <value>")}))))
 
+(defn- decision-text
+  "What the driver would do on the next tick, in words.
+
+   The log records what it DID and stays quiet about routine skips, which is
+   right for a line printed every second and wrong for the question an operator
+   actually asks: why is this one not moving? That question is asked on demand,
+   so it is answered here."
+  [position]
+  (let [d (drive/fireable position)]
+    (if-let [f (:fire d)]
+      (str "would fire " (name f))
+      (case (:skip d)
+        :terminal            "nothing left to do"
+        :waiting-on-a-human  "waiting on you"
+        :not-mechanical      (str "needs " (name (:stage d)) ", which no phase runs yet")
+        :no-runner           (str "no runner for " (name (:stage d)))
+        (str "skipped: " (name (:skip d)))))))
+
 (defn- show [[project ws-id]]
   (let [p (pipeline/of project ws-id)]
     (println (format "  %-8s %-22s %-18s %s"
-                     (name project) ws-id (name (:at p))
-                     (if-let [n (:next p)]
-                       (str "→ " (name (:stage n)) " (" (name (:mode n)) ")")
-                       "—")))))
+                     (name project) ws-id (name (:at p)) (decision-text p)))))
 
 (defn list-cmd [& _]
   (let [d (drive/driven)]

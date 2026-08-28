@@ -785,6 +785,22 @@
       (body rid)
       (run-blocking! rid))))
 
+(def ^:private quiet-skips
+  "Skips that say nothing an operator can act on, and so are not logged every
+   tick. Each is the ordinary resting state of a driven workstream: waiting on a
+   person, needing a stage a later phase will bring, or already working."
+  #{:waiting-on-a-human :not-mechanical :terminal :already-running})
+
+(defn drive-log-line
+  "One line for a drive decision, or nil when it is not worth one."
+  [{:keys [ws-id at fired run-id skipped]}]
+  (cond
+    fired   (str "nido drive: " ws-id " at " (name at) " — firing " (name fired)
+                 " as " run-id)
+    (and skipped (not (quiet-skips skipped)))
+    (str "nido drive: " ws-id " at " (name at) " — skipped, " (name skipped))
+    :else nil))
+
 (defn tick!
   "One iteration of the main loop. Public for testability."
   []
@@ -809,7 +825,19 @@
         (review/sweep-resolved!)
         ;; Advance the workstreams on the driver's allow-list. Empty by default,
         ;; so landing this drives nothing until somebody names a workstream.
-        (try (drive/tick!)
+        ;;
+        ;; The decisions are LOGGED, not discarded. The driver is the one part of
+        ;; nido that acts without being asked, so "it ran and chose to do nothing"
+        ;; and "it never ran" have to be distinguishable from outside — and with
+        ;; the return value dropped they were not: a driver wired to nothing and a
+        ;; driver declining every workstream produce identical silence.
+        ;;
+        ;; Only what it FIRED, and what it skipped for a reason an operator can do
+        ;; something about. A workstream skipped as :not-mechanical every second
+        ;; would fill the log with the fact that phase five has not happened yet.
+        (try (doseq [d (drive/tick!)]
+               (when-let [line (drive-log-line d)]
+                 (println line)))
              (catch Throwable t
                (binding [*err* *err*]
                  (.println ^java.io.PrintWriter *err*
