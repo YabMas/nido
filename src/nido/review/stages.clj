@@ -14,6 +14,7 @@
    [nido.platform.core :as core]
    [nido.review.cache :as cache]
    [nido.review.codex :as codex]
+   [nido.review.conformance :as conformance]
    [nido.review.layers :as layers]
    [nido.review.prompts :as prompts]
    [nido.session.lifecycle :as lifecycle]
@@ -332,7 +333,15 @@
                                targets))
                  whole    (or (first (filter #(:stack? (:target %)) results))
                               (first results))
-                 findings (collect-findings results)]
+                 ;; The mechanical reviewer joins the fan-out, but not the layer bookkeeping:
+                 ;; it reports on the worktree rather than on a range, so it is no layer and
+                 ;; belongs in neither :reviews nor the toc. Its findings are ordinary
+                 ;; findings from here on — handled, ruled on, owned and fixed like any other.
+                 conform  (when project
+                            {:target   {:label "design"}
+                             :findings (conformance/findings project cwd)})
+                 findings (collect-findings (cond-> (vec results)
+                                              (seq (:findings conform)) (conj conform)))]
              (if (empty? findings)
                ;; Nothing was reported anywhere, so nothing is owed anywhere and
                ;; every target reviewed at this patch has converged. Recorded

@@ -116,7 +116,7 @@
 (Band Review
   "The judgment loops over a record, a design, a diff."
   {:prefix ["nido.review."]
-   :may-depend [Platform Session Coordination Vsdd]})
+   :may-depend [Platform Session Coordination Vsdd Design]})
 
 (Band Boot
   "The daemon composition root: it wires the other bands together, and is reached

@@ -3,10 +3,12 @@
   (:require
    [babashka.fs :as fs]
    [clojure.string :as str]
-   [clojure.test :refer [deftest is]]
+   [clojure.test :refer [deftest is testing]]
    [nido.coordinator.agent :as agent]
    [nido.platform.core :as core]
+   [nido.review.cache :as cache]
    [nido.review.codex :as codex]
+   [nido.review.conformance :as conformance]
    [nido.review.layers :as layers]
    [nido.review.prompts :as prompts]
    [nido.review.stages :as stages]
@@ -50,6 +52,46 @@
           "an unstacked branch is one whole-stack target")
       (is (= "incorrect" (:overall-correctness ctx)))
       (is (nil? (:control ctx))))))
+
+(deftest review-stage-merges-the-mechanical-design-reviewer-into-the-round
+  (testing "a design violation is an ordinary finding from the fan-out on: it gets a handle, an
+            owner layer, a disposition and a fixer, and the convergence machinery can then see a
+            violation the loop is failing to shift"
+    (with-redefs [layers/patch-hash (fn [& _] nil)
+                  codex/merge-base (fn [& _] "BASEREV")
+                  codex/review! (fn [_] {:status nil :findings [{:title "x"}]})
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  cache/read-cache (fn [& _] {})
+                  conformance/findings (fn [& _] [{:title "design: no undeclared edge" :id "d1"}])]
+      (let [ctx ((:run stages/review-stage)
+                 {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 1})]
+        (is (= #{"x" "design: no undeclared edge"} (set (map :title (:findings ctx)))))
+        (is (= "design" (:from-layer (first (filter #(= "d1" (:id %)) (:findings ctx)))))))))
+
+  (testing "and a broken design alone keeps the round going — a clean diff over a tree that no
+            longer obeys its own design is not a clean round"
+    (with-redefs [layers/patch-hash (fn [& _] nil)
+                  codex/merge-base (fn [& _] "BASEREV")
+                  codex/review! (fn [_] {:status :clean :findings []})
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  cache/read-cache (fn [& _] {})
+                  conformance/findings (fn [& _] [{:title "design: no undeclared edge" :id "d1"}])]
+      (let [ctx ((:run stages/review-stage)
+                 {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 1})]
+        (is (nil? (:control ctx)))
+        (is (= 1 (count (:findings ctx)))))))
+
+  (testing "a project declaring no design leaves the round exactly as it was"
+    (with-redefs [layers/patch-hash (fn [& _] nil)
+                  codex/merge-base (fn [& _] "BASEREV")
+                  codex/review! (fn [_] {:status :clean :findings []})
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  cache/read-cache (fn [& _] {})
+                  conformance/findings (fn [& _] [])]
+      (let [ctx ((:run stages/review-stage)
+                 {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 1})]
+        (is (= :stop (:control ctx)))
+        (is (= :clean (:status ctx)))))))
 
 (deftest review-stage-clean-diff-stops
   (with-redefs [layers/patch-hash (fn [& _] nil)

@@ -52,9 +52,12 @@
    `.clj` files. Nothing to add to the registry, nothing to keep in sync with the tree — the
    canvas is checked into the repo, so its presence in a worktree is already the truth about
    whether that branch has a design. A project whose layout differs (a `src/main` root, a
-   canvas somewhere else) overrides via `:design` in the project registry."
+   canvas somewhere else) overrides via `:design` in the project registry.
+
+   `project-name` may be a string or a keyword — callers hold it both ways, and a lookup that
+   silently missed on the wrong one would fall back to the defaults and check the wrong tree."
   [project-name worktree]
-  (let [cfg   (merge default-design (:design (project/get-project project-name)))
+  (let [cfg   (merge default-design (:design (project/get-project (name project-name))))
         dirs  (for [d (:spec-dirs cfg)] (fs/path worktree d))
         files (mapcat #(when (fs/directory? %) (fs/glob % "**.clj")) dirs)]
     (when (seq files)
