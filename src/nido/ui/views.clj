@@ -304,7 +304,27 @@
      .ws-section-rows { overflow:hidden; max-height:0; opacity:0;
                         transition:max-height .28s ease, opacity .2s ease; }
      .ws-section-rows.ws-open { max-height:4000px; opacity:1; }
-     .winddown, .dismissed { opacity: 0.65; }"))
+     .winddown, .dismissed { opacity: 0.65; }
+        /* Operations — the proposal is the unit, so the row is the design.
+           Evidence is what a decision is actually about, so it is on the card
+           rather than behind a disclosure; the proposal is what you are being
+           asked to accept, so it is set apart from the observation. */
+        .prop { border:1px solid #2a2a2a; border-radius:6px; padding:12px 14px; margin-bottom:10px;
+                background:#141414; }
+        .prop.decided { opacity:.55; }
+        .prop-head { display:flex; gap:8px; align-items:baseline; flex-wrap:wrap; margin-bottom:6px; }
+        .prop-where { font-family:ui-monospace,monospace; font-size:12px; color:#aee0ff; }
+        .prop-sum { margin:0 0 8px; }
+        .prop-ev { font-size:12px; color:#999; border-left:2px solid #333; padding-left:10px;
+                   margin:0 0 8px; }
+        .prop-fix { font-size:13px; border-left:2px solid #3a5a7a; padding-left:10px; margin:0 0 10px; }
+        .prop-meta { font-size:11px; color:#777; display:flex; gap:10px; flex-wrap:wrap; }
+        .prop-verdict { display:inline-block; padding:1px 6px; border-radius:3px; font-size:11px; }
+        .v-approved { background:#1a3a2a; color:#4ade80; }
+        .v-declined { background:#3a1a1a; color:#f87171; }
+        .ops-empty { color:#777; padding:20px 0; }
+        .ops-head { display:flex; gap:14px; align-items:baseline; margin-bottom:14px; flex-wrap:wrap; }
+"))
 
 ;; ---------------------------------------------------------------------------
 ;; Shell (persistent rail + content area) — replaces per-page headers.
@@ -324,7 +344,7 @@
    current surface (changing only scope, preserving the workstreams tab); a surface link
    carries the current scope. Selecting a project changes what you see, never where you are."
   [{:keys [active needs-count daemon scope projects tab]}]
-  (let [surface-path {:needs "/" :workstreams "/workstreams"}
+  (let [surface-path {:needs "/" :workstreams "/workstreams" :operations "/operations"}
         q (fn [scope-val workstreams?]
             (let [parts (cond-> []
                           (and scope-val (not= "all" scope-val)) (conj (str "scope=" scope-val))
@@ -344,6 +364,11 @@
       [:img.rail-logo {:src "/nido-logo.png" :alt "nido" :width 84 :height 84}]]
      (dest :needs "/" "Needs you")
      (dest :workstreams "/workstreams" "Workstreams")
+     ;; A third destination, and the first that is not workstream-shaped: its
+     ;; unit is the proposal. /system was dissolved for being a second view of
+     ;; the plane the board already showed; this is a different plane — records
+     ;; that are not a stage of any arc, read across workstreams.
+     (dest :operations "/operations" "Operations")
      [:div.rail-scope
       [:div.meta "Scope"]
       (scope-link "all" "All projects")
@@ -2173,6 +2198,97 @@
        [:div.inbox {:data-on-interval__duration.5s (str "@get('/_fragment/workstreams" q "')")}
         (h/raw (workstreams-fragment screen))]]
       [:div.pane (h/raw (workstream-pane (:ws selection) (:dev-states selection) (:machine selection)))]])))
+
+;; ---------------------------------------------------------------------------
+;; Operations — nido's own improvement backlog
+
+(defn- prop-decision-chip [{:keys [verdict decided-by]}]
+  [:span {:class (str "prop-verdict v-" (name verdict))}
+   (name verdict) (when decided-by (str " · " decided-by))])
+
+(defn- proposal-card
+  "One proposal, with what earned it and what was decided.
+
+   Evidence is rendered, not folded away. It is the whole reason a proposal is
+   worth acting on — the producing skill makes it mandatory and calls it what
+   separates an observation from an opinion — and a surface that hides it asks
+   for a decision about a claim while showing only the claim."
+  [{:keys [project ws-id analysis-seq observation at-seq kind where summary evidence
+           proposal run-id reviewed rounds status at decision] :as _p}]
+  (let [addr (str analysis-seq "." observation)
+        base (str "/operations/" project "/" ws-id "/" analysis-seq "/" observation
+                  "?entry=" at-seq)]
+    [:div {:class (str "prop" (when decision " decided"))}
+     [:div.prop-head
+      [:span {:class (str "chip c-" (name kind))} (name kind)]
+      [:span.prop-where where]
+      (when decision (prop-decision-chip decision))]
+     [:p.prop-sum summary]
+     (when-not (str/blank? (str evidence)) [:p.prop-ev evidence])
+     [:p.prop-fix proposal]
+     [:div.prop-meta
+      [:span (str "proposal " addr)]
+      (when reviewed [:span (str "reviewed " reviewed)])
+      (when status [:span (str status " · " rounds " round" (when (not= 1 rounds) "s"))])
+      (when at [:span (subs (str at) 0 (min 10 (count (str at))))])
+      (when run-id [:span.mono (subs (str run-id) 0 (min 14 (count (str run-id))))])]
+     (when-not decision
+       [:div.actions {:style "margin-top:10px"}
+        [:button.btn.btn-primary {"data-on:click" (str "@post('" base "&verdict=approved')")} "Approve"]
+        [:button.btn {"data-on:click" (str "@post('" base "&verdict=declined')")} "Decline"]])]))
+
+(defn operations-fragment
+  "The proposal list, patched by the poll. Undecided first — a decided proposal
+   is a record and an undecided one is a question, and the questions are what
+   you came for."
+  [proposals]
+  (let [[open done] ((juxt remove filter) :decision proposals)]
+    (str
+     (h/html
+      [:div {:id "operations"}
+       [:div.ops-head
+        [:strong (str (count open) " awaiting you")]
+        [:span.meta (str (count done) " decided · " (count proposals) " in all")]]
+       (if (empty? proposals)
+         [:p.ops-empty "No review-loop analysis has proposed anything yet."]
+         (list (for [p open] (proposal-card p))
+               (when (seq done)
+                 [:details.trail
+                  [:summary (str (count done) " already decided")]
+                  (for [p done] (proposal-card p))])))]))))
+
+(defn operations-page
+  "Every proposal nido's review-loop analyses have made, and what was decided.
+
+   Its unit is the proposal rather than the workstream, which is what makes it a
+   destination of its own rather than a tab on the board: these records are not
+   a stage of any arc, and they are read ACROSS workstreams — the same defect
+   proposed by four runs is four rows here and four unrelated workstreams
+   there."
+  [ctx proposals]
+  (shell
+   (assoc ctx :active :operations :title "Operations")
+   [:div.gate-wrap
+    [:div.inbox {:data-on-interval__duration.5s
+                 (str "@get('/_fragment/operations"
+                      (when (and (:scope ctx) (not= "all" (:scope ctx)))
+                        (str "?scope=" (:scope ctx))) "')")}
+     [:div {:id "operations"} [:p.meta "…"]]]]))
+
+(defn proposal-result-fragment
+  "What a decision click patches back. The row is replaced by the same card, now
+   carrying its decision — or, when the ledger moved under the reader, by the
+   refusal saying so, because a decision made against a page that has moved is
+   not a decision about what is there now."
+  [result proposals]
+  (if (= :stale (:decision result))
+    (str (h/html [:div {:id "operations"}
+                  [:div.card
+                   [:strong "The page moved."]
+                   [:p.meta (str "This workstream's ledger is now at entry " (:latest result)
+                                 ". Nothing was recorded — the next poll shows what is there now.")]]])
+         (operations-fragment proposals))
+    (operations-fragment proposals)))
 
 (defn not-found-page []
   (shell {:title "404"} [:h1 "Not found"]))

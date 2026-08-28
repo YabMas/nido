@@ -18,6 +18,7 @@
     (case (first segs)
       nil          :needs
       "workstreams" :workstreams
+      "operations"  :operations
       :other)))
 
 (defn- selection [ps]
@@ -68,7 +69,7 @@
 
 (defn parse
   "Request map -> view-state:
-     {:surface :needs|:workstreams|:other
+     {:surface :needs|:workstreams|:operations|:other
       :scope   \"all\"|<project>
       :selection {:project _ :ws-id _}|nil
       :entry   <long>|nil

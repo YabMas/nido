@@ -201,6 +201,20 @@
                            (filter #(= :manual (-> % :source :type)))
                            vec)]))})
 
+(defn- proposals-for
+  "Proposals across every project, or one when scoped. Reads the ledger on each
+   call rather than caching: the list is derived, and a decision made in another
+   tab must show up on the next poll rather than when something invalidates."
+  [scope]
+  (if (and scope (not= "all" scope))
+    (work/proposals scope)
+    (vec (mapcat (fn [[pname _]]
+                   (try (work/proposals pname) (catch Throwable _ [])))
+                 (project/list-projects)))))
+
+(defn- operations-fragment-response [scope]
+  (sse-response (sse-fragment (views/operations-fragment (proposals-for scope)))))
+
 (defn- ops-fragment-response
   "`scope` filters the badge count to one project's gates (string :project on
    each gate); \"all\" (or omitted) counts every gate, matching prior behavior."
@@ -457,6 +471,27 @@
               (println "[nido ui] findings/file! failed:" (ex-message e)))))
         (ws-pane-fragment-response project ws-id))
 
+      ;; POST /operations/:project/:ws-id/:analysis-seq/:observation — decide one
+      ;; proposal. ?entry= is the ledger position the row was rendered from and
+      ;; ?verdict= is which button; both ride the query string the same way every
+      ;; other position-carrying click does.
+      (and (= 5 (count segs)) (= "operations" (first segs)))
+      (let [project (nth segs 1)
+            ws-id   (nth segs 2)
+            vs      (view-state/parse req)
+            verdict (keyword (or (get-in req [:params "verdict"])
+                                 (second (re-find #"verdict=([a-z]+)" (str (:query-string req))))))
+            result  (if (contains? #{:approved :declined} verdict)
+                      (work/decide-proposal!
+                       project ws-id
+                       {:analysis-seq (parse-long (nth segs 3))
+                        :observation  (parse-long (nth segs 4))
+                        :verdict      verdict
+                        :at-seq       (:entry vs)})
+                      {:decision :stale :latest nil})]
+        (sse-response (sse-fragment
+                       (views/proposal-result-fragment result (proposals-for (:scope vs))))))
+
       ;; POST /ops/... — ambient ops levers (halt/resume, breaker clear, fire).
       ;; Every lever responds with the refreshed ops fragment + rail status.
       (= "ops" (first segs))
@@ -514,6 +549,17 @@
       ;; GET /_fragment/needs — queue + rail
       ["_fragment" "needs"]
       (needs-fragment-response (derive-screen (view-state/parse req)))
+
+      ;; GET /operations — nido's own improvement backlog, one row per proposal
+      ["operations"]
+      (let [vs (view-state/parse req)]
+        (html-response 200 (views/operations-page
+                            (rail-ctx :operations (derive-screen vs))
+                            (proposals-for (:scope vs)))))
+
+      ;; GET /_fragment/operations — SSE proposal-list refresh
+      ["_fragment" "operations"]
+      (operations-fragment-response (:scope (view-state/parse req)))
 
       ;; GET /_fragment/ops — SSE ops-panel refresh (patches #ops-panel + rail).
       ;; Scope rides ?scope=, parsed the same way every other view-state is —
