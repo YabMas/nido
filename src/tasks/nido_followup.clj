@@ -24,10 +24,18 @@
    the same reason nido.coordinator.scratch keeps its wiring at the task layer."
   (:require
    [clojure.string :as str]
+   [nido.coordinator.state :as cstate]
+   [nido.platform.io :as io]
    [nido.notion.followups :as followups]
    [nido.notion.client :as client]
    [nido.session.lifecycle :as lifecycle]
    [nido.platform.task-args :as task-args]))
+
+(defn- cfg!
+  "The validated :followups config. This layer is the one that legitimately
+   knows where nido keeps its configuration."
+  []
+  (followups/config! (io/read-edn (cstate/config-path)) (cstate/config-path)))
 
 (def ^:private raw-string-keys
   "Values that must survive verbatim: EDN-parsing a URL with a `/digits`
@@ -81,7 +89,7 @@
   [args]
   (let [[_ opts] (task-args/split-args args raw-string-keys)
         entry    (entry-of opts)
-        res      (followups/create! entry)]
+        res      (followups/create! (cfg!) entry)]
     (cond
       (= :invalid (:error res))
       (do (println "not filed — the entry is incomplete:")
@@ -98,7 +106,7 @@
 
 (defn- list! [args]
   (let [[_ opts] (task-args/split-args args raw-string-keys)
-        res      (followups/list-entries (or (some-> (:status opts) name) "Open"))]
+        res      (followups/list-entries (cfg!) (or (some-> (:status opts) name) "Open"))]
     (if (:error res)
       (do (println "could not read the follow-up DB:" (name (:error res)))
           (System/exit 1))
@@ -116,7 +124,7 @@
     (when-not token
       (println "No Notion token in keychain. Run bb nido:notion:auth:set.")
       (System/exit 1))
-    (let [res (followups/check-config token)]
+    (let [res (followups/check-config (cfg!) token)]
       (if (= :ok (:status res))
         (println "follow-up DB config matches the live schema.")
         (do (println "follow-up DB config drift:")

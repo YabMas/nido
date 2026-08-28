@@ -22,8 +22,6 @@
    code change. `check-config` cross-checks both against the live schema."
   (:require
    [clojure.string :as str]
-   [nido.coordinator.state :as cstate]
-   [nido.platform.io :as io]
    [nido.notion.client :as client]))
 
 (def field-types
@@ -67,20 +65,22 @@
   {"compounding" 0 "flat" 1 "cheaper-later" 2})
 
 (defn config
-  "The `:followups` config map, or nil when unconfigured (io/read-edn already
-   returns nil for a missing file)."
-  []
-  (:followups (io/read-edn (cstate/config-path))))
+  "The `:followups` config map out of nido's config, or nil when unconfigured.
+   This namespace does not know WHERE nido keeps its configuration — whoever
+   calls it does, and reads the file."
+  [nido-config]
+  (:followups nido-config))
 
 (defn config!
-  "Like `config`, but throws with a setup hint rather than returning nil —
-   for the write paths, where silently doing nothing is the worst outcome."
-  []
-  (let [{:keys [database properties] :as cfg} (config)]
+  "Like `config`, but throws with a setup hint rather than returning nil — for
+   the write paths, where silently doing nothing is the worst outcome. `where`
+   names the file the hint should point the reader at."
+  [nido-config where]
+  (let [{:keys [database properties] :as cfg} (config nido-config)]
     (when-not (and database (seq properties))
       (throw (ex-info "No follow-up database configured"
                       {:hint (str "Add :followups {:database \"<notion-db-id>\" "
-                                  ":properties {...}} to " (cstate/config-path)
+                                  ":properties {...}} to " where
                                   " — see nido.notion.followups for the shape.")})))
     cfg))
 
@@ -92,8 +92,7 @@
       (throw (ex-info (str "No Notion property name configured for " field)
                       {:field field
                        :configured (vec (keys (:properties cfg)))
-                       :hint (str "Add it under :followups :properties in "
-                                  (cstate/config-path))}))))
+                       :hint "Add it under :followups :properties in nido's config"}))))
 
 (defn validate
   "Return a vector of human-readable problems with `entry` (empty when it is
@@ -131,9 +130,8 @@
    `field-types`; `:description` (optional) becomes the page body. Returns the
    created page ({:id \"FU-##\" :url … :page-id …}) or {:error :kw}. Throws only
    on misconfiguration — an unconfigured DB is a setup bug, not a runtime state."
-  [{:keys [description] :as entry}]
-  (let [cfg    (config!)
-        errors (validate entry)]
+  [cfg {:keys [description] :as entry}]
+  (let [errors (validate entry)]
     (if (seq errors)
       {:error :invalid :problems errors}
       (let [token (or (client/keychain-token)
@@ -149,10 +147,9 @@
   "Open follow-ups, ordered by decay pressure then effort — what rots fastest
    first. `status` defaults to \"Open\". Returns a vector of normalised pages or
    {:error :kw}."
-  ([] (list-entries "Open"))
-  ([status]
-   (let [cfg   (config!)
-         token (or (client/keychain-token)
+  ([cfg] (list-entries cfg "Open"))
+  ([cfg status]
+   (let [token (or (client/keychain-token)
                    (throw (ex-info "No Notion token in keychain"
                                    {:hint "Run bb nido:notion:auth:set"})))
          ds    (client/resolve-data-source-id (:database cfg) token)
@@ -173,9 +170,8 @@
    field's vocabulary must be a subset of that property's options. Returns
    {:status :ok} or {:status :error :errors [{:message …} …]} — the same shape
    as nido.notion.views-check, so callers surface both the same way."
-  [token]
-  (let [cfg      (config!)
-        ds-id    (client/resolve-data-source-id (:database cfg) token)
+  [cfg token]
+  (let [ds-id    (client/resolve-data-source-id (:database cfg) token)
         ds       (client/retrieve-data-source ds-id token)
         db-props (:properties ds)
         prop-of  (fn [n] (or (get db-props n) (get db-props (keyword n))))
