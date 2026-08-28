@@ -179,6 +179,7 @@ jj git fetch                                  # main moves under you; other sess
 jj rebase -s <bottom-change-id> -d main       # replay the arc onto main's tip
 jj resolve --list                             # exits 2 with "No conflicts" in the CLEAN case
 bb nido:test                                  # green BEFORE it lands — nothing gates it after
+bb nido:land:check                            # the design stands, and the code still obeys it
 jj bookmark set main -r <top-change-id>       # fast-forward
 jj git push -b main
 ```
@@ -189,13 +190,40 @@ non-fast-forward, so a stale base surfaces as a rejected push rather than a merg
 commit; fetch, rebase again, re-run the tests.
 
 **Nothing runs CI after the push.** There is no merge queue and no required check
-on this repo, so `bb nido:test` before the fast-forward is the only gate there is.
+on this repo, so what runs before the fast-forward is the only gate there is.
 Landing red means main is red for whoever fetches next.
 
 **Clean up the local bookmarks.** Never push the session bookmark. Once `main`
 points at the same commit, delete the `<session>--<slug>` layer bookmarks — they
 are local-only, and leaving them lying around is how a later bare `jj git push`
 resurrects branches nobody wanted.
+
+## The declared design — `canvas/bands.clj`
+
+Nido's high-level structure is a **model**, not a diagram: eight bands, each
+claiming a namespace prefix, each declaring which bands it may depend on. Fukan
+checks it against the extracted call graph, so the declaration and the code
+cannot quietly disagree.
+
+- **Membership is derived from the path.** A namespace's band is readable from
+  its name and cannot drift from the tree, which is what the 2026-08-28
+  restructure bought. Every namespace must belong to a band — an unbanded
+  package is invisible to every other law, so that one is enforced too.
+- **`bb nido:design:check`** answers directly (exit 1 on a violation, 2 when the
+  check could not be decided — which is never read as a pass).
+- **`bb nido:land:check`** refuses the landing on the same answer.
+- **The review loop** runs it as one more reviewer in the round, so a violation
+  gets a handle, an owner layer and a fixer like any other finding. A violation
+  the loop cannot resolve is a `park`: "the code moves or the declaration does"
+  is a decision, not a repair.
+- **Every session briefing carries the declaration verbatim**, so an agent knows
+  the bands before it writes a require.
+
+Changing the declaration is a legitimate fix — but it is a design change. Say in
+the commit why the rule was wrong, rather than widening it until the code fits.
+
+Any project nido drives gets this if it has a `canvas/`: detection is by
+convention, and a project without one is `:unmodelled`, never broken.
 
 ### What still applies, and what doesn't
 
