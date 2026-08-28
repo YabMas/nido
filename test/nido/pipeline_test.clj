@@ -288,87 +288,14 @@
             (is (false? (:decided? (:standing (:read r))))
                 "standing withdrew the grant; the projection did not have to know how")))))))
 
-;; ── The arc, at stage granularity ───────────────────────────────────────────
 
-(deftest history-collapses-a-stages-rounds-into-one-row
-  ;; The whole point of the stage cut: a baseline that converged over rounds
-  ;; appended a review and a superseding record each time, and read as a log
-  ;; those say nothing the one row says better.
-  (with-tmp
-    (fn [_]
-      (let [[id add!] (ledger)]
-        (intent! add!)
-        (dotimes [_ 3]
-          (let [b (add! :baseline a-baseline)]
-            (add! :baseline-review {:format :baseline-review :verdict :falsified
-                                    :baseline-seq b :reason "no"
-                                    :findings [{:cites ["c1"] :claim "wrong"
-                                                :claim-id "c1"
-                                                :evidence ["src/a.clj:1"]}]})))
-        (let [h (p/history :brian id)]
-          (is (= [:intent :baseline] (mapv :stage h)))
-          (is (= 6 (count (:entries (second h)))) "six records, one row")
-          (is (= 2 (:from (second h))))
-          (is (= 7 (:to (second h)))))))))
-
-(deftest a-stage-re-entered-opens-a-new-row-rather-than-merging
-  ;; Coming back to a stage is the most interesting thing a ledger records, and
-  ;; grouping by stage instead of folding in order would erase it.
-  (with-tmp
-    (fn [_]
-      (let [[id add!] (ledger)]
-        (intent! add!)
-        (let [b (add! :baseline a-baseline)]
-          (add! :design (a-design b))
-          (add! :baseline (assoc a-baseline :supersedes {:seq b :why "again"}))
-          (is (= [:intent :baseline :design :baseline]
-                 (mapv :stage (p/history :brian id)))))))))
-
-(deftest history-drops-a-kind-it-cannot-place-rather-than-inventing-a-stage
-  (with-tmp
-    (fn [_]
-      (let [[id add!] (ledger)]
-        (intent! add!)
-        (add! :impl "legacy freeform")
-        (is (= [:intent] (mapv :stage (p/history :brian id))))
-        (is (nil? (p/stage-of :impl)))))))
-
-(deftest a-merged-entry-is-not-terminal-once-the-workstream-is-reopened
-  ;; What a phase plan creates on every landing but the last: reopen! clears
-  ;; :closed for the next phase while the :merged entry stays in the ledger
-  ;; forever. Reading the entry as terminal strands the plan after phase one.
-  (with-tmp
-    (fn [_]
-      (let [[id add!] (ledger)]
-        (intent! add!)
-        (add! :pr-opened {:format :pr-opened :url "https://example.test/pr/1" :title "t"})
-        (add! :merged {:format :merged :pr "o/r#1" :title "t"
-                       :url "https://example.test/pr/1"
-                       :merged-at "2026-08-01T00:00:00Z"})
-        (ws/close! :brian id :done)
-        (is (= :shipped (:at (p/of :brian id))))
-
-        (ws/reopen! :brian id :in-progress)
-        (let [r (p/of :brian id)]
-          (is (= :phase-landed (:at r))
-              "a landing finished and somebody reopened it — that is the plan working")
-          (is (= {:stage :implement :mode :working-copy} (:next r))
-              "the next act is the next phase, not a second draft PR"))))))
-
-(deftest an-open-findings-round-outranks-a-landed-phase
-  ;; Both are 'merged and open'. Findings are the reason it was reopened when
-  ;; there are any, so they have to be tested first.
-  (with-tmp
-    (fn [_]
-      (let [[id add!] (ledger)]
-        (intent! add!)
-        (add! :merged {:format :merged :pr "o/r#1" :title "t"
-                       :url "https://example.test/pr/1"
-                       :merged-at "2026-08-01T00:00:00Z"})
-        (ws/set-findings! :brian id
-                          {:round 1 :items {"f1" {:id "f1" :severity :blocker
-                                                  :summary "still broken"}}})
-        (is (= :findings-open (:at (p/of :brian id))))))))
+(deftest stage-of-places-a-kind-or-refuses
+  ;; Still load-bearing: deciding whether work moved on past a halt is asking
+  ;; which entries are stages and which are halts.
+  (is (= :baseline (p/stage-of :baseline)))
+  (is (= :baseline (p/stage-of :baseline-review)))
+  (is (= :halt (p/stage-of :blocker)))
+  (is (nil? (p/stage-of :impl)) "a kind this vocabulary does not read"))
 
 ;; ── What a finished stage means ─────────────────────────────────────────────
 

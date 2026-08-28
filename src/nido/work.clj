@@ -735,12 +735,11 @@
         :label        (:label row)
         :links        (:links row)
         :ledger       (ledger-summary project (:br-id row))
-        ;; What the pane LEADS with: where this is, what currently holds, and the
-        ;; arc at stage granularity. The entry index below stays exactly as it
-        ;; was — it is the log underneath, not the answer.
+        ;; What the pane LEADS with: where this is and what currently holds. The
+        ;; entry index below stays exactly as it was — it is the log underneath,
+        ;; not the answer.
         :position     (pipeline/of project ws-id)
         :holds        (holds project ws-id)
-        :arc          (pipeline/history project ws-id)
         :entries      index
         :selected-seq sel
         ;; Nothing open, or the open entry is the CURRENT one. Live actions are

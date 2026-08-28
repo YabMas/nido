@@ -163,13 +163,6 @@
         .hold .no { color:#a07a4a; }
         .hold.empty { border-style:dashed; background:none; }
         .hold.empty .hb { color:#5f5f78; }
-        .arc { display:flex; flex-wrap:wrap; gap:6px; margin:12px 0 4px; align-items:center; }
-        .arc .st { display:flex; gap:7px; align-items:baseline; border:1px solid #24243c;
-                   border-radius:4px; padding:3px 9px; background:#12122a; }
-        .arc .st .sn { font-size:11px; text-transform:uppercase; color:#a0a0c0; }
-        .arc .st .sc { font-size:11px; color:#666; }
-        .arc .st.now { border-color:#3a4a7a; background:#1a2238; }
-        .arc .sep { color:#3a3a55; }
         .ledger-index { margin:14px 0 8px; border:1px solid #20203a; border-radius:6px; overflow:hidden; }
         .ledger-row { display:flex; gap:10px; align-items:baseline; padding:7px 12px;
                       border-bottom:1px solid #1a1a30; color:#cdcde0; cursor:pointer; }
@@ -1596,36 +1589,6 @@
                   [:span.no "not yet approved"]))
      [:div.hold.empty [:div.hh [:span.hk "design"]] [:div.hb "nothing committed to"]])])
 
-(defn- arc-strip
-  "The arc, one chip per stage rather than one row per entry.
-
-   This is the whole point of the stage cut. A converged baseline appends a review
-   and a superseding record per round, so seven rounds is fourteen ledger rows
-   that say `baseline` fourteen times; here they say it once, with the count. A
-   stage RE-ENTERED after a retraction gets its own chip rather than merging with
-   the first — coming back is the most interesting thing a ledger records.
-
-   The last chip is the current one, and marking it that way needs no comparison
-   against the position: the arc is in ledger order, so the stage the newest entry
-   belongs to IS where the ledger last was. Matching a position keyword against a
-   stage keyword would be comparing two vocabularies that deliberately differ —
-   :design-approved is a position, :approval is a stage — and would simply never
-   fire."
-  [arc]
-  (when (seq arc)
-    (let [last-i (dec (count arc))]
-      (into [:div.arc]
-            (interpose
-             [:span.sep "›"]
-             (map-indexed
-              (fn [i {:keys [stage from to entries]}]
-                [:span.st {:class (when (= i last-i) "now")}
-                 [:span.sn (name stage)]
-                 [:span.sc (str "entry " from (when (not= from to) (str "–" to))
-                                (when (> (count entries) 1)
-                                  (str " · " (count entries) " records")))]])
-              arc))))))
-
 (defn- ledger-index
   "The workstream's ledger: every entry, newest first. A row @gets the pane with
    ?entry=<seq>, which OPENS that entry in the viewer below — the ledger itself
@@ -1795,7 +1758,7 @@
    — see pane-fragment), so transient dev-env states (starting…) self-advance
    without the refresh closing whatever the reader has open."
   ([ws session-dev-states] (workstream-pane ws session-dev-states {}))
-  ([{:keys [project ws-id origin stage label links ledger report action-report entries selected-seq open-rounds sessions environment on-latest? error-msg bare? br-id notion-status position holds arc]
+  ([{:keys [project ws-id origin stage label links ledger report action-report entries selected-seq open-rounds sessions environment on-latest? error-msg bare? br-id notion-status position holds]
      :or {on-latest? true}} session-dev-states machine-facts]
    (let [pos {:project project :ws-id ws-id :entry selected-seq :rounds open-rounds}]
      (str
@@ -1815,7 +1778,6 @@
             ;; answer, that is the evidence.
             (when position (position-line position))
             (when (seq holds) (holds-block holds))
-            (arc-strip arc)
             (when ledger
               [:div.card [:strong "ledger "] (:key ledger) " · " (some-> ledger :status name)
                " · " (:report-count ledger) " report(s)"])

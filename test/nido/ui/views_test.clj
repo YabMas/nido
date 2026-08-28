@@ -1192,9 +1192,6 @@
                     :record {:area "how position is represented"}}
            :design {:seq 10 :revisions 2 :premise 8 :decided? true
                     :record {:summary "one projection, one driver"}}}
-   :arc [{:stage :intent :from 1 :to 1 :entries [:intent]}
-         {:stage :baseline :from 2 :to 9 :entries (vec (repeat 8 :baseline))}
-         {:stage :design :from 10 :to 11 :entries [:design :design-decision]}]
    :entries [] :sessions [] :on-latest? true})
 
 (deftest the-pane-states-the-position-and-who-the-next-stage-waits-on
@@ -1226,13 +1223,6 @@
               (assoc-in a-pane [:holds :baseline :verified?] false) {})]
     (is (str/includes? html "not verified"))
     (is (str/includes? html "cannot be decided"))))
-
-(deftest the-arc-reads-one-chip-per-stage-and-marks-the-current-one
-  (let [html (views/workstream-pane a-pane {})]
-    (is (str/includes? html "entry 2–9 · 8 records")
-        "eight ledger rows, one chip")
-    (is (str/includes? html "class=\"st now\"")
-        "the last chip is where the ledger last was")))
 
 (deftest the-entry-by-entry-ledger-survives-underneath
   ;; The stage view is the answer; the log is the evidence, and removing it would

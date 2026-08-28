@@ -179,7 +179,13 @@
 
 (defn stage-of
   "The arc stage an entry of `kind` belongs to, or nil for one this vocabulary
-   does not place."
+   does not place.
+
+   The stage-granular arc this was built for is gone — it cost a line of the pane
+   and told a reader less than the ledger index below it already did. The MAPPING
+   survives because `unanswered-blocker` needs it: deciding whether work moved on
+   past a halt is asking which entries are stages and which are halts, which is
+   this question."
   [kind]
   (get stage-of-kind kind))
 
@@ -460,36 +466,6 @@
   (get disposition-of-status status :escalate))
 
 ;; ── The arc, at stage granularity ───────────────────────────────────────────
-
-(defn history
-  "The workstream's arc, one row per stage rather than one per entry.
-
-   This is what makes a ledger readable. A baseline loop appends one review and
-   one superseding baseline PER ROUND, so a baseline that converged in four rounds is
-   eight rows of log — and read as a log, the eight say nothing the one says
-   better. Collapsed, it is `baseline · 4 revisions · verified`, and the eight
-   entries are still underneath for anyone who wants them.
-
-   Consecutive entries of one stage collapse into a single row; a stage RE-ENTERED
-   later opens a new row rather than merging with the earlier one, because
-   returning to a stage is the most interesting thing a ledger can record and
-   merging the two would erase the return. That is why this folds over the entries
-   in order instead of grouping by stage."
-  [project ws-id]
-  (when-let [w (ws/read-ws project ws-id)]
-    (->> (:entries w)
-         (keep (fn [e] (when-let [s (stage-of (:kind e))] (assoc e :stage s))))
-         (reduce (fn [rows {:keys [stage seq at kind]}]
-                   (let [last-row (peek rows)]
-                     (if (= stage (:stage last-row))
-                       (conj (pop rows)
-                             (-> last-row
-                                 (assoc :to seq :at at)
-                                 (update :entries conj kind)))
-                       (conj rows {:stage stage :from seq :to seq :at at
-                                   :entries [kind]}))))
-                 [])
-         vec)))
 
 (defn of
   "Where workstream `ws-id` is, and what should happen to it next.
