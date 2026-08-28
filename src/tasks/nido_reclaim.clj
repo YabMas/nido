@@ -2,7 +2,7 @@
   "Bb task entry point for reclaiming orphaned per-instance state dirs."
   (:require
    [clojure.edn :as edn]
-   [nido.reclaim :as reclaim]))
+   [nido.session.reclaim :as reclaim]))
 
 (defn- parse-opts [args]
   (if (empty? args)

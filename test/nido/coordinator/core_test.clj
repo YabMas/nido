@@ -28,7 +28,7 @@
    [nido.coordinator.workstream :as ws]
    [nido.platform.project :as project]
    [nido.session.profiles :as profiles]
-   [nido.work :as work]))
+   [nido.coordinator.work :as work]))
 
 (defn- reset-executor! [f]
   (executor/configure! {:global-cap 1})
@@ -772,8 +772,8 @@
 
 (deftest maybe-adopt!-throttles-and-sweeps-all-projects
   (let [calls (atom [])]
-    (with-redefs [nido.work/adopt-orphans! (fn [p] (swap! calls conj p) {:adopted [] :yielded []})
-                  nido.work/prune-dead-registry! (constantly [])
+    (with-redefs [nido.coordinator.work/adopt-orphans! (fn [p] (swap! calls conj p) {:adopted [] :yielded []})
+                  nido.coordinator.work/prune-dead-registry! (constantly [])
                   nido.platform.project/list-projects (constantly {"brian" {:directory "/x"}})]
       ;; private fn + private atom: test through the var
       (#'nido.coordinator.core/reset-adopt-throttle!)
@@ -783,8 +783,8 @@
 
 (deftest adoption-sweep-prunes-the-dead-registry-first
   (let [calls (atom [])]
-    (with-redefs [nido.work/prune-dead-registry! (fn [] (swap! calls conj :pruned) ["p--ghost"])
-                  nido.work/adopt-orphans!       (fn [_] (swap! calls conj :adopted) {})
+    (with-redefs [nido.coordinator.work/prune-dead-registry! (fn [] (swap! calls conj :pruned) ["p--ghost"])
+                  nido.coordinator.work/adopt-orphans!       (fn [_] (swap! calls conj :adopted) {})
                   nido.coordinator.core/registered-projects (constantly [:brian])]
       (reset! @#'core/!last-adopt-ms 0)
       (#'core/maybe-adopt! (* 10 60 1000))

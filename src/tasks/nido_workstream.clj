@@ -6,7 +6,7 @@
    [nido.coordinator.report :as report]
    [nido.coordinator.workstream :as ws]
    [nido.platform.task-args :as task-args]
-   [nido.work :as work]))
+   [nido.coordinator.work :as work]))
 
 (defn- resolve-ws-id
   "Workstream id from opts: explicit :ws-id, or :ref resolved via find-by-ref

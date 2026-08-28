@@ -23,7 +23,7 @@
    [nido.coordinator.session :as session]
    [nido.coordinator.workstream :as ws]
    [nido.platform.io :as io]
-   [nido.pipeline :as pipeline]
+   [nido.coordinator.pipeline :as pipeline]
    [nido.session.state :as session-state]))
 
 (defn attempt

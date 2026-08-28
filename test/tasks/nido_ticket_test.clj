@@ -4,7 +4,7 @@
    [nido.coordinator.facets :as facets]
    [nido.coordinator.tickets :as tickets]
    [nido.coordinator.workstream :as workstream]
-   [nido.work :as work]
+   [nido.coordinator.work :as work]
    [tasks.nido-ticket :as t]))
 
 (deftest complete-refreshes-facets-after-completing

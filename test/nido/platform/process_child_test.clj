@@ -1,4 +1,4 @@
-;; test/nido/process_child_test.clj
+;; test/nido/platform/process_child_test.clj
 (ns nido.platform.process-child-test
   "Children this process started, and stopping them when it stops.
 

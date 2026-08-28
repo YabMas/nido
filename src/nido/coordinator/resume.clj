@@ -4,7 +4,7 @@
    (`claude --resume <id> -p \"<input>\"`). The session phase is driven
    :parked -> :running -> :parked directly (the gate inbox reads the session phase,
    not a Run state — so this works whether the owning Run is :awaiting-review or
-   already terminal). This is the :reply resolver behind nido.work/resolve-gate!."
+   already terminal). This is the :reply resolver behind nido.coordinator.work/resolve-gate!."
   (:require
    [babashka.fs :as fs]
    [clojure.string :as str]

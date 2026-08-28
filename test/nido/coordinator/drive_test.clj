@@ -8,7 +8,7 @@
    [nido.coordinator.session :as session]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.workstream :as ws]
-   [nido.pipeline :as pipeline]))
+   [nido.coordinator.pipeline :as pipeline]))
 
 (defn- with-tmp [f]
   (let [tmp (fs/create-temp-dir)]

@@ -1,9 +1,9 @@
-(ns nido.run-test
+(ns nido.session.run-test
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is testing]]
    [nido.platform.config :as config]
-   [nido.run :as run]
+   [nido.session.run :as run]
    [nido.session.engine :as engine]
    [nido.session.lifecycle :as lifecycle]))
 

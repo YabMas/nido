@@ -5,7 +5,7 @@
    [clojure.test :refer [deftest is]]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.workstream :as ws]
-   [nido.work]
+   [nido.coordinator.work]
    [tasks.nido-workstream :as task]))
 
 (defn- with-tmp [f]
@@ -16,7 +16,7 @@
 
 (deftest stage-advance-routes-through-set-stage
   (let [calls (atom [])]
-    (with-redefs [nido.work/set-stage! (fn [p w t] (swap! calls conj [p w t]) {:decision :advanced})]
+    (with-redefs [nido.coordinator.work/set-stage! (fn [p w t] (swap! calls conj [p w t]) {:decision :advanced})]
       (#'tasks.nido-workstream/stage-advance*
         {:project "brian" :ws-id "ws-1" :stage "in-progress"})
       (is (= [[:brian "ws-1" :in-progress]] @calls)

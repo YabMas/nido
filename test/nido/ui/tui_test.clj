@@ -1,4 +1,4 @@
-(ns nido.tui-test
+(ns nido.ui.tui-test
   (:require
    [babashka.fs :as fs]
    [charm.components.text-input :as text-input]
@@ -14,8 +14,8 @@
    [nido.platform.project :as project]
    [nido.session.dev]
    [nido.session.lifecycle :as lifecycle]
-   [nido.tui :as tui]
-   [nido.work]))
+   [nido.ui.tui :as tui]
+   [nido.coordinator.work]))
 
 (deftest origin-filter-cycles-all-then-each-origin
   (is (= [:all :notion :github :slack :scratch] (mapv :id @#'tui/origin-filters)))
@@ -90,14 +90,14 @@
   ;; via work/grouped simply doesn't render on the board. Feed a real :ready row
   ;; here so this genuinely proves board-rows drops it, rather than passing
   ;; vacuously because the mock never carried a :ready key at all.
-  (with-redefs [nido.work/grouped
+  (with-redefs [nido.coordinator.work/grouped
                 (fn [_ _]
                   {:in-progress [{:ws-id "p1" :origin :scratch :label "spike"
                                   :needs-you false :engagement :active}]
                    :ready       [{:ws-id "r1" :origin :notion :label "BR-9 · ready row"
                                   :needs-you false :engagement :idle}]
                    :triage      {:in-flight [] :queued []}})
-                nido.work/live-session-names (constantly #{})]
+                nido.coordinator.work/live-session-names (constantly #{})]
     (let [all (#'tui/board-rows "brian" :all)
           labels (keep #(get-in % [:data :ws-id]) all)]
       (is (= ["p1"] (vec labels)) "in-progress renders, no :ready band")
@@ -110,7 +110,7 @@
 (deftest board-folds-intake-queues-by-default
   ;; The intake queues — Queue (inbox/Slack) and Triage·queued — start collapsed:
   ;; header + count only, no selectable item rows. Engaged work stays expanded.
-  (with-redefs [nido.work/grouped
+  (with-redefs [nido.coordinator.work/grouped
                 (fn [_ _]
                   {:incoming  [{:ws-id "s1" :origin :slack :label "can you link it"
                              :needs-you true :engagement :idle}]
@@ -120,7 +120,7 @@
                                          :needs-you true :engagement :idle}
                                         {:ws-id "q2" :origin :notion :label "BR-2 · b"
                                          :needs-you true :engagement :idle}]}})
-                nido.work/live-session-names (constantly #{})]
+                nido.coordinator.work/live-session-names (constantly #{})]
     (let [rows   (#'tui/board-rows "brian" :all)
           ids    (set (keep #(get-in % [:data :ws-id]) rows))
           titles (map :title rows)]
@@ -130,18 +130,18 @@
       (is (some #(re-find #"▸ Queue \(1\)" %) titles) "folded Queue shows ▸ + count")
       (is (some #(re-find #"▸ Triage · queued \(2\)" %) titles) "folded queued shows ▸ + count")
       (is (some #(re-find #"▾ Triage · in flight \(1\)" %) titles) "expanded band shows ▾")
-      (is (some #(= {:nido.tui/band :triage-queued} (:data %)) rows)
+      (is (some #(= {:nido.ui.tui/band :triage-queued} (:data %)) rows)
           "the queued header carries its band key so the fold toggle can flip it"))))
 
 (deftest board-rows-expands-a-band-when-not-collapsed
   ;; With nothing in the collapsed set, Triage·queued renders its items as real,
   ;; selectable workstream rows — the path that makes them promotable.
-  (with-redefs [nido.work/grouped
+  (with-redefs [nido.coordinator.work/grouped
                 (fn [_ _]
                   {:triage {:in-flight []
                             :queued [{:ws-id "q1" :origin :notion :label "BR-1 · a"
                                       :needs-you true :engagement :idle}]}})
-                nido.work/live-session-names (constantly #{})]
+                nido.coordinator.work/live-session-names (constantly #{})]
     (let [rows (#'tui/board-rows "brian" :all #{})
           ids  (keep #(get-in % [:data :ws-id]) rows)]
       (is (= ["q1"] (vec ids)) "an expanded Triage·queued renders its item as a selectable row")
@@ -183,42 +183,42 @@
         "empty lists stay at offset zero")))
 
 (deftest board-open-routes-through-open-target
-  (with-redefs [nido.work/open-target (fn [_ _] {:project :brian :session "live"})
-                nido.work/reclaimed? (fn [_ _ _] false)
-                nido.tui/selected-workstream (fn [_] {:ws-id "w1"})
-                nido.tui/enter-session (fn [s _ sn _] [(assoc s ::opened sn) nil])]
+  (with-redefs [nido.coordinator.work/open-target (fn [_ _] {:project :brian :session "live"})
+                nido.coordinator.work/reclaimed? (fn [_ _ _] false)
+                nido.ui.tui/selected-workstream (fn [_] {:ws-id "w1"})
+                nido.ui.tui/enter-session (fn [s _ sn _] [(assoc s ::opened sn) nil])]
     (let [[s' _] (#'tui/update-board (board-state :all) (msg/key-press "o"))]
       (is (= "live" (::opened s')) "open resolves the session via work/open-target"))))
 
 (deftest board-open-rehydrates-a-reclaimed-session
-  (with-redefs [nido.work/open-target (fn [_ _] {:project :brian :session "run-x"})
-                nido.work/reclaimed? (fn [_ _ _] true)
-                nido.tui/selected-workstream (fn [_] {:ws-id "w1"})]
+  (with-redefs [nido.coordinator.work/open-target (fn [_ _] {:project :brian :session "run-x"})
+                nido.coordinator.work/reclaimed? (fn [_ _ _] true)
+                nido.ui.tui/selected-workstream (fn [_] {:ws-id "w1"})]
     (let [[s' _] (#'tui/update-board (board-state :all) (msg/key-press "o"))]
       (is (= :rehydrate (-> s' :busy :verb))
           "a reclaimed home opens via an async re-hydrate spinner, not a hard error")
       (is (= "run-x" (-> s' :busy :subject))))))
 
 (deftest rehydrated-message-enters-the-session
-  (with-redefs [nido.tui/enter-session (fn [s _ sn _] [(assoc s ::opened sn) nil])]
+  (with-redefs [nido.ui.tui/enter-session (fn [s _ sn _] [(assoc s ::opened sn) nil])]
     (let [state (assoc (board-state :all) :busy {:verb :rehydrate :subject "run-x"})
-          [s' _] (#'tui/update-fn state {:type :nido.tui/rehydrated :project :brian :session "run-x"})]
+          [s' _] (#'tui/update-fn state {:type :nido.ui.tui/rehydrated :project :brian :session "run-x"})]
       (is (= "run-x" (::opened s')) "::rehydrated chains into enter-session once the home is back")
       (is (nil? (:busy s')) "and clears the busy spinner"))))
 
 (deftest board-promote-uses-default-target
-  (with-redefs [nido.tui/selected-workstream (fn [_] {:ws-id "w1" :promote-id "BR-1"})
-                nido.work/default-target (fn [_ action] (is (= :promote action)) :in-progress)
-                nido.work/set-stage! (fn [_ id target] {:decision :promote :id id :target target})
-                nido.tui/current-rows (constantly [])]
+  (with-redefs [nido.ui.tui/selected-workstream (fn [_] {:ws-id "w1" :promote-id "BR-1"})
+                nido.coordinator.work/default-target (fn [_ action] (is (= :promote action)) :in-progress)
+                nido.coordinator.work/set-stage! (fn [_ id target] {:decision :promote :id id :target target})
+                nido.ui.tui/current-rows (constantly [])]
     (let [[s' _] (#'tui/update-board (board-state :all) (msg/key-press "p"))]
       (is (re-find #"promoted|in progress" (:status s'))))))
 
 (deftest board-done-sets-stage-done
   (let [calls (atom [])]
-    (with-redefs [nido.tui/selected-workstream (fn [_] {:ws-id "w1" :br-id "BR-1"})
-                  nido.work/set-stage! (fn [_ id target] (swap! calls conj [id target]) {:decision :done})
-                  nido.tui/current-rows (constantly [])]
+    (with-redefs [nido.ui.tui/selected-workstream (fn [_] {:ws-id "w1" :br-id "BR-1"})
+                  nido.coordinator.work/set-stage! (fn [_ id target] (swap! calls conj [id target]) {:decision :done})
+                  nido.ui.tui/current-rows (constantly [])]
       (#'tui/update-board (board-state :all) (msg/key-press "d"))
       (is (= [["w1" :done]] @calls) "d → set-stage! :done"))))
 
@@ -235,18 +235,18 @@
 
 (deftest board-x-dismisses-selected-workstream
   (let [calls (atom [])]
-    (with-redefs [nido.tui/selected-workstream (fn [_] {:ws-id "w1" :br-id "BR-1"})
-                  nido.work/dismiss! (fn [p id] (swap! calls conj [p id]) {:decision :dismissed})
-                  nido.tui/current-rows (constantly [])]
+    (with-redefs [nido.ui.tui/selected-workstream (fn [_] {:ws-id "w1" :br-id "BR-1"})
+                  nido.coordinator.work/dismiss! (fn [p id] (swap! calls conj [p id]) {:decision :dismissed})
+                  nido.ui.tui/current-rows (constantly [])]
       (let [[s' _] (#'tui/update-board (board-state :all) (msg/key-press "x"))]
         (is (= [["brian" "w1"]] @calls) "x → work/dismiss!")
         (is (re-find #"dismissed" (:status s')))))))
 
 (deftest board-x-noop-on-notion-row
   (let [calls (atom [])]
-    (with-redefs [nido.tui/selected-workstream (fn [_] {:ws-id "w1" :br-id "BR-1" :origin :notion})
-                  nido.work/dismiss! (fn [p id] (swap! calls conj [p id]) {:decision :dismissed})
-                  nido.tui/current-rows (constantly [])]
+    (with-redefs [nido.ui.tui/selected-workstream (fn [_] {:ws-id "w1" :br-id "BR-1" :origin :notion})
+                  nido.coordinator.work/dismiss! (fn [p id] (swap! calls conj [p id]) {:decision :dismissed})
+                  nido.ui.tui/current-rows (constantly [])]
       (let [[s' _] (#'tui/update-board (board-state :all) (msg/key-press "x"))]
         (is (= [] @calls) "x does NOT dismiss a Notion row — Notion owns it")
         (is (re-find #"Notion" (:status s')) "status explains why")))))
@@ -258,15 +258,15 @@
       "s opens the ops overlay"))
 
 (deftest board-tab-cycles-origin-filter
-  (with-redefs [nido.tui/current-rows (constantly [])]
+  (with-redefs [nido.ui.tui/current-rows (constantly [])]
     (let [[s' _] (#'tui/update-board (board-state :all) (msg/key-press "tab"))]
       (is (= :notion (:origin s'))))))
 
 (deftest space-toggles-the-band-under-the-cursor
   ;; Cursor on a folded Triage·queued header → space unfolds it (drops it from the
   ;; collapsed set); space again re-folds. A no-op when the cursor isn't on a band.
-  (with-redefs [nido.tui/selected-data (fn [_] {:nido.tui/band :triage-queued})
-                nido.tui/current-rows (constantly [])]
+  (with-redefs [nido.ui.tui/selected-data (fn [_] {:nido.ui.tui/band :triage-queued})
+                nido.ui.tui/current-rows (constantly [])]
     (let [state  (assoc (board-state :all) :collapsed #{:incoming :triage-queued})
           [s1 _] (#'tui/update-board state (msg/key-press " "))]
       (is (= #{:incoming} (:collapsed s1)) "space unfolds the band under the cursor")
@@ -274,8 +274,8 @@
         (is (= #{:incoming :triage-queued} (:collapsed s2)) "space again re-folds it")))))
 
 (deftest space-on-a-non-band-row-is-a-noop
-  (with-redefs [nido.tui/selected-data (fn [_] {:ws-id "w1"})
-                nido.tui/current-rows (constantly [])]
+  (with-redefs [nido.ui.tui/selected-data (fn [_] {:ws-id "w1"})
+                nido.ui.tui/current-rows (constantly [])]
     (let [state  (assoc (board-state :all) :collapsed #{:triage-queued})
           [s' _] (#'tui/update-board state (msg/key-press " "))]
       (is (= #{:triage-queued} (:collapsed s')) "space leaves the fold set untouched on a workstream row"))))
@@ -285,24 +285,24 @@
       "board footer documents the [space] fold toggle"))
 
 (deftest workstream-esc-returns-to-board
-  (with-redefs [nido.tui/current-rows (constantly [])]
+  (with-redefs [nido.ui.tui/current-rows (constantly [])]
     (let [st (assoc (board-state :all) :screen :workstream :ws-id "w1" :ws-label "x")
           [back _] (#'tui/update-workstream st (msg/key-press "escape"))]
       (is (= :board (:screen back)) "esc returns to the board"))))
 
 (deftest workstream-enter-opens-the-environment-chat
-  (with-redefs [nido.work/environment (fn [_ _] {:name "impl-br-1"})
-                nido.work/reclaimed? (fn [_ _ _] false)
-                nido.tui/enter-session (fn [s _ sn _] [(assoc s ::opened sn) nil])]
+  (with-redefs [nido.coordinator.work/environment (fn [_ _] {:name "impl-br-1"})
+                nido.coordinator.work/reclaimed? (fn [_ _ _] false)
+                nido.ui.tui/enter-session (fn [s _ sn _] [(assoc s ::opened sn) nil])]
     (let [st (assoc (board-state :all) :screen :workstream :project "brian" :ws-id "w1")
           [s' _] (#'tui/update-workstream st (msg/key-press "enter"))]
       (is (= "impl-br-1" (::opened s')) "enter opens the resolved environment's chat"))))
 
 (deftest workstream-enter-rehydrates-a-reclaimed-environment
-  (with-redefs [nido.work/environment (fn [_ _] {:name "impl-br-1"})
-                nido.work/reclaimed? (fn [_ _ _] true)
-                nido.tui/rehydrate-and-enter (fn [s _ _ sn] [(assoc s ::rehydrated sn) nil])
-                nido.tui/enter-session (fn [s _ sn _] [(assoc s ::direct sn) nil])]
+  (with-redefs [nido.coordinator.work/environment (fn [_ _] {:name "impl-br-1"})
+                nido.coordinator.work/reclaimed? (fn [_ _ _] true)
+                nido.ui.tui/rehydrate-and-enter (fn [s _ _ sn] [(assoc s ::rehydrated sn) nil])
+                nido.ui.tui/enter-session (fn [s _ sn _] [(assoc s ::direct sn) nil])]
     (let [st (assoc (board-state :all) :screen :workstream :project "brian" :ws-id "w1")
           [s' _] (#'tui/update-workstream st (msg/key-press "enter"))]
       (is (= "impl-br-1" (::rehydrated s')) "a reclaimed env is rehydrated, not entered directly")
@@ -310,9 +310,9 @@
 
 (deftest workstream-o-opens-browser-when-running
   (let [opened (atom nil)]
-    (with-redefs [nido.work/environment (fn [_ _] {:name "impl-br-1"})
+    (with-redefs [nido.coordinator.work/environment (fn [_ _] {:name "impl-br-1"})
                   nido.session.dev/session-dev-state (fn [_ _] {:state :running :url "http://localhost:3100"})
-                  nido.tui/open-browser! (fn [url] (reset! opened url))]
+                  nido.ui.tui/open-browser! (fn [url] (reset! opened url))]
       (let [st (assoc (board-state :all) :screen :workstream :project "brian" :ws-id "w1")
             [s' _] (#'tui/update-workstream st (msg/key-press "o"))]
         (is (= "http://localhost:3100" @opened) "o opens the dev URL")
@@ -320,9 +320,9 @@
 
 (deftest workstream-o-hints-when-no-url
   (let [opened (atom :not-called)]
-    (with-redefs [nido.work/environment (fn [_ _] {:name "impl-br-1"})
+    (with-redefs [nido.coordinator.work/environment (fn [_ _] {:name "impl-br-1"})
                   nido.session.dev/session-dev-state (fn [_ _] {:state :down})
-                  nido.tui/open-browser! (fn [url] (reset! opened url))]
+                  nido.ui.tui/open-browser! (fn [url] (reset! opened url))]
       (let [st (assoc (board-state :all) :screen :workstream :project "brian" :ws-id "w1")
             [s' _] (#'tui/update-workstream st (msg/key-press "o"))]
         (is (= :not-called @opened) "o does not open the browser when the env is down")
@@ -330,7 +330,7 @@
 
 (deftest workstream-d-stops-and-r-restarts-the-environment
   (let [calls (atom [])]
-    (with-redefs [nido.work/environment (fn [_ _] {:name "impl-br-1"})
+    (with-redefs [nido.coordinator.work/environment (fn [_ _] {:name "impl-br-1"})
                   nido.session.dev/dev-action! (fn [p w s a] (swap! calls conj [p w s a]) (future nil))]
       (let [st (assoc (board-state :all) :screen :workstream :project "brian" :ws-id "w1")]
         (#'tui/update-workstream st (msg/key-press "d"))
@@ -339,7 +339,7 @@
             "d stops and r restarts the environment via dev-action")))))
 
 (deftest workstream-X-opens-destroy-confirm
-  (with-redefs [nido.work/environment (fn [_ _] {:name "impl-br-1"})]
+  (with-redefs [nido.coordinator.work/environment (fn [_ _] {:name "impl-br-1"})]
     (let [st (assoc (board-state :all) :screen :workstream :project "brian" :ws-id "w1")
           [s' _] (#'tui/update-workstream st (msg/key-press "X"))]
       (is (= :confirm-destroy (:modal s')) "X opens the destroy confirmation modal")
@@ -347,14 +347,14 @@
 
 (deftest workstream-u-starts-the-environment
   (let [calls (atom [])]
-    (with-redefs [nido.work/environment (fn [_ _] {:name "impl-br-1"})
+    (with-redefs [nido.coordinator.work/environment (fn [_ _] {:name "impl-br-1"})
                   nido.session.dev/dev-action! (fn [p w s a] (swap! calls conj [p w s a]) (future nil))]
       (let [st (assoc (board-state :all) :screen :workstream :project "brian" :ws-id "w1")]
         (#'tui/update-workstream st (msg/key-press "u"))
         (is (= [["brian" "w1" "impl-br-1" "start"]] @calls) "u starts the environment via dev-action")))))
 
 (deftest workstream-key-no-env-sets-status
-  (with-redefs [nido.work/environment (fn [_ _] nil)]
+  (with-redefs [nido.coordinator.work/environment (fn [_ _] nil)]
     (let [st (assoc (board-state :all) :screen :workstream :project "brian" :ws-id "w1")
           [s' cmd] (#'tui/update-workstream st (msg/key-press "u"))]
       (is (str/includes? (:status s') "no runnable version"))
@@ -366,20 +366,20 @@
       (is (str/includes? f verb)))))
 
 (deftest environment-block-renders-resolved-session-facts
-  (with-redefs [nido.work/environment (fn [_ _] {:name "impl-br-1" :weight :heavy})
+  (with-redefs [nido.coordinator.work/environment (fn [_ _] {:name "impl-br-1" :weight :heavy})
                 nido.session.dev/session-dev-state (fn [_ _] {:state :running :url "http://localhost:3100"})
                 nido.session.lifecycle/list-all-data
                 (fn [_] {:sessions [{:name "impl-br-1" :app-port 3100 :pg-port 5500
                                      :nrepl-port 6100 :worktree "/wt/impl-br-1"}]})
                 nido.session.state/session-home-dir (fn [_ _] "/home/brian/impl-br-1")
-                nido.tui/session-link-entries (fn [_] [])]
+                nido.ui.tui/session-link-entries (fn [_] [])]
     (let [block (#'tui/environment-block "brian" "w")]
       (is (str/includes? block "running") "live dev-state status shown")
       (is (str/includes? block "http://localhost:3100") "dev URL shown")
       (is (str/includes? block "5500") "pg port shown"))))
 
 (deftest environment-block-empty-state-when-no-env
-  (with-redefs [nido.work/environment (fn [_ _] nil)]
+  (with-redefs [nido.coordinator.work/environment (fn [_ _] nil)]
     (is (str/includes? (#'tui/environment-block "brian" "w") "no runnable version")
         "empty state when the workstream has no heavy session")))
 
@@ -387,7 +387,7 @@
   ;; The inline block lists the session's links plus the basic info the user
   ;; missed: dev URL, ports, session home, worktree.
   (with-redefs [nido.session.state/session-home-dir (fn [_ _] "/home/brian/impl-br-1")
-                nido.tui/session-link-entries
+                nido.ui.tui/session-link-entries
                 (fn [_] [{:type :notion :url "https://notion.so/BR-1" :title "BR-1"}])
                 nido.session.links/group-by-type (fn [es] {:notion es})
                 nido.session.links/display-labels (fn [_ _] "Notion")]
@@ -401,9 +401,9 @@
 
 (deftest stage-picker-promotes-to-the-chosen-target
   (let [calls (atom [])]
-    (with-redefs [nido.tui/selected-workstream (fn [_] {:ws-id "w1" :promote-id "BR-1"})
-                  nido.work/set-stage! (fn [_ id t] (swap! calls conj [id t]) {:decision :advanced})
-                  nido.tui/current-rows (constantly [])]
+    (with-redefs [nido.ui.tui/selected-workstream (fn [_] {:ws-id "w1" :promote-id "BR-1"})
+                  nido.coordinator.work/set-stage! (fn [_ id t] (swap! calls conj [id t]) {:decision :advanced})
+                  nido.ui.tui/current-rows (constantly [])]
       (let [opened (first (#'tui/open-stage-picker (board-state :all)))]
         (is (= :stage-picker (:modal opened)))
         (let [picked (assoc-in opened [:modal-target :picker]
@@ -445,8 +445,8 @@
     (is (= :pickup-input (:modal s')))))
 
 (deftest system-screen-is-gone
-  (is (nil? (resolve 'nido.tui/enter-system)))
-  (is (nil? (resolve 'nido.tui/update-system))))
+  (is (nil? (resolve 'nido.ui.tui/enter-system)))
+  (is (nil? (resolve 'nido.ui.tui/update-system))))
 
 (deftest board-no-longer-handles-system-levers
   (doseq [k ["f" "h" "c"]]
@@ -454,13 +454,13 @@
       (is (nil? (:modal s')) (str "board key " k " no longer opens a coordinator modal")))))
 
 (deftest board-rows-shows-queue-band
-  (with-redefs [nido.work/grouped
+  (with-redefs [nido.coordinator.work/grouped
                 (constantly {:incoming [{:origin :slack :stage :incoming :needs-you true
                                          :label "the app crashed" :engagement :idle
                                          :last-activity "2026-06-02T00:00:00Z"}]
                              :ready [] :in-progress [] :triage {:in-flight [] :queued []}})
-                nido.work/live-session-names (constantly #{})]
-    (let [titles (map :title (#'nido.tui/board-rows :brian :all))]
+                nido.coordinator.work/live-session-names (constantly #{})]
+    (let [titles (map :title (#'nido.ui.tui/board-rows :brian :all))]
       (is (some #(str/includes? % "Queue (1)") titles))
       (is (str/includes? (first titles) "Queue")
           "Queue band renders first (inbox-first spec requirement)"))))
@@ -468,13 +468,13 @@
 (deftest board-rows-include-winding-down-band
   ;; A closed workstream still holding live sessions renders as a trailing
   ;; "Winding down" band — the one place bring-down! applies.
-  (with-redefs [nido.work/grouped
+  (with-redefs [nido.coordinator.work/grouped
                 (fn [_ _] {:incoming [] :in-progress [] :shipping []
                           :triage {:in-flight [] :queued []}
                           :winding-down [{:ws-id "w" :origin :scratch
                                           :label "leftover" :outcome :done
                                           :sessions ["s1"] :stage :winding-down}]})
-                nido.work/live-session-names (constantly #{"s1"})]
+                nido.coordinator.work/live-session-names (constantly #{"s1"})]
     (let [titles (map :title (#'tui/board-rows :brian :all #{} {}))]
       (is (some #(str/includes? % "Winding down") titles))
       (is (some #(str/includes? % "leftover") titles)))))
@@ -499,7 +499,7 @@
     (fn []
       ;; redef the liveness oracle so the board doesn't hit lifecycle;
       ;; pass an EMPTY collapsed set so no band is folded out of the row list.
-      (with-redefs [nido.work/live-session-names (constantly #{})]
+      (with-redefs [nido.coordinator.work/live-session-names (constantly #{})]
         (workstream/create! :brian {:stage :triaging :external-refs [{:adapter :notion :id "BR-1"}]
                                     :facets {:app-domain ["Teacher"]}})
         (workstream/create! :brian {:stage :triaging :external-refs [{:adapter :notion :id "BR-2"}]
@@ -512,7 +512,7 @@
 (deftest facet-strip-hidden-on-non-facet-origin
   ;; facet-strip should render nothing on non-facet-bearing origins (:slack,
   ;; :github, :scratch) even when dimensions are configured.
-  (with-redefs [nido.work/facet-dimensions (constantly [:app-domain])]
+  (with-redefs [nido.coordinator.work/facet-dimensions (constantly [:app-domain])]
     (is (str/blank? (#'tui/facet-strip :brian :slack {:app-domain :all}))
         "facet-strip returns blank on :slack origin")
     (is (str/blank? (#'tui/facet-strip :brian :github {:app-domain :all}))
@@ -530,7 +530,7 @@
   ;; would disappear otherwise.
   (with-tmp
     (fn []
-      (with-redefs [nido.work/live-session-names (constantly #{})]
+      (with-redefs [nido.coordinator.work/live-session-names (constantly #{})]
         ;; Slack workstream: no facets
         (workstream/create! :brian {:stage :triaging
                                     :external-refs [{:adapter :slack-message :id "slack-C-1.0"}]})
@@ -556,7 +556,7 @@
   (let [calls (atom [])]
     (with-redefs [nido.session.dev/dev-action!
                   (fn [p w s a] (swap! calls conj [p w s a]) (future nil))]
-      (#'nido.tui/dev-start! "brian" "ws-1" "impl-br-1")
+      (#'nido.ui.tui/dev-start! "brian" "ws-1" "impl-br-1")
       (is (= [["brian" "ws-1" "impl-br-1" "start"]] @calls)))))
 
 ;; ---------------------------------------------------------------------------
@@ -565,8 +565,8 @@
 
 (deftest new-verb-routes-through-work-new
   (let [calls (atom [])]
-    (with-redefs [nido.work/new! (fn [p s] (swap! calls conj [p s]) "ws-9")]
-      (#'nido.tui/create-workstream! "brian" "scratch-foo")
+    (with-redefs [nido.coordinator.work/new! (fn [p s] (swap! calls conj [p s]) "ws-9")]
+      (#'nido.ui.tui/create-workstream! "brian" "scratch-foo")
       (is (= [["brian" "scratch-foo"]] @calls)))))
 
 ;; ---------------------------------------------------------------------------

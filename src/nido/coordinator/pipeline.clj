@@ -1,5 +1,5 @@
 ;; src/nido/pipeline.clj
-(ns nido.pipeline
+(ns nido.coordinator.pipeline
   "Where a workstream is in its life, and what should happen to it next.
 
    Derived on every read and stored nowhere — the same contract

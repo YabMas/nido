@@ -1,4 +1,4 @@
-(ns nido.tui
+(ns nido.ui.tui
   "Tiny charm.clj-based terminal UI over the existing session lifecycle.
 
    Screens:
@@ -36,7 +36,7 @@
    [nido.coordinator.triggers :as triggers]
    [nido.notion.client :as client]
    [nido.platform.project :as project]
-   [nido.work :as work]
+   [nido.coordinator.work :as work]
    [nido.session.dev :as dev]
    [nido.session.engine :as engine]
    [nido.session.lifecycle :as lifecycle]
@@ -64,7 +64,7 @@
   program/quit-cmd)
 
 ;; ---------------------------------------------------------------------------
-;; Origin filter: the board is one stage-grouped list (nido.work/grouped); the
+;; Origin filter: the board is one stage-grouped list (nido.coordinator.work/grouped); the
 ;; workstream's origin is a badge per row and a filter, not a separate screen.
 ;; ---------------------------------------------------------------------------
 
@@ -148,7 +148,7 @@
     rows))
 
 ;; ---------------------------------------------------------------------------
-;; Board rows — spine board: nido.work/grouped, badged by origin, origin-filtered.
+;; Board rows — spine board: nido.coordinator.work/grouped, badged by origin, origin-filtered.
 ;; ---------------------------------------------------------------------------
 
 (def ^:private origin-badges
@@ -169,7 +169,7 @@
 (defn- badged-item-row
   "One workstream row for the spine board: origin badge + the wsv display string.
    wsv/format-row and wsv/promote-result-message (below) are display-only helpers
-   intentionally NOT re-exported through the nido.work facade — they are pure
+   intentionally NOT re-exported through the nido.coordinator.work facade — they are pure
    presentation formatters with no model logic.
    For :shipping rows, the merge-lane sub-state is appended after the standard label."
   [r]

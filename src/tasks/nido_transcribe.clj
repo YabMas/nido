@@ -11,7 +11,7 @@
   (:require
    [clojure.string :as str]
    [nido.platform.task-args :as task-args]
-   [nido.transcribe :as transcribe]))
+   [nido.transcribe.core :as transcribe]))
 
 (defn exit! [code] (System/exit code))
 

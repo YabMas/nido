@@ -1,10 +1,10 @@
-(ns nido.template-test
+(ns nido.session.template-test
   "Tests for the snapshot+rollback guard around `refresh!`: a failed refresh
    (e.g. the staging fetch throws) must never leave the template destroyed."
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
-   [nido.template :as tpl]))
+   [nido.session.template :as tpl]))
 
 (defn- with-temp-template
   "Build a stopped fake template data-dir (PG_VERSION + a content marker) under

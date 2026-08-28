@@ -7,7 +7,7 @@
             [nido.platform.process :as process]
             [nido.ui.markdown :as md]
             [nido.ui.view-state :as view-state]
-            [nido.work :as work]))
+            [nido.coordinator.work :as work]))
 
 ;; ---------------------------------------------------------------------------
 ;; Layout
@@ -403,7 +403,7 @@
 ;; Fragments (for SSE updates)
 
 ;; ---------------------------------------------------------------------------
-;; Gate inbox (cross-project human-decision queue over nido.work)
+;; Gate inbox (cross-project human-decision queue over nido.coordinator.work)
 
 (defn origin-badge [origin]
   (let [[ch cls] (case origin

@@ -1,8 +1,8 @@
-(ns nido.commands-test
+(ns nido.session.commands-test
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is testing]]
-   [nido.commands :as commands]))
+   [nido.session.commands :as commands]))
 
 (deftest resolve-java-home-finds-real-jdk
   (testing "when a JDK is discoverable, the home contains bin/java"

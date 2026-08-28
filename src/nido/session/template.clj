@@ -1,4 +1,4 @@
-(ns nido.template
+(ns nido.session.template
   "Per-project Postgres template cluster. Lives at
    ~/.nido/templates/<project-name>/pg-data/ and acts as the source for APFS
    clones when a session starts with :clone-from-template on its :postgresql
@@ -17,7 +17,7 @@
    postmaster.pid and refuse to start."
   (:require
    [babashka.fs :as fs]
-   [nido.commands :as commands]
+   [nido.session.commands :as commands]
    [nido.platform.config :as config]
    [nido.platform.core :as core]
    [nido.session.engine :as engine]

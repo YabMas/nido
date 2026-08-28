@@ -1,4 +1,4 @@
-(ns nido.shared-pg
+(ns nido.session.shared-pg
   "Per-project shared Postgres cluster. One long-lived RUNNING cluster at
    ~/.nido/shared/<project>/pg-data, seeded once by APFS-cloning the (stopped)
    template. All :shared-mode sessions connect to it instead of cloning their

@@ -1,4 +1,4 @@
-(ns nido.transcribe
+(ns nido.transcribe.core
   "URL → VTT dispatch. Loom share/embed URLs use the public GraphQL
    transcript endpoint with a whisper fallback for transcript-disabled
    videos. Anything else downloads + whispers.

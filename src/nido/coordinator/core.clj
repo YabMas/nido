@@ -43,10 +43,10 @@
    [nido.coordinator.triggers :as triggers]
    [nido.platform.core :as nido-core]
    [nido.platform.project :as project]
-   [nido.reclaim :as reclaim]
+   [nido.session.reclaim :as reclaim]
    [nido.session.profiles :as profiles]
    [nido.ui.server :as ui-server]
-   [nido.work :as work]))
+   [nido.coordinator.work :as work]))
 
 (def ^:private defaults
   {:poll-ms             1000
@@ -763,7 +763,7 @@
    every run.edn written before the field existed executing exactly as it did.
 
    Deliberately an EXECUTION selector and not a position. Where a workstream
-   stands is nido.pipeline's question, derived on read; this is a fact about one
+   stands is nido.coordinator.pipeline's question, derived on read; this is a fact about one
    Run, written when it is minted."
   {:merge (fn [rid] (ship/drive-home-blocking! rid))
    ;; The driven stage. Its body runs the stage in-process inside the slot the

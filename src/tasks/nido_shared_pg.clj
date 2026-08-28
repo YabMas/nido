@@ -3,7 +3,7 @@
    [clojure.edn :as edn]
    [nido.session.engine :as engine]
    [nido.session.lifecycle :as lifecycle]
-   [nido.shared-pg :as shared]))
+   [nido.session.shared-pg :as shared]))
 
 (defn- parse-opts [args]
   (if (empty? args)

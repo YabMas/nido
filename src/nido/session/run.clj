@@ -1,11 +1,11 @@
-(ns nido.run
+(ns nido.session.run
   "Run a project-declared :project-commands entry inside a session's worktree.
    The generic 'adopt a target-project command' primitive: nido resolves where
-   to run (the session worktree) and forwards the command via nido.commands;
+   to run (the session worktree) and forwards the command via nido.session.commands;
    the command's behaviour and output belong to the target project."
   (:require
    [babashka.fs :as fs]
-   [nido.commands :as commands]
+   [nido.session.commands :as commands]
    [nido.platform.config :as config]
    [nido.session.engine :as engine]
    [nido.session.lifecycle :as lifecycle]))

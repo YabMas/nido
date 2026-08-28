@@ -1,4 +1,4 @@
-(ns nido.reclaim
+(ns nido.session.reclaim
   "Delete per-instance state dirs under ~/.nido/state/ that have no
    matching registry entry. Useful after a session was destroyed
    uncleanly (kill -9, host crash, manual rm) and left its PGDATA

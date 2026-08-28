@@ -4,7 +4,7 @@
    [clojure.edn]
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
-   [nido.transcribe :as transcribe]
+   [nido.transcribe.core :as transcribe]
    [tasks.nido-transcribe :as task]))
 
 (deftest parse-duration-accepts-m-and-s-and-ints

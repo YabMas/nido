@@ -1,8 +1,8 @@
-(ns nido.transcribe-test
+(ns nido.transcribe.core-test
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
-   [nido.transcribe :as t]
+   [nido.transcribe.core :as t]
    [nido.transcribe.loom :as loom]
    [nido.transcribe.whisper :as whisper]))
 

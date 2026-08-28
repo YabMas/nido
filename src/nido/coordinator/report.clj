@@ -1130,7 +1130,7 @@
 (def Blocker
   "A halt that needs a human. :needs is the question; :options is that same
    question in answerable form — the branches the agent can already see, which
-   the gate renders as A/B/… and answers with one click (nido.work/option-input
+   the gate renders as A/B/… and answers with one click (nido.coordinator.work/option-input
    builds the resume text nido-side from the option the human picked).
 
    :options is optional because not every blocker is a choice — 'I need the
@@ -1152,7 +1152,7 @@
 
 (def BlockerAnswered
   "The human's answer to a blocker that named its branches — written by nido at
-   the moment the gate button is clicked (nido.work/answer-blocker!), never by an
+   the moment the gate button is clicked (nido.coordinator.work/answer-blocker!), never by an
    agent.
 
    It exists because the QUESTION outlives the agent that asked it. A blocker is

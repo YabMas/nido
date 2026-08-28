@@ -11,7 +11,7 @@
    [nido.coordinator.state :as cstate]
    [nido.platform.io :as io]
    [nido.platform.project :as project]
-   [nido.work :as work]))
+   [nido.coordinator.work :as work]))
 
 (defn- reset-executor! [f]
   (executor/configure! {:global-cap 4})

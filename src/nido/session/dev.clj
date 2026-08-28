@@ -7,7 +7,7 @@
             [nido.session.engine :as engine]
             [nido.session.lifecycle :as lifecycle]
             [nido.session.state :as state]
-            [nido.work :as work]))
+            [nido.coordinator.work :as work]))
 
 ;; ---------------------------------------------------------------------------
 ;; In-flight action tracking

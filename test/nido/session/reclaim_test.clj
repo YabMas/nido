@@ -1,8 +1,8 @@
-(ns nido.reclaim-test
+(ns nido.session.reclaim-test
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
-   [nido.reclaim :as reclaim]
+   [nido.session.reclaim :as reclaim]
    [nido.session.state :as state]))
 
 (defn- mk-dir! [root id mtime-ms]

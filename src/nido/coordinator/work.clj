@@ -1,4 +1,4 @@
-(ns nido.work
+(ns nido.coordinator.work
   "The work-plane core: the single vocabulary every surface (TUI, web) wraps.
 
    Sits ABOVE the coordinator record layer (nido.coordinator.workstream/.session/
@@ -33,7 +33,7 @@
    [nido.coordinator.workstreams-view :as wsv]
    [nido.notion.client :as notion]
    [nido.notion.views :as views]
-   [nido.pipeline :as pipeline]
+   [nido.coordinator.pipeline :as pipeline]
    [nido.slack.client :as slack]
    [nido.platform.process :as proc]
    [nido.platform.project :as project]

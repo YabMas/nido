@@ -1,4 +1,4 @@
-(ns nido.shared-pg-test
+(ns nido.session.shared-pg-test
   (:require
    [babashka.fs :as fs]
    [babashka.process]
@@ -7,7 +7,7 @@
    [nido.platform.process :as proc]
    [nido.session.services.postgresql :as pg]
    [nido.session.state :as state]
-   [nido.shared-pg :as shared]))
+   [nido.session.shared-pg :as shared]))
 
 (deftest with-lock-serializes-and-returns-body-value
   (let [lock (str (fs/path (fs/create-temp-dir) "t.lock"))]

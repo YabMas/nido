@@ -9,7 +9,7 @@
    [nido.coordinator.tickets-view :as tickets-view]
    [nido.coordinator.workstream :as workstream]
    [nido.platform.task-args :as task-args]
-   [nido.work :as work]))
+   [nido.coordinator.work :as work]))
 
 (defn- project-kw [opts] (keyword (or (:project opts) "brian")))
 

@@ -1,5 +1,5 @@
-;; test/nido/pipeline_test.clj
-(ns nido.pipeline-test
+;; test/nido/coordinator/pipeline_test.clj
+(ns nido.coordinator.pipeline-test
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is testing]]
@@ -7,7 +7,7 @@
    [nido.coordinator.report :as report]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.workstream :as ws]
-   [nido.pipeline :as p]))
+   [nido.coordinator.pipeline :as p]))
 
 (defn- with-tmp [f]
   (let [tmp (fs/create-temp-dir)]

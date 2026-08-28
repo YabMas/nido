@@ -45,7 +45,7 @@
 (defn flyway-checksum
   "Computes a Flyway-compatible CRC32 checksum over a SQL file.
    Reads line-by-line, converts each line to UTF-8 bytes, updates CRC32.
-   Public: nido.shared-pg reuses it to record history rows when advancing the
+   Public: nido.session.shared-pg reuses it to record history rows when advancing the
    shared cluster, and it must match Flyway's own checksum exactly."
   [file-path]
   (let [crc (CRC32.)
@@ -332,7 +332,7 @@
           project-dir  (get-in ctx [:session :project-dir])
           source-repo  ((requiring-resolve 'nido.session.engine/source-project-root)
                         project-dir)
-          {:keys [port]} ((requiring-resolve 'nido.shared-pg/ensure-ready!)
+          {:keys [port]} ((requiring-resolve 'nido.session.shared-pg/ensure-ready!)
                           project-name
                           {:db-name db-name :owner-user db-user :schema schema
                            :app-user app-db-user :source-repo source-repo})

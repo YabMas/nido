@@ -1,7 +1,7 @@
 (ns tasks.nido-template
   (:require
    [clojure.edn :as edn]
-   [nido.template :as template]))
+   [nido.session.template :as template]))
 
 (defn- parse-opts [args]
   (if (empty? args)

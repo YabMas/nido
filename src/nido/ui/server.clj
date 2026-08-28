@@ -16,7 +16,7 @@
             [nido.ui.health :as health]
             [nido.ui.views :as views]
             [nido.ui.view-state :as view-state]
-            [nido.work :as work]
+            [nido.coordinator.work :as work]
             [org.httpkit.server :as http]))
 
 ;; ---------------------------------------------------------------------------

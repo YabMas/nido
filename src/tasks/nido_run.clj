@@ -19,7 +19,7 @@
    kwarg key."
   (:require
    [clojure.string :as str]
-   [nido.run :as run]
+   [nido.session.run :as run]
    [nido.platform.task-args :as task-args]))
 
 (defn- require-project [opts]

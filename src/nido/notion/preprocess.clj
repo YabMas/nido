@@ -1,6 +1,6 @@
 (ns nido.notion.preprocess
   "Walk a Notion page, find video blocks (Loom + Notion-uploaded + other
-   MP4-like URLs), call `nido.transcribe/video!` for each, write a
+   MP4-like URLs), call `nido.transcribe.core/video!` for each, write a
    manifest + agent-readable digest to <out-dir>."
   (:require
    [babashka.fs :as fs]

@@ -2,7 +2,7 @@
   (:require
    [clojure.test :refer [deftest is]]
    [nido.session.engine :as engine]
-   [nido.shared-pg :as shared]
+   [nido.session.shared-pg :as shared]
    [tasks.nido-shared-pg :as task]))
 
 (deftest up-passes-role-and-source-opts-to-ensure-ready

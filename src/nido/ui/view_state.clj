@@ -27,7 +27,7 @@
 (def tabs
   "The /workstreams surfaces, in display order. The FIRST entry is the default.
    A tab is a BAND selector — which part of the stage spine is on screen (see
-   nido.work/tab-bands) — NOT a row filter: every row in the tab renders
+   nido.coordinator.work/tab-bands) — NOT a row filter: every row in the tab renders
    whatever its origin. They are nido's two jobs: intake via the various
    streams, and orchestrating work in progress."
   [:intake :active])
@@ -55,7 +55,7 @@
       :tab     :intake|:active}
 
    No source/facet filtering: the board shows every origin, and its tabs select
-   BANDS rather than rows (see nido.work/tab-bands). A legacy ?source= / facet
+   BANDS rather than rows (see nido.coordinator.work/tab-bands). A legacy ?source= / facet
    bookmark parses cleanly and constrains nothing."
   [{:keys [uri query-string]}]
   (let [ps (pairs query-string)]

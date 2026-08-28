@@ -1,7 +1,7 @@
 (ns nido.tasks.nido-run-test
   (:require
    [clojure.test :refer [deftest is testing]]
-   [nido.run :as run]
+   [nido.session.run :as run]
    [tasks.nido-run :as task]))
 
 (deftest missing-project-throws

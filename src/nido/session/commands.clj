@@ -1,4 +1,4 @@
-(ns nido.commands
+(ns nido.session.commands
   "Project-declared commands: a keyword-addressable layer over shell invocations
    so nido can call project-specific tasks (dump DB, restore DB, etc.) without
    knowing their shell form. Commands are declared under :project-commands in

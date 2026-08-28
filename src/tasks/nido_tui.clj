@@ -28,7 +28,7 @@
   (:require
    [babashka.fs :as fs]
    [nido.platform.core :as core]
-   [nido.tui :as tui]
+   [nido.ui.tui :as tui]
    [tasks.nido-session :as session])
   (:import
    [java.io PrintWriter StringWriter]))
