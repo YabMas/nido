@@ -7,7 +7,7 @@
   (:require
    [babashka.fs :as fs]
    [babashka.process :as p]
-   [nido.coordinator.core :as core]
+   [nido.boot.core :as core]
    [nido.coordinator.halt :as halt]
    [nido.coordinator.heartbeat :as heartbeat]
    [nido.coordinator.pid :as pid]

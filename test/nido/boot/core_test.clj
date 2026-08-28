@@ -1,4 +1,4 @@
-(ns nido.coordinator.core-test
+(ns nido.boot.core-test
   "Integration smoke test: envelope → executor → run-blocking! → terminal state.
    Also covers the triage pre-spawn gate (Task 4)."
   (:require
@@ -11,7 +11,7 @@
    [nido.coordinator.sources.notion]
    [nido.platform.io]
    [nido.coordinator.clock :as clock]
-   [nido.coordinator.core :as core]
+   [nido.boot.core :as core]
    [nido.coordinator.executor :as executor]
    [nido.coordinator.github-merge :as github-merge]
    [nido.github.config :as gh-config]
@@ -126,11 +126,11 @@
           ;; submit directly to the executor (bypassing process-envelope!)
           (executor/submit! (:id run) 0)
           ;; first tick: promotes the Run into a future that calls run-blocking!
-          (executor/tick! #'nido.coordinator.core/run-blocking! {})
+          (executor/tick! #'nido.boot.core/run-blocking! {})
           ;; wait for the future to finish (agent stub is instant)
           (Thread/sleep 200)
           ;; second tick: reaps the finished future
-          (executor/tick! #'nido.coordinator.core/run-blocking! {})
+          (executor/tick! #'nido.boot.core/run-blocking! {})
           (is (contains? #{:done :failed :awaiting-review}
                          (:state (runs/read-run (:id run)))))))
       (finally (fs/delete-tree tmp)))))
@@ -689,7 +689,7 @@
                                    :payload {:adapter :slack-message :id "slack-C-1.0"
                                              :title "boom" :text "it broke"}}}
               tbp     {:brian [trigger]}]
-          (#'nido.coordinator.core/process-envelope! env tbp)
+          (#'nido.boot.core/process-envelope! env tbp)
           (let [ids (ws/list-ids :brian)]
             (is (= 1 (count ids)))
             (let [w (ws/read-ws :brian (first ids))]
@@ -712,10 +712,10 @@
              :trigger {:name :triage-slack-bugs}
              :payload {:adapter :slack-message :id "slack-C-1.0" :text "x"}}))
         ;; reset the throttle clock so the sweep fires, then sweep 10 days later
-        (reset! @#'nido.coordinator.core/!last-inbox-sweep-ms 0)
-        (with-redefs-fn {#'nido.coordinator.core/registered-projects (constantly [:brian])}
+        (reset! @#'nido.boot.core/!last-inbox-sweep-ms 0)
+        (with-redefs-fn {#'nido.boot.core/registered-projects (constantly [:brian])}
           (fn []
-            (#'nido.coordinator.core/maybe-expire-inbox!
+            (#'nido.boot.core/maybe-expire-inbox!
               (+ (.toEpochMilli (java.time.Instant/parse "2026-06-01T00:00:00Z"))
                  (* 10 24 60 60 1000)))))
         (is (= :dropped (-> (ws/find-by-ref :brian :slack-message "slack-C-1.0")
@@ -746,7 +746,7 @@
 (deftest ship-envelope-routes-to-handle-ship
   (let [seen (atom nil)]
     (with-redefs [nido.coordinator.ship/handle-ship! (fn [env] (reset! seen env) nil)]
-      (#'nido.coordinator.core/dispatch-envelope! {:type :ship :project :brian :session "s" :ws-id "w"} {})
+      (#'nido.boot.core/dispatch-envelope! {:type :ship :project :brian :session "s" :ws-id "w"} {})
       (is (= :ship (:type @seen))))))
 
 (deftest non-ship-envelope-still-routes-to-process-envelope
@@ -759,7 +759,7 @@
   (let [handle-ship-called (atom false)]
     (with-redefs [nido.coordinator.ship/handle-ship! (fn [_] (reset! handle-ship-called :ship!))]
       (try
-        (#'nido.coordinator.core/dispatch-envelope! {:type :manual :payload {}} {})
+        (#'nido.boot.core/dispatch-envelope! {:type :manual :payload {}} {})
         (catch Throwable _
           ;; process-envelope! may throw in the bare test context — that's OK;
           ;; the assertion below is all we need.
@@ -777,16 +777,16 @@
                   nido.coordinator.work/prune-dead-registry! (constantly [])
                   nido.platform.project/list-projects (constantly {"brian" {:directory "/x"}})]
       ;; private fn + private atom: test through the var
-      (#'nido.coordinator.core/reset-adopt-throttle!)
-      (#'nido.coordinator.core/maybe-adopt! 1000000)
-      (#'nido.coordinator.core/maybe-adopt! 1001000)   ; 1s later — throttled
+      (#'nido.boot.core/reset-adopt-throttle!)
+      (#'nido.boot.core/maybe-adopt! 1000000)
+      (#'nido.boot.core/maybe-adopt! 1001000)   ; 1s later — throttled
       (is (= [:brian] @calls)))))
 
 (deftest adoption-sweep-prunes-the-dead-registry-first
   (let [calls (atom [])]
     (with-redefs [nido.coordinator.work/prune-dead-registry! (fn [] (swap! calls conj :pruned) ["p--ghost"])
                   nido.coordinator.work/adopt-orphans!       (fn [_] (swap! calls conj :adopted) {})
-                  nido.coordinator.core/registered-projects (constantly [:brian])]
+                  nido.boot.core/registered-projects (constantly [:brian])]
       (reset! @#'core/!last-adopt-ms 0)
       (#'core/maybe-adopt! (* 10 60 1000))
       (is (= [:pruned :adopted] @calls)

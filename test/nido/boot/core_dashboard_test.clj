@@ -1,6 +1,6 @@
-(ns nido.coordinator.core-dashboard-test
+(ns nido.boot.core-dashboard-test
   (:require [clojure.test :refer [deftest is]]
-            [nido.coordinator.core :as core]))
+            [nido.boot.core :as core]))
 
 (deftest dashboard-config-defaults-on-8800
   (is (= {:enabled? true :port 8800} (core/dashboard-config {}))))

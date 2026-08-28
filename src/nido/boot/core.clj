@@ -1,4 +1,4 @@
-(ns nido.coordinator.core
+(ns nido.boot.core
   "Coordinator main loop. Foreground only in Stage 1a.
 
    See spec §The coordinator daemon."

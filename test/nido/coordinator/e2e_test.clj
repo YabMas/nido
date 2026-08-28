@@ -5,7 +5,7 @@
    [nido.platform.core :as nido-core]
    [nido.coordinator.agent :as agent]
    [nido.coordinator.breakers :as breakers]
-   [nido.coordinator.core :as core]
+   [nido.boot.core :as core]
    [nido.coordinator.executor :as executor]
    [nido.coordinator.queue :as queue]
    [nido.coordinator.runs :as runs]
