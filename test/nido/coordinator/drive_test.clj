@@ -46,8 +46,8 @@
 (deftest a-halt-with-no-stated-question-asks-an-honest-one
   ;; Better than a confident sentence nobody derived: the driver does not know
   ;; what the round could not settle, and should not invent it.
-  (let [h (drive/halt-for {:stage :verify-survey :outcome :disputed})]
-    (is (str/includes? (:summary h) "verify-survey"))
+  (let [h (drive/halt-for {:stage :verify-baseline :outcome :disputed})]
+    (is (str/includes? (:summary h) "verify-baseline"))
     (is (str/includes? (:summary h) "disputed"))
     (is (str/includes? (:needs h) "everything derivable"))))
 
@@ -79,7 +79,7 @@
       (let [id (a-ws)]
         (session/create! :brian id {:name "auto" :weight :heavy
                                     :autonomy a-running-agent})
-        (let [r (drive/park! :brian id {:stage :verify-survey :outcome :disputed})]
+        (let [r (drive/park! :brian id {:stage :verify-baseline :outcome :disputed})]
           (is (= "auto" (:parked r)))
           (is (= :parked (get-in (first (session/list-sessions :brian id))
                                  [:autonomy :phase]))))))))
@@ -90,7 +90,7 @@
   (with-tmp
     (fn []
       (let [id (a-ws)
-            r  (drive/park! :brian id {:stage :verify-survey :outcome :disputed})]
+            r  (drive/park! :brian id {:stage :verify-baseline :outcome :disputed})]
         (is (nil? (:parked r)))
         (is (some? (:seq r)) "the ledger entry is the durable half")
         (is (some? (ws/latest-entry :brian id :blocker)))))))
@@ -114,13 +114,13 @@
     (fn []
       (let [id (a-ws)]
         (is (= :advance (:disposition (drive/park-on-escalate!
-                                       :brian id {:stage :verify-survey
+                                       :brian id {:stage :verify-baseline
                                                   :outcome :sufficient}))))
         (is (nil? (ws/latest-entry :brian id :blocker))
             "a survey that held is not a halt")
 
         (is (= :retry (:disposition (drive/park-on-escalate!
-                                     :brian id {:stage :verify-survey
+                                     :brian id {:stage :verify-baseline
                                                 :outcome :codex-failed}))))
         (is (nil? (ws/latest-entry :brian id :blocker))
             "the machinery failing is not a person's business yet")
@@ -157,8 +157,8 @@
 ;; ── What the driver decides to fire ─────────────────────────────────────────
 
 (deftest only-a-mechanical-stage-with-a-runner-is-fired
-  (is (= :verify-survey (:fire (drive/fireable
-                                {:next {:stage :verify-survey :mode :mechanical}}))))
+  (is (= :verify-baseline (:fire (drive/fireable
+                                {:next {:stage :verify-baseline :mode :mechanical}}))))
   (is (= :decide-design (:fire (drive/fireable
                                 {:next {:stage :decide-design :mode :mechanical}})))))
 
@@ -204,8 +204,8 @@
         (drive/drive! :brian id)
         (let [out (drive/tick! #(swap! submitted conj %))]
           (is (= 1 (count out)))
-          (is (= :verify-survey (:fired (first out)))
-              "a survey with no verdict is at :surveyed, whose next act is mechanical")
+          (is (= :verify-baseline (:fired (first out)))
+              "a survey with no verdict is at :baselined, whose next act is mechanical")
           (is (= 1 (count @submitted)))
           (is (= :drive (:trigger (first @submitted))))
           (is (false? (:uncapped? (first @submitted)))
@@ -239,7 +239,7 @@
     {:calls calls :slept slept
      :run (fn [project ws-id]
             (with-redefs [drive/mechanical-stages
-                          {:verify-survey {:task ::fake :label "baseline"}}
+                          {:verify-baseline {:task ::fake :label "baseline"}}
                           requiring-resolve
                           (fn [_] (fn [_] (let [i @calls]
                                             (swap! calls inc)
@@ -247,7 +247,7 @@
               ;; :cwd injected — a real session home is not what these tests
               ;; are about, and run-stage!'s own no-session branch is covered
               ;; separately.
-              (drive/run-stage! project ws-id :verify-survey
+              (drive/run-stage! project ws-id :verify-baseline
                                 {:cwd "/tmp" :sleep-fn #(swap! slept conj %)})))}))
 
 (deftest a-machine-failure-is-retried-and-then-stops
@@ -303,9 +303,9 @@
         (ws/append-entry! :brian id {:kind :intent}
                           (pr-str {:format :intent :goal "g" :done-when ["d"]}))
         (ws/append-entry! :brian id {:kind :baseline} (pr-str a-survey))
-        (is (= :verify-survey (:fire (drive/fireable (pipeline/of :brian id))))
+        (is (= :verify-baseline (:fire (drive/fireable (pipeline/of :brian id))))
             "fireable before the halt")
-        (drive/park! :brian id {:stage :verify-survey :outcome :codex-failed})
+        (drive/park! :brian id {:stage :verify-baseline :outcome :codex-failed})
         (let [pos (pipeline/of :brian id)]
           (is (= :blocked (:at pos)))
           (is (= :waiting-on-a-human (:skip (drive/fireable pos)))))))))

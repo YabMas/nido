@@ -83,15 +83,15 @@
       (let [[id add!] (ledger)]
         (intent! add!)
         (is (= :intent-stated (:at (p/of :brian id))))
-        (is (= :survey (:stage (:next (p/of :brian id)))))
+        (is (= :write-baseline (:stage (:next (p/of :brian id)))))
 
         (let [b (add! :baseline a-survey)]
-          (is (= :surveyed (:at (p/of :brian id))))
-          (is (= {:stage :verify-survey :mode :mechanical} (:next (p/of :brian id))))
+          (is (= :baselined (:at (p/of :brian id))))
+          (is (= {:stage :verify-baseline :mode :mechanical} (:next (p/of :brian id))))
 
           (add! :baseline-review {:format :baseline-review :verdict :sufficient
                                   :baseline-seq b :reason "it holds"})
-          (is (= :survey-verified (:at (p/of :brian id))))
+          (is (= :baseline-verified (:at (p/of :brian id))))
           (is (= :design (:stage (:next (p/of :brian id)))))
 
           (let [d (add! :design (a-design b))]
@@ -127,7 +127,7 @@
                              :because "a second summing path exists"
                              :evidence ["src/b.clj:9"]})
           (is (= :premise-retracted (:at (p/of :brian id))))
-          (is (= {:stage :resurvey :mode :authoring} (:next (p/of :brian id)))))))))
+          (is (= {:stage :rebaseline :mode :authoring} (:next (p/of :brian id)))))))))
 
 (deftest a-superseding-survey-repairs-the-retraction
   (with-tmp
@@ -139,7 +139,7 @@
                              :because "wrong" :evidence ["src/b.clj:9"]})
           (is (= :premise-retracted (:at (p/of :brian id))))
           (add! :baseline (assoc a-survey :supersedes {:seq b :why "corrected"}))
-          (is (= :surveyed (:at (p/of :brian id)))
+          (is (= :baselined (:at (p/of :brian id)))
               "the ledger moved past it, so it is no longer the fact that matters"))))))
 
 (deftest an-unanswered-blocker-halts-and-an-answered-one-does-not
@@ -169,9 +169,9 @@
         (let [b1 (add! :baseline a-survey)]
           (add! :baseline-review {:format :baseline-review :verdict :sufficient
                                   :baseline-seq b1 :reason "it holds"})
-          (is (= :survey-verified (:at (p/of :brian id))))
+          (is (= :baseline-verified (:at (p/of :brian id))))
           (add! :baseline (assoc a-survey :area "a different area"))
-          (is (= :surveyed (:at (p/of :brian id)))
+          (is (= :baselined (:at (p/of :brian id)))
               "the newest survey is the one standing, and nothing has judged it"))))))
 
 (deftest only-proceed-counts-as-a-decision
@@ -306,7 +306,7 @@
                                                 :claim-id "c1"
                                                 :evidence ["src/a.clj:1"]}]})))
         (let [h (p/history :brian id)]
-          (is (= [:intent :survey] (mapv :stage h)))
+          (is (= [:intent :baseline] (mapv :stage h)))
           (is (= 6 (count (:entries (second h)))) "six records, one row")
           (is (= 2 (:from (second h))))
           (is (= 7 (:to (second h)))))))))
@@ -321,7 +321,7 @@
         (let [b (add! :baseline a-survey)]
           (add! :design (a-design b))
           (add! :baseline (assoc a-survey :supersedes {:seq b :why "again"}))
-          (is (= [:intent :survey :design :survey]
+          (is (= [:intent :baseline :design :baseline]
                  (mapv :stage (p/history :brian id)))))))))
 
 (deftest history-drops-a-kind-it-cannot-place-rather-than-inventing-a-stage

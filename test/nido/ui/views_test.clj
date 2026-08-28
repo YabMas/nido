@@ -1188,12 +1188,12 @@
               :intake :pickup}
    :holds {:intent {:seq 1 :revisions 1 :kind :intent
                     :record {:goal "drive a workstream to a draft PR"}}
-           :survey {:seq 8 :revisions 4 :verified? true
+           :baseline {:seq 8 :revisions 4 :verified? true
                     :record {:area "how position is represented"}}
            :design {:seq 10 :revisions 2 :premise 8 :decided? true
                     :record {:summary "one projection, one driver"}}}
    :arc [{:stage :intent :from 1 :to 1 :entries [:intent]}
-         {:stage :survey :from 2 :to 9 :entries (vec (repeat 8 :baseline))}
+         {:stage :baseline :from 2 :to 9 :entries (vec (repeat 8 :baseline))}
          {:stage :design :from 10 :to 11 :entries [:design :design-decision]}]
    :entries [] :sessions [] :on-latest? true})
 
@@ -1223,7 +1223,7 @@
 
 (deftest an-unverified-survey-says-what-it-costs
   (let [html (views/workstream-pane
-              (assoc-in a-pane [:holds :survey :verified?] false) {})]
+              (assoc-in a-pane [:holds :baseline :verified?] false) {})]
     (is (str/includes? html "not verified"))
     (is (str/includes? html "cannot be decided"))))
 
@@ -1260,16 +1260,16 @@
   ;; The band could not: everything from authoring an intent to opening a draft
   ;; PR is :in-progress, so rows waiting on a survey, on a decision and on a
   ;; person all read the same.
-  (let [html (str (h/html (board-row {:at :survey-verified
+  (let [html (str (h/html (board-row {:at :baseline-verified
                                       :next {:stage :design :mode :authoring}})))]
-    (is (str/includes? html "Survey verified"))
+    (is (str/includes? html "Baseline verified"))
     (is (str/includes? html "write the design"))))
 
 (deftest a-row-waiting-on-a-human-is-lit-and-one-that-is-not-is-muted
   (let [mine  (str (h/html (board-row {:at :design-decided
                                        :next {:stage :approve-design :mode :human}})))
-        nido' (str (h/html (board-row {:at :surveyed
-                                       :next {:stage :verify-survey :mode :mechanical}})))]
+        nido' (str (h/html (board-row {:at :baselined
+                                       :next {:stage :verify-baseline :mode :mechanical}})))]
     (is (str/includes? mine "pos pos-you")
         "the next move is a person's — that is what a board is scanned for")
     (is (not (str/includes? nido' "pos-you")))))

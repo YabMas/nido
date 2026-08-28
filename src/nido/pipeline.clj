@@ -61,8 +61,8 @@
    :design-approved
    :design-decided
    :designed
-   :survey-verified
-   :surveyed
+   :baseline-verified
+   :baselined
    :intent-stated
    :intake
    :unplaceable])
@@ -151,7 +151,7 @@
    asks what the newest records make true NOW, this asks which stage a given
    record was part of. Both are the one secret this module keeps, so they live
    together — a second copy elsewhere would be a second answer to `is a
-   baseline-review part of surveying`, and the two would drift.
+   baseline-review part of the baseline stage`, and the two would drift.
 
    A kind absent here has no stage, and `history` drops it rather than inventing
    one. That is the same refusal `:unplaceable` makes, at row granularity."
@@ -159,8 +159,8 @@
    :triage          :intent
    :proposed-ticket :intent
    :intent          :intent
-   :baseline        :survey
-   :baseline-review :survey
+   :baseline        :baseline
+   :baseline-review :baseline
    :design          :design
    :design-decision :design
    :design-verdict  :design
@@ -252,12 +252,12 @@
                                     (ws/entries-of project ws-id :design)))))
         (:seq latest)))))
 
-(defn survey-verified?
+(defn baseline-verified?
   "True when a review found the workstream's newest survey sufficient.
 
    Public because the surface asks it too, and there must be one answer to it.
    A second implementation beside this one is how `verified` on a card and
-   `:survey-verified` in the fold come to disagree about the same ledger.
+   `:baseline-verified` in the fold come to disagree about the same ledger.
 
    Keyed on the survey's :seq, never on recency: a workstream can hold several
    surveys and several reviews of them, and the review that matters is the one
@@ -314,8 +314,8 @@
     approved?                      :design-approved
     decided?                       :design-decided
     (contains? ks :design)         :designed
-    verified?                      :survey-verified
-    (contains? ks :baseline)       :surveyed
+    verified?                      :baseline-verified
+    (contains? ks :baseline)       :baselined
     (or (contains? ks :intent)
         (contains? ks :triage))    :intent-stated
 
@@ -341,15 +341,15 @@
    a human's gesture — and a merged workstream is done. Distinguish that from
    :human, which is a next action nobody but a person can take."
   {:intake            {:stage :establish-intent      :mode :authoring}
-   :intent-stated     {:stage :survey                :mode :authoring}
-   :surveyed          {:stage :verify-survey         :mode :mechanical}
-   :survey-verified   {:stage :design                :mode :authoring}
+   :intent-stated     {:stage :write-baseline        :mode :authoring}
+   :baselined          {:stage :verify-baseline         :mode :mechanical}
+   :baseline-verified   {:stage :design                :mode :authoring}
    :designed          {:stage :decide-design         :mode :mechanical}
    :design-decided    {:stage :approve-design        :mode :human}
    :design-approved   {:stage :implement             :mode :working-copy}
    :implemented       {:stage :review-implementation :mode :mechanical}
    :reviewed          {:stage :publish-draft-pr      :mode :working-copy}
-   :premise-retracted {:stage :resurvey              :mode :authoring}
+   :premise-retracted {:stage :rebaseline              :mode :authoring}
    :findings-open     {:stage :address-findings      :mode :working-copy}
    ;; The next phase is an implementation, and which one is read off the design's
    ;; :phases against how many :merged entries the ledger holds — a count, not a
@@ -467,7 +467,7 @@
    This is what makes a ledger readable. A baseline loop appends one review and
    one superseding survey PER ROUND, so a survey that converged in four rounds is
    eight rows of log — and read as a log, the eight say nothing the one says
-   better. Collapsed, it is `survey · 4 revisions · verified`, and the eight
+   better. Collapsed, it is `baseline · 4 revisions · verified`, and the eight
    entries are still underneath for anyone who wants them.
 
    Consecutive entries of one stage collapse into a single row; a stage RE-ENTERED
@@ -520,7 +520,7 @@
                          ;; implementation of it is a second answer.
                          :approved?      (boolean (:decided? st))
                          :decided?       (design-decided? project ws-id)
-                         :verified?      (survey-verified? project ws-id)})
+                         :verified?      (baseline-verified? project ws-id)})
           kind   (intake-kind w ks)]
       (cond->
        {:at     pos

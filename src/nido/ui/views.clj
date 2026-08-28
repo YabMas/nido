@@ -1342,8 +1342,8 @@
    vocabulary at somebody who only wants to know what is going on."
   {:intake            "Not started"
    :intent-stated     "Intent stated"
-   :surveyed          "Surveyed"
-   :survey-verified   "Survey verified"
+   :baselined          "Baselined"
+   :baseline-verified "Baseline verified"
    :designed          "Designed"
    :design-decided    "Decision made"
    :design-approved   "Approved"
@@ -1359,15 +1359,15 @@
 
 (def ^:private stage-label
   {:establish-intent      "establish intent"
-   :survey                "survey the area"
-   :verify-survey         "verify the survey"
+   :write-baseline        "write the baseline"
+   :verify-baseline       "verify the baseline"
    :design                "write the design"
    :decide-design         "decide on it"
    :approve-design        "your approval"
    :implement             "implement it"
    :review-implementation "review the diff"
    :publish-draft-pr      "open the draft PR"
-   :resurvey              "re-survey"
+   :rebaseline            "re-do the baseline"
    :address-findings      "address findings"
    :answer-blocker        "your answer"})
 
@@ -1551,9 +1551,9 @@
    (when foot [:div.hf foot])])
 
 (defn- holds-block
-  "The intent, the survey and the design that CURRENTLY hold.
+  "The intent, the baseline and the design that CURRENTLY hold.
 
-   Three cards, never three lists. A survey that took seven rounds appended seven
+   Three cards, never three lists. A baseline that took seven rounds appended seven
    superseding records and the reader wants the seventh; the other six are in the
    log below, marked superseded, exactly where they were. An absent record renders
    as an empty card rather than vanishing, so the shape of the arc is legible from
@@ -1565,7 +1565,7 @@
    one — which reads as a card that has nothing to say rather than one that
    was cut off. The text itself is collapsed rather than preserved — a record's
    line breaks come from the EDN a human typed, not from the prose."
-  [{:keys [intent survey design]}]
+  [{:keys [intent baseline design]}]
   [:div.holds
    (if intent
      (hold-card "intent" intent
@@ -1575,13 +1575,13 @@
                 (when (= :triage (:kind intent))
                   [:span.meta "from triage — the design may cite it"]))
      [:div.hold.empty [:div.hh [:span.hk "intent"]] [:div.hb "not stated"]])
-   (if survey
-     (hold-card "survey" survey
-                (or (get-in survey [:record :area]) "—")
-                (if (:verified? survey)
+   (if baseline
+     (hold-card "baseline" baseline
+                (or (get-in baseline [:record :area]) "—")
+                (if (:verified? baseline)
                   [:span.ok "✓ verified — a decision can be made against it"]
                   [:span.no "not verified — a design citing it cannot be decided"]))
-     [:div.hold.empty [:div.hh [:span.hk "survey"]] [:div.hb "not surveyed"]])
+     [:div.hold.empty [:div.hh [:span.hk "baseline"]] [:div.hb "no baseline yet"]])
    (if design
      (hold-card "design" design
                 (or (get-in design [:record :summary]) "—")

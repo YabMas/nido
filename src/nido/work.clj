@@ -664,7 +664,7 @@
          intent] (if-let [i (cws/latest-entry project ws-id :intent)]
                    [:intent i]
                    [:triage (cws/latest-entry project ws-id :triage)])
-        survey  (cws/latest-entry project ws-id :baseline)
+        baseline (cws/latest-entry project ws-id :baseline)
         design  (cws/latest-entry project ws-id :design)
         st      (when design (standing/of-design project ws-id design))]
     (cond-> {}
@@ -672,10 +672,11 @@
                              :kind i-kind
                              :revisions (n-of i-kind)
                              :record intent})
-      survey (assoc :survey {:seq (:seq survey) :at (:at survey)
-                             :revisions (n-of :baseline)
-                             :verified? (boolean (pipeline/survey-verified? project ws-id))
-                             :record survey})
+      baseline (assoc :baseline {:seq (:seq baseline) :at (:at baseline)
+                                 :revisions (n-of :baseline)
+                                 :verified? (boolean (pipeline/baseline-verified?
+                                                      project ws-id))
+                                 :record baseline})
       design (assoc :design {:seq (:seq design) :at (:at design)
                              :revisions (n-of :design)
                              ;; The premise this design cites, which need not be

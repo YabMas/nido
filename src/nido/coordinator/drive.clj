@@ -152,7 +152,7 @@
    A stage absent here is not fired, whatever its mode says. The projection can
    name a stage this phase cannot run — that is the normal case, and it parks
    rather than pretending."
-  {:verify-survey {:task 'tasks.nido-review/baseline-cmd* :label "baseline"}
+  {:verify-baseline {:task 'tasks.nido-review/baseline-cmd* :label "baseline"}
    :decide-design {:task 'tasks.nido-review/design-cmd*   :label "design"}})
 
 (defn fireable

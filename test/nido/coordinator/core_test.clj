@@ -827,14 +827,14 @@
   ;; The driver is the one part of nido that acts without being asked, so "it
   ;; ran and chose to do nothing" and "it never ran" have to be distinguishable
   ;; from outside.
-  (let [line (core/drive-log-line {:ws-id "ws-1" :at :surveyed
-                                   :fired :verify-survey :run-id "r-1"})]
+  (let [line (core/drive-log-line {:ws-id "ws-1" :at :baselined
+                                   :fired :verify-baseline :run-id "r-1"})]
     (is (str/includes? line "ws-1"))
-    (is (str/includes? line "firing verify-survey"))
+    (is (str/includes? line "firing verify-baseline"))
     (is (str/includes? line "r-1"))))
 
 (deftest an-actionable-skip-is-logged
-  (is (str/includes? (core/drive-log-line {:ws-id "ws-4" :at :surveyed
+  (is (str/includes? (core/drive-log-line {:ws-id "ws-4" :at :baselined
                                            :skipped :no-session})
                      "no-session")))
 
