@@ -201,7 +201,7 @@
 
 (defn- check-routes-total!
   "Every health observation on the cited `baseline` is routed exactly once by
-   `record`, none is invented, and none the survey marked invisibly incomplete is
+   `record`, none is invented, and none the baseline marked invisibly incomplete is
    spun out.
 
    This is what makes 'nothing is lost and nothing is smuggled' a property rather
@@ -212,7 +212,7 @@
    The spin-out veto is the sharp one. Invisible incompleteness — a half-applied
    invariant, a rule with silent exceptions — is exactly what must not be
    deferred, and a veto that depends on remembering to be principled fires when
-   you are fresh and not when you are tired. The survey flags it as an is-claim
+   you are fresh and not when you are tired. The baseline flags it as an is-claim
    about the code; the ledger refuses the deferral.
 
    An unparseable baseline yields no observations and so checks vacuously — the
@@ -316,9 +316,9 @@
 
    Four of them, and they arrived with this change: a :retraction's target and
    a :design-approved's design are new kinds entirely, while a design's and a
-   survey's :supersedes were both writable and neither was ever checked. That
+   baseline's :supersedes were both writable and neither was ever checked. That
    last pair is why this exists at all — :supersedes was the one citation in
-   the ledger nothing had an opinion about, recorded in the survey this change
+   the ledger nothing had an opinion about, recorded in the baseline this change
    was designed against as an invisibly-incomplete health observation."
   [w kind payload]
   (when (#{:retraction :design-approved :design :baseline} kind)
@@ -448,8 +448,8 @@
    `latest-entry` answers `the current one`, which is what almost every reader
    wants. This answers `was one ever written about THIS record` — the question a
    precondition asks, where the newest entry of a kind need not be the one about
-   the record in hand. A workstream can hold several surveys and several reviews
-   of them, and the review that matters is the one naming the survey you are
+   the record in hand. A workstream can hold several baselines and several reviews
+   of them, and the review that matters is the one naming the baseline you are
    standing on."
   [project ws-id kind]
   (if-let [w (read-ws project ws-id)]
@@ -465,7 +465,7 @@
    without the caller crashing.
 
    Exists because a design record cites its baseline by :seq, and 'the latest
-   baseline' is not the same thing — a workstream may survey twice, and the
+   baseline' is not the same thing — a workstream may baseline twice, and the
    design was judged against one of them specifically."
   [project ws-id seq-n]
   (when-let [w (read-ws project ws-id)]

@@ -117,7 +117,7 @@
   "Fields that said something and now say nothing.
 
    Every other detector here measures something with a natural cardinality —
-   how many modules, which ids, which file:line references. A survey's prose
+   how many modules, which ids, which file:line references. A baseline's prose
    fields have none, so blanking one is claiming less in the one way nothing
    counted: the schema types them `string?`, so \"\" validates, the ledger
    accepts it, and the round that follows has nothing left to refute.
@@ -136,7 +136,7 @@
                                (gone (str subject " " id "'s") p c fields)))
                            (sort-by key (by-id (get prev k))))))]
     (concat
-     (gone "the survey's" prev curr [:shape :composition :bounded-by :area])
+     (gone "the baseline's" prev curr [:shape :composition :bounded-by :area])
      (within :modules      "module" [:module :hides :interface])
      (within :load-bearing "claim"  [:property :falsified-by]))))
 
@@ -160,7 +160,7 @@
         ;; Readings are where the analysis lives, so losing one loses analysis
         ;; whatever the prose still says. There is no id on a claim to track a
         ;; reading through a rewrite, so what is counted is how many readings
-        ;; the survey carries and which perspectives it still applies at all —
+        ;; the baseline carries and which perspectives it still applies at all —
         ;; both of which survive an amender rewriting every word.
         readings (fn [b] (concat (mapcat :readings (:load-bearing b))
                                  (mapcat :readings (:modules b))))
@@ -208,7 +208,7 @@
         (retreat :health-dropped (str "observation " id " is no longer recorded")))
       ;; The veto is the whole reason :invisibly-incomplete? exists — an
       ;; observation carrying it can never be spun out. Clearing the flag is
-      ;; therefore not a survey correction with a side effect; it is the one
+      ;; therefore not a baseline correction with a side effect; it is the one
       ;; edit that converts a defect into a deferrable.
       (for [id (sort unveiled)]
         (retreat :veto-lifted
@@ -261,7 +261,7 @@
             :let [was (proutes hid)]
             :when (and was (= :fix-here was) (not= :fix-here to))]
         (retreat :route-deferred (str hid ": :fix-here → " to)))
-      ;; Same hole the survey had: these are typed `string?`, so a record whose
+      ;; Same hole the baseline had: these are typed `string?`, so a record whose
       ;; shape and summary say nothing at all is a record the ledger accepts and
       ;; nothing here counted. It does not quiet the round — the gate reads the
       ;; relations — so it is pure loss, which is the clearest case there is.

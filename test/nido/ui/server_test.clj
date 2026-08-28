@@ -641,6 +641,6 @@
   (let [msg (server/resolve-failure-msg
              {:decision :approval-refused
               :because {:reason :premise-retracted
-                        :detail "the survey at entry 2 was retracted by entry 9"}})]
+                        :detail "the baseline at entry 2 was retracted by entry 9"}})]
     (is (str/includes? msg "no longer stands"))
     (is (str/includes? msg "entry 9") "naming the entry is what a reader can act on")))

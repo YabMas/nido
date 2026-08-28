@@ -845,7 +845,7 @@
         (str k " is the level this record exists to operate at")))
   (is (thrown? clojure.lang.ExceptionInfo
                (report/validate-event :baseline (assoc valid-baseline :modules [])))
-      "a survey with no modules has described an implementation"))
+      "a baseline with no modules has described an implementation"))
 
 (deftest a-module-must-say-what-it-hides
   (is (thrown? clojure.lang.ExceptionInfo
@@ -854,7 +854,7 @@
                                  :modules [{:id "mod-calc" :module "calc" :interface "amounts"}])))
       "a module that hides nothing is a file"))
 
-(deftest a-survey-from-the-kind-era-still-reads
+(deftest a-baseline-from-the-kind-era-still-reads
   ;; Its era lasted hours and a record was written in it. A schema tightened
   ;; without a read shape does not error — latest-entry swallows the parse
   ;; failure, so the record stops being there.
@@ -881,7 +881,7 @@
     (doseq [[label rec] {"current" current "kind-era" kind-era "legacy" legacy}]
       (is (some? (report/parse-event :baseline rec)) (str label " must read")))))
 
-(deftest a-survey-from-the-kind-era-still-reads
+(deftest a-baseline-from-the-kind-era-still-reads
   ;; Its era lasted hours and a record was written in it — by someone else, on a
   ;; live workstream, minutes before the schema moved under them. A tightening
   ;; without a read shape does not error: latest-entry swallows the parse
@@ -909,7 +909,7 @@
     (doseq [[label rec] {"current" valid-baseline "kind-era" kind-era "legacy" legacy}]
       (is (some? (report/parse-event :baseline rec)) (str label " must read")))))
 
-(deftest a-survey-written-before-the-level-moved-still-reads
+(deftest a-baseline-written-before-the-level-moved-still-reads
   ;; Entries are immutable, so the question is whether it was valid when written.
   (let [legacy (-> valid-baseline
                    (dissoc :modules :composition)
@@ -972,10 +972,10 @@
     (is (not (str/includes? md "\n\n\n"))
         "an absent optional leaves no blank hole where its line would have been")))
 
-;; ── Health — what the survey ran into ───────────────────────────────────────
+;; ── Health — what the baseline ran into ───────────────────────────────────────
 ;; The one field of the baseline that is a judgement rather than a reading, and
 ;; still an `is`. Its job is to make "leave the place cleaner than you found it"
-;; a record rather than a virtue, without letting the survey start routing.
+;; a record rather than a virtue, without letting the baseline start routing.
 
 (def ^:private healthy-baseline
   (assoc valid-baseline
@@ -998,7 +998,7 @@
 
 (deftest health-is-optional
   (is (= valid-baseline (report/validate-event :baseline valid-baseline))
-      "a survey that ran into nothing worth recording is legitimate; the smell
+      "a baseline that ran into nothing worth recording is legitimate; the smell
        lives in the skill, not in the schema"))
 
 (deftest health-observation-requires-an-axis
@@ -1050,7 +1050,7 @@
 
 (deftest report->markdown-baseline-groups-health-by-axis
   (let [md (report/report->markdown healthy-baseline)]
-    (is (str/includes? md "## Health — what the survey ran into"))
+    (is (str/includes? md "## Health — what the baseline ran into"))
     (is (str/includes? md "### Design health"))
     (is (str/includes? md "### Implementation health"))
     (is (str/includes? md "`invoice-resums`"))
@@ -1081,7 +1081,7 @@
 (deftest baseline-titles-itself-by-area
   (is (= "Baseline: order totalling — calc, the aggregate, and the invoice reader"
          (report/report-title valid-baseline))
-      "the ledger index shows what was surveyed, not the first line of its shape")
+      "the ledger index shows what was baselined, not the first line of its shape")
   (is (= "Baseline: order totalling"
          (report/report-title (assoc valid-baseline :area "order totalling\nand its readers")))
       "one line per entry — the index is a table, and :area is prose that wraps"))
@@ -1137,7 +1137,7 @@
     (is (= r (report/parse-event :design r)) label)))
 
 ;; ── Routes — the other half of "the baseline never routes" ──────────────────
-;; The survey observes and cannot route; the design routes and cannot observe.
+;; The baseline observes and cannot route; the design routes and cannot observe.
 ;; The schema's job here is the asymmetry: doing the work needs no defence,
 ;; every form of not-doing-it-here does.
 
@@ -1387,7 +1387,7 @@
     (is (not (str/includes? md "How this was arrived at")))))
 
 (deftest the-depth-lens-says-what-an-interface-is
-  ;; Two consecutive live rounds disagreed on nothing else: the survey counted
+  ;; Two consecutive live rounds disagreed on nothing else: the baseline counted
   ;; what callers depend on, the judge counted what the namespace publishes, and
   ;; both were right about different things.
   (let [q (:question (:ousterhout/depth report/lenses))]
@@ -1417,8 +1417,8 @@
     (is (thrown? Exception (report/entry-payload :design-approved (pr-str (dissoc ok :at-seq)))))
     (is (thrown? Exception (report/entry-payload :design-approved (pr-str (dissoc ok :design)))))))
 
-(deftest a-survey-may-name-the-survey-it-corrects-and-need-not
-  ;; Optional is the load-bearing half: every survey already written carries
+(deftest a-baseline-may-name-the-baseline-it-corrects-and-need-not
+  ;; Optional is the load-bearing half: every baseline already written carries
   ;; none, and that absence is what stops a reader inferring the edge from
   ;; append order.
   (let [b {:format :baseline :area "a" :bounded-by "b" :shape "s"
@@ -1439,7 +1439,7 @@
   {:format :blocker
    :summary "the decision round could not settle the decomposition"
    :needs   "which way to cut phase three"
-   :tried   [{:stage :verify-survey :outcome :sufficient :rounds 7}
+   :tried   [{:stage :verify-baseline :outcome :sufficient :rounds 7}
              {:stage :decide-design :outcome :disputed :rounds 4
               :detail "decomposable, raised three rounds running"}]
    :options [{:label "recut" :summary "split the layer"}

@@ -45,7 +45,7 @@
 
 ;; ── The premise the round stands on ─────────────────────────────────────────
 ;;
-;; Three of the four derivations are made AGAINST the survey, so a survey nobody
+;; Three of the four derivations are made AGAINST the baseline, so a baseline nobody
 ;; verified makes them worthless in a way the round cannot see from inside: its
 ;; only honest exit is :resurvey. The first workstream to run this loop took that
 ;; exit seven times out of seven and never reached a decision, paying for a full
@@ -64,18 +64,18 @@
 (deftest an-undecidable-premise-becomes-the-round-s-outcome
   (let [out (gate-says {:decidable? false
                         :blocked {:reason :premise-unverified :seq 1
-                                  :detail "the design cites the survey at entry 1, and no round has found that survey sufficient"}})]
+                                  :detail "the design cites the baseline at entry 1, and no round has found that baseline sufficient"}})]
     (is (= :premise-unverified (:outcome out)))
     (is (str/includes? (:detail out) "entry 1")
-        "which survey went unverified is the whole of what the reader has to act on")))
+        "which baseline went unverified is the whole of what the reader has to act on")))
 
 (deftest a-retracted-premise-keeps-its-own-name
-  ;; Not collapsed to :premise-unverified. A survey nobody checked and a survey
+  ;; Not collapsed to :premise-unverified. A baseline nobody checked and a baseline
   ;; somebody found false want different things from a reader, and the remedy
   ;; line is chosen by this keyword.
   (let [out (gate-says {:decidable? false
                         :blocked {:reason :premise-retracted :seq 9
-                                  :detail "the survey at entry 1 was retracted by entry 9"}})]
+                                  :detail "the baseline at entry 1 was retracted by entry 9"}})]
     (is (= :premise-retracted (:outcome out)))
     (is (str/includes? (:detail out) "entry 9"))))
 
@@ -85,7 +85,7 @@
       "an unapproved design is decidable — approval comes after this round, and a
        gate that wanted it first would make the round unreachable"))
 
-(deftest a-design-citing-no-survey-is-not-gated
+(deftest a-design-citing-no-baseline-is-not-gated
   (with-redefs [standing/of-design (fn [& _] (throw (ex-info "must not be asked" {})))]
     (is (nil? (record/unverified-premise :nido "ws-1" (dissoc a-design :baseline)))
         "there is no premise to verify, and the prompt says so")))
@@ -108,7 +108,7 @@
     (is (zero? @launched)
         "the answer is in nido's own ledger; paying an agent to rediscover it is the defect")
     ;; The control, and it is what makes the assertion above mean anything: with
-    ;; the survey verified the same call DOES reach the judge, so a zero count is
+    ;; the baseline verified the same call DOES reach the judge, so a zero count is
     ;; the gate refusing rather than the seam failing to bite.
     (is (= :no-output (:outcome (run [{:format :baseline-review
                                        :verdict :sufficient :baseline-seq 1}]))))
@@ -302,7 +302,7 @@
 (deftest the-amender-is-told-the-number-it-is-asked-to-cite
   ;; The record below the instruction is printed unstamped — a :seq is the
   ;; ledger's to give and a record carrying one is refused on write — so an
-  ;; amender told to cite the corrected survey by :seq and shown no :seq
+  ;; amender told to cite the corrected baseline by :seq and shown no :seq
   ;; anywhere was being asked to guess the one field the ledger checks.
   (let [[_ prompt _]
         (with-resurvey {:nested :sufficient}
@@ -310,7 +310,7 @@
                               :record (decision :resurvey)))]
     (is (str/includes? prompt "Set :baseline :seq to 11"))))
 
-(deftest an-unstamped-corrected-survey-does-not-invent-a-number
+(deftest an-unstamped-corrected-baseline-does-not-invent-a-number
   ;; Degraded read-back: better to say "the corrected baseline" than to name an
   ;; entry that is not the one on disk.
   (let [[_ prompt _]
@@ -322,7 +322,7 @@
     (is (str/includes? prompt "Point :baseline :seq at the corrected baseline"))))
 
 (deftest the-design-amender-is-told-not-to-restate-what-held
-  ;; Same churn guard the survey amender has, and for a sharper reason: every
+  ;; Same churn guard the baseline amender has, and for a sharper reason: every
   ;; check is re-derived over the whole record, so a rewritten neighbour can
   ;; break a derivation that was passing.
   (let [[_ prompt _]
@@ -334,7 +334,7 @@
 (deftest a-resurvey-is-only-half-the-repair
   ;; The failure this catches: discover-baseline resolves the CITED baseline, so
   ;; repairing the latest one changes nothing the next round can see. The design
-  ;; would be judged against the same stale survey, reach the same verdict, and
+  ;; would be judged against the same stale baseline, reach the same verdict, and
   ;; re-survey until the cap.
   (let [repointed (assoc a-design :baseline {:seq 11 :relation :extends :note "n"})
         [out prompt appended]
@@ -345,7 +345,7 @@
     (is (nil? (:status out)) "the round continues once the design is re-stated")
     (is (some? appended) "and the design is what gets superseded")
     (is (= 11 (get-in (read-string appended) [:baseline :seq])))
-    (testing "the amender sees the CORRECTED survey, not the one that was wrong"
+    (testing "the amender sees the CORRECTED baseline, not the one that was wrong"
       (is (str/includes? prompt "PREMISE was wrong"))
       ;; By its content, not by its :seq — the stamp is the reader's and is
       ;; stripped before the record is shown, precisely so it can be written back.
@@ -370,14 +370,14 @@
       (run record/design-amend-stage
            (assoc (ctx :findings []) :record (decision :resurvey)))
       (is (= {:format :baseline :seq 8} (:baseline @seen))
-          "the nested loop repairs the survey the design CITES, not the newest one")
+          "the nested loop repairs the baseline the design CITES, not the newest one")
       (is (= record/baseline-pipeline (:pipeline @seen)))
       (is (= record/baseline-finding-key (:finding-key @seen)))
       (is (fn? (:emit @seen)))
       (is (nil? ((:emit @seen) {:event :phase-started}))))))
 
 (deftest a-resurvey-that-did-not-hold-is-terminal-here
-  ;; A design round cannot proceed on a survey the baseline loop could not make
+  ;; A design round cannot proceed on a baseline the baseline loop could not make
   ;; true; re-judging against it would build a decision on the failed premise.
   (doseq [s [:retreated :no-progress :amend-noop]]
     (with-redefs [rloop/run-loop (fn [_] {:status s})
@@ -391,7 +391,7 @@
 
 (deftest re-surveying-is-not-capped
   ;; A re-survey is only half a repair: the design is re-stated against the
-  ;; corrected survey afterwards, so every cycle changes the record the next
+  ;; corrected baseline afterwards, so every cycle changes the record the next
   ;; round judges. A count would stop the loop while it was still making
   ;; progress, which is the one thing a convergence loop must not do — the
   ;; engine's stall detector is what ends a run that has stopped getting

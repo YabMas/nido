@@ -15,7 +15,7 @@
         (f tmp))
       (finally (fs/delete-tree tmp)))))
 
-(def ^:private a-survey
+(def ^:private a-baseline
   {:format :baseline :area "order totalling" :bounded-by "money on an order"
    :shape "one summing path"
    :modules [{:id "agg" :module "the aggregate" :hides "the summing order"
@@ -46,11 +46,11 @@
           (ws/append-entry! :brian id {:kind kind} (pr-str record))
           (count (:entries (ws/read-ws :brian id))))]))
 
-(deftest a-design-on-a-verified-survey-is-decidable-and-not-yet-decided
+(deftest a-design-on-a-verified-baseline-is-decidable-and-not-yet-decided
   (with-tmp
     (fn [_]
       (let [[id add] (ledger)
-            b (add :baseline a-survey)
+            b (add :baseline a-baseline)
             _ (add :baseline-review {:format :baseline-review :verdict :sufficient
                                      :baseline-seq b :reason "it holds"})
             d (add :design (a-design b))
@@ -64,7 +64,7 @@
   (with-tmp
     (fn [_]
       (let [[id add] (ledger)
-            b (add :baseline a-survey)
+            b (add :baseline a-baseline)
             _ (add :baseline-review {:format :baseline-review :verdict :sufficient
                                      :baseline-seq b :reason "ok"})
             d (add :design (a-design b))
@@ -79,7 +79,7 @@
   (with-tmp
     (fn [_]
       (let [[id add] (ledger)
-            b (add :baseline a-survey)
+            b (add :baseline a-baseline)
             _ (add :baseline-review {:format :baseline-review :verdict :sufficient
                                      :baseline-seq b :reason "ok"})
             d (add :design (a-design b))
@@ -96,21 +96,21 @@
         (is (= :premise-retracted (:reason (:blocked st))))
         (is (= r (:seq (:blocked st))) "the refusal names the entry responsible")))))
 
-(deftest a-corrected-survey-does-not-block-and-is-reported-as-the-way-back
-  ;; Supersession never blocks: a survey corrected but not retracted still
+(deftest a-corrected-baseline-does-not-block-and-is-reported-as-the-way-back
+  ;; Supersession never blocks: a baseline corrected but not retracted still
   ;; stands. The correction only tells a stuck design what would re-establish it.
   (with-tmp
     (fn [_]
       (let [[id add] (ledger)
-            b1 (add :baseline a-survey)
+            b1 (add :baseline a-baseline)
             d  (add :design (a-design b1))
-            b2 (add :baseline (assoc a-survey :area "corrected"
+            b2 (add :baseline (assoc a-baseline :area "corrected"
                                      :supersedes {:seq b1 :why "refuted"}))
             _  (add :baseline-review {:format :baseline-review :verdict :sufficient
                                       :baseline-seq b2 :reason "ok"})
             st (standing/of-design :brian id (ws/entry-at-seq :brian id d))]
         (is (false? (:decidable? st))
-            "the survey it CITES was never found sufficient — the correction's
+            "the baseline it CITES was never found sufficient — the correction's
              verdict is about a different entry")
         (is (= :premise-unverified (:reason (:blocked st))))
         (is (= b2 (:replaced-by (:blocked st)))
@@ -121,18 +121,18 @@
   (with-tmp
     (fn [_]
       (let [[id add] (ledger)
-            b1 (add :baseline a-survey)
+            b1 (add :baseline a-baseline)
             d  (add :design (a-design b1))
-            b2 (add :baseline (assoc a-survey :area "second"
+            b2 (add :baseline (assoc a-baseline :area "second"
                                      :supersedes {:seq b1 :why "r"}))
-            b3 (add :baseline (assoc a-survey :area "third"
+            b3 (add :baseline (assoc a-baseline :area "third"
                                      :supersedes {:seq b2 :why "r"}))
-            _  (add :baseline (assoc a-survey :area "an unrelated later survey"))
+            _  (add :baseline (assoc a-baseline :area "an unrelated later baseline"))
             st (standing/of-design :brian id (ws/entry-at-seq :brian id d))]
         (is (= b3 (:replaced-by (:premise st)))
             "the chain is followed to its end")
         (is (not= b3 (inc b3)))
-        (testing "and a survey citing nothing yields no replacement, however new"
+        (testing "and a baseline citing nothing yields no replacement, however new"
           (let [st2 (standing/of-design
                      :brian id (assoc (a-design 999) :seq 999))]
             (is (nil? (:replaced-by (:premise st2))))))))))
@@ -144,7 +144,7 @@
   (with-tmp
     (fn [_]
       (let [[id add] (ledger)
-            b (add :baseline a-survey)
+            b (add :baseline a-baseline)
             _ (add :baseline-review {:format :baseline-review :verdict :sufficient
                                      :baseline-seq b :reason "ok"})
             d (add :design (a-design b))
@@ -158,15 +158,15 @@
           (is (= :unreadable-ledger (:reason (:blocked st))))
           (is (not (:decidable? st)) "and an indeterminate standing blocks"))))))
 
-(deftest a-review-of-a-different-survey-does-not-verify-this-one
-  ;; A workstream holds several surveys and several reviews. The one that counts
-  ;; names the survey the design stands on — reading "the latest review" would
-  ;; let a survey of another area vouch for this one.
+(deftest a-review-of-a-different-baseline-does-not-verify-this-one
+  ;; A workstream holds several baselines and several reviews. The one that counts
+  ;; names the baseline the design stands on — reading "the latest review" would
+  ;; let a baseline of another area vouch for this one.
   (with-tmp
     (fn [_]
       (let [[id add] (ledger)
-            b1 (add :baseline a-survey)
-            b2 (add :baseline (assoc a-survey :area "a different area"))
+            b1 (add :baseline a-baseline)
+            b2 (add :baseline (assoc a-baseline :area "a different area"))
             d  (add :design (a-design b1))
             _  (add :baseline-review {:format :baseline-review :verdict :sufficient
                                       :baseline-seq b2 :reason "the other one holds"})
@@ -190,14 +190,14 @@
     (ws/write! (update w :entries conj {:kind kind :seq n :at "2026-01-01T00:00:00Z" :file f}))
     n))
 
-(deftest a-survey-checked-under-the-older-question-was-still-checked
+(deftest a-baseline-checked-under-the-older-question-was-still-checked
   ;; :accurate is what :sufficient replaced, and it is read-only now — a ledger
   ;; carrying one was verified, and re-asking it under the newer question is the
   ;; baseline loop's business, not a reason to refuse to decide against it.
   (with-tmp
     (fn [_]
       (let [[id add] (ledger)
-            b (add :baseline a-survey)
+            b (add :baseline a-baseline)
             _ (add-from-an-older-era! id :baseline-review
                                       {:format :baseline-review :verdict :accurate
                                        :baseline-seq b :reason "ok"})

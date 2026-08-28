@@ -52,7 +52,7 @@
                          :standing {:decidable? false :decided? false
                                     :blocked {:reason :premise-retracted :seq 9
                                               :replaced-by 12
-                                              :detail "the survey at entry 2 was retracted by entry 9"}}})]
+                                              :detail "the baseline at entry 2 was retracted by entry 9"}}})]
     (is (= 1 code))
     (is (str/includes? out "entry 9") "the entry responsible")
     (is (str/includes? out "found it FALSE") "and that this is not mere staleness")

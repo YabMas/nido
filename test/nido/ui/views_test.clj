@@ -1152,14 +1152,14 @@
   [record]
   (views/workstream-pane (assoc sample-ws :report record) {}))
 
-(deftest a-survey-that-holds-is-not-told-to-re-survey
+(deftest a-baseline-that-holds-is-not-told-to-re-survey
   ;; The guard named :accurate, the verdict that :sufficient replaced, so the
   ;; EXPECTED outcome of every run rendered with "Re-survey" printed under it.
   (let [html (baseline-review-pane {:format :baseline-review :verdict :sufficient
                            :baseline-seq 3 :reason "it holds"})]
     (is (not (str/includes? html "Re-survey")))))
 
-(deftest a-falsified-survey-still-is
+(deftest a-falsified-baseline-still-is
   (let [html (baseline-review-pane {:format :baseline-review :verdict :falsified
                            :baseline-seq 3 :reason "no"
                            :findings [{:cites ["c"] :claim "x"}]})]
@@ -1171,7 +1171,7 @@
                            :baseline-seq 3 :reason "true, and not enough"
                            :findings [{:blocks :decomposable :cites ["c"] :claim "x"
                                        :needs "what the renderer hides"}]})]
-    (is (str/includes? html "Derivations this survey cannot support"))
+    (is (str/includes? html "Derivations this baseline cannot support"))
     (is (str/includes? html "decomposable"))
     (is (str/includes? html "what the renderer hides"))
     (is (not (str/includes? html "Claims the code does not support")))))
@@ -1179,7 +1179,7 @@
 ;; ── The pane leads with what currently holds ────────────────────────────────
 
 (def ^:private a-pane
-  "A workstream mid-arc: a survey that took four revisions and held, a design
+  "A workstream mid-arc: a baseline that took four revisions and held, a design
    approved on it. The shape the pane exists to make legible."
   {:ws-id "ws-1" :project "nido" :origin :notion :stage :in-progress
    :label "the pipeline"
@@ -1221,7 +1221,7 @@
     (is (str/includes? html "nothing committed to"))
     (is (str/includes? html "hold empty"))))
 
-(deftest an-unverified-survey-says-what-it-costs
+(deftest an-unverified-baseline-says-what-it-costs
   (let [html (views/workstream-pane
               (assoc-in a-pane [:holds :baseline :verified?] false) {})]
     (is (str/includes? html "not verified"))
@@ -1240,7 +1240,7 @@
   (let [html (views/workstream-pane
               (assoc a-pane :entries
                      [{:seq 2 :kind :baseline :at "2026-08-01T00:00:00Z"
-                       :title "survey" :superseded-by 4}])
+                       :title "baseline" :superseded-by 4}])
               {})]
     (is (str/includes? html "ledger-index"))
     (is (str/includes? html "superseded by 4"))))
@@ -1258,7 +1258,7 @@
 
 (deftest a-row-states-its-position-and-what-would-move-it
   ;; The band could not: everything from authoring an intent to opening a draft
-  ;; PR is :in-progress, so rows waiting on a survey, on a decision and on a
+  ;; PR is :in-progress, so rows waiting on a baseline, on a decision and on a
   ;; person all read the same.
   (let [html (str (h/html (board-row {:at :baseline-verified
                                       :next {:stage :design :mode :authoring}})))]
@@ -1288,7 +1288,7 @@
 
 (deftest the-standing-records-are-stacked-and-shown-whole
   ;; Three columns fitted the cards on screen at the cost of the thing they are
-  ;; for: a survey's area or a design's summary runs to several sentences, and a
+  ;; for: a baseline's area or a design's summary runs to several sentences, and a
   ;; narrow column clamped at four lines showed a fragment — which reads as a
   ;; card with nothing to say rather than one that was cut off.
   ;;

@@ -97,7 +97,7 @@
       (is (str/includes? p "refuted by: a caller outside the aggregate"))
       (is (str/includes? p "read as parnas/dependency = on-interface")))
     (testing "and the perspectives themselves, so both sides read a verdict alike"
-      (is (str/includes? p "THE PERSPECTIVES THIS SURVEY IS READ THROUGH"))
+      (is (str/includes? p "THE PERSPECTIVES THIS BASELINE IS READ THROUGH"))
       (is (str/includes? p "from Out of the Tar Pit"))
       (is (str/includes? p "A READING IS A CLAIM TOO")))
     (testing "the refs are still handed over, as where to look"
@@ -109,16 +109,16 @@
         "a declared unknown is honesty already recorded, not a finding to make")))
 
 (deftest the-baseline-prompt-refuses-the-plane-that-never-converges
-  ;; The failure this is aimed at: asked to check a survey against a large
+  ;; The failure this is aimed at: asked to check a baseline against a large
   ;; subsystem, a judge finds true things about it forever. An implementation
   ;; has no fixed point; a decomposition does.
   (let [p (record/baseline-prompt {:baseline baseline})]
     (is (str/includes? p "not reviewing the code for\ndefects"))
     (is (str/includes? p "belongs to code\nreview"))
     (is (str/includes? p "does that specific counterexample exist"))
-    (is (str/includes? p "Neither is a finding that reports a bug in code the survey"))))
+    (is (str/includes? p "Neither is a finding that reports a bug in code the baseline"))))
 
-(deftest a-survey-from-before-the-move-still-makes-a-prompt
+(deftest a-baseline-from-before-the-move-still-makes-a-prompt
   ;; Legacy records are readable, so a round over one has to be too — it simply
   ;; has no decomposition to ask about.
   (let [p (record/baseline-prompt
@@ -149,10 +149,10 @@
     (is (str/includes? p "You do not make the decision"))
     (is (str/includes? p "Never answer it yourself"))))
 
-(deftest the-decision-prompt-shows-the-survey-it-derives-against
-  ;; The defect this is aimed at: the prompt named the survey's modules,
+(deftest the-decision-prompt-shows-the-baseline-it-derives-against
+  ;; The defect this is aimed at: the prompt named the baseline's modules,
   ;; extension points and health observations in its instructions and printed
-  ;; none of them. A judge cannot tell "the survey does not say" from "I was not
+  ;; none of them. A judge cannot tell "the baseline does not say" from "I was not
   ;; shown it", the only recommendation that fits the first is :resurvey, and
   ;; that is what one workstream got seven times running without ever reaching a
   ;; decision.
@@ -176,11 +176,11 @@
     (testing "a claim keeps what would refute it, not just where to look"
       (is (str/includes? p "refuted by: a caller outside the aggregate"))
       (is (str/includes? p "src/order/aggregate.clj:12")))
-    (testing "and what the survey already declared it did not determine"
+    (testing "and what the baseline already declared it did not determine"
       (is (str/includes? p "DECLARED NOT DETERMINED"))
       (is (str/includes? p "whether the CSV importer bypasses the aggregate")))))
 
-(deftest a-survey-from-before-the-move-still-makes-a-decision-prompt
+(deftest a-baseline-from-before-the-move-still-makes-a-decision-prompt
   (let [p (record/design-prompt
            {:design design
             :baseline (dissoc baseline :modules :composition :health
@@ -188,7 +188,7 @@
     (is (not (str/includes? p "MODULES —")))
     (is (not (str/includes? p "EXTENSION POINTS")))
     (is (str/includes? p "the aggregate is the only summing path")
-        "what the legacy survey does carry is still shown")))
+        "what the legacy baseline does carry is still shown")))
 
 (deftest the-decision-prompt-survives-a-design-with-no-baseline-or-stance
   (is (string? (record/design-prompt {:design design}))
@@ -399,35 +399,35 @@
     (is (str/includes? p "predates the rule"))
     (is (str/includes? p "treat\na claim you cannot see any way to refute as a finding")
         "and the gap becomes something to report rather than something to ignore")
-    (is (not (str/includes? p "THE PERSPECTIVES THIS SURVEY IS READ THROUGH"))
+    (is (not (str/includes? p "THE PERSPECTIVES THIS BASELINE IS READ THROUGH"))
         "a vocabulary nothing is read through is noise in the prompt")
     (is (not (str/includes? p "A READING IS A CLAIM TOO")))))
 
 (deftest a-decomposition-with-no-analysis-is-told-to-report-itself
-  ;; The gap this closes was watched, not imagined: the first survey authored in
+  ;; The gap this closes was watched, not imagined: the first baseline authored in
   ;; this shape carried five modules and zero readings. Gating the vocabulary on
-  ;; readings BEING there hid it from exactly the survey that needed it.
+  ;; readings BEING there hid it from exactly the baseline that needed it.
   (let [no-readings (update baseline :load-bearing
                             (fn [lb] (mapv #(dissoc % :readings) lb)))
         p (record/baseline-prompt {:baseline no-readings})]
     (is (str/includes? p "READS NOTHING THROUGH ANY PERSPECTIVE"))
     (is (str/includes? p "Report that as UNDERSCOPED"))
-    (is (str/includes? p "THE PERSPECTIVES THIS SURVEY IS READ THROUGH")
+    (is (str/includes? p "THE PERSPECTIVES THIS BASELINE IS READ THROUGH")
         "the vocabulary is shown, because this record could carry it")
     (is (not (str/includes? p "A READING IS A CLAIM TOO"))
         "and it is not told to check readings it does not have")))
 
-(deftest a-survey-that-cannot-carry-readings-is-not-nagged-about-them
+(deftest a-baseline-that-cannot-carry-readings-is-not-nagged-about-them
   (let [legacy (dissoc baseline :modules :composition)
         p (record/baseline-prompt {:baseline legacy})]
     (is (not (str/includes? p "READS NOTHING THROUGH ANY PERSPECTIVE")))
-    (is (not (str/includes? p "THE PERSPECTIVES THIS SURVEY IS READ THROUGH")))))
+    (is (not (str/includes? p "THE PERSPECTIVES THIS BASELINE IS READ THROUGH")))))
 
-(deftest a-current-survey-still-gets-the-full-apparatus
+(deftest a-current-baseline-still-gets-the-full-apparatus
   (let [p (record/baseline-prompt {:baseline baseline})]
     (is (str/includes? p "each with the\ncounterexample that would refute it"))
     (is (str/includes? p "refuted by: a caller outside the aggregate"))
-    (is (str/includes? p "THE PERSPECTIVES THIS SURVEY IS READ THROUGH"))))
+    (is (str/includes? p "THE PERSPECTIVES THIS BASELINE IS READ THROUGH"))))
 
 ;; ── Insufficiency has to name what it blocks ────────────────────────────────
 
@@ -437,7 +437,7 @@
                            :confirmed []
                            :findings [{:blocks "decomposable"
                                        :cites ["the aggregate is the only summing path"]
-                                       :claim "the survey never says where rounding is decided"
+                                       :claim "the baseline never says where rounding is decided"
                                        :needs "which module owns the rounding decision"
                                        :evidence ["src/order/calc.clj:41"]}]})
            3)]
@@ -504,7 +504,7 @@
 
 (deftest a-confirmation-identifies-a-claim-rather-than-describing-it
   ;; Measured on a live run: five rounds produced 29 DISTINCT confirmation
-  ;; strings for a survey of 13 claims and modules. Each round reworded them, so
+  ;; strings for a baseline of 13 claims and modules. Each round reworded them, so
   ;; the list carried forward could not be matched to anything and the judge
   ;; re-examined what it had already settled.
   (let [r (record/parse-baseline-review

@@ -676,7 +676,7 @@
 ;; ── Following a citation ───────────────────────────────────────────────────
 
 (deftest entry-at-seq-follows-the-citation-not-the-latest
-  ;; A workstream may survey twice. The design was judged against ONE of them,
+  ;; A workstream may baseline twice. The design was judged against ONE of them,
   ;; and handing a later baseline to the review would check the change against a
   ;; yardstick its author never saw.
   (with-tmp
@@ -684,10 +684,10 @@
       (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
         (ws/append-entry! :brian (:id w) {:kind :baseline} (pr-str a-baseline))
         (ws/append-entry! :brian (:id w) {:kind :baseline}
-                          (pr-str (assoc a-baseline :area "a second, wider survey")))
+                          (pr-str (assoc a-baseline :area "a second, wider baseline")))
         (is (= "order totalling" (:area (ws/entry-at-seq :brian (:id w) 1))))
-        (is (= "a second, wider survey" (:area (ws/entry-at-seq :brian (:id w) 2))))
-        (is (= "a second, wider survey" (:area (ws/latest-entry :brian (:id w) :baseline)))
+        (is (= "a second, wider baseline" (:area (ws/entry-at-seq :brian (:id w) 2))))
+        (is (= "a second, wider baseline" (:area (ws/latest-entry :brian (:id w) :baseline)))
             "latest and cited genuinely differ here — which is why the reader
              following a :seq cannot be latest-entry")
         (is (nil? (ws/entry-at-seq :brian (:id w) 9))
@@ -712,7 +712,7 @@
             "a retraction naming no entry")
         (is (some? (add :retraction {:format :retraction :retracts {:seq 1}
                                      :because "b" :evidence ["src/a.clj:1"]}))
-            "and one naming a real survey is fine")
+            "and one naming a real baseline is fine")
         (is (thrown-with-msg?
              clojure.lang.ExceptionInfo #"Approval cites entry 1, which is a :baseline"
              (add :design-approved {:format :design-approved :design {:seq 1} :at-seq 2}))
@@ -720,9 +720,9 @@
         (is (thrown-with-msg?
              clojure.lang.ExceptionInfo #"Baseline :supersedes cites entry 2"
              (add :baseline (assoc a-baseline :supersedes {:seq 2 :why "corrected"})))
-            "a survey correcting a retraction is not a correction")
+            "a baseline correcting a retraction is not a correction")
         (is (some? (add :baseline (assoc a-baseline :supersedes {:seq 1 :why "corrected"})))
-            "a survey correcting a survey is")))))
+            "a baseline correcting a baseline is")))))
 
 (deftest a-citation-standing-never-reads-is-left-alone
   ;; Validating every number in the ledger is a different change, and one the

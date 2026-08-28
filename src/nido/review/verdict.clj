@@ -32,13 +32,13 @@
    change RESPECTED its declared relation is a claim about the change: it said
    :within, so every load-bearing property should still stand. Whether the
    baseline was ACCURATE is a claim about the premise, and a design can be sound
-   while resting on a survey that was wrong — a different failure with a different
+   while resting on a baseline that was wrong — a different failure with a different
    remedy, which is why it gets its own classification rather than being rounded
    to the design being wrong."
   [baseline relation]
   (when baseline
     (str "\nWHAT THE AREA ALREADY WAS — the baseline this change was judged\n"
-         "against, surveyed BEFORE the design was written. These are properties\n"
+         "against, baselined BEFORE the design was written. These are properties\n"
          "the code relied on beforehand, with where they were read:\n"
          (str/join "\n"
                    (map #(str "- " (:property %)
@@ -60,7 +60,7 @@
          "   what it said it was — report it in load_bearing_broken. A property\n"
          "   the change named and broke on purpose is NOT a finding.\n"
          "2. Was the baseline right? If a finding shows a stated property is\n"
-         "   simply not true of the code, the design may be sound and the SURVEY\n"
+         "   simply not true of the code, the design may be sound and the BASELINE\n"
          "   wrong. Classify that finding as \"baseline\" — it means re-survey,\n"
          "   not redesign, and the two must not be confused.\n"
          "Populate load_bearing_held with the properties this round confirmed\n"

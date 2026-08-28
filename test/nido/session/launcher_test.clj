@@ -640,13 +640,13 @@
   (with-redefs [nido.core/nido-source-dir (fn [] "/opt/nido")]
     (is (= ["/opt/nido"] (launcher/nido-add-dirs)))))
 
-(deftest shipping-doctrine-tells-a-session-to-survey-first
+(deftest shipping-doctrine-tells-a-session-to-baseline-first
   ;; The doctrine text is the only part of this that reaches a session that never
   ;; invokes /design. If the baseline step is not stated here, nothing asks for
   ;; one and the schema requirement lands as an error at the moment of filing —
   ;; too late to have changed how the work was done.
   (let [d @#'launcher/shipping-doctrine-instructions]
-    (is (str/includes? d "Survey before you decide"))
+    (is (str/includes? d "Baseline before you decide"))
     (is (str/includes? d "BEFORE the design and independent of it"))
     (is (str/includes? d "fillable without knowing the\n  change")
         "the test for what belongs in a baseline, not just its name")

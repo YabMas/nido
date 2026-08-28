@@ -411,7 +411,7 @@
    [:why string?]])
 
 (def lenses
-  "The borrowed perspectives a survey may read a claim or a module through.
+  "The borrowed perspectives a baseline may read a claim or a module through.
 
    Each lens is one source's view of ONE subject, with a closed set of verdicts.
    That shape is the point, and it replaced a single flat :kind that had crushed
@@ -426,7 +426,7 @@
    Deliberately small to begin with. A lens nobody uses is noise in every prompt,
    and the four here are the ones with the sharpest verdicts: two for what the
    parts hold and do, one for the quality of a seam, one for the arrangement —
-   because state, control and depth are all properties of a PART, and a survey
+   because state, control and depth are all properties of a PART, and a baseline
    that never judges the arrangement has described a list."
   {:tarpit/state
    {:source     "Out of the Tar Pit (Moseley & Marks)"
@@ -531,7 +531,7 @@
    ;; the next round can say whether that claim is still wrong.
    ;;
    ;; Without it nothing survives an amendment. Measured over five rounds on one
-   ;; survey: of six claims, one kept its text and NONE kept an evidence
+   ;; baseline: of six claims, one kept its text and NONE kept an evidence
    ;; reference — so "you fixed this and it is still wrong" was indistinguishable
    ;; from "here is something new", and the stall detector could never fire.
    [:id           string?]
@@ -555,7 +555,7 @@
    [:how string?]])
 
 (def HealthObservation
-  "One thing about the area's health that the survey ENCOUNTERED while
+  "One thing about the area's health that the baseline ENCOUNTERED while
    establishing what the operating design is. Deliberately not an audit: a pass
    that goes looking will always find something, and the area would then be
    reviewed in full at the start of every workstream that touches it. Bounded by
@@ -567,7 +567,7 @@
    weak design cleanly implemented is the dangerous one: it looks healthy,
    everything downstream inherits it, and it is what should turn a change's
    declared relation from :within into :revisit. Collapsing them yields the
-   useless survey output ('this area is a bit messy') instead of the useful one
+   useless baseline output ('this area is a bit messy') instead of the useful one
    ('the boundary is in the wrong place, and the code honouring it is why nobody
    noticed').
 
@@ -586,7 +586,7 @@
    [:invisibly-incomplete? {:optional true} boolean?]])
 
 (defn- distinct-record-ids?
-  "Ids are unique within a survey, per kind. A duplicate makes `which claim did
+  "Ids are unique within a baseline, per kind. A duplicate makes `which claim did
    you refute` unanswerable, which is the one question the id exists to answer."
   [{:keys [load-bearing modules]}]
   (and (or (< (count load-bearing) 2) (apply distinct? (map :id load-bearing)))
@@ -606,7 +606,7 @@
 
    :health is the one field that is a judgement rather than a reading, and it is
    still an `is`: whether what is here holds, not whether it should be different.
-   It never carries a destination — routing needs the change, and a survey by
+   It never carries a destination — routing needs the change, and a baseline by
    someone who already knows the change is worth nothing. The design record that
    cites this baseline is what routes them.
 
@@ -633,7 +633,7 @@
     [:bounded-by       string?]
     [:shape            string?]
     ;; The decomposition and what it buys. Required, because they are the level
-    ;; this record exists to operate at: a survey that lists properties without
+    ;; this record exists to operate at: a baseline that lists properties without
     ;; saying what the modules are and how they combine has described an
     ;; implementation, and every judgement made against it will be made about
     ;; the implementation too.
@@ -646,13 +646,13 @@
     [:drift            {:optional true} [:vector string?]]
     [:read             [:vector {:min 1} string?]]
     [:unknowns         {:optional true} [:vector string?]]
-    ;; The survey this one corrects, when it corrects one. Optional, and every
-    ;; survey written before this field existed carries none — which is the
+    ;; The baseline this one corrects, when it corrects one. Optional, and every
+    ;; baseline written before this field existed carries none — which is the
     ;; case that matters, because it is what stops a reader inferring the edge
     ;; from append order instead.
     ;;
-    ;; The baseline round already appends a corrected survey per amendment and
-    ;; said nothing about what it corrected, so a design citing the survey the
+    ;; The baseline round already appends a corrected baseline per amendment and
+    ;; said nothing about what it corrected, so a design citing the baseline the
     ;; round has since repaired had no way to be told which record would
     ;; re-establish its premise. Same {:seq :why} a design already carries: an
     ;; author names what they superseded, and nobody derives it.
@@ -663,7 +663,7 @@
     distinct-record-ids?]])
 
 (def LoadBearingLegacy
-  "READ SHAPE — a property from before the survey moved up a level, carrying a
+  "READ SHAPE — a property from before the baseline moved up a level, carrying a
    required file:line citation and no classification. Not writable."
   [:map {:closed true}
    [:property string?]
@@ -671,9 +671,9 @@
    [:drift    {:optional true} string?]])
 
 (def BaselineLegacy
-  "READ SHAPE — a survey from before :modules, :composition and the claim
+  "READ SHAPE — a baseline from before :modules, :composition and the claim
    vocabulary existed, when a load-bearing property was prose plus a coordinate.
-   Not writable; kept so every survey already on a ledger stays readable."
+   Not writable; kept so every baseline already on a ledger stays readable."
   [:and
    [:map {:closed true}
     [:format           [:= :baseline]]
@@ -687,13 +687,13 @@
     [:drift            {:optional true} [:vector string?]]
     [:read             [:vector {:min 1} string?]]
     [:unknowns         {:optional true} [:vector string?]]
-    ;; The survey this one corrects, when it corrects one. Optional, and every
-    ;; survey written before this field existed carries none — which is the
+    ;; The baseline this one corrects, when it corrects one. Optional, and every
+    ;; baseline written before this field existed carries none — which is the
     ;; case that matters, because it is what stops a reader inferring the edge
     ;; from append order instead.
     ;;
-    ;; The baseline round already appends a corrected survey per amendment and
-    ;; said nothing about what it corrected, so a design citing the survey the
+    ;; The baseline round already appends a corrected baseline per amendment and
+    ;; said nothing about what it corrected, so a design citing the baseline the
     ;; round has since repaired had no way to be told which record would
     ;; re-establish its premise. Same {:seq :why} a design already carries: an
     ;; author names what they superseded, and nobody derives it.
@@ -702,7 +702,7 @@
     distinct-health-ids?]])
 
 (def LoadBearingKindEra
-  "READ SHAPE — a property from the brief era between the survey moving up a
+  "READ SHAPE — a property from the brief era between the baseline moving up a
    level and the flat :kind being replaced by readings. It carries a
    counterexample, like a current one, and a single classification where a
    current one carries perspectives."
@@ -732,7 +732,7 @@
    [:drift        {:optional true} string?]])
 
 (def BaselineNoIds
-  "READ SHAPE — a survey with a decomposition and readings but no ids on its
+  "READ SHAPE — a baseline with a decomposition and readings but no ids on its
    claims or modules. Not writable; the era lasted one afternoon and produced the
    measurements that ended it."
   [:and
@@ -750,13 +750,13 @@
     [:drift            {:optional true} [:vector string?]]
     [:read             [:vector {:min 1} string?]]
     [:unknowns         {:optional true} [:vector string?]]
-    ;; The survey this one corrects, when it corrects one. Optional, and every
-    ;; survey written before this field existed carries none — which is the
+    ;; The baseline this one corrects, when it corrects one. Optional, and every
+    ;; baseline written before this field existed carries none — which is the
     ;; case that matters, because it is what stops a reader inferring the edge
     ;; from append order instead.
     ;;
-    ;; The baseline round already appends a corrected survey per amendment and
-    ;; said nothing about what it corrected, so a design citing the survey the
+    ;; The baseline round already appends a corrected baseline per amendment and
+    ;; said nothing about what it corrected, so a design citing the baseline the
     ;; round has since repaired had no way to be told which record would
     ;; re-establish its premise. Same {:seq :why} a design already carries: an
     ;; author names what they superseded, and nobody derives it.
@@ -765,7 +765,7 @@
     distinct-health-ids?]])
 
 (def BaselineKindEra
-  "READ SHAPE — a survey with a decomposition but with :kind on its properties.
+  "READ SHAPE — a baseline with a decomposition but with :kind on its properties.
    Not writable.
 
    Its era lasted hours, and a record was written in it. That is the whole
@@ -788,13 +788,13 @@
     [:drift            {:optional true} [:vector string?]]
     [:read             [:vector {:min 1} string?]]
     [:unknowns         {:optional true} [:vector string?]]
-    ;; The survey this one corrects, when it corrects one. Optional, and every
-    ;; survey written before this field existed carries none — which is the
+    ;; The baseline this one corrects, when it corrects one. Optional, and every
+    ;; baseline written before this field existed carries none — which is the
     ;; case that matters, because it is what stops a reader inferring the edge
     ;; from append order instead.
     ;;
-    ;; The baseline round already appends a corrected survey per amendment and
-    ;; said nothing about what it corrected, so a design citing the survey the
+    ;; The baseline round already appends a corrected baseline per amendment and
+    ;; said nothing about what it corrected, so a design citing the baseline the
     ;; round has since repaired had no way to be told which record would
     ;; re-establish its premise. Same {:seq :why} a design already carries: an
     ;; author names what they superseded, and nobody derives it.
@@ -1233,7 +1233,7 @@
 
 (def ClassifiedFinding
   "What KIND of thing a finding turned out to be. :baseline is the premise case —
-   the finding shows a property the survey claimed is simply not true of the code.
+   the finding shows a property the baseline claimed is simply not true of the code.
    It matters that it is not :design: the remedy is to re-survey, and a sound
    design resting on a wrong premise is a different failure from a wrong design."
   [:map {:closed true}
@@ -1313,25 +1313,25 @@
    [:evidence {:optional true} [:vector string?]]])
 
 (def derivations
-  "What a survey exists to let the decision round work out. A survey is
+  "What a baseline exists to let the decision round work out. A baseline is
    SUFFICIENT when these can be derived against it — not when nothing true is
    left to say about the area, which is never."
   [:relation-honest :goal-served :decomposable :routing-coherent])
 
 (def BlockedFinding
-  "A gap in a survey, named by the derivation it blocks.
+  "A gap in a baseline, named by the derivation it blocks.
 
    :blocks is the whole of this record's bounding, and it replaced a bare
    `:underscoped`. Completeness has no fixed point: measured against an area, a
    judge finds true things to add forever, and five rounds of exactly that
    produced twenty-four findings without one repeating. Sufficiency has four,
    because there are four derivations and a gap either blocks one or is
-   something the survey merely does not mention.
+   something the baseline merely does not mention.
 
-   So a gap must say which derivation cannot be made and what the survey would
+   So a gap must say which derivation cannot be made and what the baseline would
    have to say for it to be. A true observation blocking none of them is not a
    finding here — at most it is a health observation, and more often it is the
-   next survey's business."
+   next baseline's business."
   [:map {:closed true}
    [:blocks   (into [:enum] derivations)]
    [:cites    [:vector {:min 1} string?]]
@@ -1340,17 +1340,17 @@
    [:evidence {:optional true} [:vector string?]]])
 
 (def BaselineReview
-  "The verification round over a survey: is this true, and is it ENOUGH?
+  "The verification round over a baseline: is this true, and is it ENOUGH?
 
    The second half used to read 'complete enough to decide against', and a judge
    asked that optimises the completeness and drops the decision. Measured against
    a real area it is right to do so — there is always another true thing to say —
    and the round never terminates. So the question is asked the way it is meant:
-   can the decision this survey exists to support be made against it?
+   can the decision this baseline exists to support be made against it?
 
    Three verdicts, and only the middle one is new. :falsified — a stated property
    is not true of the code; unchanged, and always a defect. :insufficient — the
-   survey is true as far as it goes and a NAMED derivation cannot be made against
+   baseline is true as far as it goes and a NAMED derivation cannot be made against
    it. :sufficient — true, and enough; the expected outcome, naming what it
    CONFIRMED, for the same reason the design verdict's :sound does.
 
@@ -1573,7 +1573,7 @@
 
    The one thing the ledger's vocabulary could not say. Supersession says a
    record is BETTER than its predecessor and is silent about whether the
-   predecessor was wrong — so nothing distinguished a survey polished by a
+   predecessor was wrong — so nothing distinguished a baseline polished by a
    review round from one abandoned as false, and no reader could tell a live
    premise from a dead one.
 
@@ -1595,7 +1595,7 @@
    [:because  string?]
    [:evidence [:vector {:min 1} string?]]
    [:found-during {:optional true}
-    [:enum :survey :design :implementation :review :landing]]])
+    [:enum :baseline :design :implementation :review :landing]]])
 
 (def DesignApproved
   "A human approved this design, at this position in the ledger.
@@ -1662,9 +1662,9 @@
    ;; outcome. Records in the two-outcome shape exist — a round writes them as
    ;; soon as it runs, merged or not.
    :design-decision DesignDecisionAny
-   ;; The survey moved up a level: :modules and :composition became required and
+   ;; The baseline moved up a level: :modules and :composition became required and
    ;; a load-bearing property gained a kind and a counterexample in place of its
-   ;; required coordinate. Every survey written before that is in the old shape.
+   ;; required coordinate. Every baseline written before that is in the old shape.
    :baseline BaselineAny
    ;; The terminal question became sufficiency, so :accurate and :underscoped
    ;; stopped being writable. Rounds in that shape exist on every workstream a
@@ -1883,7 +1883,7 @@
             (for [{:keys [at how]} extension-points]
               (str "- " at " — " how))))
     (when (seq health)
-      (cons "\n## Health — what the survey ran into" (health->markdown health)))
+      (cons "\n## Health — what the baseline ran into" (health->markdown health)))
     (when (seq drift)
       (cons "\n## Drift from the stance" (for [d drift] (str "- " d))))
     (when (seq unknowns)
@@ -2059,7 +2059,7 @@
           (for [{:keys [cites claim evidence blocks needs]} findings]
             (str "- **" (str/join "; " cites) "** — " claim
                  ;; A gap's whole content is which derivation it blocks and what
-                 ;; the survey would have to say. Both were on the record and
+                 ;; the baseline would have to say. Both were on the record and
                  ;; neither reached a reader.
                  (when blocks
                    (str "\n  - blocks `" (name blocks) "` — needs " needs))
@@ -2067,9 +2067,9 @@
                    (str "\n  - " (str/join ", " (map #(str "`" % "`") evidence)))))))))
 
 (def verdict-holds
-  "The verdicts that say somebody checked this survey against the code and it
+  "The verdicts that say somebody checked this baseline against the code and it
    held. :accurate is the older one — the same answer under the question the
-   round asked before it asked about sufficiency. The survey was still checked,
+   round asked before it asked about sufficiency. The baseline was still checked,
    and re-checking it under the newer question is the baseline loop's business,
    not a reason to refuse to decide against it.
 
@@ -2086,7 +2086,7 @@
    the opposite of what the round found."
   [verdict]
   (case verdict
-    :insufficient "Derivations this survey cannot support"
+    :insufficient "Derivations this baseline cannot support"
     :underscoped  "What the bound leaves out"
     "Claims the code does not support"))
 

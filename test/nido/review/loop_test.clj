@@ -184,7 +184,7 @@
 ;; ── A finding nothing can fix ───────────────────────────────────────────────
 
 (deftest a-finding-raised-three-rounds-running-ends-the-run
-  ;; Watched live: a survey got to two findings, resolved one each round and
+  ;; Watched live: a baseline got to two findings, resolved one each round and
   ;; re-raised the other under the same key. The SET differed every round, so
   ;; no-progress? never fired, while the one finding that mattered went round
   ;; and round.
@@ -247,7 +247,7 @@
 
 (deftest a-stuck-finding-is-named-rather-than-the-round-being-called-stalled
   ;; Both are true when a run ends holding the same findings, and only one says
-  ;; which. Watched: a survey converged 8 → 1 → 1 with eleven of twelve items
+  ;; which. Watched: a baseline converged 8 → 1 → 1 with eleven of twelve items
   ;; confirmed, and reported :no-progress — sending a reader to look at
   ;; everything when the answer was a single claim.
   (let [[_ emit] (capturing)

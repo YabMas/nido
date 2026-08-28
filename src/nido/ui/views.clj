@@ -142,7 +142,7 @@
                     color:#7a7a95; }
         .posn .why { flex-basis:100%; font-size:12px; color:#8a7a50; }
         /* One per row, full text. Three columns fitted the cards on screen and
-           made the RECORDS unreadable: a survey's area or a design's summary is
+           made the RECORDS unreadable: a baseline's area or a design's summary is
            several sentences, and a 220px column clamped at four lines showed
            about a third of one. These are the three things the pane exists to
            state, so they are stated. */
@@ -694,7 +694,7 @@
 
    `read` and `unknowns` collapse together into the provenance fold: they matter
    when the baseline is doubted, and are noise the rest of the time. An empty
-   `unknowns` is a smell rather than a clean bill of health — a survey that found
+   `unknowns` is a smell rather than a clean bill of health — a baseline that found
    nothing it could not determine usually did not look — so the fold says how many
    there were instead of hiding the count."
   [{:keys [area bounded-by shape load-bearing extension-points health governing
@@ -1137,7 +1137,7 @@
         (for [{:keys [cites claim evidence blocks needs]} findings]
           [:li [:strong (str/join "; " cites)]
            [:div claim]
-           ;; A gap says which derivation it blocks and what the survey would
+           ;; A gap says which derivation it blocks and what the baseline would
            ;; have to say; without those two a reader sees a claim and no reason.
            (when blocks
              [:div "blocks " [:code (name blocks)] " — needs " needs])
@@ -1377,7 +1377,7 @@
 
    The band alone could not say it. Everything between authoring an intent and
    opening a draft PR is :in-progress, so forty rows read identically while one
-   waited on a survey, one on a decision and one on a person. The chip is muted
+   waited on a baseline, one on a decision and one on a person. The chip is muted
    by default and lit only when the next move is a HUMAN's, because that is the
    distinction a board is scanned for.
 
@@ -1591,7 +1591,7 @@
                   (:decided? design)
                   [:span.ok (str "✓ approved"
                                  (when-let [p (:premise design)]
-                                   (str " · on the survey at entry " p)))]
+                                   (str " · on the baseline at entry " p)))]
                   :else
                   [:span.no "not yet approved"]))
      [:div.hold.empty [:div.hh [:span.hk "design"]] [:div.hb "nothing committed to"]])])
@@ -1599,9 +1599,9 @@
 (defn- arc-strip
   "The arc, one chip per stage rather than one row per entry.
 
-   This is the whole point of the stage cut. A converged survey appends a review
+   This is the whole point of the stage cut. A converged baseline appends a review
    and a superseding record per round, so seven rounds is fourteen ledger rows
-   that say `survey` fourteen times; here they say it once, with the count. A
+   that say `baseline` fourteen times; here they say it once, with the count. A
    stage RE-ENTERED after a retraction gets its own chip rather than merging with
    the first — coming back is the most interesting thing a ledger records.
 

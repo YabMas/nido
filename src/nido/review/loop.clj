@@ -58,7 +58,7 @@
 
    Four, so that THREE repairs are attempted and every one of them is judged.
    It was three, which bought two tested repairs — and twice in one day the
-   third attempt was the one that worked: a survey's reading corrected on the
+   third attempt was the one that worked: a baseline's reading corrected on the
    third try was reported as never resolved, and a re-run found it clean. A
    convergence loop must not stop while it is still making progress, and the
    evidence says the third attempt is often where progress is."
@@ -72,7 +72,7 @@
    every round — so `no-progress?` never fires, while the one finding that
    matters is raised, amended, and raised again indefinitely.
 
-   Watched: a survey reached two findings, resolved one, and re-raised the other
+   Watched: a baseline reached two findings, resolved one, and re-raised the other
    under the same key three rounds running. That is not a loop making progress
    and it is not a loop going nowhere; it is a loop that has finished everything
    it can and is stuck on the rest, which is a different thing to report and the
@@ -104,7 +104,7 @@
     ;; BEFORE no-progress?, because both are true of a run that ends holding the
     ;; same findings and only this one says which. :no-progress sends a reader
     ;; to look at everything; :unfixable names the two or three that did not
-    ;; move, which on a converged survey is the whole of what is left.
+    ;; move, which on a converged baseline is the whole of what is left.
     (seq (unfixable finding-key prior (:findings ctx)))
     (assoc ctx :status :unfixable
            :unfixable (vec (unfixable finding-key prior (:findings ctx))))
@@ -212,7 +212,7 @@
                   ;; repairing" on the bare ctx. It was dropped every round, so
                   ;; each judge fell through to its "or the latest entry" default
                   ;; — the exact re-read that key exists to prevent. The loop
-                  ;; still converged, because on a workstream with one survey the
+                  ;; still converged, because on a workstream with one baseline the
                   ;; latest entry IS the amended one, which is why nothing showed
                   ;; it. The fix belongs here rather than in either pipeline:
                   ;; there was no seam to put it through.

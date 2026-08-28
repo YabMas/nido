@@ -40,7 +40,7 @@
 
    Closed, and ordered by PRECEDENCE rather than by progress: the first six are
    halts and terminals that outrank whatever the record trail would otherwise
-   say. A workstream whose survey was retracted is at :premise-retracted even
+   say. A workstream whose baseline was retracted is at :premise-retracted even
    though it also holds a design — the retraction is the fact that matters, and
    reporting it as :designed would send the driver forward over a premise
    somebody found untrue.
@@ -98,7 +98,7 @@
 
    :triaged   a :triage entry states the goal, and a design may cite it directly
    :proposal  a Slack proposal, scoped in twenty minutes by an agent that had
-              not surveyed — a proposal, never a decision
+              not baselined — a proposal, never a decision
    :issue     a GitHub issue, whose body is the brief
    :pickup    handed to nido directly, bypassing triage on purpose: the ticket
               body is the only statement of scope anywhere
@@ -216,7 +216,7 @@
         ;; question is settled in the session chat and the work simply continues,
         ;; leaving a blocker nobody ever formally closed. Requiring the record
         ;; made every such workstream permanently :blocked — BR-5099 was halted
-        ;; on 2026-08-21 and then surveyed, designed, reviewed clean and had
+        ;; on 2026-08-21 and then baselined, designed, reviewed clean and had
         ;; three PRs opened on 2026-08-26, and still read as waiting on a human.
         ;;
         ;; So the ledger answers it: a stage record appended AFTER the halt is
@@ -253,15 +253,15 @@
         (:seq latest)))))
 
 (defn baseline-verified?
-  "True when a review found the workstream's newest survey sufficient.
+  "True when a review found the workstream's newest baseline sufficient.
 
    Public because the surface asks it too, and there must be one answer to it.
    A second implementation beside this one is how `verified` on a card and
    `:baseline-verified` in the fold come to disagree about the same ledger.
 
-   Keyed on the survey's :seq, never on recency: a workstream can hold several
-   surveys and several reviews of them, and the review that matters is the one
-   naming the survey you are standing on."
+   Keyed on the baseline's :seq, never on recency: a workstream can hold several
+   baselines and several reviews of them, and the review that matters is the one
+   naming the baseline you are standing on."
   [project ws-id]
   (when-let [b (ws/latest-entry project ws-id :baseline)]
     (boolean (some #(and (= (:seq b) (:baseline-seq %))
@@ -401,7 +401,7 @@
    kind of silence, which is the distinction `outcome-tagged` exists to preserve
    and which a driver would otherwise have to re-derive at every call site."
   {;; ── the work succeeded ──
-   :sufficient           :advance   ; the survey holds; a design may be decided against it
+   :sufficient           :advance   ; the baseline holds; a design may be decided against it
    :clean                :advance   ; the diff review found nothing
    :converged            :advance   ; it found things and they were all fixed
    :not-worth-running    :advance   ; the records say this round would not pay — nothing to do
@@ -414,11 +414,11 @@
    :review-failed        :retry
 
    ;; ── an earlier record is at fault, and it is nameable ──
-   :premise-unverified   :route-back  ; go verify the survey this design cites
+   :premise-unverified   :route-back  ; go verify the baseline this design cites
    :premise-retracted    :route-back
    :design-retracted     :route-back
-   :no-premise           :route-back  ; the design cites no survey at all
-   :nothing-to-check     :route-back  ; the survey recorded nothing checkable; it is too thin
+   :no-premise           :route-back  ; the design cites no baseline at all
+   :nothing-to-check     :route-back  ; the baseline recorded nothing checkable; it is too thin
    ;; The diff warden's escalate: a finding CONTRADICTS a named invariant, so the
    ;; design is in question rather than its execution. That derivation was being
    ;; made every round already and consumed by nothing — this is the wire.
@@ -465,7 +465,7 @@
   "The workstream's arc, one row per stage rather than one per entry.
 
    This is what makes a ledger readable. A baseline loop appends one review and
-   one superseding survey PER ROUND, so a survey that converged in four rounds is
+   one superseding baseline PER ROUND, so a baseline that converged in four rounds is
    eight rows of log — and read as a log, the eight say nothing the one says
    better. Collapsed, it is `baseline · 4 revisions · verified`, and the eight
    entries are still underneath for anyone who wants them.

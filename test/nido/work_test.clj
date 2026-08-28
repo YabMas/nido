@@ -667,7 +667,7 @@
       "Approve resumes a parked agent, so it needs a workstream; the two-way
        membership hazard documented on that set is why this is pinned"))
 
-(def ^:private approvable-survey
+(def ^:private approvable-baseline
   {:format :baseline :area "a" :bounded-by "b" :shape "s"
    :modules [{:id "m" :module "m" :hides "h" :interface "i"}]
    :composition "c"
@@ -675,7 +675,7 @@
    :read ["src/a.clj"]})
 
 (defn- approvable
-  "A workstream whose latest entry is a design decision on a verified survey —
+  "A workstream whose latest entry is a design decision on a verified baseline —
    the one gate that offers Approve. Returns [ws-id design-seq decision-seq]."
   []
   (let [w  (workstream/create! :brian {:stage :in-progress :external-refs []})
@@ -683,7 +683,7 @@
         add (fn [kind r] (workstream/append-entry! :brian id {:kind kind} (pr-str r))
               (count (:entries (workstream/read-ws :brian id))))]
     (add :intent {:format :intent :goal "g" :done-when ["d"]})
-    (let [b (add :baseline approvable-survey)
+    (let [b (add :baseline approvable-baseline)
           _ (add :baseline-review {:format :baseline-review :verdict :sufficient
                                    :baseline-seq b :reason "ok"})
           d (add :design {:format :design :summary "s" :shape "sh"
@@ -749,7 +749,7 @@
       (let [[id b _ dd] (approvable)]
         (workstream/append-entry! :brian id {:kind :retraction}
                                   (pr-str {:format :retraction :retracts {:seq b}
-                                           :because "the survey is not true of the code"
+                                           :because "the baseline is not true of the code"
                                            :evidence ["src/a.clj:9"]}))
         (with-redefs [resume/resume! (fn [& _] {:decision :resumed})
                       work/parked-session (constantly {:name "auto"})]

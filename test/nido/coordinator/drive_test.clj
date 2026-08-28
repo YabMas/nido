@@ -23,7 +23,7 @@
    :on-promote nil :phase :running
    :phase-history [{:at "2026-08-27T00:00:00Z" :phase :running}] :error nil})
 
-(def ^:private a-survey
+(def ^:private a-baseline
   {:format :baseline :area "a" :bounded-by "b" :shape "s"
    :modules [{:id "m" :module "m" :hides "h" :interface "i"}]
    :composition "c"
@@ -117,7 +117,7 @@
                                        :brian id {:stage :verify-baseline
                                                   :outcome :sufficient}))))
         (is (nil? (ws/latest-entry :brian id :blocker))
-            "a survey that held is not a halt")
+            "a baseline that held is not a halt")
 
         (is (= :retry (:disposition (drive/park-on-escalate!
                                      :brian id {:stage :verify-baseline
@@ -168,7 +168,7 @@
          (:skip (drive/fireable {:next {:stage :approve-design :mode :human}})))
       "a human gate is not something to fire past")
   (is (= :not-mechanical
-         (:skip (drive/fireable {:next {:stage :survey :mode :authoring}})))
+         (:skip (drive/fireable {:next {:stage :write-baseline :mode :authoring}})))
       "authoring is a later phase")
   (is (= :not-mechanical
          (:skip (drive/fireable {:next {:stage :implement :mode :working-copy}}))))
@@ -200,12 +200,12 @@
                                     :autonomy a-running-agent})
         (ws/append-entry! :brian id {:kind :intent}
                           (pr-str {:format :intent :goal "g" :done-when ["d"]}))
-        (ws/append-entry! :brian id {:kind :baseline} (pr-str a-survey))
+        (ws/append-entry! :brian id {:kind :baseline} (pr-str a-baseline))
         (drive/drive! :brian id)
         (let [out (drive/tick! #(swap! submitted conj %))]
           (is (= 1 (count out)))
           (is (= :verify-baseline (:fired (first out)))
-              "a survey with no verdict is at :baselined, whose next act is mechanical")
+              "a baseline with no verdict is at :baselined, whose next act is mechanical")
           (is (= 1 (count @submitted)))
           (is (= :drive (:trigger (first @submitted))))
           (is (false? (:uncapped? (first @submitted)))
@@ -222,7 +222,7 @@
                                     :autonomy a-running-agent})
         (ws/append-entry! :brian id {:kind :intent}
                           (pr-str {:format :intent :goal "g" :done-when ["d"]}))
-        (ws/append-entry! :brian id {:kind :baseline} (pr-str a-survey))
+        (ws/append-entry! :brian id {:kind :baseline} (pr-str a-baseline))
         (drive/drive! :brian id)
         (drive/tick! #(swap! submitted conj %))
         (let [out (drive/tick! #(swap! submitted conj %))]
@@ -302,7 +302,7 @@
       (let [id (a-ws)]
         (ws/append-entry! :brian id {:kind :intent}
                           (pr-str {:format :intent :goal "g" :done-when ["d"]}))
-        (ws/append-entry! :brian id {:kind :baseline} (pr-str a-survey))
+        (ws/append-entry! :brian id {:kind :baseline} (pr-str a-baseline))
         (is (= :verify-baseline (:fire (drive/fireable (pipeline/of :brian id))))
             "fireable before the halt")
         (drive/park! :brian id {:stage :verify-baseline :outcome :codex-failed})

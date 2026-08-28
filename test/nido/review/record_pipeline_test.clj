@@ -80,9 +80,9 @@
 ;; ── The judge stage ─────────────────────────────────────────────────────────
 
 (deftest the-judge-reads-the-code-cwd-and-the-ledger-reads-the-other-one
-  ;; A survey describes the area BEFORE a change. Judged against a worktree that
+  ;; A baseline describes the area BEFORE a change. Judged against a worktree that
   ;; already carries that change, the round reports the change's own modules as
-  ;; things the survey failed to mention, and the amender folds the change into
+  ;; things the baseline failed to mention, and the amender folds the change into
   ;; the record it was supposed to be judged against. So the revision is its own
   ;; axis: the agents read :code-cwd, the workstream still resolves from :cwd.
   (let [seen (atom nil)]
@@ -281,7 +281,7 @@
         (is (= :sufficient (:status out)))
         (is (= 2 (:iter out)))))))
 
-(deftest a-nested-loop-launched-on-a-named-survey-still-follows-its-amendments
+(deftest a-nested-loop-launched-on-a-named-baseline-still-follows-its-amendments
   ;; This is the shape a re-survey runs in, and it could not converge. Given an
   ;; explicit :baseline, every round after the first fell back to it — the
   ;; amendment was never judged — so the run re-raised its findings and stalled
@@ -290,7 +290,7 @@
   ;;
   ;; The CLI hid it: it passes no :baseline, so the same fallthrough landed on
   ;; "the latest entry", which IS the amendment. Only the nested caller broke.
-  (let [start  (assoc a-baseline :area "the survey the design cites")
+  (let [start  (assoc a-baseline :area "the baseline the design cites")
         fixed  (assoc a-baseline :area "corrected")
         judged (atom [])
         round  (atom 0)]
@@ -315,9 +315,9 @@
                                  :baseline start
                                  :pipeline record/baseline-pipeline
                                  :finding-key record/baseline-finding-key})]
-        (is (= ["the survey the design cites" "corrected"] @judged))
+        (is (= ["the baseline the design cites" "corrected"] @judged))
         (is (= :sufficient (:status out)))
-        (testing "and the corrected survey comes back carrying the seq a design must cite"
+        (testing "and the corrected baseline comes back carrying the seq a design must cite"
           (is (= 7 (:seq (:under-repair (:carry out))))))))))
 
 (deftest an-amender-that-changes-nothing-stalls-instead-of-spinning
@@ -347,7 +347,7 @@
   (let [p (record/amend-prompt {:baseline a-baseline :findings [a-finding]
                                 :out-path "/run/amend-round-1.edn"})]
     (testing "what it is for"
-      (is (str/includes? p "make the survey TRUE"))
+      (is (str/includes? p "make the baseline TRUE"))
       (is (str/includes? p "not the same job as making the")))
     (testing "the evidence the judge cited is in front of the amender"
       (is (str/includes? p "src/order/invoice.clj:88")))
@@ -486,8 +486,8 @@
   (let [p (record/amend-prompt {:baseline a-baseline :findings [a-gap]
                                 :out-path "/run/amend-round-1.edn"})]
     (testing "the round is described as what it was"
-      (is (str/includes? p "found the survey TRUE"))
-      (is (str/includes? p "make the survey SAY ENOUGH"))
+      (is (str/includes? p "found the baseline TRUE"))
+      (is (str/includes? p "make the baseline SAY ENOUGH"))
       (is (not (str/includes? p "refuted part of it"))))
     (testing "the derivation it blocks and what it needs are both in front of it"
       (is (str/includes? p "blocks:  decomposable"))
@@ -551,7 +551,7 @@
 
 (deftest a-loop-repairs-the-record-it-was-pointed-at-not-the-newest
   ;; The failure this catches ran for five rounds and could not have converged:
-  ;; a workstream held two surveys of DIFFERENT areas — a narrow follow-up
+  ;; a workstream held two baselines of DIFFERENT areas — a narrow follow-up
   ;; written beside the broad one — and the loop re-read "the latest" every
   ;; round, so it repaired the follow-up while the design went on citing the
   ;; other. No amount of repair to one answers a design citing the other.
@@ -598,7 +598,7 @@
 (deftest the-record-carried-on-is-the-one-the-ledger-stamped
   ;; The amender cannot write a :seq and must not invent one, but everything
   ;; downstream identifies the record by exactly that number — the verdict is
-  ;; labelled with it and a design cites its survey by it. Carrying the record
+  ;; labelled with it and a design cites its baseline by it. Carrying the record
   ;; as written leaves all of that pointing at nothing.
   (let [corrected (assoc a-baseline :area "corrected")]
     (with-redefs [ws/entry-at-seq (fn [_ _ n] (assoc corrected :seq n :at "t"))]
@@ -624,14 +624,14 @@
   ;; outside the registry, the ledger refused the record, and a nineteen-reading
   ;; amendment was lost whole.
   (let [p (record/amend-prompt {:baseline a-baseline :findings [a-finding] :out-path "/x"})]
-    (is (str/includes? p "THE PERSPECTIVES THIS SURVEY IS READ THROUGH"))
+    (is (str/includes? p "THE PERSPECTIVES THIS BASELINE IS READ THROUGH"))
     (is (str/includes? p "imposed") "the verdicts themselves, not just the lens names")
     (is (str/includes? p "the whole record\nis lost with it")
         "and what it costs to guess"))
-  (testing "a survey that cannot carry readings is not handed a vocabulary it cannot use"
+  (testing "a baseline that cannot carry readings is not handed a vocabulary it cannot use"
     (let [p (record/amend-prompt {:baseline (dissoc a-baseline :modules)
                                   :findings [a-finding] :out-path "/x"})]
-      (is (not (str/includes? p "THE PERSPECTIVES THIS SURVEY IS READ THROUGH"))))))
+      (is (not (str/includes? p "THE PERSPECTIVES THIS BASELINE IS READ THROUGH"))))))
 
 (deftest the-vocabulary-says-which-subject-each-lens-reads
   ;; Watched live: an amender attached a claim lens to a module. Only
@@ -685,7 +685,7 @@
           "every distinct confirmation, once"))))
 
 (deftest a-round-records-what-it-confirmed
-  ;; By id, and only ids the survey actually contains — a confirmation naming
+  ;; By id, and only ids the baseline actually contains — a confirmation naming
   ;; nothing confirms nothing, and must not accumulate in the list later rounds
   ;; are shown.
   (let [corrected (assoc a-baseline :area "corrected")
@@ -705,7 +705,7 @@
     (is (str/includes? p "cannot converge"))
     (is (str/includes? p "Spend your effort on what is NOT in this list"))))
 
-(deftest a-confirmation-naming-nothing-in-the-survey-is-dropped
+(deftest a-confirmation-naming-nothing-in-the-baseline-is-dropped
   ;; Watched live: a judge asked for ids answered with "design" and
   ;; "implementation" — health-observation AXIS values, not ids. Kept, those
   ;; accumulate in the list every later round is shown, and a list that is partly
@@ -733,7 +733,7 @@
 
 ;; ── The subjects a finding can name ─────────────────────────────────────────
 
-(deftest every-subject-in-a-survey-is-nameable
+(deftest every-subject-in-a-baseline-is-nameable
   ;; A finding keyed on the evidence it happens to cite is keyed on something
   ;; the amendment answering it moves — the identity-by-description failure this
   ;; loop has already paid for three times. :shape and :composition are not
@@ -745,7 +745,7 @@
     (is (contains? ids "c1") "the claim ids are still there")
     (is (contains? ids "invoice-resums") "and the health observation ids")))
 
-(deftest a-reserved-id-is-only-known-when-the-survey-fills-it-in
+(deftest a-reserved-id-is-only-known-when-the-baseline-fills-it-in
   (is (not (contains? (record/known-ids (dissoc a-baseline :composition))
                       "composition"))))
 
@@ -764,7 +764,7 @@
 
 (deftest the-amender-is-told-to-replace-a-claim-not-annotate-it
   ;; "Change only what was refuted" says WHICH statements to touch; it never
-  ;; said how. Measured over six rounds on one survey: the composition went 405
+  ;; said how. Measured over six rounds on one baseline: the composition went 405
   ;; characters to 4091 because every correction was hung off the sentence that
   ;; was wrong, and each added clause became the next round's finding — the same
   ;; field refuted three rounds running for three different reasons.
@@ -795,9 +795,9 @@
 
 ;; ── Naming what a correction corrects ───────────────────────────────────────
 
-(deftest a-corrected-survey-names-the-survey-it-corrects
+(deftest a-corrected-baseline-names-the-baseline-it-corrects
   ;; The round is the only thing that knows the pair, and the edge is written
-  ;; rather than derived: taking the newest survey instead is exactly the
+  ;; rather than derived: taking the newest baseline instead is exactly the
   ;; recency the ledger's citations exist to refuse.
   (let [corrected (assoc a-baseline :area "corrected")
         [_ appended] (with-amend {:prev (assoc a-baseline :seq 7 :at "t")
@@ -815,7 +815,7 @@
                                  (ctx :findings [a-finding]))]
     (is (= 3 (get-in (read-string appended) [:supersedes :seq])))))
 
-(deftest a-survey-with-no-seq-to-name-gains-no-citation
+(deftest a-baseline-with-no-seq-to-name-gains-no-citation
   ;; The run was pointed at a record that is not in this ledger — a nested
   ;; loop's value, or a fixture. Inventing a number would be worse than none.
   (let [corrected (assoc a-baseline :area "corrected")

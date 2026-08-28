@@ -11,9 +11,9 @@
    Two things can make a design undecidable and they are not the same. A
    RETRACTION says a record is untrue, and only an explicit one counts —
    supersession, correction, age and a changed working copy all mean nothing
-   here, because a review round appends three to six superseding surveys in a
+   here, because a review round appends three to six superseding baselines in a
    normal run and a rule that fired on those would be switched off within a
-   week. An UNVERIFIED PREMISE says nobody has checked the survey this design
+   week. An UNVERIFIED PREMISE says nobody has checked the baseline this design
    names, which is the question the design round already asked; it moved here so
    that every surface asks it the same way.
 
@@ -50,12 +50,12 @@
   (into {} (map (juxt #(get-in % [:retracts :seq]) :seq)) retractions))
 
 (defn- replacement
-  "The newest survey reachable from `seq-n` by correction citations, or nil.
+  "The newest baseline reachable from `seq-n` by correction citations, or nil.
 
-   Follows only a citation a correcting survey WROTE naming what it corrected.
-   Every survey written before that field existed carries none, and those yield
-   no replacement — taking the newest survey instead is exactly the recency the
-   ledger's citations exist to refuse. Bounded by the number of surveys, so a
+   Follows only a citation a correcting baseline WROTE naming what it corrected.
+   Every baseline written before that field existed carries none, and those yield
+   no replacement — taking the newest baseline instead is exactly the recency the
+   ledger's citations exist to refuse. Bounded by the number of baselines, so a
    citation cycle cannot spin here."
   [baselines seq-n]
   (let [by-superseded (into {} (map (juxt #(get-in % [:supersedes :seq]) :seq))
@@ -70,10 +70,10 @@
   "Whether `design` — a stamped :design record — stands, and what stops it.
 
    :decidable? is the question the design round asks before it will judge:
-   this design is not retracted, and the survey it NAMES was found sufficient
+   this design is not retracted, and the baseline it NAMES was found sufficient
    at exactly that number. :decided? adds the human's grant.
 
-   Supersession never blocks. A survey corrected but not retracted still
+   Supersession never blocks. A baseline corrected but not retracted still
    stands, and a design citing it is decidable exactly when a verdict naming
    that entry found it sufficient. The correction is reported, not enforced:
    it tells a design whose premise was never verified which record would
@@ -115,12 +115,12 @@
 
                           (nil? premise-seq)
                           {:reason :no-premise
-                           :detail "the design cites no survey"}
+                           :detail "the design cites no baseline"}
 
                           (:retracted-by premise)
                           {:reason :premise-retracted :seq (:retracted-by premise)
                            :replaced-by (:replaced-by premise)
-                           :detail (str "the survey at entry " premise-seq
+                           :detail (str "the baseline at entry " premise-seq
                                         " was retracted by entry " (:retracted-by premise)
                                         (when-let [r (:replaced-by premise)]
                                           (str "; entry " r " corrects it")))}
@@ -128,8 +128,8 @@
                           (not sufficient?)
                           {:reason :premise-unverified :seq premise-seq
                            :replaced-by (:replaced-by premise)
-                           :detail (str "the design cites the survey at entry " premise-seq
-                                        ", and no round has found that survey sufficient"
+                           :detail (str "the design cites the baseline at entry " premise-seq
+                                        ", and no round has found that baseline sufficient"
                                         (when-let [r (:replaced-by premise)]
                                           (str "; entry " r " corrects it and is what a "
                                                "superseding design would cite")))})]

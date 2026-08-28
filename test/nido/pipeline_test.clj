@@ -16,7 +16,7 @@
         (f tmp))
       (finally (fs/delete-tree tmp)))))
 
-(def ^:private a-survey
+(def ^:private a-baseline
   {:format :baseline :area "order totalling" :bounded-by "money on an order"
    :shape "one summing path"
    :modules [{:id "agg" :module "the aggregate" :hides "the summing order"
@@ -85,7 +85,7 @@
         (is (= :intent-stated (:at (p/of :brian id))))
         (is (= :write-baseline (:stage (:next (p/of :brian id)))))
 
-        (let [b (add! :baseline a-survey)]
+        (let [b (add! :baseline a-baseline)]
           (is (= :baselined (:at (p/of :brian id))))
           (is (= {:stage :verify-baseline :mode :mechanical} (:next (p/of :brian id))))
 
@@ -112,13 +112,13 @@
 
 (deftest a-retraction-outranks-the-record-trail-under-it
   ;; The whole point of ordering by precedence: this workstream also holds a
-  ;; verified survey and a design, and reporting :designed would send a driver
+  ;; verified baseline and a design, and reporting :designed would send a driver
   ;; forward over a premise somebody found untrue.
   (with-tmp
     (fn [_]
       (let [[id add!] (ledger)]
         (intent! add!)
-        (let [b (add! :baseline a-survey)]
+        (let [b (add! :baseline a-baseline)]
           (add! :baseline-review {:format :baseline-review :verdict :sufficient
                                   :baseline-seq b :reason "it holds"})
           (add! :design (a-design b))
@@ -129,16 +129,16 @@
           (is (= :premise-retracted (:at (p/of :brian id))))
           (is (= {:stage :rebaseline :mode :authoring} (:next (p/of :brian id)))))))))
 
-(deftest a-superseding-survey-repairs-the-retraction
+(deftest a-superseding-baseline-repairs-the-retraction
   (with-tmp
     (fn [_]
       (let [[id add!] (ledger)]
         (intent! add!)
-        (let [b (add! :baseline a-survey)]
+        (let [b (add! :baseline a-baseline)]
           (add! :retraction {:format :retraction :retracts {:seq b}
                              :because "wrong" :evidence ["src/b.clj:9"]})
           (is (= :premise-retracted (:at (p/of :brian id))))
-          (add! :baseline (assoc a-survey :supersedes {:seq b :why "corrected"}))
+          (add! :baseline (assoc a-baseline :supersedes {:seq b :why "corrected"}))
           (is (= :baselined (:at (p/of :brian id)))
               "the ledger moved past it, so it is no longer the fact that matters"))))))
 
@@ -161,25 +161,25 @@
 
 ;; ── Keyed on seq, never on recency ──────────────────────────────────────────
 
-(deftest a-review-of-an-older-survey-does-not-verify-the-newer-one
+(deftest a-review-of-an-older-baseline-does-not-verify-the-newer-one
   (with-tmp
     (fn [_]
       (let [[id add!] (ledger)]
         (intent! add!)
-        (let [b1 (add! :baseline a-survey)]
+        (let [b1 (add! :baseline a-baseline)]
           (add! :baseline-review {:format :baseline-review :verdict :sufficient
                                   :baseline-seq b1 :reason "it holds"})
           (is (= :baseline-verified (:at (p/of :brian id))))
-          (add! :baseline (assoc a-survey :area "a different area"))
+          (add! :baseline (assoc a-baseline :area "a different area"))
           (is (= :baselined (:at (p/of :brian id)))
-              "the newest survey is the one standing, and nothing has judged it"))))))
+              "the newest baseline is the one standing, and nothing has judged it"))))))
 
 (deftest only-proceed-counts-as-a-decision
   (with-tmp
     (fn [_]
       (let [[id add!] (ledger)]
         (intent! add!)
-        (let [b (add! :baseline a-survey)
+        (let [b (add! :baseline a-baseline)
               _ (add! :baseline-review {:format :baseline-review :verdict :sufficient
                                         :baseline-seq b :reason "holds"})
               d (add! :design (a-design b))]
@@ -273,7 +273,7 @@
     (fn [_]
       (let [[id add!] (ledger)]
         (intent! add!)
-        (let [b (add! :baseline a-survey)
+        (let [b (add! :baseline a-baseline)
               _ (add! :baseline-review {:format :baseline-review :verdict :sufficient
                                         :baseline-seq b :reason "holds"})
               d (add! :design (a-design b))]
@@ -281,7 +281,7 @@
           (add! :design-approved {:format :design-approved :design {:seq d} :at-seq 5})
           (is (= :design-approved (:at (p/of :brian id))))
           (add! :retraction {:format :retraction :retracts {:seq b}
-                             :because "the survey was wrong"
+                             :because "the baseline was wrong"
                              :evidence ["src/b.clj:9"]})
           (let [r (p/of :brian id)]
             (is (= :premise-retracted (:at r)))
@@ -291,7 +291,7 @@
 ;; ── The arc, at stage granularity ───────────────────────────────────────────
 
 (deftest history-collapses-a-stages-rounds-into-one-row
-  ;; The whole point of the stage cut: a survey that converged over rounds
+  ;; The whole point of the stage cut: a baseline that converged over rounds
   ;; appended a review and a superseding record each time, and read as a log
   ;; those say nothing the one row says better.
   (with-tmp
@@ -299,7 +299,7 @@
       (let [[id add!] (ledger)]
         (intent! add!)
         (dotimes [_ 3]
-          (let [b (add! :baseline a-survey)]
+          (let [b (add! :baseline a-baseline)]
             (add! :baseline-review {:format :baseline-review :verdict :falsified
                                     :baseline-seq b :reason "no"
                                     :findings [{:cites ["c1"] :claim "wrong"
@@ -318,9 +318,9 @@
     (fn [_]
       (let [[id add!] (ledger)]
         (intent! add!)
-        (let [b (add! :baseline a-survey)]
+        (let [b (add! :baseline a-baseline)]
           (add! :design (a-design b))
-          (add! :baseline (assoc a-survey :supersedes {:seq b :why "again"}))
+          (add! :baseline (assoc a-baseline :supersedes {:seq b :why "again"}))
           (is (= [:intent :baseline :design :baseline]
                  (mapv :stage (p/history :brian id)))))))))
 
@@ -422,7 +422,7 @@
 ;; ── A halt the work moved past ──────────────────────────────────────────────
 
 (deftest work-appended-after-a-halt-answers-it
-  ;; BR-5099's exact shape: halted on one day, then surveyed, designed, PR'd and
+  ;; BR-5099's exact shape: halted on one day, then baselined, designed, PR'd and
   ;; reviewed clean five days later, with no :blocker-answered — because that
   ;; record is written when somebody clicks the gate button, and this question
   ;; was settled in the session chat. Requiring the record left the workstream

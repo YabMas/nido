@@ -169,7 +169,7 @@
 (deftest terminal-tells-redesign-and-re-survey-apart
   ;; Two remedies, and naming the wrong one is worse than naming none: a broken
   ;; load-bearing property means the change did not do what it said; a :baseline
-  ;; finding means the survey was wrong and the design may be fine.
+  ;; finding means the baseline was wrong and the design may be fine.
   (let [out (with-out-str
               (#'tasks.nido-review/print-verdict!
                 {:verdict :strained :round 2 :reason "pressure on the aggregate"

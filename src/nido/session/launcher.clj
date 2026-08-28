@@ -250,7 +250,7 @@
        "indistinguishable, and every reviewer re-derives a different design from\n"
        "the diff.\n"
        "\n"
-       "- **Survey before you decide.** One `:baseline` record per workstream,\n"
+       "- **Baseline before you decide.** One `:baseline` record per workstream,\n"
        "  written BEFORE the design and independent of it: the area, what bounds\n"
        "  it, the properties the code already relies on, and where it already\n"
        "  admits extension. Every field must be fillable without knowing the\n"

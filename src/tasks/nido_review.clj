@@ -183,7 +183,7 @@
 
    A verdict can now point at two different remedies, and saying the wrong one is
    worse than saying nothing: a broken load-bearing property means the change did
-   not do what it said, while a finding classified :baseline means the survey was
+   not do what it said, while a finding classified :baseline means the baseline was
    wrong and the design may be fine. Redesign and re-survey are not the same
    instruction."
   [v]
@@ -321,7 +321,7 @@
    identity that has two causes. An amender that produced nothing is the one the
    default line describes. The other is an amender that corrected exactly what
    was named, and a judge that came back with a DIFFERENT way the same claim is
-   false — measured: two rounds on one survey, shape and composition both
+   false — measured: two rounds on one baseline, shape and composition both
    refuted twice, each time by a distinct counterexample, the record amended
    both times. Telling that reader the amender stopped working is false and
    points them at the wrong thing: what they have is a claim that cannot be made
@@ -340,7 +340,7 @@
    The key is the pipeline's own value and its shape is its business, not a
    reader's — but every shape it takes names its subject somewhere inside. A
    claim key carries the id as a string; the two closed-vocabulary keys, a
-   design check and a survey gap, carry it as the keyword after the tag. The
+   design check and a baseline gap, carry it as the keyword after the tag. The
    tag is skipped: `blocks` and `check` say which KIND of handle this is, and
    printing that instead of `decomposable` names the mechanism rather than the
    thing the run could not resolve."
@@ -364,18 +364,18 @@
    whose records this run reads and amends. `:code-cwd` is where the agents
    read, and it defaults to `:cwd` because they are usually the same tree.
 
-   They are not the same tree when a survey describes an area BEFORE a change
+   They are not the same tree when a baseline describes an area BEFORE a change
    that is already written. A baseline is supposed to be fillable without
    knowing the fix; judged against a worktree that carries the fix, it is told
    its own subject does not exist — the round reports the change's new modules
-   as things the survey failed to mention, and an amender asked to repair that
-   folds the change INTO the survey it was supposed to be judged against. The
+   as things the baseline failed to mention, and an amender asked to repair that
+   folds the change INTO the baseline it was supposed to be judged against. The
    record then describes the post-change world, and every relation the design
    declares to it is answered against a premise that already contains the
    answer.
 
    So the revision is an axis of its own, separate from the workstream: point
-   `:code-cwd` at a checkout of the base and the survey is judged against the
+   `:code-cwd` at a checkout of the base and the baseline is judged against the
    area as it was, while the ledger stays where the work is.
 
    The final block prints from a `finally`, so a loop that throws still leaves
@@ -426,8 +426,8 @@
     (println (str kind "-loop: " (name status) " · report " report-path))
     ;; :amend-error is one of two ways a run explains itself. The other is the
     ;; :detail on a no-verdict outcome, and it was never printed — so a run that
-    ;; stopped because the design cites an unverified survey said which status it
-    ;; ended in and never said WHICH survey, which is the only part a reader
+    ;; stopped because the design cites an unverified baseline said which status it
+    ;; ended in and never said WHICH baseline, which is the only part a reader
     ;; needs to act.
     (when-let [detail (or (:amend-error final) (get-in final [:record :detail]))]
       (println (str "  " detail)))
@@ -456,22 +456,22 @@
   "Only :sufficient ends a run. :insufficient is a VERDICT and never a status —
    a gap is something an amender can answer, so the round that reports one keeps
    going. It had a line here, which said the loop can end that way; it cannot."
-  {:sufficient "the survey holds against the code, and a decision can be made against it"
+  {:sufficient "the baseline holds against the code, and a decision can be made against it"
    :no-record "author the baseline first"
-   :nothing-to-check "nothing in the survey is refutable yet"})
+   :nothing-to-check "nothing in the baseline is refutable yet"})
 
 (defn- baseline-at
-  "The survey named by :seq, or nil for `whichever is newest`.
+  "The baseline named by :seq, or nil for `whichever is newest`.
 
-   A workstream can hold surveys of DIFFERENT areas — a narrow follow-up beside
+   A workstream can hold baselines of DIFFERENT areas — a narrow follow-up beside
    the broad one it came out of — and a design cites one of them specifically.
-   Without this the only survey reachable from the command line is the newest,
-   so the advice a blocked design gives (`verify the survey it cites first`)
-   names a command that cannot verify that survey. It runs, it verifies the
+   Without this the only baseline reachable from the command line is the newest,
+   so the advice a blocked design gives (`verify the baseline it cites first`)
+   names a command that cannot verify that baseline. It runs, it verifies the
    other one, and the design stays blocked with nothing to show for it.
 
    A :seq naming no entry is refused rather than silently falling back to the
-   newest, which would be the same wrong survey with no way to tell."
+   newest, which would be the same wrong baseline with no way to tell."
   [cwd n]
   (when n
     (let [n (long n)
@@ -489,7 +489,7 @@
 
 (defn baseline-cmd*
   "Verify a baseline against the code, and keep correcting it until the code
-   stops refuting it. :seq names WHICH survey; the default is the newest."
+   stops refuting it. :seq names WHICH baseline; the default is the newest."
   ;; `seq-n`, not `seq` — destructuring the key by its own name would shadow
   ;; clojure.core/seq for the whole body.
   [{:keys [cwd] seq-n :seq :as opts}]
@@ -507,7 +507,7 @@
 (def ^:private design-remedies
   {:proceed "nothing derivable blocks it — what is left is the part only you can answer"
    :underivable "a check has no yardstick to derive against, which is not a defect an amender can repair"
-   :premise-unverified "verify the survey it cites first — `bb nido:review:baseline :seq <that entry>` — then decide against it"
+   :premise-unverified "verify the baseline it cites first — `bb nido:review:baseline :seq <that entry>` — then decide against it"
    :no-record "author the design first"
    :not-worth-running "the design declares it moves nothing structural, so a decision round would not pay"})
 

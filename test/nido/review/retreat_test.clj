@@ -44,7 +44,7 @@
     (is (some #(= "src/b.clj:2 is cited by no load-bearing property any more" (:detail %)) rs))))
 
 (deftest rewording-a-property-is-not-a-retreat
-  ;; The whole point of comparing evidence rather than prose: a survey that
+  ;; The whole point of comparing evidence rather than prose: a baseline that
   ;; corrects how it states a property, while still pointing at the same code,
   ;; has repaired the record — not weakened it.
   (let [curr (assoc-in base-baseline [:load-bearing 0 :property]
@@ -229,7 +229,7 @@
     (is (some #(re-find #"tarpit/control" (:detail %)) rs))))
 
 (deftest changing-a-verdict-is-a-re-judgement-not-a-retreat
-  ;; Reading something as accidental that was read as essential is what a survey
+  ;; Reading something as accidental that was read as essential is what a baseline
   ;; SHOULD do when it finds the derivation. The reading is still there.
   (let [curr (assoc-in modular-baseline [:load-bearing 0 :readings 0 :verdict] :accidental)]
     (is (= [] (retreat/baseline-retreats modular-baseline curr)))))
@@ -268,7 +268,7 @@
 
 ;; ── Prose that stops saying anything ────────────────────────────────────────
 
-(def ^:private full-survey
+(def ^:private full-baseline
   {:format :baseline :area "orders" :bounded-by "money on an order"
    :shape "one rounding boundary" :composition "only the aggregate sees the lines"
    :read ["src/a.clj"]
@@ -283,13 +283,13 @@
   ;; types these `string?` so "" validates, and the ledger accepts it — so
   ;; blanking a field claimed less in the one way nothing measured, and the next
   ;; round had nothing left to refute.
-  (let [curr (-> full-survey
+  (let [curr (-> full-baseline
                  (assoc :composition "")
                  (assoc-in [:modules 0 :hides] "")
                  (assoc-in [:load-bearing 0 :falsified-by] ""))
         details (map :detail (filter #(= :emptied (:what %))
-                                     (retreat/baseline-retreats full-survey curr)))]
-    (is (= ["the survey's composition now says nothing"
+                                     (retreat/baseline-retreats full-baseline curr)))]
+    (is (= ["the baseline's composition now says nothing"
             "module m1's hides now says nothing"
             "claim c1's falsified-by now says nothing"]
            details))))
@@ -297,14 +297,14 @@
 (deftest shortening-prose-is-not-a-retreat
   ;; An amender tightening a claim is doing the job. Only blank-from-non-blank
   ;; is unambiguous; a length threshold would report the good edit too.
-  (let [curr (assoc full-survey :composition "only the aggregate sums")]
+  (let [curr (assoc full-baseline :composition "only the aggregate sums")]
     (is (empty? (filter #(= :emptied (:what %))
-                        (retreat/baseline-retreats full-survey curr))))))
+                        (retreat/baseline-retreats full-baseline curr))))))
 
 (deftest a-dropped-module-is-not-also-reported-as-emptied
   ;; It is already named as dropped; saying it twice reads as two losses.
-  (let [curr (assoc full-survey :modules [])
-        whats (set (map :what (retreat/baseline-retreats full-survey curr)))]
+  (let [curr (assoc full-baseline :modules [])
+        whats (set (map :what (retreat/baseline-retreats full-baseline curr)))]
     (is (contains? whats :module-dropped))
     (is (not (contains? whats :emptied)))))
 

@@ -351,7 +351,7 @@
    would happen next. The board used to show only which BAND a workstream was in,
    so everything between authoring an intent and opening a draft PR looked
    identical: forty rows reading :in-progress, saying nothing about which of them
-   was waiting on a survey and which on a human."
+   was waiting on a baseline and which on a human."
   ([project] (list-workstreams project nil))
   ([project live-names]
    (mapv #(with-position project (to-spine %))
@@ -646,13 +646,13 @@
    there.
 
    The pane used to answer this by rendering every revision of each and leaving
-   the reader to work out which one was live. On a workstream whose survey took
+   the reader to work out which one was live. On a workstream whose baseline took
    seven rounds that is fourteen rows saying one thing, and the one thing is the
    only thing a reader wanted. So: the standing record, plus a count of what it
    supersedes, and the log underneath for anyone who needs the trail.
 
    :verified? and :decided? are asked of the modules that own them — nothing here
-   re-derives whether a survey held or a design was granted, because a second
+   re-derives whether a baseline held or a design was granted, because a second
    implementation of that join is a second answer to it."
   [project ws-id]
   (let [entries (:entries (cws/read-ws project ws-id))
@@ -680,7 +680,7 @@
       design (assoc :design {:seq (:seq design) :at (:at design)
                              :revisions (n-of :design)
                              ;; The premise this design cites, which need not be
-                             ;; the survey above: a workstream can survey again
+                             ;; the baseline above: a workstream can baseline again
                              ;; after deciding, and the design was judged against
                              ;; the one it named.
                              :premise (:seq (:premise st))
@@ -1323,7 +1323,7 @@
    The PREMISE, which an option click has no equivalent of: the gate is asked
    again at the moment of the grant. The design round said this design could be
    decided when it ran, and standing is a statement about now — so a design
-   whose survey was retracted between the round and the click is refused here
+   whose baseline was retracted between the round and the click is refused here
    rather than granted, and no approval is ever written for a premise that is
    already gone."
   [project ws-id entry-seq]

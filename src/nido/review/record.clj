@@ -6,7 +6,7 @@
    kind is a different pipeline, not a different engine. What differs here is
    what is judged and against what:
 
-     baseline round — VERIFICATION. Is this survey true, and complete enough to
+     baseline round — VERIFICATION. Is this baseline true, and complete enough to
        decide against? Near-mechanical: every property and health observation
        carries file:line evidence, so checking one is 'go read it'.
 
@@ -54,11 +54,11 @@
 ;; ── Whether a round is worth running ────────────────────────────────────────
 
 (defn baseline-round-worth-running?
-  "A survey is worth verifying when there is something checkable in it. That is
+  "A baseline is worth verifying when there is something checkable in it. That is
    any load-bearing property or health observation — every one carries evidence,
    so every one is a claim the code can refute.
 
-   A baseline with neither is not a survey that passed; it is one that recorded
+   A baseline with neither is not a baseline that passed; it is one that recorded
    nothing to check, and a round over it could only produce prose."
   [baseline]
   (boolean (and baseline
@@ -135,7 +135,7 @@
                 invariants)))
 
 (def whole-record-ids
-  "Ids for the survey's un-id'd single fields.
+  "Ids for the baseline's un-id'd single fields.
 
    :shape and :composition are the two claims a decomposition-level round is
    most likely to challenge — one says what the area's organising idea is, the
@@ -149,8 +149,8 @@
    :composition :composition})
 
 (defn known-ids
-  "Every id a survey actually contains — claims, modules, health observations,
-   and the reserved name of each whole-record field the survey fills in."
+  "Every id a baseline actually contains — claims, modules, health observations,
+   and the reserved name of each whole-record field the baseline fills in."
   [record]
   (into (into #{} (comp (filter (fn [[_ k]] (some? (get record k))))
                         (map (comp name key)))
@@ -248,7 +248,7 @@
    the Tar Pit's sense is a claim about what the PROBLEM required, not a
    criticism of the code."
   []
-  (str "\nTHE PERSPECTIVES THIS SURVEY IS READ THROUGH. Each is one source's view\n"
+  (str "\nTHE PERSPECTIVES THIS BASELINE IS READ THROUGH. Each is one source's view\n"
        "of one subject, with a closed set of verdicts. A reading is checkable: it\n"
        "says which verdict holds and why, and you can go and find out.\n\n"
        (str/join
@@ -290,7 +290,7 @@
    "\n"
    (map (fn [{:keys [id property falsified-by readings evidence]}]
           (str "- " (when id (str "[" id "] ")) property
-               ;; Only when there is one. A survey written before counterexamples
+               ;; Only when there is one. A baseline written before counterexamples
                ;; were required carries none, and printing the label with nothing
                ;; after it tells the judge a claim is refutable in a way its
                ;; author never committed to.
@@ -304,7 +304,7 @@
 (defn baseline-prompt
   "The verification prompt.
 
-   Pitched at the decomposition, and deliberately so. Asked to check a survey
+   Pitched at the decomposition, and deliberately so. Asked to check a baseline
    against a large subsystem, a judge will find true things about it forever —
    an implementation has no fixed point to converge on, while a decomposition
    does. What makes that bound real is that each claim arrives with the
@@ -312,11 +312,11 @@
    good` but `does that specific thing exist`."
   [{:keys [baseline disputes confirmed]}]
   (str
-   "You are checking whether a SURVEY of an area is TRUE, and whether it is\n"
+   "You are checking whether a BASELINE of an area is TRUE, and whether it is\n"
    "ENOUGH. You are NOT designing anything, you are not reviewing the code for\n"
    "defects, and you are not judging whether the area is good.\n\n"
    "ENOUGH FOR WHAT — this is the whole of the second question, and it is not\n"
-   "completeness. A survey exists so a later round can derive four things about a\n"
+   "completeness. A baseline exists so a later round can derive four things about a\n"
    "proposed change:\n"
    "  relation-honest   does the change stand where it says it stands, against\n"
    "                    this area's modules and load-bearing properties?\n"
@@ -325,13 +325,13 @@
    "  decomposable      can its cut be stated, and does it follow this area's\n"
    "                    module boundaries?\n"
    "  routing-coherent  do this area's health observations belong to one story?\n\n"
-   "The survey is ENOUGH when those can be derived against it. It does not have\n"
+   "The baseline is ENOUGH when those can be derived against it. It does not have\n"
    "to be everything true about the area, and it never will be: measured against\n"
    "a real system there is always another true thing to add, so a round that\n"
    "reports what is missing rather than what is BLOCKED never finishes and never\n"
    "helps. If you notice something true that blocks none of the four, it is not a\n"
    "finding. Leave it.\n\n"
-   "THE LEVEL THIS OPERATES AT. The survey describes the area as a DECOMPOSITION:\n"
+   "THE LEVEL THIS OPERATES AT. The baseline describes the area as a DECOMPOSITION:\n"
    "which modules exist, what design decision each one hides, and how their\n"
    "composition produces the required behaviour. Judge it there. A defect in one\n"
    "line of SQL is not a finding here however real it is — that belongs to code\n"
@@ -340,10 +340,10 @@
    "EVERY CLAIM CARRIES WHAT WOULD REFUTE IT. That is what you go looking for.\n"
    "Not `does this feel right` — `does that specific counterexample exist in the\n"
    "code`. Report a finding only when you found one, and say what it is.\n\n"
-   ;; Gated on the survey being ABLE to carry readings, not on it having any.
-   ;; Gating on presence hid the vocabulary from exactly the survey that needed
+   ;; Gated on the baseline being ABLE to carry readings, not on it having any.
+   ;; Gating on presence hid the vocabulary from exactly the baseline that needed
    ;; it — one with a decomposition and no analysis — so nothing ever told anyone
-   ;; the perspectives existed. The first real survey written in this shape
+   ;; the perspectives existed. The first real baseline written in this shape
    ;; carried five modules and zero readings.
    (when (contains? baseline :modules)
      (str (if (some (comp seq :readings)
@@ -354,7 +354,7 @@
                  "read as deep is refuted by an interface that costs about what it hides.\n"
                  "A dependency read as on-interface is refuted by a caller reaching past\n"
                  "it. Check the readings as well as the properties.\n")
-            (str "THIS SURVEY READS NOTHING THROUGH ANY PERSPECTIVE. It could — the\n"
+            (str "THIS BASELINE READS NOTHING THROUGH ANY PERSPECTIVE. It could — the\n"
                  "vocabulary is below and the record is in a shape that carries readings.\n"
                  "A decomposition recorded with no reading of it is structure without\n"
                  "analysis: it says what the parts are and never says whether the problem\n"
@@ -375,7 +375,7 @@
    "\nLOAD-BEARING — what is claimed to break if violated"
    (if (some :falsified-by (:load-bearing baseline))
      ", each with the\ncounterexample that would refute it:\n"
-     (str ".\n\nThis survey predates the rule that a claim must name its own\n"
+     (str ".\n\nThis baseline predates the rule that a claim must name its own\n"
           "counterexample, so none of them do. Judge the claims as stated, and treat\n"
           "a claim you cannot see any way to refute as a finding in its own right.\n"))
    (claim-block (:load-bearing baseline)) "\n"
@@ -401,16 +401,16 @@
    "   and edited independently; the composition does not produce the behaviour\n"
    "   claimed. Show the counterexample, with where it is.\n"
    "2. INSUFFICIENT — one of the four derivations cannot be made against this\n"
-   "   survey. Say WHICH (`blocks`) and what the survey would have to say for it\n"
+   "   baseline. Say WHICH (`blocks`) and what the baseline would have to say for it\n"
    "   to be makeable (`needs`) — the specific missing claim, not `more detail`.\n"
    "   A gap that blocks none of the four is not a finding here; at most it is a\n"
-   "   health observation, and more often it is the next survey's business.\n\n"
-   "SUFFICIENT IS THE EXPECTED OUTCOME on any survey that has done its job. It is\n"
+   "   health observation, and more often it is the next baseline's business.\n\n"
+   "SUFFICIENT IS THE EXPECTED OUTCOME on any baseline that has done its job. It is\n"
    "not a high bar and it is not praise — it means a decision can be made against\n"
-   "this, which is all a survey is for.\n\n"
+   "this, which is all a baseline is for.\n\n"
    "Every finding MUST cite what it is about — the exact property, module or\n"
    "composition text. A finding that cites nothing is not a finding; do not\n"
-   "report it. Neither is a finding that reports a bug in code the survey\n"
+   "report it. Neither is a finding that reports a bug in code the baseline\n"
    "correctly describes.\n\n"
    "Populate confirmed with the IDS of what you actually went and checked — the\n"
    "bracketed slugs, without the brackets. Every subject carries one: claims,\n"
@@ -425,8 +425,8 @@
    (confirmations-block confirmed)
    (disputes-block disputes)))
 
-(defn- survey-block
-  "The survey the design was made against, at the level the design round needs it.
+(defn- baseline-block
+  "The baseline the design was made against, at the level the design round needs it.
 
    Three of the four derivations are made AGAINST this record: relation-honest
    reads the modules and the extension points, decomposable reads the module
@@ -436,16 +436,16 @@
 
    It used to print :bounded-by and the load-bearing properties and nothing else,
    while the derivations below asked for module boundaries, extension points and
-   health observations by name. A judge cannot tell `the survey does not say`
+   health observations by name. A judge cannot tell `the baseline does not say`
    from `I was not shown it`, and the only recommendation that fits the first is
    :resurvey — so every round recommended :resurvey, and one of them reported a
-   module as unsurveyed that the survey had named all along."
+   module missing that the baseline had named all along."
   [baseline]
   (when baseline
-    (str "\nTHE AREA AS SURVEYED, before this was designed. Three of the four\n"
-         "derivations are made against THIS. Where the survey states something,\n"
-         "derive against what it states — a survey that is wrong about the area is\n"
-         "a finding, but a survey you did not read is not one.\n\n"
+    (str "\nTHE AREA AS BASELINED, before this was designed. Three of the four\n"
+         "derivations are made against THIS. Where the baseline states something,\n"
+         "derive against what it states — a baseline that is wrong about the area is\n"
+         "a finding, but a baseline you did not read is not one.\n\n"
          "AREA: " (:area baseline) "\n"
          "BOUNDED BY: " (:bounded-by baseline) "\n"
          (when-let [s (:shape baseline)] (str "SHAPE: " s "\n"))
@@ -458,7 +458,7 @@
                 "point not listed here is asking for the design to be revisited. This\n"
                 "is the yardstick for the declared relation:\n"
                 (bullets (map #(str (:at %) " — " (:how %)) e)) "\n"))
-         "\nLOAD-BEARING — what the survey claims breaks if violated:\n"
+         "\nLOAD-BEARING — what the baseline claims breaks if violated:\n"
          (claim-block (:load-bearing baseline)) "\n"
          (when-let [h (seq (:health baseline))]
            (str "\nHEALTH OBSERVED — the design's routes cite these BY ID, and\n"
@@ -478,7 +478,7 @@
                       h))
                 "\n"))
          (when-let [u (seq (:unknowns baseline))]
-           (str "\nDECLARED NOT DETERMINED by the survey. Already honest — not a\n"
+           (str "\nDECLARED NOT DETERMINED by the baseline. Already honest — not a\n"
                 "finding, and not on its own grounds to call the premise wrong:\n"
                 (bullets u) "\n")))))
 
@@ -551,7 +551,7 @@
      (str "Declared against the baseline: " (name r)
           (qualifiers (:baseline design)) "\n")
      (str "Declared against the baseline: NOTHING. This design predates the\n"
-          "baseline event, so it was judged against no survey. Weigh its claims\n"
+          "baseline event, so it was judged against no baseline. Weigh its claims\n"
           "on their own merits; the absence is not itself a finding.\n"))
    (when-let [r (seq (:rejected design))]
      (str "\nALREADY REJECTED. A finding re-proposing one of these is ANSWERED,\n"
@@ -573,7 +573,7 @@
      (str "\nHEALTH OBSERVATIONS ROUTED:\n"
           (bullets (map #(str (:health-id %) " → " (name (:to %))
                               (when (:why %) (str " — " (:why %)))) rt)) "\n"))
-   (survey-block baseline)
+   (baseline-block baseline)
    (when stance (str "\nPROJECT STANCE — framing only:\n" stance "\n"))
    "\nDERIVE THESE FOUR. Each is decidable; none is a matter of taste:\n\n"
    "  relation-honest   — does it stand where it says it stands? A design\n"
@@ -608,7 +608,7 @@
    "  amend    — a derivable defect in the record itself.\n"
    "  recut    — the decomposition does not hold.\n"
    "  resurvey — the PREMISE is wrong, not the commitment. A design can be sound\n"
-   "             on a survey that was not. Redesign and re-survey are different\n"
+   "             on a baseline that was not. Redesign and re-survey are different\n"
    "             instructions and saying the wrong one is worse than saying\n"
    "             nothing.\n\n"
    "Every finding MUST cite what it falsifies. A finding that cites nothing is\n"
@@ -646,7 +646,7 @@
 
 (defn- normalize-blocked
   "An insufficient finding, kept only if it names a derivation it blocks and what
-   the survey would have to say. Those two are the bound: without them
+   the baseline would have to say. Those two are the bound: without them
    `insufficient` is the unbounded bucket `underscoped` was, and the round that
    produced twenty-four non-repeating findings would simply produce them under a
    new name."
@@ -787,11 +787,11 @@
 
    `:baseline` names WHICH record to verify, and a loop must supply it. The
    newest entry is only the right answer for a one-shot round on a workstream
-   with one survey. A workstream can hold surveys of DIFFERENT areas — a narrow
+   with one baseline. A workstream can hold baselines of DIFFERENT areas — a narrow
    follow-up written beside the broad one it came out of — and a loop that
    re-reads `latest` repairs whichever was appended last, which need not be the
    one anybody asked about. It then cannot converge by construction: the design
-   citing the other survey is never answered however long it runs."
+   citing the other baseline is never answered however long it runs."
   [{:keys [cwd code-cwd run-id label disputes baseline confirmed]}]
   (if-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
     (if-let [baseline (or baseline (ws/latest-entry project ws-id :baseline))]
@@ -810,9 +810,9 @@
 (defn unverified-premise
   "Why this design cannot be judged yet, or nil when nothing stops it.
 
-   Three of the decision round's four derivations are made AGAINST the survey.
-   On an unverified one the judge cannot tell `the survey is wrong` from `the
-   survey is right and the area is not what I would have described`, and only
+   Three of the decision round's four derivations are made AGAINST the baseline.
+   On an unverified one the judge cannot tell `the baseline is wrong` from `the
+   baseline is right and the area is not what I would have described`, and only
    the first has a remedy. That is not hypothetical: the first workstream to run
    this loop recommended :resurvey seven times out of seven and never once
    reached a decision, each round paying for a full derivation to rediscover
@@ -820,16 +820,16 @@
 
    So the order is stated rather than discovered, and it costs nothing to state:
    nido can read the answer out of its own ledger before it spends a judge on
-   it. Verify the survey, then decide against it.
+   it. Verify the baseline, then decide against it.
 
    The join used to live here, and lives in `standing` now — which asks two
-   questions where this asked one: has the survey been verified, and has anyone
-   RETRACTED it since. A design decided on a survey somebody later found false
+   questions where this asked one: has the baseline been verified, and has anyone
+   RETRACTED it since. A design decided on a baseline somebody later found false
    is the case this round could not see, and the reason it could not is that a
    verdict is a permanent record of a past reading while a retraction is a
    statement about now.
 
-   A design citing NO survey is still not gated: there is no premise to check,
+   A design citing NO baseline is still not gated: there is no premise to check,
    the prompt says exactly that, and the round is judged on the design's own
    merits."
   [project ws-id design]
@@ -847,7 +847,7 @@
 
    Three of the no-verdict outcomes are read out of the records before a judge is
    launched, and cost nothing: no design, a design that says it moves nothing
-   structural, and a design standing on a survey nobody verified. Only the last
+   structural, and a design standing on a baseline nobody verified. Only the last
    is new, and it is the one that was previously discovered by paying for the
    round — see `unverified-premise`."
   [{:keys [cwd code-cwd run-id label disputes]}]
@@ -884,7 +884,7 @@
 ;; ── The baseline round as a loop ────────────────────────────────────────────
 ;;
 ;; Two stages on the shared engine: JUDGE (codex, read-only, the same pass the
-;; one-shot round ran) and AMEND (claude, correcting the survey). The engine
+;; one-shot round ran) and AMEND (claude, correcting the baseline). The engine
 ;; drives them until the code stops refuting the record, or until something says
 ;; stop that a human has to hear about.
 ;;
@@ -902,7 +902,7 @@
 
    The claim's ID when the finding names one, because that is the only handle
    that survives the claim being amended. Measured before ids existed: over five
-   rounds on one survey, of six claims one kept its text and none kept an
+   rounds on one baseline, of six claims one kept its text and none kept an
    evidence reference — so a claim that was fixed and is STILL WRONG produced a
    key nothing had seen, and the stall detector could not fire on the one case it
    exists for.
@@ -990,7 +990,7 @@
   (vec (mapcat :disputes history)))
 
 (defn amend-prompt
-  "Instruction to repair a survey the round found wanting.
+  "Instruction to repair a baseline the round found wanting.
 
    States the one thing that makes the loop worth running at all: the job is to
    make the record TRUE, and making the findings go away is not the same job.
@@ -1009,30 +1009,30 @@
   (let [gaps? (boolean (some :blocks findings))]
    (str
    (if gaps?
-     (str "A read-only judge checked this workstream's BASELINE — the survey of how\n"
-          "the area works today — against the code. It found the survey TRUE, and\n"
+     (str "A read-only judge checked this workstream's BASELINE — the baseline of how\n"
+          "the area works today — against the code. It found the baseline TRUE, and\n"
           "found it does not say enough to derive something a decision needs.\n\n"
           "So nothing below is a correction. Each one names a derivation that cannot\n"
-          "be made against the survey as it stands, and what the survey would have to\n"
+          "be made against the baseline as it stands, and what the baseline would have to\n"
           "say for it to be. Answer THOSE. Do not restate, sharpen or re-evidence a\n"
-          "claim the judge did not name: it already holds, and a survey grows without\n"
+          "claim the judge did not name: it already holds, and a baseline grows without\n"
           "limit if completeness is the target — which is the failure the named\n"
           "derivation exists to bound. Add what the derivation needs and stop.\n\n")
-     (str "A read-only judge checked this workstream's BASELINE — the survey of how the\n"
+     (str "A read-only judge checked this workstream's BASELINE — the baseline of how the\n"
           "area works today — against the code, and refuted part of it.\n\n"))
    (if gaps?
-     (str "Your job is to make the survey SAY ENOUGH. That is not the same job as\n"
+     (str "Your job is to make the baseline SAY ENOUGH. That is not the same job as\n"
           "making the findings go away, and the difference is the whole point of\n"
           "this pass:\n\n"
           "  - A derivation that cannot be made should be ANSWERED by stating what\n"
-          "    the survey was missing, with evidence, at the level it is written at.\n"
+          "    the baseline was missing, with evidence, at the level it is written at.\n"
           "  - Nothing here says a claim is wrong. Correct one only if reading the\n"
           "    code for this gap showed you it is, and say so.\n"
           "  - Deleting a property, dropping a module, dropping a health observation,\n"
           "    or clearing an :invisibly-incomplete? flag is measured and reported to\n"
           "    a human. A round that asked for MORE and got less is the loudest\n"
           "    version of that, and the one most likely to be an accident.\n\n")
-     (str "Your job is to make the survey TRUE. That is not the same job as making the\n"
+     (str "Your job is to make the baseline TRUE. That is not the same job as making the\n"
           "findings go away, and the difference is the whole point of this pass:\n\n"
           "  - A property the code does not have should be CORRECTED to what the code\n"
           "    actually does, and keep pointing at the evidence that shows it.\n"
@@ -1044,8 +1044,8 @@
           "    its counterexample — calling essential state `accidental` because a\n"
           "    derivation was found, when what that means is the claim was wrong.\n"
           "    Every one of those is measured and reported to a human. Do it only where\n"
-          "    the survey was genuinely wrong, and expect to have said why.\n\n"))
-   "Stay at the level the survey is written at: modules, what each hides, and how\n"
+          "    the baseline was genuinely wrong, and expect to have said why.\n\n"))
+   "Stay at the level the baseline is written at: modules, what each hides, and how\n"
    "their composition produces the behaviour. A finding about one line of code\n"
    "matters here only insofar as it refutes a claim about the decomposition.\n"
    "Prefer a claim that stays true as the code moves — what a module HIDES — over\n"
@@ -1071,7 +1071,7 @@
           "back unchanged — not restated, not sharpened, not made more precise.\n\n"))
    ;; The rule above says WHICH statements to touch. This one says HOW, and its
    ;; absence is what actually ran this loop out. Measured over six rounds on
-   ;; one survey: the composition went 405 characters to 4091 and the shape 271
+   ;; one baseline: the composition went 405 characters to 4091 and the shape 271
    ;; to 2671, because every correction was appended as an exception to the
    ;; sentence that was wrong rather than replacing it. Each appended clause was
    ;; then the next round's finding — the same field was refuted three rounds
@@ -1086,7 +1086,7 @@
    "If a claim needs a page of qualification to stay true, it was the wrong\n"
    "claim — say the simpler true thing instead, even if it says less. Expect a\n"
    "corrected record to be about the length it was.\n\n"
-   "That rule is what lets this end. A sharper claim is a bigger target: a survey\n"
+   "That rule is what lets this end. A sharper claim is a bigger target: a baseline\n"
    "saying `publishes ten vars` or `folds five event types` invites the next round\n"
    "to count, and counting is always available. Rounds have gone by watching one\n"
    "claim get sharper while another, freshly sharpened, became the next finding.\n"
@@ -1130,7 +1130,7 @@
    "Write EDN to:\n\n  " out-path "\n\n"
    "  {:record   <the COMPLETE corrected baseline — every field, not a diff>\n"
    "   :disputes [{:finding 2 :because \"...\" :evidence [\"src/x.clj:41\"]}]}\n\n"
-   "Omit :record entirely if every finding is disputed and the survey needs no\n"
+   "Omit :record entirely if every finding is disputed and the baseline needs no\n"
    "change. Omit :disputes if you accepted all of them. The record must satisfy\n"
    "the same schema the current one does; nido reads this file, validates it, and\n"
    "appends it as the superseding baseline. Do not append it yourself and do not\n"
@@ -1154,7 +1154,7 @@
    An amender hands back a record with no :seq — it cannot know one, and the
    write schemas are closed so it must not invent one. But everything downstream
    of the append identifies the record BY that number: the review verdict is
-   labelled `:baseline-seq`, a design cites its survey as `:baseline {:seq n}`,
+   labelled `:baseline-seq`, a design cites its baseline as `:baseline {:seq n}`,
    and the precondition that a design's premise was verified is a join between
    the two. Carrying the unstamped record forward makes all three unanswerable
    about the record actually on disk.
@@ -1183,7 +1183,7 @@
            counts (dispute-counts (:history ctx))
            ;; The record this run is repairing: the one it was pointed at, then
            ;; each amendment it makes itself. Never re-read as "the latest",
-           ;; which another session — or an earlier round of a different survey —
+           ;; which another session — or an earlier round of a different baseline —
            ;; can change underneath a run in flight. It rides in :carry because
            ;; that is the only part of the ctx that outlives a round.
            target (or (:under-repair (:carry ctx)) (:baseline (:config ctx)))
@@ -1215,7 +1215,7 @@
              (assoc ctx :record record :findings findings))))))})
 
 (def amend-stage
-  "Correct the survey, then measure what the correction cost.
+  "Correct the baseline, then measure what the correction cost.
 
    Three things are checked after the amender exits, and they are three
    different failures:
@@ -1305,7 +1305,7 @@
                  ;; The correction names what it corrects. This round is the
                  ;; only thing that knows the pair — `prev` is the record it was
                  ;; asked to repair and `record` is the repair — and it is
-                 ;; written rather than derived because taking the newest survey
+                 ;; written rather than derived because taking the newest baseline
                  ;; instead is exactly the recency the ledger's citations exist
                  ;; to refuse. An amender that supplied its own is left alone:
                  ;; a citation is the author's, and nothing here overrules one.
@@ -1355,7 +1355,7 @@
 ;;
 ;; Same two stages and the same appeal channel, over a different record and with
 ;; one addition the baseline loop has no use for: this round can conclude that
-;; the SURVEY is wrong rather than the design, and when it does the repair is a
+;; the BASELINE is wrong rather than the design, and when it does the repair is a
 ;; different loop. So :resurvey descends into the baseline pipeline and comes
 ;; back, which is what makes the pair a state machine rather than two loops that
 ;; happen to share an engine.
@@ -1416,12 +1416,12 @@
      :recut (str "It says the DECOMPOSITION does not hold. Re-cut it. The claims may be\n"
                  "right; how the change is split into layers or phases is what is wrong,\n"
                  "and restating the claims will not fix it.\n\n")
-     :resurvey (str "It said the PREMISE was wrong — and the survey has since been\n"
+     :resurvey (str "It said the PREMISE was wrong — and the baseline has since been\n"
                     "re-run and now holds against the code. The corrected baseline is\n"
                     "below.\n\n"
                     "Re-state this design against it. That is not a re-citation: the\n"
                     "design's claims were made about a reading of the area that has\n"
-                    "changed, so each one has to be checked against the new survey and\n"
+                    "changed, so each one has to be checked against the new baseline and\n"
                     "may not survive it. "
                     ;; The number, not "the corrected baseline". The record below
                     ;; is printed unstamped — :seq is the ledger's and a record
@@ -1430,11 +1430,11 @@
                     ;; to guess the one field the citation is checked against.
                     (if-let [n (:seq baseline)]
                       (str "Set :baseline :seq to " n " — that is the entry the\n"
-                           "corrected survey was appended as — and set :supersedes to the\n"
+                           "corrected baseline was appended as — and set :supersedes to the\n"
                            "design you are replacing.\n\n")
                       (str "Point :baseline :seq at the corrected baseline and set\n"
                            ":supersedes to the design you are replacing.\n\n"))
-                    "If a claim no longer holds under the corrected survey, change it.\n"
+                    "If a claim no longer holds under the corrected baseline, change it.\n"
                     "Re-pointing the citation while leaving the claims untouched asserts\n"
                     "the design still stands on a premise nobody has re-checked it\n"
                     "against, which is the failure this whole round exists to catch.\n\n")
@@ -1554,11 +1554,11 @@
    trajectory survives where a reader looks for it.
 
    Any non-:sufficient outcome is terminal HERE. A design round cannot proceed on
-   a survey the baseline loop could not make true, and re-judging the design
+   a baseline the baseline loop could not make true, and re-judging the design
    against it would produce a decision built on the premise that just failed.
 
    Uncapped. A re-survey is only half a repair — the design is re-stated against
-   the corrected survey afterwards — so every cycle changes the record the next
+   the corrected baseline afterwards — so every cycle changes the record the next
    round judges, and the engine's own stall detector is what ends a run that has
    stopped getting anywhere. A count would stop it while it was still making
    progress, which is the one thing a convergence loop must not do."
@@ -1566,9 +1566,9 @@
   (let [{:keys [cwd code-cwd run-id budget]} (:config ctx)
         [project ws-id] (stages/project+ws-from-cwd cwd)
         n   (count (filter :resurveyed (:history ctx)))
-        ;; The survey the design was JUDGED against, which is the only one whose
+        ;; The baseline the design was JUDGED against, which is the only one whose
         ;; repair can change the verdict. A workstream may hold several — a
-        ;; narrow follow-up written beside the broad survey it came out of — and
+        ;; narrow follow-up written beside the broad baseline it came out of — and
         ;; repairing the newest instead would leave the cited one untouched
         ;; however many rounds it ran.
         cited (stages/discover-baseline cwd (ws/latest-entry project ws-id :design))
@@ -1583,12 +1583,12 @@
                              :finding-key baseline-finding-key})]
         (if (= :sufficient (:status out))
           ;; No history entry here. The re-survey is only HALF the repair — the
-          ;; design still cites the survey that was wrong — so the round is not
+          ;; design still cites the baseline that was wrong — so the round is not
           ;; over, and the amendment that finishes it records them together.
           ;;
-          ;; The corrected survey travels as a VALUE. Reading it back as "the
+          ;; The corrected baseline travels as a VALUE. Reading it back as "the
           ;; latest baseline" would hand the design amender whatever was
-          ;; appended last, which is how the citation came to point at a survey
+          ;; appended last, which is how the citation came to point at a baseline
           ;; of a different area in the first place.
           (assoc ctx :resurveyed (:status out)
                  :resurveyed-baseline (or (:under-repair (:carry out)) cited))
@@ -1681,12 +1681,12 @@
 
    The premise takes two steps, and skipping the second is how the loop fails to
    converge. A re-survey repairs the BASELINE, but the design still cites the
-   survey that was wrong, and `discover-baseline` resolves the citation rather
-   than the newest entry — deliberately, so a later survey cannot silently change
+   baseline that was wrong, and `discover-baseline` resolves the citation rather
+   than the newest entry — deliberately, so a later baseline cannot silently change
    what an already-judged design was judged against. So a re-survey alone changes
    nothing the next round can see: it would judge the same design against the
    same stale baseline, reach the same verdict, and re-survey again until the
-   cap. The design is re-stated against the corrected survey here, and only that
+   cap. The design is re-stated against the corrected baseline here, and only that
    finishes the repair."
   {:name :amend
    :run

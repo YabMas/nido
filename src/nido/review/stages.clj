@@ -355,7 +355,7 @@
 
 (defn discover-baseline
   "The baseline `design` was judged against — the entry it CITES, not the newest
-   one. A workstream may survey more than once, and the design committed to a
+   one. A workstream may baseline more than once, and the design committed to a
    particular reading; handing the judge a later baseline would have it check the
    change against a yardstick the author never saw.
 

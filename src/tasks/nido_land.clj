@@ -31,20 +31,20 @@
          (when replaced-by
            (str "     (entry " replaced-by " already corrects it; verify THAT one\n"
                 "      and cite it below — this one is not what a design should stand on)\n"))
-         "  2. supersede the design so it cites the survey that held:\n"
+         "  2. supersede the design so it cites the baseline that held:\n"
          "     a new :design entry with :baseline {:seq <the verified one> …}\n"
          "     and :supersedes {:seq <this design> :why \"…\"}\n"
          "  3. bb nido:review:design\n"
          "  4. Approve it in the gate inbox")
 
     :premise-retracted
-    (str "  The survey is not merely stale, somebody found it FALSE — read entry "
+    (str "  The baseline is not merely stale, somebody found it FALSE — read entry "
          seq "\n  for the counterexample before you touch anything.\n"
-         "  1. survey the area again and append a new :baseline (/design §4)\n"
+         "  1. baseline the area again and append a new :baseline (/design §4)\n"
          (when replaced-by
            (str "     (entry " replaced-by " corrects it — start from there)\n"))
          "  2. bb nido:review:baseline — until it answers `sufficient`\n"
-         "  3. supersede the design so it cites the corrected survey\n"
+         "  3. supersede the design so it cites the corrected baseline\n"
          "  4. bb nido:review:design, then Approve it in the gate inbox")
 
     :design-retracted
@@ -53,8 +53,8 @@
          "  approved. Do not amend the retracted one: it stays in the ledger.")
 
     :no-premise
-    (str "  This design cites no survey — it predates the baseline event.\n"
-         "  1. survey the area and append a :baseline (/design §4)\n"
+    (str "  This design cites no baseline — it predates the baseline event.\n"
+         "  1. baseline the area and append a :baseline (/design §4)\n"
          "  2. bb nido:review:baseline\n"
          "  3. supersede the design so it cites it, then re-decide and approve")
 
@@ -73,7 +73,7 @@
 
 (defn check
   "Refuse unless this session's design stands: not retracted, approved, and the
-   exact survey it cites still live.
+   exact baseline it cites still live.
 
    A workstream with NO design passes. Most do not have one — scratch
    workstreams, pickups mid-flight — and a gate that demanded a design of every

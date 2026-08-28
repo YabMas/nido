@@ -248,7 +248,7 @@
     (let [out (with-out-str (t/baseline-cmd ":cwd" "/w"))]
       (is (str/includes? out "Weakened:"))
       (is (str/includes? out "(nothing — the record claims everything it claimed at the start)"))
-      (is (str/includes? out "the survey holds against the code")))))
+      (is (str/includes? out "the baseline holds against the code")))))
 
 (deftest a-loop-that-never-amended-says-that-instead
   ;; The same distinction one level up: a run that never reached an amendment
@@ -385,7 +385,7 @@
 
 (deftest a-stuck-finding-is-named-by-its-subject-not-its-tag
   ;; Every identity key names its subject somewhere inside, but the two
-  ;; closed-vocabulary keys — a design check and a survey gap — carry it as the
+  ;; closed-vocabulary keys — a design check and a baseline gap — carry it as the
   ;; keyword after a tag. Printing the tag names the mechanism instead of the
   ;; thing the run could not resolve.
   (let [f #'tasks.nido-review/finding-name]
@@ -394,10 +394,10 @@
     (is (= "routing-coherent"   (f [[:check :routing-coherent] 0])))
     (is (= "src/a.clj:1"        (f [[:evidence ["src/a.clj:1"]] 0])))))
 
-(deftest baseline-cmd-can-name-which-survey-to-verify
-  ;; A workstream can hold surveys of different areas and a design cites one
-  ;; specifically. Without this the only reachable survey is the newest, so the
-  ;; advice a blocked design gives — verify the survey it cites — names a
+(deftest baseline-cmd-can-name-which-baseline-to-verify
+  ;; A workstream can hold baselines of different areas and a design cites one
+  ;; specifically. Without this the only reachable baseline is the newest, so the
+  ;; advice a blocked design gives — verify the baseline it cites — names a
   ;; command that verifies the other one and leaves the design blocked.
   (let [seen (atom nil)
         cited {:format :baseline :area "the one the design cites" :seq 7}]
@@ -409,7 +409,7 @@
       (is (= cited (:baseline @seen))))))
 
 (deftest a-seq-naming-no-entry-is-refused-rather-than-falling-back
-  ;; Falling back to the newest would verify the same wrong survey with no way
+  ;; Falling back to the newest would verify the same wrong baseline with no way
   ;; to tell it had happened.
   (with-redefs [lifecycle/worktree-from-cwd (fn [g] g)
                 stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
@@ -433,9 +433,9 @@
   (with-redefs [rloop/run-loop
                 (fn [_] {:status :premise-unverified
                          :record {:outcome :premise-unverified
-                                  :detail "the design cites the survey at entry 4, and no round has found that survey sufficient"}})]
+                                  :detail "the design cites the baseline at entry 4, and no round has found that baseline sufficient"}})]
     (let [out (with-out-str (t/design-cmd ":cwd" "/w"))]
-      (is (str/includes? out "the survey at entry 4")))))
+      (is (str/includes? out "the baseline at entry 4")))))
 
 (deftest a-capped-run-says-the-cap-was-the-reader-s-own
   ;; The loop has no default cap — it ends on its own merits — so :max-iters is
@@ -472,7 +472,7 @@
 
 (deftest a-repeated-finding-set-says-which-of-its-two-causes-it-was
   ;; With a record loop's identity, "the same findings again" has two causes.
-  ;; Measured: two rounds on one survey, shape and composition refuted twice,
+  ;; Measured: two rounds on one baseline, shape and composition refuted twice,
   ;; each time by a DIFFERENT counterexample, the record amended both times.
   ;; Telling that reader the amender stopped working is false.
   ;; From the history, not the terminal ctx: a run that ends on a judgement
