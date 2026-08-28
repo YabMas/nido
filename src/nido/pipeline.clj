@@ -144,6 +144,45 @@
     :blocker :blocker-answered :retraction
     :findings :pr-opened :ship-submitted :merged})
 
+(def ^:private stage-of-kind
+  "Which stage of the arc each entry kind belongs to.
+
+   The same correspondence `place` folds over, read the other way round: `place`
+   asks what the newest records make true NOW, this asks which stage a given
+   record was part of. Both are the one secret this module keeps, so they live
+   together — a second copy elsewhere would be a second answer to `is a
+   baseline-review part of surveying`, and the two would drift.
+
+   A kind absent here has no stage, and `history` drops it rather than inventing
+   one. That is the same refusal `:unplaceable` makes, at row granularity."
+  {:ticket          :intent
+   :triage          :intent
+   :proposed-ticket :intent
+   :intent          :intent
+   :baseline        :survey
+   :baseline-review :survey
+   :design          :design
+   :design-decision :design
+   :design-verdict  :design
+   :design-approved :approval
+   :retraction      :retraction
+   :blocker         :halt
+   :blocker-answered :halt
+   :implementation-plan      :implementation
+   :implementation-completed :implementation
+   :review          :review
+   :review-analysis :review
+   :findings        :findings
+   :pr-opened       :publication
+   :ship-submitted  :shipping
+   :merged          :shipping})
+
+(defn stage-of
+  "The arc stage an entry of `kind` belongs to, or nil for one this vocabulary
+   does not place."
+  [kind]
+  (get stage-of-kind kind))
+
 (defn- open-findings?
   "True when a findings round left items nobody has resolved.
 
@@ -165,11 +204,32 @@
     ;; nest it the way a design nests its :baseline. Reading it as nested matched
     ;; nothing, so every answered blocker stayed a halt forever.
     (let [answered (into #{} (keep :blocker-seq)
-                         (ws/entries-of project ws-id :blocker-answered))]
-      (->> (ws/entries-of project ws-id :blocker)
-           (remove #(contains? answered (:seq %)))
-           last
-           :seq))))
+                         (ws/entries-of project ws-id :blocker-answered))
+          latest   (->> (ws/entries-of project ws-id :blocker)
+                        (remove #(contains? answered (:seq %)))
+                        last)]
+      (when latest
+        ;; …and nothing since it shows the work went on anyway.
+        ;;
+        ;; A :blocker-answered is written when somebody clicks the gate button,
+        ;; and that is not the only way a halt gets answered. Far more often the
+        ;; question is settled in the session chat and the work simply continues,
+        ;; leaving a blocker nobody ever formally closed. Requiring the record
+        ;; made every such workstream permanently :blocked — BR-5099 was halted
+        ;; on 2026-08-21 and then surveyed, designed, reviewed clean and had
+        ;; three PRs opened on 2026-08-26, and still read as waiting on a human.
+        ;;
+        ;; So the ledger answers it: a stage record appended AFTER the halt is
+        ;; the work having moved past it, which is the same evidence a person
+        ;; reading the timeline would use. Halts themselves do not count — a
+        ;; later blocker is a new question, not an answer to the old one, and it
+        ;; is already the one this returns.
+        (when-not (some (fn [e]
+                          (and (> (:seq e) (:seq latest))
+                               (when-let [st (stage-of (:kind e))]
+                                 (not= :halt st))))
+                        (:entries w))
+          (:seq latest))))))
 
 (defn- live-retraction
   "The :seq of a retraction whose subject still stands unrepaired, or nil.
@@ -400,45 +460,6 @@
   (get disposition-of-status status :escalate))
 
 ;; ── The arc, at stage granularity ───────────────────────────────────────────
-
-(def ^:private stage-of-kind
-  "Which stage of the arc each entry kind belongs to.
-
-   The same correspondence `place` folds over, read the other way round: `place`
-   asks what the newest records make true NOW, this asks which stage a given
-   record was part of. Both are the one secret this module keeps, so they live
-   together — a second copy elsewhere would be a second answer to `is a
-   baseline-review part of surveying`, and the two would drift.
-
-   A kind absent here has no stage, and `history` drops it rather than inventing
-   one. That is the same refusal `:unplaceable` makes, at row granularity."
-  {:ticket          :intent
-   :triage          :intent
-   :proposed-ticket :intent
-   :intent          :intent
-   :baseline        :survey
-   :baseline-review :survey
-   :design          :design
-   :design-decision :design
-   :design-verdict  :design
-   :design-approved :approval
-   :retraction      :retraction
-   :blocker         :halt
-   :blocker-answered :halt
-   :implementation-plan      :implementation
-   :implementation-completed :implementation
-   :review          :review
-   :review-analysis :review
-   :findings        :findings
-   :pr-opened       :publication
-   :ship-submitted  :shipping
-   :merged          :shipping})
-
-(defn stage-of
-  "The arc stage an entry of `kind` belongs to, or nil for one this vocabulary
-   does not place."
-  [kind]
-  (get stage-of-kind kind))
 
 (defn history
   "The workstream's arc, one row per stage rather than one per entry.

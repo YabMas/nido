@@ -418,3 +418,61 @@
   ;; contradicts a named invariant puts the DESIGN in question, not its
   ;; execution — and until now nothing consumed it.
   (is (= :route-back (p/disposition :escalated))))
+
+;; ── A halt the work moved past ──────────────────────────────────────────────
+
+(deftest work-appended-after-a-halt-answers-it
+  ;; BR-5099's exact shape: halted on one day, then surveyed, designed, PR'd and
+  ;; reviewed clean five days later, with no :blocker-answered — because that
+  ;; record is written when somebody clicks the gate button, and this question
+  ;; was settled in the session chat. Requiring the record left the workstream
+  ;; permanently "waiting on you" while three PRs sat open against it.
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)]
+        (add! :blocker {:format :blocker :summary "a product decision"
+                        :needs "which way to name it"})
+        (is (= :blocked (:at (p/of :brian id))) "live while nothing has moved")
+        (intent! add!)
+        (is (not= :blocked (:at (p/of :brian id)))
+            "an intent appended after it is the work going on anyway")
+        (add! :pr-opened {:format :pr-opened :url "https://example.test/pr/1"
+                          :title "t"})
+        (is (= :published (:at (p/of :brian id))))))))
+
+(deftest a-halt-with-nothing-after-it-is-still-a-halt
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)]
+        (intent! add!)
+        (add! :blocker {:format :blocker :summary "stuck" :needs "a key"})
+        (is (= :blocked (:at (p/of :brian id))))))))
+
+(deftest another-halt-is-not-an-answer-to-the-first
+  ;; A later blocker is a NEW question, not a resolution of the old one — and it
+  ;; is the one that should be reported.
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)]
+        (intent! add!)
+        (add! :blocker {:format :blocker :summary "first" :needs "a"})
+        (let [second-seq (add! :blocker {:format :blocker :summary "second" :needs "b"})]
+          (is (= :blocked (:at (p/of :brian id))))
+          (is (= "second" (:summary (ws/latest-entry :brian id :blocker)))
+              "and it is the later question that stands")
+          (is (some? second-seq)))))))
+
+(deftest an-explicit-answer-still-answers
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)]
+        (intent! add!)
+        (let [blk (add! :blocker {:format :blocker :summary "which branch"
+                                  :needs "a call"
+                                  :options [{:label "A" :summary "a"}
+                                            {:label "B" :summary "b"}]})]
+          (is (= :blocked (:at (p/of :brian id))))
+          (add! :blocker-answered {:format :blocker-answered :blocker-seq blk
+                                   :letter "A" :label "do a" :summary "took A"})
+          (is (= :intent-stated (:at (p/of :brian id)))
+              "answered explicitly, with no other work since"))))))
