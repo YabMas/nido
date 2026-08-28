@@ -111,15 +111,28 @@
 (defn review-layers
   "One entry per review target this round: what it found, or that it was not
    looked at because its patch had already converged. This is what makes the
-   round legible per layer instead of as one number."
+   round legible per layer instead of as one number.
+
+   A reporter that contributed findings but is no layer of the stack — the
+   mechanical design reviewer — gets a row too. It is not in `:reviews`,
+   because it reviews the worktree rather than a range and has neither a brief
+   nor a manifest to put in the warden's table of contents. Without a row here
+   its findings would still be listed while every counted row read zero, which
+   is the one way a summary can be worse than no summary."
   [ctx]
-  (let [counts (frequencies (keep :from-layer (:findings ctx)))]
+  (let [counts   (frequencies (keep :from-layer (:findings ctx)))
+        reviewed (into #{} (map (comp :label :target)) (:reviews ctx))
+        skipped  (into #{} (map :label) (:skipped ctx))
+        accounted (into reviewed skipped)]
     (in-stack-order
-     (into (mapv (fn [{:keys [target]}]
-                   (row target {:status   "reviewed"
-                                :findings (get counts (:label target) 0)}))
-                 (:reviews ctx))
-           (mapv (fn [t] (row t {:status "skipped"})) (:skipped ctx))))))
+     (-> (mapv (fn [{:keys [target]}]
+                 (row target {:status   "reviewed"
+                              :findings (get counts (:label target) 0)}))
+               (:reviews ctx))
+         (into (mapv (fn [t] (row t {:status "skipped"})) (:skipped ctx)))
+         (into (for [[label n] counts
+                     :when (and label (not (contains? accounted label)))]
+                 (row {:label label} {:status "reported" :findings n})))))))
 
 (defn- finish-phase
   [ph phase ctx at]

@@ -1,6 +1,6 @@
 (ns nido.review.report-test
   (:require
-   [clojure.test :refer [deftest is]]
+   [clojure.test :refer [deftest is testing]]
    [cheshire.core :as json]
    [babashka.fs :as fs]
    [nido.review.report :as report]))
@@ -316,3 +316,26 @@
 
 (deftest a-record-round-with-no-amendment-yet-is-not-mistaken-for-a-review-round
   (is (= "ended" (record-round-status [{:cites ["a"]}] nil))))
+
+(deftest a-reporter-that-is-no-layer-still-gets-a-row
+  (testing "the mechanical design reviewer contributes findings but reviews the worktree rather
+            than a range, so it is in no :reviews entry. Without a row its findings would be
+            listed while every counted row read zero, which is the one way a summary can be
+            worse than no summary."
+    (let [rows (report/review-layers
+                {:reviews  [{:target {:label "stack" :stack? true}}]
+                 :skipped  []
+                 :findings [{:from-layer "stack"} {:from-layer "design"} {:from-layer "design"}]})
+          by   (into {} (map (juxt :label identity)) rows)]
+      (is (= 2 (count rows)))
+      (is (= 1 (:findings (get by "stack"))))
+      (is (= 2 (:findings (get by "design"))))
+      (is (= "reported" (:status (get by "design")))
+          "reported, not reviewed — it looked at no range"))))
+
+(deftest a-skipped-layer-is-not-duplicated-as-a-reporter
+  (let [rows (report/review-layers
+              {:reviews  []
+               :skipped  [{:label "base"}]
+               :findings [{:from-layer "base"}]})]
+    (is (= 1 (count rows)) "a converged layer's carried findings do not mint a second row")))
