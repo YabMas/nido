@@ -777,3 +777,52 @@
                  (set (map :kind (:entries w))))
               "every writer's own payload survived")))
       (finally (fs/delete-tree tmp)))))
+
+(deftest only-one-answer-to-the-same-question-is-appended
+  ;; What append-entry-at! exists for. A decision names the ledger position it
+  ;; was read at; if the check and the write are two operations, two clicks
+  ;; answering the SAME question both read the same latest, both find it
+  ;; current, and both append. Serialising the writes does not help — what needs
+  ;; protecting is not the file but the claim that this answer was given to this
+  ;; question.
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-root (constantly (str tmp))]
+        (let [id (:id (ws/create! :brian {:stage :in-progress :external-refs []}))
+              _  (ws/append-entry! :brian id {:kind :note} "the question")
+              n  8
+              ;; every writer answers position 1, which is genuinely current
+              res (->> (range n)
+                       (mapv (fn [i]
+                               (future
+                                 (ws/append-entry-at! :brian id 1
+                                                      {:kind (keyword (str "note" i))}
+                                                      (str "answer " i)))))
+                       (mapv deref))
+              won (remove map? res)
+              w   (ws/read-ws :brian id)]
+          (is (= 1 (count won))
+              "exactly one answer to position 1 is appended, however many raced")
+          (is (= (dec n) (count (filter #(= :stale (:refused %)) res)))
+              "every other is refused as stale rather than silently dropped")
+          (is (= 2 (count (:entries w)))
+              "the question and one answer — no second answer landed")))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest an-answer-with-no-position-is-refused-rather-than-guessed
+  ;; nil means the caller did not thread the reading position through. Treating
+  ;; it as "don't care" would append a decision against whatever the ledger holds
+  ;; now, which is the failure the position exists to prevent — so it fails
+  ;; closed. This is the shape the web approve path got wrong for real: a nil
+  ;; position that reached a resolver.
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-root (constantly (str tmp))]
+        (let [id (:id (ws/create! :brian {:stage :in-progress :external-refs []}))]
+          (ws/append-entry! :brian id {:kind :note} "a")
+          (is (= :stale (:refused (ws/append-entry-at! :brian id nil {:kind :note} "b"))))
+          (is (= :stale (:refused (ws/append-entry-at! :brian id 99 {:kind :note} "b")))
+              "a position past the end is stale too, not an error")
+          (is (= 1 (count (:entries (ws/read-ws :brian id))))
+              "neither refusal wrote anything")))
+      (finally (fs/delete-tree tmp)))))

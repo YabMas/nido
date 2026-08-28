@@ -1568,6 +1568,39 @@
    [:report-path      {:optional true} [:maybe string?]]
    [:artifact         {:optional true} string?]])
 
+(def ImprovementDecision
+  "A human decided what to do about ONE proposal a review-loop analysis made.
+
+   The proposal is named by where it sits, not by an identifier: :observation is
+   its index in the :observations vector of the :review-analysis entry at
+   :analysis-seq, on this workstream. Entries are immutable, so that position is
+   as stable as the record, and nothing has to mint or store a proposal id —
+   which is what lets a decision be made about a record that was written before
+   anyone thought to decide about it.
+
+   :at-seq is the entry the surface RENDERED the proposal from, and it is what
+   makes the decision honest rather than merely durable, the same way it does
+   for a design approval. A decision taken against a page the ledger has since
+   moved past is not a decision about what is there now, so the click carries
+   the position it was read at and the append refuses when that is no longer the
+   latest. It is usually equal to :analysis-seq and must not be assumed to be:
+   the analysis is one entry among many on a workstream that keeps growing.
+
+   :decided-by is stamped nido-side, never read from the request — the same
+   reasoning as the text an option button resumes an agent with. A browser sends
+   an id and nothing else, so a decision cannot arrive claiming an author.
+
+   :note is where a decline says why. Optional because an approval usually needs
+   no words: the proposal is the words."
+  [:map {:closed true}
+   [:format       [:= :improvement-decision]]
+   [:analysis-seq int?]
+   [:observation  int?]                      ; 0-based index into :observations
+   [:verdict      [:enum :approved :declined]]
+   [:at-seq       int?]
+   [:decided-by   string?]
+   [:note         {:optional true} string?]])
+
 (def Retraction
   "A named earlier entry is not true, and here is what shows it.
 
@@ -1639,6 +1672,7 @@
    :design-verdict           DesignVerdict
    :findings                 FindingsRound
    :review-analysis          ReviewAnalysis
+   :improvement-decision     ImprovementDecision
    :proposed-ticket          ProposedTicket
    :retraction               Retraction
    :design-approved          DesignApproved})
@@ -2188,7 +2222,14 @@
                (when area (str "(" area ") ")) "[" id "] " summary))))))
 
 (defn- review-analysis->markdown
-  [{:keys [verdict run-id status rounds reviewed summary observations report-path]}]
+  "An analysis, whole. Every observation renders with its evidence, because
+   evidence is what the producing skill makes required and what separates an
+   observation from an opinion — a reader deciding whether to act on a proposal
+   is deciding about the evidence, and this render used to drop it.
+
+   Ordered summary → evidence → proposal, which is the order the decision is
+   made in: what happened, what shows it, what to do about it."
+  [{:keys [verdict run-id status rounds reviewed summary observations report-path artifact]}]
   (str/join "\n"
     (remove nil?
       (concat
@@ -2199,10 +2240,20 @@
          ""
          summary
          ""]
-        (for [{:keys [kind where summary proposal]} observations]
+        (for [{:keys [kind where summary evidence proposal]} observations]
           (str "- **" (name kind) "** (" where ") " summary
+               (when-not (str/blank? (str evidence)) (str "\n  — " evidence))
                (when proposal (str "\n  → " proposal))))
-        [(when report-path (str "\n`" report-path "`"))]))))
+        [(when artifact (str "\n" artifact))
+         (when report-path (str "\n`" report-path "`"))]))))
+
+(defn- improvement-decision->markdown
+  [{:keys [analysis-seq observation verdict decided-by note]}]
+  (str/join "\n"
+    (remove nil?
+      [(str "# Proposal " analysis-seq "." observation " — " (name verdict))
+       (str "by " decided-by)
+       (when note (str "\n" note))])))
 
 (defn- proposed-ticket-head
   [{:keys [title ticket-type priority]}]
@@ -2252,6 +2303,7 @@
     :design-verdict           (design-verdict->markdown report)
     :findings                 (findings->markdown report)
     :review-analysis          (review-analysis->markdown report)
+    :improvement-decision     (improvement-decision->markdown report)
     :proposed-ticket          (proposed-ticket->markdown report)
     ""))
 
@@ -2298,5 +2350,7 @@
                                    " (" (count (:items report)) " items)")
      :review-analysis          (str "Review-loop analysis: " (name (:verdict report))
                                     " (" (count (:observations report)) " observations)")
+     :improvement-decision     (str "Proposal " (:analysis-seq report) "." (:observation report)
+                                    " " (name (:verdict report)))
      :ship-submitted           "Ship submitted"
      nil)))

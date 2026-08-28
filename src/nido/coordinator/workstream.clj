@@ -405,6 +405,51 @@
                         (assoc entry :seq seq-n :at (clock/now-iso) :file rel)))
         abs))))
 
+(defn append-entry-at!
+  "Append only if `expected-seq` is still the ledger's latest entry. Returns the
+   absolute path on success, or {:refused :stale :latest <seq>} without writing.
+
+   The compare and the write are ONE operation because they share the append
+   lock — which is the whole point, and the reason this is a ledger operation
+   rather than something a caller assembles. A caller that reads the latest seq,
+   compares it, and then calls `append-entry!` has a window between the two: two
+   clicks answering the same question can both read the same latest, both find
+   it current, and both append. Serialising the writes does not help, because
+   what is being protected is not the file — it is the claim that this answer
+   was given to THIS question.
+
+   `expected-seq` is the position a human was looking at when they answered, so
+   it is a fact about a past reading that nothing here can reconstruct; it has
+   to be carried in. nil is refused rather than treated as `don't care`, so a
+   caller that forgets to thread the position fails closed instead of appending
+   a decision to whatever the ledger happens to hold now."
+  [project ws-id expected-seq entry content]
+  (io/with-file-lock
+    (append-lock-path project ws-id)
+    (fn []
+      (let [w      (or (read-ws project ws-id)
+                       (throw (ex-info "Workstream not found"
+                                       {:project project :ws-id ws-id})))
+            latest (count (:entries w))]
+        (if (or (nil? expected-seq) (not= expected-seq latest))
+          {:refused :stale :latest latest}
+          ;; Re-entering append-entry! would deadlock on the lock this holds, so
+          ;; the write is the same steps inline. They are few, and the
+          ;; alternative — a lock that counts its holders — buys a shared body at
+          ;; the price of the one property this whole function exists for.
+          (let [seq-n (inc latest)
+                [ext payload] (report/entry-payload (:kind entry) content)
+                _     (check-baseline-citation! w (:kind entry) payload)
+                _     (check-standing-citations! w (:kind entry) payload)
+                _     (check-seam-phase-ref! (:kind entry) payload)
+                fname (format "%04d-%s.%s" seq-n (name (:kind entry)) ext)
+                rel   (str "entries/" fname)
+                abs   (str (fs/path (cstate/workstream-dir project ws-id) rel))]
+            (io/write-text! abs payload)
+            (write! (update w :entries (fnil conj [])
+                            (assoc entry :seq seq-n :at (clock/now-iso) :file rel)))
+            abs))))))
+
 (defn latest-entry
   "The most recent typed entry of `kind` on this workstream — parsed, validated,
    and stamped with its :seq and :at — or nil. Degrades to nil on a missing,
