@@ -1,79 +1,14 @@
 (ns canvas.bands
   "Nido's high-level design: the bands, and what each may depend on.
 
-   A Band is a stratum of the codebase. Membership is DERIVED from the namespace
-   path rather than authored, which is what the 2026-08-28 restructure bought:
-   every band is a package under src/nido/, so a namespace's band is readable
-   from its name and cannot drift from the tree.
+   `Band` itself is fukan's — `fukan.common.vocab.code.band`, promoted out of this file once a
+   second project wanted it. What lives here is only what is nido's: which strata this codebase
+   has, which namespaces each claims, and which of them may reach which.
 
-   This is deliberately NOT fukan's `Subsystem`. Subsystem checks a declared
-   :may-depend DAG against `module-depends`, which is built from authored
-   `:delegates` — it says nothing until a region is modelled operation by
-   operation. A Band checks the same shape of declaration against `ns-depends`,
-   the EXTRACTED call graph at namespace altitude, which needs no authoring at
-   all. Same declaration, different evidence."
-  (:require [fukan.canvas.core.structure :as s :refer [defstructure]]
-            [fukan.common.extraction.clojure.module :refer [Ns]]))
-
-(defn ^:export read-prefix
-  "A bare string in a :prefix vector -> NsPrefix clauses, so a band authors its
-   prefixes as plain strings rather than as constructor calls."
-  [v]
-  [(list 'value v)])
-
-(defstructure ^:value NsPrefix
-  "One namespace prefix a Band claims. A `^:value` structure because fukan has no
-   plural scalar slot -- a leaf that repeats is a content-deduped node."
-  {:value :string}
-  (reader read-prefix))
-
-(defstructure Band
-  "A stratum of the codebase: the namespaces under its `:prefix`es, plus the
-   bands it is allowed to depend on. The laws are the SLOT SEMANTICS of
-   `:may-depend` — without them the declaration is prose."
-  {:prefix     [:+ NsPrefix]  ; namespace prefixes whose members this band claims
-   :may-depend [:* Band]}     ; the bands it may depend on (declared intent)
-
-  (law "every cross-band namespace dependency follows a declared :may-depend edge"
-    ;; The offender is the whole EDGE, plus the two bands it crosses. A law naming only the
-    ;; caller would report that nido.review.loop is in the wrong without saying which of its
-    ;; requires is the wrong one — true, and useless to whoever has to act on it. All four
-    ;; vars are bound in the body already, so carrying them costs nothing.
-    ;;
-    ;; The var NAMES are load-bearing too: they travel with the rows (fukan's `:vars`) and are
-    ;; what a consumer labels the columns with, so `?from`/`?to` renders as a finding an agent
-    ;; can act on where `?a`/`?b` renders as four names in a line.
-    {:scope :global
-     :offenders [?from ?to ?from-band ?to-band]
-     :rules [[(declared-dep ?s ?t) (is ?s ::Band) (may-depend ?s ?t)]]
-     :where [(ns-depends ?from ?to)
-             (in-band ?from ?from-band) (in-band ?to ?to-band)
-             [(not= ?from-band ?to-band)]
-             (not (declared-dep ?from-band ?to-band))]})
-
-  (law "every namespace belongs to a band"
-    ;; Without this the whole design is opt-in. `in-band` is derived from the path, so a
-    ;; namespace under a prefix no band claims is not an offender anywhere — it is INVISIBLE:
-    ;; the cross-band law needs both ends in a band to fire, so an unbanded package can call
-    ;; anything and be called by anything and the model stays green. This arc found that hole
-    ;; the honest way, by adding `nido.design.*` and watching the check pass.
-    {:scope :global
-     :offenders [?ns]
-     :where [(is ?ns Ns) (not-join [?ns] (in-band ?ns ?b))]})
-
-  (law "the :may-depend graph is acyclic — no band transitively depends on itself"
-    {:offenders [?band]
-     :rules [[(band-reaches ?s ?t) (may-depend ?s ?t)]
-             [(band-reaches ?s ?t) (may-depend ?s ?mid) (band-reaches ?mid ?t)]]
-     :where [(band-reaches ?band ?band)]}))
-
-(s/defrelation :in-band
-  "Code namespace ?ns belongs to Band ?b — DERIVED from the namespace path: ?ns's
-   name starts with one of ?b's declared prefixes. No membership is authored."
-  [?ns ?b]
-  [(is ?b ::Band) (prefix ?b ?px) [?px :val/value ?p]
-   (is ?ns Ns) (named ?ns ?n)
-   [(clojure.string/starts-with? ?n ?p)]])
+   Membership is DERIVED from the namespace path rather than authored, which is what the
+   2026-08-28 restructure bought: every band is a package under src/nido/, so a namespace's band
+   is readable from its name and cannot drift from the tree."
+  (:require [fukan.common.vocab.code.band :refer [Band]]))
 
 ;; ── the bands, floor first ───────────────────────────────────────────────────
 
@@ -111,7 +46,6 @@
   "Parallel sweep orchestration across dirty modules."
   {:prefix ["nido.vsdd."]
    :may-depend [Platform]})
-
 
 (Band Review
   "The judgment loops over a record, a design, a diff."
