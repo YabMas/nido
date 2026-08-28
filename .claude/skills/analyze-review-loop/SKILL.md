@@ -32,7 +32,7 @@ The payload names the run dir and the report. Start there:
 
 ```bash
 ls "<run-dir>"
-cat "<report-path>" | jq '{status: .summary.status, rounds: .summary.rounds, target: .target}'
+cat "<report-path>" | jq '{status: .status, rounds: .summary.rounds, target: .target}'
 ```
 
 `report.json` is the whole run: `:target` (cwd, base, base-rev, layers, files), then one entry per round under `:rounds`, each with its phases — `review` (per-layer `:layers` rows and every `:findings` body), `warden` (`:decision`, `:reason`, and per-finding `:rulings`), and `fix` (`:fixes`, `:fixed-count`).
