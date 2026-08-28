@@ -77,10 +77,12 @@
 
    Floored so a stack of short slugs still lines its text up with the rest of
    the display, and capped so one long slug pushes only its own line right
-   instead of widening every row. The cap is not cosmetic — `frontend/repaint!`
-   counts the frame's NEWLINES and moves the cursor up that many rows, so a line
-   that wraps is a row the repaint does not know about and the frame walks down
-   the screen."
+   instead of widening every row.
+
+   The cap buys legibility, not correctness: `frontend/fit` cuts every line to
+   the terminal's width before it is painted, so an over-wide row costs the text
+   after it rather than the repaint. Widening every row to suit one slug would
+   spend that budget on all of them."
   [names]
   (-> (reduce max 0 (map count names))
       inc
@@ -368,8 +370,8 @@
    The title is passed in rather than read off the report, because a record loop
    is identified by what it is judging — a workstream and a record kind — and the
    report carries a diff review's :target instead. Capped for the reason
-   `name-col` is: a line that wraps is a row the repaint cannot count, and the
-   frame walks down the screen."
+   `name-col` is: `frontend/fit` would otherwise cut the title at the terminal's
+   edge, and a workstream id ending in `…` names nothing."
   [report ^Instant now {:keys [title]}]
   (str "  " (let [t (str title)]
               (if (> (count t) title-cap) (str (subs t 0 title-cap) "…") t))

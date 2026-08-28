@@ -127,10 +127,10 @@
     (is (not (str/includes? s "Composition")))))
 
 (deftest the-name-column-cannot-be-widened-without-bound
-  ;; repaint! counts the frame's newlines to know how far to move the cursor
-  ;; back up, so a line that wraps is a row it does not know about and the frame
-  ;; walks down the screen. One long slug must therefore not be able to drag
-  ;; every other row across the terminal with it.
+  ;; `frontend/fit` cuts every line to the terminal's width, so width overspent
+  ;; on the name column is text lost off the right of the row. One long slug
+  ;; must not be able to drag every other row across the terminal with it and
+  ;; spend that budget for all of them.
   (let [row      (fn [i l] {:label l :index i :status "reviewed" :findings 0})
         frame-of (fn [n]
                    (render/frame
@@ -398,9 +398,9 @@
     (is (str/includes? s "! health-dropped — h1 gone"))
     (is (str/includes? s "! veto-lifted — h2 unmarked"))))
 
-(deftest no-frame-line-can-wrap-the-repaint-off-its-count
-  ;; frontend/repaint! counts NEWLINES to know how far to move the cursor up, so
-  ;; a wrapped line is a row it cannot see and the frame walks down the screen.
+(deftest a-long-title-is-capped-here-not-cut-by-the-terminal
+  ;; `frontend/fit` would cut it at the window's edge, and a workstream id
+  ;; ending in `…` names nothing. Capping it here spends the width deliberately.
   (let [s (render/record-frame record-report now-10s
                                {:title (apply str (repeat 200 "x"))})]
     (is (every? #(<= (count %) 80) (str/split-lines s)))))
