@@ -35,8 +35,13 @@
    :may-depend [:* Band]}     ; the bands it may depend on (declared intent)
 
   (law "every cross-band namespace dependency follows a declared :may-depend edge"
+    ;; The offender is the whole EDGE, plus the two bands it crosses. A law that named only
+    ;; ?a would report that nido.review.loop is in the wrong without saying which of its
+    ;; requires is the wrong one — true, and useless to whoever has to act on it. All four
+    ;; vars are bound in the body already; carrying them costs nothing and is the difference
+    ;; between a finding an agent can fix and one it has to investigate.
     {:scope :global
-     :offenders [?a]
+     :offenders [?a ?b ?s ?t]
      :rules [[(declared-dep ?s ?t) (is ?s ::Band) (may-depend ?s ?t)]]
      :where [(ns-depends ?a ?b)
              (in-band ?a ?s) (in-band ?b ?t) [(not= ?s ?t)]
