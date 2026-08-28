@@ -330,15 +330,23 @@
 
 (defn- click-payload
   "What a gate click carries besides its action id, which depends on the action:
-   the reply textarea's text for :reply, and for a blocker-option button the :seq
-   of the report it was rendered from — posted as ?entry=, the same reading
-   position every other surface rides, so work/resolve-gate! can refuse a letter
-   whose question the ledger has since moved past. nil for every other action:
-   those resolve entirely nido-side."
+   the reply textarea's text for :reply, and for every button that answers a
+   ledger question the :seq of the report it was rendered from — posted as
+   ?entry=, the same reading position every other surface rides, so the resolver
+   can refuse an answer whose question the ledger has since moved past. nil for
+   every other action: those resolve entirely nido-side.
+
+   Which buttons those are is asked of the descriptor, not listed here. Every
+   position-carrying button is rendered by the same branch of `action-button`
+   (the one that appends ?entry= when a descriptor has a :seq), so a second list
+   of ids kept in this namespace is a list that can disagree with it — and did:
+   :approve was rendered with its position and read back without one, so
+   `work/approve!` saw nil, took its stale branch, and no design was ever
+   approved from the web."
   [{:keys [body] :as req} action-id]
   (cond
-    (= :reply action-id)            (:reply (parse-json-body body))
-    (work/option-action? action-id) (:entry (view-state/parse req))))
+    (= :reply action-id)                     (:reply (parse-json-body body))
+    (work/position-carrying-action? action-id) (:entry (view-state/parse req))))
 
 (defn- gate-action-response-fragment
   "The pane/gate fragment for a POST'd gate action: the per-action success toast

@@ -497,6 +497,25 @@
        'should we build this', and offering it beside Approve invites it to be
        read as one"))
 
+;; The oracle for the bug where a button was rendered with its reading position
+;; and read back without one: :approve reached approve! as nil, took the stale
+;; branch, and no design was ever approved from the web. Derived from
+;; gate-actions rather than listed, so a new position-carrying action cannot be
+;; added on one side only.
+(deftest every-button-given-a-position-is-read-back-with-one
+  (let [descriptors (concat
+                     (work/gate-actions :in-progress true nil
+                                        {:report-format :design-decision :seq 7})
+                     (work/gate-actions :in-progress true nil
+                                        {:options [{:label "A"} {:label "B"}] :seq 7}))
+        carries-seq (into #{} (comp (filter :seq) (map :id)) descriptors)]
+    (is (seq carries-seq) "the fixture must actually produce position-carrying buttons")
+    (is (contains? carries-seq :approve)
+        "Approve is rendered with the position it was read at")
+    (doseq [id carries-seq]
+      (is (work/position-carrying-action? id)
+          (str id " is rendered with a :seq, so the surface must read its ?entry= back")))))
+
 (deftest every-other-in-progress-gate-is-unchanged
   (let [usual [{:id :reply :label "Reply" :kind :resume :style :default}
                {:id :done  :label "Done"  :kind :mutation :style :primary}]]

@@ -128,6 +128,24 @@
   [action-id]
   (contains? option-index action-id))
 
+(defn position-carrying-action?
+  "True for a gate action whose button is rendered with the ledger position it
+   was read at, and whose resolver refuses a click that no longer names the
+   ledger's latest entry.
+
+   It answers a question about `gate-actions`' output, so it lives beside it: a
+   surface that decided for itself which ids carry a position would be holding a
+   second copy of this, free to disagree — which is exactly what happened. The
+   web read the position back for option buttons only, so :approve arrived nil
+   at `approve!`, took the stale branch, and no design was ever approved from the
+   dashboard.
+
+   Anything added here needs the same two things an option button has: a :seq on
+   its descriptor, and a resolver that compares it before acting."
+  [action-id]
+  (or (option-action? action-id)
+      (= :approve action-id)))
+
 (defn- option-actions
   "One button per branch of a blocker's :options, lettered by position. `:kind
    :mutation` because it is resolved nido-side, like :approve — the descriptor
