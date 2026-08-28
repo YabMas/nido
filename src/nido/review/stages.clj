@@ -295,6 +295,10 @@
                    extra))
       (catch Throwable _ nil))))
 
+;; Defined below, beside the cache reasoning it belongs with, and called from
+;; both stages that can end a round holding nothing owed — see its docstring.
+(declare record-convergence!)
+
 (def review-stage
   "Every layer and the whole stack, reviewed in one round.
 
@@ -330,8 +334,15 @@
                               (first results))
                  findings (collect-findings results)]
              (if (empty? findings)
-               (assoc ctx :findings [] :reviews results :skipped skipped
-                      :control :stop :status :clean)
+               ;; Nothing was reported anywhere, so nothing is owed anywhere and
+               ;; every target reviewed at this patch has converged. Recorded
+               ;; here because this branch is terminal: the engine stops on
+               ;; :control :stop, so the warden — which is where convergence is
+               ;; otherwise written — never runs for a round that starts clean.
+               (let [ctx' (assoc ctx :findings [] :reviews results :skipped skipped
+                                 :control :stop :status :clean)]
+                 (record-convergence! cwd ctx')
+                 ctx')
                (assoc ctx
                       :findings findings
                       :reviews results
@@ -480,11 +491,21 @@
 (defn record-convergence!
   "Write what converged this round into the workstream's cache.
 
-   This lives in the warden stage rather than in a stage of its own because the
-   engine short-circuits the moment the warden says stop — and a round that
-   stops because nothing needs fixing is exactly the round whose convergence is
-   worth remembering. Best-effort: a cache that cannot be written costs the next
-   run some duplicated review and nothing else."
+   Called from the two stages that can end a round with nothing owed, rather
+   than from a stage of its own: the engine short-circuits on `:control :stop`,
+   so anything sequenced after the stage that stopped would never run. Those two
+   are the warden, which stops once every finding is settled, and the review
+   stage, which stops before a warden exists when the round reported nothing at
+   all. The second is the one most worth recording and was the one missing —
+   a round that finds nothing is the loop's best outcome, and it was the only
+   outcome it forgot, so re-reviewing an untouched patch cost a full fan-out
+   every time.
+
+   Safe to call from either because it reads only `:reviews` and `:findings` and
+   both are set by then, and because `converged-targets` is pure: with no
+   findings nothing is owed, so every target reviewed at this patch converges.
+   Best-effort — a cache that cannot be written costs the next run some
+   duplicated review and nothing else."
   [cwd ctx]
   (when-let [[project ws-id] (project+ws-from-cwd cwd)]
     (let [converged (converged-targets (:reviews ctx) (:findings ctx))]
