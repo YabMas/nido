@@ -153,8 +153,8 @@
    together — a second copy elsewhere would be a second answer to `is a
    baseline-review part of the baseline stage`, and the two would drift.
 
-   A kind absent here has no stage, and `history` drops it rather than inventing
-   one. That is the same refusal `:unplaceable` makes, at row granularity."
+   A kind absent here has no stage, and `arc` drops it rather than inventing one.
+   That is the same refusal `:unplaceable` makes, at row granularity."
   {:ticket          :intent
    :triage          :intent
    :proposed-ticket :intent
@@ -181,13 +181,100 @@
   "The arc stage an entry of `kind` belongs to, or nil for one this vocabulary
    does not place.
 
-   The stage-granular arc this was built for is gone — it cost a line of the pane
-   and told a reader less than the ledger index below it already did. The MAPPING
-   survives because `unanswered-blocker` needs it: deciding whether work moved on
-   past a halt is asking which entries are stages and which are halts, which is
-   this question."
+   Two callers, asking it for different reasons. `arc` groups a ledger by stage so
+   a reader sees the trail at the granularity work actually moves in.
+   `unanswered-blocker` asks whether anything since a halt was a stage rather than
+   another halt, which is how it decides that work moved on without the gate ever
+   being clicked.
+
+   An earlier single-line rendering of the arc was removed for telling a reader
+   less than the index beneath it. That was a fact about one line, not about the
+   grouping: what failed was restating the position in different words, and what
+   a stage carries — its records, its re-entries, whether it was skipped — is
+   nowhere else on the page."
   [kind]
   (get stage-of-kind kind))
+
+(def arc-stages
+  "The stages of the arc, in the order a workstream travels them.
+
+   The spine only — somewhere work arrives, does something and leaves a record
+   behind. What is NOT here is in `off-arc`, and the distinction is the reason
+   this is a vector rather than the key set of `stage-of-kind`: a halt is
+   something that happens TO a workstream, not a place it got to, and a line that
+   put it in sequence would say a blocked workstream had advanced to blocked."
+  [:intent :baseline :design :approval :implementation :review :publication :shipping])
+
+(def ^:private off-arc
+  "Stages that interrupt the arc rather than lying on it. Reported beside it and
+   never in it — see `arc-stages`."
+  #{:halt :retraction :findings})
+
+(defn arc
+  "One workstream's ledger read as the arc it travelled:
+
+     {:stages     [{:stage :entries :visits :state (:last-seq :last-at :seqs)} …]
+      :excursions [{:stage :entries :last-seq :last-at :seqs} …]}
+
+   Pure over the entry index the ledger already keeps — the same `{:kind :seq
+   :at}` maps the pane lists one per row — so it reads nothing of its own and
+   cannot come to disagree with the index it sits above. Entries of a kind this
+   vocabulary does not place are dropped rather than bucketed somewhere.
+
+   `:visits` is the field that earns this over a list. It counts how many times
+   the workstream ENTERED a stage, not how many records the stage holds, and it
+   is counted across the spine alone so that a halt in the middle of a design
+   does not read as having left design and come back. A design its decision round
+   sent back to the baseline shows two visits to baseline; nine designs and nine
+   decisions inside one uninterrupted stretch of design show one. Ordering by
+   sequence number cannot show either, and neither can anything shaped like a
+   progress bar, because both describe a walk that only goes forward.
+
+   `:state` is what a stage cell renders:
+
+     :done     it holds records and is not where the trail ends
+     :current  the newest record carrying any stage belongs to it
+     :skipped  it holds no record and the trail is already past it
+     :ahead    it holds no record and the trail has not reached it
+
+   :skipped is neither a defect nor an error — a workstream can reach a draft PR
+   having never written an implementation-plan record — but it is a fact a reader
+   should see, and folding it into :ahead would claim a stage is still owed when
+   the work went past it. When the trail ends on an excursion no spine stage is
+   current, and nothing is skipped: what a blocked workstream was in the middle of
+   is a question the position answers, not one to guess at from a record order."
+  [entries]
+  (let [staged  (keep (fn [e]
+                        (when-let [st (stage-of (:kind e))]
+                          (assoc e :stage st)))
+                      entries)
+        spine   (remove #(off-arc (:stage %)) staged)
+        current (:stage (last staged))
+        idx     (zipmap arc-stages (range))
+        ;; nil — never false — when the trail ends off the arc, so `past?` cannot
+        ;; report a stage as skipped on the strength of an excursion.
+        past?   (fn [st] (when-let [c (idx current)]
+                           (< (idx st) c)))
+        visits  (frequencies (map first (partition-by identity (map :stage spine))))
+        held    (group-by :stage staged)
+        facet   (fn [st es]
+                  (cond-> {:stage st :entries (count es) :visits (get visits st 0)}
+                    (seq es) (assoc :last-seq (:seq (last es))
+                                    :last-at  (:at (last es))
+                                    :seqs     (mapv :seq es))))]
+    {:stages (mapv (fn [st]
+                     (let [es (get held st)]
+                       (assoc (facet st es)
+                              :state (cond (= st current) :current
+                                           (seq es)       :done
+                                           (past? st)     :skipped
+                                           :else          :ahead))))
+                   arc-stages)
+     :excursions (->> (filter #(off-arc (:stage %)) staged)
+                      (group-by :stage)
+                      (mapv (fn [[st es]] (facet st es)))
+                      (sort-by :last-seq)
+                      vec)}))
 
 (defn- open-findings?
   "True when a findings round left items nobody has resolved.

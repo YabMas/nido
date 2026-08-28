@@ -297,6 +297,104 @@
   (is (= :halt (p/stage-of :blocker)))
   (is (nil? (p/stage-of :impl)) "a kind this vocabulary does not read"))
 
+;; ── The arc ─────────────────────────────────────────────────────────────────
+
+(defn- kinds->entries
+  "A ledger index from a bare kind sequence — {:kind :seq :at}, which is all `arc`
+   reads. Seqs are 1-based so a failure names the position a reader would count to."
+  [kinds]
+  (vec (map-indexed (fn [i k] {:kind k :seq (inc i) :at (str "2026-08-28T00:00:0" (mod i 10) "Z")})
+                    kinds)))
+
+(defn- stage-map [entries]
+  (into {} (map (juxt :stage identity)) (:stages (p/arc entries))))
+
+(deftest arc-covers-every-spine-stage-in-order
+  (let [a (p/arc (kinds->entries [:intent]))]
+    (is (= p/arc-stages (mapv :stage (:stages a)))
+        "every stage renders, in arc order, whether or not it holds anything")
+    (is (= [:current :ahead :ahead :ahead :ahead :ahead :ahead :ahead]
+           (mapv :state (:stages a)))
+        "the only staged entry names the current stage; the rest are unreached")))
+
+(deftest arc-marks-where-the-trail-ends
+  (let [m (stage-map (kinds->entries [:intent :baseline :baseline-review]))]
+    (is (= :done    (:state (m :intent))))
+    (is (= :current (:state (m :baseline))) "the newest staged entry names the current stage")
+    (is (= :ahead   (:state (m :design))))))
+
+(deftest arc-tells-a-skipped-stage-from-one-not-yet-reached
+  ;; A workstream can reach implementation having written no approval record. That
+  ;; is not an error, and calling it :ahead would say a stage is still owed when
+  ;; the work has gone past it.
+  (let [m (stage-map (kinds->entries [:intent :baseline :design :implementation-plan]))]
+    (is (= :skipped (:state (m :approval)))  "no record, and the trail is past it")
+    (is (= :ahead   (:state (m :review)))    "no record, and the trail has not reached it")
+    (is (= :current (:state (m :implementation))))))
+
+(deftest arc-counts-entries-and-visits-separately
+  ;; Nine records inside one uninterrupted stretch is one visit. The two numbers
+  ;; answer different questions and collapsing them loses the loop-back.
+  (let [m (stage-map (kinds->entries [:design :design-decision :design :design-decision]))]
+    (is (= 4 (:entries (m :design))))
+    (is (= 1 (:visits  (m :design))) "one uninterrupted stretch, however many records")))
+
+(deftest arc-counts-a-loop-back-as-a-second-visit
+  (let [m (stage-map (kinds->entries [:baseline :baseline-review
+                                      :design :design-decision
+                                      :baseline :baseline-review
+                                      :design]))]
+    (is (= 2 (:visits (m :baseline))) "sent back to the baseline once")
+    (is (= 2 (:visits (m :design))))
+    (is (= 4 (:entries (m :baseline))))))
+
+(deftest arc-does-not-let-a-halt-split-a-stage
+  ;; A blocker raised mid-design is an interruption, not a departure. Counting it
+  ;; as one would inflate every visit count on any workstream that ever parked.
+  (let [a (p/arc (kinds->entries [:design :blocker :blocker-answered :design]))
+        m (into {} (map (juxt :stage identity)) (:stages a))]
+    (is (= 1 (:visits (m :design))) "the halt interrupted design; it did not leave it")
+    (is (= [:halt] (mapv :stage (:excursions a))))
+    (is (= 2 (:entries (first (:excursions a)))))))
+
+(deftest arc-keeps-excursions-out-of-the-spine
+  (let [a (p/arc (kinds->entries [:intent :baseline :retraction :findings]))]
+    (is (every? #(contains? #{:intent :baseline :design :approval :implementation
+                              :review :publication :shipping} %)
+                (map :stage (:stages a)))
+        "a halt is something that happens to a workstream, not a place it reaches")
+    (is (= [:retraction :findings] (mapv :stage (:excursions a))))))
+
+(deftest arc-names-no-current-stage-when-the-trail-ends-off-it
+  ;; What a blocked workstream was in the middle of is the position's question.
+  ;; Guessing it from record order would be a second answer able to disagree.
+  (let [a (p/arc (kinds->entries [:intent :baseline :design :blocker]))
+        m (into {} (map (juxt :stage identity)) (:stages a))]
+    (is (not-any? #(= :current (:state %)) (:stages a)))
+    (is (not-any? #(= :skipped (:state %)) (:stages a))
+        "and nothing is skipped either — there is no current stage to be past")
+    (is (= :done (:state (m :design))))))
+
+(deftest arc-drops-a-kind-it-cannot-place
+  (let [a (p/arc (kinds->entries [:intent :impl :resolution]))
+        m (into {} (map (juxt :stage identity)) (:stages a))]
+    (is (= 1 (:entries (m :intent))) "the two legacy kinds are not bucketed anywhere")
+    (is (= 0 (reduce + (map :entries (rest (:stages a))))))))
+
+(deftest arc-survives-a-ledger-it-can-place-nothing-in
+  (let [a (p/arc (kinds->entries [:impl :resolution]))]
+    (is (every? #(= :ahead (:state %)) (:stages a)))
+    (is (empty? (:excursions a))))
+  (let [a (p/arc [])]
+    (is (= p/arc-stages (mapv :stage (:stages a))))
+    (is (empty? (:excursions a)))))
+
+(deftest arc-carries-the-seqs-a-reader-would-open
+  (let [m (stage-map (kinds->entries [:intent :baseline :baseline-review :design]))]
+    (is (= [2 3] (:seqs (m :baseline))))
+    (is (= 3 (:last-seq (m :baseline))))
+    (is (nil? (:seqs (m :review))) "a stage holding nothing carries no coordinates")))
+
 ;; ── What a finished stage means ─────────────────────────────────────────────
 
 (defn- ledger-review-statuses
