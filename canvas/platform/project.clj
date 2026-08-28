@@ -22,5 +22,5 @@
      :delegates [config/read-projects config/write-projects! core/log-step]})
   (Operation get-project
     "One project entry, or nil."
-    {:signature [:=> [:catn [:name :string]] [:or :map :nil]]
+    {:signature [:=> [:catn [:name :string]] [:maybe :map]]
      :delegates [config/read-projects]}))

@@ -42,6 +42,6 @@
   (Operation log-tail "The last n lines of a file, or empty when it does not exist."
     {:signature [:=> [:catn [:path :string] [:lines :int]] :string]})
   (Operation rss-bytes "Resident set size of a pid in bytes, or nil."
-    {:signature [:=> [:catn [:pid :int]] [:or :int :nil]]})
+    {:signature [:=> [:catn [:pid :int]] [:maybe :int]]})
   (Operation human-bytes "A byte count as a short human string."
-    {:signature [:=> [:catn [:v [:or :int :nil]]] :string]}))
+    {:signature [:=> [:catn [:v [:maybe :int]]] :string]}))

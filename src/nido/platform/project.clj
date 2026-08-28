@@ -39,7 +39,7 @@
         (core/log-step (str "Project '" name "' not found"))
         false))))
 
-(defn ^{:malli/schema [:=> [:cat :string] [:or :map :nil]]}
+(defn ^{:malli/schema [:=> [:cat :string] [:maybe :map]]}
   get-project
   "Get a project entry by name, or nil."
   [name]

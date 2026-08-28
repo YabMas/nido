@@ -93,7 +93,7 @@
     (fs/create-dirs parent))
   (spit path (json/generate-string data {:pretty true})))
 
-(defn ^{:malli/schema [:=> [:cat :string] [:or :string :nil]]}
+(defn ^{:malli/schema [:=> [:cat :string] [:maybe :string]]}
   read-text
   "Read a text file, returning nil if it doesn't exist."
   [path]

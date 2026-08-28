@@ -188,7 +188,7 @@
          (take-last lines)
          (str/join "\n"))))
 
-(defn ^{:malli/schema [:=> [:cat :int] [:or :int :nil]]}
+(defn ^{:malli/schema [:=> [:cat :int] [:maybe :int]]}
   rss-bytes
   "Resident set size of a pid in bytes, via `ps -o rss= -p <pid>`. The
    `ps` column is KiB on Darwin and Linux, multiplied here by 1024.
@@ -200,7 +200,7 @@
       (when (zero? exit)
         (some-> out str/trim parse-long (* 1024))))))
 
-(defn ^{:malli/schema [:=> [:cat [:or :int :nil]] :string]}
+(defn ^{:malli/schema [:=> [:cat [:maybe :int]] :string]}
   human-bytes
   "Format a byte count as a short human-readable string (e.g. \"1.8 GB\").
    Returns \"—\" when v is nil."

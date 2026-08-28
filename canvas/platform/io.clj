@@ -28,7 +28,7 @@
     {:signature [:=> [:catn [:path :string] [:data :any]] :any]})
   (Operation read-text
     "Read a text file, or nil when it does not exist."
-    {:signature [:=> [:catn [:path :string]] [:or :string :nil]]})
+    {:signature [:=> [:catn [:path :string]] [:maybe :string]]})
   (Operation write-text!
     "Write text, creating parent dirs."
     {:signature [:=> [:catn [:path :string] [:text :string]] :any]}))
