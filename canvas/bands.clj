@@ -87,6 +87,17 @@
   {:prefix ["nido.vsdd."]
    :may-depend [Platform]})
 
+(Band Design
+  "Reading a project's declared design and checking its code against it.
+
+   A capability band over the floor, like Vsdd: it shells to fukan and reads
+   findings back. It is deliberately NOT a floor namespace despite everything
+   above eventually wanting it — high fan-in is not what makes something
+   generic, and a seam that knows what a `canvas/` is belongs to nido, not to
+   its standard library."
+  {:prefix ["nido.design."]
+   :may-depend [Platform]})
+
 (Band Review
   "The judgment loops over a record, a design, a diff."
   {:prefix ["nido.review."]
@@ -108,4 +119,4 @@
 (Band Surface
   "Every way a human reaches nido: the bb tasks, the TUI, the web dashboard."
   {:prefix ["tasks." "nido.ui."]
-   :may-depend [Platform Integration Session Coordination Vsdd Review Boot]})
+   :may-depend [Platform Integration Session Coordination Vsdd Review Boot Design]})

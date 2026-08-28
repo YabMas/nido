@@ -252,6 +252,11 @@
    :doc "Refuse a landing whose design does not stand: retracted, never decided, or decided on a survey retracted since. Exits non-zero and prints the way out. [:cwd <dir>]"
    :task (apply nido-land/cmd *command-line-args*)}
 
+  nido:design:check
+  {:requires ([tasks.nido-design :as nido-design])
+   :doc "Check a worktree against the project's declared design (fukan canvas/). Exits 1 on a violation, 2 when undecidable. [:cwd <dir>]"
+   :task (apply nido-design/cmd *command-line-args*)}
+
   nido:test
   {:requires ([tasks.nido-test :as nido-test])
    :doc "Run unit tests. Optional :only <ns-prefix> to filter."
