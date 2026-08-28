@@ -14,6 +14,7 @@
    [babashka.fs :as fs]
    [clojure.java.io :as jio]
    [clojure.string :as str]
+   [nido.design.check :as design]
    [nido.platform.config :as config]
    [nido.session.resume-shim :as resume-shim]
    [nido.platform.core :as core]
@@ -546,6 +547,38 @@
     (when-let [resource (jio/resource (str "project-briefings/" project-name ".md"))]
       (slurp resource))))
 
+(defn- render-design-section
+  "The project's declared design, verbatim, and what the reader is to do about it.
+
+   Verbatim rather than summarised because the declaration is already written to be read —
+   bands with docstrings, laws with the reason they exist — and a generated summary would drop
+   that half while adding a way to drift from the model it summarises.
+
+   It carries no violation COUNT. A count written here would be true at `session:up` and wrong
+   by the agent's first edit, and a stale green is worse than no green at all. The section says
+   how to ask instead; the answer is always current.
+
+   Nil when the project declares no design, so the briefing simply does not have the section."
+  [project-name worktree]
+  (when-let [design (try (when worktree (design/design-of project-name worktree))
+                         (catch Throwable _ nil))]
+    (str "## The design this project declares\n"
+         "\n"
+         "This is not documentation. It is a model your code is CHECKED against:\n"
+         "`bb nido:design:check` exits non-zero the moment the code stops obeying\n"
+         "it. Read it before you add a namespace or a require — nearly every\n"
+         "violation is one import that should have gone the other way, and it is\n"
+         "far cheaper to not write than to unpick.\n"
+         "\n"
+         "```clojure\n"
+         (design/declaration-text design)
+         "\n```\n"
+         "\n"
+         "If the code is right and the declaration is wrong, change the\n"
+         "DECLARATION — in the same commit, saying why. What you may not do is\n"
+         "leave the two disagreeing and let the next person discover it.\n"
+         "\n")))
+
 (defn- render-workstream-line
   "Render the 'Workstream:' line when workstream-id is present.
    Appends ' (<br-id>)' when br-id is also available."
@@ -579,6 +612,7 @@
        "## Services are already running\n\nThe REPL, app server, and database for this worktree are managed by\nnido. Don't run project-local scripts that spin up a REPL/app/DB —\nconnect to what's already live. The postgres MCP is preconfigured to\nthis session's DB.\n\n"
        "## Lite session\n\nThis is a lite session with no background services. The worktree is a\nread-only symlink to the project source directory.\n\n")
      (when-not (str/blank? project-briefing) (str project-briefing "\n"))
+     (render-design-section project-name worktree)
      shipping-doctrine-instructions
      "\n"
      comment-doctrine-instructions

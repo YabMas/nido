@@ -77,6 +77,17 @@
   "Generic low-level libraries and the nido home. Depends on nothing."
   {:prefix ["nido.platform."]})
 
+(Band Design
+  "Reading a project's declared design and checking its code against it.
+
+   A capability band over the floor, like Vsdd: it shells to fukan and reads
+   findings back. It is deliberately NOT a floor namespace despite everything
+   above eventually wanting it — high fan-in is not what makes something
+   generic, and a seam that knows what a `canvas/` is belongs to nido, not to
+   its standard library."
+  {:prefix ["nido.design."]
+   :may-depend [Platform]})
+
 (Band Integration
   "Outbound adapters: Notion, Slack, GitHub, video transcription."
   {:prefix ["nido.notion." "nido.slack." "nido.github." "nido.transcribe."]
@@ -85,7 +96,7 @@
 (Band Session
   "Bringing a development session up and down: worktrees, services, the session home."
   {:prefix ["nido.session." "nido.bench."]
-   :may-depend [Platform Integration]})
+   :may-depend [Platform Integration Design]})
 
 (Band Coordination
   "The work plane: workstreams, tickets, runs, sources, the lanes that drive them."
@@ -97,16 +108,6 @@
   {:prefix ["nido.vsdd."]
    :may-depend [Platform]})
 
-(Band Design
-  "Reading a project's declared design and checking its code against it.
-
-   A capability band over the floor, like Vsdd: it shells to fukan and reads
-   findings back. It is deliberately NOT a floor namespace despite everything
-   above eventually wanting it — high fan-in is not what makes something
-   generic, and a seam that knows what a `canvas/` is belongs to nido, not to
-   its standard library."
-  {:prefix ["nido.design."]
-   :may-depend [Platform]})
 
 (Band Review
   "The judgment loops over a record, a design, a diff."

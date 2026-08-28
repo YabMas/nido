@@ -6,6 +6,8 @@
    [clojure.test :refer [deftest is testing]]
    [nido.platform.config :as config]
    [nido.platform.core :as core]
+   [nido.design.check]
+   [nido.platform.project]
    [nido.session.launcher :as launcher]
    [nido.session.links :as links]
    [nido.session.state :as state]))
@@ -656,3 +658,31 @@
     (is (str/includes? d "re-survey, not to supersede")
         "a wrong premise and a wrong design have different remedies")
     (is (str/includes? d "`/design` §4"))))
+
+(deftest render-context-carries-the-declared-design
+  (testing "a project that declares a design gets it verbatim in the briefing, because the
+            declaration is already written to be read and a summary could drift from it"
+    (let [wt (fs/create-temp-dir)]
+      (try
+        (fs/create-dirs (fs/path wt "canvas"))
+        (spit (str (fs/path wt "canvas" "bands.clj"))
+              "(Band Platform \"the floor, depends on nothing\" {:prefix [\"p.\"]})")
+        (with-redefs [nido.platform.project/get-project (constantly nil)
+                      nido.design.check/check
+                      (fn [& _] (throw (ex-info "the briefing must not run the checker" {})))]
+          (let [doc (@#'launcher/render-context (assoc base-ctx :worktree (str wt)))]
+            (is (str/includes? doc "## The design this project declares"))
+            (is (str/includes? doc "the floor, depends on nothing")
+                "verbatim — the docstrings are the half a reader most needs")
+            (is (str/includes? doc "bb nido:design:check")
+                "the section says how to ask, since it carries no count of its own")))
+        (finally (fs/delete-tree wt))))))
+
+(deftest render-context-omits-the-design-section-when-none-is-declared
+  (let [wt (fs/create-temp-dir)]
+    (try
+      (with-redefs [nido.platform.project/get-project (constantly nil)]
+        (let [doc (@#'launcher/render-context (assoc base-ctx :worktree (str wt)))]
+          (is (not (str/includes? doc "## The design this project declares"))
+              "most projects nido drives declare nothing, and get a clean briefing")))
+      (finally (fs/delete-tree wt)))))
