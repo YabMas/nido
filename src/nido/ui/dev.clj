@@ -128,6 +128,34 @@
   (some-> (state/read-session instance-id)
           (get-in [:service-states :app :app-port])))
 
+(defn- stop-session-blocking!
+  "Down one session and clear its optimistic state. Blocking — callers own the
+   thread."
+  [session opts instance-id]
+  (lifecycle/down! session opts)
+  (clear-app-state! instance-id))
+
+(defn stop-session!
+  "Bring ONE session down on a background thread, tracking optimistic state under
+   its canonical instance-id and capturing a failure into it.
+
+   The session-scoped teardown. `work/bring-down!` is the WORKSTREAM-scoped
+   fan-out over the same `lifecycle/down!`: it downs every session its workstream
+   owns, which is right for a closed workstream's leftovers and wrong for a
+   single idle session whose siblings may be in use. Anything acting on one
+   session belongs here."
+  [project session]
+  (let [{:keys [wt-path instance-id]} (lifecycle/session-coords session {:project project})
+        profile (engine/read-profile-for-session wt-path)
+        opts    (cond-> {:project project} profile (assoc :profile profile))]
+    (set-app-state! instance-id :stopping)
+    (future
+      (try (stop-session-blocking! session opts instance-id)
+           (catch Exception e
+             (set-app-state! instance-id :failed
+                             (or (:error-msg (ex-data e)) (ex-message e))))))
+    instance-id))
+
 (defn dev-action!
   "Run a DEV-ENVIRONMENT lifecycle action for one session on a background
    thread, tracking optimistic state in app-states (keyed by the canonical
@@ -152,8 +180,7 @@
                   (set-app-state! instance-id :failed
                                   "App did not open its port within the timeout — see eval log"))))
           "stop"
-          (do (lifecycle/down! session opts)
-              (clear-app-state! instance-id))
+          (stop-session-blocking! session opts instance-id)
           "restart"
           (do (lifecycle/restart! session opts)
               (clear-app-state! instance-id))

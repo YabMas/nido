@@ -377,9 +377,23 @@
           (list
            [:div.meta {:style "margin-top:7px"} "Nothing driving these:"]
            (for [c (take 3 candidates)]
-             [:div.fleet-cand
-              [:span.nm (str (:project c) "/" (:session c))]
-              [:span.sz (process/human-bytes (:bytes c)) " · " (fleet-idle-str c)]])
+             (list
+              [:div.fleet-cand
+               [:span.nm (str (:project c) "/" (:session c))]
+               [:span.sz (process/human-bytes (:bytes c)) " · " (fleet-idle-str c)]
+               (if (:pending? c)
+                 [:span.meta "stopping…"]
+                 [:button.btn
+                  {"data-on:click"
+                   (str "@post('/ops/fleet/" (:project c) "/"
+                        (java.net.URLEncoder/encode (str (:session c)) "UTF-8")
+                        "/down')")}
+                  "down"])]
+              ;; A stop that failed keeps its button — the action stays retryable —
+              ;; and says why. The panel polls every 5s, so this is the only place
+              ;; the click's outcome is ever reported.
+              (when-let [err (:error-msg c)]
+                [:div.meta {:style "color:#f87171"} err])))
            (when (pos? more) [:div.meta (str "+" more " more")]))
 
           ;; A blind probe also produces no candidates, and "nothing is idle" is a

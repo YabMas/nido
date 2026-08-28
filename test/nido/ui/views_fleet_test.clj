@@ -95,3 +95,29 @@
         "the aggregate still stands — it does not depend on the activity probes"))
   (let [out (render (assoc roomy :candidates [] :signals-ok? true))]
     (is (str/includes? out "Nothing idle"))))
+
+(deftest a-candidate-offers-a-stop-that-names-only-itself
+  (let [out (render (assoc tight :candidates
+                           [{:project "brian" :session "feat/learning-goals"
+                             :instance-id "brian--learning-goals"
+                             :bytes gb :idle-ms (* 50 3600000)}]))]
+    (is (str/includes? out "/ops/fleet/brian/feat%2Flearning-goals/down")
+        "session-scoped route, and the branch prefix is encoded rather than splitting the path")
+    (is (str/includes? out ">down<"))))
+
+(deftest an-in-flight-stop-replaces-its-own-button
+  (let [out (render (assoc tight :candidates
+                           [{:project "brian" :session "s" :instance-id "brian--s"
+                             :bytes gb :idle-ms (* 50 3600000) :pending? true}]))]
+    (is (str/includes? out "stopping"))
+    (is (not (str/includes? out "/ops/fleet/brian/s/down")))))
+
+(deftest a-failed-stop-reports-itself-and-stays-retryable
+  ;; The panel polls every 5s and the stop runs on a background thread, so this
+  ;; row is the only place the click's outcome is ever reported.
+  (let [out (render (assoc tight :candidates
+                           [{:project "brian" :session "s" :instance-id "brian--s"
+                             :bytes gb :idle-ms (* 50 3600000)
+                             :error-msg "pg_ctl: could not stop server"}]))]
+    (is (str/includes? out "pg_ctl: could not stop server"))
+    (is (str/includes? out "/ops/fleet/brian/s/down") "button survives the failure")))

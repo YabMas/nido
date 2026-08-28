@@ -175,7 +175,16 @@
       (assoc (select-keys t [:sessions :fleet :in-use :machine])
              :over?       (fleet/over-budget? t)
              :signals-ok? (fleet/signals-ok? rows)
-             :candidates  (fleet/candidates rows)))
+             ;; Each candidate carries whatever its own stop is doing. Resolved at
+             ;; RENDER rather than on click: a row that cannot be acted on has to
+             ;; say so before it is pressed, not after.
+             :candidates  (mapv (fn [c]
+                                  (let [{:keys [state error-msg]}
+                                        (dev/current-app-state (:instance-id c))]
+                                    (cond-> c
+                                      (= :stopping state) (assoc :pending? true)
+                                      (= :failed state)   (assoc :error-msg error-msg))))
+                                (fleet/candidates rows))))
     (catch Throwable _ nil)))
 
 (defn- ops-context []
@@ -395,6 +404,17 @@
             (sse-response
              (sse-fragment
               (views/pickup-result-fragment result opts))))))
+
+      ;; POST /ops/fleet/:project/:session/down — down ONE idle session from the
+      ;; fleet card. Session-scoped on purpose: work/bring-down! is the workstream
+      ;; fan-out and would take this session's siblings with it. The session name
+      ;; is URL-encoded because branch-prefixed names carry slashes.
+      (and (= 5 (count segs)) (= "ops" (first segs)) (= "fleet" (nth segs 1))
+           (= "down" (nth segs 4)))
+      (let [project (nth segs 2)
+            session (java.net.URLDecoder/decode (nth segs 3) "UTF-8")]
+        (dev/stop-session! project session)
+        (ops-fragment-response))
 
       ;; POST /workstreams/:project/:ws-id/winddown — bring a closed workstream's
       ;; leftover sessions down. Optimistic :stopping keyed "project/ws-id" (same
