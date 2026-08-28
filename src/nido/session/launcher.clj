@@ -550,9 +550,16 @@
 (defn- render-design-section
   "The project's declared design, verbatim, and what the reader is to do about it.
 
-   Verbatim rather than summarised because the declaration is already written to be read —
-   bands with docstrings, laws with the reason they exist — and a generated summary would drop
-   that half while adding a way to drift from the model it summarises.
+   Rendered by FUKAN, not read off disk. Fukan is what knows what a design is — which
+   vocabularies the project actually instantiated, which nodes are its own rather than the
+   meta-grammar's, how an instance was authored — and it renders the declarations without the
+   requires and helper fns that share the file with them. Reading the canvas source worked only
+   where a design happens to be one hand-written file, which is a property of one project, not
+   of designs.
+
+   As its authored forms rather than as a summary: the declarations are already written to be
+   read — structures with docstrings, laws with the reason they exist — and a generated summary
+   would drop that half while adding a way to drift from the model it summarises.
 
    It carries no violation COUNT. A count written here would be true at `session:up` and wrong
    by the agent's first edit, and a stale green is worse than no green at all. The section says
@@ -560,8 +567,8 @@
 
    Nil when the project declares no design, so the briefing simply does not have the section."
   [project-name worktree]
-  (when-let [design (try (when worktree (design/design-of project-name worktree))
-                         (catch Throwable _ nil))]
+  (when-let [declared (try (when worktree (design/describe project-name worktree))
+                           (catch Throwable _ nil))]
     (str "## The design this project declares\n"
          "\n"
          "This is not documentation. It is a model your code is CHECKED against:\n"
@@ -572,7 +579,7 @@
          "to unpick.\n"
          "\n"
          "```clojure\n"
-         (design/declaration-text design)
+         declared
          "\n```\n"
          "\n"
          "If the code is right and the declaration is wrong, change the\n"

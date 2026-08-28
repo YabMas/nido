@@ -28,20 +28,29 @@
 
    `:cmd` is the documented way to consume fukan from another project — a `:fukan` alias whose
    `:extra-paths [\".\"]` puts the consumer's root on the classpath, making `canvas/` both
-   discoverable and requirable. A project that consumes fukan differently overrides it."
+   discoverable and requirable. The VERB is appended to it, so one entry covers both questions a
+   project can ask. A project that consumes fukan differently overrides it."
   {:src       "src"
    :spec-dirs ["canvas"]
-   :cmd       ["clojure" "-M:fukan" "-m" "fukan.check"]})
+   :cmd       ["clojure" "-M:fukan" "-m" "fukan.cli"]})
 
 (def ^:private check-timeout-ms
-  "How long to wait for the checker. It is a cold JVM plus a model build — seconds, not
-   milliseconds — and the ceiling exists so a wedged one cannot hang a session coming up."
+  "How long to wait for the checker. It is a cold JVM plus a model build over the whole code
+   tree — seconds, not milliseconds — and the ceiling exists so a wedged one cannot hang a
+   session coming up."
   180000)
+
+(def ^:private describe-timeout-ms
+  "How long to wait for a design DOCUMENT. Shorter than the check's budget on purpose: the
+   model build behind it reads no code at all (~0.5s; the rest is JVM start), and this one is
+   in the path of a session briefing, which must not sit for minutes waiting to say something
+   it can equally well not say."
+  60000)
 
 (def ^:private declaration-char-cap
   "How much declared design to embed in a briefing before truncating. A model is prose plus
    declarations and is meant to be read; a model that crowded out everything else in a briefing
-   would be read by nobody."
+   would be read by nobody. Fukan's own self-model renders to ~40k, nido's to ~3k."
   16000)
 
 (defn design-of
@@ -63,19 +72,41 @@
     (when (seq files)
       (assoc cfg :files (mapv str (sort-by str files))))))
 
-(defn declaration-text
-  "The project's declared design, as the source that declares it.
+(defn- run-fukan
+  "Run one fukan verb over `worktree`, or `::timeout`. The verb is appended to the configured
+   `:cmd`, so a project that consumes fukan differently overrides one thing rather than two."
+  [{:keys [cmd]} worktree verb flags timeout-ms]
+  (let [argv (concat cmd [verb] flags)
+        proc (process/process argv {:dir (str worktree) :out :string :err :string})
+        done (deref proc timeout-ms ::timeout)]
+    (when (= ::timeout done) (process/destroy-tree proc))
+    (or (and (= ::timeout done) ::timeout) done)))
 
-   Not a generated summary. A model is authored as documented declarations — bands with
-   docstrings, laws with the reason they exist — and rendering that down to a table would drop
-   the half a reader most needs while adding a way for the rendering to drift from the model.
+(defn describe
+  "The project's declared design as a document, or nil when it declares none — or when fukan
+   could not render one.
+
+   Asked of FUKAN rather than read off disk. Fukan is what knows what a design is: which
+   vocabularies the project actually instantiated, which nodes are its own rather than the
+   meta-grammar's, and how an instance was authored. Reading `canvas/**.clj` instead worked
+   only for the case where a design happens to be one hand-written file — it pasted requires
+   and helper fns along with the declarations, said nothing about a model that is partly
+   extracted, and offered no way to select. `bands.clj` is a structure expressed through fukan,
+   not a privileged shape this seam should know the outline of.
+
    Truncated at `declaration-char-cap` with a line saying so, never silently."
-  [{:keys [files]}]
-  (let [full (str/join "\n" (for [f files] (slurp f)))]
-    (if (<= (count full) declaration-char-cap)
-      full
-      (str (subs full 0 declaration-char-cap)
-           "\n\n;; … truncated. The whole declaration is in " (str/join ", " files) "\n"))))
+  [project-name worktree]
+  (when-let [design (design-of project-name worktree)]
+    (let [{:keys [spec-dirs]} design
+          done (run-fukan design worktree "describe"
+                          ["--spec-dirs" (str/join "," spec-dirs)] describe-timeout-ms)]
+      (when (and (map? done) (zero? (long (:exit done))) (seq (str/trim (str (:out done)))))
+        (let [full (str/trim (:out done))]
+          (if (<= (count full) declaration-char-cap)
+            full
+            (str (subs full 0 declaration-char-cap)
+                 "\n\n;; … truncated. The whole declaration is in "
+                 (str/join ", " (:files design)) "\n")))))))
 
 (defn- parse-report
   "Read the checker's stdout. Unparseable output is UNDECIDABLE rather than clean: stdout is
@@ -99,15 +130,13 @@
   ([_project-name worktree design]
    (if-not design
      {:status :unmodelled}
-     (let [{:keys [cmd src spec-dirs]} design
-           argv (concat cmd ["--src" src "--spec-dirs" (str/join "," spec-dirs)])
-           proc (process/process argv {:dir (str worktree) :out :string :err :string})
-           done (deref proc check-timeout-ms ::timeout)]
+     (let [{:keys [src spec-dirs]} design
+           done (run-fukan design worktree "check"
+                           ["--src" src "--spec-dirs" (str/join "," spec-dirs)] check-timeout-ms)]
        (if (= ::timeout done)
-         (do (process/destroy-tree proc)
-             {:status :undecidable
-              :error  (str "the design check did not finish within "
-                           (quot check-timeout-ms 1000) "s")})
+         {:status :undecidable
+          :error  (str "the design check did not finish within "
+                       (quot check-timeout-ms 1000) "s")}
          (let [{:keys [exit out err]} done
                report (parse-report out)]
            (case (long exit)

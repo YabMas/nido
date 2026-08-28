@@ -665,9 +665,8 @@
     (let [wt (fs/create-temp-dir)]
       (try
         (fs/create-dirs (fs/path wt "canvas"))
-        (spit (str (fs/path wt "canvas" "bands.clj"))
-              "(Band Platform \"the floor, depends on nothing\" {:prefix [\"p.\"]})")
-        (with-redefs [nido.platform.project/get-project (constantly nil)
+        (with-redefs [nido.design.check/describe
+                      (constantly "(Band Platform \"the floor, depends on nothing\" {:prefix [\"p.\"]})")
                       nido.design.check/check
                       (fn [& _] (throw (ex-info "the briefing must not run the checker" {})))]
           (let [doc (@#'launcher/render-context (assoc base-ctx :worktree (str wt)))]
@@ -681,7 +680,7 @@
 (deftest render-context-omits-the-design-section-when-none-is-declared
   (let [wt (fs/create-temp-dir)]
     (try
-      (with-redefs [nido.platform.project/get-project (constantly nil)]
+      (with-redefs [nido.design.check/describe (constantly nil)]
         (let [doc (@#'launcher/render-context (assoc base-ctx :worktree (str wt)))]
           (is (not (str/includes? doc "## The design this project declares"))
               "most projects nido drives declare nothing, and get a clean briefing")))

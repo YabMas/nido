@@ -97,11 +97,41 @@
   (is (= "" (design/violation-text {:status :satisfied}))
       "nothing to say renders as nothing, so a caller can splice it in unconditionally"))
 
-(deftest an-oversized-declaration-is-truncated-out-loud
-  (let [wt (worktree-with {"canvas/big.clj" (str/join (repeat 20000 "x"))})]
+(deftest the-design-document-comes-from-fukan-not-from-the-files
+  (testing "fukan is what knows what a design IS — which vocabularies were instantiated, which
+            nodes are the project's rather than the meta-grammar's, how an instance was
+            authored. Reading canvas/**.clj worked only where a design happens to be one
+            hand-written file, which is a property of one project, not of designs."
+    (let [wt (worktree-with {"canvas/bands.clj" ";; requires and helper fns live here too"})]
+      (try
+        (with-redefs [project/get-project
+                      (constantly {:design {:cmd (answering "(Band Platform \"the floor\" {})" 0)}})]
+          (is (= "(Band Platform \"the floor\" {})" (design/describe "p" wt))
+              "what fukan rendered, not what the file said"))
+        (finally (fs/delete-tree wt))))))
+
+(deftest a-project-with-no-canvas-is-described-as-nothing
+  (let [wt (worktree-with {"src/a.clj" "(ns a)"})]
     (try
       (with-redefs [project/get-project (constantly nil)]
-        (let [text (design/declaration-text (design/design-of "p" wt))]
+        (is (nil? (design/describe "p" wt))))
+      (finally (fs/delete-tree wt)))))
+
+(deftest a-renderer-that-failed-describes-nothing-rather-than-half-a-design
+  (let [wt (worktree-with {"canvas/bands.clj" "(ns canvas.bands)"})]
+    (try
+      (with-redefs [project/get-project
+                    (constantly {:design {:cmd (answering "{:undecidable true}" 2)}})]
+        (is (nil? (design/describe "p" wt))
+            "a briefing with no design section beats one asserting a design nobody rendered"))
+      (finally (fs/delete-tree wt)))))
+
+(deftest an-oversized-declaration-is-truncated-out-loud
+  (let [wt (worktree-with {"canvas/big.clj" "(ns canvas.big)"})]
+    (try
+      (with-redefs [project/get-project
+                    (constantly {:design {:cmd (answering (str/join (repeat 20000 "x")) 0)}})]
+        (let [text (design/describe "p" wt)]
           (is (< (count text) 20000))
           (is (str/includes? text "truncated") "never silently")))
       (finally (fs/delete-tree wt)))))
