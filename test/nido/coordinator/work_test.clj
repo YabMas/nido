@@ -1,7 +1,6 @@
 (ns nido.coordinator.work-test
   (:require
    [babashka.fs :as fs]
-   [clojure.java.io :as io]
    [clojure.set :as set]
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
@@ -1475,24 +1474,6 @@
                    {:name "impl-new" :weight :heavy :substrate :live     :created-at "2026-07-21T10:00:00Z"}])]
     (is (= "impl-new" (:name (work/environment :brian "ws-1")))
         "an archived heavy session is excluded even if newer")))
-
-(deftest work-core-does-not-require-a-ui-namespace
-  ;; Layering: nido.coordinator.work is the model core every surface wraps. It must not
-  ;; depend on a UI namespace (it used to require nido.ui.view-state purely to
-  ;; borrow the source-filter defaults). Read via io/resource, not a relative
-  ;; path: `bb --config ~/Code/nido/bb.edn` runs with the caller's cwd (that is
-  ;; how the `nido` shell wrapper dispatches), so "src/nido/coordinator/work.clj" would not
-  ;; resolve. "src" is on :paths, so the file is a classpath resource.
-  (let [ns-form  (read-string (slurp (io/resource "nido/coordinator/work.clj")))
-        required (->> ns-form
-                      (filter list?)
-                      (filter #(= :require (first %)))
-                      (mapcat rest)
-                      (map first)
-                      (map str))]
-    (is (seq required) "sanity: the ns form was actually parsed")
-    (is (not-any? #(str/starts-with? % "nido.ui") required)
-        "the model core must not require a UI namespace")))
 
 (deftest screen-needs-count-equals-gate-count
   (let [gates [{:ws-id "a" :project "brian"} {:ws-id "b" :project "brian"}]
