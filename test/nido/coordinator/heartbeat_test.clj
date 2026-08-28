@@ -5,7 +5,7 @@
    [nido.coordinator.clock :as clock]
    [nido.coordinator.heartbeat :as hb]
    [nido.coordinator.state :as cstate]
-   [nido.io :as io]))
+   [nido.platform.io :as io]))
 
 (deftest write!-records-state-with-timestamp
   (let [tmp     (fs/create-temp-dir)

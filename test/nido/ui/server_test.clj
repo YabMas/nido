@@ -10,9 +10,9 @@
             [nido.session.engine]
             [nido.session.lifecycle :as lifecycle]
             [nido.session.state]
-            [nido.process]
+            [nido.platform.process]
             [nido.work]
-            [nido.project :as project]))
+            [nido.platform.project :as project]))
 
 (deftest system-redirects-to-workstreams
   (let [resp (server/handle-request {:request-method :get :uri "/system"})]
@@ -328,7 +328,7 @@
                 (fn [_ _] {:wt-path "/wt" :instance-id "brian--x"})
                 nido.session.state/read-registry
                 (fn [] {"/wt" {:app-port 3142 :url "http://x.localhost:3142"}})
-                nido.process/tcp-open? (fn [_] true)]
+                nido.platform.process/tcp-open? (fn [_] true)]
     (is (= {:state :running :url "http://x.localhost:3142"}
            (dev/session-dev-state "brian" "feat/x")))))
 
@@ -337,7 +337,7 @@
                 (fn [_ _] {:wt-path "/wt" :instance-id "brian--x"})
                 nido.session.state/read-registry
                 (fn [] (throw (ex-info "should not read registry in 3-arity" {})))
-                nido.process/tcp-open? (fn [_] true)]
+                nido.platform.process/tcp-open? (fn [_] true)]
     (is (= {:state :running :url "http://x.localhost:3142"}
            (dev/session-dev-state "brian" "feat/x"
                                   {"/wt" {:app-port 3142 :url "http://x.localhost:3142"}})))))
@@ -366,7 +366,7 @@
                   nido.session.engine/read-profile-for-session (fn [_] {:services []})
                   nido.work/ensure-open! (fn [& _] false)
                   nido.session.lifecycle/up! (fn [s opts] (swap! calls conj [:up s (:profile opts)]))
-                  nido.process/tcp-open? (fn [_] true)
+                  nido.platform.process/tcp-open? (fn [_] true)
                   nido.session.dev/app-port-for-instance (fn [_] 4096)
                   nido.work/workstream
                   (fn [_ _ & _] {:project "brian" :ws-id "ws-1" :origin :notion

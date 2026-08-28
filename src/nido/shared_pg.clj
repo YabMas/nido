@@ -11,8 +11,8 @@
    [babashka.fs :as fs]
    [babashka.process :refer [shell]]
    [clojure.string :as str]
-   [nido.core :as core]
-   [nido.process :as proc]
+   [nido.platform.core :as core]
+   [nido.platform.process :as proc]
    [nido.session.services.postgresql :as pg]
    [nido.session.state :as state]))
 

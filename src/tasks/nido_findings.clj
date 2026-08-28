@@ -3,8 +3,8 @@
   (:require
    [clojure.pprint :as pprint]
    [nido.coordinator.findings :as findings]
-   [nido.io :as io]
-   [nido.task-args :as task-args]))
+   [nido.platform.io :as io]
+   [nido.platform.task-args :as task-args]))
 
 (defn- project-kw [opts] (keyword (or (:project opts) "brian")))
 

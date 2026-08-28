@@ -9,7 +9,7 @@
    [nido.coordinator.queue :as queue]
    [nido.coordinator.session :as session]
    [nido.session.lifecycle :as lifecycle]
-   [nido.task-args :as task-args]))
+   [nido.platform.task-args :as task-args]))
 
 (defn enqueue-ship!
   "Write a :ship envelope. Returns the envelope path."

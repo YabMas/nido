@@ -8,7 +8,7 @@
    [babashka.fs :as fs]
    [clojure.string :as str]
    [nido.coordinator.state :as cstate]
-   [nido.io :as io]))
+   [nido.platform.io :as io]))
 
 (defn sources-dir []
   (str (fs/path (cstate/coordinator-root) "sources")))

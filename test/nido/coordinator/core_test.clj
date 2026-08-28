@@ -8,7 +8,7 @@
    [nido.coordinator.agent :as agent]
    [nido.coordinator.events]
    [nido.coordinator.sources.notion]
-   [nido.io]
+   [nido.platform.io]
    [nido.coordinator.clock :as clock]
    [nido.coordinator.core :as core]
    [nido.coordinator.executor :as executor]
@@ -26,7 +26,7 @@
    [nido.coordinator.tickets :as tickets]
    [nido.coordinator.status-file :as status-file]
    [nido.coordinator.workstream :as ws]
-   [nido.project :as project]
+   [nido.platform.project :as project]
    [nido.session.profiles :as profiles]
    [nido.work :as work]))
 
@@ -69,7 +69,7 @@
   (with-tmp
     (fn []
       (fs/create-dirs (str (fs/path (cstate/nido-root) "projects" "brian")))
-      (nido.io/write-edn! (str (fs/path (cstate/nido-root) "projects" "brian" "notion-views.edn"))
+      (nido.platform.io/write-edn! (str (fs/path (cstate/nido-root) "projects" "brian" "notion-views.edn"))
                           {:database "db" :board-views [:new-reports :in-review]
                            :board-poll "5m"
                            :views {:new-reports {} :in-review {} :open-bugs {}}})
@@ -774,7 +774,7 @@
   (let [calls (atom [])]
     (with-redefs [nido.work/adopt-orphans! (fn [p] (swap! calls conj p) {:adopted [] :yielded []})
                   nido.work/prune-dead-registry! (constantly [])
-                  nido.project/list-projects (constantly {"brian" {:directory "/x"}})]
+                  nido.platform.project/list-projects (constantly {"brian" {:directory "/x"}})]
       ;; private fn + private atom: test through the var
       (#'nido.coordinator.core/reset-adopt-throttle!)
       (#'nido.coordinator.core/maybe-adopt! 1000000)

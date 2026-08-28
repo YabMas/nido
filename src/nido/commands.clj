@@ -7,7 +7,7 @@
    [babashka.fs :as fs]
    [babashka.process :as process :refer [shell]]
    [clojure.string :as str]
-   [nido.core :as core]
+   [nido.platform.core :as core]
    [nido.session.context :as ctx]))
 
 (defn resolve-command

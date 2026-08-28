@@ -7,7 +7,7 @@
    [nido.coordinator.sources.notion :as notion-src]
    [nido.coordinator.sources.state :as sst]
    [nido.coordinator.state :as cstate]
-   [nido.io :as io]
+   [nido.platform.io :as io]
    [nido.notion.client :as client]))
 
 ;; ---------------------------------------------------------------------------

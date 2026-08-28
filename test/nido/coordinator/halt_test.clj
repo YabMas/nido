@@ -4,7 +4,7 @@
    [clojure.test :refer [deftest is]]
    [nido.coordinator.halt :as halt]
    [nido.coordinator.state :as cstate]
-   [nido.io :as io]))
+   [nido.platform.io :as io]))
 
 (defn- with-tmp [f]
   (let [tmp (fs/create-temp-dir)]

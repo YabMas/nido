@@ -25,7 +25,7 @@
    [charm.program :as program]
    [charm.style.core :as style]
    [clojure.string :as str]
-   [nido.charm-patch :as charm-patch]
+   [nido.platform.charm-patch :as charm-patch]
    [nido.coordinator.breakers :as breakers]
    [nido.coordinator.halt :as halt]
    [nido.coordinator.pickup :as pickup]
@@ -35,7 +35,7 @@
    [nido.coordinator.workstreams-view :as wsv]
    [nido.coordinator.triggers :as triggers]
    [nido.notion.client :as client]
-   [nido.project :as project]
+   [nido.platform.project :as project]
    [nido.work :as work]
    [nido.session.dev :as dev]
    [nido.session.engine :as engine]
@@ -1595,7 +1595,7 @@
 
    Alt-screen (full-screen) mode. charm's alt-screen path historically stranded
    the previous frame on resize (it resizes JLine's Display but never clears the
-   physical screen); `nido.charm-patch` vendors the fix — its create-renderer
+   physical screen); `nido.platform.charm-patch` vendors the fix — its create-renderer
    wrapper captures the renderer, and `update-fn`'s window-size handler calls
    `clear-on-resize!` to wipe + invalidate the cache before charm's render!.
    `install!` is idempotent, so calling it on every run-once is safe."

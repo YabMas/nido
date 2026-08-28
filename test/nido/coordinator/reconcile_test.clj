@@ -8,7 +8,7 @@
    [nido.coordinator.state :as cstate]
    [nido.coordinator.tickets :as tickets]
    [nido.coordinator.workstream :as ws]
-   [nido.io :as io]))
+   [nido.platform.io :as io]))
 
 (def base-run
   {:id "2026-05-13-test-foo-zzzzzzzz"

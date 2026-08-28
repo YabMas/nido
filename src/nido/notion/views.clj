@@ -15,7 +15,7 @@
   (:require
    [babashka.fs :as fs]
    [nido.coordinator.state :as cstate]
-   [nido.io :as io]))
+   [nido.platform.io :as io]))
 
 (defn- registry-path [project]
   (str (fs/path (cstate/nido-root) "projects" (name project) "notion-views.edn")))

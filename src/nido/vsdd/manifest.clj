@@ -1,8 +1,8 @@
 (ns nido.vsdd.manifest
   "VSDD run manifest — the structured record of a complete VSDD run.
    Manifests are the data model for introspection (UI, history, debugging)."
-  (:require [nido.io :as io]
-            [nido.process :as proc]))
+  (:require [nido.platform.io :as io]
+            [nido.platform.process :as proc]))
 
 (defn create
   "Create a new run manifest."

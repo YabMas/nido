@@ -14,7 +14,7 @@
   (:require
    [babashka.fs :as fs]
    [clojure.string :as str]
-   [nido.io :as io]
+   [nido.platform.io :as io]
    [nido.coordinator.state :as cstate]))
 
 (def builtin-registry

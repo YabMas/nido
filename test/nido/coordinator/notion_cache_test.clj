@@ -5,7 +5,7 @@
    [nido.coordinator.notion-cache :as nc]
    [nido.coordinator.sources.state :as sstate]
    [nido.coordinator.state :as cstate]
-   [nido.io :as io]))
+   [nido.platform.io :as io]))
 
 (deftest parse-priority-rank-cases
   (is (= 0 (nc/parse-priority-rank "0 – Release Blocker")) "en-dash separator")

@@ -2,7 +2,7 @@
   (:require
    [babashka.fs :as fs]
    [clojure.string :as str]
-   [nido.core :as core]
+   [nido.platform.core :as core]
    [nido.session.context :as ctx]
    [nido.session.service :as service]))
 

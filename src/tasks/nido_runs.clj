@@ -10,7 +10,7 @@
    [clojure.string :as str]
    [nido.coordinator.runs :as runs]
    [nido.coordinator.state :as cstate]
-   [nido.task-args :as task-args]))
+   [nido.platform.task-args :as task-args]))
 
 (defn- all-runs []
   (let [d (cstate/runs-dir)]

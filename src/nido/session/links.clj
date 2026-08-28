@@ -11,7 +11,7 @@
    session-home) because the session-home is regenerated on every `up`."
   (:require
    [babashka.fs :as fs]
-   [nido.io :as io]
+   [nido.platform.io :as io]
    [nido.session.state :as state]))
 
 (def known-types

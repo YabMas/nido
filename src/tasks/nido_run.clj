@@ -20,7 +20,7 @@
   (:require
    [clojure.string :as str]
    [nido.run :as run]
-   [nido.task-args :as task-args]))
+   [nido.platform.task-args :as task-args]))
 
 (defn- require-project [opts]
   (or (some-> (:project opts) name)

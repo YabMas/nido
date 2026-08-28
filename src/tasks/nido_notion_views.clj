@@ -3,7 +3,7 @@
   (:require
    [nido.notion.client :as client]
    [nido.notion.views-check :as check]
-   [nido.task-args :as task-args]))
+   [nido.platform.task-args :as task-args]))
 
 (defn check-cmd
   "bb nido:notion:views:check :project <p> — validate the registry against the live DB."

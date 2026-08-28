@@ -6,7 +6,7 @@
    [babashka.fs :as fs]
    [nido.coordinator.clock :as clock]
    [nido.coordinator.state :as cstate]
-   [nido.io :as io]))
+   [nido.platform.io :as io]))
 
 (defn halted? []
   (fs/exists? (cstate/halted-path)))

@@ -4,7 +4,7 @@
    [clojure.test :refer [deftest is]]
    [nido.coordinator.queue :as queue]
    [nido.coordinator.state :as cstate]
-   [nido.io :as io]))
+   [nido.platform.io :as io]))
 
 (deftest drain-reads-and-removes-files
   (let [tmp (fs/create-temp-dir)]

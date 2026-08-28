@@ -12,7 +12,7 @@
    [babashka.fs :as fs]
    [clojure.set :as set]
    [clojure.string :as str]
-   [nido.config :as config]
+   [nido.platform.config :as config]
    [nido.coordinator.clock :as clock]
    [nido.coordinator.facets :as facets]
    [nido.coordinator.notion-cache :as notion-cache]
@@ -27,7 +27,7 @@
    [nido.coordinator.state :as cstate]
    [nido.coordinator.tickets :as tickets]
    [nido.coordinator.triggers :as triggers]
-   [nido.io :as io]
+   [nido.platform.io :as io]
    [nido.coordinator.standing :as standing]
    [nido.coordinator.workstream :as cws]
    [nido.coordinator.workstreams-view :as wsv]
@@ -35,8 +35,8 @@
    [nido.notion.views :as views]
    [nido.pipeline :as pipeline]
    [nido.slack.client :as slack]
-   [nido.process :as proc]
-   [nido.project :as project]
+   [nido.platform.process :as proc]
+   [nido.platform.project :as project]
    [nido.session.lifecycle :as lifecycle]
    [nido.session.state :as sstate]))
 

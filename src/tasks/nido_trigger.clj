@@ -10,7 +10,7 @@
    [nido.coordinator.queue :as queue]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.triggers :as triggers]
-   [nido.task-args :as task-args]))
+   [nido.platform.task-args :as task-args]))
 
 (defn fire
   "bb nido:trigger:fire :project <p> <trigger-name> :url <v> :ticket-id <v> ..."

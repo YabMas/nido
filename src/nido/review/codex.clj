@@ -3,7 +3,7 @@
    -> normalized findings. nido worktrees are non-colocated jj workspaces, so
    git-coupled `codex review` cannot run there."
   (:require
-   [nido.process :as nprocess]
+   [nido.platform.process :as nprocess]
    [babashka.fs :as fs]
    [babashka.process :as p]
    [cheshire.core :as json]

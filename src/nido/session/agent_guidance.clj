@@ -8,7 +8,7 @@
   (:require
    [babashka.fs :as fs]
    [clojure.string :as str]
-   [nido.core :as core]))
+   [nido.platform.core :as core]))
 
 (def ^:private marker
   "<!-- nido-managed: DO NOT EDIT (remove this line to take ownership) -->")

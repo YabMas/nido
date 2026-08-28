@@ -4,7 +4,7 @@
    [nido.coordinator.sources :as sources]
    [nido.coordinator.sources.notion :as nsource]
    [nido.coordinator.sources.state :as sst]
-   [nido.task-args :as task-args]))
+   [nido.platform.task-args :as task-args]))
 
 (defn list-cmd
   "bb nido:coordinator:source:list -- one row per source-instance state file."

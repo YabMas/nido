@@ -8,7 +8,7 @@
    [nido.coordinator.state :as cstate]
    [nido.coordinator.tickets :as tickets]
    [nido.coordinator.workstream :as ws]
-   [nido.io :as io]))
+   [nido.platform.io :as io]))
 
 (defn- with-tmp [f]
   (let [tmp (fs/create-temp-dir)]

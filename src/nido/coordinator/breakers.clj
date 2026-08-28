@@ -8,7 +8,7 @@
    [babashka.fs :as fs]
    [nido.coordinator.clock :as clock]
    [nido.coordinator.state :as cstate]
-   [nido.io :as io]))
+   [nido.platform.io :as io]))
 
 (defn read-all []
   (let [p (cstate/breakers-path)]

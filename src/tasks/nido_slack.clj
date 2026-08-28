@@ -5,7 +5,7 @@
   (:require
    [clojure.string :as str]
    [nido.slack.client :as slack]
-   [nido.task-args :as task-args]))
+   [nido.platform.task-args :as task-args]))
 
 (def ^:private react-raw-keys
   "Kwarg keys for `react` whose values must be passed through verbatim. Slack

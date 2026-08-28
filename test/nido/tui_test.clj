@@ -11,7 +11,7 @@
    [nido.coordinator.triggers]
    [nido.coordinator.workstream :as workstream]
    [nido.notion.client :as client]
-   [nido.project :as project]
+   [nido.platform.project :as project]
    [nido.session.dev]
    [nido.session.lifecycle :as lifecycle]
    [nido.tui :as tui]
@@ -171,7 +171,7 @@
         state (-> {:screen :board :origin :all :project "brian" :size [100 40]}
                   (#'tui/rebuild-list items))
         old-height (get-in state [:list :height])]
-    (with-redefs [nido.charm-patch/clear-on-resize! (fn [] nil)]
+    (with-redefs [nido.platform.charm-patch/clear-on-resize! (fn [] nil)]
       (let [[resized _] (#'tui/update-fn state (msg/window-size 100 14))]
         (is (< (get-in resized [:list :height]) old-height)
             "the resize event applies the new terminal height to the list immediately")))))
@@ -433,7 +433,7 @@
       (is (= :clear-breaker (:modal s'))))))
 
 (deftest ops-overlay-routes-f-to-fire-trigger
-  (with-redefs [nido.project/list-projects (constantly {"brian" {}})
+  (with-redefs [nido.platform.project/list-projects (constantly {"brian" {}})
                 nido.coordinator.triggers/load-for-project (constantly [])]
     (let [state {:screen :board :project "p" :origin :all :modal :ops}
           [s' _] (#'tui/update-fn state (msg/key-press "f"))]

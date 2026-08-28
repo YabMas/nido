@@ -3,7 +3,7 @@
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
    [nido.coordinator.state :as cstate]
-   [nido.io :as io]
+   [nido.platform.io :as io]
    [nido.notion.views :as views]))
 
 (defn- with-tmp [f]

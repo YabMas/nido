@@ -3,8 +3,8 @@
    then rebase converged results onto the main branch."
   (:require [babashka.fs :as fs]
             [clojure.string :as str]
-            [nido.core :as core]
-            [nido.io :as io]
+            [nido.platform.core :as core]
+            [nido.platform.io :as io]
             [nido.vsdd.jj :as jj]
             [nido.vsdd.loop :as vsdd-loop]))
 

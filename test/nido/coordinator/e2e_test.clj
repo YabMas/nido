@@ -9,8 +9,8 @@
    [nido.coordinator.queue :as queue]
    [nido.coordinator.runs :as runs]
    [nido.coordinator.state :as cstate]
-   [nido.io :as io]
-   [nido.project :as project]
+   [nido.platform.io :as io]
+   [nido.platform.project :as project]
    [nido.work :as work]))
 
 (defn- reset-executor! [f]

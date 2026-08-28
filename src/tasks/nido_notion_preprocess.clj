@@ -13,7 +13,7 @@
    [clojure.string :as str]
    [nido.notion.client :as notion]
    [nido.notion.preprocess :as pp]
-   [nido.task-args :as task-args]))
+   [nido.platform.task-args :as task-args]))
 
 (defn exit! [code] (System/exit code))
 

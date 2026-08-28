@@ -5,7 +5,7 @@
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
    [nido.coordinator.agent :as agent]
-   [nido.core :as core]
+   [nido.platform.core :as core]
    [nido.review.codex :as codex]
    [nido.review.layers :as layers]
    [nido.review.prompts :as prompts]

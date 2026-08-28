@@ -1,6 +1,6 @@
 (ns tasks.nido-project
-  (:require [nido.core :as core]
-            [nido.project :as project]))
+  (:require [nido.platform.core :as core]
+            [nido.platform.project :as project]))
 
 (defn init
   "Create the ~/.nido/ skeleton directory structure."

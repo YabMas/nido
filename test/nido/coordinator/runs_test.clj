@@ -3,7 +3,7 @@
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
    [malli.core :as m]
-   [nido.config]
+   [nido.platform.config]
    [nido.coordinator.clock :as clock]
    [nido.coordinator.runs :as runs]
    [nido.coordinator.session :as session]
@@ -600,7 +600,7 @@
       (finally (fs/delete-tree tmp)))))
 
 (deftest launch-context-resolves-worktree-and-injection
-  (with-redefs [nido.config/read-projects (fn [] {"brian" {:directory "/Code/brian"}})
+  (with-redefs [nido.platform.config/read-projects (fn [] {"brian" {:directory "/Code/brian"}})
                 nido.session.lifecycle/worktree-path (fn [_p _d s] (str "/wt/" s))
                 nido.session.engine/resolve-instance-id (fn [_] "brian--x")
                 nido.session.launcher/session-briefing (fn [_p _s _i] "BRIEF")

@@ -4,7 +4,7 @@
    [babashka.process]
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
-   [nido.process :as proc]
+   [nido.platform.process :as proc]
    [nido.session.services.postgresql :as pg]
    [nido.session.state :as state]
    [nido.shared-pg :as shared]))

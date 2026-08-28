@@ -9,7 +9,7 @@
    [nido.coordinator.runs :as runs]
    [nido.coordinator.runs-view :as rv]
    [nido.coordinator.state :as cstate]
-   [nido.io :as io]))
+   [nido.platform.io :as io]))
 
 (def base-run
   {:id "2026-05-13-brian-investigate-bug-a1b2c3"

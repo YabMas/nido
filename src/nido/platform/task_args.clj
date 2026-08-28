@@ -1,4 +1,4 @@
-(ns nido.task-args
+(ns nido.platform.task-args
   "Shared CLI argument parser for `bb nido:*` tasks. The bb task layer hands
    us a flat seq of strings; we split it into [positionals opts-map]."
   (:require

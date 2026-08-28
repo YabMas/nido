@@ -4,7 +4,7 @@
    [clojure.test :refer [deftest is testing]]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.status-file :as sf]
-   [nido.io :as io]))
+   [nido.platform.io :as io]))
 
 (deftest read-returns-nil-when-absent
   (let [tmp (fs/create-temp-dir)]

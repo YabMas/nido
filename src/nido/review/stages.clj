@@ -11,7 +11,7 @@
    [nido.coordinator.session :as csession]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.workstream :as ws]
-   [nido.core :as core]
+   [nido.platform.core :as core]
    [nido.review.cache :as cache]
    [nido.review.codex :as codex]
    [nido.review.layers :as layers]

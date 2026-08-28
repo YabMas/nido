@@ -8,7 +8,7 @@
    [nido.coordinator.session :as sess]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.workstream :as ws]
-   [nido.io :as io]))
+   [nido.platform.io :as io]))
 
 (def example-ws
   {:id            "ws-20260605-a1b2c3"

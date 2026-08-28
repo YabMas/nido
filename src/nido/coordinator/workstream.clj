@@ -12,7 +12,7 @@
    [nido.coordinator.report :as report]
    [nido.coordinator.session :as session]
    [nido.coordinator.state :as cstate]
-   [nido.io :as io]))
+   [nido.platform.io :as io]))
 
 (def ExternalRef
   [:map {:closed true}

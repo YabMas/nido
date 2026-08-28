@@ -5,7 +5,7 @@
    [babashka.fs :as fs]
    [malli.core :as m]
    [nido.coordinator.state :as cstate]
-   [nido.io :as io]))
+   [nido.platform.io :as io]))
 
 (def Config
   [:map {:closed true}

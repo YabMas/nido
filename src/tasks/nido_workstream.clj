@@ -5,7 +5,7 @@
   (:require
    [nido.coordinator.report :as report]
    [nido.coordinator.workstream :as ws]
-   [nido.task-args :as task-args]
+   [nido.platform.task-args :as task-args]
    [nido.work :as work]))
 
 (defn- resolve-ws-id

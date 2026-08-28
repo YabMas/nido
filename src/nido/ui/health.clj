@@ -9,7 +9,7 @@
    [nido.coordinator.halt :as halt]
    [nido.coordinator.pid :as pid]
    [nido.coordinator.state :as cstate]
-   [nido.io :as io]))
+   [nido.platform.io :as io]))
 
 (defn daemon-health
   "Pure: derive the rail dot state from extracted inputs.

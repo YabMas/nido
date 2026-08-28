@@ -21,9 +21,9 @@
    [clojure.edn :as edn]
    [clojure.pprint :as pprint]
    [clojure.string :as str]
-   [nido.config :as config]
-   [nido.core :as core]
-   [nido.process :as proc]
+   [nido.platform.config :as config]
+   [nido.platform.core :as core]
+   [nido.platform.process :as proc]
    [nido.session.engine :as engine]
    [nido.session.lifecycle :as lifecycle]
    [nido.session.state :as state]))

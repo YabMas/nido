@@ -27,8 +27,8 @@
   (:require
    [babashka.fs :as fs]
    [clojure.string :as str]
-   [nido.core :as core]
-   [nido.io :as io]))
+   [nido.platform.core :as core]
+   [nido.platform.io :as io]))
 
 (defn- nido-claude-dir []
   (str (fs/path (core/nido-source-dir) ".claude")))

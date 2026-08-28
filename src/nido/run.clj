@@ -6,7 +6,7 @@
   (:require
    [babashka.fs :as fs]
    [nido.commands :as commands]
-   [nido.config :as config]
+   [nido.platform.config :as config]
    [nido.session.engine :as engine]
    [nido.session.lifecycle :as lifecycle]))
 

@@ -9,8 +9,8 @@
    [babashka.fs :as fs]
    [babashka.process :refer [shell]]
    [clojure.string :as str]
-   [nido.core :as core]
-   [nido.process :as proc]
+   [nido.platform.core :as core]
+   [nido.platform.process :as proc]
    [nido.session.context :as ctx]
    [nido.session.service :as service]
    [nido.session.state :as state]))

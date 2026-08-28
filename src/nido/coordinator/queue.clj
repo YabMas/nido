@@ -9,7 +9,7 @@
    [clojure.edn :as edn]
    [nido.coordinator.clock :as clock]
    [nido.coordinator.state :as cstate]
-   [nido.io :as io]))
+   [nido.platform.io :as io]))
 
 (defn- read-envelope-file [path]
   (try

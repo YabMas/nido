@@ -7,7 +7,7 @@
    [clojure.string :as str]
    [malli.core :as m]
    [nido.coordinator.state :as cstate]
-   [nido.io :as io]))
+   [nido.platform.io :as io]))
 
 (def Trigger
   [:map {:closed true}

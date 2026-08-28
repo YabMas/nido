@@ -1,7 +1,7 @@
 (ns nido.session.session-from-cwd-test
   (:require
    [clojure.test :refer [deftest is]]
-   [nido.config :as config]
+   [nido.platform.config :as config]
    [nido.session.engine :as engine]
    [nido.session.lifecycle :as lifecycle]
    [nido.session.state :as state]))

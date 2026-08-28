@@ -12,7 +12,7 @@
    [nido.coordinator.halt :as halt]
    [nido.coordinator.runs :as runs]
    [nido.coordinator.state :as cstate]
-   [nido.io :as io]))
+   [nido.platform.io :as io]))
 
 (defn read-all-runs
   "Read every run.edn under ~/.nido/runs/. Skips malformed files silently

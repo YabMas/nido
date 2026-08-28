@@ -12,7 +12,7 @@
    [nido.coordinator.sources.state :as sstate]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.workstream :as ws]
-   [nido.io :as io]
+   [nido.platform.io :as io]
    [nido.notion.client :as notion]))
 
 (def default-terminal

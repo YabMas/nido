@@ -15,10 +15,10 @@
    [nido.coordinator.state :as cstate]
    [nido.coordinator.launchctl :as lc]
    [nido.coordinator.sources.state :as sst]
-   [nido.io :as io]
-   [nido.process :as proc]
+   [nido.platform.io :as io]
+   [nido.platform.process :as proc]
    [clojure.string :as str]
-   [nido.task-args :as task-args]))
+   [nido.platform.task-args :as task-args]))
 
 (defn run [& args]
   (let [[_ opts]  (task-args/split-args args)

@@ -3,8 +3,8 @@
    [babashka.fs :as fs]
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
-   [nido.core :as core]
-   [nido.process :as proc]
+   [nido.platform.core :as core]
+   [nido.platform.process :as proc]
    [nido.session.service :as service]
    [nido.session.services.process]))
 

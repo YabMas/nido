@@ -1,4 +1,4 @@
-(ns nido.process
+(ns nido.platform.process
   (:require
    [babashka.fs :as fs]
    [babashka.process :refer [shell]]

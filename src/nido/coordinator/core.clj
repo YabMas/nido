@@ -41,8 +41,8 @@
    [nido.notion.client :as client]
    [nido.notion.views :as views]
    [nido.coordinator.triggers :as triggers]
-   [nido.core :as nido-core]
-   [nido.project :as project]
+   [nido.platform.core :as nido-core]
+   [nido.platform.project :as project]
    [nido.reclaim :as reclaim]
    [nido.session.profiles :as profiles]
    [nido.ui.server :as ui-server]
@@ -160,7 +160,7 @@
                     (str "WARN: auto-reclaim threw — " (ex-message t))))))))
 
 (defn- registered-projects []
-  ;; nido.project/list-projects returns {<string-name> {:directory ...}}.
+  ;; nido.platform.project/list-projects returns {<string-name> {:directory ...}}.
   ;; Envelopes (and load-all-triggers' returned map) use keyword project names,
   ;; so coerce here to a vector of keywords.
   (mapv keyword (keys (project/list-projects))))

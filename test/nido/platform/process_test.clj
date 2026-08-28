@@ -1,7 +1,7 @@
-(ns nido.process-test
+(ns nido.platform.process-test
   (:require
    [clojure.test :refer [deftest is testing]]
-   [nido.process :as sut]))
+   [nido.platform.process :as sut]))
 
 ;; ---------------------------------------------------------------------------
 ;; find-available-port — browser-blocked ports

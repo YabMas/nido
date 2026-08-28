@@ -27,7 +27,7 @@
    [nido.notion.followups :as followups]
    [nido.notion.client :as client]
    [nido.session.lifecycle :as lifecycle]
-   [nido.task-args :as task-args]))
+   [nido.platform.task-args :as task-args]))
 
 (def ^:private raw-string-keys
   "Values that must survive verbatim: EDN-parsing a URL with a `/digits`

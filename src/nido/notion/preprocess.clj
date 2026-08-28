@@ -8,7 +8,7 @@
    [cheshire.core :as json]
    [clojure.edn :as edn]
    [clojure.string :as str]
-   [nido.io :as io]
+   [nido.platform.io :as io]
    [nido.notion.client :as notion]
    [nido.transcribe.loom :as loom]))
 

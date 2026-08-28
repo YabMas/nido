@@ -6,7 +6,7 @@
    template state."
   (:require
    [babashka.fs :as fs]
-   [nido.core :as core]
+   [nido.platform.core :as core]
    [nido.session.state :as state]))
 
 (defn- tracked-instance-ids []

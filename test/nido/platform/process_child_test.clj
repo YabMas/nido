@@ -1,5 +1,5 @@
 ;; test/nido/process_child_test.clj
-(ns nido.process-child-test
+(ns nido.platform.process-child-test
   "Children this process started, and stopping them when it stops.
 
    nido disables babashka.process's destroy-tree hook globally to cure a macOS
@@ -8,7 +8,7 @@
   (:require
    [babashka.process :as p]
    [clojure.test :refer [deftest is testing]]
-   [nido.process :as nprocess]))
+   [nido.platform.process :as nprocess]))
 
 (defn- sleeper []
   (:proc (p/process {:out :inherit} "sleep" "120")))

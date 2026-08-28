@@ -1,8 +1,8 @@
-(ns nido.io-test
+(ns nido.platform.io-test
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
-   [nido.io :as io]))
+   [nido.platform.io :as io]))
 
 (deftest write-edn!-round-trip
   (let [tmp (fs/create-temp-dir)]

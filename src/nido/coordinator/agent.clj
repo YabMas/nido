@@ -3,7 +3,7 @@
 
    See spec §Agent launch."
   (:require
-   [nido.process :as nprocess]
+   [nido.platform.process :as nprocess]
    [babashka.process :as p]
    [cheshire.core :as json]
    [clojure.java.io :as jio]

@@ -3,7 +3,7 @@
    (web dashboard, TUI). Owns the in-flight app-states atom and every
    function that reads or mutates dev-resource state for a session."
   (:require [clojure.string :as str]
-            [nido.process :as proc]
+            [nido.platform.process :as proc]
             [nido.session.engine :as engine]
             [nido.session.lifecycle :as lifecycle]
             [nido.session.state :as state]

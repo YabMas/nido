@@ -2,7 +2,7 @@
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is testing]]
-   [nido.config :as config]
+   [nido.platform.config :as config]
    [nido.run :as run]
    [nido.session.engine :as engine]
    [nido.session.lifecycle :as lifecycle]))

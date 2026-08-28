@@ -2,8 +2,8 @@
   "Analyzes completed VSDD runs for efficiency improvements.
    Collects run data (manifest + reports), passes to an LLM for pattern analysis."
   (:require [clojure.string :as str]
-            [nido.core :as core]
-            [nido.io :as io]
+            [nido.platform.core :as core]
+            [nido.platform.io :as io]
             [nido.vsdd.agent :as agent]
             [nido.vsdd.prompts :as prompts]))
 

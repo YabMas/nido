@@ -9,7 +9,7 @@
    [nido.session.launcher :as launcher]
    [nido.session.lifecycle :as lifecycle]
    [nido.session.state :as state]
-   [nido.task-args :as task-args]))
+   [nido.platform.task-args :as task-args]))
 
 (defn- toml-value [v]
   (json/generate-string v))

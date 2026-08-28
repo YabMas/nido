@@ -4,7 +4,7 @@
    [babashka.fs :as fs]
    [clojure.string :as str]
    [clojure.test :as t]
-   [nido.task-args :as task-args]))
+   [nido.platform.task-args :as task-args]))
 
 (defn- discover-test-namespaces
   "Find test namespaces under test/, optionally filtered by prefix."

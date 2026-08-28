@@ -4,7 +4,7 @@
    [babashka.process]
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
-   [nido.core]
+   [nido.platform.core]
    [nido.session.engine :as engine]
    [nido.session.lifecycle :as lifecycle]
    [nido.session.profiles :as profiles]
@@ -71,7 +71,7 @@
         session-home (str (fs/path tmp "sessions" project-name session-name))
         up-called?   (atom false)]
     (try
-      (with-redefs [nido.core/nido-home              (constantly (str tmp))
+      (with-redefs [nido.platform.core/nido-home              (constantly (str tmp))
                     nido.session.state/session-home-dir (fn [_ _] session-home)
                     nido.session.lifecycle/resolve-project
                     (fn [_] [project-name {:directory (str tmp)}])
@@ -99,7 +99,7 @@
       (fs/create-dirs wt-path)               ; on-disk worktree exists
       (fs/create-dirs project-dir)
       ;; session-home is deliberately NOT created
-      (with-redefs [nido.core/nido-home              (constantly (str tmp))
+      (with-redefs [nido.platform.core/nido-home              (constantly (str tmp))
                     nido.session.state/session-home-dir (fn [_ _] session-home)
                     nido.session.lifecycle/resolve-project
                     (fn [_] [project-name {:directory project-dir}])
@@ -119,7 +119,7 @@
         session-home (str (fs/path tmp "sessions" project-name session-name))]
     (try
       (fs/create-dirs project-dir)
-      (with-redefs [nido.core/nido-home              (constantly (str tmp))
+      (with-redefs [nido.platform.core/nido-home              (constantly (str tmp))
                     nido.session.state/session-home-dir (fn [_ _] session-home)
                     nido.session.lifecycle/resolve-project
                     (fn [_] [project-name {:directory project-dir}])
@@ -141,7 +141,7 @@
         captured     (atom nil)]
     (try
       (fs/create-dirs session-home)
-      (with-redefs [nido.core/nido-home                 (constantly (str tmp))
+      (with-redefs [nido.platform.core/nido-home                 (constantly (str tmp))
                     nido.session.state/session-home-dir (fn [_ _] session-home)
                     nido.session.lifecycle/resolve-project
                     (fn [_] [project-name {:directory (str tmp)}])
@@ -164,7 +164,7 @@
         captured     (atom nil)]
     (try
       (fs/create-dirs session-home)
-      (with-redefs [nido.core/nido-home                 (constantly (str tmp))
+      (with-redefs [nido.platform.core/nido-home                 (constantly (str tmp))
                     nido.session.state/session-home-dir (fn [_ _] session-home)
                     nido.session.lifecycle/resolve-project
                     (fn [_] [project-name {:directory (str tmp)}])
@@ -412,7 +412,7 @@
         project-dir (str (fs/path tmp "src" "unconfigured"))]
     (try
       (fs/create-dirs (str (fs/path tmp "projects")))  ; no projects/unconfigured/
-      (with-redefs [nido.core/nido-home (constantly (str tmp))]
+      (with-redefs [nido.platform.core/nido-home (constantly (str tmp))]
         (is (= (str (fs/path tmp "src" "unconfigured-worktrees"))
                (lifecycle/worktrees-dir "unconfigured" project-dir))
             "unconfigured project resolves to the default worktrees-dir")
@@ -428,7 +428,7 @@
       (fs/create-dirs (str (fs/path tmp "projects" "configured")))
       (spit (str (fs/path tmp "projects" "configured" "session.edn"))
             (pr-str {:worktrees-dir ".worktrees"}))
-      (with-redefs [nido.core/nido-home (constantly (str tmp))]
+      (with-redefs [nido.platform.core/nido-home (constantly (str tmp))]
         (is (= (str (fs/path project-dir ".worktrees"))
                (lifecycle/worktrees-dir "configured" project-dir))
             "a relative override still resolves against project-dir"))
@@ -449,7 +449,7 @@
   ;; record; absent, the answer is "unknown" (nil) rather than a guess.
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [nido.core/nido-home        (constantly (str tmp))
+      (with-redefs [nido.platform.core/nido-home        (constantly (str tmp))
                     lifecycle/resolve-project  (fn [_] ["brian" {:directory (str tmp)}])
                     lifecycle/worktrees-dir    (fn [_ _] (str (fs/path tmp "worktrees")))]
         (let [wt (str (fs/path tmp "worktrees" "impl-x"))]
@@ -471,7 +471,7 @@
   ;; worktree. Without this the panel stays empty for every such session.
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [nido.core/nido-home        (constantly (str tmp))
+      (with-redefs [nido.platform.core/nido-home        (constantly (str tmp))
                     lifecycle/resolve-project  (fn [_] ["brian" {:directory (str tmp)}])
                     lifecycle/worktrees-dir    (fn [_ _] (str (fs/path tmp "worktrees")))]
         (let [real   (str (fs/path tmp "worktrees" "impl-x"))

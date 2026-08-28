@@ -1,8 +1,8 @@
 (ns nido.session.state
   (:require
    [babashka.fs :as fs]
-   [nido.core :as core]
-   [nido.io :as io]))
+   [nido.platform.core :as core]
+   [nido.platform.io :as io]))
 
 ;; ---------------------------------------------------------------------------
 ;; Path helpers — all session state lives under ~/.nido/state/<instance-id>/

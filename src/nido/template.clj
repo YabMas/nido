@@ -18,8 +18,8 @@
   (:require
    [babashka.fs :as fs]
    [nido.commands :as commands]
-   [nido.config :as config]
-   [nido.core :as core]
+   [nido.platform.config :as config]
+   [nido.platform.core :as core]
    [nido.session.engine :as engine]
    [nido.session.services.postgresql :as pg]
    [nido.session.state :as state]))

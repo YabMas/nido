@@ -8,7 +8,7 @@
   (:require
    [babashka.fs :as fs]
    [nido.coordinator.state :as cstate]
-   [nido.io :as io]))
+   [nido.platform.io :as io]))
 
 (defn read-all-tickets
   "Read every ticket meta.edn under ~/.nido/projects/*/tickets/*/, each tagged

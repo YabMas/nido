@@ -13,7 +13,7 @@
    [nido.coordinator.clock :as clock]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.workstream :as cws]
-   [nido.io :as io]))
+   [nido.platform.io :as io]))
 
 (defn ticket-dir [project br-id]
   (str (fs/path (cstate/nido-root) "projects" (name project) "tickets" br-id)))

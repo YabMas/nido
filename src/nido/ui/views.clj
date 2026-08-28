@@ -4,7 +4,7 @@
             [hiccup2.core :as h]
             [nido.coordinator.report :as report]
             [nido.coordinator.triggers :as triggers]
-            [nido.process :as process]
+            [nido.platform.process :as process]
             [nido.ui.markdown :as md]
             [nido.ui.view-state :as view-state]
             [nido.work :as work]))

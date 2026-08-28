@@ -1,4 +1,4 @@
-(ns nido.core
+(ns nido.platform.core
   (:require [babashka.fs :as fs]
             [clojure.java.io :as io]))
 
@@ -12,14 +12,15 @@
   "The directory containing nido's bb.edn — i.e. the nido project root.
    Derived at runtime from where this namespace was loaded so the value is
    correct regardless of the caller's cwd. Resolves
-   <root>/src/nido/core.clj → <root>."
+   <root>/src/nido/platform/core.clj → <root>."
   []
-  (let [url (io/resource "nido/core.clj")]
+  (let [url (io/resource "nido/platform/core.clj")]
     (when-not url
       (throw (ex-info "Could not resolve nido source dir from classpath" {})))
     (-> url
         .toURI
         java.io.File.
+        .getParentFile      ; platform/
         .getParentFile      ; nido/
         .getParentFile      ; src/
         .getParentFile      ; project root

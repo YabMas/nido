@@ -13,7 +13,7 @@
      ~/.nido/projects/<project>/_pre-unification/   (legacy run/ticket records archived by migration)"
   (:require [babashka.fs :as fs]
             [clojure.string :as str]
-            [nido.core :as core]))
+            [nido.platform.core :as core]))
 
 (defn nido-root []
   (str (core/nido-home)))

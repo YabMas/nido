@@ -10,7 +10,7 @@
      On usage error: prints \"Usage:\" to stderr, exits 2."
   (:require
    [clojure.string :as str]
-   [nido.task-args :as task-args]
+   [nido.platform.task-args :as task-args]
    [nido.transcribe :as transcribe]))
 
 (defn exit! [code] (System/exit code))

@@ -1,7 +1,7 @@
 (ns tasks.nido-vsdd
   "CLI entry points for VSDD orchestration."
   (:require [clojure.edn :as edn]
-            [nido.io :as io]
+            [nido.platform.io :as io]
             [nido.vsdd.analyst :as analyst]
             [nido.vsdd.loop :as vsdd]
             [nido.vsdd.sweep :as vsdd-sweep]))
@@ -52,7 +52,7 @@
                     (throw (ex-info "Missing :run-id" {:args args})))
         ;; Load the manifest to get the module-path
         manifest-file (str project-dir "/.vsdd/" run-id "/manifest.edn")
-        manifest (or (nido.io/read-edn manifest-file)
+        manifest (or (nido.platform.io/read-edn manifest-file)
                      (throw (ex-info "Manifest not found" {:run-id run-id})))
         module-path (:module manifest)
         config (load-vsdd-config project-dir

@@ -2,7 +2,7 @@
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
-   [nido.io :as io]
+   [nido.platform.io :as io]
    [nido.notion.client :as client]
    [nido.notion.views-check :as check]
    [nido.coordinator.state :as cstate]))

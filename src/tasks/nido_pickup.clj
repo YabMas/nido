@@ -4,7 +4,7 @@
    [nido.coordinator.pickup :as pickup]
    [nido.coordinator.state :as cstate]
    [nido.notion.client :as client]
-   [nido.task-args :as task-args]))
+   [nido.platform.task-args :as task-args]))
 
 (defn pickup
   "bb nido:pickup :project <p> <notion-url-or-id>"

@@ -1,7 +1,7 @@
-(ns nido.project
+(ns nido.platform.project
   (:require [babashka.fs :as fs]
-            [nido.config :as config]
-            [nido.core :as core]))
+            [nido.platform.config :as config]
+            [nido.platform.core :as core]))
 
 (defn add!
   "Register a project. Creates project definition dir under ~/.nido/projects/<name>/."

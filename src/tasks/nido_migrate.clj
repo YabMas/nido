@@ -1,7 +1,7 @@
 (ns tasks.nido-migrate
   (:require
    [nido.coordinator.migrate :as migrate]
-   [nido.task-args :as task-args]))
+   [nido.platform.task-args :as task-args]))
 
 (defn migrate-cmd
   "bb nido:migrate :project <p> — migrate legacy run.edn/ticket records into the

@@ -4,8 +4,8 @@
    [cheshire.core :as json]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
-   [nido.config :as config]
-   [nido.core :as core]
+   [nido.platform.config :as config]
+   [nido.platform.core :as core]
    [nido.session.launcher :as launcher]
    [nido.session.links :as links]
    [nido.session.state :as state]))
@@ -637,7 +637,7 @@
         (fs/delete-tree tmp)))))
 
 (deftest nido-add-dirs-returns-source-dir
-  (with-redefs [nido.core/nido-source-dir (fn [] "/opt/nido")]
+  (with-redefs [nido.platform.core/nido-source-dir (fn [] "/opt/nido")]
     (is (= ["/opt/nido"] (launcher/nido-add-dirs)))))
 
 (deftest shipping-doctrine-tells-a-session-to-baseline-first

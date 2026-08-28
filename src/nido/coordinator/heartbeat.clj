@@ -7,7 +7,7 @@
   (:require
    [nido.coordinator.clock :as clock]
    [nido.coordinator.state :as cstate]
-   [nido.io :as io]))
+   [nido.platform.io :as io]))
 
 (defn write!
   "Persist `state` (a map) to status.edn with a fresh :heartbeat-at."

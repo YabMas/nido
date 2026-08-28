@@ -32,7 +32,7 @@
    [nido.coordinator.scratch :as scratch]
    [nido.session.lifecycle :as lifecycle]
    [nido.session.state :as state]
-   [nido.task-args :as task-args]))
+   [nido.platform.task-args :as task-args]))
 
 (defn- require-project [opts]
   (or (some-> (:project opts) name)

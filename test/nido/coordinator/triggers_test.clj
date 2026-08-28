@@ -5,7 +5,7 @@
    [malli.core :as m]
    [nido.coordinator.triggers :as triggers]
    [nido.coordinator.state :as cstate]
-   [nido.io :as io]))
+   [nido.platform.io :as io]))
 
 (def minimal-trigger
   {:name    :investigate-bug

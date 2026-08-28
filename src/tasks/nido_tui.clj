@@ -27,7 +27,7 @@
      bb nido:tui"
   (:require
    [babashka.fs :as fs]
-   [nido.core :as core]
+   [nido.platform.core :as core]
    [nido.tui :as tui]
    [tasks.nido-session :as session])
   (:import

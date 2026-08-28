@@ -9,7 +9,7 @@
    [clojure.string :as str]
    [nido.coordinator.scratch :as scratch]
    [nido.session.lifecycle :as lifecycle]
-   [nido.task-args :as task-args]))
+   [nido.platform.task-args :as task-args]))
 
 (defn- coordinator-run?
   "A coordinator-run worktree, named `run-<project>-<trigger>-<suffix>` (see

@@ -7,7 +7,7 @@
    [nido.coordinator.drive :as drive]
    [nido.coordinator.workstream :as ws]
    [nido.pipeline :as pipeline]
-   [nido.task-args :as task-args]))
+   [nido.platform.task-args :as task-args]))
 
 (defn- require-opt [opts k]
   (or (some-> (get opts k) name)

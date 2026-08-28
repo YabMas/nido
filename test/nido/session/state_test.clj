@@ -3,7 +3,7 @@
    [babashka.fs :as fs]
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
-   [nido.io :as io]
+   [nido.platform.io :as io]
    [nido.session.state :as state]))
 
 (deftest shared-pg-paths-are-under-project-shared-dir

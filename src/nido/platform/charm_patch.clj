@@ -1,4 +1,4 @@
-(ns nido.charm-patch
+(ns nido.platform.charm-patch
   "Vendored workaround for a charm.clj 0.2.71 alt-screen RESIZE bug.
 
    Symptom: in alt-screen mode, resizing the terminal strands a frozen copy of

@@ -22,7 +22,7 @@
    [nido.coordinator.state :as cstate]
    [nido.coordinator.session :as session]
    [nido.coordinator.workstream :as ws]
-   [nido.io :as io]
+   [nido.platform.io :as io]
    [nido.pipeline :as pipeline]
    [nido.session.state :as session-state]))
 

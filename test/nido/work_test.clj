@@ -5,7 +5,7 @@
    [clojure.set :as set]
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
-   [nido.config]
+   [nido.platform.config]
    [nido.coordinator.facets]
    [nido.coordinator.pickup]
    [nido.coordinator.promote]
@@ -18,12 +18,12 @@
    [nido.coordinator.tickets :as tickets]
    [nido.coordinator.triggers]
    [nido.coordinator.workstream :as workstream]
-   [nido.io :as nido-io]
+   [nido.platform.io :as nido-io]
    [nido.notion.client :as notion-client]
    [nido.notion.views :as views]
    [nido.slack.client :as slack-client]
-   [nido.project]
-   [nido.process]
+   [nido.platform.project]
+   [nido.platform.process]
    [nido.session.lifecycle]
    [nido.session.state]
    [nido.work :as work]))
@@ -328,12 +328,12 @@
       "every pickable stage survives create!/advance-stage!"))
 
 (deftest default-target-falls-back-to-in-progress
-  (with-redefs [nido.config/read-projects (constantly {})]
+  (with-redefs [nido.platform.config/read-projects (constantly {})]
     (is (= :in-progress (work/default-target :brian :promote)))
     (is (= :in-progress (work/default-target :brian :new)))))
 
 (deftest default-target-honors-configured-stage
-  (with-redefs [nido.config/read-projects
+  (with-redefs [nido.platform.config/read-projects
                 (constantly {'brian {:workstream-defaults {:promote :ready}}})]
     (is (= :ready (work/default-target :brian :promote))
         "configured target wins, project key matched by name")
@@ -341,7 +341,7 @@
         "unset action falls back to canonical")))
 
 (deftest default-target-rejects-non-stage-config
-  (with-redefs [nido.config/read-projects
+  (with-redefs [nido.platform.config/read-projects
                 (constantly {'brian {:workstream-defaults {:promote :nonsense}}})]
     (is (= :in-progress (work/default-target :brian :promote))
         "a configured value that isn't a spine stage is ignored")))
@@ -914,7 +914,7 @@
         (session/create! :brian (:id w)
                          {:name "auto" :weight :heavy
                           :autonomy (assoc autonomy-running :phase :parked)}))
-      (with-redefs [nido.project/list-projects
+      (with-redefs [nido.platform.project/list-projects
                     (constantly {"brian" {:directory "/tmp/brian"}})]
         (let [gs (work/all-gates)]
           (is (= 1 (count gs)))
@@ -1812,7 +1812,7 @@
                                     {:name "crashed"   :app-port 3102 :nrepl-port 5602 :pg-port nil}
                                     {:name "shared-pg" :app-port nil  :nrepl-port nil  :pg-port 6145}
                                     {:name "down"      :app-port nil  :nrepl-port nil  :pg-port nil}]})
-                nido.process/tcp-open? (fn [port] (contains? #{3101 5601 6145} port))]
+                nido.platform.process/tcp-open? (fn [port] (contains? #{3101 5601 6145} port))]
     (is (= #{"app-up" "repl-up"} (work/live-session-names "p")))
     (is (not (contains? (work/live-session-names "p") "crashed"))
         "recorded ports that no longer answer are not liveness")
@@ -1820,7 +1820,7 @@
         "pg is never a signal — the shared cluster answers for every session at once")))
 
 (deftest session-live?-reads-app-or-nrepl-only
-  (with-redefs [nido.process/tcp-open? (fn [port] (= 4000 port))]
+  (with-redefs [nido.platform.process/tcp-open? (fn [port] (= 4000 port))]
     (is (true?  (work/session-live? {:app-port 4000})))
     (is (true?  (work/session-live? {:nrepl-port 4000})))
     (is (false? (work/session-live? {:app-port 4001 :nrepl-port 4002})))
@@ -1833,7 +1833,7 @@
                 (fn [_ _] [{:name "a" :live? true :entry {:url "u" :pg-port 5501 :app-port 3101}
                             :repl-rss 1024 :pg-rss 2048 :heap-max "2g"}
                            {:name "b" :live? false :entry nil}])
-                nido.project/list-projects (constantly {"p" {:directory "/x"}})]
+                nido.platform.project/list-projects (constantly {"p" {:directory "/x"}})]
     (let [facts (work/machine-facts "p" ["a"])]
       (is (= ["a"] (keys facts)))
       (is (= {:live? true :url "u" :pg-port 5501 :nrepl-port nil :app-port 3101
@@ -1917,8 +1917,8 @@
                                               :created-at "not-a-timestamp"}})
                   nido.session.state/remove-many-from-registry!
                   (fn [ks] (reset! removed (set ks)))
-                  nido.process/tcp-open? (fn [port] (= 3000 port))
-                  nido.process/process-alive? (fn [pid] (= 4242 pid))]
+                  nido.platform.process/tcp-open? (fn [port] (= 3000 port))
+                  nido.platform.process/process-alive? (fn [pid] (= 4242 pid))]
       (let [pruned (work/prune-dead-registry! now)]
         (is (= #{"/wt/dead" "/wt/no-ts" "/wt/bad-ts"} @removed)
             "dead + old is pruned; no timestamp or a malformed one reads as old and is pruned")

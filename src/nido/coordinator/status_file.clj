@@ -5,7 +5,7 @@
   (:require
    [babashka.fs :as fs]
    [nido.coordinator.state :as cstate]
-   [nido.io :as io]))
+   [nido.platform.io :as io]))
 
 (defn read-status
   "Returns the status map or nil if absent / malformed."

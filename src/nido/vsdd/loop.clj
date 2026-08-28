@@ -20,8 +20,8 @@
                           :architect   (fn [module-path findings] ...)}"
   (:require [clojure.java.io :as jio]
             [clojure.string :as str]
-            [nido.core :as core]
-            [nido.io :as io]
+            [nido.platform.core :as core]
+            [nido.platform.io :as io]
             [nido.vsdd.agent :as agent]
             [nido.vsdd.judge :as judge]
             [nido.vsdd.manifest :as manifest]
