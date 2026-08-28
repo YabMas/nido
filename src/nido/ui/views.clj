@@ -137,15 +137,12 @@
         .pos .pos-nx { font-size:11px; color:#5f5f78; }
         .pos.pos-you .pos-at { color:#c9a227; }
         .pos.pos-you .pos-nx { color:#a08a4a; }
-        .posn { display:flex; gap:10px; align-items:baseline; flex-wrap:wrap;
-                margin:10px 0 4px; }
-        .posn .at { font-size:15px; color:#e8e8e8; font-weight:600; }
-        .posn .nx { font-size:12px; color:#9a9ac0; border:1px solid #2a2a4a;
-                    border-radius:4px; padding:1px 8px; }
+        .posn { margin:2px 0 10px; }
+        .posn .nx { font-size:13px; color:#9a9ac0; }
         .posn .nx b { color:#cdcde0; font-weight:600; }
-        .posn .md { font-size:11px; text-transform:uppercase; letter-spacing:.04em;
-                    color:#7a7a95; }
-        .posn .why { flex-basis:100%; font-size:12px; color:#8a7a50; }
+        .posn .nx.done { color:#6f6f88; font-style:italic; }
+        .posn .md { color:#7a7a95; }
+        .posn .why { margin-top:4px; font-size:12px; color:#8a7a50; }
         /* One per row, full text. Three columns fitted the cards on screen and
            made the RECORDS unreadable: a baseline's area or a design's summary is
            several sentences, and a 220px column clamped at four lines showed
@@ -1514,27 +1511,40 @@
 
 (defn- day [at] (when at (let [s (str at)] (subs s 0 (min 10 (count s))))))
 
-(defn- position-line
-  "Where this workstream is and what comes next — the pane's first line, and the
-   one thing a reader wants before anything else.
+(defn status-heading
+  "The Status section's heading, carrying the position itself.
 
-   The mode is shown beside the stage because it says WHO does it: a stage in
-   :human mode is waiting on the person reading this, and one in any other mode
-   is not. That distinction was previously only inferable from which buttons
-   happened to render."
-  [{:keys [at next why]}]
+   The position was a bold word at the top of the section body, immediately under
+   a heading that said nothing. Two lines to say one thing, and the heading was
+   the emptier of them — so the position moved into it and the body kept only
+   what comes next."
+  [{:keys [at]}]
+  (if at
+    (str "Status — " (get position-label at (name at)))
+    "Status"))
+
+(defn- position-line
+  "What comes next, on its own line and in plain words.
+
+   No pill. A bordered chip reads as a control or a tag — something to click or
+   to filter by — and this is neither: it is one sentence about what happens
+   next. It also sat inline beside the position, which made a heading, a state
+   and an instruction into one run-on line.
+
+   The mode still says WHO acts, because that is the distinction a reader is
+   scanning for, but as a clause rather than as a badge."
+  [{:keys [next why]}]
   [:div.posn
-   [:span.at (get position-label at (name at))]
    (if next
-     (list [:span.nx "next · " [:b (get stage-label (:stage next) (name (:stage next)))]]
-           [:span.md (case (:mode next)
-                       :human        "waiting on you"
-                       :mechanical   "a task"
-                       :authoring    "writes records"
-                       :working-copy "changes code"
-                       (name (:mode next)))])
-     [:span.md "nothing further"])
-   (when why [:span.why why])])
+     [:div.nx "next · " [:b (get stage-label (:stage next) (name (:stage next)))]
+      [:span.md (case (:mode next)
+                  :human        " — waiting on you"
+                  :mechanical   " — a task nido runs"
+                  :authoring    " — nido writes the record"
+                  :working-copy " — changes code"
+                  (str " — " (name (:mode next))))]]
+     [:div.nx.done "nothing further"])
+   (when why [:div.why why])])
 
 (defn- hold-card
   "One standing record: what it is, which entry it is, how many revisions it took,
@@ -1784,7 +1794,7 @@
             ;; stream, so the standing records and the log of every superseded
             ;; revision of them read as the same kind of thing — which is exactly
             ;; the confusion the standing records were added to end.
-            [:h2 "Now"]
+            [:h2 (status-heading position)]
             (when position (position-line position))
             (when (seq holds) (holds-block holds))
             ;; The actions belong HERE and not under the log, because they act on

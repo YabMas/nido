@@ -1300,10 +1300,10 @@
                      [{:seq 2 :kind :baseline :at "2026-08-01T00:00:00Z"
                        :title "baseline"}])
               {})
-        at   (fn [h] (str/index-of html (str "<h2>" h "</h2>")))]
-    (is (every? some? [(at "Now") (at "History") (at "Environment")])
+        at   (fn [h] (str/index-of html (str "<h2>" h)))]
+    (is (every? some? [(at "Status") (at "History") (at "Environment")])
         "three sections")
-    (is (< (at "Now") (at "History") (at "Environment")) "in that order")
+    (is (< (at "Status") (at "History") (at "Environment")) "in that order")
     ;; what currently holds is above the log of how it got there
     (is (< (str/index-of html "class=\"posn\"") (at "History")))
     (is (< (str/index-of html "class=\"holds\"") (at "History")))
@@ -1322,3 +1322,21 @@
     (when-let [bar (str/index-of html "action-bar")]
       (is (< bar (str/index-of html "<h2>History</h2>"))
           "actions belong to Now"))))
+
+(deftest the-status-heading-carries-the-position
+  ;; It was a bold word at the top of a section whose heading said nothing —
+  ;; two lines to say one thing, and the heading was the emptier of them.
+  (is (= "Status — Draft PR open" (views/status-heading {:at :published})))
+  (is (= "Status — Baseline verified" (views/status-heading {:at :baseline-verified})))
+  (is (= "Status" (views/status-heading nil)) "no position, no dash"))
+
+(deftest what-comes-next-is-its-own-line-and-not-a-pill
+  ;; A bordered chip reads as a control or a tag — something to click or filter
+  ;; by — and this is one sentence about what happens next.
+  (let [html (views/workstream-pane a-pane {})
+        css  (views/shell {:body "" :title "t"})]
+    (is (str/includes? html "next · "))
+    (is (str/includes? html "changes code"))
+    (is (not (re-find #"\.posn \.nx \{[^}]*border" css)) "no pill around it")
+    (is (not (str/includes? html "class=\"at\""))
+        "and the position is not repeated in the body")))
