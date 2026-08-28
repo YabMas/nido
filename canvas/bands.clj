@@ -47,6 +47,16 @@
              (in-band ?a ?s) (in-band ?b ?t) [(not= ?s ?t)]
              (not (declared-dep ?s ?t))]})
 
+  (law "every namespace belongs to a band"
+    ;; Without this the whole design is opt-in. `in-band` is derived from the path, so a
+    ;; namespace under a prefix no band claims is not an offender anywhere — it is INVISIBLE:
+    ;; the cross-band law needs both ends in a band to fire, so an unbanded package can call
+    ;; anything and be called by anything and the model stays green. This arc found that hole
+    ;; the honest way, by adding `nido.design.*` and watching the check pass.
+    {:scope :global
+     :offenders [?ns]
+     :where [(is ?ns Ns) (not-join [?ns] (in-band ?ns ?b))]})
+
   (law "the :may-depend graph is acyclic — no band transitively depends on itself"
     {:offenders [?s]
      :rules [[(band-reaches ?s ?t) (may-depend ?s ?t)]
