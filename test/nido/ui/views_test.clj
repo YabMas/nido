@@ -1285,3 +1285,18 @@
   (let [html (str (h/html (board-row nil)))]
     (is (str/includes? html "the pipeline"))
     (is (not (str/includes? html "class=\"pos")))))
+
+(deftest the-standing-records-are-stacked-and-shown-whole
+  ;; Three columns fitted the cards on screen at the cost of the thing they are
+  ;; for: a survey's area or a design's summary runs to several sentences, and a
+  ;; narrow column clamped at four lines showed a fragment — which reads as a
+  ;; card with nothing to say rather than one that was cut off.
+  ;;
+  ;; Asserted on the stylesheet because that is where the truncation was. The
+  ;; server always sent the whole string; nothing server-side could catch this.
+  (let [css (views/shell {:body "" :title "t"})]
+    (is (str/includes? css "flex-direction:column") "one card per row")
+    (is (not (str/includes? css "line-clamp"))
+        "and no clamp anywhere — the records are the point of the pane")
+    (is (not (str/includes? css "white-space:pre-wrap"))
+        "collapsed, because a record's line breaks come from the EDN a human typed")))

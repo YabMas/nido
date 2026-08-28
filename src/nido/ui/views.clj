@@ -141,16 +141,23 @@
         .posn .md { font-size:11px; text-transform:uppercase; letter-spacing:.04em;
                     color:#7a7a95; }
         .posn .why { flex-basis:100%; font-size:12px; color:#8a7a50; }
-        .holds { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
-                 gap:10px; margin:12px 0; }
+        /* One per row, full text. Three columns fitted the cards on screen and
+           made the RECORDS unreadable: a survey's area or a design's summary is
+           several sentences, and a 220px column clamped at four lines showed
+           about a third of one. These are the three things the pane exists to
+           state, so they are stated. */
+        .holds { display:flex; flex-direction:column; gap:10px; margin:12px 0; }
         .hold { border:1px solid #2a2a4a; border-radius:6px; background:#16213e;
                 padding:10px 12px; min-width:0; }
         .hold .hh { display:flex; gap:8px; align-items:baseline; margin-bottom:5px; }
         .hold .hk { font-size:11px; text-transform:uppercase; color:#8a8ab0; }
         .hold .hs { font-size:11px; color:#666; }
-        .hold .hb { font-size:12.5px; line-height:1.5; color:#cdcde0;
-                    display:-webkit-box; -webkit-line-clamp:4; -webkit-box-orient:vertical;
-                    overflow:hidden; }
+        /* No clamp, and whitespace COLLAPSED rather than preserved. These
+           strings are soft-wrapped in the EDN a human typed, so the newlines and
+           the leading indentation are an artifact of the source file, not of the
+           prose; pre-wrap renders them as hard breaks with the indent showing. */
+        .hold .hb { font-size:12.5px; line-height:1.55; color:#cdcde0;
+                    overflow-wrap:anywhere; }
         .hold .hf { margin-top:6px; font-size:11px; }
         .hold .ok { color:#6a9a6a; }
         .hold .no { color:#a07a4a; }
@@ -1550,7 +1557,14 @@
    superseding records and the reader wants the seventh; the other six are in the
    log below, marked superseded, exactly where they were. An absent record renders
    as an empty card rather than vanishing, so the shape of the arc is legible from
-   what is missing as much as from what is there."
+   what is missing as much as from what is there.
+
+   Stacked one per row and shown whole. Three columns fitted them on screen at
+   the cost of the thing they are for: an area or a summary runs to several
+   sentences, and a narrow column clamped at four lines showed a fragment of
+   one — which reads as a card that has nothing to say rather than one that
+   was cut off. The text itself is collapsed rather than preserved — a record's
+   line breaks come from the EDN a human typed, not from the prose."
   [{:keys [intent survey design]}]
   [:div.holds
    (if intent
