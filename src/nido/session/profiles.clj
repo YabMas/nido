@@ -14,8 +14,8 @@
   (:require
    [babashka.fs :as fs]
    [clojure.string :as str]
-   [nido.platform.io :as io]
-   [nido.coordinator.state :as cstate]))
+   [nido.platform.core :as core]
+   [nido.platform.io :as io]))
 
 (def builtin-registry
   {:profiles
@@ -23,7 +23,7 @@
            :worktree {:strategy :git-worktree}}}})
 
 (defn- registry-path [project]
-  (str (fs/path (cstate/nido-root) "projects" (name project) "session-profiles.edn")))
+  (core/project-file project "session-profiles.edn"))
 
 (defn- expand-tilde [s]
   (if (and (string? s) (str/starts-with? s "~/"))

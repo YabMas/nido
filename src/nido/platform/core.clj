@@ -26,6 +26,23 @@
         .getParentFile      ; project root
         .getAbsolutePath)))
 
+(defn nido-root
+  "The nido home, as the single redirect seam. Production code reads it
+   exactly like nido-home; tests with-redefs THIS var to point a whole run
+   at a temp dir. It is deliberately distinct from nido-home: the session
+   band addresses nido-home directly and is not redirected by it, which is
+   what keeps a redirected test looking at real session state."
+  []
+  (str (nido-home)))
+
+(defn project-file
+  "Path to a per-project definition file under ~/.nido/projects/<project>/.
+   Every band addresses that directory -- notion-views.edn, github.edn,
+   session-profiles.edn -- so the shape belongs here rather than being
+   rebuilt at each call site."
+  [project filename]
+  (str (fs/path (nido-root) "projects" (name project) filename)))
+
 (def ^:private log-lock (Object.))
 
 (defn log-step

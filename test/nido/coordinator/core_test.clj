@@ -5,6 +5,7 @@
    [babashka.fs :as fs]
    [clojure.string :as str]
    [clojure.test :refer [deftest is use-fixtures]]
+   [nido.platform.core :as nido-core]
    [nido.coordinator.agent :as agent]
    [nido.coordinator.events]
    [nido.coordinator.sources.notion]
@@ -44,7 +45,7 @@
 (defn- with-tmp [f]
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [nido-core/nido-root (constantly (str tmp))]
         (cstate/ensure-dirs!)
         (f))
       (finally (fs/delete-tree tmp)))))
@@ -68,8 +69,8 @@
 (deftest board-views-are-polled-even-with-no-trigger
   (with-tmp
     (fn []
-      (fs/create-dirs (str (fs/path (cstate/nido-root) "projects" "brian")))
-      (nido.platform.io/write-edn! (str (fs/path (cstate/nido-root) "projects" "brian" "notion-views.edn"))
+      (fs/create-dirs (str (fs/path (nido-core/nido-root) "projects" "brian")))
+      (nido.platform.io/write-edn! (str (fs/path (nido-core/nido-root) "projects" "brian" "notion-views.edn"))
                           {:database "db" :board-views [:new-reports :in-review]
                            :board-poll "5m"
                            :views {:new-reports {} :in-review {} :open-bugs {}}})
@@ -102,7 +103,7 @@
 (deftest envelope-drives-run-to-terminal-via-executor
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))
+      (with-redefs [nido-core/nido-root (constantly (str tmp))
                     agent/launch!    (fn [_]
                                        {:exit-code         0
                                         :claude-session-id "sess-x"
@@ -182,7 +183,7 @@
       ;; Default the profile to a non-symlink (fail-open) shape so the pre-spawn
       ;; skill-resolution gate doesn't probe the real ~/Code/<project>/.claude.
       ;; The gate tests override resolve-profile with their own symlink target.
-      (with-redefs [cstate/nido-root (constantly (str tmp))
+      (with-redefs [nido-core/nido-root (constantly (str tmp))
                     runs/teardown-session-for-run! (fn [_] nil)
                     profiles/resolve-profile (fn [_ _] {:worktree {:strategy :git-worktree}})]
         (cstate/ensure-dirs!)
@@ -679,7 +680,7 @@
 (deftest queue-mode-trigger-parks-inbox-no-spawn
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [nido-core/nido-root (constantly (str tmp))]
         (cstate/ensure-dirs!)
         (let [trigger {:name :triage-slack-bugs :intake :queue :skill :triage-bug
                        :source {:type :slack-channel :channel "C"}}
@@ -703,7 +704,7 @@
 (deftest maybe-expire-inbox-closes-old-entries
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [nido-core/nido-root (constantly (str tmp))]
         (cstate/ensure-dirs!)
         (with-redefs [clock/now-iso (constantly "2026-06-01T00:00:00Z")]
           (intake/enqueue-inbox!

@@ -2,10 +2,10 @@
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is are testing]]
+   [nido.platform.core :as core]
    [nido.coordinator.clock :as clock]
    [nido.coordinator.notion-sync :as ns-sync]
    [nido.coordinator.sources.state :as sstate]
-   [nido.coordinator.state :as cstate]
    [nido.coordinator.workstream :as ws]
    [nido.notion.client :as notion]))
 
@@ -49,7 +49,7 @@
   "Run f with a fresh temp nido-root (mirrors github_merge_test)."
   [f]
   (let [tmp (fs/create-temp-dir)]
-    (try (with-redefs [cstate/nido-root (constantly (str tmp))]
+    (try (with-redefs [core/nido-root (constantly (str tmp))]
            (f tmp))
          (finally (fs/delete-tree tmp)))))
 

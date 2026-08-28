@@ -2,6 +2,7 @@
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
+   [nido.platform.core :as core]
    [nido.coordinator.queue :as queue]
    [nido.coordinator.state :as cstate]
    [nido.platform.io :as io]))
@@ -9,7 +10,7 @@
 (deftest drain-reads-and-removes-files
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (cstate/ensure-dirs!)
         (let [f1 (str (fs/path (cstate/queue-dir) "a.edn"))
               f2 (str (fs/path (cstate/queue-dir) "b.edn"))]
@@ -25,7 +26,7 @@
 (deftest drain-empty-queue
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (cstate/ensure-dirs!)
         (is (= [] (queue/drain!))))
       (finally (fs/delete-tree tmp)))))
@@ -33,7 +34,7 @@
 (deftest drain-skips-and-quarantines-malformed-files
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (cstate/ensure-dirs!)
         (let [good (str (fs/path (cstate/queue-dir) "good.edn"))
               bad  (str (fs/path (cstate/queue-dir) "bad.edn"))]
@@ -48,7 +49,7 @@
 (deftest enqueue!-writes-an-envelope-file
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (cstate/ensure-dirs!)
         (queue/enqueue! {:target {:project :brian :trigger :x} :payload {:url "1"}})
         (is (= 1 (count (fs/list-dir (cstate/queue-dir))))))
@@ -57,7 +58,7 @@
 (defn- with-tmp-nido [f]
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (cstate/ensure-dirs!)
         (f))
       (finally (fs/delete-tree tmp)))))

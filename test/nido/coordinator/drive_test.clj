@@ -4,16 +4,16 @@
    [babashka.fs :as fs]
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
+   [nido.platform.core :as core]
    [nido.coordinator.drive :as drive]
    [nido.coordinator.session :as session]
-   [nido.coordinator.state :as cstate]
    [nido.coordinator.workstream :as ws]
    [nido.coordinator.pipeline :as pipeline]))
 
 (defn- with-tmp [f]
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (f))
       (finally (fs/delete-tree tmp)))))
 

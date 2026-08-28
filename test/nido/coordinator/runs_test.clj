@@ -3,6 +3,7 @@
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
    [malli.core :as m]
+   [nido.platform.core :as core]
    [nido.platform.config]
    [nido.coordinator.clock :as clock]
    [nido.coordinator.runs :as runs]
@@ -114,7 +115,7 @@
 (deftest create-run!-builds-a-queued-run
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (let [fire-req {:project :brian
                         :trigger {:name    :investigate-bug
                                   :source  {:type :manual}
@@ -139,7 +140,7 @@
 (deftest create-run-carries-priority
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (let [fire-req {:project :brian
                         :trigger {:name    :investigate-bug
                                   :source  {:type :manual}
@@ -154,7 +155,7 @@
 (deftest create-run-carries-session-profile
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (cstate/ensure-dirs!)
         (let [run (runs/create-run!
                     {:project :p
@@ -171,7 +172,7 @@
 (deftest create-run-defaults-session-profile-to-full
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (cstate/ensure-dirs!)
         (let [run (runs/create-run!
                     {:project :p
@@ -187,7 +188,7 @@
 (deftest read-run-backfills-missing-session-profile
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (cstate/ensure-dirs!)
         ;; Mimic a legacy Run on disk that has :priority (from Plan A) but
         ;; no :session-profile yet.
@@ -211,7 +212,7 @@
 (deftest read-run-backfills-missing-priority
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (cstate/ensure-dirs!)
         (let [old-run {:id              "legacy-run-1"
                        :project         :brian
@@ -239,7 +240,7 @@
 (deftest create-run-defaults-uncapped-to-false
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (cstate/ensure-dirs!)
         (let [run (runs/create-run!
                     {:project :p :trigger {:name :t :skill :noop
@@ -251,7 +252,7 @@
 (deftest create-run-carries-uncapped
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (cstate/ensure-dirs!)
         (let [run (runs/create-run!
                     {:project :p :trigger {:name :t :skill :noop
@@ -264,7 +265,7 @@
 (deftest read-run-backfills-missing-uncapped
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (cstate/ensure-dirs!)
         (let [path  (str (cstate/run-dir "legacy-no-uncapped") "/run.edn")
               legacy {:id "legacy-no-uncapped"
@@ -308,7 +309,7 @@
 
 (defn- with-tmp [f]
   (let [tmp (fs/create-temp-dir)]
-    (try (with-redefs [cstate/nido-root (constantly (str tmp))]
+    (try (with-redefs [core/nido-root (constantly (str tmp))]
            (cstate/ensure-dirs!) (f tmp))
          (finally (fs/delete-tree tmp)))))
 
@@ -338,7 +339,7 @@
 (deftest create-run-derives-ticket-stable-session-name-and-snapshots-on-promote
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (cstate/ensure-dirs!)
         (let [trigger {:name :plan-bug :source {:type :manual} :skill :plan-bug
                        :payload "Plan {{event/title}}"
@@ -360,7 +361,7 @@
 (deftest create-run-session-name-truncates-long-title-and-handles-no-title
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (cstate/ensure-dirs!)
         (let [mk (fn [payload]
                    (:session-name
@@ -381,7 +382,7 @@
 (deftest create-run-without-prefix-keeps-random-session-name
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (cstate/ensure-dirs!)
         (let [trigger {:name :triage-bug :source {:type :notion-view} :skill :triage-bug
                        :payload "Triage {{event/title}}"}
@@ -396,7 +397,7 @@
 (deftest create-run-with-prefix-but-no-id-falls-back-to-random-name
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (cstate/ensure-dirs!)
         ;; :session-name-prefix set, but the payload carries no :id ⇒ random name
         (let [trigger {:name :plan-bug :source {:type :manual} :skill :plan-bug
@@ -412,7 +413,7 @@
 (deftest mirror-run-phase-syncs-session-and-noops-without-ws
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (cstate/ensure-dirs!)
         ;; no :workstream-id → no-op, no throw
         (is (nil? (runs/mirror-run-phase! {:project :p :session-name "s" :state :running})))
@@ -466,7 +467,7 @@
 (deftest create-run-coerces-non-int-priority
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (cstate/ensure-dirs!)
         (let [routed {:project :p :priority "2 - Should" :session-profile :full
                       :uncapped? false
@@ -583,7 +584,7 @@
   ;; off :live, so engagement-state stops treating the dead session as live.
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))
+      (with-redefs [core/nido-root (constantly (str tmp))
                     nido.session.lifecycle/destroy! (fn [_ _] nil)]
         (let [w (workstream/create! :brian {:stage :triaging})
               _ (session/create! :brian (:id w) {:name "run-triage-1" :weight :light

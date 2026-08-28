@@ -2,14 +2,14 @@
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
-   [nido.coordinator.state :as cstate]
+   [nido.platform.core :as core]
    [nido.platform.io :as io]
    [nido.notion.views :as views]))
 
 (defn- with-tmp [f]
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (fs/create-dirs (str (fs/path tmp "projects" "brian")))
         (f tmp))
       (finally (fs/delete-tree tmp)))))
@@ -46,7 +46,7 @@
 (defn- with-registry [project edn f]
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (let [path (str (fs/path (str tmp) "projects" (name project) "notion-views.edn"))]
           (fs/create-dirs (fs/parent path))
           (io/write-edn! path edn))
@@ -64,6 +64,6 @@
 (deftest facet-properties-empty-when-registry-absent
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (is (= [] (views/facet-properties :brian))))
       (finally (fs/delete-tree tmp)))))

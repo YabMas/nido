@@ -2,6 +2,7 @@
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is use-fixtures]]
+   [nido.platform.core :as nido-core]
    [nido.coordinator.agent :as agent]
    [nido.coordinator.breakers :as breakers]
    [nido.coordinator.core :as core]
@@ -41,7 +42,7 @@
         tmp-str (str tmp)
         sid     (atom nil)]   ; capture the session-id run-blocking! generates + passes to launch!
     (try
-      (with-redefs [cstate/nido-root         (constantly tmp-str)
+      (with-redefs [nido-core/nido-root         (constantly tmp-str)
                     ;; core/tick! reaches maybe-adopt! -> work/prune-dead-registry! for real,
                     ;; which would read/probe/delete from the developer's actual
                     ;; ~/.nido/state/sessions.edn — stub it out so this test stays hermetic.
@@ -108,7 +109,7 @@
         fail-launch (fn [_opts] {:exit-code 1 :claude-session-id nil :timed-out? false})
         no-session  (fn [_run] {})]
     (try
-      (with-redefs [cstate/nido-root            (constantly (str tmp))
+      (with-redefs [nido-core/nido-root            (constantly (str tmp))
                     ;; see manual-trigger-end-to-end above — same core/tick! -> real-prune exposure.
                     work/prune-dead-registry!   (constantly [])
                     project/list-projects       (constantly {"brian" {:directory "/tmp"}})

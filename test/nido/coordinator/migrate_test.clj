@@ -3,6 +3,7 @@
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
    [malli.core :as m]
+   [nido.platform.core :as core]
    [nido.coordinator.migrate :as migrate]
    [nido.coordinator.session :as sess]
    [nido.coordinator.state :as cstate]
@@ -12,7 +13,7 @@
 
 (defn- with-tmp [f]
   (let [tmp (fs/create-temp-dir)]
-    (try (with-redefs [cstate/nido-root (constantly (str tmp))]
+    (try (with-redefs [core/nido-root (constantly (str tmp))]
            (cstate/ensure-dirs!) (f tmp))
          (finally (fs/delete-tree tmp)))))
 
@@ -123,7 +124,7 @@
 (deftest run-once-migrates-ticket-and-run-then-archives
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (seed-legacy! tmp)
         (let [report (migrate/run-once! :brian)]
           (is (= 1 (:workstreams report)))
@@ -149,7 +150,7 @@
   (let [tmp      (fs/create-temp-dir)
         acme-run (assoc old-run :id "acme-run-1" :project :acme :event-payload {:url "u"})]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (seed-legacy! tmp)
         (io/write-edn! (str (fs/path tmp "runs" (:id acme-run) "run.edn")) acme-run)
         (migrate/run-once! :brian)
@@ -166,7 +167,7 @@
   ;; partial run) is reused via find-by-ref, not re-minted — no duplicate.
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (seed-legacy! tmp)
         (ws/write! (migrate/ticket->workstream :brian old-ticket "ws-pre-existing"))
         (migrate/run-once! :brian)
@@ -180,7 +181,7 @@
 (deftest run-once-is-idempotent
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (seed-legacy! tmp)
         (migrate/run-once! :brian)
         (let [again (migrate/run-once! :brian)]
@@ -196,7 +197,7 @@
 (deftest archive-orphaned-live-archives-terminal-triage-but-not-plan-bug
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (let [w (ws/create! :brian {:stage :triaging})]
           (sess/create! :brian (:id w) {:name "done-triage" :weight :light
                                         :autonomy (auton :triage-bug :done)})

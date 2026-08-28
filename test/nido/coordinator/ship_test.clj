@@ -2,6 +2,7 @@
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is use-fixtures]]
+   [nido.platform.core :as core]
    [nido.coordinator.agent :as agent]
    [nido.coordinator.executor :as ex]
    [nido.coordinator.runs :as runs]
@@ -20,7 +21,7 @@
     (try
       (ex/configure! {:global-cap 2})
       (ex/clear!)
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (cstate/ensure-dirs!)
         (f))
       (finally (fs/delete-tree tmp)))))

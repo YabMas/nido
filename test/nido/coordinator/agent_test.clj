@@ -2,6 +2,7 @@
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
+   [nido.platform.core :as core]
    [nido.coordinator.agent :as agent]
    [nido.coordinator.state :as cstate]))
 
@@ -48,7 +49,7 @@
 (deftest launch!-returns-the-given-session-id
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (fs/create-dirs (cstate/run-dir "r1"))
         (let [result (agent/launch!
                        {:run-id        "r1"
@@ -65,7 +66,7 @@
 (deftest launch!-captures-session-id-and-exits-clean
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (fs/create-dirs (cstate/run-dir "r1"))
         (let [result (agent/launch!
                        {:run-id        "r1"
@@ -85,7 +86,7 @@
   ;; stream-json event so the caller can detect a no-op exit (zero turns).
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (fs/create-dirs (cstate/run-dir "r1"))
         (let [worked (agent/launch!
                        {:run-id "r1" :cwd (str tmp) :first-message "/x"
@@ -107,7 +108,7 @@
 (deftest launch!-records-non-zero-exit
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (fs/create-dirs (cstate/run-dir "r1"))
         (let [result (agent/launch!
                        {:run-id        "r1"
@@ -122,7 +123,7 @@
 (deftest launch!-times-out-and-sigterms
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (fs/create-dirs (cstate/run-dir "r1"))
         (let [t0 (System/currentTimeMillis)
               result (agent/launch!
@@ -142,7 +143,7 @@
 (deftest launch!-does-not-time-out-inside-its-budget
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (fs/create-dirs (cstate/run-dir "r1"))
         (let [result (agent/launch!
                        {:run-id        "r1"
@@ -185,7 +186,7 @@
 
 (deftest launch!-redirects-stderr-to-err-file-when-given
   (let [tmp (fs/create-temp-dir)]
-    (with-redefs [cstate/nido-root (constantly (str tmp))]
+    (with-redefs [core/nido-root (constantly (str tmp))]
       (fs/create-dirs (cstate/run-dir "r-err"))
       (let [err-path (str (fs/path tmp "agent.err.log"))]
         (agent/launch! {:run-id "r-err" :cwd (str tmp)

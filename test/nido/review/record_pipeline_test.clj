@@ -8,6 +8,7 @@
    [babashka.fs :as fs]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing use-fixtures]]
+   [nido.platform.core :as core]
    [nido.coordinator.agent :as agent]
    [nido.coordinator.state :as cstate]
    [nido.coordinator.workstream :as ws]
@@ -24,7 +25,7 @@
   [f]
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (cstate/ensure-dirs!)
         (f))
       (finally (fs/delete-tree tmp)))))

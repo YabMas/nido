@@ -2,6 +2,7 @@
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
+   [nido.platform.core :as core]
    [nido.coordinator.clock :as clock]
    [nido.coordinator.github-issue-intake :as intake]
    [nido.coordinator.session :as session]
@@ -12,7 +13,7 @@
 
 (defn- with-tmp [f]
   (let [tmp (fs/create-temp-dir)]
-    (try (with-redefs [cstate/nido-root (constantly (str tmp))]
+    (try (with-redefs [core/nido-root (constantly (str tmp))]
            (cstate/ensure-dirs!) (f tmp))
          (finally (fs/delete-tree tmp)))))
 

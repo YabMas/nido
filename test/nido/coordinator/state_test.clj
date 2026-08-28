@@ -3,6 +3,7 @@
    [babashka.fs :as fs]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
+   [nido.platform.core :as core]
    [nido.coordinator.state :as cstate]))
 
 (deftest paths
@@ -31,7 +32,7 @@
 (deftest workstream-paths-compose-under-project
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (is (str/ends-with? (cstate/workstreams-dir :brian) "projects/brian/workstreams"))
         (is (str/ends-with? (cstate/workstream-dir :brian "ws-1") "workstreams/ws-1"))
         (is (str/ends-with? (cstate/workstream-edn-path :brian "ws-1") "ws-1/workstream.edn"))
@@ -45,7 +46,7 @@
 (deftest ensure-dirs!-creates-coordinator-tree
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (cstate/ensure-dirs!)
         (is (fs/directory? (str (fs/path tmp "coordinator"))))
         (is (fs/directory? (str (fs/path tmp "coordinator" "queue"))))

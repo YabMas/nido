@@ -16,7 +16,7 @@
             [nido.platform.core :as core]))
 
 (defn nido-root []
-  (str (core/nido-home)))
+  (core/nido-root))
 
 ;; coordinator-root is the with-redefs seam (private redirect target);
 ;; coordinator-dir is the public name callers use elsewhere.

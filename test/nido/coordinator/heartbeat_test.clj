@@ -2,6 +2,7 @@
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
+   [nido.platform.core :as core]
    [nido.coordinator.clock :as clock]
    [nido.coordinator.heartbeat :as hb]
    [nido.coordinator.state :as cstate]
@@ -11,7 +12,7 @@
   (let [tmp     (fs/create-temp-dir)
         fake-ts "2026-05-13T10:00:00Z"]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))
+      (with-redefs [core/nido-root (constantly (str tmp))
                     clock/now-iso   (constantly fake-ts)]
         (cstate/ensure-dirs!)
         (hb/write! {:status :running :slots-in-use 0})

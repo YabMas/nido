@@ -2,14 +2,14 @@
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
+   [nido.platform.core :as core]
    [nido.platform.io :as io]
-   [nido.session.profiles :as profiles]
-   [nido.coordinator.state :as cstate]))
+   [nido.session.profiles :as profiles]))
 
 (defn- with-tmp [f]
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (fs/create-dirs (str (fs/path tmp "projects" "brian")))
         (f tmp))
       (finally (fs/delete-tree tmp)))))

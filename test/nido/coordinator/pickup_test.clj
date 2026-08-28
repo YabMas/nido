@@ -2,6 +2,7 @@
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
+   [nido.platform.core :as core]
    [nido.coordinator.pickup :as pickup]
    [nido.coordinator.queue :as queue]
    [nido.coordinator.state :as cstate]
@@ -16,7 +17,7 @@
    record into the live ~/.nido and parks a phantom drive on the board."
   [f]
   (let [tmp (fs/create-temp-dir)]
-    (try (with-redefs [cstate/nido-root (constantly (str tmp))]
+    (try (with-redefs [core/nido-root (constantly (str tmp))]
            (cstate/ensure-dirs!) (f))
          (finally (fs/delete-tree tmp)))))
 

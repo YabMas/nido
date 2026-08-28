@@ -2,13 +2,13 @@
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
-   [nido.coordinator.preprocess :as pp]
-   [nido.coordinator.state :as cstate]))
+   [nido.platform.core :as core]
+   [nido.coordinator.preprocess :as pp]))
 
 (defn- with-tmp-runs [f]
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (fs/create-dirs (str (fs/path tmp "runs")))
         (f tmp))
       (finally (fs/delete-tree tmp)))))

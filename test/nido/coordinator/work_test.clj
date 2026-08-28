@@ -5,6 +5,7 @@
    [clojure.set :as set]
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
+   [nido.platform.core :as core]
    [nido.platform.config]
    [nido.coordinator.facets]
    [nido.coordinator.pickup]
@@ -31,7 +32,7 @@
 (defn- with-tmp [f]
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (cstate/ensure-dirs!)
         (f tmp))
       (finally (fs/delete-tree tmp)))))

@@ -14,11 +14,11 @@
    a data-source query. No translation layer."
   (:require
    [babashka.fs :as fs]
-   [nido.coordinator.state :as cstate]
+   [nido.platform.core :as core]
    [nido.platform.io :as io]))
 
 (defn- registry-path [project]
-  (str (fs/path (cstate/nido-root) "projects" (name project) "notion-views.edn")))
+  (core/project-file project "notion-views.edn"))
 
 (defn load-registry [project]
   (let [path (registry-path project)]

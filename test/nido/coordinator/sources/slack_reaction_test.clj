@@ -1,6 +1,7 @@
 (ns nido.coordinator.sources.slack-reaction-test
   (:require [clojure.test :refer [deftest is use-fixtures]]
             [babashka.fs :as fs]
+            [nido.platform.core :as core]
             [nido.coordinator.clock :as clock]
             [nido.coordinator.state :as cstate]
             [nido.coordinator.sources :as sources]
@@ -11,7 +12,7 @@
 (def ^:dynamic *tmp* nil)
 (use-fixtures :each
   (fn [t] (let [d (fs/create-temp-dir)]
-            (with-redefs [cstate/nido-root (fn [] (str d))]
+            (with-redefs [core/nido-root (fn [] (str d))]
               (cstate/ensure-dirs!) (binding [*tmp* d] (t))))))
 
 (defn- msg [ts text owl?]

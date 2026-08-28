@@ -4,6 +4,7 @@
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
    [malli.core :as m]
+   [nido.platform.core :as core]
    [nido.coordinator.clock :as clock]
    [nido.coordinator.session :as sess]
    [nido.coordinator.state :as cstate]
@@ -24,7 +25,7 @@
 (defn- with-tmp [f]
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (f tmp))
       (finally (fs/delete-tree tmp)))))
 
@@ -94,7 +95,7 @@
 (deftest round-trip
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (ws/write! example-ws)
         (is (= example-ws (ws/read-ws :brian (:id example-ws)))))
       (finally (fs/delete-tree tmp)))))
@@ -102,14 +103,14 @@
 (deftest read-ws-returns-nil-when-missing
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (is (nil? (ws/read-ws :brian "nope"))))
       (finally (fs/delete-tree tmp)))))
 
 (deftest create-mints-id-and-seeds-stage-history
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))
+      (with-redefs [core/nido-root (constantly (str tmp))
                     clock/now-iso (constantly "2026-06-05T09:00:00Z")]
         (let [w (ws/create! :brian {:stage :triaging
                                     :external-refs [{:adapter :notion :id "BR-1"}]})]
@@ -124,7 +125,7 @@
 (deftest advance-stage-appends-history-and-updates-stage
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))
+      (with-redefs [core/nido-root (constantly (str tmp))
                     clock/now-iso (constantly "2026-06-05T10:00:00Z")]
         (ws/write! example-ws)
         (let [updated (ws/advance-stage! :brian (:id example-ws) :ready)]
@@ -138,7 +139,7 @@
 (deftest advance-stage-is-noop-when-stage-unchanged
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (ws/write! example-ws)
         (let [updated (ws/advance-stage! :brian (:id example-ws) :triaging)]
           (is (= 1 (count (:stage-history updated))))))
@@ -147,7 +148,7 @@
 (deftest close-sets-closed-with-outcome
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))
+      (with-redefs [core/nido-root (constantly (str tmp))
                     clock/now-iso (constantly "2026-06-05T11:00:00Z")]
         (ws/write! example-ws)
         (let [closed (ws/close! :brian (:id example-ws) :dropped)]
@@ -157,7 +158,7 @@
 (deftest append-entry-writes-file-and-indexes-it
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))
+      (with-redefs [core/nido-root (constantly (str tmp))
                     clock/now-iso (constantly "2026-06-05T12:00:00Z")]
         (ws/write! example-ws)
         (let [path (ws/append-entry! :brian (:id example-ws)
@@ -177,7 +178,7 @@
 (deftest append-entry-increments-seq
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))
+      (with-redefs [core/nido-root (constantly (str tmp))
                     clock/now-iso (constantly "2026-06-05T12:00:00Z")]
         (ws/write! example-ws)
         (ws/append-entry! :brian (:id example-ws) {:kind :note} "a")
@@ -189,7 +190,7 @@
 (deftest add-ref-appends-and-dedupes
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (let [w0 (ws/create! :brian {:stage :triaging :external-refs []})
               w1 (ws/add-ref! :brian (:id w0) {:adapter :notion :id "BR-9"})
               w2 (ws/add-ref! :brian (:id w0) {:adapter :notion :id "BR-9"})]
@@ -200,7 +201,7 @@
 (deftest find-by-ref-locates-the-workstream
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (let [w (ws/create! :brian {:stage :triaging
                                     :external-refs [{:adapter :notion :id "BR-42"}]})]
           (ws/create! :brian {:stage :triaging
@@ -212,7 +213,7 @@
 (deftest engagement-reads-sessions-off-disk
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))
+      (with-redefs [core/nido-root (constantly (str tmp))
                     clock/now-iso (constantly "2026-06-05T09:00:00Z")]
         (let [w (ws/create! :brian {:stage :triaging})]
           (is (= :idle (ws/engagement :brian (:id w))))
@@ -252,7 +253,7 @@
 (deftest create-threads-facets
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (let [w (ws/create! :brian {:stage :triaging :external-refs []
                                     :facets {:type "bug"}})]
           (is (= {:type "bug"} (:facets (ws/read-ws :brian (:id w)))))))
@@ -261,7 +262,7 @@
 (deftest set-facets-updates-existing
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (let [w (ws/create! :brian {:stage :triaging :external-refs []})]
           (ws/set-facets! :brian (:id w) {:app-domain ["Teacher"]})
           (is (= {:app-domain ["Teacher"]} (:facets (ws/read-ws :brian (:id w)))))))
@@ -270,7 +271,7 @@
 (deftest set-facets-throws-on-absent
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (is (thrown? clojure.lang.ExceptionInfo
                      (ws/set-facets! :brian "ws-nonexistent" {:type "bug"}))))
       (finally (fs/delete-tree tmp)))))
@@ -278,7 +279,7 @@
 (deftest set-facets-empty-map-removes-key
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (let [w (ws/create! :brian {:stage :triaging :external-refs []
                                     :facets {:type "bug"}})]
           (ws/set-facets! :brian (:id w) {})
@@ -288,7 +289,7 @@
 (deftest append-entry-validates-and-stores-typed-event
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))
+      (with-redefs [core/nido-root (constantly (str tmp))
                     clock/now-iso (constantly "2026-06-05T12:00:00Z")]
         (ws/write! example-ws)
         (let [path (ws/append-entry! :brian (:id example-ws) {:kind :implementation-plan}
@@ -302,7 +303,7 @@
 (deftest append-entry-rejects-malformed-typed-event
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))
+      (with-redefs [core/nido-root (constantly (str tmp))
                     clock/now-iso (constantly "2026-06-05T12:00:00Z")]
         (ws/write! example-ws)
         (is (thrown? clojure.lang.ExceptionInfo
@@ -346,7 +347,7 @@
 (deftest read-ws-normalizes-legacy-inbox-stage
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))
+      (with-redefs [core/nido-root (constantly (str tmp))
                     clock/now-iso (constantly "2026-06-05T09:00:00Z")]
         ;; A record persisted before the rename carries the legacy :stage :inbox.
         ;; Written directly: create! refuses it now — :inbox is read-legacy only,
@@ -751,7 +752,7 @@
   ;; instead of queueing.
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (let [id  (:id (ws/create! :brian {:stage :in-progress :external-refs []}))
               n   12
               res (->> (range n)

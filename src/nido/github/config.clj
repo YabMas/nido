@@ -4,7 +4,7 @@
   (:require
    [babashka.fs :as fs]
    [malli.core :as m]
-   [nido.coordinator.state :as cstate]
+   [nido.platform.core :as core]
    [nido.platform.io :as io]))
 
 (def Config
@@ -21,7 +21,7 @@
      [:enabled  {:optional true} boolean?]]]])
 
 (defn- config-path [project]
-  (str (fs/path (cstate/nido-root) "projects" (name project) "github.edn")))
+  (core/project-file project "github.edn"))
 
 (defn load-config
   "Read + validate github.edn for a project. Returns the config map, or nil

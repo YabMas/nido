@@ -3,6 +3,7 @@
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
    [malli.core :as m]
+   [nido.platform.core :as core]
    [nido.coordinator.clock :as clock]
    [nido.coordinator.session :as sess]
    [nido.coordinator.state :as cstate]
@@ -10,7 +11,7 @@
 
 (defn- with-tmp [f]
   (let [tmp (fs/create-temp-dir)]
-    (try (with-redefs [cstate/nido-root (constantly (str tmp))
+    (try (with-redefs [core/nido-root (constantly (str tmp))
                        clock/now-iso    (constantly "2026-06-05T09:00:00Z")]
            (cstate/ensure-dirs!) (f tmp))
          (finally (fs/delete-tree tmp)))))
@@ -56,7 +57,7 @@
 (deftest round-trip
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (sess/write! autonomous-session)
         (is (= autonomous-session
                (sess/read-session :brian "ws-1" "run-triage-x"))))
@@ -65,14 +66,14 @@
 (deftest read-session-returns-nil-when-missing
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (is (nil? (sess/read-session :brian "ws-1" "no-such"))))
       (finally (fs/delete-tree tmp)))))
 
 (deftest create-seeds-substrate-history
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))
+      (with-redefs [core/nido-root (constantly (str tmp))
                     clock/now-iso (constantly "2026-06-05T09:00:00Z")]
         (let [s (sess/create! :brian "ws-1"
                               {:name "sx" :weight :heavy :autonomy nil})]
@@ -84,7 +85,7 @@
 (deftest list-sessions-returns-records-for-a-workstream
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))
+      (with-redefs [core/nido-root (constantly (str tmp))
                     clock/now-iso (constantly "2026-06-05T09:00:00Z")]
         (sess/create! :brian "ws-1" {:name "a" :weight :light :autonomy nil})
         (sess/create! :brian "ws-1" {:name "b" :weight :heavy :autonomy nil})
@@ -94,7 +95,7 @@
 (deftest archive-flips-substrate-and-appends-history
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))
+      (with-redefs [core/nido-root (constantly (str tmp))
                     clock/now-iso (constantly "2026-06-05T13:00:00Z")]
         (sess/write! human-session)
         (let [a (sess/archive! :brian "ws-1" "explore-firefox")]
@@ -106,7 +107,7 @@
 (deftest set-phase-updates-autonomy-and-history
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))
+      (with-redefs [core/nido-root (constantly (str tmp))
                     clock/now-iso (constantly "2026-06-05T13:30:00Z")]
         (sess/write! autonomous-session)
         (let [p (sess/set-phase! :brian "ws-1" "run-triage-x" :parked)]
@@ -118,7 +119,7 @@
 (deftest set-phase-throws-on-human-session
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (sess/write! human-session)
         (is (thrown? clojure.lang.ExceptionInfo
                      (sess/set-phase! :brian "ws-1" "explore-firefox" :parked))))
@@ -140,7 +141,7 @@
 (deftest archive-is-idempotent
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))
+      (with-redefs [core/nido-root (constantly (str tmp))
                     clock/now-iso (constantly "2026-06-05T13:00:00Z")]
         (sess/write! human-session)
         (sess/archive! :brian "ws-1" "explore-firefox")
@@ -178,7 +179,7 @@
 (deftest in-flight-by-trigger-counts-live-in-progress-autonomous-sessions
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))
+      (with-redefs [core/nido-root (constantly (str tmp))
                     clock/now-iso (constantly "2026-06-05T09:00:00Z")]
         (let [w (ws/create! :brian {:stage :triaging})
               auto (fn [nm phase]
@@ -199,7 +200,7 @@
 (deftest gating-count-includes-parked
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))
+      (with-redefs [core/nido-root (constantly (str tmp))
                     clock/now-iso (constantly "2026-06-05T09:00:00Z")]
         (let [w  (ws/create! :brian {:stage :triaging})
               mk (fn [nm phase]
@@ -223,7 +224,7 @@
   ;; session must not keep pinning its trigger at :max-in-flight.
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))
+      (with-redefs [core/nido-root (constantly (str tmp))
                     clock/now-iso (constantly "2026-06-05T09:00:00Z")]
         (let [open   (ws/create! :brian {:stage :triaging})
               closed (ws/create! :brian {:stage :triaging})

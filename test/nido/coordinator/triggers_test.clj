@@ -3,6 +3,7 @@
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
    [malli.core :as m]
+   [nido.platform.core :as core]
    [nido.coordinator.triggers :as triggers]
    [nido.coordinator.state :as cstate]
    [nido.platform.io :as io]))
@@ -33,7 +34,7 @@
 (deftest load-triggers-reads-file
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (fs/create-dirs (fs/parent (cstate/triggers-path :brian)))
         (io/write-edn! (cstate/triggers-path :brian)
                        {:triggers [minimal-trigger]})
@@ -45,7 +46,7 @@
 (deftest load-triggers-returns-empty-when-file-missing
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (is (= [] (triggers/load-for-project :nonexistent))))
       (finally (fs/delete-tree tmp)))))
 
@@ -153,7 +154,7 @@
 (deftest intake-queue-trigger-loads
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (let [p (cstate/triggers-path :brian)]
           (fs/create-dirs (fs/parent p))
           (spit p (pr-str {:triggers [{:name :triage-slack-bugs

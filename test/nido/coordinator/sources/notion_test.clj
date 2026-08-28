@@ -2,6 +2,7 @@
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
+   [nido.platform.core :as core]
    [nido.coordinator.clock :as clock]
    [nido.coordinator.sources :as sources]
    [nido.coordinator.sources.notion :as notion-src]
@@ -17,7 +18,7 @@
 (defn- with-tmp [f]
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (cstate/ensure-dirs!)
         (f tmp))
       (finally (fs/delete-tree tmp)))))
@@ -320,7 +321,7 @@
 (deftest poll-once-uses-view-filter
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (fs/create-dirs (str (fs/path tmp "projects" "brian")))
         (io/write-edn! (str (fs/path tmp "projects" "brian" "notion-views.edn"))
                        {:database "db-1"
@@ -345,7 +346,7 @@
 (deftest poll-once-merges-additional-filter
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [cstate/nido-root (constantly (str tmp))]
+      (with-redefs [core/nido-root (constantly (str tmp))]
         (fs/create-dirs (str (fs/path tmp "projects" "brian")))
         (io/write-edn! (str (fs/path tmp "projects" "brian" "notion-views.edn"))
                        {:database "db-1"
