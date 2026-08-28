@@ -77,13 +77,18 @@
    row — workstream-row's :stage is unreliable for scratch). :scratch when the
    stored stage is :scratch (a one-off, set by scratch/birth!); :github when it
    carries a :github-issue ref (Phase 3); :slack when it carries a :slack-message
-   ref; else :notion — the default/coordinator bucket, so a ref-less coordinator
-   workstream is never dropped from every view."
+   ref; :review-run when it carries a :review-run ref — a workstream minted to
+   HOLD a review-loop analysis rather than to do work, which is why it is a
+   source of its own: every other bucket names somewhere work arrived FROM, and
+   this one names a reading nido made of itself. Else :notion — the
+   default/coordinator bucket, so a ref-less coordinator workstream is never
+   dropped from every view."
   [ws]
   (cond
     (= :scratch (:stage ws))                                      :scratch
     (some #(= :github-issue (:adapter %)) (:external-refs ws))   :github
     (some #(= :slack-message (:adapter %)) (:external-refs ws))  :slack
+    (some #(= :review-run (:adapter %)) (:external-refs ws))     :review-run
     :else                                                         :notion))
 
 (defn- short-suffix

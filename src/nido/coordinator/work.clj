@@ -333,6 +333,15 @@
                  (:dismissed? row)              :dismissed
                  (= :settled (:engagement row)) :done
                  (= :scratch origin)            :in-progress
+                 ;; A workstream that holds a reading rather than work. It folds
+                 ;; to a band the board does not draw, which is not the same as
+                 ;; hiding it: it is reachable, and only reachable, from the
+                 ;; operations surface, whose unit is the proposal inside the
+                 ;; analysis rather than the workstream around it. Below
+                 ;; :dismissed and :settled so a dismissed or closed one still
+                 ;; reads that way — those say something about a human's
+                 ;; decision, and this only says what kind of record it is.
+                 (= :review-run origin)         :analysed
                  :else                          (:stage row))]
     (-> row
         (assoc :origin origin :stage stage)
@@ -341,8 +350,11 @@
 (def ^:private unrendered-bands
   "Bands the board does not draw a row for, and so does not need a position for.
    :done is dropped by grouped-by-stage outright; :dismissed renders its own
-   muted row with one action and nothing about where the work stood."
-  #{:done :dismissed})
+   muted row with one action and nothing about where the work stood; :analysed
+   is not work at all — a workstream holding a review-loop analysis has no arc
+   to advance and belongs to the operations surface, whose unit is the proposal
+   inside it rather than the workstream around it."
+  #{:done :dismissed :analysed})
 
 (defn- with-position
   "Stamp the pipeline position on a row the board will actually render.

@@ -60,6 +60,12 @@
 (deftest tab-bands-union-covers-every-row-exactly-once
   ;; The guarantee this whole design exists for: nothing can be hidden by
   ;; default again. Every row the model emits is reachable from exactly one tab.
+  ;;
+  ;; :analysed is the one deliberate exception and it is checked below rather
+  ;; than left implicit — a workstream holding a review-loop analysis is not work
+  ;; and has no arc, so the board draws no row for it and the operations surface
+  ;; is where it is reachable. That is an exception to WHICH SURFACE shows it,
+  ;; never to whether something shows it.
   (let [grouped {:incoming [{:ws-id "i"}]
                  :triage {:in-flight [{:ws-id "tf"}] :queued [{:ws-id "tq"}]}
                  :in-progress [{:ws-id "p"}]
@@ -74,6 +80,35 @@
         "union of both tabs = every row grouped-rows emits")
     (is (empty? (set/intersection intake active))
         "and no row appears in both tabs")))
+
+(deftest analysed-rows-are-off-the-board-on-both-sides-or-neither
+  ;; The union oracle above only holds because tab-bands and grouped-rows agree
+  ;; about :analysed. If a later edit teaches one of them about the band and not
+  ;; the other, that test starts failing for a reason nobody will connect to
+  ;; this; so the agreement is asserted here, where the reason is written down.
+  (let [grouped {:incoming [{:ws-id "i"}] :analysed [{:ws-id "a"}]}]
+    (is (= #{"i"} (set (map :ws-id (work/grouped-rows grouped))))
+        "grouped-rows does not emit an analysed row")
+    (is (= #{"i"} (set (map :ws-id (mapcat second (work/tab-bands :intake grouped)))))
+        "and no tab draws one")
+    (is (empty? (mapcat second (work/tab-bands :active grouped))))
+    (is (contains? @#'work/unrendered-bands :analysed)
+        "so it must be an unrendered band — otherwise with-position pays to place
+         a row nothing will draw")))
+
+(deftest a-workstream-holding-an-analysis-is-not-work
+  ;; What put ten analyses in nido's Intake asking to establish intent: they
+  ;; arrived through no source ws-source knew, fell to the :notion default, and
+  ;; were projected as ordinary un-triaged tickets.
+  (is (= :analysed (:stage (@#'work/to-spine {:source :review-run :stage :triaging})))
+      "a review-run row folds off the board whatever stage it was stored at")
+  (is (= :dismissed (:stage (@#'work/to-spine {:source :review-run :stage :triaging
+                                               :dismissed? true})))
+      "a dismissed one still reads dismissed — that is a human's decision and it outranks
+       what kind of record this is")
+  (is (= :done (:stage (@#'work/to-spine {:source :review-run :stage :triaging
+                                          :engagement :settled})))
+      "and a closed one still reads done"))
 
 (deftest tab-bands-intake-appends-dismissed
   (let [grouped {:incoming [{:ws-id "i"}]
