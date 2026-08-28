@@ -557,9 +557,14 @@
    where a design happens to be one hand-written file, which is a property of one project, not
    of designs.
 
-   As its authored forms rather than as a summary: the declarations are already written to be
-   read — structures with docstrings, laws with the reason they exist — and a generated summary
-   would drop that half while adding a way to drift from the model it summarises.
+   As PROSE rather than as the forms that authored it. `{:may-depend [:* Band]}` is exactly what
+   was written and exactly what you would write to change it, and it asks a reader whose question
+   is `what may this namespace require` to learn a quantifier notation first and infer the rule
+   second. Fukan renders the same declarations as sentences, and an agent that has to obey a
+   design should not have to read it in the author's register.
+
+   Not a summary either — a summary is a third thing that can disagree with the model. This is
+   the model, said differently, and fukan derives it.
 
    It carries no violation COUNT. A count written here would be true at `session:up` and wrong
    by the agent's first edit, and a stale green is worse than no green at all. The section says
@@ -578,9 +583,7 @@
          "should have gone the other way, and it is far cheaper to not write than\n"
          "to unpick.\n"
          "\n"
-         "```clojure\n"
          declared
-         "\n```\n"
          "\n"
          "If the code is right and the declaration is wrong, change the\n"
          "DECLARATION — in the same commit, saying why. What you may not do is\n"
