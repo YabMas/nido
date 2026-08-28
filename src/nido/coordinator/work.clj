@@ -1768,6 +1768,126 @@
           (assoc row :project pname))
         (sort-by (juxt #(if (:live? %) 0 1) :project :name)))))
 
+;; ── Proposals: the unit the operations surface addresses ────────────────────
+
+(defn- analysis-entries
+  "Oldest-first [seq entry-map] for every :review-analysis on this workstream,
+   parsed. Reads through the same entry->report every other reader uses, so a
+   record too old or too new for this reader degrades the same way it does
+   everywhere else rather than blanking the proposal list."
+  [project ws-id]
+  (let [{:keys [base-dir entries]} (active-ledger project ws-id)]
+    (->> entries
+         (filter #(= :review-analysis (:kind %)))
+         (keep (fn [e]
+                 (let [r (entry->report base-dir e)]
+                   (when (= :review-analysis (:format r)) r)))))))
+
+(defn- decisions-by-address
+  "{[analysis-seq observation] -> decision} for this workstream, latest wins.
+
+   Latest rather than first because a decision is an append and the ledger has
+   no delete: changing your mind is a second entry, and the one that counts is
+   the one made last. Nothing enforces one decision per proposal, and nothing
+   should — the record of having changed it is the point."
+  [project ws-id]
+  (let [{:keys [base-dir entries]} (active-ledger project ws-id)]
+    (->> entries
+         (filter #(= :improvement-decision (:kind %)))
+         (keep (fn [e]
+                 (let [r (entry->report base-dir e)]
+                   (when (= :improvement-decision (:format r)) r))))
+         (reduce (fn [m d] (assoc m [(:analysis-seq d) (:observation d)] d)) {}))))
+
+(defn proposals
+  "Every proposal this project's review-loop analyses have made, newest analysis
+   first, each with whatever was decided about it.
+
+   A proposal is not a stored thing: it is an observation carrying a :proposal,
+   addressed by the entry that contains it and its index in that entry. So this
+   derives rather than reads — nothing writes a proposal row, and an analysis
+   filed before any of this existed produces rows exactly like one filed today.
+
+   Observations WITHOUT a :proposal are dropped. They are real analysis and
+   worth reading, but this surface exists to be decided on and there is nothing
+   to decide about an observation that proposes nothing; they stay legible in
+   the analysis itself.
+
+   `:at-seq` is the position a decision about this row must carry — the ledger's
+   latest entry at the moment the row was built, NOT the analysis's own seq. A
+   decision answers the workstream as it stands, and these differ the moment
+   anything else is appended."
+  [project]
+  (let [pk (keyword (name project))]
+    (->> (cws/list-ids pk)
+         (keep (fn [ws-id]
+                 (let [w (cws/read-ws pk ws-id)]
+                   (when (some #(= :review-run (:adapter %)) (:external-refs w))
+                     {:ws-id ws-id :w w}))))
+         (mapcat (fn [{:keys [ws-id w]}]
+                   (let [decided (decisions-by-address pk ws-id)
+                         at-seq  (count (:entries w))
+                         ref     (some #(when (= :review-run (:adapter %)) %) (:external-refs w))]
+                     (for [a (analysis-entries pk ws-id)
+                           [i o] (map-indexed vector (:observations a))
+                           :when (:proposal o)]
+                       {:project      (name pk)
+                        :ws-id        ws-id
+                        :analysis-seq (:seq a)
+                        :observation  i
+                        :at-seq       at-seq
+                        :kind         (:kind o)
+                        :where        (:where o)
+                        :summary      (:summary o)
+                        :evidence     (:evidence o)
+                        :proposal     (:proposal o)
+                        :verdict      (:verdict a)
+                        :run-id       (:run-id a)
+                        :reviewed     (:reviewed a)
+                        :status       (:status a)
+                        :rounds       (:rounds a)
+                        :at           (:at a)
+                        :title        (:title ref)
+                        :decision     (get decided [(:seq a) i])}))))
+         (sort-by :at)
+         reverse
+         vec)))
+
+(def ^:private decided-by
+  "Who a decision is recorded as. Read from the environment nido runs in, never
+   from a request: a browser sends an action id and nothing else, so a decision
+   cannot arrive claiming an author. Same source the daemon stamps :fired-by a
+   hand-fired trigger with."
+  (delay (or (System/getenv "USER") "unknown")))
+
+(defn decide-proposal!
+  "Record a human decision about one proposal. Returns {:decision :recorded} or
+   {:decision :stale :latest <seq>} when the position no longer names the
+   ledger's latest entry.
+
+   The whole act is the append: nothing is resumed and nothing is spawned,
+   because nothing acts on a decision in this landing (FU-32). That makes this
+   the simplest possible version of the shape every other answer on this ledger
+   has — write the durable record, and let whatever wants it read it later.
+
+   `at-seq` is what the reader was looking at. It is compared inside the append
+   lock by cws/append-entry-at!, so two people deciding the same proposal from
+   the same page cannot both be recorded: the second is told the page moved."
+  [project ws-id {:keys [analysis-seq observation verdict at-seq note]}]
+  (let [res (cws/append-entry-at!
+             (keyword (name project)) ws-id at-seq
+             {:kind :improvement-decision}
+             (pr-str (cond-> {:format       :improvement-decision
+                              :analysis-seq analysis-seq
+                              :observation  observation
+                              :verdict      verdict
+                              :at-seq       at-seq
+                              :decided-by   @decided-by}
+                       (not (str/blank? (str note))) (assoc :note note))))]
+    (if (map? res)
+      {:decision :stale :latest (:latest res)}
+      {:decision :recorded :file res})))
+
 (defn all-grouped
   "[{:project <string> :grouped <grouped-map>} …] across every registered
    project (mirrors all-gates). A project that can't be read contributes

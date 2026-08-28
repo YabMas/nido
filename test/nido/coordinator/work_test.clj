@@ -2269,3 +2269,68 @@
         (is (= {:decision :no-trigger}
                (work/resolve-gate! :brian "pg-bare" :start-triage))
             "reaches start-triage-page! rather than the guard's :no-workstream")))))
+
+;; ── Proposals ───────────────────────────────────────────────────────────────
+
+(defn- with-analysis-ws
+  "A review-run workstream holding one analysis, in a throwaway nido root."
+  [observations f]
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-root (constantly (str tmp))]
+        (let [w  (workstream/create! :nido {:stage :triaging
+                                    :external-refs [{:adapter :review-run :id "run-1" :title "t"}]})
+              id (:id w)]
+          (workstream/append-entry! :nido id {:kind :review-analysis}
+                            (pr-str {:format :review-analysis :verdict :degraded
+                                     :run-id "run-1" :status "clean" :rounds 2 :summary "s"
+                                     :observations observations}))
+          (f id)))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest a-proposal-is-addressed-by-where-it-sits
+  (with-analysis-ws
+    [{:kind :waste :where "w0" :summary "s0" :evidence "e0" :proposal "p0"}
+     {:kind :working-well :where "w1" :summary "s1" :evidence "e1"}
+     {:kind :miss :where "w2" :summary "s2" :evidence "e2" :proposal "p2"}]
+    (fn [id]
+      (let [ps (work/proposals :nido)]
+        (is (= 2 (count ps))
+            "an observation proposing nothing is not a row — there is nothing to decide")
+        (is (= #{[1 0] [1 2]} (set (map (juxt :analysis-seq :observation) ps)))
+            "each row is addressed by its entry and its index in that entry, and the
+             index survives the gap the dropped observation leaves")
+        (is (every? #(seq (:evidence %)) ps)
+            "evidence rides along — it is what the decision is about")))))
+
+(deftest a-decision-answers-the-page-it-was-read-from
+  (with-analysis-ws
+    [{:kind :waste :where "w" :summary "s" :evidence "e" :proposal "p"}]
+    (fn [id]
+      (let [p (first (work/proposals :nido))]
+        (is (= 1 (:at-seq p)) "the position to answer is the ledger's latest, not the analysis's seq")
+        (is (= {:decision :stale :latest 1}
+               (work/decide-proposal! :nido id (assoc p :verdict :approved :at-seq 99)))
+            "a decision naming a position the ledger never had is refused")
+        (is (= :recorded (:decision (work/decide-proposal! :nido id (assoc p :verdict :approved)))))
+        (let [after (first (work/proposals :nido))]
+          (is (= :approved (:verdict (:decision after))) "the row carries what was decided")
+          (is (seq (:decided-by (:decision after)))
+              "and who decided, stamped here rather than sent by a caller")
+          (is (= {:decision :stale :latest 2}
+                 (work/decide-proposal! :nido id (assoc p :verdict :declined)))
+              "the same click again is stale — the decision it made is now the latest entry"))))))
+
+(deftest changing-your-mind-is-an-append-and-the-last-one-counts
+  (with-analysis-ws
+    [{:kind :waste :where "w" :summary "s" :evidence "e" :proposal "p"}]
+    (fn [id]
+      (let [p (first (work/proposals :nido))]
+        (work/decide-proposal! :nido id (assoc p :verdict :approved))
+        (let [p2 (first (work/proposals :nido))]
+          (work/decide-proposal! :nido id (assoc p2 :verdict :declined :note "on reflection")))
+        (let [d (:decision (first (work/proposals :nido)))]
+          (is (= :declined (:verdict d)) "the later decision is the one that counts")
+          (is (= "on reflection" (:note d)))
+          (is (= 3 (count (:entries (workstream/read-ws :nido id))))
+              "and the first one is still there — the ledger has no delete"))))))
