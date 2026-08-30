@@ -209,7 +209,8 @@
          (when (and n (pos? (long n)))
            (str " · " n " layer" (when (not= 1 n) "s"))))))
 
-(defn frame
+(defn ^{:malli/schema [:=> [:cat :ReviewReport :any] :string]}
+  frame
   "The live block: header + compact per-round lines. Bounded (no finding bodies)."
   [report ^Instant now]
   (str (header report) "\n"
@@ -275,7 +276,8 @@
                 (map (fn [[d n]] (str n " " d)))
                 (str/join ", "))))))
 
-(defn final
+(defn ^{:malli/schema [:=> [:cat :ReviewReport] :string]}
+  final
   "Printed once at the end: the live frame's static form + findings detail +
    terminal status + where the full report lives."
   [report]
@@ -298,7 +300,8 @@
          (fate-tally findings)
          "\n  Full report: <run-dir>/report.json")))
 
-(defn plain-line
+(defn ^{:malli/schema [:=> [:cat :any :map] [:maybe :string]]}
+  plain-line
   "One line per transition for non-TTY mode, or nil to stay silent."
   [_report {:keys [event iter phase status label findings]}]
   (case event
@@ -364,7 +367,8 @@
                    nil))]
     (str/trimr (str "    " (glyph ph now) " " (pad (:phase ph) 7) (or detail "")))))
 
-(defn record-frame
+(defn ^{:malli/schema [:=> [:cat :ReviewReport :any :map] :string]}
+  record-frame
   "The live block: a title line, then one block per round.
 
    The title is passed in rather than read off the report, because a record loop
@@ -393,7 +397,8 @@
   [report]
   (mapcat :disputes (all-phases report)))
 
-(defn record-final
+(defn ^{:malli/schema [:=> [:cat :ReviewReport :map] :string]}
+  record-final
   "Printed once at the end: the live frame's static form, then what the run gave
    up, then the terminal status.
 

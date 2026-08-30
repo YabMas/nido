@@ -40,7 +40,8 @@
   (into #{} (comp (filter :settles?) (map :disposition))
         prompts/disposition-vocabulary))
 
-(defn settled?
+(defn ^{:malli/schema [:=> [:cat :Finding] :boolean]}
+  settled?
   "Has this finding been decided? See `settling-dispositions`."
   [f]
   (contains? settling-dispositions (:disposition f)))
@@ -59,7 +60,8 @@
      :of          (:of r)
      :because     (:because r)}))
 
-(defn parse-warden-decision
+(defn ^{:malli/schema [:=> [:cat :string] :map]}
+  parse-warden-decision
   "Last fenced ```json block in `text` -> {:decision :reason :rulings}.
    Unparseable -> indeterminate."
   [text]
@@ -77,7 +79,8 @@
           {:decision :indeterminate :reason (str "unparseable: " (ex-message e))}))
       {:decision :indeterminate :reason "no json decision block"})))
 
-(defn project+ws-from-cwd
+(defn ^{:malli/schema [:=> [:cat :Path] :any]}
+  project+ws-from-cwd
   "Resolve cwd → [project ws-id] via the session, or nil. The same path
    tasks.nido-review/append-review-entry! takes to find where to write."
   [cwd]
@@ -87,7 +90,8 @@
         [(keyword project) ws-id]))
     (catch Throwable _ nil)))
 
-(defn session-stack
+(defn ^{:malli/schema [:=> [:cat :Path :any] :any]}
+  session-stack
   "This session's layers, bottom→top, or [] when cwd resolves to no session (a
    review run outside a nido worktree still has to work — it just has no stack
    to land on)."
@@ -104,7 +108,8 @@
    dozen at once."
   6)
 
-(defn in-parallel
+(defn ^{:malli/schema [:=> [:cat :int :any] :any]}
+  in-parallel
   "Run each thunk, at most `n` at a time, preserving order.
 
    An exception in any thunk propagates carrying its ORIGINAL ex-data: a bare
@@ -122,7 +127,8 @@
                           futs))))
         (partition-all n thunks)))
 
-(defn composition-of
+(defn ^{:malli/schema [:=> [:cat :Path :any] :any]}
+  composition-of
   "What the composition pass is told about the stack it is composing: one entry
    per layer, in stack order, carrying the range that layer contributes, the rev
    of the tree its own PR would merge, what it claims, what it declared out of
@@ -149,7 +155,8 @@
                 :files        (codex/changed-files cwd from to)}))
         targets))
 
-(defn review-targets
+(defn ^{:malli/schema [:=> [:cat :Path :any] :any]}
+  review-targets
   "What this round reviews: one target per layer, bounded by that layer's brief,
    plus one over the whole stack.
 
@@ -189,14 +196,16 @@
               (assoc whole :composition
                      {:layers (composition-of cwd per-layer)}))))))
 
-(defn with-patch-hashes
+(defn ^{:malli/schema [:=> [:cat :Path :any] :any]}
+  with-patch-hashes
   "Stamp each target with the hash of the patch it contributes — its identity
    for the cache. A target whose hash cannot be computed keeps nil and is
    therefore never skipped."
   [cwd targets]
   (mapv #(assoc % :patch-hash (layers/patch-hash cwd (:from %) (:to %))) targets))
 
-(defn to-review
+(defn ^{:malli/schema [:=> [:cat :map :any] :map]}
+  to-review
   "Split targets into those this round must review and those already converged
    at exactly this patch. A target with no hash is always reviewed: unknown
    content is reviewed content."
@@ -247,7 +256,8 @@
                                                  (str/split-lines (or manifest ""))))})))
         results))
 
-(defn announce-targets!
+(defn ^{:malli/schema [:=> [:cat :map :map] :any]}
+  announce-targets!
   "Publish what this round is about to review, BEFORE any agent starts.
 
    Everything here is known at setup: the fork point from jj, the target list
@@ -365,7 +375,8 @@
   {:name :review
    :run  run-review-stage})
 
-(defn discover-design-record
+(defn ^{:malli/schema [:=> [:cat :Path] [:maybe :map]]}
+  discover-design-record
   "This workstream's latest :design record, or nil.
 
    Replaces a glob for the newest `docs/superpowers/specs/*-design.md`, which
@@ -376,7 +387,8 @@
   (when-let [[project ws-id] (project+ws-from-cwd cwd)]
     (ws/latest-entry project ws-id :design)))
 
-(defn discover-baseline
+(defn ^{:malli/schema [:=> [:cat :Path :map] [:maybe :map]]}
+  discover-baseline
   "The baseline `design` was judged against — the entry it CITES, not the newest
    one. A workstream may baseline more than once, and the design committed to a
    particular reading; handing the judge a later baseline would have it check the
@@ -393,7 +405,8 @@
 
 (def ^:private stance-char-cap 12000)
 
-(defn stance-path
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :Path]}
+  stance-path
   "Where `project`'s stance text lives: its own file if it has one, otherwise the
    common `default.md`.
 
@@ -412,7 +425,8 @@
         own (fs/path dir (str (name project) ".md"))]
     (if (fs/exists? own) own (fs/path dir "default.md"))))
 
-(defn read-stance
+(defn ^{:malli/schema [:=> [:cat :ProjectName] [:maybe :string]]}
+  read-stance
   "The project's stance text, from nido's own tree, capped so it can't blow up the
    warden prompt. Read from the source dir rather than cwd: the review runs in the
    worktree, and the stance ships with the /design skill in nido's `.claude`, which
@@ -429,7 +443,8 @@
               s))))
       (catch Throwable _ nil))))
 
-(defn answered-by-layer
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  answered-by-layer
   "What earlier rounds already CLOSED, per layer, for the layers under review.
 
    Written by `answered-for` from this stage's own closes and hung off each
@@ -450,7 +465,8 @@
         (:reviews ctx)))
 
 
-(defn converged-targets
+(defn ^{:malli/schema [:=> [:cat :any :any] :any]}
+  converged-targets
   "Pure: the targets this round left with nothing OWED, paired with the patch
    they were reviewed at.
 
@@ -483,7 +499,8 @@
                                  (not (contains? owners (:label t))))))))
           reviews)))
 
-(defn answered-for
+(defn ^{:malli/schema [:=> [:cat :any :any] :any]}
+  answered-for
   "What this target reported and the warden SETTLED. Carried forward under the
    patch hash so next round's fresh reviewer, reporting the same thing, gets
    answered rather than re-adjudicated.
@@ -500,7 +517,8 @@
               (map #(select-keys % [:id :title :disposition :authority :because])))
         findings))
 
-(defn record-convergence!
+(defn ^{:malli/schema [:=> [:cat :Path :map] :any]}
+  record-convergence!
   "Write what converged this round into the workstream's cache.
 
    Called from the two stages that can end a round with nothing owed, rather
@@ -534,7 +552,8 @@
                           converged)]
           (cache/write! project ws-id c))))))
 
-(defn resolve-handle
+(defn ^{:malli/schema [:=> [:cat :any :Finding] :any]}
+  resolve-handle
   "The identity a finding is filed under: the handle of the finding the warden
    says it restates, or its own id when it restates nothing.
 
@@ -551,7 +570,8 @@
   [handles {:keys [id same-as]}]
   (or (get handles same-as) id))
 
-(defn apply-rulings
+(defn ^{:malli/schema [:=> [:cat :any :any :any] :any]}
+  apply-rulings
   "Merge the warden's per-finding rulings onto the findings, and file each under
    the identity the warden gave it.
 
@@ -575,7 +595,8 @@
               (assoc merged :handle (resolve-handle handles merged))))
           findings)))
 
-(defn seen-findings
+(defn ^{:malli/schema [:=> [:cat :any] :any]}
+  seen-findings
   "Every finding an earlier round raised, oldest first, as {:round :id :title}.
 
    This is the pool the warden's `same_as` points into, and it cannot come from
@@ -659,7 +680,8 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
   {:name :warden
    :run  run-warden-stage})
 
-(defn working-copy-dirty?
+(defn ^{:malli/schema [:=> [:cat :Path] :boolean]}
+  working-copy-dirty?
   "True when jj reports working-copy changes in cwd.
 
    Answers `is there anything uncommitted`, which is what the diff fixer needs:
@@ -667,7 +689,8 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
   [cwd]
   (not (str/blank? (:out (jj/jj! cwd "diff" "--git")))))
 
-(defn working-copy-state
+(defn ^{:malli/schema [:=> [:cat :Path] :map]}
+  working-copy-state
   "What the working copy currently contains, as a value to compare against later.
 
    A record round cannot use `working-copy-dirty?`, and the difference is not
@@ -683,7 +706,8 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
   [cwd]
   (str (:out (jj/jj! cwd "diff" "--git"))))
 
-(defn layer-label
+(defn ^{:malli/schema [:=> [:cat :map] :string]}
+  layer-label
   [layer]
   (or (:slug layer) (:bookmark layer)))
 
@@ -695,7 +719,8 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                    (when remedy [(keyword kind) remedy])))
         prompts/composition-kinds))
 
-(defn reshape-plan
+(defn ^{:malli/schema [:=> [:cat :any :Finding] [:maybe :map]]}
+  reshape-plan
   "What to do about one finding whose remedy is the stack's shape, or nil.
 
    `across` names the layers the defect spans, in stack order, so the lower one
@@ -777,7 +802,8 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
    :run  run-reshape-stage})
 
 
-(defn fix-plan
+(defn ^{:malli/schema [:=> [:cat :any :any] :any]}
+  fix-plan
   "Findings the warden dispositioned :fix, grouped by the layer that OWNS them,
    ordered bottom→top.
 
@@ -805,7 +831,8 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                         {:label (layer-label layer) :layer layer :findings (vec fs)})))
               stack)))))
 
-(defn layer-fixer-session
+(defn ^{:malli/schema [:=> [:cat :any :any] :string]}
+  layer-fixer-session
   "A stable claude session id per layer, derived from the run's own id so it is
    the same across rounds without being carried in mutable state.
 

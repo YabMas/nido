@@ -28,11 +28,13 @@
    [clojure.edn :as edn]
    [nido.coordinator.record.state :as cstate]))
 
-(defn path
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :Path]}
+  path
   [project ws-id]
   (str (fs/path (cstate/workstream-dir project ws-id) "review-cache.edn")))
 
-(defn read-cache
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :map]}
+  read-cache
   "The workstream's cache, or {} — for a workstream that has none, and for one
    whose file is unreadable or corrupt. A cache that cannot be read must degrade
    to reviewing everything, never to skipping."
@@ -44,12 +46,14 @@
         {}))
     (catch Throwable _ {})))
 
-(defn converged?
+(defn ^{:malli/schema [:=> [:cat :map :string] :boolean]}
+  converged?
   "Has this exact patch already been reviewed to convergence?"
   [cache patch-hash]
   (= :converged (:status (get cache patch-hash))))
 
-(defn answered
+(defn ^{:malli/schema [:=> [:cat :map :string] :any]}
+  answered
   "Findings already closed against this exact patch, as
    [{:id … :because …}]. Fed back to the next round's warden so a fresh
    reviewer reporting the same thing gets answered rather than re-adjudicated —
@@ -60,13 +64,15 @@
   [cache patch-hash]
   (vec (:answered (get cache patch-hash))))
 
-(defn record
+(defn ^{:malli/schema [:=> [:cat :map :string :map] :map]}
+  record
   "Pure: the cache with `patch-hash` marked. Never removes an entry — the store
    is append-only, so re-encountering a patch is a hit rather than a rebuild."
   [cache patch-hash entry]
   (assoc cache patch-hash (merge {:status :converged} entry)))
 
-(defn write!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :any]}
+  write!
   "Persist the cache. Best-effort: a cache that cannot be written costs the next
    run some duplicated review, which is never a reason to fail a finished one."
   [project ws-id cache]

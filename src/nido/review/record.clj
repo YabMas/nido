@@ -53,7 +53,8 @@
 
 ;; ── Whether a round is worth running ────────────────────────────────────────
 
-(defn baseline-round-worth-running?
+(defn ^{:malli/schema [:=> [:cat :map] :boolean]}
+  baseline-round-worth-running?
   "A baseline is worth verifying when there is something checkable in it. That is
    any load-bearing property or health observation — every one carries evidence,
    so every one is a claim the code can refute.
@@ -65,7 +66,8 @@
                 (or (seq (:load-bearing baseline))
                     (seq (:health baseline))))))
 
-(defn design-round-worth-running?
+(defn ^{:malli/schema [:=> [:cat :map] :boolean]}
+  design-round-worth-running?
   "The decision round costs a human's attention at the end of it, so it runs
    where the records themselves say it would pay.
 
@@ -86,7 +88,8 @@
             (contains? #{:L :XL} (:effort design))
             (some #(not= :fix-here (:to %)) (:routes design))))))
 
-(defn discover-intent
+(defn ^{:malli/schema [:=> [:cat :Path :map] [:maybe :map]]}
+  discover-intent
   "The intent the design CITED, projected to what a goal may contain. nil when
    the design cites none — a pre-intent record — which the prompt states rather
    than papering over.
@@ -148,7 +151,8 @@
   {:shape       :shape
    :composition :composition})
 
-(defn known-ids
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  known-ids
   "Every id a baseline actually contains — claims, modules, health observations,
    and the reserved name of each whole-record field the baseline fills in."
   [record]
@@ -158,7 +162,8 @@
         (comp cat (keep :id))
         [(:load-bearing record) (:modules record) (:health record)]))
 
-(defn confirmed-in
+(defn ^{:malli/schema [:=> [:cat :map :any] :any]}
+  confirmed-in
   "The confirmations that name something in `record`, and nothing else.
 
    A judge asked for ids will occasionally answer with something adjacent — an
@@ -170,7 +175,8 @@
   (let [ids (known-ids record)]
     (vec (distinct (filter ids confirmed)))))
 
-(defn confirmed-so-far
+(defn ^{:malli/schema [:=> [:cat :any] :any]}
+  confirmed-so-far
   "Every claim an earlier round of this run said it checked and found to hold.
 
    A judge that confirms a claim and then, on an unchanged record and unchanged
@@ -187,7 +193,8 @@
   [history]
   (vec (distinct (mapcat :confirmed history))))
 
-(defn confirmations-block
+(defn ^{:malli/schema [:=> [:cat :any] :string]}
+  confirmations-block
   "What earlier rounds already checked, in front of the judge.
 
    Not `do not look again` — a confirmation can be wrong and the code it was
@@ -206,7 +213,8 @@
          "progress.\n"
          "Spend your effort on what is NOT in this list.\n")))
 
-(defn disputes-block
+(defn ^{:malli/schema [:=> [:cat :any] :string]}
+  disputes-block
   "What an earlier round's amender said back, put in front of the judge.
 
    This is the whole appeal channel. Without it a dispute is a note in a file
@@ -240,7 +248,8 @@
                (str "\n" indent "read as " (namespace lens) "/" (name lens)
                     " = " (name verdict) " — " because))))
 
-(defn lens-block
+(defn ^{:malli/schema [:=> [:cat] :string]}
+  lens-block
   "The perspectives in play, with their verdicts and where each comes from.
 
    Put in front of the judge rather than assumed, because a verdict is only
@@ -301,7 +310,8 @@
                  (str "\n    read from:  " (str/join ", " evidence)))))
         load-bearing)))
 
-(defn baseline-prompt
+(defn ^{:malli/schema [:=> [:cat :map] :string]}
+  baseline-prompt
   "The verification prompt.
 
    Pitched at the decomposition, and deliberately so. Asked to check a baseline
@@ -513,7 +523,8 @@
             [(str "\n    principles: " (str/join "; " p))])
           (when-let [n (:note m)] [(str "\n    because: " n)]))))
 
-(defn design-prompt
+(defn ^{:malli/schema [:=> [:cat :map] :string]}
+  design-prompt
   "The decision prompt. Derives what can be derived; hands the rest over."
   [{:keys [design baseline stance intent disputes]}]
   (str
@@ -668,7 +679,8 @@
                       (seq (:evidence f)) (assoc :evidence (mapv str (:evidence f)))))))
               raw)))
 
-(defn parse-baseline-review
+(defn ^{:malli/schema [:=> [:cat :string :any] :map]}
+  parse-baseline-review
   "Codex JSON -> a :baseline-review ledger record, or nil when the answer is
    unusable. nil is a non-answer, never a fabricated :sufficient — the caller
    records nothing rather than inventing trust."
@@ -700,7 +712,8 @@
               (not= :sufficient v) (assoc :findings findings))))))
     (catch Exception _ nil)))
 
-(defn parse-design-decision
+(defn ^{:malli/schema [:=> [:cat :string :any] :map]}
+  parse-design-decision
   "Codex JSON -> a :design-decision ledger record, or nil when unusable."
   [json-str design-seq]
   (try
@@ -780,7 +793,8 @@
          :detail "the answer did not satisfy what a round must return"})
     result))
 
-(defn baseline-review!
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  baseline-review!
   "Verify a baseline against the code. Returns the ledger record, or
    {:outcome <kw> :detail <str>} saying why there is none — never a bare nil, so
    a caller can always tell a skipped round from a failed one.
@@ -807,7 +821,8 @@
       {:outcome :no-record :detail "this workstream has no :baseline entry"})
     {:outcome :no-workstream :detail (str "cwd resolves to no nido session: " cwd)}))
 
-(defn unverified-premise
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] [:maybe :map]]}
+  unverified-premise
   "Why this design cannot be judged yet, or nil when nothing stops it.
 
    Three of the decision round's four derivations are made AGAINST the baseline.
@@ -839,7 +854,8 @@
         {:outcome (or (:reason (:blocked st)) :premise-unverified)
          :detail  (:detail (:blocked st))}))))
 
-(defn design-decision!
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  design-decision!
   "Run the decision round over this workstream's latest design record. Returns
    the ledger record, or {:outcome <kw> :detail <str>} saying why there is none.
 
@@ -870,7 +886,8 @@
       {:outcome :no-record :detail "this workstream has no :design entry"})
     {:outcome :no-workstream :detail (str "cwd resolves to no nido session: " cwd)}))
 
-(defn append!
+(defn ^{:malli/schema [:=> [:cat :Path :map] :any]}
+  append!
   "Append a round's record to the workstream ledger. Best-effort, for the same
    reason the review path's appends are: a round that produced an answer must not
    turn into a failure because the side record could not be written."
@@ -897,7 +914,8 @@
 ;; sharpen the property's evidence rather than to argue: sharper evidence is a
 ;; repair the next round can read, and an argument in phase 1 has nowhere to go.
 
-(defn baseline-finding-base-key
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  baseline-finding-base-key
   "What makes two baseline findings the same finding.
 
    The claim's ID when the finding names one, because that is the only handle
@@ -930,7 +948,8 @@
     (seq (:evidence f))                    [:evidence (vec (sort (:evidence f)))]
     :else                                  [:cites (vec (sort (:cites f)))]))
 
-(defn dispute-aware
+(defn ^{:malli/schema [:=> [:cat :any] :any]}
+  dispute-aware
   "Fold how many times a finding has been disputed into its identity.
 
    Without this the appeal channel cannot complete a single round trip. A
@@ -948,7 +967,8 @@
 
 ;; ── The appeal channel ──────────────────────────────────────────────────────
 
-(defn parse-amend-answer
+(defn ^{:malli/schema [:=> [:cat :any :any :any] :map]}
+  parse-amend-answer
   "What an amender may hand back: an amended record, objections to what it was
    asked to amend for, or both.
 
@@ -979,17 +999,20 @@
                                    :evidence (vec (map str evidence))})))
                             disputes))})))
 
-(defn dispute-counts
+(defn ^{:malli/schema [:=> [:cat :any] :any]}
+  dispute-counts
   "How many times each finding has been objected to across the whole run."
   [history]
   (frequencies (map :key (mapcat :disputes history))))
 
-(defn disputes-for-judge
+(defn ^{:malli/schema [:=> [:cat :any] :any]}
+  disputes-for-judge
   "Every standing objection, oldest first, for the next judge prompt."
   [history]
   (vec (mapcat :disputes history)))
 
-(defn amend-prompt
+(defn ^{:malli/schema [:=> [:cat :map] :string]}
+  amend-prompt
   "Instruction to repair a baseline the round found wanting.
 
    States the one thing that makes the loop worth running at all: the job is to
@@ -1370,7 +1393,8 @@
 ;; limitation — it is the round's whole purpose: everything derivable is derived
 ;; so that what reaches a human is only the judgement that cannot be.
 
-(defn broken-checks
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  broken-checks
   "The derivations that failed — the design round's findings, at the granularity
    the round can actually decide at.
 
@@ -1380,7 +1404,8 @@
   [record]
   (vec (filter #(= :broken (:status %)) (:checks record))))
 
-(defn underivable-checks
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  underivable-checks
   "The derivations the round could not make at all.
 
    Never findings, and the distinction is the reason :status has three values.
@@ -1391,10 +1416,12 @@
   [record]
   (vec (filter #(= :underivable (:status %)) (:checks record))))
 
-(defn design-finding-base-key [c] [:check (:check c)])
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  design-finding-base-key [c] [:check (:check c)])
 (def design-finding-key (dispute-aware design-finding-base-key))
 
-(defn trajectory
+(defn ^{:malli/schema [:=> [:cat :any] :any]}
+  trajectory
   "The run, as the human reading the escalated decision needs it. Rounds that
    found nothing and gave up nothing are still listed: a round that passed
    quietly is evidence about the ones that did not."
@@ -1408,7 +1435,8 @@
             (seq disputes) (assoc :disputed (mapv :claim disputes))))
         history)))
 
-(defn design-amend-prompt
+(defn ^{:malli/schema [:=> [:cat :map] :string]}
+  design-amend-prompt
   "Instruction to repair a design record the derivation found wanting.
 
    :recut and :amend are given different jobs, because saying the wrong one is

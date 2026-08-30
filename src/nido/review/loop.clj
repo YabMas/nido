@@ -18,7 +18,8 @@
    that is about to move."
   [stages/review-stage stages/warden-stage stages/reshape-stage stages/fix-stage])
 
-(defn default-finding-key
+(defn ^{:malli/schema [:=> [:cat :Finding] :any]}
+  default-finding-key
   "How the DIFF review tells one finding from another: the handle the warden
    filed it under.
 
@@ -172,7 +173,8 @@
    ctx
    pipeline))
 
-(defn run-loop
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  run-loop
   "Drive the pipeline until terminal. config:
    {:cwd :base :run-id :max-iters :pipeline :emit :clock :budget :dry-run?}.
    :max-iters is OPTIONAL and has no default — nil means run until the loop

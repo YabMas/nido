@@ -14,7 +14,8 @@
    [nido.review.prompts :as prompts]
    [nido.vsdd.jj :as jj]))
 
-(defn finding-id
+(defn ^{:malli/schema [:=> [:cat :Finding] :string]}
+  finding-id
   "A finding's identity, derived from what it points at rather than from its
    position in a list. Indices into \"this round's findings\" cannot survive
    re-attribution across layers, and they make a report that says nothing about
@@ -22,7 +23,8 @@
   [{:keys [file line-start title]}]
   (digest/short-id (str file "|" line-start "|" title)))
 
-(defn normalize-finding
+(defn ^{:malli/schema [:=> [:cat :map] :Finding]}
+  normalize-finding
   "Codex native finding (keyword keys) -> normalized finding.
 
    `kind` and `layers` are added only when the finding carries them, which is
@@ -45,7 +47,8 @@
 
 (defn- with-id [f] (assoc f :id (finding-id f)))
 
-(defn parse-output
+(defn ^{:malli/schema [:=> [:cat :string] :any]}
+  parse-output
   "Parse codex --output-schema JSON string into
    {:findings [...] :overall-correctness <str>}."
   [json-str]
@@ -53,7 +56,8 @@
     {:findings            (mapv (comp with-id normalize-finding) (:findings m))
      :overall-correctness (:overall_correctness m)}))
 
-(defn codex-argv
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  codex-argv
   "The `codex exec` invocation as [opts & args] for p/shell. Pure, so it's
    unit-testable. The prompt is fed via stdin with \"-\" as the positional
    prompt. Review runs read-only. codex's streaming output is captured to
@@ -68,7 +72,8 @@
    "-o" out-path
    "-"])
 
-(defn run-codex!
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  run-codex!
   "Run `codex exec` with output-schema. Seam for tests. Returns {:exit <int>}.
    Writes the final JSON response to :out-path.
 
@@ -83,7 +88,8 @@
       (:proc proc)
       #(let [res @proc] {:exit (:exit res)}))))
 
-(defn composition-schema
+(defn ^{:malli/schema [:=> [:cat :any] :any]}
+  composition-schema
   "The findings schema with the composition pass's two extra fields: the `kind`
    it must classify the defect as, and the `layers` it must show the defect
    spans.
@@ -111,14 +117,16 @@
                              {:type "array" :items {:type "string"}})
                    (update :required #(into (vec %) ["kind" "layers"]))))))
 
-(defn schema-json
+(defn ^{:malli/schema [:=> [:cat :boolean] :string]}
+  schema-json
   "The output schema to hand codex for this review, as JSON."
   [composition?]
   (let [base (json/parse-string
               (slurp (io/resource "review/findings_schema.json")) true)]
     (json/generate-string (cond-> base composition? composition-schema))))
 
-(defn merge-base
+(defn ^{:malli/schema [:=> [:cat :Path :any] :string]}
+  merge-base
   "Resolve the merge base (fork point) of @ and `base` to a single commit id.
    This — not the tip of `base` — is the correct comparison point for a branch
    review: `jj diff --from <tip-of-base> --to @` is a 2-way tree diff, so any
@@ -146,7 +154,8 @@
   [cwd from to]
   (jj/jj! cwd "diff" "--name-only" "--from" from "--to" to))
 
-(defn changed-files
+(defn ^{:malli/schema [:=> [:cat :Path :any :any] :any]}
+  changed-files
   "The files a range touches, or [] when the diff fails for any reason. Tolerant
    by design: this feeds the target block the display reads, and a header is
    never worth a run.
@@ -162,7 +171,8 @@
         []))
     (catch Throwable _ [])))
 
-(defn safe-label
+(defn ^{:malli/schema [:=> [:cat :any] :string]}
+  safe-label
   "A label made safe to put in a filename. Layer labels come from bookmarks, and
    an unstacked branch's bookmark is the session name — which contains a slash
    (`feat/thing`) and would silently write the artifact into a subdirectory that
@@ -180,7 +190,8 @@
   [label iter suffix]
   (format "%s-round-%d%s" (safe-label label) (or iter 1) suffix))
 
-(defn review!
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  review!
   "Git-free codex review of ONE revision range. See ns doc.
 
    `from`/`to` aim it: `merge-base(@,base)`→`@` for the whole stack, or a single

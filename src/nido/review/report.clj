@@ -8,7 +8,8 @@
 
 (def schema-version 1)
 
-(defn init
+(defn ^{:malli/schema [:=> [:cat :map] :ReviewReport]}
+  init
   [{:keys [run-id cwd base started-at]}]
   {:schema     schema-version
    :run-id     run-id
@@ -78,7 +79,8 @@
         pidx   (last (keep-indexed (fn [i ph] (when (= phase-name (:phase ph)) i)) phases))]
     (if pidx (update-in report [:rounds ridx :phases pidx] f) report)))
 
-(defn in-stack-order
+(defn ^{:malli/schema [:=> [:cat :any] :any]}
+  in-stack-order
   "Rows as the stack has them: layers bottom→top by :index, the composition pass
    last.
 
@@ -108,7 +110,8 @@
            (:index target) (assoc :index (:index target)))
          extra))
 
-(defn review-layers
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  review-layers
   "One entry per review target this round: what it found, or that it was not
    looked at because its patch had already converged. This is what makes the
    round legible per layer instead of as one number.
@@ -236,7 +239,8 @@
 
 ;; ---- fold ----------------------------------------------------------------
 
-(defn apply-event
+(defn ^{:malli/schema [:=> [:cat :ReviewReport :map] :ReviewReport]}
+  apply-event
   [report {:keys [event] :as ev} _clock]
   (case event
     :run-started
@@ -274,7 +278,8 @@
 
 ;; ---- persistence ---------------------------------------------------------
 
-(defn persist!
+(defn ^{:malli/schema [:=> [:cat :ReviewReport :Path] :any]}
+  persist!
   "Atomically write `report` to `path` as pretty JSON: write <path>.tmp then
    rename over `path`, so a concurrent reader never sees a half-written file."
   [report path]

@@ -140,7 +140,8 @@
      (within :modules      "module" [:module :hides :interface])
      (within :load-bearing "claim"  [:property :falsified-by]))))
 
-(defn baseline-retreats
+(defn ^{:malli/schema [:=> [:cat :map :map] :any]}
+  baseline-retreats
   "Everything the superseding baseline claims less of than the one before it.
 
    Health observations are compared by :id, which is stable by schema — that is
@@ -225,7 +226,8 @@
 (def baseline-order [:within :extends :revisit])
 (def standing-order [:conforms :extends :challenges])
 
-(defn design-retreats
+(defn ^{:malli/schema [:=> [:cat :map :map] :any]}
+  design-retreats
   "Everything the superseding design commits to less strongly than the one
    before it.
 
@@ -280,7 +282,8 @@
    it. A floor as well, so a two-word field going to five words is not news."
   {:factor 2.0 :floor 400})
 
-(defn growth
+(defn ^{:malli/schema [:=> [:cat :map :map] :any]}
+  growth
   "Prose fields that have grown past checking since the run began.
 
    NOT a retreat, and reported apart from them for that reason: a field that
@@ -304,7 +307,8 @@
                     (>= (/ (double c) a) (:factor grew-by)))]
      {:field f :from a :to c})))
 
-(defn growth-summary
+(defn ^{:malli/schema [:=> [:cat :any] :string]}
+  growth-summary
   [growth]
   (when (seq growth)
     (str/join "\n"
@@ -315,7 +319,8 @@
 
 ;; ── Reporting ───────────────────────────────────────────────────────────────
 
-(defn summary
+(defn ^{:malli/schema [:=> [:cat :any] :string]}
+  summary
   "One line per retreat, for the terminal and for the escalation. Empty vector
    renders as nil rather than as an empty heading — 'nothing was weakened' is
    worth saying once, by the caller, not implied by a blank section."

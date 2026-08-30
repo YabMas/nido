@@ -10,7 +10,8 @@
   (:import
    [java.security MessageDigest]))
 
-(defn sha256-hex
+(defn ^{:malli/schema [:=> [:cat :string] :string]}
+  sha256-hex
   "Lowercase hex SHA-256 of `s`."
   [s]
   (let [md (MessageDigest/getInstance "SHA-256")]
@@ -18,7 +19,8 @@
          (map #(format "%02x" %))
          (apply str))))
 
-(defn short-id
+(defn ^{:malli/schema [:=> [:cat :string] :string]}
+  short-id
   "The first 8 hex characters of the digest of `s` — enough to name a finding
    unambiguously within one round, short enough to read in a prompt and quote in
    a report."

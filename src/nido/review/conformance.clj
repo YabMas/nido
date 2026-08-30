@@ -43,7 +43,8 @@
          "call graph. It is not a false positive — there is no reviewer here to have\n"
          "misread anything. What can be wrong is the declaration.")))
 
-(defn findings
+(defn ^{:malli/schema [:=> [:cat :ProjectName :Path] [:vector :Finding]]}
+  findings
   "Design violations in `worktree` as review findings — one per broken LAW, not one per
    offending row.
 

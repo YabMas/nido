@@ -61,7 +61,8 @@
     (when (str/starts-with? bookmark prefix)
       (subs bookmark (count prefix)))))
 
-(defn stack
+(defn ^{:malli/schema [:=> [:cat :Path :any :any] :any]}
+  stack
   "This session's layers, ordered bottom→top:
      [{:bookmark :slug :tip <commit-id> :change <change-id>} …]
 
@@ -84,7 +85,8 @@
 
 ;; ---- what each layer contributes ----------------------------------------
 
-(defn ranges
+(defn ^{:malli/schema [:=> [:cat :any :any] :any]}
+  ranges
   "Pair each layer with the revision range it contributes:
      [{… :from <rev> :to <commit-id>} …]   bottom→top
 
@@ -103,7 +105,8 @@
                               :to   (:tip layer))))
         stack))
 
-(defn patch-hash
+(defn ^{:malli/schema [:=> [:cat :Path :any :any] :string]}
+  patch-hash
   "The identity of what a range CONTRIBUTES, as against where it sits.
 
    Hashes the range's git-format diff, so it is stable across everything the
@@ -116,7 +119,8 @@
     (when (zero? exit)
       (digest/sha256-hex out))))
 
-(defn description
+(defn ^{:malli/schema [:=> [:cat :Path :any] :string]}
+  description
   "A revision's full commit message, or nil."
   [cwd rev]
   (let [{:keys [exit out]} (jj/jj! cwd "log" "-r" rev "--no-graph" "-T" "description")]
@@ -129,7 +133,8 @@
 (def ^:private field-re #"^(Layer|Claims|Verify|Lane|Out of scope):\s*(.*)$")
 (def ^:private continuation-re #"^\s+\S.*$")
 
-(defn parse-brief
+(defn ^{:malli/schema [:=> [:cat :string] :map]}
+  parse-brief
   "A layer commit message → its `/stack` §5 review brief:
      {:mode :claims :verify :lane :out-of-scope :subject :raw}
 
@@ -161,14 +166,16 @@
                      :raw     (str/trim description))
         (seq (:mode joined)) (update :mode #(keyword (str/lower-case (str/trim %))))))))
 
-(defn brief
+(defn ^{:malli/schema [:=> [:cat :Path :any] :map]}
+  brief
   "The review brief of the layer whose tip is `rev`, or nil."
   [cwd rev]
   (parse-brief (description cwd rev)))
 
 ;; ---- landing a fix on a layer -------------------------------------------
 
-(defn position-for-fix!
+(defn ^{:malli/schema [:=> [:cat :Path :map] :any]}
+  position-for-fix!
   "Put the working copy on `layer` so a fixer's edits land there rather than on
    top of the whole stack. Layers above rebase onto the new commit
    automatically. A nil layer (unstacked branch) means the working copy is
@@ -192,7 +199,8 @@
                              (:bookmark layer) " — " err)
                         {:reason :review-failed :cwd cwd :layer layer}))))))
 
-(defn land-fix!
+(defn ^{:malli/schema [:=> [:cat :Path :map :string] :any]}
+  land-fix!
   "Turn the working copy into the layer's fix commit and move the layer's
    bookmark onto it. Returns the fix's commit id.
 
@@ -215,7 +223,8 @@
     (do (jj/jj! cwd "commit" "-m" msg)
         (:out (jj/jj! cwd "log" "-r" "@-" "-T" "commit_id" "--no-graph")))))
 
-(defn restore-top!
+(defn ^{:malli/schema [:=> [:cat :Path :any] :any]}
+  restore-top!
   "Return the working copy to a fresh empty commit on top of the stack, so
    whatever runs next sees the whole stack in `<base>..@` again.
 
@@ -251,7 +260,8 @@
 ;; halves — the operation log is an exact undo, and whether a reorder was legal
 ;; is a question it answers rather than one anybody has to judge.
 
-(defn current-op
+(defn ^{:malli/schema [:=> [:cat :Path] :string]}
+  current-op
   "The id of jj's latest operation — the point a reshape can be rolled back to."
   [cwd]
   (let [{:keys [exit out]} (jj/jj! cwd "op" "log" "--no-graph" "-T" "id.short()"
@@ -259,7 +269,8 @@
     (when (and (zero? exit) (not (str/blank? out)))
       (str/trim (first (str/split-lines out))))))
 
-(defn conflicted
+(defn ^{:malli/schema [:=> [:cat :Path :any] :any]}
+  conflicted
   "Change ids in this stack that jj left conflicted, or [].
 
    The `conflicts()` revset, and NOT `jj resolve --list`. That command inspects
@@ -277,14 +288,16 @@
       (vec (remove str/blank? (str/split-lines out)))
       [])))
 
-(defn restore-op!
+(defn ^{:malli/schema [:=> [:cat :Path :string] :any]}
+  restore-op!
   "Put the repo back as it was at `op`. Best-effort: this runs on the failure
    path, and a restore that also fails must not replace the diagnosis."
   [cwd op]
   (when op
     (try (jj/jj! cwd "op" "restore" op) (catch Throwable _ nil))))
 
-(defn attempt-reshape!
+(defn ^{:malli/schema [:=> [:cat :Path :any :any] :map]}
+  attempt-reshape!
   "Run `f`, and keep what it did only if the stack came out clean.
 
    Returns {:ok? true} or {:ok? false :reason \"…\"}, never throws for a reshape
@@ -313,7 +326,8 @@
 
       :else {:ok? true})))
 
-(defn reorder!
+(defn ^{:malli/schema [:=> [:cat :Path :any :map :map] :map]}
+  reorder!
   "Move `layer` to sit directly below `other`. Both are layers of this stack.
 
    The remedy an order-dependence finding names: a layer reaching for something
@@ -324,7 +338,8 @@
    cwd base
    #(jj/jj! cwd "rebase" "-r" (:bookmark layer) "--insert-before" (:bookmark other))))
 
-(defn fold!
+(defn ^{:malli/schema [:=> [:cat :Path :any :map :map] :map]}
+  fold!
   "Squash `layer` into `into-layer`, leaving one layer where there were two.
 
    Always legal where a reorder may not be — folding removes a boundary rather

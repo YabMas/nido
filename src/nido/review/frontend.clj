@@ -12,13 +12,15 @@
   (:import
    [java.time Instant]))
 
-(defn plain?
+(defn ^{:malli/schema [:=> [:cat] :boolean]}
+  plain?
   "True when output is not an interactive terminal, or forced via env."
   []
   (or (= "1" (System/getenv "NIDO_REVIEW_PLAIN"))
       (nil? (System/console))))
 
-(defn emit-fn
+(defn ^{:malli/schema [:=> [:cat :any :Path :any :boolean] :any]}
+  emit-fn
   "Build the emit fn: fold event → atom, persist, and in plain mode print a
    narration line.
 
@@ -50,7 +52,8 @@
 ;; viewport lives in this section; `render` stays a pure projection to text and
 ;; knows nothing about the window it lands in.
 
-(defn tty-size
+(defn ^{:malli/schema [:=> [:cat] :map]}
+  tty-size
   "The terminal's `{:cols n :rows n}`, or nil when there is no tty to ask.
 
    `stty` rather than JLine, which babashka does bundle: building a JLine system
@@ -85,7 +88,8 @@
       line
       (str (subs line 0 (max 0 (dec width))) "…"))))
 
-(defn fit
+(defn ^{:malli/schema [:=> [:cat :string :map] :string]}
+  fit
   "`s` bounded to a `cols` x `rows` viewport, so that its line count is exactly
    the number of terminal rows it will occupy.
 
@@ -224,7 +228,8 @@
             (recur n geom' (if due? now measured-at)))
         n))))
 
-(defn with-live-frame
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  with-live-frame
   "Animate `frame-fn` while `(f)` runs, then erase the live block and give the
    cursor back. Returns whatever `(f)` returned.
 
@@ -265,7 +270,8 @@
                           clear-down show-cursor))
               (flush))))))))
 
-(defn with-live-display
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  with-live-display
   "Run (f emit) under the review report's live frame, then print the final
    summary over it. Pass :plain? to force a mode; omit it to auto-detect via the
    `plain?` fn. (Local is named `plain` so it never shadows the `plain?`

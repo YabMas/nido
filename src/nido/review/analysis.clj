@@ -33,7 +33,8 @@
    every review loop, whatever it reviewed, is analysed nido-side."
   {:project :nido :trigger :review-analysis})
 
-(defn payload
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  payload
   "Pure: the envelope payload for one terminated run.
 
    `:adapter`/`:id` form the external ref the coordinator dedups workstreams on.
@@ -67,7 +68,8 @@
     reviewed-session (assoc :reviewed-session reviewed-session)
     reviewed-ws-id   (assoc :reviewed-ws-id reviewed-ws-id)))
 
-(defn worth-analysing?
+(defn ^{:malli/schema [:=> [:cat :any :boolean :boolean] :boolean]}
+  worth-analysing?
   "Pure. Every terminal outcome is worth a look EXCEPT a dry run, and except a
    run that left no report to read.
 
@@ -88,7 +90,8 @@
   [status dry-run? report?]
   (boolean (and status (not dry-run?) report?)))
 
-(defn enqueue!
+(defn ^{:malli/schema [:=> [:cat :map] [:maybe :any]]}
+  enqueue!
   "Queue the analysis for one terminated run. Returns the envelope path, or nil
    when the run was not worth analysing or the write failed.
 

@@ -99,7 +99,8 @@
          "Invariants marked \"holds always\" are the ones that must be true at\n"
          "EVERY phase boundary, including this one; judge those normally.\n")))
 
-(defn build-prompt
+(defn ^{:malli/schema [:=> [:cat :map] :string]}
+  build-prompt
   "The verdict prompt. `design` is the workstream's :design record, `baseline` the
    :baseline record it cited (nil when it predates them), `findings` the findings
    still open at the end, `history` the per-round digest."
@@ -169,7 +170,8 @@
    "Do not reach for invalidated because the review was noisy. A design is only\n"
    "invalidated when you can name the invariant that cannot hold."))
 
-(defn parse
+(defn ^{:malli/schema [:=> [:cat :string :any :any] :map]}
+  parse
   "Last fenced ```json block -> verdict map, or nil when absent/unparseable/unknown.
    nil is a non-answer, not a verdict: the caller records nothing rather than
    inventing one."
@@ -215,12 +217,14 @@
             (assoc :needs (str (:needs m))))))
       (catch Exception _ nil))))
 
-(defn decision?
+(defn ^{:malli/schema [:=> [:cat :any] :boolean]}
+  decision?
   "True when the verdict is one a human has to answer rather than read."
   [v]
   (boolean (#{:invalidated :standing-challenged} (:verdict v))))
 
-(defn still-open
+(defn ^{:malli/schema [:=> [:cat :any] :any]}
+  still-open
   "Findings that actually remain at the end — the warden closed the rest, by a
    named authority. Handing a closed finding to the verdict as \"still open\"
    would have it re-adjudicate something already decided, against a design it is
@@ -228,7 +232,8 @@
   [findings]
   (into [] (remove #(= :closed (:disposition %))) findings))
 
-(defn run!
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  run!
   "Run the verdict pass. Returns the verdict map, or nil when there is no design
    record to judge against, the agent no-ops, or the answer is unparseable — all
    three mean 'nothing to record', never a fabricated :sound."

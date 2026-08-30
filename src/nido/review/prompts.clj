@@ -13,7 +13,8 @@
   (when-not (str/blank? (str v))
     (str label ": " v "\n")))
 
-(defn layer-brief-block
+(defn ^{:malli/schema [:=> [:cat :map] :string]}
+  layer-brief-block
   "The bounding preamble for a review aimed at ONE layer of a stack, built from
    that layer's `/stack` §5 brief. nil when there is no brief — a whole-stack
    review is not bounded by one, and saying nothing is better than saying
@@ -245,7 +246,8 @@
                       "\n")))))
        (str/join "\n")))
 
-(defn composition-block
+(defn ^{:malli/schema [:=> [:cat :map] :string]}
+  composition-block
   "The primer for the pass that reviews the stack as a COMPOSITION rather than as
    one wide diff.
 
@@ -333,7 +335,8 @@
      "  tell which layer to change, and being able to tell is the entire value\n"
      "  of this pass.\n\n")))
 
-(defn fix-prompt
+(defn ^{:malli/schema [:=> [:cat :map] :string]}
+  fix-prompt
   "Instruction to fix the given findings. Do NOT commit — the engine commits."
   [{:keys [findings]}]
   (str
@@ -348,7 +351,8 @@
 
 (defn- bullets [xs] (str/join "\n" (map #(str "- " %) xs)))
 
-(defn toc-block
+(defn ^{:malli/schema [:=> [:cat :any] :string]}
+  toc-block
   "The stack's table of contents: what each layer claims, what it declared out of
    scope, and which files it touches.
 
@@ -475,7 +479,8 @@
               (str/join "\n"))
          "\n\n")))
 
-(defn warden-prompt
+(defn ^{:malli/schema [:=> [:cat :map] :string]}
+  warden-prompt
   "Build the warden prompt. The warden is the only thing in the loop with a
    view across layers, so attribution — which layer a finding BELONGS to, as
    against which one reported it — is its job and nothing else's.
