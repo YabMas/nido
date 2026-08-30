@@ -2,8 +2,8 @@
   "Hiccup view functions for the nido dashboard."
   (:require [clojure.string :as str]
             [hiccup2.core :as h]
-            [nido.coordinator.record.report :as report]
-            [nido.coordinator.record.triggers :as triggers]
+            [nido.coordinator.report :as report]
+            [nido.coordinator.control :as control]
             [nido.platform.process :as process]
             [nido.ui.markdown :as md]
             [nido.ui.view-state :as view-state]
@@ -494,7 +494,7 @@
       [:strong "Fire trigger"]
       (for [[project ts] triggers
             {:keys [name payload] :as _t} ts]
-        (let [ks (triggers/placeholder-keys (or payload "{}"))]
+        (let [ks (control/trigger-placeholders (or payload "{}"))]
           [:div.fire-row
            [:span.mono (str (clojure.core/name project) "/" (clojure.core/name name))]
            (for [k ks]

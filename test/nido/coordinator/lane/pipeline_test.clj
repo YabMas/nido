@@ -5,7 +5,7 @@
    [clojure.test :refer [deftest is testing]]
    [malli.core :as m]
    [nido.platform.core :as core]
-   [nido.coordinator.record.report :as report]
+   [nido.coordinator.report :as report]
    [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.lane.pipeline :as p]))
 

@@ -4,7 +4,7 @@
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing use-fixtures]]
    [nido.platform.core :as core]
-   [nido.coordinator.record.report :as report]
+   [nido.coordinator.report :as report]
    [nido.coordinator.record.session :as csession]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as ws]

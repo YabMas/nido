@@ -23,6 +23,8 @@
    [nido.coordinator.daemon.halt :as halt]
    [nido.coordinator.daemon.pid :as pid]
    [nido.coordinator.record.state :as cstate]
+   [nido.coordinator.record.triggers :as triggers]
+   [nido.coordinator.source.queue :as queue]
    [nido.platform.io :as io]))
 
 ;; ── health: the rail dot, and the different question underneath it ───────────
@@ -123,3 +125,30 @@
    undoing a trip, not turning a feature on."
   [project trigger]
   (breakers/enable! project trigger))
+
+;; ── triggers and firing ──────────────────────────────────────────────────────
+;;
+;; Trigger config and firing live HERE rather than in `work`, and the dashboard's own routing
+;; said so first: `/ops/halt`, `/ops/resume`, `/ops/breakers/…/clear` and `/ops/fire` were
+;; already one family of "ambient ops levers". Firing an envelope at a trigger is something you
+;; do to the daemon, not something you do to a workstream.
+
+(defn triggers-for
+  "Every trigger configured for `project`. Unfiltered — a caller that wants only the manual ones
+   says so, because the TUI's fire picker and the dashboard's fire form disagree about that."
+  [project]
+  (triggers/load-for-project project))
+
+(defn trigger-placeholders
+  "The placeholder keys in a trigger's payload template — the fields a fire form has to collect."
+  [payload]
+  (triggers/placeholder-keys payload))
+
+(defn fire!
+  "Queue an envelope at `project`/`trigger` with `payload`.
+
+   Takes the three things a caller HAS rather than the envelope map they would otherwise each
+   build: three call sites were spelling `{:target {:project … :trigger …} :payload …}` by hand,
+   which is the queue's wire shape leaking into two surfaces."
+  [project trigger payload]
+  (queue/enqueue! {:target {:project project :trigger trigger} :payload payload}))

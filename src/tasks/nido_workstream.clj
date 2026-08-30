@@ -3,7 +3,7 @@
    stage, close a workstream. Resolves the target workstream by id or by Notion
    external ref (BR-####). Used by the triage skill's dual-write and by humans."
   (:require
-   [nido.coordinator.record.report :as report]
+   [nido.coordinator.report :as report]
    [nido.coordinator.record.workstream :as ws]
    [nido.platform.task-args :as task-args]
    [nido.coordinator.work :as work]))

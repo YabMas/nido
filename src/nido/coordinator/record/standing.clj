@@ -21,7 +21,7 @@
    review verdicts count as verification — that is this module's secret, and the
    ledger's job is to hold entries and resolve numbers."
   (:require
-   [nido.coordinator.record.report :as report]
+   [nido.coordinator.report :as report]
    [nido.coordinator.record.workstream :as ws]))
 
 (defn- indexed-count

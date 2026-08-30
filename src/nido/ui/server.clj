@@ -3,10 +3,6 @@
   (:require [cheshire.core :as json]
             [clojure.java.io :as io]
             [clojure.string :as str]
-            [nido.coordinator.lane.findings :as findings]
-            [nido.coordinator.lane.pickup :as pickup]
-            [nido.coordinator.source.queue :as queue]
-            [nido.coordinator.record.triggers :as triggers]
             [nido.notion.client :as client]
             [nido.platform.process :as proc]
             [nido.platform.project :as project]
@@ -72,7 +68,7 @@
    or nil when nothing does — deliberately NOT read-rail-daemon, whose :state is
    a severity ladder for the dot rather than a go/no-go for one envelope."
   [project]
-  (control/read-queue-blocker (keyword project) pickup/trigger))
+  (control/read-queue-blocker (keyword project) work/pickup-trigger))
 
 (defn derive-screen
   "Impure wiring: gather what only IO can produce (grouped rows, gates, in-flight
@@ -195,7 +191,7 @@
    :triggers (into {}
                    (for [[pname _] (project/list-projects)]
                      [(keyword pname)
-                      (->> (triggers/load-for-project (keyword pname))
+                      (->> (control/triggers-for (keyword pname))
                            (filter #(= :manual (-> % :source :type)))
                            vec)]))})
 
@@ -420,13 +416,13 @@
             ;; reported a healthy daemon as down whenever any unrelated
             ;; trigger was tripped.
             blocked (read-pickup-blocker project)
-            opts    {:project project :blocked-by blocked :trigger pickup/trigger}]
+            opts    {:project project :blocked-by blocked :trigger work/pickup-trigger}]
         (if (str/blank? input)
           (sse-response
            (sse-fragment
             (views/pickup-result-fragment {:decision :unresolved :error :unrecognized-input}
                                           opts)))
-          (let [result (pickup/pickup! (keyword project) input (client/keychain-token))]
+          (let [result (work/pickup! (keyword project) input (client/keychain-token))]
             (sse-response
              (sse-fragment
               (views/pickup-result-fragment result opts))))))
@@ -463,10 +459,10 @@
             items   (parse-findings-lines (:findings b))]
         (when (seq items)
           (try
-            (findings/file! (keyword project) ws-id
-                            {:items items :staging-ref (not-empty (:staging b))})
+            (work/file-findings! (keyword project) ws-id
+                                 {:items items :staging-ref (not-empty (:staging b))})
             (catch Exception e
-              (println "[nido ui] findings/file! failed:" (ex-message e)))))
+              (println "[nido ui] work/file-findings! failed:" (ex-message e)))))
         (ws-pane-fragment-response project ws-id))
 
       ;; POST /operations/:project/:ws-id/:analysis-seq/:observation — decide one
@@ -504,13 +500,13 @@
           (and (= 4 (count segs)) (= "fire" (second segs)))
           (let [project (keyword (nth segs 2))
                 tname   (keyword (nth segs 3))
-                trig    (->> (triggers/load-for-project project)
+                trig    (->> (control/triggers-for project)
                              (filter #(= tname (:name %))) first)
-                ks      (triggers/placeholder-keys (or (:payload trig) "{}"))
+                ks      (control/trigger-placeholders (or (:payload trig) "{}"))
                 body*   (parse-json-body body)
                 payload (into {} (for [k ks]
                                    [k (str (get body* (keyword (views/fire-signal tname k)) ""))]))]
-            (queue/enqueue! {:target {:project project :trigger tname} :payload payload}))
+            (control/fire! project tname payload))
           :else nil)
         (ops-fragment-response (:scope (view-state/parse req))))
 

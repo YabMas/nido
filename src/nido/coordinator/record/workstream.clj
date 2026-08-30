@@ -9,7 +9,7 @@
    [clojure.string :as str]
    [malli.core :as m]
    [nido.coordinator.record.clock :as clock]
-   [nido.coordinator.record.report :as report]
+   [nido.coordinator.report :as report]
    [nido.coordinator.record.session :as session]
    [nido.coordinator.record.state :as cstate]
    [nido.platform.io :as io]))

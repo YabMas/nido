@@ -27,12 +27,8 @@
    [clojure.string :as str]
    [nido.platform.charm-patch :as charm-patch]
    [nido.coordinator.control :as control]
-   [nido.coordinator.lane.pickup :as pickup]
-   [nido.coordinator.source.queue :as queue]
    [nido.coordinator.view.runs :as runs-view]
-   [nido.coordinator.lane.scratch :as scratch]
    [nido.coordinator.view.workstreams :as wsv]
-   [nido.coordinator.record.triggers :as triggers]
    [nido.notion.client :as client]
    [nido.platform.project :as project]
    [nido.coordinator.work :as work]
@@ -520,9 +516,8 @@
 ;; belongs to one), destroy reaps it (spares ref-carrying workstreams).
 ;; `:add` uses create-workstream! which delegates to work/new! (already bundles
 ;; lifecycle/up! + scratch/birth!) — no :after needed for that verb.
-(defn- birth-scratch!   [p sn] (scratch/birth! (keyword p) sn
-                                               (lifecycle/session-weight sn {:project p})))
-(defn- reap-scratch!    [p sn] (scratch/reap!  (keyword p) sn))
+(defn- birth-scratch!   [p sn] (work/session-started! p sn))
+(defn- reap-scratch!    [p sn] (work/session-destroyed! p sn))
 
 (defn- create-workstream!
   "Birth a scratch workstream and bring its session up. Delegates to
@@ -677,11 +672,10 @@
   "Either enqueue immediately (no placeholders) or open the payload-input
    sub-modal seeded with the first field's text-input."
   [state project trigger]
-  (let [ks (triggers/placeholder-keys (:payload trigger))]
+  (let [ks (control/trigger-placeholders (:payload trigger))]
     (if (empty? ks)
       (do
-        (queue/enqueue! {:target  {:project project :trigger (:name trigger)}
-                         :payload {}})
+        (control/fire! project (:name trigger) {})
         [(-> state
              close-modal
              (assoc :status (queued-status project (:name trigger))))
@@ -702,7 +696,7 @@
    When none exist, open the picker in an error state so esc still closes."
   [state project-str]
   (let [project-kw (keyword project-str)
-        trigs      (->> (triggers/load-for-project project-kw)
+        trigs      (->> (control/triggers-for project-kw)
                         (filter #(= :manual (-> % :source :type)))
                         vec)]
     (if (empty? trigs)
@@ -784,8 +778,7 @@
                        :prompt (str (name (nth keys next-idx)) ": "))))
            nil]
           (do
-            (queue/enqueue! {:target  {:project project :trigger (:name trigger)}
-                             :payload values'})
+            (control/fire! project (:name trigger) values')
             [(-> state
                  close-modal
                  (assoc :status (queued-status project (:name trigger))))
@@ -985,7 +978,7 @@
     (msg/key-match? msg "enter")
     (let [input (str/trim (text-input/value (:modal-input state)))]
       (if (seq input)
-        (let [result (pickup/pickup! (:project state) input (client/keychain-token))]
+        (let [result (work/pickup! (:project state) input (client/keychain-token))]
           [(-> state close-modal (assoc :status (pickup-result-status input result))) nil])
         [(close-modal state) nil]))
 

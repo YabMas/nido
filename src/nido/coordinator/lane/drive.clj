@@ -17,7 +17,7 @@
    [babashka.fs :as fs]
    [nido.coordinator.record.clock :as clock]
    [nido.coordinator.daemon.executor :as executor]
-   [nido.coordinator.record.report :as report]
+   [nido.coordinator.report :as report]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.session :as session]

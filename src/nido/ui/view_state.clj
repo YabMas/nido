@@ -3,7 +3,7 @@
    site derives from. Pure given the request map — no IO."
   (:require
    [clojure.string :as str]
-   [nido.coordinator.lane.pipeline :as pipeline]))
+   [nido.coordinator.work :as work]))
 
 (defn- pairs [query-string]
   (when query-string
@@ -58,7 +58,7 @@
   [ps]
   (when-let [raw (some (fn [[k v]] (when (= k "stage") v)) ps)]
     (let [k (keyword (decode raw))]
-      (when (some #{k} pipeline/arc-stages) k))))
+      (when (some #{k} work/arc-stages) k))))
 
 (defn- history?
   "`?history=1` -> true: whether the pane's raw ledger index is expanded. Absent

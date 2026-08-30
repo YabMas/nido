@@ -4,7 +4,7 @@
    [clojure.pprint :as pprint]
    [nido.coordinator.lane.facets :as facets]
    [nido.coordinator.lane.promote :as promote]
-   [nido.coordinator.record.report :as report]
+   [nido.coordinator.report :as report]
    [nido.coordinator.record.tickets :as tickets]
    [nido.coordinator.view.tickets :as tickets-view]
    [nido.coordinator.record.workstream :as workstream]

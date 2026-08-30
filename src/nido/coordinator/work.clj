@@ -15,10 +15,11 @@
    [nido.platform.config :as config]
    [nido.coordinator.record.clock :as clock]
    [nido.coordinator.lane.facets :as facets]
+   [nido.coordinator.lane.findings :as findings]
    [nido.coordinator.source.notion-cache :as notion-cache]
    [nido.coordinator.lane.pickup :as pickup]
    [nido.coordinator.lane.promote :as promote]
-   [nido.coordinator.record.report :as report]
+   [nido.coordinator.report :as report]
    [nido.coordinator.lane.resume :as resume]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.lane.scratch :as scratch]
@@ -1937,3 +1938,48 @@
      :groups      scoped
      :gates       kept-gates
      :needs-count (count kept-gates)}))
+
+;; ── the acts a surface performs on the work plane ────────────────────────────
+;;
+;; The TUI and the dashboard reached `lane.pickup`, `lane.findings` and `lane.scratch` directly
+;; for these. Each one IS work-plane vocabulary — resolve a pasted ref into a workstream, file a
+;; findings round on one, tell the plane a session came up — so it belongs at this altitude
+;; rather than behind a require of the lane that happens to implement it today.
+
+(def arc-stages
+  "The stages a workstream travels, in order. The plane naming its own spine — a surface deciding
+   whether a key is a stage should ask the work plane, not the lane that happens to compute the
+   arc today."
+  pipeline/arc-stages)
+
+(def pickup-trigger
+  "The trigger name a pickup enqueues under. Surfaces need it to ask whether a pickup would
+   actually be processed, which is a question about that specific trigger's breaker."
+  pickup/trigger)
+
+(defn pickup!
+  "Resolve a pasted Notion URL / page-id / BR-#### into a workstream and queue its provisioning."
+  [project input token]
+  (pickup/pickup! project input token))
+
+(defn file-findings!
+  "File a staging findings round on a shipped workstream. `opts` = {:items […] :staging-ref?
+   :note? :session?}. Appends the event, seeds the tracker, reopens to :in-progress."
+  [project ws-id opts]
+  (findings/file! project ws-id opts))
+
+(defn session-started!
+  "Tell the work plane a session came up: births its loose workstream, idempotently — a no-op
+   when the session already belongs to one.
+
+   The weight lookup rode in the TUI before, which meant the surface knew both that a scratch
+   workstream exists and how a session is weighed. It needs to know neither."
+  [project session-name]
+  (scratch/birth! (keyword project) session-name
+                  (lifecycle/session-weight session-name {:project project})))
+
+(defn session-destroyed!
+  "Tell the work plane a session was destroyed: reaps its loose workstream, sparing one that
+   carries a ref."
+  [project session-name]
+  (scratch/reap! (keyword project) session-name))

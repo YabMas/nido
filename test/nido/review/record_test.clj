@@ -6,7 +6,7 @@
    [cheshire.core :as json]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
-   [nido.coordinator.record.report :as report]
+   [nido.coordinator.report :as report]
    [nido.review.record :as record]))
 
 (def ^:private baseline

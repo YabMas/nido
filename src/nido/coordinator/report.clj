@@ -1,4 +1,4 @@
-(ns nido.coordinator.record.report
+(ns nido.coordinator.report
   "Typed triage report: the schema the triage-bug skill emits, validated at the
    ledger boundary, plus a format-agnostic markdown renderer. See spec
    docs/superpowers/specs/2026-06-22-typed-triage-report-and-action-primitive-design.md."

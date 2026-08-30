@@ -1,8 +1,8 @@
-(ns nido.coordinator.record.report-test
+(ns nido.coordinator.report-test
   (:require [clojure.test :refer [deftest is]]
             [clojure.string :as str]
             [clojure.edn :as edn]
-            [nido.coordinator.record.report :as report]))
+            [nido.coordinator.report :as report]))
 
 (def ^:private valid-report
   {:format :triage-report

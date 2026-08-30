@@ -1,8 +1,8 @@
-(ns nido.coordinator.record.report-findings-test
+(ns nido.coordinator.report-findings-test
   (:require
    [clojure.test :refer [deftest is]]
    [malli.core :as m]
-   [nido.coordinator.record.report :as report]))
+   [nido.coordinator.report :as report]))
 
 (def ^:private good
   {:format :findings
