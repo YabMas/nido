@@ -11,6 +11,7 @@
    [nido.coordinator.record.session :as session]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.triggers :as triggers]
+   [nido.coordinator.record.workstream :as cws]
    [nido.platform.io :as io]
    [nido.session.engine :as engine]
    [nido.session.launcher :as launcher]
@@ -47,6 +48,16 @@
    [:agent             keyword?]
    [:session-name      string?]
    [:workstream-id     {:optional true} [:maybe string?]]
+   ;; The part of the project's DECLARED design that governs this Run's area, as a fukan
+   ;; selection — read off the workstream's latest baseline, which is where the scoping decision
+   ;; is made (see report/Baseline :scope). Carried on the Run so the launcher can brief with it
+   ;; without reaching into the ledger: resolving it is coordination's job, and it hands the
+   ;; resolved value down, exactly as it does the run directory.
+   ;;
+   ;; Optional and nil for every Run whose workstream has no baseline yet — including the
+   ;; baseline round's own, which is the case that matters: that session gets no scope because
+   ;; establishing one is what it is for.
+   [:design-scope      {:optional true} [:maybe [:vector any?]]]
    [:claude-session-id [:maybe string?]]
    [:limits            [:map-of keyword? any?]]
    [:priority          int?]
@@ -258,6 +269,10 @@
                  :agent           (or (:agent trigger) :claude)
                  :session-name    session-name
                  :workstream-id   workstream-id
+                 ;; nil until this workstream has been baselined — the baseline round is what
+                 ;; establishes a scope, so its own run cannot carry one.
+                 :design-scope    (when workstream-id
+                                    (:scope (cws/latest-entry project workstream-id :baseline)))
                  :claude-session-id nil
                  :limits          (or (:limits trigger) {:budget "8h" :max-failures 3})
                  :priority        (if (int? priority) priority 0)

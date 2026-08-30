@@ -176,3 +176,23 @@
             (is (str/includes? text ":select"))
             (is (str/includes? text "20000") "and says how much there was")))
         (finally (fs/delete-tree wt))))))
+
+(deftest an-explicit-scope-beats-the-projects-configured-default
+  (testing "the caller with a scope got it from a baseline that read the code; the project
+            default was set by someone who had not"
+    (let [wt (worktree-with {"canvas/bands.clj" "(ns canvas.bands)"})]
+      (try
+        (with-redefs [project/get-project
+                      (constantly {:design {:cmd (echoing-args) :select '[(Band ?n)]}})]
+          (is (str/includes? (design/describe "p" wt '[(Module ?n)]) "--select [(Module ?n)]")
+              "the workstream's scope, not the project's"))
+        (finally (fs/delete-tree wt))))))
+
+(deftest no-scope-and-no-default-asks-for-everything
+  (testing "before its workstream is baselined a session has no scope, and that is right: the
+            round whose job is to establish one cannot be handed one"
+    (let [wt (worktree-with {"canvas/bands.clj" "(ns canvas.bands)"})]
+      (try
+        (with-redefs [project/get-project (constantly {:design {:cmd (echoing-args)}})]
+          (is (not (str/includes? (design/describe "p" wt nil) "--select"))))
+        (finally (fs/delete-tree wt))))))

@@ -44,7 +44,12 @@
                   (io/read-edn path))))]
     (if-let [ws-id (:workstream-id run)]
       {:workstream-id ws-id
-       :br-id         (get-in run [:event-payload :id])}
+       :br-id         (get-in run [:event-payload :id])
+       ;; The part of the declared design that governs this workstream's area, decided by its
+       ;; baseline round and stamped on the Run when it was minted. Read here rather than
+       ;; resolved: reaching a workstream ledger is coordination's job, and it hands the value
+       ;; down on run.edn exactly as it does the run directory.
+       :design-scope  (:design-scope run)}
       {})))
 
 (defn- pg-service-def [session-edn]
@@ -570,9 +575,16 @@
    by the agent's first edit, and a stale green is worse than no green at all. The section says
    how to ask instead; the answer is always current.
 
+   SCOPED when the workstream has been baselined. A design outgrows a briefing — nido's own is
+   20k characters against a 16k budget — and the answer is not to cut the end off it. The
+   baseline round decides which part governs its area and records the selection; every session
+   after it on that workstream is briefed with that part, whole. Before the baseline there is no
+   scope and the section carries everything, which is right: the round whose job is to establish
+   the scope cannot be handed one.
+
    Nil when the project declares no design, so the briefing simply does not have the section."
-  [project-name worktree]
-  (when-let [declared (try (when worktree (design/describe project-name worktree))
+  [project-name worktree design-scope]
+  (when-let [declared (try (when worktree (design/describe project-name worktree design-scope))
                            (catch Throwable _ nil))]
     (str "## The design this project declares\n"
          "\n"
@@ -603,7 +615,7 @@
   [{:keys [project-name session-name worktree source-dir
            app-port app-url nrepl-port pg-port
            profile links project-briefing
-           workstream-id br-id]}]
+           workstream-id br-id design-scope]}]
   (let [services-active? (profiles/services-provisioned? profile)]
     (str
      "# Active nido session\n"
@@ -623,7 +635,7 @@
        "## Services are already running\n\nThe REPL, app server, and database for this worktree are managed by\nnido. Don't run project-local scripts that spin up a REPL/app/DB —\nconnect to what's already live. The postgres MCP is preconfigured to\nthis session's DB.\n\n"
        "## Lite session\n\nThis is a lite session with no background services. The worktree is a\nread-only symlink to the project source directory.\n\n")
      (when-not (str/blank? project-briefing) (str project-briefing "\n"))
-     (render-design-section project-name worktree)
+     (render-design-section project-name worktree design-scope)
      shipping-doctrine-instructions
      "\n"
      comment-doctrine-instructions

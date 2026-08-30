@@ -100,9 +100,14 @@
    not a privileged shape this seam should know the outline of.
 
    Truncated at `declaration-char-cap` with a line saying so, never silently."
-  [project-name worktree]
+  ([project-name worktree] (describe project-name worktree nil))
+  ([project-name worktree scope]
   (when-let [design (design-of project-name worktree)]
-    (let [{:keys [spec-dirs select]} design
+    (let [{:keys [spec-dirs]} design
+          ;; an explicit scope WINS over the project's configured default: the caller that has
+          ;; one got it from a baseline that read the code, and the default was set by someone
+          ;; who had not
+          select (or scope (:select design))
           done (run-fukan design worktree "describe"
                           (cond-> ["--spec-dirs" (str/join "," spec-dirs)]
                             select (conj "--select" (pr-str select)))
@@ -115,9 +120,10 @@
                  "\n\n;; … truncated at " declaration-char-cap " of " (count full)
                  " characters. The whole declaration is in "
                  (str/join ", " (:files design))
-                 ".\n;; A design this size should be SCOPED rather than cut: set `:select` on the"
-                 "\n;; project's registry entry (datalog clauses binding ?n) so the briefing"
-                 "\n;; carries a whole answer to a narrower question instead of most of a wide one.\n")))))))
+                 ".\n;; A design this size should be SCOPED rather than cut: the workstream's"
+                 "\n;; baseline records a `:scope`, and a project may set `:select` on its registry"
+                 "\n;; entry — either carries a whole answer to a narrower question instead of"
+                 "\n;; most of a wide one.\n"))))))))
 
 (defn- parse-report
   "Read the checker's stdout. Unparseable output is UNDECIDABLE rather than clean: stdout is
