@@ -8,7 +8,8 @@
    [nido.coordinator.source.state :as sstate]
    [nido.notion.views :as views]))
 
-(defn parse-priority-rank
+(defn ^{:malli/schema [:=> [:cat [:maybe :string]] :int]}
+  parse-priority-rank
   "Leading integer of a Notion Priority select label → int (lower = more
    important), or nil. Handles both ASCII '-' and en-dash '–' separators:
    '0 – Release Blocker' → 0, '1 - Must' → 1. nil/blank/no-leading-digit → nil."
@@ -16,7 +17,8 @@
   (when-let [m (and s (re-find #"^\s*(\d+)" (str s)))]
     (parse-long (second m))))
 
-(defn pages-snapshot
+(defn ^{:malli/schema [:=> [:cat :any] :map]}
+  pages-snapshot
   "Build the :pages map {page-id → {:status :priority :ball-ids :title :br}} from a
    vector of normalised Notion pages (client/normalise-page output). :status is the
    promoted Status string (or nil), :priority the parsed Priority rank (or nil),
@@ -33,7 +35,8 @@
                  :br       (:id p)}]))
         pages))
 
-(defn project-page-facts
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :map]}
+  project-page-facts
   "Merge the :pages maps of the project's :notion-view snapshots into one
    page-id → {:status :priority :ball-ids :title :br} lookup. Restricted to the
    registry's :board-views when set (else every watched view). Empty map when

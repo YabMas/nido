@@ -49,7 +49,8 @@
          :session-profile (:session-profile t)
          :uncapped? (boolean (:uncapped? t))}))))
 
-(defn route
+(defn ^{:malli/schema [:=> [:cat :Envelope :map] [:vector :FireRequest]]}
+  route
   "Resolve an envelope to a vector of fire-requests:
      [{:project <kw> :trigger <trigger-map> :payload <m> :priority <int>} ...]
    Or, on routing errors for :target envelopes, a vector of error maps:

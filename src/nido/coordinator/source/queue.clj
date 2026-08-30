@@ -19,7 +19,8 @@
         [nil (ex-info "envelope is not a map" {:value v})]))
     (catch Exception e [nil e])))
 
-(defn drain!
+(defn ^{:malli/schema [:=> [:cat] [:vector :Envelope]]}
+  drain!
   "Read and remove all envelope files. Returns a vector of envelopes.
    Malformed files are renamed `<file>.malformed` and skipped."
   []
@@ -42,7 +43,8 @@
       []
       files)))
 
-(defn enqueue!
+(defn ^{:malli/schema [:=> [:cat :Envelope] :any]}
+  enqueue!
   "Write an envelope to the queue with a fresh UUID filename.
    Stamps :created-at (when the caller produced it), :received-at (when
    we observed it), and defaults :priority to 0 if absent."

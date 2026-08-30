@@ -12,7 +12,8 @@
 
 (defonce ^:private !registry (atom {}))
 
-(defn register-source!
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  register-source!
   "Register a source plugin. Idempotent (a re-registration replaces the
    previous entry — useful for REPL development)."
   [{:keys [type schema events start!] :as src}]
@@ -23,14 +24,16 @@
   (swap! !registry assoc type (select-keys src [:schema :events :start!]))
   type)
 
-(defn lookup [type] (get @!registry type))
+(defn ^{:malli/schema [:=> [:cat :keyword] [:maybe :map]]}
+  lookup [type] (get @!registry type))
 
 (defn- sha1-hex [^String s]
   (let [md (MessageDigest/getInstance "SHA-1")
         bs (.digest md (.getBytes s "UTF-8"))]
     (str/join (map #(format "%02x" %) bs))))
 
-(defn config-hash
+(defn ^{:malli/schema [:=> [:cat :SourceConfig] :string]}
+  config-hash
   "Stable 12-hex-char hash of a source-config map. :type is stripped before
    hashing so the hash identifies the source-instance, not the source type."
   [source-config]
@@ -47,7 +50,8 @@
   (let [canonical (pr-str (into (sorted-map) broadcast))]
     (str (subs (sha1-hex canonical) 0 16) ".edn")))
 
-(defn emit-broadcast!
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  emit-broadcast!
   "Write a broadcast envelope into the queue dir. The filename is a hash
    of the broadcast contents so re-emission of an identical broadcast is
    an idempotent no-op. Crash-safety: the source writes the envelope FIRST

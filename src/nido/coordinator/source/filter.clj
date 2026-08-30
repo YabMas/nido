@@ -20,7 +20,8 @@
       (or (set? v) (vector? v))           (contains? (set v) ev)
       :else                               (= v ev))))
 
-(defn accept?
+(defn ^{:malli/schema [:=> [:cat :map :map] :boolean]}
+  accept?
   "True iff every key in filter-map matches the event payload."
   [filter-map event]
   (every? (partial key-matches? event) filter-map))

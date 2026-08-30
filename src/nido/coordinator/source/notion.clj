@@ -78,7 +78,8 @@
     (nil? view-filter)       additional-filter
     :else                    {:and [view-filter additional-filter]}))
 
-(defn poll-once!
+(defn ^{:malli/schema [:=> [:cat :map :any :any] :map]}
+  poll-once!
   "One iteration of the polling loop for a given source-config.
    Resolves :view via the views registry, queries the Notion data source,
    and calls emit-fn for each newly appeared page.
@@ -180,7 +181,8 @@
                            :consecutive-failures next-failures)
               tripped? (assoc :breaker :open :breaker-opened-at (clock/now-iso)))))))))
 
-(defn start-instance!
+(defn ^{:malli/schema [:=> [:cat :map :any :map] :map]}
+  start-instance!
   "Start one source-instance. Returns {:poll! :stop!} per the source-plugin
    contract.
 
@@ -199,7 +201,8 @@
      :stop! (fn []
               nil)}))
 
-(defn register! []
+(defn ^{:malli/schema [:=> [:cat] :any]}
+  register! []
   (sources/register-source!
    {:type   :notion-view
     :schema [:map

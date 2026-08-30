@@ -73,7 +73,7 @@
   (Operation rich-text-runs "Text as a rich-text array."
     {:signature [:=> [:catn [:text :string]] [:vector :map]] :delegates [split-rich-text]})
   (Operation paragraph-blocks "Text as paragraph blocks, each within the cap."
-    {:signature [:=> [:catn [:text :string]] [:vector :map]] :delegates [rich-text-runs]})
+    {:signature [:=> [:catn [:text :string]] [:vector :map]]})
   (Operation create-page-with-properties! "Create a page with properties and a description."
     {:signature [:=> [:catn [:data-source-id :string] [:token NotionToken] [:properties :map]
                             [:description [:maybe :string]]] :map]

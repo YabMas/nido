@@ -56,7 +56,8 @@
             (recur (:next_cursor resp) acc' (inc pages))
             {:messages acc'}))))))
 
-(defn poll-once!
+(defn ^{:malli/schema [:=> [:cat :map :any :any] :map]}
+  poll-once!
   "One iteration for a source-config. Reads prior state, returns updated state
    (caller persists). source-config must have :project, :channel."
   [source-config token emit-fn]
@@ -119,7 +120,8 @@
                                :consecutive-failures next-failures))
               tripped? (assoc :breaker :open :breaker-opened-at (clock/now-iso)))))))))
 
-(defn start-instance!
+(defn ^{:malli/schema [:=> [:cat :map :any :map] :map]}
+  start-instance!
   [source-config emit-fn {:keys [token] :as _opts}]
   (let [hash  (sources/config-hash source-config)
         token (or token (client/keychain-token))
@@ -128,7 +130,8 @@
     {:poll! (fn [] (sst/write-state! hash (poll-once! source-config token emit)))
      :stop! (fn [] nil)}))
 
-(defn register! []
+(defn ^{:malli/schema [:=> [:cat] :any]}
+  register! []
   (sources/register-source!
    {:type   :slack-channel
     :schema [:map
