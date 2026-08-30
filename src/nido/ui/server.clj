@@ -3,9 +3,7 @@
   (:require [cheshire.core :as json]
             [clojure.java.io :as io]
             [clojure.string :as str]
-            [nido.coordinator.daemon.breakers :as breakers]
             [nido.coordinator.lane.findings :as findings]
-            [nido.coordinator.daemon.halt :as halt]
             [nido.coordinator.lane.pickup :as pickup]
             [nido.coordinator.source.queue :as queue]
             [nido.coordinator.record.triggers :as triggers]
@@ -14,7 +12,7 @@
             [nido.platform.project :as project]
             [nido.session.fleet :as fleet]
             [nido.ui.dev :as dev]
-            [nido.ui.health :as health]
+            [nido.coordinator.control :as control]
             [nido.ui.views :as views]
             [nido.ui.view-state :as view-state]
             [nido.coordinator.work :as work]
@@ -67,14 +65,14 @@
 ;; ---------------------------------------------------------------------------
 ;; Rail seam + context
 
-(defn read-rail-daemon "Seam over health for stubbing in tests." [] (health/read-daemon-health))
+(defn read-rail-daemon "Seam over health for stubbing in tests." [] (control/read-daemon-health))
 
 (defn read-pickup-blocker
   "Seam over health for stubbing in tests. What blocks the leg a pickup fires,
    or nil when nothing does — deliberately NOT read-rail-daemon, whose :state is
    a severity ladder for the dot rather than a go/no-go for one envelope."
   [project]
-  (health/read-queue-blocker (keyword project) pickup/trigger))
+  (control/read-queue-blocker (keyword project) pickup/trigger))
 
 (defn derive-screen
   "Impure wiring: gather what only IO can produce (grouped rows, gates, in-flight
@@ -191,9 +189,9 @@
 
 (defn- ops-context []
   {:daemon   (read-rail-daemon)
-   :halt     (halt/read-halt-info)
+   :halt     (control/halt-info)
    :fleet    (fleet-context)
-   :breakers (breakers/tripped-triggers)
+   :breakers (control/tripped-triggers)
    :triggers (into {}
                    (for [[pname _] (project/list-projects)]
                      [(keyword pname)
@@ -497,11 +495,11 @@
       (= "ops" (first segs))
       (do
         (cond
-          (= ["ops" "halt"] segs)   (halt/halt! {:source :user :note "from dashboard"})
-          (= ["ops" "resume"] segs) (halt/resume!)
+          (= ["ops" "halt"] segs)   (control/halt! {:source :user :note "from dashboard"})
+          (= ["ops" "resume"] segs) (control/resume!)
           ;; /ops/breakers/:project/:trigger/clear
           (and (= 5 (count segs)) (= "breakers" (second segs)) (= "clear" (nth segs 4)))
-          (breakers/enable! (keyword (nth segs 2)) (keyword (nth segs 3)))
+          (control/clear-breaker! (keyword (nth segs 2)) (keyword (nth segs 3)))
           ;; /ops/fire/:project/:trigger — placeholder values ride the JSON signal body
           (and (= 4 (count segs)) (= "fire" (second segs)))
           (let [project (keyword (nth segs 2))

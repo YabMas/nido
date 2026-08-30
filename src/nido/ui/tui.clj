@@ -26,8 +26,7 @@
    [charm.style.core :as style]
    [clojure.string :as str]
    [nido.platform.charm-patch :as charm-patch]
-   [nido.coordinator.daemon.breakers :as breakers]
-   [nido.coordinator.daemon.halt :as halt]
+   [nido.coordinator.control :as control]
    [nido.coordinator.lane.pickup :as pickup]
    [nido.coordinator.source.queue :as queue]
    [nido.coordinator.view.runs :as runs-view]
@@ -808,26 +807,26 @@
 ;; ---------------------------------------------------------------------------
 
 (defn- open-halt-confirm [state]
-  (if (halt/halted?)
+  (if (control/halted?)
     [(-> state (assoc :modal :halt-resume-confirm)) nil]
     [(-> state (assoc :modal :halt-confirm)) nil]))
 
 (defn- update-halt-confirm [state msg]
   (cond
     (or (msg/key-match? msg "y") (msg/key-match? msg "Y"))
-    (do (halt/halt! {:source :user :note "from TUI"})
+    (do (control/halt! {:source :user :note "from TUI"})
         [(-> state (close-modal) (assoc :status "Coordinator halted.")) nil])
     :else [(close-modal state) nil]))
 
 (defn- update-halt-resume-confirm [state msg]
   (cond
     (or (msg/key-match? msg "y") (msg/key-match? msg "Y"))
-    (do (halt/resume!)
+    (do (control/resume!)
         [(-> state (close-modal) (assoc :status "Coordinator resumed.")) nil])
     :else [(close-modal state) nil]))
 
 (defn- open-clear-breaker-picker [state]
-  (let [tripped (breakers/tripped-triggers)]
+  (let [tripped (control/tripped-triggers)]
     (if (empty? tripped)
       [state nil]
       [(-> state
@@ -847,7 +846,7 @@
 
     (msg/key-match? msg "enter")
     (if-let [{:keys [project trigger]} (picker-selected state)]
-      (do (breakers/enable! project trigger)
+      (do (control/clear-breaker! project trigger)
           [(-> state (close-modal)
                (assoc :status (str "Breaker cleared: "
                                    (name project) "/" (name trigger))))
@@ -1527,7 +1526,7 @@
 
     :halt-resume-confirm
     (str "Resume coordinator?\n\n"
-         (when-let [h (halt/read-halt-info)]
+         (when-let [h (control/halt-info)]
            (str "Currently halted by " (name (:source h))
                 (when (:note h) (str " (" (:note h) ")"))
                 ".")))
@@ -1543,10 +1542,10 @@
 
     :ops
     (str (status-bar) "\n\n"
-         (when-let [h (halt/read-halt-info)]
+         (when-let [h (control/halt-info)]
            (str "halted by " (name (:source h))
                 (when (:note h) (str " — " (:note h))) "\n\n"))
-         (let [tripped (breakers/tripped-triggers)]
+         (let [tripped (control/tripped-triggers)]
            (if (seq tripped)
              (str "breakers:\n"
                   (str/join "\n" (for [{:keys [project trigger info]} tripped]

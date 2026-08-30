@@ -88,6 +88,22 @@
   {:prefix ["nido.coordinator.lane."]
    :may-depend [Platform Integration Session Record Source Daemon View]})
 
+(Band Control
+  "`nido.coordinator.control` — daemon control, as a surface asks for it: is the coordinator
+   healthy, will this envelope run, pause it, resume it, clear a breaker.
+
+   The work plane's SECOND facade, and it is separate because the first one is about a different
+   subject. WorkPlane is the vocabulary of workstreams, tickets and runs; nothing in it wants to
+   know about a pid file. Routing halt and breakers through it to satisfy a dependency rule would
+   have made one facade answer two unrelated questions, which is how a facade becomes a junk
+   drawer. Two questions, two facades.
+
+   It is the only thing above Record that may reach Daemon, which is what makes the seal mean
+   something: a surface asking whether the coordinator is up goes through here, and a surface
+   cannot reach a launchd plist at all."
+  {:prefix ["nido.coordinator.control"]
+   :may-depend [Platform Record Daemon]})
+
 (Band WorkPlane
   "`nido.coordinator.work` — the single vocabulary every surface is meant to wrap.
 
@@ -127,7 +143,7 @@
    and nothing beneath it."
   {:prefix ["nido.ui."]
    :may-depend [Platform Integration Session Vsdd Review Boot Design
-                Record Source Daemon View Lane WorkPlane]})
+                Record Source View Lane WorkPlane Control]})
 
 (Band Tasks
   "The bb task entry points — one namespace per CLI verb.
