@@ -95,7 +95,8 @@
             ;; Keep the ticket record honest: an orphaned triage Run clears a stale :investigating.
             (tickets/on-run-terminal! updated state)))))))
 
-(defn reconcile!
+(defn ^{:malli/schema [:=> [:cat] :any]}
+  reconcile!
   "Scan every Run directory under ~/.nido/runs/ and force any non-terminal
    Run to a terminal state. Idempotent — already-terminal Runs are left alone."
   []

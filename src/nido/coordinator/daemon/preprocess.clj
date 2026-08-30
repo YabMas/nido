@@ -12,7 +12,8 @@
    [clojure.string :as str]
    [nido.coordinator.record.state :as cstate]))
 
-(defn shell-bb-task
+(defn ^{:malli/schema [:=> [:cat :any] :map]}
+  shell-bb-task
   "Shell-out to a bb task. Returns {:exit :out :err}. Redef seam."
   [args]
   (let [proc @(p/process args {:out :string :err :string})]
@@ -30,7 +31,8 @@
     (re-matches #"\d+h" s)   (* 3600 (Integer/parseInt (str/replace s #"h$" "")))
     :else                    600))
 
-(defn invoke-notion-ticket!
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  invoke-notion-ticket!
   "Shell out to `bb nido:notion:preprocess-ticket`. Returns the registry
    entry contract: {:ok? true} or {:ok? false :error {...}}."
   [{:keys [run budget-s out-dir]}]
@@ -65,7 +67,8 @@
   "Single-entry registry for v1."
   {:notion-ticket invoke-notion-ticket!})
 
-(defn run!
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  run!
   "Run configured preprocessors for a Run before claude is spawned.
    Returns {:ok? true} or {:ok? false :error {:reason :preprocessor :detail}}.
    Stops at the first failing preprocessor."

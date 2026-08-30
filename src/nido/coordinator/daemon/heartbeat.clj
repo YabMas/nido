@@ -9,7 +9,8 @@
    [nido.coordinator.record.state :as cstate]
    [nido.platform.io :as io]))
 
-(defn write!
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  write!
   "Persist `state` (a map) to status.edn with a fresh :heartbeat-at."
   [state]
   (io/write-edn! (cstate/status-path)

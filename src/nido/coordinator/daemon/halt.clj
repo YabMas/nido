@@ -8,10 +8,12 @@
    [nido.coordinator.record.state :as cstate]
    [nido.platform.io :as io]))
 
-(defn halted? []
+(defn ^{:malli/schema [:=> [:cat] :boolean]}
+  halted? []
   (fs/exists? (cstate/halted-path)))
 
-(defn read-halt-info
+(defn ^{:malli/schema [:=> [:cat] [:maybe :HaltInfo]]}
+  read-halt-info
   "Map with :source (:user | :auto), :reason (optional kw), :note (optional str),
    :halted-at (iso). Returns nil when not halted."
   []
@@ -19,13 +21,15 @@
     (try (io/read-edn (cstate/halted-path))
          (catch Exception _ nil))))
 
-(defn halt!
+(defn ^{:malli/schema [:=> [:cat :HaltInfo] :any]}
+  halt!
   "Write halted.edn with the given metadata. Always stamps :halted-at."
   [info]
   (io/write-edn! (cstate/halted-path)
                  (assoc info :halted-at (clock/now-iso))))
 
-(defn resume!
+(defn ^{:malli/schema [:=> [:cat] :any]}
+  resume!
   "Remove halted.edn. Idempotent — no-op if absent."
   []
   (when (halted?)

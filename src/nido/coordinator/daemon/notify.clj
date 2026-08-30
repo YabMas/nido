@@ -38,7 +38,8 @@
             merged   (distinct (concat existing add-ids))]
         {:people (mapv (fn [id] {:id id}) merged)}))))
 
-(defn on-plan-spawn!
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  on-plan-spawn!
   "Update the ticket's Notion properties when its plan Run spawns. Reads
    {:notion-status <s> :property <s?> :ball-holder <user-id?>
     :add-participants [<user-id> ...]?} from (:on-promote run) and the page id

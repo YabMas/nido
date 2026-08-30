@@ -7,7 +7,8 @@
    [clojure.string :as str]
    [nido.coordinator.record.state :as cstate]))
 
-(defn read
+(defn ^{:malli/schema [:=> [:cat] [:maybe :int]]}
+  read
   "Return the PID stored in coordinator.pid, or nil if absent / malformed."
   []
   (let [p (cstate/pid-path)]
@@ -16,19 +17,22 @@
         (-> p slurp str/trim Long/parseLong)
         (catch Exception _ nil)))))
 
-(defn write!
+(defn ^{:malli/schema [:=> [:cat :int] :any]}
+  write!
   "Write the given PID to coordinator.pid. Caller's responsibility to ensure
    the coordinator dir exists (cstate/ensure-dirs!)."
   [pid]
   (spit (cstate/pid-path) (str pid "\n")))
 
-(defn delete!
+(defn ^{:malli/schema [:=> [:cat] :any]}
+  delete!
   "Remove coordinator.pid. Idempotent."
   []
   (let [p (cstate/pid-path)]
     (when (fs/exists? p) (fs/delete p))))
 
-(defn alive?
+(defn ^{:malli/schema [:=> [:cat] :boolean]}
+  alive?
   "True iff the PID in coordinator.pid corresponds to a live OS process.
    Uses java.lang.ProcessHandle, which is available in babashka."
   []

@@ -5,14 +5,17 @@
   (:require
    [nido.coordinator.record.clock :as clock]))
 
-(defn empty-detector []
+(defn ^{:malli/schema [:=> [:cat] :map]}
+  empty-detector []
   {:spawns []      ; vector of ISO timestamps
    :failures []})
 
-(defn record-spawn [det iso-ts]
+(defn ^{:malli/schema [:=> [:cat :map :string] :map]}
+  record-spawn [det iso-ts]
   (update det :spawns conj iso-ts))
 
-(defn record-failure [det iso-ts]
+(defn ^{:malli/schema [:=> [:cat :map :string] :map]}
+  record-failure [det iso-ts]
   (update det :failures conj iso-ts))
 
 (defn- ms-between [from-iso to-iso]
@@ -25,7 +28,8 @@
   (let [delta (ms-between event-iso now-iso)]
     (and (>= delta 0) (<= delta window-ms))))
 
-(defn check
+(defn ^{:malli/schema [:=> [:cat :map :map] [:maybe :map]]}
+  check
   "Return {:trip :spawn-burst | :fail-burst :count <n>} when a threshold
    is exceeded; nil otherwise."
   [det {:keys [spawn-window-ms spawn-threshold fail-window-ms fail-threshold]}]
