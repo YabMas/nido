@@ -11,7 +11,8 @@
    [nido.coordinator.record.tickets :as tickets]
    [nido.coordinator.record.workstream :as workstream]))
 
-(defn notion-ref
+(defn ^{:malli/schema [:=> [:cat :Workstream] [:maybe :map]]}
+  notion-ref
   "The workstream's :notion external-ref map, or nil."
   [ws]
   (some #(when (= :notion (:adapter %)) %) (:external-refs ws)))
@@ -46,7 +47,8 @@
       (when (and (= :notion adapter) (not-empty page-id))
         (str "https://www.notion.so/" (str/replace page-id "-" "")))))
 
-(defn ref-links
+(defn ^{:malli/schema [:=> [:cat :Workstream] [:vector :map]]}
+  ref-links
   "The workstream's followable external refs, display-ordered:
    [{:adapter :label :id :title :url} …]. A ref with no resolvable URL is dropped
    — there is nothing to follow. Pure and nil-safe; never returns nil."
@@ -65,14 +67,16 @@
          (sort-by #(get rank (:adapter %) last-rank))
          vec)))
 
-(defn ledger-ref
+(defn ^{:malli/schema [:=> [:cat :Workstream] [:maybe :map]]}
+  ledger-ref
   "The external-ref whose :id keys the per-ticket ledger (`bb nido:ticket:*` :br):
    the :notion ref (BR-####) or the :slack-message ref (slack-<channel>-<ts>).
    Either is the key the triage skill writes its record under."
   [ws]
   (or (notion-ref ws) (slack-ref ws)))
 
-(defn ws-source
+(defn ^{:malli/schema [:=> [:cat :Workstream] :keyword]}
+  ws-source
   "Source bucket of a workstream, classified from its RAW record (not a projected
    row — workstream-row's :stage is unreliable for scratch). :scratch when the
    stored stage is :scratch (a one-off, set by scratch/birth!); :github when it
@@ -96,7 +100,8 @@
   [ws-id]
   (last (str/split (str ws-id) #"-")))
 
-(defn label
+(defn ^{:malli/schema [:=> [:cat :Workstream :any] :string]}
+  label
   "Display label for a workstream, resolved by fallback:
    1. Notion external-ref → \"BR-#### · <title>\" (or just BR-#### with no/blank title)
    1b. Slack external-ref → the message text (its :title); the slack-<channel>-<ts>
@@ -135,7 +140,8 @@
                      [(:created-at s)]))
            sessions)))
 
-(defn last-activity
+(defn ^{:malli/schema [:=> [:cat :Workstream :any] [:maybe :string]]}
+  last-activity
   "Latest ISO-8601 timestamp across the workstream's stage-history and each
    session's substrate-history / autonomy phase-history / created-at. ISO
    strings sort lexically = chronologically. nil when nothing is present."
@@ -164,7 +170,8 @@
     (assoc s :substrate :archived)
     s))
 
-(defn workstream-row
+(defn ^{:malli/schema [:=> [:cat :ProjectName :Workstream [:? :any] [:? :any]] :WorkstreamRow]}
+  workstream-row
   "One display row for a workstream: reads its sessions and projects engagement
    + lifecycle stage. `live-names` (optional) is the set of session names actually
    holding ports; when supplied, a human session not in it is treated as down so
@@ -230,7 +237,8 @@
       :ship-substate   (when (= :shipping (:stage proj)) (session/ship-substate sessions))
       :open-findings   (count (:open (:findings ws)))})))
 
-(defn bare-row
+(defn ^{:malli/schema [:=> [:cat :ProjectName :string :map] :WorkstreamRow]}
+  bare-row
   "A display row for a watched-view Notion page with NO nido workstream, so an
    orphan / never-provisioned ticket is visible on the board. Synthetic :ws-id is
    the Notion page-id (stable + unique). Notion-driven stage; no sessions → engagement
@@ -261,7 +269,8 @@
      :dismissed?      (= :dismissed tstatus)
      :bare?           true}))
 
-(defn workstream-rows
+(defn ^{:malli/schema [:=> [:cat :ProjectName [:? :any]] [:vector :WorkstreamRow]]}
+  workstream-rows
   "All display rows for a project: one per workstream, PLUS a synthesized bare row
    for each watched-view page (from the Notion cache) that no workstream covers — so
    orphan / never-provisioned tickets are visible. `live-names` is threaded into each
@@ -327,7 +336,8 @@
     {:in-flight (by-severity (filter in-flight? rows))
      :queued    (by-notion-priority (remove in-flight? rows))}))
 
-(defn grouped-by-stage
+(defn ^{:malli/schema [:=> [:cat [:vector :WorkstreamRow]] :map]}
+  grouped-by-stage
   "Partition rows by lifecycle stage for the two-surface board — Intake
    (:triage/:incoming/:dismissed) and Active (:in-progress/:shipping). :done and
    :ready are omitted: :done is done; :ready (triaged, awaiting pickup) is the
@@ -350,7 +360,8 @@
    'active' band of the Scratch view. :idle and :settled fall to the idle band."
   #{:active :parked-at-gate :queued})
 
-(defn grouped-by-engagement
+(defn ^{:malli/schema [:=> [:cat [:vector :WorkstreamRow]] :map]}
+  grouped-by-engagement
   "Group scratch rows by liveness for the Scratch view (no lifecycle stage).
    {:active [...] :idle [...]}, each newest-activity first."
   [rows]
@@ -358,7 +369,8 @@
     {:active (by-newest (filter live? rows))
      :idle   (by-newest (remove live? rows))}))
 
-(defn session-rows
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:vector :map]]}
+  session-rows
   "Display rows for one workstream's coordinator-sessions, ordered most-recently-
    active first. :phase is nil for human (non-autonomous) sessions."
   [project ws-id]
@@ -381,7 +393,8 @@
 (defn- truncate [s n]
   (if (> (count s) n) (str (subs s 0 n) "…") s))
 
-(defn engagement-substatus
+(defn ^{:malli/schema [:=> [:cat :keyword] :string]}
+  engagement-substatus
   "Short per-item liveness tag shown next to the label inside a stage row."
   [eng]
   (case eng
@@ -392,7 +405,8 @@
     :settled        "done"
     "—"))
 
-(defn format-row
+(defn ^{:malli/schema [:=> [:cat :WorkstreamRow] :string]}
+  format-row
   "Display string for a stage-grouped row: `⏸ <label>   <substatus>` (the marker
    is two spaces when the row does not need you)."
   [{:keys [label needs-you engagement]}]
@@ -401,7 +415,8 @@
           (truncate (str label) title-max)
           (engagement-substatus engagement)))
 
-(defn promote-result-message
+(defn ^{:malli/schema [:=> [:cat :any :map] :string]}
+  promote-result-message
   "Status-line string for a `promote/promote-workstream!` decision on `br`.
    `br` is the Notion BR-#### id, GitHub issue ref (e.g. \"o/r#42\"), or nil
    for a scratch/slack/ref-less workstream. Inbox→triage decisions
@@ -425,7 +440,8 @@
         :skip-not-promotable (str "nothing to promote on " br)
         (str "refused " br " — " (name decision))))))
 
-(defn format-session-row
+(defn ^{:malli/schema [:=> [:cat :map] :string]}
+  format-session-row
   "Display string for a session row: `<name>  ·  <phase|human>  ·  <weight>  ·  <substrate>`."
   [{:keys [name phase weight substrate]}]
   (format "%s  ·  %s  ·  %s  ·  %s"

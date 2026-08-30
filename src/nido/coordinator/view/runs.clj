@@ -14,7 +14,8 @@
    [nido.coordinator.record.state :as cstate]
    [nido.platform.io :as io]))
 
-(defn read-all-runs
+(defn ^{:malli/schema [:=> [:cat] [:vector :Run]]}
+  read-all-runs
   "Read every run.edn under ~/.nido/runs/. Skips malformed files silently
    (invalid runs are noise; the daemon's monitoring is responsible for
    surfacing real errors)."
@@ -31,7 +32,8 @@
            vec)
       [])))
 
-(defn classify
+(defn ^{:malli/schema [:=> [:cat :Run] :keyword]}
+  classify
   "Categorize a Run by state for the overview's grouped display:
    - :needs-attention — :awaiting-review, :failed, :halted (user should look)
    - :in-flight       — :queued, :running (daemon's working)
@@ -47,7 +49,8 @@
 (defn- last-state-at [run]
   (some-> run :state-history last :at))
 
-(defn grouped-runs
+(defn ^{:malli/schema [:=> [:cat [:vector :Run]] :map]}
+  grouped-runs
   "Partition a vector of Runs into display groups.
    - :needs-attention and :in-flight include all matching runs
    - :recent caps at 10, newest first
@@ -78,7 +81,8 @@
     (str (subs s 0 n) "…")
     s))
 
-(defn run-subject
+(defn ^{:malli/schema [:=> [:cat :Run] :string]}
+  run-subject
   "A recognizable label for a run: `BR-#### · <title>` when the event-payload
    carries both, the title alone when there's no BR id, else the run-id (for
    legacy payloads that predate the :id/:title fields). Long titles truncate."
@@ -90,7 +94,8 @@
       title          title
       :else          id)))
 
-(defn format-row
+(defn ^{:malli/schema [:=> [:cat :Run] :string]}
+  format-row
   "Display string for a single Run: `[state-padded] project · trigger · subject`.
    Subject is a recognizable `BR-#### · title` label (see run-subject)."
   [{:keys [state project trigger] :as run}]
@@ -100,7 +105,8 @@
           (name trigger)
           (run-subject run)))
 
-(defn format-age
+(defn ^{:malli/schema [:=> [:cat [:maybe :string]] :string]}
+  format-age
   "Human-readable age string for an ISO-8601 timestamp relative to now.
    Buckets: just now (<10s), Ns ago, Nm ago, Nh ago, Nd ago."
   [iso-ts]
@@ -118,7 +124,8 @@
 
 (def heartbeat-stale-after-seconds 5)
 
-(defn breaker-reason
+(defn ^{:malli/schema [:=> [:cat :map] :string]}
+  breaker-reason
   "Human-readable 'why' for an open breaker, from its breakers.edn entry.
    User-disabled → a deliberate pause (with the note); failure-tripped → the
    consecutive-failure count and when the last failure happened."
@@ -129,7 +136,8 @@
       (str n " consecutive failure" (when (not= 1 n) "s")
            (when last-failure-at (str ", last " (format-age last-failure-at)))))))
 
-(defn read-alerts
+(defn ^{:malli/schema [:=> [:cat] :map]}
+  read-alerts
   "Aggregate alert summary for the TUI status bar. Returns
    {:halted? :halt-source :halt-note
     :breakers <int total open>
@@ -174,7 +182,8 @@
               (cond-> (not fresh?) (assoc :status :unreachable))))
         (catch Exception _ absent)))))
 
-(defn read-coordinator-status
+(defn ^{:malli/schema [:=> [:cat] :map]}
+  read-coordinator-status
   "Read ~/.nido/coordinator/status.edn and decide reachability.
    Returns:
      {:status <kw or :unreachable> :slots-in-use <int>

@@ -10,7 +10,8 @@
    [nido.coordinator.record.state :as cstate]
    [nido.platform.io :as io]))
 
-(defn read-all-tickets
+(defn ^{:malli/schema [:=> [:cat] [:vector :Ticket]]}
+  read-all-tickets
   "Read every ticket meta.edn under ~/.nido/projects/*/tickets/*/, each tagged
    with its :project (keyword). Skips malformed/missing files silently."
   []
@@ -29,7 +30,8 @@
               :when m]
           (assoc m :project (keyword (str (fs/file-name proj)))))))))
 
-(defn classify
+(defn ^{:malli/schema [:=> [:cat :Ticket] :keyword]}
+  classify
   "Bucket a ticket by lifecycle stage:
    - :ready       — acked triage (:triaged), ready to promote to implementation
    - :in-progress — being worked (:investigating :awaiting-input :planning :implementing)
@@ -42,12 +44,14 @@
     (= :dismissed status)                                              :dismissed
     :else                                                              :other))
 
-(defn last-activity
+(defn ^{:malli/schema [:=> [:cat :Ticket] [:maybe :string]]}
+  last-activity
   "Best timestamp for ordering: the latest ledger entry's :at, else :triaged-at."
   [m]
   (or (some-> m :entries last :at) (:triaged-at m)))
 
-(defn grouped-tickets
+(defn ^{:malli/schema [:=> [:cat [:vector :Ticket]] :map]}
+  grouped-tickets
   "Partition tickets into display groups, newest activity first.
    :dismissed is capped at 10; :other is dropped from the overview."
   [all]
@@ -62,7 +66,8 @@
 (defn- truncate [s n]
   (if (> (count s) n) (str (subs s 0 n) "…") s))
 
-(defn format-row
+(defn ^{:malli/schema [:=> [:cat :Ticket] :string]}
+  format-row
   "Display string for a ticket: `BR-#### · <title>  [status]`."
   [{:keys [br-id status title]}]
   (format "%-9s · %s  [%s]"
