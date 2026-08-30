@@ -120,7 +120,27 @@
                 Record Source Daemon Lane WorkPlane]})
 
 (Band Surface
-  "Every way a human reaches nido: the bb tasks, the TUI, the web dashboard."
-  {:prefix ["tasks." "nido.ui."]
+  "The long-lived surfaces a human looks at: the TUI, the web dashboard, the views behind them.
+
+   Five thousand lines that outlive any one command, which is why this is the band worth sealing
+   and `Tasks` is not. It may reach the work plane's TOP — `WorkPlane` to act, `View` to read —
+   and nothing beneath it."
+  {:prefix ["nido.ui."]
    :may-depend [Platform Integration Session Vsdd Review Boot Design
+                Record Source Daemon View Lane WorkPlane]})
+
+(Band Tasks
+  "The bb task entry points — one namespace per CLI verb.
+
+   A COMPOSITION ROOT band, not a surface, and the split from `Surface` is the point. A task is
+   a hundred-odd lines of parse-the-args, call-the-domain, print; its job is to wire strata
+   together for exactly one command, which is what a composition root is for. Boot is the same
+   shape for the daemon. Holding them to a facade would push a hundred forwarding functions into
+   `work` and make it shallow — the opposite of what a facade is for.
+
+   Its reach is wide and DECLARED, so it is still checked: a task reaching somewhere new is a
+   line in this file, not an accident. It reaches `Surface` for the same reason Boot does not:
+   a task STARTS the TUI and the dashboard, and starting them is what tasks are for."
+  {:prefix ["tasks."]
+   :may-depend [Platform Integration Session Vsdd Review Boot Design Surface
                 Record Source Daemon View Lane WorkPlane]})
