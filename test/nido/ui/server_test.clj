@@ -3,9 +3,7 @@
             [clojure.string :as str]
             [nido.ui.server :as server]
             [nido.ui.views :as views]
-            [nido.coordinator.daemon.breakers]
-            [nido.coordinator.daemon.halt]
-            [nido.coordinator.record.triggers]
+            [nido.coordinator.control]
             [nido.ui.dev :as dev]
             [nido.session.engine]
             [nido.session.lifecycle :as lifecycle]
@@ -511,10 +509,10 @@
 
 (deftest post-ops-halt-writes-halt-and-responds-with-ops-fragment
   (let [halted (atom false)]
-    (with-redefs [nido.coordinator.daemon.halt/halt! (fn [_] (reset! halted true))
-                  nido.coordinator.daemon.halt/read-halt-info (fn [] nil)
-                  nido.coordinator.daemon.breakers/tripped-triggers (fn [] [])
-                  nido.coordinator.record.triggers/load-for-project (fn [_] [])
+    (with-redefs [nido.coordinator.control/halt! (fn [_] (reset! halted true))
+                  nido.coordinator.control/halt-info (fn [] nil)
+                  nido.coordinator.control/tripped-triggers (fn [] [])
+                  nido.coordinator.control/triggers-for (fn [_] [])
                   server/read-rail-daemon (fn [] {:state :up})
                   nido.coordinator.work/all-gates (fn [] [])]
       (let [resp (server/handle-request {:request-method :post :uri "/ops/halt"})]
@@ -527,9 +525,9 @@
   (with-redefs [nido.coordinator.work/all-gates (fn [] [{:project "brian" :ws-id "w1"}
                                             {:project "brian" :ws-id "w2"}
                                             {:project "fukan" :ws-id "w3"}])
-                nido.coordinator.daemon.halt/read-halt-info (fn [] nil)
-                nido.coordinator.daemon.breakers/tripped-triggers (fn [] [])
-                nido.coordinator.record.triggers/load-for-project (fn [_] [])
+                nido.coordinator.control/halt-info (fn [] nil)
+                nido.coordinator.control/tripped-triggers (fn [] [])
+                nido.coordinator.control/triggers-for (fn [_] [])
                 project/list-projects (fn [] {"brian" {:directory "/x"} "fukan" {:directory "/y"}})
                 server/read-rail-daemon (fn [] {:state :up})]
     (let [scoped   (server/handle-request {:request-method :get :uri "/_fragment/ops"

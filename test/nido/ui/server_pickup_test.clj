@@ -2,7 +2,7 @@
   (:require
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
-   [nido.coordinator.lane.pickup :as pickup]
+   [nido.coordinator.work :as work]
    [nido.notion.client :as client]
    [nido.ui.server :as server]))
 
@@ -14,7 +14,7 @@
 (deftest pickup-post-resolves-and-patches-result
   (with-redefs [client/keychain-token (fn [] "tok")
                 server/read-pickup-blocker (fn [_] nil)
-                pickup/pickup! (fn [project input token]
+                work/pickup! (fn [project input token]
                                  (is (= :brian project))
                                  (is (= "BR-104" input))
                                  (is (= "tok" token))
@@ -29,7 +29,7 @@
 (deftest pickup-post-blank-input-short-circuits
   (with-redefs [client/keychain-token (fn [] "tok")
                 server/read-pickup-blocker (fn [_] nil)
-                pickup/pickup! (fn [& _] (throw (ex-info "should not be called" {})))]
+                work/pickup! (fn [& _] (throw (ex-info "should not be called" {})))]
     (let [resp (post "/workstreams/pickup/brian" "{\"pickup\":\"   \"}")]
       (is (= 200 (:status resp)))
       (is (str/includes? (:body resp) "Paste a Notion URL")))))
@@ -39,7 +39,7 @@
                 server/read-pickup-blocker (fn [project]
                                              (is (= "brian" project))
                                              blocked-by)
-                pickup/pickup! (fn [& _]
+                work/pickup! (fn [& _]
                                  {:decision :driving :continuing? false :ws-id nil
                                   :ref {:id "BR-104" :title "t"} :queued "/q/x.edn"})]
     (:body (post "/workstreams/pickup/brian" "{\"pickup\":\"BR-104\"}"))))
@@ -62,7 +62,7 @@
   (let [asked (atom nil)]
     (with-redefs [client/keychain-token (fn [] "tok")
                   server/read-pickup-blocker (fn [p] (reset! asked p) nil)
-                  pickup/pickup! (fn [& _]
+                  work/pickup! (fn [& _]
                                    {:decision :driving :continuing? false :ws-id nil
                                     :ref {:id "BR-104" :title "t"} :queued "/q/x.edn"})]
       (post "/workstreams/pickup/brian" "{\"pickup\":\"BR-104\"}")

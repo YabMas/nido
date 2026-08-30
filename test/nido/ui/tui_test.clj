@@ -6,17 +6,16 @@
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
    [nido.platform.core :as core]
-   [nido.coordinator.lane.pickup :as pickup]
+   [nido.coordinator.control]
+   [nido.coordinator.work :as work]
    [nido.coordinator.lane.scratch :as scratch]
    [nido.coordinator.record.state :as cstate]
-   [nido.coordinator.record.triggers]
    [nido.coordinator.record.workstream :as workstream]
    [nido.notion.client :as client]
    [nido.platform.project :as project]
    [nido.ui.dev]
    [nido.session.lifecycle :as lifecycle]
-   [nido.ui.tui :as tui]
-   [nido.coordinator.work]))
+   [nido.ui.tui :as tui]))
 
 (deftest origin-filter-cycles-all-then-each-origin
   (is (= [:all :notion :github :slack :scratch] (mapv :id @#'tui/origin-filters)))
@@ -419,7 +418,7 @@
     (is (= :ops (:modal state')))))
 
 (deftest ops-overlay-routes-to-the-levers
-  (with-redefs [nido.coordinator.daemon.halt/halted? (fn [] false)]
+  (with-redefs [nido.coordinator.control/halted? (fn [] false)]
     (let [state {:screen :board :project "p" :origin :all :modal :ops}
           [s-h _] (#'tui/update-fn state (msg/key-press "h"))
           [s-esc _] (#'tui/update-fn state (msg/key-press "escape"))]
@@ -427,7 +426,7 @@
       (is (nil? (:modal s-esc))))))
 
 (deftest ops-overlay-routes-c-to-clear-breaker
-  (with-redefs [nido.coordinator.daemon.breakers/tripped-triggers
+  (with-redefs [nido.coordinator.control/tripped-triggers
                 (constantly [{:project :brian :trigger :t :info {}}])]
     (let [state {:screen :board :project "p" :origin :all :modal :ops}
           [s' _] (#'tui/update-fn state (msg/key-press "c"))]
@@ -435,7 +434,7 @@
 
 (deftest ops-overlay-routes-f-to-fire-trigger
   (with-redefs [nido.platform.project/list-projects (constantly {"brian" {}})
-                nido.coordinator.record.triggers/load-for-project (constantly [])]
+                nido.coordinator.control/triggers-for (constantly [])]
     (let [state {:screen :board :project "p" :origin :all :modal :ops}
           [s' _] (#'tui/update-fn state (msg/key-press "f"))]
       (is (= :fire-pick-trigger (:modal s'))))))
@@ -577,7 +576,7 @@
 
 (deftest pickup-input-submit-drives-the-resolved-ticket
   (let [calls (atom [])]
-    (with-redefs [pickup/pickup! (fn [project input token]
+    (with-redefs [work/pickup! (fn [project input token]
                                    (swap! calls conj [project input token])
                                    {:decision :driving :ref {:id "BR-42"} :queued {:id 1}})
                   client/keychain-token (constantly "tok-123")]
@@ -592,7 +591,7 @@
             "status reflects the :driving decision")))))
 
 (deftest pickup-input-submit-reports-an-unresolved-ref
-  (with-redefs [pickup/pickup! (constantly {:decision :unresolved :error :not-found})
+  (with-redefs [work/pickup! (constantly {:decision :unresolved :error :not-found})
                 client/keychain-token (constantly "tok-123")]
     (let [opened (first (#'tui/open-pickup-input (board-state :all)))
           typed  (assoc opened :modal-input (text-input/set-value (:modal-input opened) "junk"))
