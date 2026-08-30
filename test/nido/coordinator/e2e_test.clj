@@ -6,7 +6,7 @@
    [nido.coordinator.agent :as agent]
    [nido.coordinator.daemon.breakers :as breakers]
    [nido.boot.core :as core]
-   [nido.coordinator.daemon.executor :as executor]
+   [nido.coordinator.executor :as executor]
    [nido.coordinator.source.queue :as queue]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.state :as cstate]

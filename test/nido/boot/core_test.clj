@@ -12,7 +12,7 @@
    [nido.platform.io]
    [nido.coordinator.record.clock :as clock]
    [nido.boot.core :as core]
-   [nido.coordinator.daemon.executor :as executor]
+   [nido.coordinator.executor :as executor]
    [nido.coordinator.lane.github-merge :as github-merge]
    [nido.github.config :as gh-config]
    [nido.coordinator.daemon.anomaly :as anomaly]

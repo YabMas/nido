@@ -31,7 +31,7 @@
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.status-file :as status-file]
    [nido.coordinator.lane.drive :as drive]
-   [nido.coordinator.daemon.executor :as executor]
+   [nido.coordinator.executor :as executor]
    [nido.coordinator.lane.github-merge :as github-merge]
    [nido.coordinator.lane.github-issue-intake :as github-issue-intake]
    [nido.coordinator.lane.notion-sync :as notion-sync]

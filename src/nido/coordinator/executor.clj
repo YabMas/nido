@@ -1,4 +1,4 @@
-(ns nido.coordinator.daemon.executor
+(ns nido.coordinator.executor
   "Slot-based scheduler with priority queue. Babashka-compatible:
    uses a Clojure sorted-set keyed by [uncapped-flag (- priority) received-at run-id]
    for the wait queue (java.util.concurrent.PriorityBlockingQueue isn't

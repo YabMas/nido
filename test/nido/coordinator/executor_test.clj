@@ -1,7 +1,7 @@
-(ns nido.coordinator.daemon.executor-test
+(ns nido.coordinator.executor-test
   (:require
    [clojure.test :refer [deftest is use-fixtures]]
-   [nido.coordinator.daemon.executor :as ex]))
+   [nido.coordinator.executor :as ex]))
 
 (defn- reset-executor! [f]
   (ex/configure! {:global-cap 2})

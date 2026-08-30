@@ -4,7 +4,7 @@
    [clojure.test :refer [deftest is use-fixtures]]
    [nido.platform.core :as core]
    [nido.coordinator.agent :as agent]
-   [nido.coordinator.daemon.executor :as ex]
+   [nido.coordinator.executor :as ex]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as session]
    [nido.coordinator.lane.ship :as sut]

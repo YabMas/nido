@@ -8,7 +8,7 @@
    [clojure.string :as str]
    [nido.coordinator.daemon.breakers :as breakers]
    [nido.coordinator.record.clock :as clock]
-   [nido.coordinator.daemon.executor :as executor]
+   [nido.coordinator.executor :as executor]
    [nido.coordinator.daemon.halt :as halt]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.state :as cstate]
