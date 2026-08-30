@@ -1582,7 +1582,8 @@
 ;; Entry point
 ;; ---------------------------------------------------------------------------
 
-(defn run-once
+(defn ^{:malli/schema [:=> [:cat] :any]}
+  run-once
   "Run the TUI once. Returns the queued action — :quit | [:verb project session...].
 
    Alt-screen (full-screen) mode. charm's alt-screen path historically stranded

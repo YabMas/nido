@@ -27,7 +27,8 @@
 (defn- heading-level [line]
   (count (re-find #"^#+" line)))
 
-(defn render
+(defn ^{:malli/schema [:=> [:cat [:maybe :string]] :any]}
+  render
   "Markdown string -> a hiccup [:div …] of block nodes. nil/blank -> \"\"."
   [s]
   (if (str/blank? s)

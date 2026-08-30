@@ -21,7 +21,8 @@
 
 (defonce ^:private app-states (atom {}))
 
-(defn set-app-state!
+(defn ^{:malli/schema [:=> [:cat :any :any [:? :any]] :any]}
+  set-app-state!
   "Store the current state for an instance. The atom value is a map
    `{:state :starting|:stopping|:restarting|:failed
      :error-msg <string?>}` so a :failed state can carry the actual
@@ -32,13 +33,16 @@
           (cond-> {:state state}
             error-msg (assoc :error-msg error-msg)))))
 
-(defn clear-app-state! [instance-id]
+(defn ^{:malli/schema [:=> [:cat :any] :any]}
+  clear-app-state! [instance-id]
   (swap! app-states dissoc instance-id))
 
-(defn current-app-state [instance-id]
+(defn ^{:malli/schema [:=> [:cat :any] :any]}
+  current-app-state [instance-id]
   (get @app-states instance-id))
 
-(defn pending-resolve-keys
+(defn ^{:malli/schema [:=> [:cat] :any]}
+  pending-resolve-keys
   "The set of gate-resolve keys currently mid-flight — keys shaped
    \"<project>/<ws-id>\" (as written by the UI's gate-resolve!) whose state is
    still :resuming/:resolving. Fed into work/screen as :pending so an optimistic
@@ -54,7 +58,8 @@
        (map key)
        set))
 
-(defn pending-winddown-keys
+(defn ^{:malli/schema [:=> [:cat] :any]}
+  pending-winddown-keys
   "The \"<project>/<ws-id>\" keys with a :stopping state mid-flight — the web's
    winddown POST writes them; work/screen marks the matching winding-down rows
    :pending? so the 5s poll shows 'stopping…' instead of a re-clickable button."
@@ -65,7 +70,8 @@
        (map key)
        set))
 
-(defn failed-ws-errors
+(defn ^{:malli/schema [:=> [:cat] :map]}
+  failed-ws-errors
   "Map of \"<project>/<ws-id>\" -> error message for every workstream-scoped
    action that ended :failed — a bring-down! AND a gate resolve (Apply/Reply),
    which share this key space. Fed into derive-screen so the failure renders on
@@ -81,7 +87,8 @@
        (map (fn [[k v]] [k (:error-msg v)]))
        (into {})))
 
-(defn dev-state-for
+(defn ^{:malli/schema [:=> [:cat :any :any :map :any :any] :map]}
+  dev-state-for
   "Pure derivation of a session's dev-resource state from real state: the
    registry entry (looked up by worktree path), a TCP probe of its app port,
    and the optimistic app-states. Returns {:state … :url :error-msg}.
@@ -98,7 +105,8 @@
       pending-kw {:state pending-kw :error-msg (when (map? pending) (:error-msg pending))}
       :else      {:state :down})))
 
-(defn session-dev-state
+(defn ^{:malli/schema [:=> [:cat :ProjectName :any [:? :map]] :map]}
+  session-dev-state
   "Derived dev-resource state for one session of `project`. The 2-arity reads
    the live registry; the 3-arity reuses a pre-read registry so batch callers
    (a whole workstream's sessions) read the registry once, not per session.
@@ -109,7 +117,8 @@
    (let [{:keys [wt-path instance-id]} (lifecycle/session-coords session {:project project})]
      (dev-state-for wt-path instance-id registry proc/tcp-open? current-app-state))))
 
-(defn ws-session-dev-states
+(defn ^{:malli/schema [:=> [:cat :ProjectName :map] :map]}
+  ws-session-dev-states
   "Map of session-name → derived dev-resource state for a workstream's sessions.
    Reads the registry once (not once per session) so a pane poll is O(1) registry
    IO + one probe per session."
@@ -121,7 +130,8 @@
         (into {} (for [{:keys [name]} sessions]
                    [name (session-dev-state project name registry)]))))))
 
-(defn app-port-for-instance
+(defn ^{:malli/schema [:=> [:cat :any] [:maybe :int]]}
+  app-port-for-instance
   "Look up the app port stored in the session state file for this instance,
    so we can probe TCP after a lifecycle action completes."
   [instance-id]
@@ -135,7 +145,8 @@
   (lifecycle/down! session opts)
   (clear-app-state! instance-id))
 
-(defn stop-session!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :any] :any]}
+  stop-session!
   "Bring ONE session down on a background thread, tracking optimistic state under
    its canonical instance-id and capturing a failure into it.
 
@@ -156,7 +167,8 @@
                              (or (:error-msg (ex-data e)) (ex-message e))))))
     instance-id))
 
-(defn dev-action!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any :keyword] :any]}
+  dev-action!
   "Run a DEV-ENVIRONMENT lifecycle action for one session on a background
    thread, tracking optimistic state in app-states (keyed by the canonical
    instance-id). `start` re-hydrates a reclaimed session-home via

@@ -67,7 +67,8 @@
   [ps]
   (boolean (some (fn [[k v]] (and (= k "history") (= "1" v))) ps)))
 
-(defn parse
+(defn ^{:malli/schema [:=> [:cat :map] :ViewState]}
+  parse
   "Request map -> view-state:
      {:surface :needs|:workstreams|:operations|:other
       :scope   \"all\"|<project>

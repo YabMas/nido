@@ -375,13 +375,15 @@
       (for [p projects] (scope-link p p))]
      (rail-health daemon)]))
 
-(defn rail-status-fragment
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  rail-status-fragment
   "The two live rail elements, for SSE patching alongside a surface fragment."
   [{:keys [needs-count daemon]}]
   (str (h/html (rail-needs-badge needs-count))
        (h/html (rail-health daemon))))
 
-(defn fire-signal
+(defn ^{:malli/schema [:=> [:cat :any :keyword] :string]}
+  fire-signal
   "Signal name for one fire-form input: JS-identifier-safe (hyphens → underscores).
    The /ops/fire route reads the SAME name back out of the signal body — keep the
    two sides on this one fn."
@@ -395,7 +397,8 @@
     (let [h (quot idle-ms 3600000)]
       (if (>= h 48) (str (quot h 24) "d") (str h "h")))))
 
-(defn fleet-card
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  fleet-card
   "Fleet memory: what every live session costs together, and what is idle enough
    to reclaim.
 
@@ -459,7 +462,8 @@
           :else
           [:div.meta {:style "margin-top:7px"} "Nothing idle — every session was touched today."]))))])
 
-(defn ops-panel-fragment
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  ops-panel-fragment
   "The ambient ops chrome: daemon state, halt/resume, open breakers with
    per-trigger clear, and a fire form per manual trigger (placeholder-less →
    one click; placeholder-carrying → one input per {{event/*}} key, signals
@@ -505,7 +509,8 @@
                               "/" (clojure.core/name name) "')")}
             "fire"]]))]])))
 
-(defn shell
+(defn ^{:malli/schema [:=> [:cat :map :any] :any]}
+  shell
   "Page chrome: persistent rail + content area. Replaces `layout`. `ctx` carries
    {:active :title :needs-count :daemon :scope :projects :tab}; `content` is hiccup.
    The ops poll carries the current :scope (when not \"all\") so the badge count
@@ -540,7 +545,8 @@
 ;; ---------------------------------------------------------------------------
 ;; Gate inbox (cross-project human-decision queue over nido.coordinator.work)
 
-(defn origin-badge [origin]
+(defn ^{:malli/schema [:=> [:cat :keyword] :any]}
+  origin-badge [origin]
   (let [[ch cls] (case origin
                    :notion ["N" "b-notion"] :github ["G" "b-github"]
                    :slack ["S" "b-slack"]   ["·" "b-scratch"])]
@@ -662,7 +668,8 @@
                                             (name (:reason resume-error)))])
    (when error-msg [:div.gate-err "⚠ " error-msg])])
 
-(defn needs-fragment
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  needs-fragment
   "The needs-you queue column — initial render + SSE refresh. Renders from the
    screen so a poll preserves the open gate's highlight (selection is threaded
    from the screen, not reset to nil each tick). Each gate's link carries the
@@ -693,7 +700,8 @@
       " · "
       [:a {:href "/workstreams"} "workstreams →"]]])))
 
-(defn gate-action-confirm-fragment
+(defn ^{:malli/schema [:=> [:cat :any :ProjectName :WorkstreamId [:? :string]] :any]}
+  gate-action-confirm-fragment
   "Immediate, action-keyed confirmation toast for an action that actually ran.
    :promote is intentionally destination-neutral: a :ready ticket provisions the
    work session, an :incoming Slack report starts triage."
@@ -718,7 +726,8 @@
         "Done."))
     project ws-id pane-id)))
 
-(defn gate-action-skip-fragment
+(defn ^{:malli/schema [:=> [:cat :string :ProjectName :WorkstreamId [:? :string]] :any]}
+  gate-action-skip-fragment
   "Rendered instead of gate-action-confirm-fragment when the gate action did NOT
    actually run — e.g. server/gate-resolve!'s in-flight guard dropped a
    cross-action click. Same shape as the confirm toast, but `msg` is the
@@ -753,7 +762,8 @@
              title (assoc :title title))
    label])
 
-(defn action-bar
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any :any [:? :any]] :any]}
+  action-bar
   "Render an action set: one-click buttons (mutations + preset-input resumes) in a row,
    plus a free-text reply textarea when a resume action without :input is present.
    `session` (optional) labels the resume target. `route` (optional, default the home
@@ -1389,7 +1399,8 @@
      :proposed-ticket          (md/render (report/report->markdown report))
      (md/render (:markdown report))))))
 
-(defn gate-pane
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  gate-pane
   "The detail pane: rendered report + follow-actions. nil -> calm placeholder.
    A `:pending?` gate (its agent is running after Apply/Reply) shows 'working…'
    and no action buttons — deriving action availability from the agent's live
@@ -1410,7 +1421,8 @@
          (list (when error-msg [:div.action-err "⚠ " error-msg])
                (action-bar project ws-id actions session)))]))))
 
-(defn needs-page
+(defn ^{:malli/schema [:=> [:cat :map :map] :any]}
+  needs-page
   "Home: the needs-you master-detail inside the shell, rendered from the screen.
    The selected gate (matched from the screen's gates by the view-state
    selection) fills the pane; the poll query carries scope + selection so the
@@ -1606,7 +1618,8 @@
      {"data-on:click" (str "@post('/workstreams/" project "/" ws-id "/gate/restore')")}
      "Restore"]]])
 
-(defn workstreams-fragment
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  workstreams-fragment
   "The selected tab's stage-grouped selectable list across projects, rendered
    from the screen. Selection is threaded from the screen so a poll refresh keeps
    the open row's highlight instead of clearing it."
@@ -1669,7 +1682,8 @@
 
 (defn- day [at] (when at (let [s (str at)] (subs s 0 (min 10 (count s))))))
 
-(defn status-heading
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  status-heading
   "The Status section's heading, carrying the position itself.
 
    The position was a bold word at the top of the section body, immediately under
@@ -2009,7 +2023,8 @@
      (when error-msg [:div.action-err "⚠ " error-msg])
      (action-bar project ws-id actions nil pane-route)]))
 
-(defn workstream-pane
+(defn ^{:malli/schema [:=> [:cat :map [:? :any]] :any]}
+  workstream-pane
   "Read-only ledger pane: header · stage · ledger summary · report · the one
    ENVIRONMENT block (the workstream's `:environment` session — dev-env controls,
    URL, ports, mem/heap facts), or 'no runnable version yet'. A `:bare?` ws (a
@@ -2118,7 +2133,8 @@
           :href  (str "/workstreams" (screen-query screen {:tab id}))}
       (str/capitalize (name id))])])
 
-(defn pickup-bar
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :any]}
+  pickup-bar
   "Paste-a-ticket bar at the top of /workstreams. Binds a `pickup` signal, POSTs
    it to /workstreams/pickup/<project> (Enter or the button), and reserves an
    empty #pickup-result the SSE response patches. Lives on the page chrome, NOT
@@ -2150,7 +2166,8 @@
                          " " (name trigger) ").")
        nil)]))
 
-(defn pickup-result-fragment
+(defn ^{:malli/schema [:=> [:cat :map :map] :string]}
+  pickup-result-fragment
   "HTML string (root #pickup-result) reporting the outcome of a pickup POST.
    `result` is pickup!'s return; opts is
    {:project <str> :blocked-by <kw or nil> :trigger <kw>}."
@@ -2177,7 +2194,8 @@
              "it'll appear in the spine shortly."])
           (pickup-blocked-note blocked-by trigger project)]))])))
 
-(defn workstreams-page
+(defn ^{:malli/schema [:=> [:cat :map :map] :any]}
+  workstreams-page
   "Overview + ledger pane, rendered from the screen. The list, its poll query,
    and the pane all derive from the one screen value, so overview and detail
    never disagree and a poll preserves the selection + tab."
@@ -2237,7 +2255,8 @@
         [:button.btn.btn-primary {"data-on:click" (str "@post('" base "&verdict=approved')")} "Approve"]
         [:button.btn {"data-on:click" (str "@post('" base "&verdict=declined')")} "Decline"]])]))
 
-(defn operations-fragment
+(defn ^{:malli/schema [:=> [:cat :any] :any]}
+  operations-fragment
   "The proposal list, patched by the poll. Undecided first — a decided proposal
    is a record and an undecided one is a question, and the questions are what
    you came for."
@@ -2257,7 +2276,8 @@
                   [:summary (str (count done) " already decided")]
                   (for [p done] (proposal-card p))])))]))))
 
-(defn operations-page
+(defn ^{:malli/schema [:=> [:cat :map :any] :any]}
+  operations-page
   "Every proposal nido's review-loop analyses have made, and what was decided.
 
    Its unit is the proposal rather than the workstream, which is what makes it a
@@ -2275,7 +2295,8 @@
                         (str "?scope=" (:scope ctx))) "')")}
      [:div {:id "operations"} [:p.meta "…"]]]]))
 
-(defn proposal-result-fragment
+(defn ^{:malli/schema [:=> [:cat :map :any] :any]}
+  proposal-result-fragment
   "What a decision click patches back. The row is replaced by the same card, now
    carrying its decision — or, when the ledger moved under the reader, by the
    refusal saying so, because a decision made against a page that has moved is
@@ -2290,5 +2311,6 @@
          (operations-fragment proposals))
     (operations-fragment proposals)))
 
-(defn not-found-page []
+(defn ^{:malli/schema [:=> [:cat] :any]}
+  not-found-page []
   (shell {:title "404"} [:h1 "Not found"]))

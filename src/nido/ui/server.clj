@@ -61,16 +61,19 @@
 ;; ---------------------------------------------------------------------------
 ;; Rail seam + context
 
-(defn read-rail-daemon "Seam over health for stubbing in tests." [] (control/read-daemon-health))
+(defn ^{:malli/schema [:=> [:cat] :map]}
+  read-rail-daemon "Seam over health for stubbing in tests." [] (control/read-daemon-health))
 
-(defn read-pickup-blocker
+(defn ^{:malli/schema [:=> [:cat :ProjectName] [:maybe :keyword]]}
+  read-pickup-blocker
   "Seam over health for stubbing in tests. What blocks the leg a pickup fires,
    or nil when nothing does — deliberately NOT read-rail-daemon, whose :state is
    a severity ladder for the dot rather than a go/no-go for one envelope."
   [project]
   (control/read-queue-blocker (keyword project) work/pickup-trigger))
 
-(defn derive-screen
+(defn ^{:malli/schema [:=> [:cat :any] :Screen]}
+  derive-screen
   "Impure wiring: gather what only IO can produce (grouped rows, gates, in-flight
    resolve keys), hand off to the pure work/screen, then attach the selection
    detail. Selection detail is attached HERE (not in work) because it needs the
@@ -258,7 +261,8 @@
 
 (def ^:private valid-severities #{:blocker :tweak :nice-to-have})
 
-(defn parse-findings-lines
+(defn ^{:malli/schema [:=> [:cat :string] :any]}
+  parse-findings-lines
   "Parse a textarea of findings, one per line `severity | area | summary`. Blank
    lines are skipped; a blank/unknown severity defaults to :tweak; a blank area is
    omitted. Returns a vector of {:summary :severity (:area)} maps."
@@ -273,7 +277,8 @@
                           :severity (if (valid-severities sev-kw) sev-kw :tweak)}
                    (not-empty area) (assoc :area area)))))))
 
-(defn resolve-failure-msg
+(defn ^{:malli/schema [:=> [:cat :map] :string]}
+  resolve-failure-msg
   "Error message for a work/resolve-gate! result that did NOT do what the
    optimistic confirmation toast promised, or nil when it settled fine. These
    resolvers signal failure by VALUE (a :decision), not by throwing, so this is
@@ -585,7 +590,8 @@
         :else
         (html-response 404 (views/not-found-page))))))
 
-(defn handle-request [{:keys [request-method] :as req}]
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  handle-request [{:keys [request-method] :as req}]
   (case request-method
     :post (handle-post req)
     (handle-get req)))
@@ -595,7 +601,8 @@
 
 (defonce ^:private server-atom (atom nil))
 
-(defn start!
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  start!
   "Start the dashboard server."
   [{:keys [port] :or {port 8800}}]
   (when-let [old @server-atom]
@@ -605,7 +612,8 @@
     (println (str "[nido] Dashboard running at http://localhost:" port))
     stop-fn))
 
-(defn stop! []
+(defn ^{:malli/schema [:=> [:cat] :any]}
+  stop! []
   (when-let [stop-fn @server-atom]
     (stop-fn)
     (reset! server-atom nil)

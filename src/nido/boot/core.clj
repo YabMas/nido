@@ -129,7 +129,8 @@
 ;; dashboard is, so it holds two functions rather than importing a surface.
 (defonce ^:private !dashboard-lifecycle (atom nil))
 
-(defn dashboard-config
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  dashboard-config
   "Resolve {:enabled? :port} for the in-process dashboard from run! opts over
    `defaults`. `:no-dashboard true` disables it; `:dashboard-port` overrides the
    port."
@@ -138,7 +139,8 @@
     {:enabled? (boolean (and (:enabled? d) (not no-dashboard)))
      :port     (or dashboard-port (:port d))}))
 
-(defn dashboard-status-line
+(defn ^{:malli/schema [:=> [:cat [:maybe :int] :boolean] :string]}
+  dashboard-status-line
   "Format the `status` Dashboard line for a resolved port + reachability."
   [port reachable?]
   (format "Dashboard:   http://localhost:%s (%s)"
@@ -781,7 +783,8 @@
        (try (drive/run-stage! (:project r) (:workstream-id r) stage)
             (finally (runs/transition! rid :done)))))})
 
-(defn execute!
+(defn ^{:malli/schema [:=> [:cat :RunId] :any]}
+  execute!
   "Hand `rid` to the body its mode selects."
   [rid]
   (let [mode (:mode (runs/read-run rid))]
@@ -795,7 +798,8 @@
    person, needing a stage a later phase will bring, or already working."
   #{:waiting-on-a-human :not-mechanical :terminal :already-running})
 
-(defn drive-log-line
+(defn ^{:malli/schema [:=> [:cat :map] :string]}
+  drive-log-line
   "One line for a drive decision, or nil when it is not worth one."
   [{:keys [ws-id at fired run-id skipped]}]
   (cond
@@ -805,7 +809,8 @@
     (str "nido drive: " ws-id " at " (name at) " — skipped, " (name skipped))
     :else nil))
 
-(defn tick!
+(defn ^{:malli/schema [:=> [:cat] :any]}
+  tick!
   "One iteration of the main loop. Public for testability."
   []
   (let [triggers-by-project (load-all-triggers)
@@ -895,7 +900,8 @@
         (try (pid/delete!)
              (catch Exception _ nil))))))
 
-(defn shutdown-grace-ms
+(defn ^{:malli/schema [:=> [:cat] :int]}
+  shutdown-grace-ms
   "Return the grace period (in ms) for daemon shutdown (SIGTERM to SIGKILL)."
   []
   (-> defaults :executor :shutdown-grace-ms))
@@ -913,7 +919,8 @@
       (executor/submit! (:id r) (:priority r) (:uncapped? r)
                         (:trigger r) (get cap-of (:trigger r))))))
 
-(defn run!
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  run!
   "Start the foreground loop. Blocks until interrupted.
    Also installs the daemon lifecycle: writes coordinator.pid, runs the
    crash-recovery reconcile pass, starts the in-process dashboard, and
