@@ -74,7 +74,8 @@
       (dissoc "CLAUDECODE")
       (merge (or extra-env {}))))
 
-(defn invoke-agent
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  invoke-agent
   "Spawn a claude subprocess for a VSDD role.
    Streams progress to terminal. Returns {:exit int :result string :session-id string}.
 
@@ -116,7 +117,8 @@
     @proc
     (assoc stream-result :exit (:exit @proc))))
 
-(defn invoke-judge
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  invoke-judge
   "Lightweight LLM call for classification — no tools, no agent definition.
    Returns {:exit int :result string :session-id string}.
 

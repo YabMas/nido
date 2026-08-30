@@ -26,7 +26,8 @@
 ;; ---------------------------------------------------------------------------
 ;; Dirty detection
 
-(defn module-needs-run?
+(defn ^{:malli/schema [:=> [:cat :Path :string] :map]}
+  module-needs-run?
   "Check if a module needs a VSDD run.
    Returns {:needs-run? bool :reason :changed|:no-prior-run|nil}."
   [project-dir module-path]
@@ -37,7 +38,8 @@
         {:needs-run? true :reason :changed}
         {:needs-run? false :reason nil}))))
 
-(defn detect-dirty-modules
+(defn ^{:malli/schema [:=> [:cat :Path [:vector :any]] [:vector :map]]}
+  detect-dirty-modules
   "Returns dirty modules as [{:module-path ... :reason :changed|:no-prior-run}]."
   [project-dir modules]
   (->> modules
@@ -54,7 +56,8 @@
 (defn- workspaces-root [project-dir]
   (str project-dir "-workspaces"))
 
-(defn create-workspace-for-module
+(defn ^{:malli/schema [:=> [:cat :Path :string] :map]}
+  create-workspace-for-module
   "Create a jj workspace for a module. Returns workspace info map."
   [project-dir module-path]
   (let [slug (module-slug module-path)
@@ -68,7 +71,8 @@
       (throw (ex-info "Failed to create workspace"
                       {:module module-path :ws-name ws-name :error (:err result)})))))
 
-(defn cleanup-workspaces!
+(defn ^{:malli/schema [:=> [:cat :Path [:vector :map]] :any]}
+  cleanup-workspaces!
   "Forget workspaces and remove their directories."
   [project-dir workspaces]
   (doseq [{:keys [workspace-name workspace-path]} workspaces]
@@ -87,7 +91,8 @@
 ;; ---------------------------------------------------------------------------
 ;; Parallel execution
 
-(defn run-module-in-workspace
+(defn ^{:malli/schema [:=> [:cat :map :map] :map]}
+  run-module-in-workspace
   "Run VSDD for a single module in its workspace.
    Returns the manifest or {:status :error :error msg}."
   [base-config ws-info]
@@ -98,7 +103,8 @@
       (catch Exception e
         {:status :error :error (ex-message e) :module-path (:module-path ws-info)}))))
 
-(defn launch-parallel-runs
+(defn ^{:malli/schema [:=> [:cat :map [:vector :map]] :map]}
+  launch-parallel-runs
   "Launch VSDD runs in parallel. Returns {module-path future}."
   [base-config workspaces]
   (into {}
@@ -107,7 +113,8 @@
                 (future (run-module-in-workspace base-config ws))]))
         workspaces))
 
-(defn await-all-runs
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  await-all-runs
   "Deref all futures. Returns {module-path result}."
   [futures-map]
   (into {}
@@ -118,7 +125,8 @@
 ;; ---------------------------------------------------------------------------
 ;; Rebase converged results
 
-(defn rebase-converged!
+(defn ^{:malli/schema [:=> [:cat :Path :map [:vector :map] [:vector :any]] :map]}
+  rebase-converged!
   "Rebase converged workspace changes onto the main branch in module order.
    Returns [{:module-path :change-id}] for converged modules."
   [project-dir results workspaces module-order]
@@ -160,7 +168,8 @@
 ;; ---------------------------------------------------------------------------
 ;; Artifact preservation
 
-(defn preserve-artifacts!
+(defn ^{:malli/schema [:=> [:cat :Path :string [:vector :map] :map] :any]}
+  preserve-artifacts!
   "Copy .vsdd/<run-id>/ from each workspace into the sweep artifacts dir."
   [project-dir sweep-id workspaces results]
   (let [sweep-dir (str project-dir "/.vsdd/sweeps/" sweep-id)]
@@ -209,7 +218,8 @@
 ;; ---------------------------------------------------------------------------
 ;; Top-level entry point
 
-(defn sweep
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  sweep
   "Run VSDD across all dirty modules in parallel.
 
    Config keys:

@@ -15,7 +15,8 @@
    :architect    ["Read" "Edit" "Write" "Glob" "Grep"]
    :analyst      []})
 
-(defn load-agent-prompt
+(defn ^{:malli/schema [:=> [:cat :keyword] [:maybe :string]]}
+  load-agent-prompt
   "Load a built-in VSDD agent prompt by role keyword.
    Returns the markdown content string, or nil if not found."
   [role]
@@ -23,7 +24,8 @@
     (when-let [resource (jio/resource file)]
       (slurp resource))))
 
-(defn tools-for-role
+(defn ^{:malli/schema [:=> [:cat :keyword] [:vector :string]]}
+  tools-for-role
   "Return the default tool list for a VSDD role."
   [role]
   (get default-tools role []))

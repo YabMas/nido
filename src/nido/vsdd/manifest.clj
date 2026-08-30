@@ -4,7 +4,8 @@
   (:require [nido.platform.io :as io]
             [nido.platform.process :as proc]))
 
-(defn create
+(defn ^{:malli/schema [:=> [:cat :map] :Manifest]}
+  create
   "Create a new run manifest."
   [{:keys [run-id module-path run-dir]}]
   {:run-id run-id
@@ -17,7 +18,8 @@
    :unresolved-spec-findings []
    :final-verdict nil})
 
-(defn check-liveness
+(defn ^{:malli/schema [:=> [:cat :Manifest] :Manifest]}
+  check-liveness
   "Check if an in-progress manifest's process is still alive.
    Returns the manifest with :status updated to :interrupted if the
    owning process is gone or PID is missing. Does not mutate the file on disk."
@@ -31,12 +33,14 @@
       (assoc manifest :status :interrupted))
     manifest))
 
-(defn add-iteration
+(defn ^{:malli/schema [:=> [:cat :Manifest :map] :Manifest]}
+  add-iteration
   "Append an iteration record to the manifest."
   [manifest iteration-data]
   (update manifest :iterations conj iteration-data))
 
-(defn finalize
+(defn ^{:malli/schema [:=> [:cat :Manifest :any] :Manifest]}
+  finalize
   "Mark the manifest as complete with a final verdict."
   [manifest verdict]
   (assoc manifest
@@ -49,17 +53,20 @@
          :finished-at (str (java.time.Instant/now))
          :final-verdict verdict))
 
-(defn manifest-path
+(defn ^{:malli/schema [:=> [:cat :Path] :Path]}
+  manifest-path
   "Path to the manifest file within a run directory."
   [run-dir]
   (str run-dir "/manifest.edn"))
 
-(defn save!
+(defn ^{:malli/schema [:=> [:cat :Manifest] :any]}
+  save!
   "Persist the manifest to disk."
   [manifest]
   (io/write-edn! (manifest-path (:run-dir manifest)) manifest))
 
-(defn load-manifest
+(defn ^{:malli/schema [:=> [:cat :Path] [:maybe :Manifest]]}
+  load-manifest
   "Load a manifest from a run directory."
   [run-dir]
   (io/read-edn (manifest-path run-dir)))

@@ -449,7 +449,8 @@
 ;; ---------------------------------------------------------------------------
 ;; Public API
 
-(defn run
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  run
   "Run the VSDD loop for a module.
 
    Config map:
@@ -507,7 +508,8 @@
       (println (str "  Artifacts:  " run-dir))
       result)))
 
-(defn resume
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  resume
   "Resume an interrupted VSDD run.
 
    Config map: same as `run`, plus:

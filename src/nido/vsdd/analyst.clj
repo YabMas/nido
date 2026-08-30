@@ -29,7 +29,8 @@
            {:critic-report-text (load-report run-dir module-path "critic-report" n)
             :impl-report-text   (load-report run-dir module-path "impl-report" n)})))
 
-(defn collect-run-data
+(defn ^{:malli/schema [:=> [:cat :Path :string] :map]}
+  collect-run-data
   "Collect all data for a VSDD run: manifest + all reports.
    Returns a map with :manifest and :iterations (enriched with report contents)."
   [project-dir run-id]
@@ -107,7 +108,8 @@
 ;; ---------------------------------------------------------------------------
 ;; Public API
 
-(defn analyze
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  analyze
   "Analyze a completed VSDD run and produce recommendations.
 
    Config:

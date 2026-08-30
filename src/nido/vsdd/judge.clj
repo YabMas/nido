@@ -2,7 +2,8 @@
   "Verdict parsing for the VSDD judge."
   (:require [clojure.string :as str]))
 
-(defn parse-verdict
+(defn ^{:malli/schema [:=> [:cat :string] :Verdict]}
+  parse-verdict
   "Extract verdict from judge output.
    Returns {:verdict :keyword :reasoning string}.
 
@@ -30,7 +31,8 @@
       :else
       {:verdict :unknown :reasoning (str output)})))
 
-(defn build-judge-prompt
+(defn ^{:malli/schema [:=> [:cat :map] :string]}
+  build-judge-prompt
   "Build the judge prompt from a critic report."
   [{:keys [report-edn module-path iteration max-iterations]}]
   (str "DO NOT use any tools. Just read this prompt and respond with a verdict.\n"
