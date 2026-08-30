@@ -3,8 +3,8 @@
    stage, close a workstream. Resolves the target workstream by id or by Notion
    external ref (BR-####). Used by the triage skill's dual-write and by humans."
   (:require
-   [nido.coordinator.report :as report]
-   [nido.coordinator.workstream :as ws]
+   [nido.coordinator.record.report :as report]
+   [nido.coordinator.record.workstream :as ws]
    [nido.platform.task-args :as task-args]
    [nido.coordinator.work :as work]))
 
@@ -42,7 +42,7 @@
 
 (defn ref-add*
   "Stamp an external ref. For :adapter github this also files the :pr-opened
-   ledger event (nido.coordinator.workstream/add-ref!), so :summary — the design-
+   ledger event (nido.coordinator.record.workstream/add-ref!), so :summary — the design-
    terms line nido cannot write for itself — belongs on this call."
   [{:keys [project adapter id url title summary] :as opts}]
   (ws/add-ref! (keyword project) (resolve-ws-id opts)

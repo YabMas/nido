@@ -21,10 +21,10 @@
 
    Cwd resolution lives here rather than in nido.notion.followups: the notion
    namespace stays a pure config+API layer, and the session lookup is wiring —
-   the same reason nido.coordinator.scratch keeps its wiring at the task layer."
+   the same reason nido.coordinator.lane.scratch keeps its wiring at the task layer."
   (:require
    [clojure.string :as str]
-   [nido.coordinator.state :as cstate]
+   [nido.coordinator.record.state :as cstate]
    [nido.platform.io :as io]
    [nido.notion.followups :as followups]
    [nido.notion.client :as client]

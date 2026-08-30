@@ -3,8 +3,8 @@
   (:require
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
-   [nido.coordinator.standing :as standing]
-   [nido.coordinator.workstream :as cws]
+   [nido.coordinator.record.standing :as standing]
+   [nido.coordinator.record.workstream :as cws]
    [nido.design.check :as design]
    [nido.review.stages :as stages]
    [nido.session.lifecycle :as lifecycle]

@@ -6,11 +6,11 @@
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
    [nido.platform.core :as core]
-   [nido.coordinator.pickup :as pickup]
-   [nido.coordinator.scratch :as scratch]
-   [nido.coordinator.state :as cstate]
-   [nido.coordinator.triggers]
-   [nido.coordinator.workstream :as workstream]
+   [nido.coordinator.lane.pickup :as pickup]
+   [nido.coordinator.lane.scratch :as scratch]
+   [nido.coordinator.record.state :as cstate]
+   [nido.coordinator.record.triggers]
+   [nido.coordinator.record.workstream :as workstream]
    [nido.notion.client :as client]
    [nido.platform.project :as project]
    [nido.ui.dev]
@@ -419,7 +419,7 @@
     (is (= :ops (:modal state')))))
 
 (deftest ops-overlay-routes-to-the-levers
-  (with-redefs [nido.coordinator.halt/halted? (fn [] false)]
+  (with-redefs [nido.coordinator.daemon.halt/halted? (fn [] false)]
     (let [state {:screen :board :project "p" :origin :all :modal :ops}
           [s-h _] (#'tui/update-fn state (msg/key-press "h"))
           [s-esc _] (#'tui/update-fn state (msg/key-press "escape"))]
@@ -427,7 +427,7 @@
       (is (nil? (:modal s-esc))))))
 
 (deftest ops-overlay-routes-c-to-clear-breaker
-  (with-redefs [nido.coordinator.breakers/tripped-triggers
+  (with-redefs [nido.coordinator.daemon.breakers/tripped-triggers
                 (constantly [{:project :brian :trigger :t :info {}}])]
     (let [state {:screen :board :project "p" :origin :all :modal :ops}
           [s' _] (#'tui/update-fn state (msg/key-press "c"))]
@@ -435,7 +435,7 @@
 
 (deftest ops-overlay-routes-f-to-fire-trigger
   (with-redefs [nido.platform.project/list-projects (constantly {"brian" {}})
-                nido.coordinator.triggers/load-for-project (constantly [])]
+                nido.coordinator.record.triggers/load-for-project (constantly [])]
     (let [state {:screen :board :project "p" :origin :all :modal :ops}
           [s' _] (#'tui/update-fn state (msg/key-press "f"))]
       (is (= :fire-pick-trigger (:modal s'))))))

@@ -276,7 +276,7 @@ bb nido:ticket:append :project <project> :br <BR-####> :kind implementation-comp
 
 **`:design-delta` is a field on this event, never its own ledger entry.** The
 merge lane classifies a Run by the *latest* ledger kind
-(`nido.coordinator.ship/classify-outcome`), so appending a separate entry after
+(`nido.coordinator.lane.ship/classify-outcome`), so appending a separate entry after
 this one would hide the `:implementation-completed` fingerprint and park a
 perfectly healthy branch as blocked.
 

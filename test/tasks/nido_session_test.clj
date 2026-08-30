@@ -2,7 +2,7 @@
   (:require
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
-   [nido.coordinator.scratch :as scratch]
+   [nido.coordinator.lane.scratch :as scratch]
    [nido.session.fleet :as fleet]
    [nido.session.lifecycle :as lifecycle]
    [nido.session.state :as state]

@@ -11,10 +11,10 @@
    only in prose is followed by whoever read the prose."
   (:require
    [clojure.string :as str]
-   [nido.coordinator.standing :as standing]
+   [nido.coordinator.record.standing :as standing]
    [nido.design.check :as design]
    [tasks.nido-design :as nido-design]
-   [nido.coordinator.workstream :as cws]
+   [nido.coordinator.record.workstream :as cws]
    [nido.review.stages :as stages]
    [nido.session.lifecycle :as lifecycle]
    [nido.platform.task-args :as task-args]))

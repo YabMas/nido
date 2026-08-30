@@ -1,7 +1,7 @@
 (ns tasks.nido-scratch-test
   (:require
    [clojure.test :refer [deftest is]]
-   [nido.coordinator.scratch :as scratch]
+   [nido.coordinator.lane.scratch :as scratch]
    [nido.session.lifecycle :as lifecycle]
    [tasks.nido-scratch :as task]))
 

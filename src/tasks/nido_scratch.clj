@@ -7,7 +7,7 @@
    a re-run the repair for records stamped before weight was derived."
   (:require
    [clojure.string :as str]
-   [nido.coordinator.scratch :as scratch]
+   [nido.coordinator.lane.scratch :as scratch]
    [nido.session.lifecycle :as lifecycle]
    [nido.platform.task-args :as task-args]))
 

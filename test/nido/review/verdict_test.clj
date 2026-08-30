@@ -3,7 +3,7 @@
   (:require
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
-   [nido.coordinator.report :as report]
+   [nido.coordinator.record.report :as report]
    [nido.review.verdict :as verdict]
    [tasks.nido-review :as nido-review]))
 

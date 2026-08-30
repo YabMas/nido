@@ -6,27 +6,27 @@
    [clojure.string :as str]
    [clojure.test :refer [deftest is use-fixtures]]
    [nido.platform.core :as nido-core]
-   [nido.coordinator.agent :as agent]
-   [nido.coordinator.events]
-   [nido.coordinator.sources.notion]
+   [nido.coordinator.daemon.agent :as agent]
+   [nido.coordinator.source.events]
+   [nido.coordinator.source.notion]
    [nido.platform.io]
-   [nido.coordinator.clock :as clock]
+   [nido.coordinator.record.clock :as clock]
    [nido.boot.core :as core]
-   [nido.coordinator.executor :as executor]
-   [nido.coordinator.github-merge :as github-merge]
+   [nido.coordinator.daemon.executor :as executor]
+   [nido.coordinator.lane.github-merge :as github-merge]
    [nido.github.config :as gh-config]
-   [nido.coordinator.anomaly :as anomaly]
-   [nido.coordinator.breakers :as breakers]
-   [nido.coordinator.intake :as intake]
-   [nido.coordinator.notify :as notify]
-   [nido.coordinator.runs :as runs]
-   [nido.coordinator.session :as session]
-   [nido.coordinator.ship :as ship]
-   [nido.coordinator.spawn :as spawn]
-   [nido.coordinator.state :as cstate]
-   [nido.coordinator.tickets :as tickets]
-   [nido.coordinator.status-file :as status-file]
-   [nido.coordinator.workstream :as ws]
+   [nido.coordinator.daemon.anomaly :as anomaly]
+   [nido.coordinator.daemon.breakers :as breakers]
+   [nido.coordinator.lane.intake :as intake]
+   [nido.coordinator.daemon.notify :as notify]
+   [nido.coordinator.record.runs :as runs]
+   [nido.coordinator.record.session :as session]
+   [nido.coordinator.lane.ship :as ship]
+   [nido.coordinator.lane.spawn :as spawn]
+   [nido.coordinator.record.state :as cstate]
+   [nido.coordinator.record.tickets :as tickets]
+   [nido.coordinator.record.status-file :as status-file]
+   [nido.coordinator.record.workstream :as ws]
    [nido.platform.project :as project]
    [nido.session.profiles :as profiles]
    [nido.coordinator.work :as work]))
@@ -77,7 +77,7 @@
       (let [triggers {:brian [{:name :triage-new
                                :source {:type :notion-view :view :new-reports :poll "2m"}}
                               {:name :plan-bug :source {:type :manual}}]}
-            _        (nido.coordinator.sources.notion/register!)
+            _        (nido.coordinator.source.notion/register!)
             configs  (#'core/discover-source-configs triggers)]
         (is (= [{:type :notion-view :view :new-reports :poll "2m" :project :brian}]
                (filter #(= :new-reports (:view %)) configs))
@@ -93,7 +93,7 @@
   ;; source, and by construction no trigger declares them — so nothing spawns.
   (let [triggers {:brian [{:name :triage-new
                            :source {:type :notion-view :view :new-reports :poll "2m"}}]}]
-    (is (empty? (nido.coordinator.events/route
+    (is (empty? (nido.coordinator.source.events/route
                   {:broadcast {:type :notion-view
                                :source-config {:type :notion-view :view :in-review
                                                :project :brian :poll "5m"}
@@ -393,7 +393,7 @@
       (let [sid-passed    (atom :unset)
             sid-at-launch (atom :unset)]
         (with-redefs [runs/spawn-session-for-run! (fn [_] nil)
-                      nido.coordinator.agent/launch!
+                      nido.coordinator.daemon.agent/launch!
                       (fn [opts]
                         (reset! sid-passed (:claude-session-id opts))
                         (reset! sid-at-launch (:claude-session-id (runs/read-run "rs")))
@@ -425,7 +425,7 @@
                         :state :queued :state-history [{:at "t" :state :queued}]
                         :artifacts [] :error nil})
       (with-redefs [runs/spawn-session-for-run! (fn [_] (throw (ex-info "boom: worktree create failed" {})))
-                    nido.coordinator.agent/launch! (fn [_] {:exit-code 0 :timed-out? false}) ; unreached
+                    nido.coordinator.daemon.agent/launch! (fn [_] {:exit-code 0 :timed-out? false}) ; unreached
                     cstate/run-session-home-link (constantly "/tmp/nope")
                     anomaly/record-failure      (fn [det _] det)
                     breakers/record-failure!    (fn [& _] nil)]
@@ -455,7 +455,7 @@
                         :state :queued :state-history [{:at "t" :state :queued}]
                         :artifacts [] :error nil})
       (with-redefs [runs/spawn-session-for-run! (fn [_] nil)
-                    nido.coordinator.agent/launch!
+                    nido.coordinator.daemon.agent/launch!
                     (fn [_] {:exit-code 0 :timed-out? false :num-turns 0
                              :result-text "Unknown command: /triage-bug"})
                     cstate/run-session-home-link (constantly "/tmp/nope")
@@ -548,7 +548,7 @@
                             :priority 0 :session-profile :lite :uncapped? false
                             :state :queued :state-history [{:at "t" :state :queued}]
                             :artifacts [] :error nil})
-          (with-redefs [nido.coordinator.agent/launch!
+          (with-redefs [nido.coordinator.daemon.agent/launch!
                         (fn [_] {:exit-code 0 :timed-out? false :num-turns 5})]
             (#'core/run-blocking! "rdone"))
           (is (= :done (:state (runs/read-run "rdone"))))
@@ -565,7 +565,7 @@
                             :priority 0 :session-profile :lite :uncapped? false
                             :state :queued :state-history [{:at "t" :state :queued}]
                             :artifacts [] :error nil})
-          (with-redefs [nido.coordinator.agent/launch!
+          (with-redefs [nido.coordinator.daemon.agent/launch!
                         (fn [_] {:exit-code 0 :timed-out? false :num-turns 5})]
             (#'core/run-blocking! "rpark"))
           (is (= :awaiting-review (:state (runs/read-run "rpark"))))
@@ -585,7 +585,7 @@
                         :state :queued :state-history [{:at "t" :state :queued}]
                         :artifacts [] :error nil})
       (with-redefs [runs/spawn-session-for-run! (fn [_] nil)
-                    nido.coordinator.agent/launch! (fn [_] {:exit-code 0 :timed-out? false})
+                    nido.coordinator.daemon.agent/launch! (fn [_] {:exit-code 0 :timed-out? false})
                     cstate/run-session-home-link (constantly "/tmp/nope")
                     status-file/read-status (fn [_] nil)
                     anomaly/record-failure      (fn [det _] det)
@@ -618,7 +618,7 @@
                           :state :queued :state-history [{:at "t" :state :queued}]
                           :artifacts [] :error nil})
         (with-redefs [runs/spawn-session-for-run! (fn [_] nil)
-                      nido.coordinator.agent/launch! (fn [opts] (reset! launch-of opts) {:exit-code 0})
+                      nido.coordinator.daemon.agent/launch! (fn [opts] (reset! launch-of opts) {:exit-code 0})
                       cstate/run-session-home-link (constantly "/tmp/nope")
                       notify/on-plan-spawn! (fn [run] (reset! notified (:id run)))
                       breakers/record-success! (fn [& _] nil)]
@@ -745,7 +745,7 @@
 
 (deftest ship-envelope-routes-to-handle-ship
   (let [seen (atom nil)]
-    (with-redefs [nido.coordinator.ship/handle-ship! (fn [env] (reset! seen env) nil)]
+    (with-redefs [nido.coordinator.lane.ship/handle-ship! (fn [env] (reset! seen env) nil)]
       (#'nido.boot.core/dispatch-envelope! {:type :ship :project :brian :session "s" :ws-id "w"} {})
       (is (= :ship (:type @seen))))))
 
@@ -757,7 +757,7 @@
   ;; (The :manual envelope will fall through to the real process-envelope!, which
   ;; may throw internally — that's fine; we only assert on the tripwire.)
   (let [handle-ship-called (atom false)]
-    (with-redefs [nido.coordinator.ship/handle-ship! (fn [_] (reset! handle-ship-called :ship!))]
+    (with-redefs [nido.coordinator.lane.ship/handle-ship! (fn [_] (reset! handle-ship-called :ship!))]
       (try
         (#'nido.boot.core/dispatch-envelope! {:type :manual :payload {}} {})
         (catch Throwable _

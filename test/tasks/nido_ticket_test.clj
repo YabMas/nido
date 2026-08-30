@@ -1,9 +1,9 @@
 (ns tasks.nido-ticket-test
   (:require
    [clojure.test :refer [deftest is]]
-   [nido.coordinator.facets :as facets]
-   [nido.coordinator.tickets :as tickets]
-   [nido.coordinator.workstream :as workstream]
+   [nido.coordinator.lane.facets :as facets]
+   [nido.coordinator.record.tickets :as tickets]
+   [nido.coordinator.record.workstream :as workstream]
    [nido.coordinator.work :as work]
    [tasks.nido-ticket :as t]))
 

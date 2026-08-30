@@ -1,7 +1,7 @@
 (ns nido.coordinator.work
   "The work-plane core: the single vocabulary every surface (TUI, web) wraps.
 
-   Sits ABOVE the coordinator record layer (nido.coordinator.workstream/.session/
+   Sits ABOVE the coordinator record layer (nido.coordinator.record.workstream/.session/
    .workstreams-view/.promote/.scratch/.tickets) and presents the ONE coherent
    model from docs/superpowers/specs/2026-06-16-coherent-workstream-core-and-thin-
    surfaces-design.md: a single stage spine (intake→triage→ready→in-progress→done),
@@ -13,27 +13,27 @@
    [clojure.set :as set]
    [clojure.string :as str]
    [nido.platform.config :as config]
-   [nido.coordinator.clock :as clock]
-   [nido.coordinator.facets :as facets]
-   [nido.coordinator.notion-cache :as notion-cache]
-   [nido.coordinator.pickup :as pickup]
-   [nido.coordinator.promote :as promote]
-   [nido.coordinator.report :as report]
-   [nido.coordinator.resume :as resume]
-   [nido.coordinator.runs :as runs]
-   [nido.coordinator.scratch :as scratch]
-   [nido.coordinator.session :as csession]
-   [nido.coordinator.spawn :as spawn]
-   [nido.coordinator.state :as cstate]
-   [nido.coordinator.tickets :as tickets]
-   [nido.coordinator.triggers :as triggers]
+   [nido.coordinator.record.clock :as clock]
+   [nido.coordinator.lane.facets :as facets]
+   [nido.coordinator.source.notion-cache :as notion-cache]
+   [nido.coordinator.lane.pickup :as pickup]
+   [nido.coordinator.lane.promote :as promote]
+   [nido.coordinator.record.report :as report]
+   [nido.coordinator.lane.resume :as resume]
+   [nido.coordinator.record.runs :as runs]
+   [nido.coordinator.lane.scratch :as scratch]
+   [nido.coordinator.record.session :as csession]
+   [nido.coordinator.lane.spawn :as spawn]
+   [nido.coordinator.record.state :as cstate]
+   [nido.coordinator.record.tickets :as tickets]
+   [nido.coordinator.record.triggers :as triggers]
    [nido.platform.io :as io]
-   [nido.coordinator.standing :as standing]
-   [nido.coordinator.workstream :as cws]
-   [nido.coordinator.workstreams-view :as wsv]
+   [nido.coordinator.record.standing :as standing]
+   [nido.coordinator.record.workstream :as cws]
+   [nido.coordinator.view.workstreams :as wsv]
    [nido.notion.client :as notion]
    [nido.notion.views :as views]
-   [nido.coordinator.pipeline :as pipeline]
+   [nido.coordinator.lane.pipeline :as pipeline]
    [nido.slack.client :as slack]
    [nido.platform.process :as proc]
    [nido.platform.project :as project]
@@ -1145,7 +1145,7 @@
         (if (:error page)
           ;; Can't read the current App Domain tags, so we can't honor "additive, never
           ;; clobber" — fail closed and leave the ticket parked for retry rather than
-          ;; write with incomplete data (see nido.coordinator.notify/merged-participants
+          ;; write with incomplete data (see nido.coordinator.daemon.notify/merged-participants
           ;; for the same additive-write contract).
           {:decision :notion-failed :error (:error page)}
           (let [current (keep :name (get-in page [:properties (keyword "App Domain") :multi_select]))

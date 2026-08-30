@@ -5,9 +5,9 @@
    drives the branch home with /drive-home, serialized one at a time. See
    docs/superpowers/specs/2026-06-30-local-merge-queue-design.md."
   (:require
-   [nido.coordinator.pid :as pid]
-   [nido.coordinator.queue :as queue]
-   [nido.coordinator.session :as session]
+   [nido.coordinator.daemon.pid :as pid]
+   [nido.coordinator.source.queue :as queue]
+   [nido.coordinator.record.session :as session]
    [nido.session.lifecycle :as lifecycle]
    [nido.platform.task-args :as task-args]))
 

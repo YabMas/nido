@@ -2,8 +2,8 @@
   "Hiccup view functions for the nido dashboard."
   (:require [clojure.string :as str]
             [hiccup2.core :as h]
-            [nido.coordinator.report :as report]
-            [nido.coordinator.triggers :as triggers]
+            [nido.coordinator.record.report :as report]
+            [nido.coordinator.record.triggers :as triggers]
             [nido.platform.process :as process]
             [nido.ui.markdown :as md]
             [nido.ui.view-state :as view-state]
@@ -1885,7 +1885,7 @@
    workstream IS; this says how it got there — which stages produced something,
    which were skipped, and which it has been sent back to. The two are the same
    ledger read two ways and cannot disagree, because both fold the one
-   correspondence nido.coordinator.pipeline keeps.
+   correspondence nido.coordinator.lane.pipeline keeps.
 
    `report-here?` says whether the open entry belongs to the expanded stage. When
    it does the viewer renders inside the expansion, next to the row that opened

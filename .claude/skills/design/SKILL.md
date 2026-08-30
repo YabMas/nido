@@ -345,7 +345,7 @@ interface that costs about what it hides. A dependency read as `:on-interface` i
 refuted by a caller reaching past it.
 
 **The set is extendable, and deliberately small to start.** A lens nobody uses is
-noise in every prompt. `nido.coordinator.report/lenses` is the registry; adding a
+noise in every prompt. `nido.coordinator.record.report/lenses` is the registry; adding a
 perspective is adding an entry, and the schema, the prompts and the weakening
 detector all derive from it.
 

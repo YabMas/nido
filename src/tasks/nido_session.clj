@@ -31,7 +31,7 @@
      bb nido:session:list    :project brian"
   (:require
    [clojure.string :as str]
-   [nido.coordinator.scratch :as scratch]
+   [nido.coordinator.lane.scratch :as scratch]
    [nido.platform.process :as process]
    [nido.platform.task-args :as task-args]
    [nido.session.fleet :as fleet]

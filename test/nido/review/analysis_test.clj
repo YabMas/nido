@@ -3,7 +3,7 @@
    [clojure.string :as str]
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
-   [nido.coordinator.queue :as queue]
+   [nido.coordinator.source.queue :as queue]
    [nido.review.analysis :as analysis]))
 
 (def a-run

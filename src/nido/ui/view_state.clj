@@ -3,7 +3,7 @@
    site derives from. Pure given the request map — no IO."
   (:require
    [clojure.string :as str]
-   [nido.coordinator.pipeline :as pipeline]))
+   [nido.coordinator.lane.pipeline :as pipeline]))
 
 (defn- pairs [query-string]
   (when query-string

@@ -476,7 +476,7 @@ poll's page snapshot is the whole point.
 This is what makes Notion's own lifecycle visible to nido. A ticket whose status
 reaches a terminal value projects to the `:done` stage and leaves the Active band
 — **"Review" included**, since that is the handoff where nido's involvement ends.
-The projection is stateless (`nido.coordinator.session/notion-stage`): it writes
+The projection is stateless (`nido.coordinator.record.session/notion-stage`): it writes
 nothing, so a ticket bounced back to In progress simply returns to the board.
 Keep the view narrow. Widening it to "Code Review" would put every merged-and-
 closed workstream back on the Active band, because a Notion-driven row ignores

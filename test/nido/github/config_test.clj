@@ -3,7 +3,7 @@
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
    [nido.platform.core :as core]
-   [nido.coordinator.state :as cstate]
+   [nido.coordinator.record.state :as cstate]
    [nido.github.config :as gh-config]
    [nido.platform.io :as io]))
 

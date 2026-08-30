@@ -2,12 +2,12 @@
   "bb task entry points for the per-ticket triage record (the skill's interface)."
   (:require
    [clojure.pprint :as pprint]
-   [nido.coordinator.facets :as facets]
-   [nido.coordinator.promote :as promote]
-   [nido.coordinator.report :as report]
-   [nido.coordinator.tickets :as tickets]
-   [nido.coordinator.tickets-view :as tickets-view]
-   [nido.coordinator.workstream :as workstream]
+   [nido.coordinator.lane.facets :as facets]
+   [nido.coordinator.lane.promote :as promote]
+   [nido.coordinator.record.report :as report]
+   [nido.coordinator.record.tickets :as tickets]
+   [nido.coordinator.view.tickets :as tickets-view]
+   [nido.coordinator.record.workstream :as workstream]
    [nido.platform.task-args :as task-args]
    [nido.coordinator.work :as work]))
 

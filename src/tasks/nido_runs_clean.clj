@@ -12,7 +12,7 @@
   (:require
    [clojure.edn :as edn]
    [clojure.string :as str]
-   [nido.coordinator.runs-clean :as clean]
+   [nido.coordinator.lane.runs-clean :as clean]
    [nido.platform.task-args :as task-args]))
 
 (defn- short-path

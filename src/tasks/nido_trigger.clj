@@ -6,10 +6,10 @@
    name is a positional; payload fields are kwargs minus the reserved
    :project key."
   (:require
-   [nido.coordinator.breakers :as breakers]
-   [nido.coordinator.queue :as queue]
-   [nido.coordinator.state :as cstate]
-   [nido.coordinator.triggers :as triggers]
+   [nido.coordinator.daemon.breakers :as breakers]
+   [nido.coordinator.source.queue :as queue]
+   [nido.coordinator.record.state :as cstate]
+   [nido.coordinator.record.triggers :as triggers]
    [nido.platform.task-args :as task-args]))
 
 (defn fire

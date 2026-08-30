@@ -4,8 +4,8 @@
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
    [nido.platform.core :as core]
-   [nido.coordinator.state :as cstate]
-   [nido.coordinator.workstream :as ws]
+   [nido.coordinator.record.state :as cstate]
+   [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.work]
    [tasks.nido-workstream :as task]))
 

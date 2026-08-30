@@ -8,8 +8,8 @@
    [babashka.fs :as fs]
    [clojure.pprint :as pp]
    [clojure.string :as str]
-   [nido.coordinator.runs :as runs]
-   [nido.coordinator.state :as cstate]
+   [nido.coordinator.record.runs :as runs]
+   [nido.coordinator.record.state :as cstate]
    [nido.platform.task-args :as task-args]))
 
 (defn- all-runs []

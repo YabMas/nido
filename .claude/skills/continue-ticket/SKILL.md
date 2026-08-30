@@ -54,7 +54,7 @@ access. The CLI carries its own credential. See
 `~/Code/nido/docs/reference/notion-access.md`.
 
 On a pickup, nido has usually already transcribed the ticket onto the ledger as
-a `:ticket` entry at provision time (`nido.coordinator.brief`) — read that, and
+a `:ticket` entry at provision time (`nido.coordinator.lane.brief`) — read that, and
 treat the live ticket as authoritative where they differ.
 
 This is not only for the empty ledger. A triage entry is a twenty-minute

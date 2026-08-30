@@ -5,10 +5,10 @@
    mirroring nido.coordinator.work/all-machine-rows' split so the state logic is testable
    without disk."
   (:require
-   [nido.coordinator.breakers :as breakers]
-   [nido.coordinator.halt :as halt]
-   [nido.coordinator.pid :as pid]
-   [nido.coordinator.state :as cstate]
+   [nido.coordinator.daemon.breakers :as breakers]
+   [nido.coordinator.daemon.halt :as halt]
+   [nido.coordinator.daemon.pid :as pid]
+   [nido.coordinator.record.state :as cstate]
    [nido.platform.io :as io]))
 
 (defn daemon-health

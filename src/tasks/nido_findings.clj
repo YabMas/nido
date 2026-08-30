@@ -2,7 +2,7 @@
   "bb task entry points for the staging findings round."
   (:require
    [clojure.pprint :as pprint]
-   [nido.coordinator.findings :as findings]
+   [nido.coordinator.lane.findings :as findings]
    [nido.platform.io :as io]
    [nido.platform.task-args :as task-args]))
 

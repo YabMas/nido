@@ -13,9 +13,9 @@
    [babashka.fs :as fs]
    [cheshire.core :as json]
    [clojure.string :as str]
-   [nido.coordinator.agent :as agent]
-   [nido.coordinator.report :as report]
-   [nido.coordinator.state :as cstate]
+   [nido.coordinator.daemon.agent :as agent]
+   [nido.coordinator.record.report :as report]
+   [nido.coordinator.record.state :as cstate]
    [nido.review.stages :as stages]))
 
 (def ^:private fenced-json-re #"(?s)```json\s*(\{.*?\})\s*```")

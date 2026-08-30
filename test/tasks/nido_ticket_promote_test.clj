@@ -1,7 +1,7 @@
 (ns tasks.nido-ticket-promote-test
   (:require
    [clojure.test :refer [deftest is]]
-   [nido.coordinator.promote :as promote]
+   [nido.coordinator.lane.promote :as promote]
    [tasks.nido-ticket :as nido-ticket]))
 
 (deftest promote-cmd-passes-project-and-br-and-prints

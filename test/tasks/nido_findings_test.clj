@@ -2,7 +2,7 @@
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
-   [nido.coordinator.findings :as findings]
+   [nido.coordinator.lane.findings :as findings]
    [tasks.nido-findings :as t]))
 
 (deftest file-cmd-reads-edn-and-calls-file!

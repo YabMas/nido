@@ -3,7 +3,7 @@
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
-   [nido.coordinator.state :as cstate]
+   [nido.coordinator.record.state :as cstate]
    [nido.review.cache :as cache]))
 
 (defn- with-tmp [f]

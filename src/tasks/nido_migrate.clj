@@ -1,6 +1,6 @@
 (ns tasks.nido-migrate
   (:require
-   [nido.coordinator.migrate :as migrate]
+   [nido.coordinator.lane.migrate :as migrate]
    [nido.platform.task-args :as task-args]))
 
 (defn migrate-cmd

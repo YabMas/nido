@@ -4,9 +4,9 @@
    The allow-list is empty by default and this is the only way to change it, so
    the whole of phase three's blast radius is what somebody has typed here."
   (:require
-   [nido.coordinator.drive :as drive]
-   [nido.coordinator.workstream :as ws]
-   [nido.coordinator.pipeline :as pipeline]
+   [nido.coordinator.lane.drive :as drive]
+   [nido.coordinator.record.workstream :as ws]
+   [nido.coordinator.lane.pipeline :as pipeline]
    [nido.platform.task-args :as task-args]))
 
 (defn- require-opt [opts k]

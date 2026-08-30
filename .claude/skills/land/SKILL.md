@@ -501,7 +501,7 @@ it, `/drive-home` records the outcome — `:implementation-completed` or
 ## What this skill does NOT do
 
 - **No ledger events.** It reports; `/drive-home` records. Two writers on one
-  workstream is how `nido.coordinator.ship/classify-outcome` ends up reading the
+  workstream is how `nido.coordinator.lane.ship/classify-outcome` ends up reading the
   wrong fingerprint and parking a healthy branch as blocked.
 - **No publishing.** It expects the PRs to exist; `/prepare-draft-pr` creates
   them and stamps the `:github` ref the merge poller correlates on.

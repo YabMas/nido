@@ -26,7 +26,7 @@
   (:require
    [babashka.fs :as fs]
    [clojure.edn :as edn]
-   [nido.coordinator.state :as cstate]))
+   [nido.coordinator.record.state :as cstate]))
 
 (defn path
   [project ws-id]

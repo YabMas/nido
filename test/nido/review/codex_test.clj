@@ -4,7 +4,7 @@
    [nido.review.codex :as codex]
    [nido.review.prompts :as prompts]
    [nido.vsdd.jj :as jj]
-   [nido.coordinator.state :as cstate]
+   [nido.coordinator.record.state :as cstate]
    [babashka.fs :as fs]
    [cheshire.core :as json]
    [clojure.java.io :as io]))

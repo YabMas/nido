@@ -353,7 +353,7 @@ manual path is a choice rather than an omission. By hand:
 #    the phase is not ready — that is the check doing its job.
 # 2. Re-open the settled workstream. reopen! is what clears :closed;
 #    stage:advance alone does not, and :in-progress runs the full promote gesture.
-bb -e '(require (quote [nido.coordinator.workstream :as ws]))
+bb -e '(require (quote [nido.coordinator.record.workstream :as ws]))
        (ws/reopen! :<project> "<ws-id>" :in-progress)'
 
 # 3. Amend the design record: append a new :design carrying :supersedes

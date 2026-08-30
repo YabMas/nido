@@ -5,7 +5,7 @@
    [clojure.test :refer [deftest is]]
    [nido.platform.core :as core]
    [nido.coordinator.work :as work]
-   [nido.coordinator.workstream :as ws]
+   [nido.coordinator.record.workstream :as ws]
    [nido.ui.server :as server]))
 
 (defn- with-one-proposal

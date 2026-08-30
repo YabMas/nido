@@ -24,8 +24,8 @@
    `tasks.nido-review/append-review-entry!` does for the ledger."
   (:require
    [babashka.fs :as fs]
-   [nido.coordinator.queue :as queue]
-   [nido.coordinator.state :as cstate]))
+   [nido.coordinator.source.queue :as queue]
+   [nido.coordinator.record.state :as cstate]))
 
 (def target
   "Where the envelope is aimed. `:nido` is the project whose triggers.edn

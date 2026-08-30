@@ -1,8 +1,8 @@
 (ns tasks.nido-pickup
   "bb task entry point for pickup: drive a Notion ticket by URL or id."
   (:require
-   [nido.coordinator.pickup :as pickup]
-   [nido.coordinator.state :as cstate]
+   [nido.coordinator.lane.pickup :as pickup]
+   [nido.coordinator.record.state :as cstate]
    [nido.notion.client :as client]
    [nido.platform.task-args :as task-args]))
 

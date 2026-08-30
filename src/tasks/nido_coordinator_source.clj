@@ -1,9 +1,9 @@
 (ns tasks.nido-coordinator-source
   "Bb task entry points for source-instance inspection + reset (Stage 5)."
   (:require
-   [nido.coordinator.sources :as sources]
-   [nido.coordinator.sources.notion :as nsource]
-   [nido.coordinator.sources.state :as sst]
+   [nido.coordinator.source.registry :as sources]
+   [nido.coordinator.source.notion :as nsource]
+   [nido.coordinator.source.state :as sst]
    [nido.platform.task-args :as task-args]))
 
 (defn list-cmd

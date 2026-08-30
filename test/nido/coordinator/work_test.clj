@@ -6,18 +6,18 @@
    [clojure.test :refer [deftest is]]
    [nido.platform.core :as core]
    [nido.platform.config]
-   [nido.coordinator.facets]
-   [nido.coordinator.pickup]
-   [nido.coordinator.promote]
-   [nido.coordinator.resume :as resume]
-   [nido.coordinator.runs :as runs]
-   [nido.coordinator.session :as session]
-   [nido.coordinator.sources.state]
-   [nido.coordinator.spawn]
-   [nido.coordinator.state :as cstate]
-   [nido.coordinator.tickets :as tickets]
-   [nido.coordinator.triggers]
-   [nido.coordinator.workstream :as workstream]
+   [nido.coordinator.lane.facets]
+   [nido.coordinator.lane.pickup]
+   [nido.coordinator.lane.promote]
+   [nido.coordinator.lane.resume :as resume]
+   [nido.coordinator.record.runs :as runs]
+   [nido.coordinator.record.session :as session]
+   [nido.coordinator.source.state]
+   [nido.coordinator.lane.spawn]
+   [nido.coordinator.record.state :as cstate]
+   [nido.coordinator.record.tickets :as tickets]
+   [nido.coordinator.record.triggers]
+   [nido.coordinator.record.workstream :as workstream]
    [nido.platform.io :as nido-io]
    [nido.notion.client :as notion-client]
    [nido.notion.views :as views]
@@ -400,7 +400,7 @@
     (fn [_]
       (let [w (workstream/create! :brian {:stage :triaging :external-refs []})
             calls (atom [])]
-        (with-redefs [nido.coordinator.promote/promote-workstream!
+        (with-redefs [nido.coordinator.lane.promote/promote-workstream!
                       (fn [p id] (swap! calls conj [p id]) {:decision :promote})]
           (is (= {:decision :promote} (work/set-stage! :brian (:id w) :in-progress)))
           (is (= [[:brian (:id w)]] @calls) "delegates to the shared promote gesture"))))))
@@ -979,7 +979,7 @@
     (fn [_]
       (let [w (workstream/create! :brian {:stage :triaging :external-refs []})
             calls (atom [])]
-        (with-redefs [nido.coordinator.promote/promote-workstream!
+        (with-redefs [nido.coordinator.lane.promote/promote-workstream!
                       (fn [p id] (swap! calls conj [p id]) {:decision :promote})]
           (is (= {:decision :promote} (work/resolve-gate! :brian (:id w) :promote)))
           (is (= [[:brian (:id w)]] @calls)))))))
@@ -1055,7 +1055,7 @@
     (fn [_]
       (let [w (workstream/create! :brian {:stage :triaging :external-refs []})
             calls (atom nil)]
-        (with-redefs [nido.coordinator.resume/resume!
+        (with-redefs [nido.coordinator.lane.resume/resume!
                       (fn [p id input] (reset! calls [p id input]) {:resumed "auto"})]
           (is (= {:resumed "auto"} (work/resolve-gate! :brian (:id w) :reply "do it")))
           (is (= [:brian (:id w) "do it"] @calls)))))))
@@ -1071,8 +1071,8 @@
             resumed (atom false)]
         (tickets/open! :brian "BR-A9" {:title "t"})
         (tickets/set-status! :brian "BR-A9" :awaiting-input)
-        (with-redefs [nido.coordinator.resume/resume! (fn [& _] (reset! resumed true) {:resumed "x"})
-                      nido.coordinator.facets/refresh-for-ticket! (fn [& _] nil)]
+        (with-redefs [nido.coordinator.lane.resume/resume! (fn [& _] (reset! resumed true) {:resumed "x"})
+                      nido.coordinator.lane.facets/refresh-for-ticket! (fn [& _] nil)]
           (is (= {:decision :applied} (work/resolve-gate! :brian (:id w) :apply)))
           (is (false? @resumed) "Apply does NOT resume a conversation")
           (is (= :triaged (tickets/status :brian "BR-A9"))
@@ -1161,11 +1161,11 @@
         (is (= "the app crashed on save" (:markdown r)))))))
 
 (deftest workstream-includes-its-report
-  (with-redefs [nido.coordinator.workstream/read-ws (fn [_ _] {:id "x"})
+  (with-redefs [nido.coordinator.record.workstream/read-ws (fn [_ _] {:id "x"})
                 work/latest-report (fn [_ _] {:kind :triage :at "t" :title "V" :markdown "# V"})
                 ;; minimal stubs so workstream's other projections don't throw:
-                nido.coordinator.session/list-sessions (fn [_ _] [])
-                nido.coordinator.workstreams-view/workstream-row (fn [_ _ & _] {:stage :triage :label "BR-7" :source :notion})]
+                nido.coordinator.record.session/list-sessions (fn [_ _] [])
+                nido.coordinator.view.workstreams/workstream-row (fn [_ _ & _] {:stage :triage :label "BR-7" :source :notion})]
     (is (= "# V" (-> (work/workstream "brian" "ws-1") :report :markdown)))))
 
 (deftest list-workstreams-rows-carry-facets
@@ -1507,7 +1507,7 @@
     (is (not (contains? s :facet-dims)) "facet-dims is gone")))
 
 (deftest environment-resolves-latest-live-heavy-session
-  (with-redefs [nido.coordinator.session/list-sessions
+  (with-redefs [nido.coordinator.record.session/list-sessions
                 (fn [_ _]
                   [{:name "triage-BR-1" :weight :light :substrate :live :created-at "2026-07-20T10:00:00Z"}
                    {:name "impl-BR-1"   :weight :heavy :substrate :live :created-at "2026-07-21T10:00:00Z"}
@@ -1516,13 +1516,13 @@
         "latest heavy session by :created-at")))
 
 (deftest environment-nil-when-no-heavy-session
-  (with-redefs [nido.coordinator.session/list-sessions
+  (with-redefs [nido.coordinator.record.session/list-sessions
                 (fn [_ _] [{:name "triage-BR-1" :weight :light :substrate :live :created-at "2026-07-20T10:00:00Z"}])]
     (is (nil? (work/environment :brian "ws-1"))
         "triage-only (light) workstream has no environment")))
 
 (deftest environment-excludes-archived-heavy
-  (with-redefs [nido.coordinator.session/list-sessions
+  (with-redefs [nido.coordinator.record.session/list-sessions
                 (fn [_ _]
                   [{:name "impl-old" :weight :heavy :substrate :archived :created-at "2026-07-22T10:00:00Z"}
                    {:name "impl-new" :weight :heavy :substrate :live     :created-at "2026-07-21T10:00:00Z"}])]
@@ -1682,7 +1682,7 @@
                                           :external-refs [{:adapter :notion :id "BR-B1" :title "t"}]})]
         (tickets/open! :brian "BR-B1" {:title "t"})
         (tickets/set-status! :brian "BR-B1" :awaiting-input)
-        (with-redefs [nido.coordinator.facets/refresh-for-ticket! (fn [& _] nil)]
+        (with-redefs [nido.coordinator.lane.facets/refresh-for-ticket! (fn [& _] nil)]
           (is (= {:decision :applied} (work/apply! :brian (:id w))))
           (is (= :triaged (tickets/status :brian "BR-B1"))))))))
 
@@ -1723,7 +1723,7 @@
                                                   {:multi_select [{:name "Teacher"}]}}})
                           notion-client/update-page-properties!
                           (fn [_pg p _tok] (reset! props p) {:ok true})
-                          nido.coordinator.facets/refresh-for-ticket! (fn [& _] nil)]
+                          nido.coordinator.lane.facets/refresh-for-ticket! (fn [& _] nil)]
               (let [r (work/apply! :brian (:id w))]
                 (is (= :applied (:decision r)))
                 (is (= {:people [{:id "955b4c25-7bce-4ca2-ab5e-d99acbcd423a"}]}
@@ -1748,7 +1748,7 @@
                           notion-client/retrieve-block-children (fn [_ _ _] {:results []})
                           notion-client/prepend-block-children!
                           (fn [_pg children _tok] (reset! prepended children) {:ok true})
-                          nido.coordinator.facets/refresh-for-ticket! (fn [& _] nil)]
+                          nido.coordinator.lane.facets/refresh-for-ticket! (fn [& _] nil)]
               ;; make the placement verify pass: first child after prepend is our callout
               (with-redefs [notion-client/retrieve-block-children
                             (fn [_ _ _] {:results [{:type "callout"
@@ -1787,7 +1787,7 @@
           (with-redefs [notion-client/keychain-token (fn [] "tok")
                         notion-client/retrieve-page (fn [_ _] {:properties {}})
                         notion-client/update-page-properties! (fn [_ _ _] {:error :server})
-                        nido.coordinator.facets/refresh-for-ticket! (fn [& _] nil)]
+                        nido.coordinator.lane.facets/refresh-for-ticket! (fn [& _] nil)]
             (let [r (work/apply! :brian (:id w))]
               (is (= :notion-failed (:decision r)))
               (is (= :server (:error r)))
@@ -1803,7 +1803,7 @@
             (with-redefs [notion-client/keychain-token (fn [] "tok")
                           notion-client/retrieve-page (fn [_ _] {:error :server})
                           notion-client/update-page-properties! (fn [_ _ _] (reset! wrote true) {:ok true})
-                          nido.coordinator.facets/refresh-for-ticket! (fn [& _] nil)]
+                          nido.coordinator.lane.facets/refresh-for-ticket! (fn [& _] nil)]
               (let [r (work/apply! :brian (:id w))]
                 (is (= :notion-failed (:decision r)))
                 (is (false? @wrote) "no property write is attempted when the page read failed — never clobber")
@@ -1821,7 +1821,7 @@
                         ;; first child never becomes our callout ⇒ position stripped
                         notion-client/retrieve-block-children (fn [_ _ _] {:results [{:type "paragraph"}]})
                         notion-client/prepend-block-children! (fn [_ _ _] {:ok true})
-                        nido.coordinator.facets/refresh-for-ticket! (fn [& _] nil)]
+                        nido.coordinator.lane.facets/refresh-for-ticket! (fn [& _] nil)]
             (let [r (work/apply! :brian (:id w))]
               (is (= :applied (:decision r)) "properties landed ⇒ still applied")
               (is (= :warn (:callout r)) "callout didn't land at the top ⇒ flagged")
@@ -2020,7 +2020,7 @@
   ;; watched-view cache the row was synthesized from.
   (with-tmp
     (fn [_]
-      (nido.coordinator.sources.state/write-state! "v1"
+      (nido.coordinator.source.state/write-state! "v1"
         {:type :notion-view :source-config {:project :brian}
          :pages {"pg-orphan" {:status "Needs verification" :priority nil :ball-ids #{}
                               :title "t" :br "BR-500"}}})
@@ -2056,7 +2056,7 @@
       ;; is closed. Without seeding the cache the row takes the legacy path, whose
       ;; :closed → :done fold already drops :needs-you on its own, and the
       ;; assertion below would pass whether or not the new filter exists.
-      (nido.coordinator.sources.state/write-state! "v1"
+      (nido.coordinator.source.state/write-state! "v1"
         {:type :notion-view :source-config {:project :brian}
          :pages {"pg" {:status "Needs verification" :priority nil :ball-ids #{}
                        :title "t" :br "BR-79"}}})
@@ -2080,7 +2080,7 @@
 ;; ---------------------------------------------------------------------------
 
 (defn- seed-page! [pages]
-  (nido.coordinator.sources.state/write-state! "v1"
+  (nido.coordinator.source.state/write-state! "v1"
     {:type :notion-view :source-config {:project :brian} :pages pages}))
 
 (deftest workstream-falls-back-to-a-bare-pane-for-an-uncovered-page
@@ -2209,23 +2209,23 @@
 (deftest start-triage-page-refuses-a-project-with-no-triage-trigger
   (with-tmp
     (fn [_]
-      (with-redefs [nido.coordinator.triggers/load-for-project (fn [_] [])]
+      (with-redefs [nido.coordinator.record.triggers/load-for-project (fn [_] [])]
         (is (= {:decision :no-trigger} (work/start-triage-page! :brian "pg-bare")))))))
 
 (deftest start-triage-page-force-spawns-the-triage-trigger
   (with-tmp
     (fn [_]
       (let [spawned (atom nil)]
-        (with-redefs [nido.coordinator.triggers/load-for-project
+        (with-redefs [nido.coordinator.record.triggers/load-for-project
                       (fn [_] [{:name :smoke :skill :investigate-bug}
                                {:name :triage-new :skill :triage-bug :priority 10
                                 :session-profile :lite :uncapped? true}])
                       nido.notion.client/keychain-token (constantly "tok")
-                      nido.coordinator.pickup/resolve-ref
+                      nido.coordinator.lane.pickup/resolve-ref
                       (fn [_ input _] {:id "BR-9" :page-id input
                                        :url "https://notion.so/pg-bare" :title "Move Licences"})
-                      nido.coordinator.spawn/ref-has-pending-session? (constantly false)
-                      nido.coordinator.spawn/spawn-and-submit!
+                      nido.coordinator.lane.spawn/ref-has-pending-session? (constantly false)
+                      nido.coordinator.lane.spawn/spawn-and-submit!
                       (fn [routed _] (reset! spawned routed))]
           (is (= {:decision :triaging} (work/start-triage-page! :brian "pg-bare")))
           (is (= :triage-new (-> @spawned :trigger :name))
@@ -2240,23 +2240,23 @@
 (deftest start-triage-page-reports-an-unresolvable-page
   (with-tmp
     (fn [_]
-      (with-redefs [nido.coordinator.triggers/load-for-project
+      (with-redefs [nido.coordinator.record.triggers/load-for-project
                     (fn [_] [{:name :triage-new :skill :triage-bug}])
                     nido.notion.client/keychain-token (constantly "")
-                    nido.coordinator.pickup/resolve-ref (fn [_ _ _] {:error :no-token})]
+                    nido.coordinator.lane.pickup/resolve-ref (fn [_ _ _] {:error :no-token})]
         (is (= {:decision :unresolved :error :no-token}
                (work/start-triage-page! :brian "pg-bare")))))))
 
 (deftest start-triage-page-does-not-double-spawn
   (with-tmp
     (fn [_]
-      (with-redefs [nido.coordinator.triggers/load-for-project
+      (with-redefs [nido.coordinator.record.triggers/load-for-project
                     (fn [_] [{:name :triage-new :skill :triage-bug}])
                     nido.notion.client/keychain-token (constantly "tok")
-                    nido.coordinator.pickup/resolve-ref
+                    nido.coordinator.lane.pickup/resolve-ref
                     (fn [_ _ _] {:id "BR-9" :page-id "pg-bare" :url "u" :title "t"})
-                    nido.coordinator.spawn/ref-has-pending-session? (constantly true)
-                    nido.coordinator.spawn/spawn-and-submit!
+                    nido.coordinator.lane.spawn/ref-has-pending-session? (constantly true)
+                    nido.coordinator.lane.spawn/spawn-and-submit!
                     (fn [_ _] (throw (ex-info "must not spawn" {})))]
         (is (= {:decision :already-in-flight}
                (work/start-triage-page! :brian "pg-bare"))
@@ -2265,7 +2265,7 @@
 (deftest resolve-gate-lets-start-triage-past-the-workstream-less-guard
   (with-tmp
     (fn [_]
-      (with-redefs [nido.coordinator.triggers/load-for-project (fn [_] [])]
+      (with-redefs [nido.coordinator.record.triggers/load-for-project (fn [_] [])]
         (is (= {:decision :no-trigger}
                (work/resolve-gate! :brian "pg-bare" :start-triage))
             "reaches start-triage-page! rather than the guard's :no-workstream")))))

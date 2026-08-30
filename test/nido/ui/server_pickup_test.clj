@@ -2,7 +2,7 @@
   (:require
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
-   [nido.coordinator.pickup :as pickup]
+   [nido.coordinator.lane.pickup :as pickup]
    [nido.notion.client :as client]
    [nido.ui.server :as server]))
 

@@ -1,7 +1,7 @@
 (ns tasks.nido-facets-test
   (:require
    [clojure.test :refer [deftest is]]
-   [nido.coordinator.facets :as facets]
+   [nido.coordinator.lane.facets :as facets]
    [tasks.nido-facets :as t]))
 
 (deftest refresh-cmd-refreshes-whole-project-by-default

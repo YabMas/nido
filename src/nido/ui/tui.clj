@@ -26,14 +26,14 @@
    [charm.style.core :as style]
    [clojure.string :as str]
    [nido.platform.charm-patch :as charm-patch]
-   [nido.coordinator.breakers :as breakers]
-   [nido.coordinator.halt :as halt]
-   [nido.coordinator.pickup :as pickup]
-   [nido.coordinator.queue :as queue]
-   [nido.coordinator.runs-view :as runs-view]
-   [nido.coordinator.scratch :as scratch]
-   [nido.coordinator.workstreams-view :as wsv]
-   [nido.coordinator.triggers :as triggers]
+   [nido.coordinator.daemon.breakers :as breakers]
+   [nido.coordinator.daemon.halt :as halt]
+   [nido.coordinator.lane.pickup :as pickup]
+   [nido.coordinator.source.queue :as queue]
+   [nido.coordinator.view.runs :as runs-view]
+   [nido.coordinator.lane.scratch :as scratch]
+   [nido.coordinator.view.workstreams :as wsv]
+   [nido.coordinator.record.triggers :as triggers]
    [nido.notion.client :as client]
    [nido.platform.project :as project]
    [nido.coordinator.work :as work]
@@ -957,7 +957,7 @@
 ;; ---------------------------------------------------------------------------
 ;; Pickup — drive a Notion ticket (URL / page-id / BR-####) from the ops
 ;; overlay, no board browsing required. Front-end over
-;; `nido.coordinator.pickup/pickup!` (which resolves the ref and enqueues the
+;; `nido.coordinator.lane.pickup/pickup!` (which resolves the ref and enqueues the
 ;; :plan-bug envelope). A single-field text-input like the create-session modal.
 ;; ---------------------------------------------------------------------------
 

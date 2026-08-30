@@ -14,9 +14,9 @@
   (:require
    [babashka.fs :as fs]
    [clojure.string :as str]
-   [nido.coordinator.session :as csession]
-   [nido.coordinator.state :as cstate]
-   [nido.coordinator.workstream :as ws]
+   [nido.coordinator.record.session :as csession]
+   [nido.coordinator.record.state :as cstate]
+   [nido.coordinator.record.workstream :as ws]
    [nido.review.analysis :as analysis]
    [nido.review.frontend :as frontend]
    [nido.review.record :as record]

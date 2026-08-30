@@ -4,11 +4,11 @@
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
    [nido.platform.core :as core]
-   [nido.coordinator.findings :as findings]
-   [nido.coordinator.queue :as queue]
-   [nido.coordinator.state :as cstate]
-   [nido.coordinator.tickets :as tickets]
-   [nido.coordinator.workstream :as ws]
+   [nido.coordinator.lane.findings :as findings]
+   [nido.coordinator.source.queue :as queue]
+   [nido.coordinator.record.state :as cstate]
+   [nido.coordinator.record.tickets :as tickets]
+   [nido.coordinator.record.workstream :as ws]
    [tasks.nido-workstream :as t]))
 
 (defn- with-tmp [f]

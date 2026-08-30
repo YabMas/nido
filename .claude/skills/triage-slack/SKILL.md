@@ -105,7 +105,7 @@ boundary-moving is as useless as one that flags none.
 
 ## Step 2 — Propose (compose + append + park)
 
-Compose a `ProposedTicket` EDN map (schema: `nido.coordinator.report/ProposedTicket`) to a temp `.edn` file. The map is **compact and structured**, not a freeform essay — keep doing the deep investigation in Step 1, but distill it down to these 1–2-line fields; the depth of your investigation shows up as *confidence* in what you write, not as length.
+Compose a `ProposedTicket` EDN map (schema: `nido.coordinator.record.report/ProposedTicket`) to a temp `.edn` file. The map is **compact and structured**, not a freeform essay — keep doing the deep investigation in Step 1, but distill it down to these 1–2-line fields; the depth of your investigation shows up as *confidence* in what you write, not as length.
 
 The schema is a **closed, `:ticket-type`-dispatched multi-schema with no default** — emit exactly one of these two shapes, matching the classification from Step 1:
 
