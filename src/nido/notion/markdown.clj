@@ -26,7 +26,8 @@
     (str plain_text " (" href ")")
     plain_text))
 
-(defn rich->text
+(defn ^{:malli/schema [:=> [:cat :any] :string]}
+  rich->text
   "The plain text of a Notion rich-text array."
   [rich]
   (->> rich (map run->text) (apply str)))
@@ -76,7 +77,8 @@
   [b]
   (str "| " (str/join " | " (repeat (count (table-cells b)) "---")) " |"))
 
-(defn block->md
+(defn ^{:malli/schema [:=> [:cat :map] [:vector :string]]}
+  block->md
   "One block as zero or more markdown lines (a vector of strings)."
   [{:keys [block depth]}]
   (let [t    (:type block)
@@ -143,7 +145,8 @@
            {:lines [] :armed false}
            blocks)))
 
-(defn blocks->markdown
+(defn ^{:malli/schema [:=> [:cat [:vector :map]] :string]}
+  blocks->markdown
   "Render `walk-blocks` output as markdown. Collapses runs of blank lines so a
    page built out of Notion's empty paragraphs does not arrive mostly empty."
   [blocks]
@@ -157,7 +160,8 @@
        (str/join "\n")
        str/trim))
 
-(defn comments->markdown
+(defn ^{:malli/schema [:=> [:cat [:vector :map]] :string]}
+  comments->markdown
   "Render `nido.notion.client/list-comments` results as markdown. Notion's API
    returns an author id rather than a name, so comments are dated, not
    attributed — a comment whose author matters names them in its own text."

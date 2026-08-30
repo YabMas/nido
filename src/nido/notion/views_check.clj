@@ -59,7 +59,8 @@
   [db-props]
   (set (map #(if (keyword? %) (clojure.core/name %) %) (keys db-props))))
 
-(defn check-registry
+(defn ^{:malli/schema [:=> [:cat :ProjectName :NotionToken] :map]}
+  check-registry
   "Validates the notion-views.edn registry for `project` against the live
    Notion data source. (In Notion API 2025-09-03 the property schema lives
    on the data source, not the database.) Returns {:status :ok} or

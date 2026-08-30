@@ -10,7 +10,8 @@
    [nido.transcribe.loom :as loom]
    [nido.transcribe.whisper :as whisper]))
 
-(defn download-to-temp!
+(defn ^{:malli/schema [:=> [:cat :string] :map]}
+  download-to-temp!
   "GET `url` to a temp file. Returns {:ok? true :path \"...\"}
    or {:ok? false :error {:reason :download-failed :detail {:status n}}}.
 
@@ -60,7 +61,8 @@
           (finally
             (fs/delete-if-exists in-path)))))))
 
-(defn video!
+(defn ^{:malli/schema [:=> [:cat :map] :Transcript]}
+  video!
   "Transcribe a video URL into a VTT at :out. See ns docstring.
    Required opts: :url :out. Optional: :model (default :small),
    :timeout-s (default 300)."

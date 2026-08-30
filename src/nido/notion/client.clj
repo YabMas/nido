@@ -11,7 +11,8 @@
    [cheshire.core :as json]
    [clojure.string :as str]))
 
-(defn sh!
+(defn ^{:malli/schema [:=> [:cat :any] :map]}
+  sh!
   "Wrapped shell-out so tests can stub `security` calls."
   [args]
   (p/sh args))
@@ -22,7 +23,8 @@
   []
   (str/trim (:out (p/sh ["whoami"]))))
 
-(defn keychain-token
+(defn ^{:malli/schema [:=> [:cat] [:maybe :NotionToken]]}
+  keychain-token
   "Read the Notion integration token from the user's macOS Keychain.
    Returns the trimmed token string, or nil if the entry isn't present."
   []
@@ -30,14 +32,16 @@
                                  "-s" "nido-notion" "-a" (whoami) "-w"])]
     (when (zero? exit) (str/trim out))))
 
-(defn keychain-set!
+(defn ^{:malli/schema [:=> [:cat :NotionToken] :any]}
+  keychain-set!
   "Upsert the Notion integration token into the user's macOS Keychain.
    `-U` upserts if an entry with the same service+account already exists."
   [token]
   (sh! ["security" "add-generic-password"
         "-s" "nido-notion" "-a" (whoami) "-U" "-w" token]))
 
-(defn http-request
+(defn ^{:malli/schema [:=> [:cat :keyword :string :map] :map]}
+  http-request
   "Wrapped HTTP call so tests can stub. Dispatches on method (:get/:post/:patch/:delete).
    Returns {:status :body}."
   [method url opts]
@@ -51,12 +55,14 @@
 
 (defonce ^:private !data-source-cache (atom {}))
 
-(defn clear-data-source-cache!
+(defn ^{:malli/schema [:=> [:cat] :any]}
+  clear-data-source-cache!
   "Test-only / config-reload helper. Clears the cached database-id→data-source-id map."
   []
   (reset! !data-source-cache {}))
 
-(defn retrieve-database
+(defn ^{:malli/schema [:=> [:cat :string :NotionToken] :map]}
+  retrieve-database
   "GET /v1/databases/<id>. Returns parsed JSON or {:error :kw}.
    Public so the registry validator (nido.notion.views-check) can call it directly."
   [database-id token]
@@ -77,7 +83,8 @@
       (= status 0)   {:error :network}
       :else          {:error :http :status status})))
 
-(defn retrieve-data-source
+(defn ^{:malli/schema [:=> [:cat :string :NotionToken] :map]}
+  retrieve-data-source
   "GET /v1/data_sources/<ds-id>. Returns parsed JSON (including :properties)
    or {:error :kw}. In Notion API 2025-09-03 the schema (property defs +
    options) lives on the data source, NOT on the database — call this when
@@ -100,7 +107,8 @@
       (= status 0)   {:error :network}
       :else          {:error :http :status status})))
 
-(defn resolve-data-source-id
+(defn ^{:malli/schema [:=> [:cat :string :NotionToken] [:maybe :string]]}
+  resolve-data-source-id
   "Look up the first data-source id for a database (the only one for most
    databases). Cached per-process — call clear-data-source-cache! after
    schema changes. Returns the id or throws if the database has no data
@@ -119,7 +127,8 @@
           (swap! !data-source-cache assoc database-id ds-id)
           ds-id)))))
 
-(defn data-source-query
+(defn ^{:malli/schema [:=> [:cat :string :NotionToken :map] :map]}
+  data-source-query
   "POST /v1/data_sources/<ds-id>/query with a body containing optional
    :filter (Notion filter map), :sorts, and :page-size. Returns
    {:status 200 :results :has_more} on success or {:status :error :kw}.
@@ -149,7 +158,8 @@
       (= status 0)    {:status 0 :error :network}
       :else           {:status status :error :http})))
 
-(defn retrieve-page
+(defn ^{:malli/schema [:=> [:cat :string :NotionToken] :map]}
+  retrieve-page
   "GET /v1/pages/<page-id>. Returns parsed JSON (including :properties) or
    {:error :kw}. Keys are keywordised, so a property named \"Participants\"
    is reached at (get-in page [:properties :Participants])."
@@ -170,7 +180,8 @@
       (= status 0)   {:error :network}
       :else          {:error :http :status status})))
 
-(defn update-page-properties!
+(defn ^{:malli/schema [:=> [:cat :string :map :NotionToken] :map]}
+  update-page-properties!
   "PATCH /v1/pages/<page-id> with a Notion-shaped :properties map. Keys are
    property names used verbatim as JSON keys; values are Notion property-value
    maps (e.g. {:status {:name \"In progress\"}} for a status property,
@@ -195,7 +206,8 @@
       (= status 0)    {:error :network}
       :else           {:error :http :status status})))
 
-(defn update-page-status!
+(defn ^{:malli/schema [:=> [:cat :string :string :string :NotionToken] :map]}
+  update-page-status!
   "PATCH /v1/pages/<page-id>, setting a Status-type property to a named option.
    Notion 'Status' properties take {:status {:name <option>}} — NOT :select.
    property-name is a string matching the Notion property name exactly (e.g.
@@ -203,7 +215,8 @@
   [page-id property-name status-name token]
   (update-page-properties! page-id {property-name {:status {:name status-name}}} token))
 
-(defn normalise-property-name
+(defn ^{:malli/schema [:=> [:cat :string] :keyword]}
+  normalise-property-name
   "\"Ticket ID\" → :ticket-id"
   [s]
   (-> (str s)
@@ -237,7 +250,8 @@
   (some (fn [[_ p]] (when (= "title" (:type p)) (extract-value p)))
         properties))
 
-(defn normalise-page
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  normalise-page
   "Turn a Notion API page object into the spec's event-payload shape.
    See spec §Source: :notion-view / Event-payload schema."
   [{:keys [id url created_time last_edited_time properties]}]
@@ -261,7 +275,8 @@
    every block we build has to respect it."
   2000)
 
-(defn split-rich-text
+(defn ^{:malli/schema [:=> [:cat :string] [:vector :string]]}
+  split-rich-text
   "`text` as a vector of ≤`rich-text-limit` chunks, cutting at the last newline
    (else the last space) inside each window so lines and words survive the break.
    Falls back to a hard cut when the window holds neither, which also guarantees
@@ -278,14 +293,16 @@
             cut    (if (and cut (pos? cut)) cut rich-text-limit)]
         (recur (str/triml (subs s cut)) (conj acc (str/trimr (subs s 0 cut))))))))
 
-(defn rich-text-runs
+(defn ^{:malli/schema [:=> [:cat :string] [:vector :map]]}
+  rich-text-runs
   "`text` as a rich_text array — one `{:type \"text\" …}` run per chunk, each within
    the cap. Use when the content belongs to ONE block (a callout, a heading);
    use `paragraph-blocks` when it should become several blocks."
   [text]
   (mapv (fn [chunk] {:type "text" :text {:content chunk}}) (split-rich-text text)))
 
-(defn paragraph-blocks
+(defn ^{:malli/schema [:=> [:cat :string] [:vector :map]]}
+  paragraph-blocks
   "`text` as Notion paragraph blocks, each within `rich-text-limit`. Splits on
    blank lines first so the source's own paragraph structure becomes real Notion
    paragraphs, then splits any single paragraph still over the cap. Blank text
@@ -300,7 +317,8 @@
              :paragraph {:rich_text [{:text {:content chunk}}]}})
           (if (seq chunks) chunks [""]))))
 
-(defn create-page-with-properties!
+(defn ^{:malli/schema [:=> [:cat :string :NotionToken :map [:maybe :string]] :map]}
+  create-page-with-properties!
   "POST /v1/pages creating a page in the data source `data-source-id` from an
    already-built Notion `properties` payload (display-name → typed value map,
    exactly as the API expects it) plus `description` rendered as paragraph
@@ -333,7 +351,8 @@
       (= status 0)   {:error :network}
       :else          {:error :http :status status})))
 
-(defn create-page!
+(defn ^{:malli/schema [:=> [:cat :string :NotionToken :map] :map]}
+  create-page!
   "Create a page in brian's Task DB. `fields`:
      {:title s :description s :type s :status s :priority s-or-nil}
    Builds that DB's property payload (title = \"Task result\", status = \"Status\",
@@ -346,7 +365,8 @@
                 (not (str/blank? priority)) (assoc "Priority" {:select {:name priority}}))]
     (create-page-with-properties! data-source-id token props description)))
 
-(defn retrieve-block-children
+(defn ^{:malli/schema [:=> [:cat :string :NotionToken :map] :map]}
+  retrieve-block-children
   "GET /v1/blocks/<block-id>/children. Single page; pass `:start-cursor`
    to get the next page. Returns:
      {:status 200 :results [...] :has_more bool :next_cursor str}
@@ -383,7 +403,8 @@
     (= status 0)           {:error :network}
     :else                  {:error :http :status status}))
 
-(defn delete-block!
+(defn ^{:malli/schema [:=> [:cat :string :NotionToken] :map]}
+  delete-block!
   "DELETE /v1/blocks/<block-id> (archives the block). Returns {:ok true} | {:error :kw}."
   [block-id token]
   (block-write-result
@@ -394,7 +415,8 @@
                     :timeout 10000})
      (catch Exception e {:status 0 :exception e}))))
 
-(defn prepend-block-children!
+(defn ^{:malli/schema [:=> [:cat :string [:vector :map] :NotionToken] :map]}
+  prepend-block-children!
   "PATCH /v1/blocks/<page-id>/children with `children` and position:start (prepend to
    the top). Notion may ignore `position` for the pinned Notion-Version and append at
    the bottom instead — the caller verifies placement. Returns {:ok true} | {:error :kw}."
@@ -409,7 +431,8 @@
                     :timeout 10000})
      (catch Exception e {:status 0 :exception e}))))
 
-(defn walk-blocks
+(defn ^{:malli/schema [:=> [:cat :string :NotionToken :map] [:vector :map]]}
+  walk-blocks
   "Recursively walk a page's block tree. Returns a vector of
    {:block <notion-block-map> :depth n}. Bounded by :max-depth (default 10)
    and :max-total (default 1000). Pagination is followed automatically.
@@ -447,7 +470,8 @@
                         acc'))))))]
       (visit root-id 0))))
 
-(defn list-comments
+(defn ^{:malli/schema [:=> [:cat :string :NotionToken] [:vector :map]]}
+  list-comments
   "GET /v1/comments?block_id=<page-id>, following pagination. Returns
      {:status 200 :results [...]}
      {:status N   :error :auth|:server|:network|:http}

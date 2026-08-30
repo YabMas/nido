@@ -6,7 +6,8 @@
    [cheshire.core :as json]
    [clojure.string :as str]))
 
-(defn sh!
+(defn ^{:malli/schema [:=> [:cat :any] :map]}
+  sh!
   "Shell out to gh. Returns {:exit :out :err}. Wrapped so tests can stub."
   [args]
   (p/sh args))
@@ -14,7 +15,8 @@
 (defn- auth-error? [err]
   (boolean (and err (re-find #"(?i)auth" err))))
 
-(defn list-merged-prs
+(defn ^{:malli/schema [:=> [:cat :string [:? :int]] :map]}
+  list-merged-prs
   "Most-recent merged PRs for a repo (newest first), capped at `limit`
    (default 50). Returns {:status :ok :prs [{:number :url :title :merged-at}]}
    or {:error :auth|:gh}."
@@ -34,7 +36,8 @@
                                     :merged-at (:mergedAt m)})))}
        {:error (if (auth-error? err) :auth :gh) :detail (str/trim (or err ""))}))))
 
-(defn list-assigned-issues
+(defn ^{:malli/schema [:=> [:cat :string :string [:? :int]] :map]}
+  list-assigned-issues
   "Open issues in `repo` assigned to `assignee` (e.g. \"@me\"), capped at `limit`
    (default 100). Returns {:status :ok :issues [{:number :url :title}]}
    or {:error :auth|:gh}."
@@ -54,7 +57,8 @@
                                     :title  (:title m)})))}
        {:error (if (auth-error? err) :auth :gh) :detail (str/trim (or err ""))}))))
 
-(defn view-issue
+(defn ^{:malli/schema [:=> [:cat :string :any] :map]}
+  view-issue
   "Fetch one issue's metadata + body. Returns
    {:status :ok :issue {:number :url :title :body}} or {:error :auth|:gh}."
   [repo number]

@@ -20,7 +20,8 @@
    "Origin"                   "https://www.loom.com"
    "apollographql-client-name" "web"})
 
-(defn http-request
+(defn ^{:malli/schema [:=> [:cat :keyword :string :map] :map]}
+  http-request
   "Wrapped HTTP call so tests can stub. Dispatches on method.
    Returns {:status :body}."
   [method url opts]
@@ -31,7 +32,8 @@
 (def ^:private video-id-re
   #"https?://(?:www\.)?loom\.com/(?:share|embed)/([0-9a-f]{32})")
 
-(defn extract-video-id
+(defn ^{:malli/schema [:=> [:cat :string] [:maybe :string]]}
+  extract-video-id
   "Extract a Loom video id from a share/embed URL. Returns nil if the URL
    is not a Loom share/embed."
   [url]
@@ -64,7 +66,8 @@
                  :query         query})
      :timeout 10000}))
 
-(defn fetch-vtt
+(defn ^{:malli/schema [:=> [:cat :string] :map]}
+  fetch-vtt
   "Fetch a public Loom video's VTT transcript via GraphQL + captions URL.
    Returns:
      {:ok? true  :vtt-text \"...\"}
@@ -112,7 +115,8 @@
                                   :detail {:status (:status vtt-resp)
                                            :phase  :captions-fetch}}})))))))
 
-(defn video-source-url
+(defn ^{:malli/schema [:=> [:cat :string] [:maybe :string]]}
+  video-source-url
   "Resolve a Loom video id to a CDN MP4 URL for whisper fallback.
    Returns {:ok? true :url \"...\"} or {:ok? false :error {...}}."
   [video-id]

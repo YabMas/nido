@@ -14,7 +14,8 @@
    [cheshire.core :as json]
    [clojure.string :as str]))
 
-(defn sh!
+(defn ^{:malli/schema [:=> [:cat :any] :map]}
+  sh!
   "Wrapped shell-out so tests can stub `security` calls."
   [args]
   (p/sh args))
@@ -25,7 +26,8 @@
   []
   (str/trim (:out (p/sh ["whoami"]))))
 
-(defn keychain-token
+(defn ^{:malli/schema [:=> [:cat] [:maybe :SlackToken]]}
+  keychain-token
   "Read the Slack bot token from the user's macOS Keychain. Returns the trimmed
    token string, or nil if the entry isn't present."
   []
@@ -33,13 +35,15 @@
                                  "-s" "nido-slack" "-a" (whoami) "-w"])]
     (when (zero? exit) (str/trim out))))
 
-(defn keychain-set!
+(defn ^{:malli/schema [:=> [:cat :SlackToken] :any]}
+  keychain-set!
   "Upsert the Slack bot token into the user's macOS Keychain. `-U` upserts."
   [token]
   (sh! ["security" "add-generic-password"
         "-s" "nido-slack" "-a" (whoami) "-U" "-w" token]))
 
-(defn http-request
+(defn ^{:malli/schema [:=> [:cat :keyword :string :map] :map]}
+  http-request
   "Wrapped HTTP call so tests can stub. Returns {:status :body}."
   [method url opts]
   (case method
@@ -64,7 +68,8 @@
             {:error :api :detail e}))))
     :else {:error :api :detail (str "http-" status)}))
 
-(defn conversations-history
+(defn ^{:malli/schema [:=> [:cat :string :SlackToken :map] :map]}
+  conversations-history
   "GET conversations.history for `channel`. Options:
      :oldest    — only messages after this ts (exclusive via :inclusive false)
      :limit     — page size (default 200)
@@ -91,7 +96,8 @@
          :has_more    (boolean (:has_more parsed))
          :next_cursor (get-in parsed [:response_metadata :next_cursor])}))))
 
-(defn chat-permalink
+(defn ^{:malli/schema [:=> [:cat :string :string :SlackToken] [:maybe :string]]}
+  chat-permalink
   "GET chat.getPermalink for one message. Returns the permalink URL, or nil on
    any error (a missing permalink must not block emission)."
   [channel ts token]
@@ -105,7 +111,8 @@
     (when-not (api-error resp)
       (:permalink (json/parse-string (:body resp) true)))))
 
-(defn owl-reacted?
+(defn ^{:malli/schema [:=> [:cat :map :string] :boolean]}
+  owl-reacted?
   "True if `message` carries a reaction whose name = `emoji`."
   [message emoji]
   (boolean (some #(= emoji (:name %)) (:reactions message))))
@@ -125,7 +132,8 @@
       err
       (merge {:ok true} (ok-extra (json/parse-string (:body resp) true))))))
 
-(defn post-message
+(defn ^{:malli/schema [:=> [:cat :string :SlackToken :map] :map]}
+  post-message
   "POST chat.postMessage. `:thread-ts` (optional) threads the reply.
    Returns {:ok true :ts <new-ts>} or {:error :kw}."
   [channel token {:keys [text thread-ts]}]
@@ -134,14 +142,16 @@
                thread-ts (assoc :thread_ts thread-ts))
              (fn [parsed] {:ts (:ts parsed)})))
 
-(defn add-reaction
+(defn ^{:malli/schema [:=> [:cat :string :string :SlackToken :string] :map]}
+  add-reaction
   "POST reactions.add — best-effort emoji ack. Returns {:ok true} or {:error :kw}."
   [channel ts token emoji]
   (post-json "https://slack.com/api/reactions.add" token
              {:channel channel :timestamp ts :name emoji}
              (constantly {})))
 
-(defn message-id
+(defn ^{:malli/schema [:=> [:cat :string :string] :string]}
+  message-id
   "Stable, unique, filesystem-safe id for a channel message."
   [channel ts]
   (str "slack-" channel "-" ts))
@@ -149,7 +159,8 @@
 (defn- truncate [s n]
   (if (> (count s) n) (subs s 0 n) s))
 
-(defn normalise-message
+(defn ^{:malli/schema [:=> [:cat :string :map] :map]}
+  normalise-message
   "Turn a raw Slack message + its permalink into the event-payload shape the
    spawn pipeline consumes. The full text is the triage brief; :title is a
    truncated display line."

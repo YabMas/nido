@@ -64,14 +64,16 @@
   "Drain order: what gets worse fastest comes first."
   {"compounding" 0 "flat" 1 "cheaper-later" 2})
 
-(defn config
+(defn ^{:malli/schema [:=> [:cat :map] [:maybe :map]]}
+  config
   "The `:followups` config map out of nido's config, or nil when unconfigured.
    This namespace does not know WHERE nido keeps its configuration — whoever
    calls it does, and reads the file."
   [nido-config]
   (:followups nido-config))
 
-(defn config!
+(defn ^{:malli/schema [:=> [:cat :map :any] :map]}
+  config!
   "Like `config`, but throws with a setup hint rather than returning nil — for
    the write paths, where silently doing nothing is the worst outcome. `where`
    names the file the hint should point the reader at."
@@ -94,7 +96,8 @@
                        :configured (vec (keys (:properties cfg)))
                        :hint "Add it under :followups :properties in nido's config"}))))
 
-(defn validate
+(defn ^{:malli/schema [:=> [:cat :map] [:vector :string]]}
+  validate
   "Return a vector of human-readable problems with `entry` (empty when it is
    fileable). Checks required fields and every closed vocabulary."
   [entry]
@@ -109,7 +112,8 @@
       (str f " must be one of " (str/join " | " (sort allowed))
            " (got " (pr-str v) ")")))))
 
-(defn ->properties
+(defn ^{:malli/schema [:=> [:cat :map :map] :map]}
+  ->properties
   "Build the Notion properties payload for `entry` against the configured
    display-names. Only fields present after defaults are written, so a DB
    without an optional property simply never receives it."
@@ -125,7 +129,8 @@
                :rich-text {:rich_text [{:text {:content (str v)}}]}
                :select    {:select {:name (str v)}})]))))
 
-(defn create!
+(defn ^{:malli/schema [:=> [:cat :map :map] :map]}
+  create!
   "File `entry` in the follow-up DB. `entry` keys are the semantic fields of
    `field-types`; `:description` (optional) becomes the page body. Returns the
    created page ({:id \"FU-##\" :url … :page-id …}) or {:error :kw}. Throws only
@@ -143,7 +148,8 @@
          (->properties cfg (dissoc entry :description))
          (or description ""))))))
 
-(defn list-entries
+(defn ^{:malli/schema [:=> [:cat :map [:? :string]] [:vector :map]]}
+  list-entries
   "Open follow-ups, ordered by decay pressure then effort — what rots fastest
    first. `status` defaults to \"Open\". Returns a vector of normalised pages or
    {:error :kw}."
@@ -164,7 +170,8 @@
             (sort-by (juxt #(get decay-rank (:decay %) 99) :effort))
             vec)))))
 
-(defn check-config
+(defn ^{:malli/schema [:=> [:cat :map :NotionToken] :map]}
+  check-config
   "Cross-check the configured display-names and nido's vocabularies against the
    live data source: every configured property must exist, and every select
    field's vocabulary must be a subset of that property's options. Returns

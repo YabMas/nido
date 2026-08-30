@@ -14,7 +14,8 @@
    [babashka.process :as p])
   (:import (java.util.concurrent TimeoutException)))
 
-(defn sh!
+(defn ^{:malli/schema [:=> [:cat :any :map] :map]}
+  sh!
   "Wrapped shell-out. Tests stub this. Returns {:exit :out :err}.
    When opts contains :timeout-s, the process is killed and
    TimeoutException is thrown after the limit. Without :timeout-s,
@@ -36,7 +37,8 @@
   (let [stem (-> input fs/file-name fs/strip-ext)]
     (str (fs/path out-dir (str stem ".vtt")))))
 
-(defn run!
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  run!
   "Transcribe a local audio/video file with whisper. See ns docstring."
   [{:keys [input model out-dir timeout-s]
     :or   {model :small timeout-s 300}}]

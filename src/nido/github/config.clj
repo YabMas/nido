@@ -23,7 +23,8 @@
 (defn- config-path [project]
   (core/project-file project "github.edn"))
 
-(defn load-config
+(defn ^{:malli/schema [:=> [:cat :ProjectName] [:maybe :map]]}
+  load-config
   "Read + validate github.edn for a project. Returns the config map, or nil
    when the file is absent (feature off). Throws on a malformed file."
   [project]
