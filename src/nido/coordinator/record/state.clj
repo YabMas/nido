@@ -15,79 +15,103 @@
             [clojure.string :as str]
             [nido.platform.core :as core]))
 
-(defn nido-root []
+(defn ^{:malli/schema [:=> [:cat] :Path]}
+  nido-root []
   (core/nido-root))
 
 ;; coordinator-root is the with-redefs seam (private redirect target);
 ;; coordinator-dir is the public name callers use elsewhere.
-(defn coordinator-root []
+(defn ^{:malli/schema [:=> [:cat] :Path]}
+  coordinator-root []
   (str (fs/path (nido-root) "coordinator")))
 
-(defn coordinator-dir [] (coordinator-root))
+(defn ^{:malli/schema [:=> [:cat] :Path]}
+  coordinator-dir [] (coordinator-root))
 
-(defn queue-dir []
+(defn ^{:malli/schema [:=> [:cat] :Path]}
+  queue-dir []
   (str (fs/path (coordinator-root) "queue")))
 
-(defn status-path []
+(defn ^{:malli/schema [:=> [:cat] :Path]}
+  status-path []
   (str (fs/path (coordinator-root) "status.edn")))
 
-(defn halted-path []
+(defn ^{:malli/schema [:=> [:cat] :Path]}
+  halted-path []
   (str (fs/path (coordinator-root) "halted.edn")))
 
-(defn pid-path []
+(defn ^{:malli/schema [:=> [:cat] :Path]}
+  pid-path []
   (str (fs/path (coordinator-root) "coordinator.pid")))
 
-(defn log-path []
+(defn ^{:malli/schema [:=> [:cat] :Path]}
+  log-path []
   (str (fs/path (coordinator-root) "coordinator.log")))
 
-(defn config-path []
+(defn ^{:malli/schema [:=> [:cat] :Path]}
+  config-path []
   (str (fs/path (coordinator-root) "config.edn")))
 
-(defn driving-path
+(defn ^{:malli/schema [:=> [:cat] :Path]}
+  driving-path
   "The allow-list of workstreams the driver may advance. Absent = nobody."
   []
   (str (fs/path (coordinator-dir) "driving.edn")))
 
-(defn breakers-path []
+(defn ^{:malli/schema [:=> [:cat] :Path]}
+  breakers-path []
   (str (fs/path (coordinator-root) "breakers.edn")))
 
-(defn runs-dir []
+(defn ^{:malli/schema [:=> [:cat] :Path]}
+  runs-dir []
   (str (fs/path (nido-root) "runs")))
 
-(defn run-dir [run-id]
+(defn ^{:malli/schema [:=> [:cat :RunId] :Path]}
+  run-dir [run-id]
   (str (fs/path (runs-dir) run-id)))
 
-(defn run-edn-path [run-id]
+(defn ^{:malli/schema [:=> [:cat :RunId] :Path]}
+  run-edn-path [run-id]
   (str (fs/path (run-dir run-id) "run.edn")))
 
-(defn run-status-path [run-id]
+(defn ^{:malli/schema [:=> [:cat :RunId] :Path]}
+  run-status-path [run-id]
   (str (fs/path (run-dir run-id) "_run-status.edn")))
 
-(defn run-artifacts-dir [run-id]
+(defn ^{:malli/schema [:=> [:cat :RunId] :Path]}
+  run-artifacts-dir [run-id]
   (str (fs/path (run-dir run-id) "artifacts")))
 
-(defn run-agent-log [run-id]
+(defn ^{:malli/schema [:=> [:cat :RunId] :Path]}
+  run-agent-log [run-id]
   (str (fs/path (run-dir run-id) "agent.log")))
 
-(defn run-session-home-link [run-id]
+(defn ^{:malli/schema [:=> [:cat :RunId] :Path]}
+  run-session-home-link [run-id]
   (str (fs/path (run-dir run-id) "session-home")))
 
-(defn triggers-path [project]
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :Path]}
+  triggers-path [project]
   (str (fs/path (nido-root) "projects" (name project) "triggers.edn")))
 
-(defn workstreams-dir [project]
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :Path]}
+  workstreams-dir [project]
   (str (fs/path (nido-root) "projects" (name project) "workstreams")))
 
-(defn workstream-dir [project ws-id]
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :Path]}
+  workstream-dir [project ws-id]
   (str (fs/path (workstreams-dir project) ws-id)))
 
-(defn workstream-edn-path [project ws-id]
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :Path]}
+  workstream-edn-path [project ws-id]
   (str (fs/path (workstream-dir project ws-id) "workstream.edn")))
 
-(defn ws-entries-dir [project ws-id]
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :Path]}
+  ws-entries-dir [project ws-id]
   (str (fs/path (workstream-dir project ws-id) "entries")))
 
-(defn ws-sessions-dir [project ws-id]
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :Path]}
+  ws-sessions-dir [project ws-id]
   (str (fs/path (workstream-dir project ws-id) "sessions")))
 
 (defn- session-key
@@ -103,16 +127,20 @@
       (str/replace "/" "%2F")
       (str/replace "\\" "%5C")))
 
-(defn session-dir [project ws-id session-name]
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName] :Path]}
+  session-dir [project ws-id session-name]
   (str (fs/path (ws-sessions-dir project ws-id) (session-key session-name))))
 
-(defn session-edn-path [project ws-id session-name]
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName] :Path]}
+  session-edn-path [project ws-id session-name]
   (str (fs/path (session-dir project ws-id session-name) "session.edn")))
 
-(defn pre-unification-dir [project]
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :Path]}
+  pre-unification-dir [project]
   (str (fs/path (nido-root) "projects" (name project) "_pre-unification")))
 
-(defn ensure-dirs!
+(defn ^{:malli/schema [:=> [:cat] :any]}
+  ensure-dirs!
   "Create the coordinator + runs directories if absent. Idempotent."
   []
   (fs/create-dirs (coordinator-root))

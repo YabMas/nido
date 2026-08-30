@@ -49,7 +49,8 @@
   [:map {:closed true}
    [:triggers [:vector Trigger]]])
 
-(defn load-for-project
+(defn ^{:malli/schema [:=> [:cat :ProjectName] [:vector :Trigger]]}
+  load-for-project
   "Read triggers.edn for a project. Returns a vector of trigger maps
    (possibly empty). Invalid entries are skipped with a stderr warning."
   [project]
@@ -68,7 +69,8 @@
                  vec))))
       [])))
 
-(defn find-by-name
+(defn ^{:malli/schema [:=> [:cat [:vector :Trigger] :keyword] [:maybe :Trigger]]}
+  find-by-name
   "Find a trigger in a loaded vector by :name. Returns nil if absent."
   [triggers name]
   (some #(when (= name (:name %)) %) triggers))
@@ -82,14 +84,16 @@
   (let [ks (mapv keyword (str/split path #"/"))]
     (get-in event ks)))
 
-(defn render-payload
+(defn ^{:malli/schema [:=> [:cat :string :map] :string]}
+  render-payload
   "Replace {{event/path}} placeholders in template with values from event.
    Missing values render as empty string."
   [template event]
   (str/replace template placeholder-re
                (fn [[_ path]] (str (lookup-path event path)))))
 
-(defn placeholder-keys
+(defn ^{:malli/schema [:=> [:cat :string] [:vector :keyword]]}
+  placeholder-keys
   "Return ordered vector of placeholder names from a trigger's :payload
    template. `{{event/url}}` → `:url`. Top-level keys only — slash-paths
    are not addressable from the form."

@@ -7,7 +7,8 @@
    [nido.coordinator.record.state :as cstate]
    [nido.platform.io :as io]))
 
-(defn read-status
+(defn ^{:malli/schema [:=> [:cat :RunId] [:maybe :RunStatus]]}
+  read-status
   "Returns the status map or nil if absent / malformed."
   [run-id]
   (let [p (cstate/run-status-path run-id)]
@@ -15,7 +16,8 @@
       (try (io/read-edn p)
            (catch Exception _ nil)))))
 
-(defn phase->state
+(defn ^{:malli/schema [:=> [:cat :keyword] [:maybe :keyword]]}
+  phase->state
   "Map a skill-reported phase to a Run state. nil for ongoing phases
    (the daemon should not transition the Run for those)."
   [phase]
@@ -25,7 +27,8 @@
     :error          :failed
     nil))
 
-(defn derive-state-after-exit
+(defn ^{:malli/schema [:=> [:cat [:maybe :RunStatus]] :keyword]}
+  derive-state-after-exit
   "Given a status map (or nil), what state should the Run move to
    after a clean agent exit? Absent status → :done."
   [status]
