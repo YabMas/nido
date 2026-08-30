@@ -5,9 +5,10 @@
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.record.clock :as clock]
             [canvas.coordinator.record.session :as session]
-            [canvas.coordinator.record.state :as state]
-            [canvas.coordinator.record.vocabulary :refer [Path ProjectName WorkstreamId]]
+            [canvas.coordinator.record.state :as state :refer [Path]]
+            [canvas.coordinator.record.vocabulary :refer [WorkstreamId]]
             [canvas.coordinator.report :as report]
+            [canvas.platform.project :refer [ProjectName]]
             [fukan.common.typing.malli]))
 
 (Kind Workstream
@@ -40,6 +41,8 @@
    Reads go through the READ contract, not the write one: an entry that was legitimately
    writable when it was written stays readable after the schema moves on, and a reader that
    cannot parse one gets nil rather than a throw."
+
+  {:child [Workstream LedgerEntry]}
   (Operation validate
     "The record, or a throw carrying malli's explanation."
     {:signature [:=> [:catn [:w Workstream]] Workstream]})

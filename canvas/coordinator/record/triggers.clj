@@ -4,7 +4,8 @@
             [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.record.state :as state]
-            [canvas.coordinator.record.vocabulary :refer [ProjectName]]
+            [canvas.platform.project :refer [ProjectName]]
+            
             [fukan.common.typing.malli]))
 
 (Kind Trigger
@@ -21,6 +22,8 @@
    Validation happens at the read, not at the launch. A trigger declaring no budget used to pass
    here and be read as infinite at launch time; refusing it when the file is read means the
    failure lands before anything has been spawned."
+
+  {:child [Trigger]}
   (Operation load-for-project
     "Every valid trigger a project declares. Invalid entries are skipped with a warning rather
      than failing the load: one bad trigger should not take the other twelve down with it."

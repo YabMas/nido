@@ -6,8 +6,9 @@
             [canvas.coordinator.record.session :as session]
             [canvas.coordinator.record.state :as state]
             [canvas.coordinator.record.triggers :as triggers]
-            [canvas.coordinator.record.vocabulary :refer [ProjectName RunId SessionName WorkstreamId]]
+            [canvas.coordinator.record.vocabulary :refer [RunId SessionName WorkstreamId]]
             [canvas.coordinator.record.workstream :as workstream]
+            [canvas.platform.project :refer [ProjectName]]
             [fukan.common.typing.malli]))
 
 (Kind Run
@@ -25,6 +26,8 @@
    The state machine is the point. Transitions are checked against an allowed table rather than
    assigned, so a Run cannot be moved from a terminal state and a caller that tries is refused
    at the write rather than discovered later by whoever reads a nonsense history."
+
+  {:child [Run]}
   (Operation validate
     "The run, or a throw carrying humanised errors."
     {:signature [:=> [:catn [:run Run]] Run]})

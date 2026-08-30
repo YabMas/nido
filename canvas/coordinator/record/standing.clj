@@ -3,8 +3,9 @@
   (:require [fukan.common.vocab.code.kind :refer [Kind]]
             [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
-            [canvas.coordinator.record.vocabulary :refer [ProjectName WorkstreamId]]
+            [canvas.coordinator.record.vocabulary :refer [WorkstreamId]]
             [canvas.coordinator.record.workstream :as workstream]
+            [canvas.platform.project :refer [ProjectName]]
             [fukan.common.typing.malli]))
 
 (Kind Standing
@@ -21,6 +22,8 @@
    DERIVED, never stored. A stored standing is a second source of truth that goes stale the
    moment anything is appended after it — and what makes a design stop standing is precisely a
    later entry, so the stored copy would be wrong exactly when it mattered."
+
+  {:child [Standing]}
   (Operation of-design
     "Whether a stamped design record still holds, and what its standing rests on."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:design :map]] Standing]

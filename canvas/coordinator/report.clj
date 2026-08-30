@@ -45,6 +45,8 @@
 (Module coordinator-report
   "The ledger's typed vocabulary: what may be written, what may be read back, and how each event
    renders."
+
+  {:child [EntryKind LedgerEvent Invariant]}
   (Operation validate-event
     "THE WRITE CONTRACT. Validate a payload against the schema registered for `kind` — what may
      be appended today. Returns the report; throws with a malli explain on mismatch."

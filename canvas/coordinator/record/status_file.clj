@@ -20,6 +20,8 @@
    The one place a skill's self-report crosses into the Run state machine. Absent or malformed
    reads as nil rather than throwing: a skill that crashed before writing is the ordinary case,
    and the daemon's answer for it is the same as for a clean exit with nothing to say."
+
+  {:child [RunStatus]}
   (Operation read-status
     "The status a run reported, or nil when it wrote none or wrote something unreadable."
     {:signature [:=> [:catn [:run-id RunId]] [:maybe RunStatus]]

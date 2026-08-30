@@ -4,9 +4,10 @@
             [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.record.clock :as clock]
-            [canvas.coordinator.record.state :as state]
-            [canvas.coordinator.record.vocabulary :refer [Path ProjectName]]
+            [canvas.coordinator.record.state :as state :refer [Path]]
+            [canvas.coordinator.record.vocabulary :refer []]
             [canvas.coordinator.record.workstream :as workstream]
+            [canvas.platform.project :refer [ProjectName]]
             [fukan.common.typing.malli]))
 
 (Kind TicketId
@@ -27,6 +28,8 @@
    The gate lives here. `gate-decision` and `promote-decision` read the ticket's status and say
    what the coordinator may do next — which is why a re-emitted event does not spawn a second
    triage run, and why a ticket nobody has triaged cannot be promoted straight to planning."
+
+  {:child [Ticket TicketId]}
   (Operation ticket-dir
     "One ticket's directory."
     {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId]] Path]})

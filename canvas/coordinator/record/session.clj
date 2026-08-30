@@ -5,7 +5,8 @@
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.record.clock :as clock]
             [canvas.coordinator.record.state :as state]
-            [canvas.coordinator.record.vocabulary :refer [ProjectName WorkstreamId SessionName]]
+            [canvas.coordinator.record.vocabulary :refer [WorkstreamId SessionName]]
+            [canvas.platform.project :refer [ProjectName]]
             [fukan.common.typing.malli]))
 
 (Kind Session
@@ -32,6 +33,8 @@
    is PURE — `engagement-state`, `stage-projection`, `notion-stage` take what they need as
    arguments and answer without touching disk, which is what makes a board's stage testable
    without provisioning a session to test it with."
+
+  {:child [Session StageProjection]}
   (Operation validate
     "The record, or a throw carrying malli's explanation of why it is not one."
     {:signature [:=> [:catn [:s Session]] Session]})

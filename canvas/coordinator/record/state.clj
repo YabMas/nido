@@ -3,8 +3,18 @@
   (:require [fukan.common.vocab.code.kind :refer [Kind]]
             [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
-            [canvas.coordinator.record.vocabulary :refer [Path ProjectName WorkstreamId RunId SessionName]]
+            [canvas.coordinator.record.vocabulary :refer [WorkstreamId RunId SessionName]]
+            [canvas.platform.project :refer [ProjectName]]
             [fukan.common.typing.malli]))
+
+(Kind Path
+  "An absolute filesystem path the coordinator owns.
+
+   Owned HERE because this is the module that hides how one is built. Every path in the
+   coordinator is derived from the nido home by a function in this file, and no caller anywhere
+   assembles one — which is what lets the whole layout move, and what lets a test point a run at
+   a temp directory by redefining one root."
+  :string)
 
 (Module record-state
   "Where everything the coordinator owns lives on disk.
@@ -12,6 +22,7 @@
    Twenty-eight functions and one shape: a path, derived from the nido home. The value is not any
    one of them but that no caller anywhere builds a path itself — which is what lets the whole
    layout move, and what lets a test point a run at a temp directory by redefining one root."
+  {:child [Path]}
   (Operation nido-root
     "The nido home. Every other path here is derived from it, which is what makes a whole coordinator relocatable by moving one directory."
     {:signature [:=> [:catn ] Path]})
