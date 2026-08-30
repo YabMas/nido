@@ -305,7 +305,8 @@
    [:exit      Gate]
    [:undo      PhaseUndo]])
 
-(defn invariant
+(defn ^{:malli/schema [:=> [:cat :any] :Invariant]}
+  invariant
   "Normalise one :invariants entry to {:invariant <string> :holds <keyword>}.
 
    A plain string is what every record written before phasing carries, and it
@@ -316,7 +317,8 @@
   [x]
   (if (string? x) {:invariant x :holds :always} x))
 
-(defn seam-closure
+(defn ^{:malli/schema [:=> [:cat :map] [:maybe :string]]}
+  seam-closure
   "The one-line rendering of what closes `seam`, or nil for a legacy seam that
    names no closure. nil is a real answer here and is rendered as absence rather
    than as \"unknown\": the record predates the obligation, so saying nothing is
@@ -1100,7 +1102,8 @@
    answer, and offering it as seven buttons pretends otherwise."
   ["A" "B" "C" "D" "E" "F"])
 
-(defn option-letter
+(defn ^{:malli/schema [:=> [:cat :int] [:maybe :string]]}
+  option-letter
   "The letter for the option at position `i`, or nil past the cap."
   [i]
   (get option-letters i))
@@ -1774,7 +1777,8 @@
                  "prose, the only way to answer is a free-text essay.")
             {:kind :blocker :report report}))))
 
-(defn validate-event
+(defn ^{:malli/schema [:=> [:cat :EntryKind :LedgerEvent] :LedgerEvent]}
+  validate-event
   "THE WRITE CONTRACT. Validate `report` (parsed EDN) against the schema registered
    for entry `kind` — what may be appended today. Returns the report on success;
    throws ex-info carrying a malli :explain on mismatch (the bb task prints it so
@@ -1788,7 +1792,8 @@
                             kind report)
     (= :blocker kind) enforce-blocker-options))
 
-(defn parse-event
+(defn ^{:malli/schema [:=> [:cat :EntryKind :any] :LedgerEvent]}
+  parse-event
   "THE READ CONTRACT. Like validate-event, but accepts anything that was
    legitimately writable when it was written (read-schemas), not only what is
    writable now.
@@ -1805,12 +1810,14 @@
                         (throw (ex-info "No schema for entry kind" {:kind kind})))
                     kind report))
 
-(defn validate
+(defn ^{:malli/schema [:=> [:cat :LedgerEvent] :LedgerEvent]}
+  validate
   "Backward-compatible triage validator — delegates to (validate-event :triage report)."
   [report]
   (validate-event :triage report))
 
-(defn entry-payload
+(defn ^{:malli/schema [:=> [:cat :EntryKind :string] [:tuple :string :string]]}
+  entry-payload
   "For a ledger append: given an entry `kind` and raw `content` string, return
    [ext payload]. A registered (typed) kind parses `content` as EDN, validates it
    (throws ex-info with :explain on mismatch), and returns [\"edn\" <pprinted report>].
@@ -2128,7 +2135,8 @@
    copy of the same set."
   #{:sufficient :accurate})
 
-(defn findings-heading
+(defn ^{:malli/schema [:=> [:cat :keyword] :string]}
+  findings-heading
   "What the findings under a verdict ARE. :insufficient does not report claims
    the code refuses — every claim held — so heading them that way tells a reader
    the opposite of what the round found."
@@ -2294,7 +2302,8 @@
          ""
          (str "Source: " source-url)]))))
 
-(defn report->markdown
+(defn ^{:malli/schema [:=> [:cat [:maybe :LedgerEvent]] :string]}
+  report->markdown
   "Render a `:format`-tagged report payload to markdown. Each event type → its own
    headed markdown; :markdown → its body; nil/unknown → \"\"."
   [report]
@@ -2338,7 +2347,8 @@
       (str (str/trimr (subs s 0 (dec index-title-cap))) "…")
       s)))
 
-(defn report-title
+(defn ^{:malli/schema [:=> [:cat :LedgerEvent] [:maybe :string]]}
+  report-title
   "Index title for the typed events that carry no top-level :title — design / plan
    / completed / blocker. nil otherwise (triage, pr-opened, merged and markdown carry a usable :title that
    the caller falls back to).
