@@ -38,7 +38,8 @@
   [path now-ms]
   (- now-ms (.toMillis (fs/last-modified-time path))))
 
-(defn reclaim-orphans!
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  reclaim-orphans!
   "Programmatic, age-guarded reclaim for the coordinator's periodic sweep.
    Deletes only orphan state dirs whose instance dir is older than
    :min-age-ms (the grace window that protects sessions still booting).
@@ -54,7 +55,8 @@
       (when (fs/exists? path) (fs/delete-tree path)))
     (vec targets)))
 
-(defn reclaim!
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  reclaim!
   "List orphaned per-instance state dirs. With :force? true, delete
    them. An instance is orphaned iff its id is not present in any
    registry entry."

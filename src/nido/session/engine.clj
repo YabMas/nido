@@ -128,7 +128,8 @@
         (link-path! source-path target-path)
         (core/log-step (str "Linked " rel-path " -> " source-path))))))
 
-(defmulti run-setup-step!
+(defmulti ^{:malli/schema [:=> [:cat :map :Path] :any]}
+  run-setup-step!
   "Run a one-shot setup step. Dispatches on (:type step)."
   (fn [step _project-dir] (:type step)))
 
@@ -162,10 +163,12 @@
 ;; Session lifecycle
 ;; ---------------------------------------------------------------------------
 
-(defn session-edn-path [project-name]
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :Path]}
+  session-edn-path [project-name]
   (str (fs/path (core/nido-home) "projects" project-name "session.edn")))
 
-(defn read-session-edn
+(defn ^{:malli/schema [:=> [:cat :ProjectName] [:maybe :map]]}
+  read-session-edn
   "Soft read: the project's session.edn, or nil when it has no session.edn.
    For read-only callers that can still answer from defaults — a project can be
    registered in projects.edn but never configured, and enumerating it must not
@@ -176,7 +179,8 @@
     (when (fs/exists? path)
       (io/read-edn path))))
 
-(defn load-session-edn [project-name]
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :map]}
+  load-session-edn [project-name]
   (let [path (session-edn-path project-name)]
     (when-not (fs/exists? path)
       (throw (ex-info (str "No session.edn found for project '" project-name "'")
@@ -184,7 +188,8 @@
                        :hint "Create a session.edn in ~/.nido/projects/<name>/session.edn"})))
     (io/read-edn path)))
 
-(defn resolve-project-name
+(defn ^{:malli/schema [:=> [:cat :Path] :ProjectName]}
+  resolve-project-name
   "Resolve a project-dir to its registered project name, falling back to the
    leaf path component."
   [project-dir]
@@ -214,7 +219,8 @@
          (= (str (fs/normalize (fs/path project-dir)))
             (str (fs/normalize (fs/path reg-dir)))))))
 
-(defn resolve-instance-id
+(defn ^{:malli/schema [:=> [:cat :Path] :InstanceId]}
+  resolve-instance-id
   "Resolve a project-dir to a unique instance identifier. For the main
    checkout this equals the project-name; for a worktree it is
    `<project-name>--<leaf-of-project-dir>` so per-worktree state is isolated."
@@ -270,7 +276,8 @@
               acc))
           {} services))
 
-(defn filter-services
+(defn ^{:malli/schema [:=> [:cat :any :any] :any]}
+  filter-services
   "Filter a session.edn :services list by an allowlist. Allowlist is
    either :all (return everything) or a vector of allowed :type values."
   [services allowlist]
@@ -288,7 +295,8 @@
 (defn- profile-path [wt-path]
   (str (fs/path (state/instance-state-dir (resolve-instance-id wt-path)) "profile.edn")))
 
-(defn write-profile-for-session!
+(defn ^{:malli/schema [:=> [:cat :Path :any] :any]}
+  write-profile-for-session!
   "Persist the resolved profile to the session's state dir. Called at the
    end of start-session! so cleanup paths can read the profile back
    without re-resolving (robust against registry edits between up and
@@ -296,7 +304,8 @@
   [wt-path profile]
   (io/write-edn! (profile-path wt-path) profile))
 
-(defn read-profile-for-session
+(defn ^{:malli/schema [:=> [:cat :Path] [:maybe :any]]}
+  read-profile-for-session
   "Return the resolved profile persisted at session-up time. nil if absent
    (e.g. legacy sessions predating this feature)."
   [wt-path]
@@ -451,7 +460,8 @@
               (proc/process-alive? pid)))
           svc-states)))
 
-(defn reconcile-app!
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  reconcile-app!
   "Re-start any :eval service of an already-running session whose app is no
    longer listening.
 
@@ -473,7 +483,8 @@
           :when   saved-state]
     (eval-svc/start-app! svc-def saved-state (:context existing))))
 
-(defn start-session!
+(defn ^{:malli/schema [:=> [:cat :Path :map] :any]}
+  start-session!
   "Start a session for a project directory using its session.edn definition.
    opts: {:jvm-heap-max string, :jvm-aliases [kw], :jvm-extra-opts [str],
           :profile <resolved-profile-map>, ...}
@@ -518,7 +529,8 @@
   (let [legacy-path (str (fs/path project-dir ".codex" "session.edn"))]
     (io/read-edn legacy-path)))
 
-(defn stop-session!
+(defn ^{:malli/schema [:=> [:cat :Path] :any]}
+  stop-session!
   "Stop a session for a project directory."
   [project-dir]
   (let [instance-id (resolve-instance-id project-dir)
@@ -562,7 +574,8 @@
                                    (ex-message e)))))
         (println "Stopped session" instance-id)))))
 
-(defn session-status
+(defn ^{:malli/schema [:=> [:cat :Path] :any]}
+  session-status
   "Show status for a project session."
   [project-dir]
   (let [project-name (resolve-project-name project-dir)
@@ -590,7 +603,8 @@
                   (println (str "    " (name k) ": " v)))))))
         (println "  state file:" (state/session-state-file instance-id))))))
 
-(defn list-sessions
+(defn ^{:malli/schema [:=> [:cat] :any]}
+  list-sessions
   "List all sessions tracked by the nido registry."
   []
   (let [registry (state/read-registry)]

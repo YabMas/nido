@@ -116,16 +116,20 @@
          (jj-source-repo? source-dir))    :jj-source-git-worktree
     :else                                 :plain-git))
 
-(defn mcp-path [project-name session-name]
+(defn ^{:malli/schema [:=> [:cat :ProjectName :string] :Path]}
+  mcp-path [project-name session-name]
   (str (fs/path (state/session-home-dir project-name session-name) ".mcp.json")))
 
-(defn claude-md-path [project-name session-name]
+(defn ^{:malli/schema [:=> [:cat :ProjectName :string] :Path]}
+  claude-md-path [project-name session-name]
   (str (fs/path (state/session-home-dir project-name session-name) "CLAUDE.md")))
 
-(defn agents-md-path [project-name session-name]
+(defn ^{:malli/schema [:=> [:cat :ProjectName :string] :Path]}
+  agents-md-path [project-name session-name]
   (str (fs/path (state/session-home-dir project-name session-name) "AGENTS.md")))
 
-(defn worktree-link [project-name session-name]
+(defn ^{:malli/schema [:=> [:cat :ProjectName :string] :Path]}
+  worktree-link [project-name session-name]
   (str (fs/path (state/session-home-dir project-name session-name) "worktree")))
 
 (defn- postgres-server
@@ -185,7 +189,8 @@
     (when (seq servers)
       {:mcpServers servers})))
 
-(defn write-session-mcp!
+(defn ^{:malli/schema [:=> [:cat :InstanceId :ProjectName :Path :any :any] [:maybe :Path]]}
+  write-session-mcp!
   "Render the session's MCP config and write it to the instance-state dir as a
    launch input. Returns the path, or nil when no server is configured."
   [instance-id project-name worktree pg-svc pg-port]
@@ -539,7 +544,8 @@
     (str "You are working through the nido orchestrator. You are in the session's\n"
          "worktree; source-code edits land here, NOT in nido's source tree.\n")))
 
-(defn read-project-briefing
+(defn ^{:malli/schema [:=> [:cat :ProjectName] [:maybe :string]]}
+  read-project-briefing
   "Return the project-specific briefing markdown for <project-name>, or
    nil when no briefing resource exists. Looked up on the classpath at
    project-briefings/<project>.md so projects without dedicated briefings
@@ -667,7 +673,8 @@
       (fs/delete link))
     (fs/create-sym-link link worktree)))
 
-(defn nido-add-dirs
+(defn ^{:malli/schema [:=> [:cat] [:vector :string]]}
+  nido-add-dirs
   "Directories to pass to claude's --add-dir so nido's harness artifacts resolve
    when the agent boots in the worktree. The nido source dir's .claude carries
    them (see nido-native-entries)."
@@ -830,7 +837,8 @@
         (fs/delete path)
         (core/log-step (str "Removed legacy " path))))))
 
-(defn write-artifacts!
+(defn ^{:malli/schema [:=> [:cat :map :map] :any]}
+  write-artifacts!
   "Write per-session launcher artifacts into the session home. Called from
    start-services! after services are up. session-edn is passed in so we
    can read DB credentials without re-loading from disk."
@@ -906,7 +914,8 @@
           (catch Exception e
             (core/log-step (str "warning: run-shim: " (ex-message e)))))))))
 
-(defn session-briefing
+(defn ^{:malli/schema [:=> [:cat :ProjectName :string :InstanceId] :string]}
+  session-briefing
   "Render the session briefing string from persisted state + links. Reusable as a
    launch input (claude --append-system-prompt). Source of truth for the home
    CLAUDE.md and AGENTS.md."
@@ -932,7 +941,8 @@
              :project-briefing (read-project-briefing project-name)}
             ws-ctx))))
 
-(defn rerender-briefing!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :string :InstanceId] :any]}
+  rerender-briefing!
   "Re-render only the session-home briefing files — used after a
    link mutation so the next session start sees the new entries.
    Reads the current ctx (ports etc.) from the persisted session.edn.
@@ -956,7 +966,8 @@
             (core/log-step (str "warning: worktree AGENTS.override.md: "
                                 (ex-message e)))))))))
 
-(defn remove-artifacts!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :string] :any]}
+  remove-artifacts!
   "Remove the session home. Called from stop-session!. No-op if the session
    was never written there (e.g. a stale session-name lookup)."
   [project-name session-name]

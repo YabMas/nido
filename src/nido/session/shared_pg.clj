@@ -21,14 +21,16 @@
    with a worktree's deterministic port (different seed → different value)."
   [5500 7500])
 
-(defn resolve-shared-port
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :int]}
+  resolve-shared-port
   "Deterministic port for a project's shared cluster, seeded by its shared dir
    so it is stable across runs and distinct from per-session ports."
   [project-name]
   (let [[low high] shared-port-range]
     (proc/deterministic-port (state/project-shared-dir project-name) low high)))
 
-(defn with-lock
+(defn ^{:malli/schema [:=> [:cat :Path :any] :any]}
+  with-lock
   "Run (f) while holding an exclusive OS file lock on lock-path. Creates the
    parent dir and lock file as needed. Blocks until the lock is acquired.
 
@@ -111,7 +113,8 @@
         (core/log-step (str "Shared cluster running (port " port ", data-dir=" data-dir ")"))
         port))))
 
-(defn ensure-up!
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :any]}
+  ensure-up!
   "Ensure the project's shared cluster exists and is running. Seeds it by
    APFS-cloning the template on first call. Concurrency-safe. Returns {:port p}."
   [project-name]
@@ -129,7 +132,8 @@
                                      :seeded-at (core/now-iso)}))
         {:port (start-existing! project-name)}))))
 
-(defn status
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :any]}
+  status
   "Print shared-cluster status for a project."
   [project-name]
   (let [data-dir (state/shared-pg-data-dir project-name)
@@ -146,7 +150,8 @@
       (when-let [p (:port m)] (println "  port:" p))
       (when-let [t (:seeded-at m)] (println "  seeded-at:" t)))))
 
-(defn down!
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :any]}
+  down!
   "Stop the shared cluster (preserve data). Cleans a stale postmaster.pid if the
    cluster died uncleanly. No-op if not seeded or already stopped."
   [project-name]
@@ -162,7 +167,8 @@
           (do (fs/delete-if-exists pid-file)
               (core/log-step (str "Removed stale shared postmaster.pid for " project-name))))))))
 
-(defn reset!
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :any]}
+  reset!
   "Stop, drop PGDATA, re-clone from template, start. Recovery path."
   [project-name]
   (with-lock (state/shared-lock-file project-name)
@@ -175,7 +181,8 @@
   ;; ensure-up! re-takes the lock; keep reset! simple by composing.
   (ensure-up! project-name))
 
-(defn destroy!
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :any]}
+  destroy!
   "Stop and remove the shared cluster PGDATA + metadata."
   [project-name]
   (down! project-name)
@@ -188,21 +195,24 @@
 ;; Migration file helpers
 ;; ---------------------------------------------------------------------------
 
-(defn migration-file->version
+(defn ^{:malli/schema [:=> [:cat :string] [:maybe :int]]}
+  migration-file->version
   "Numeric version of a Flyway versioned migration filename, or nil for
    non-versioned (e.g. repeatable R__) names."
   [filename]
   (when-let [[_ v] (re-matches #"V(\d+)__.*\.sql" filename)]
     (parse-long v)))
 
-(defn migration-file->description
+(defn ^{:malli/schema [:=> [:cat :string] :string]}
+  migration-file->description
   "Flyway description: the text between the version prefix and .sql, with
    underscores turned into spaces (matches Flyway's own recorded description)."
   [filename]
   (when-let [[_ _ desc] (re-matches #"V(\d+)__(.*)\.sql" filename)]
     (str/replace desc "_" " ")))
 
-(defn pending-migrations
+(defn ^{:malli/schema [:=> [:cat :any [:vector :string]] [:vector :string]]}
+  pending-migrations
   "Migration filenames whose version is greater than applied-max, sorted
    ascending by version. Non-versioned names are ignored."
   [applied-max filenames]
@@ -216,7 +226,8 @@
 ;; DDL-less application role
 ;; ---------------------------------------------------------------------------
 
-(defn app-role-sql
+(defn ^{:malli/schema [:=> [:cat :map] :string]}
+  app-role-sql
   "Idempotent SQL that (re)establishes the DDL-less application role. Grants
    full DML on current and future objects but never CREATE on the schema, so a
    Flyway migration run as this role fails `permission denied` and rolls back."
@@ -239,7 +250,8 @@
    "ALTER DEFAULT PRIVILEGES FOR ROLE " owner-user " IN SCHEMA " schema
    " GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO " app-user ";\n"))
 
-(defn run-owner-sql!
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  run-owner-sql!
   "Run a SQL string against the shared cluster as the owner via psql. Throws on
    non-zero exit with the captured stderr."
   [{:keys [port db-name owner-user]} sql]
@@ -252,7 +264,8 @@
       (throw (ex-info "shared-pg owner SQL failed"
                       {:error (:err result) :output (:out result)})))))
 
-(defn ensure-app-role!
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  ensure-app-role!
   "Create/refresh the DDL-less application role on the shared cluster.
    No-op when :app-user is nil (feature off)."
   [{:keys [app-user schema owner-user] :as opts}]
@@ -265,7 +278,8 @@
 ;; Advance-to-main apply loop
 ;; ---------------------------------------------------------------------------
 
-(defn history-insert-sql
+(defn ^{:malli/schema [:=> [:cat :map] :string]}
+  history-insert-sql
   "One INSERT into flyway_schema_history matching Flyway's row shape. Wrapped
    with the migration body in a single transaction by the caller."
   [{:keys [schema rank version description script checksum owner-user]}]
@@ -275,7 +289,8 @@
        rank ", '" version "', '" description "', 'SQL', '" script "', "
        checksum ", '" owner-user "', now(), 0, true);"))
 
-(defn shared-applied-max
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  shared-applied-max
   "Max applied version and max installed_rank in the shared history. Returns
    {:version 0 :rank 0} for an empty/baseline-free history."
   [{:keys [port db-name owner-user schema]}]
@@ -305,7 +320,8 @@
 
 (def ^:private migrations-subdir "resources/db/migrations")
 
-(defn list-main-migration-files
+(defn ^{:malli/schema [:=> [:cat :Path] [:vector :string]]}
+  list-main-migration-files
   "Basenames of main@origin's migration files, via jj — one cheap subprocess,
    no per-file `file show`. Fails loud on jj error. (The dir is flat: every
    file lives directly under resources/db/migrations.)"
@@ -321,7 +337,8 @@
          (filter #(str/ends-with? % ".sql"))
          (mapv (comp str fs/file-name)))))
 
-(defn materialize-one!
+(defn ^{:malli/schema [:=> [:cat :Path :Path :string] :any]}
+  materialize-one!
   "Write one main@origin migration file (by basename) into dest-dir via jj.
    Fails loud on jj error. UTF-8 pinned on the write so the checksum round-trip
    is charset-independent."
@@ -335,7 +352,8 @@
     (spit (str (fs/path dest-dir filename)) (:out show) :encoding "UTF-8")
     filename))
 
-(defn advance-shared-to-main!
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  advance-shared-to-main!
   "Advance the shared cluster to main@origin by applying pending migrations as
    the owner. No-op when already current — nothing is materialized or shelled
    out to jj/psql in that case. Returns the count applied."
@@ -377,7 +395,8 @@
           (finally
             (fs/delete-tree tmp)))))))
 
-(defn ensure-ready!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :map] :any]}
+  ensure-ready!
   "Bring the shared cluster up and, when opts opts-in (has :app-user or
    :source-repo), advance it to main@origin and ensure the DDL-less role.
    Returns {:port p}. opts nil/empty ⇒ plain ensure-up!."

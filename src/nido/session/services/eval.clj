@@ -202,7 +202,8 @@
 ;; Public: app toggle (called from lifecycle + UI, NOT from start-service!)
 ;; ---------------------------------------------------------------------------
 
-(defn start-app!
+(defn ^{:malli/schema [:=> [:cat :map :any :map] :any]}
+  start-app!
   "Eval the service's :start-form over nREPL and wait for the app's HTTP
    port to open. Idempotent: if the app is already listening, returns
    immediately without re-evaling."
@@ -235,7 +236,8 @@
             (core/log-step (str "App is reachable at http://" host ":" app-port)))
           ready?)))))
 
-(defn stop-app!
+(defn ^{:malli/schema [:=> [:cat :map :any] :any]}
+  stop-app!
   "Eval the service's :stop-form over nREPL to bring the app down while
    leaving the JVM running. Idempotent."
   [service-def saved-state]

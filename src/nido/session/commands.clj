@@ -10,7 +10,8 @@
    [nido.platform.core :as core]
    [nido.session.context :as ctx]))
 
-(defn resolve-command
+(defn ^{:malli/schema [:=> [:cat :map :any] [:maybe :any]]}
+  resolve-command
   "Look up a command definition by ref in the commands map."
   [commands-map ref]
   (or (get commands-map ref)
@@ -23,7 +24,8 @@
   [home]
   (boolean (and home (seq home) (fs/exists? (fs/path home "bin" "java")))))
 
-(defn resolve-java-home
+(defn ^{:malli/schema [:=> [:cat] [:maybe :string]]}
+  resolve-java-home
   "Best-effort discovery of a JDK home for subprocesses that shell out to the
    Clojure CLI (e.g. brian's `bb ci`). Project commands run via `bash -lc`,
    and a login shell re-runs macOS' path_helper which reorders PATH so the
@@ -52,7 +54,8 @@
                     home      (str (fs/parent (fs/parent canonical)))]
                 (when (valid-java-home? home) home))))))))
 
-(defn run-command!
+(defn ^{:malli/schema [:=> [:cat :map :any :map [:? :any]] :any]}
+  run-command!
   "Run a named project-command.
 
    commands-map: the project's :project-commands map.

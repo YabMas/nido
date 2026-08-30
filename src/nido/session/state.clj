@@ -14,39 +14,46 @@
 ;; shared per project.
 ;; ---------------------------------------------------------------------------
 
-(defn state-dir
+(defn ^{:malli/schema [:=> [:cat] :Path]}
+  state-dir
   "Root state directory: ~/.nido/state/"
   []
   (str (fs/path (core/nido-home) "state")))
 
-(defn instance-state-dir
+(defn ^{:malli/schema [:=> [:cat :InstanceId] :Path]}
+  instance-state-dir
   "Per-instance state directory: ~/.nido/state/<instance-id>/"
   [instance-id]
   (str (fs/path (state-dir) instance-id)))
 
-(defn session-mcp-path
+(defn ^{:malli/schema [:=> [:cat :InstanceId] :Path]}
+  session-mcp-path
   "Path to a session's rendered postgres MCP config (a launch input passed via
    claude's --mcp-config). Lives under the durable instance-state dir, not the
    ephemeral session home."
   [instance-id]
   (str (fs/path (instance-state-dir instance-id) "mcp.json")))
 
-(defn session-state-file
+(defn ^{:malli/schema [:=> [:cat :InstanceId] :Path]}
+  session-state-file
   "Session state file: ~/.nido/state/<instance-id>/session.edn"
   [instance-id]
   (str (fs/path (instance-state-dir instance-id) "session.edn")))
 
-(defn log-dir
+(defn ^{:malli/schema [:=> [:cat :InstanceId] :Path]}
+  log-dir
   "Log directory: ~/.nido/state/<instance-id>/logs/"
   [instance-id]
   (str (fs/path (instance-state-dir instance-id) "logs")))
 
-(defn log-file
+(defn ^{:malli/schema [:=> [:cat :InstanceId :any] :Path]}
+  log-file
   "Log file for a named service: ~/.nido/state/<instance-id>/logs/<name>.log"
   [instance-id service-name]
   (str (fs/path (log-dir instance-id) (str (name service-name) ".log"))))
 
-(defn pg-data-dir
+(defn ^{:malli/schema [:=> [:cat :InstanceId] :Path]}
+  pg-data-dir
   "PostgreSQL data directory: ~/.nido/state/<instance-id>/pg-data/"
   [instance-id]
   (str (fs/path (instance-state-dir instance-id) "pg-data")))
@@ -59,12 +66,14 @@
 ;; off instance-state-dir is complete.
 ;; ---------------------------------------------------------------------------
 
-(defn sessions-root
+(defn ^{:malli/schema [:=> [:cat] :Path]}
+  sessions-root
   "~/.nido/sessions/"
   []
   (str (fs/path (core/nido-home) "sessions")))
 
-(defn session-home-dir
+(defn ^{:malli/schema [:=> [:cat :ProjectName :string] :Path]}
+  session-home-dir
   "~/.nido/sessions/<project>/<session>/"
   [project-name session-name]
   (str (fs/path (sessions-root) project-name session-name)))
@@ -73,35 +82,42 @@
 ;; Template paths — long-lived, per-project, source for APFS clones
 ;; ---------------------------------------------------------------------------
 
-(defn templates-dir
+(defn ^{:malli/schema [:=> [:cat] :Path]}
+  templates-dir
   "Root templates directory: ~/.nido/templates/"
   []
   (str (fs/path (core/nido-home) "templates")))
 
-(defn project-template-dir
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :Path]}
+  project-template-dir
   "Per-project template directory: ~/.nido/templates/<project-name>/"
   [project-name]
   (str (fs/path (templates-dir) project-name)))
 
-(defn template-pg-data-dir
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :Path]}
+  template-pg-data-dir
   "Template PostgreSQL data directory: ~/.nido/templates/<project-name>/pg-data/"
   [project-name]
   (str (fs/path (project-template-dir project-name) "pg-data")))
 
-(defn template-meta-file
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :Path]}
+  template-meta-file
   "Template metadata file: ~/.nido/templates/<project-name>/template.edn"
   [project-name]
   (str (fs/path (project-template-dir project-name) "template.edn")))
 
-(defn template-log-file
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :Path]}
+  template-log-file
   "Template log file: ~/.nido/templates/<project-name>/pg.log"
   [project-name]
   (str (fs/path (project-template-dir project-name) "pg.log")))
 
-(defn read-template-meta [project-name]
+(defn ^{:malli/schema [:=> [:cat :ProjectName] [:maybe :map]]}
+  read-template-meta [project-name]
   (io/read-edn (template-meta-file project-name)))
 
-(defn write-template-meta! [project-name data]
+(defn ^{:malli/schema [:=> [:cat :ProjectName :map] :any]}
+  write-template-meta! [project-name data]
   (io/write-edn! (template-meta-file project-name) data))
 
 ;; ---------------------------------------------------------------------------
@@ -109,40 +125,48 @@
 ;; sessions in :shared mode. Lives under ~/.nido/shared/<project-name>/.
 ;; ---------------------------------------------------------------------------
 
-(defn shared-dir
+(defn ^{:malli/schema [:=> [:cat] :Path]}
+  shared-dir
   "Root shared-cluster directory: ~/.nido/shared/"
   []
   (str (fs/path (core/nido-home) "shared")))
 
-(defn project-shared-dir
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :Path]}
+  project-shared-dir
   "Per-project shared dir: ~/.nido/shared/<project-name>/"
   [project-name]
   (str (fs/path (shared-dir) project-name)))
 
-(defn shared-pg-data-dir
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :Path]}
+  shared-pg-data-dir
   "Shared cluster PGDATA: ~/.nido/shared/<project-name>/pg-data/"
   [project-name]
   (str (fs/path (project-shared-dir project-name) "pg-data")))
 
-(defn shared-log-file
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :Path]}
+  shared-log-file
   "Shared cluster log: ~/.nido/shared/<project-name>/pg.log"
   [project-name]
   (str (fs/path (project-shared-dir project-name) "pg.log")))
 
-(defn shared-meta-file
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :Path]}
+  shared-meta-file
   "Shared cluster metadata: ~/.nido/shared/<project-name>/shared.edn"
   [project-name]
   (str (fs/path (project-shared-dir project-name) "shared.edn")))
 
-(defn shared-lock-file
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :Path]}
+  shared-lock-file
   "Lock file guarding shared-cluster creation: ~/.nido/shared/<project-name>/shared.lock"
   [project-name]
   (str (fs/path (project-shared-dir project-name) "shared.lock")))
 
-(defn read-shared-meta [project-name]
+(defn ^{:malli/schema [:=> [:cat :ProjectName] [:maybe :map]]}
+  read-shared-meta [project-name]
   (io/read-edn (shared-meta-file project-name)))
 
-(defn write-shared-meta! [project-name data]
+(defn ^{:malli/schema [:=> [:cat :ProjectName :map] :any]}
+  write-shared-meta! [project-name data]
   (io/write-edn! (shared-meta-file project-name) data))
 
 ;; ---------------------------------------------------------------------------
@@ -151,23 +175,27 @@
 ;; ~/.nido/state/<instance-id>/pg-mode-override.edn and survives down/up.
 ;; ---------------------------------------------------------------------------
 
-(defn pg-mode-override-file
+(defn ^{:malli/schema [:=> [:cat :InstanceId] :Path]}
+  pg-mode-override-file
   "Per-session PG mode override file: ~/.nido/state/<instance-id>/pg-mode-override.edn"
   [instance-id]
   (str (fs/path (instance-state-dir instance-id) "pg-mode-override.edn")))
 
-(defn read-pg-mode-override
+(defn ^{:malli/schema [:=> [:cat :InstanceId] [:maybe :map]]}
+  read-pg-mode-override
   "Return the override map {:mode <kw>} for a session, or nil if none set."
   [instance-id]
   (let [f (pg-mode-override-file instance-id)]
     (when (fs/exists? f) (io/read-edn f))))
 
-(defn write-pg-mode-override!
+(defn ^{:malli/schema [:=> [:cat :InstanceId :keyword] :any]}
+  write-pg-mode-override!
   "Persist {:mode <kw>} as this session's PG mode override."
   [instance-id mode]
   (io/write-edn! (pg-mode-override-file instance-id) {:mode mode}))
 
-(defn clear-pg-mode-override!
+(defn ^{:malli/schema [:=> [:cat :InstanceId] :any]}
+  clear-pg-mode-override!
   "Remove a session's PG mode override (if any)."
   [instance-id]
   (fs/delete-if-exists (pg-mode-override-file instance-id)))
@@ -176,13 +204,16 @@
 ;; Session read/write
 ;; ---------------------------------------------------------------------------
 
-(defn read-session [instance-id]
+(defn ^{:malli/schema [:=> [:cat :InstanceId] [:maybe :map]]}
+  read-session [instance-id]
   (io/read-edn (session-state-file instance-id)))
 
-(defn write-session! [instance-id data]
+(defn ^{:malli/schema [:=> [:cat :InstanceId :map] :any]}
+  write-session! [instance-id data]
   (io/write-edn! (session-state-file instance-id) data))
 
-(defn delete-session! [instance-id]
+(defn ^{:malli/schema [:=> [:cat :InstanceId] :any]}
+  delete-session! [instance-id]
   (fs/delete-if-exists (session-state-file instance-id)))
 
 ;; ---------------------------------------------------------------------------
@@ -198,17 +229,20 @@
     [(str (fs/path codex-home "nido" "sessions.edn"))
      (str (fs/path codex-home "agent-cockpit" "sessions.edn"))]))
 
-(defn read-registry []
+(defn ^{:malli/schema [:=> [:cat] :map]}
+  read-registry []
   (let [legacy (reduce (fn [acc path]
                          (merge acc (or (io/read-edn path) {})))
                        {}
                        (legacy-registry-paths))]
     (merge legacy (or (io/read-edn @registry-file-path) {}))))
 
-(defn write-registry! [registry]
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  write-registry! [registry]
   (io/write-edn! @registry-file-path registry))
 
-(defn upsert-registry! [project-dir entry]
+(defn ^{:malli/schema [:=> [:cat :Path :map] :any]}
+  upsert-registry! [project-dir entry]
   (write-registry! (assoc (read-registry) project-dir entry)))
 
 (defn- prune-legacy-registry!
@@ -222,11 +256,13 @@
       (when (contains? m k)
         (io/write-edn! path (dissoc m k))))))
 
-(defn remove-from-registry! [project-dir]
+(defn ^{:malli/schema [:=> [:cat :Path] :any]}
+  remove-from-registry! [project-dir]
   (prune-legacy-registry! project-dir)
   (write-registry! (dissoc (read-registry) project-dir)))
 
-(defn remove-many-from-registry!
+(defn ^{:malli/schema [:=> [:cat [:vector :any]] :any]}
+  remove-many-from-registry!
   "Remove several keys in ONE canonical write, still pruning each from the
    legacy registries. The per-key remove-from-registry! re-reads and rewrites
    for every key, so a concurrent upsert-registry! landing between one key's

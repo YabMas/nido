@@ -49,7 +49,8 @@
 (defn- inside? [child parent]
   (str/starts-with? (abs-path child) (abs-path parent)))
 
-(defn resolve-project
+(defn ^{:malli/schema [:=> [:cat :map] [:maybe :ProjectName]]}
+  resolve-project
   "Resolve the active nido project. Order:
      1. explicit :project opt
      2. cwd is at or inside a registered project's :directory
@@ -72,7 +73,8 @@
                       {:registered (vec (keys projects))})))
     [chosen (get projects chosen)]))
 
-(defn worktrees-dir
+(defn ^{:malli/schema [:=> [:cat :ProjectName :Path] :Path]}
+  worktrees-dir
   "Base directory for this project's worktrees. Resolution:
      - session.edn :worktrees-dir absolute path or `~/...` → used as-is
      - session.edn :worktrees-dir relative path             → resolved
@@ -101,19 +103,22 @@
       (str (fs/path (str (fs/parent project-dir))
                     (str project-name "-worktrees"))))))
 
-(defn worktree-path
+(defn ^{:malli/schema [:=> [:cat :ProjectName :Path :string] :Path]}
+  worktree-path
   "Filesystem path for a named session's worktree."
   [project-name project-dir name]
   (str (fs/path (worktrees-dir project-name project-dir) name)))
 
-(defn canonical
+(defn ^{:malli/schema [:=> [:cat :any] :Path]}
+  canonical
   "Absolute, symlink-resolved path string. Falls back to abs-path when the
    path doesn't exist on disk (e.g. in tests / not-yet-created dirs)."
   [p]
   (try (str (fs/canonicalize p))
        (catch Exception _ (abs-path p))))
 
-(defn session-from-cwd
+(defn ^{:malli/schema [:=> [:cat [:? :any]] [:maybe :map]]}
+  session-from-cwd
   "Resolve which session a cwd belongs to via the worktree-keyed registry
    (longest-prefix wins), deriving the session name by relativizing the
    matched worktree path against the project's worktrees-dir. Home-independent.
@@ -191,7 +196,8 @@
       (core/log-step (str "git worktree add " wt-path " -b " branch " " base))
       (git! project-dir ["worktree" "add" wt-path "-b" branch base]))))
 
-(defn create-symlink-worktree!
+(defn ^{:malli/schema [:=> [:cat :Path :Path] :any]}
+  create-symlink-worktree!
   "Symlink wt-path to an existing checkout at target. Refuses if target
    is missing — we never silently point at non-existent code. Replaces a
    stale symlink at wt-path if one exists."
@@ -205,7 +211,8 @@
   (fs/create-sym-link wt-path target)
   wt-path)
 
-(defn remove-symlink-worktree!
+(defn ^{:malli/schema [:=> [:cat :Path] :any]}
+  remove-symlink-worktree!
   "Delete the symlink at wt-path. Refuses to recurse — the symlink
    target is shared state we never own. Safe no-op if wt-path doesn't
    exist or isn't a symlink (prevents accidental deletion of real dirs)."
@@ -402,7 +409,8 @@
   (or (:profile opts)
       (profiles/resolve-profile project-name (or (:session-profile opts) :full))))
 
-(defn session-coords
+(defn ^{:malli/schema [:=> [:cat :string :map] :map]}
+  session-coords
   "Resolve {:wt-path :instance-id} for a named session. The instance-id is the
    canonical one (engine/resolve-instance-id over the worktree path), so it
    matches the registry + lifecycle state even for slash-namespaced names."
@@ -422,7 +430,8 @@
     (fs/directory? wt-path) :heavy
     :else                   nil))
 
-(defn session-weight
+(defn ^{:malli/schema [:=> [:cat :string :map] :keyword]}
+  session-weight
   "The `:weight` a named session's record should carry, read back from what
    `up!` actually provisioned rather than from what a caller assumed: the
    profile snapshot in its state dir, else the worktree shape. nil when neither
@@ -443,7 +452,8 @@
           (weight-from-worktree wt-path)))
     (catch Exception _ nil)))
 
-(defn up!
+(defn ^{:malli/schema [:=> [:cat :string :map] :any]}
+  up!
   "Bring the named session up: create its worktree if missing, then start
    PG + JVM + app. Idempotent — running on an existing live session is a
    no-op (engine/start-session! detects and short-circuits).
@@ -473,7 +483,8 @@
       (create-git-worktree! project-dir wt-path branch base))
     (engine/start-session! wt-path (assoc opts :session-name name :profile profile))))
 
-(defn down!
+(defn ^{:malli/schema [:=> [:cat :string :map] :any]}
+  down!
   "Stop the named session. Worktree and on-disk state are preserved."
   [name opts]
   (let [{:keys [wt-path]} (with-context name opts)]
@@ -481,7 +492,8 @@
       (throw (ex-info "Worktree does not exist" {:path wt-path :name name})))
     (engine/stop-session! wt-path)))
 
-(defn restart!
+(defn ^{:malli/schema [:=> [:cat :string :map] :any]}
+  restart!
   "Internal: stop then start the named session (worktree must exist).
    Used by the dashboard's restart button. Not exposed as a bb task —
    `bb nido:session:down` followed by `:up` covers the CLI case."
@@ -500,7 +512,8 @@
                      first)]
         (pg/resolve-pg-mode (or svc {})))))
 
-(defn reset!
+(defn ^{:malli/schema [:=> [:cat :string :map] :any]}
+  reset!
   "Nuclear recovery for a session in a bad state: stop the session,
    drop its PGDATA, then start it again so the :postgresql service
    re-clones a fresh PGDATA from the current template. Distinct from
@@ -529,7 +542,8 @@
         (fs/delete-tree pg-data)))
     (engine/start-session! wt-path (assoc opts :session-name name))))
 
-(defn isolate!
+(defn ^{:malli/schema [:=> [:cat :string :map] :any]}
+  isolate!
   "Switch a session to a PRIVATE Postgres clone (for destructive tests): set a
    per-session :isolated override, then stop+start so it re-provisions its own
    PGDATA from the template. Other sessions are unaffected. Reverse with `share!`."
@@ -543,7 +557,8 @@
            (core/log-step (str "warning: stop during isolate: " (ex-message e)))))
     (engine/start-session! wt-path (assoc opts :session-name name))))
 
-(defn share!
+(defn ^{:malli/schema [:=> [:cat :string :map] :any]}
+  share!
   "Switch a session back to the shared cluster: clear its :isolated override,
    drop its private PGDATA, then stop+start so it re-provisions against the
    shared cluster. Safe to call on an already-shared session."
@@ -561,7 +576,8 @@
         (fs/delete-tree pg-data)))
     (engine/start-session! wt-path (assoc opts :session-name name))))
 
-(defn destroy!
+(defn ^{:malli/schema [:=> [:cat :string :map] :any]}
+  destroy!
   "Bring the named session down, drop its instance state-dir (PGDATA,
    logs, session.edn) and remove its worktree.
    opts: {... :delete-branch? bool (default false)}
@@ -599,7 +615,8 @@
       :else
       (remove-git-worktree! project-dir wt-path branch delete-branch?))))
 
-(defn status
+(defn ^{:malli/schema [:=> [:cat :string :map] :any]}
+  status
   "Print status for a named session."
   [name opts]
   (let [{:keys [wt-path]} (with-context name opts)]
@@ -609,7 +626,8 @@
     (when (fs/exists? wt-path)
       (engine/session-status wt-path))))
 
-(defn cd-target-file
+(defn ^{:malli/schema [:=> [:cat] :Path]}
+  cd-target-file
   "File the parent shell wrapper polls after `bb nido:tui` exits to decide
    where to `cd`. Located inside `~/.nido/` so it's per-user and survives
    reboots. The wrapper is responsible for removing it before invoking bb;
@@ -635,7 +653,8 @@
                        :valid #{"home" "worktree"}
                        :hint "Pass :cd home (default) or :cd worktree"})))))
 
-(defn resolve-cd-target
+(defn ^{:malli/schema [:=> [:cat :string :map] [:maybe :Path]]}
+  resolve-cd-target
   "Resolve (as a path string) the cwd a session `:enter` should land in, or
    throw with a hint. Shared by `enter!` (writes it to `cd-target-file` for the
    parent-shell handoff) and `spawn-tab!` (opens it as a Warp tab).
@@ -677,7 +696,8 @@
                            :hint "Run `bb nido:session:up` to recreate the worktree."})))
         resolved))))
 
-(defn enter!
+(defn ^{:malli/schema [:=> [:cat :string :map] :any]}
+  enter!
   "Hand off a cwd to the parent shell via `cd-target-file`. bb cannot change
    its parent's cwd, so a tiny zsh function (see Nido's CLAUDE.md) reads
    this file after the bb task exits and `cd`s the user there. Used by the
@@ -697,7 +717,8 @@
     (spit target resolved)
     (core/log-step (str "Selected " resolved))))
 
-(defn warp?
+(defn ^{:malli/schema [:=> [:cat] :boolean]}
+  warp?
   "True when running inside Warp. Warp is the only terminal whose URI scheme
    can open a tab in the *current* window, so it's the only one that gets the
    in-app spawn; every other terminal falls back to the `cd-target-file`
@@ -715,7 +736,8 @@
            (str/replace "+" "%20")
            (str/replace "%2F" "/"))))
 
-(defn spawn-tab!
+(defn ^{:malli/schema [:=> [:cat :string :map] :any]}
+  spawn-tab!
   "Open a new Warp tab in the *current* window at the session's `:enter` cwd and
    return that path. Warp's URI scheme can neither run a command nor set the tab
    title, so the tab lands at a bare shell; the title is set by the zsh precmd
@@ -751,7 +773,8 @@
          (map #(str (fs/relativize base %)))
          sort)))
 
-(defn list-all-data
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  list-all-data
   "Programmatic counterpart to `list-all`. Returns
    `{:project-name <name> :worktrees-dir <path> :sessions [{...}]}` where each
    session map carries `:name :worktree :pg-port :app-port :nrepl-port :repl-pid`.
@@ -775,7 +798,8 @@
      :worktrees-dir base
      :sessions (or sessions [])}))
 
-(defn list-all
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  list-all
   "List every session for a project, with quick liveness info."
   [opts]
   (let [{:keys [project-name worktrees-dir sessions]} (list-all-data opts)]
@@ -800,7 +824,8 @@
 ;; auto-resolved when invoked from a session-home cwd.
 ;; ---------------------------------------------------------------------------
 
-(defn session-home-coords-from-cwd
+(defn ^{:malli/schema [:=> [:cat [:? :any]] [:maybe :map]]}
+  session-home-coords-from-cwd
   "If cwd is a session-home (~/.nido/sessions/<project>/<session>/),
    return [project session]. Otherwise nil. The session name may itself
    contain slashes (feat/x), so it's everything after the first segment
@@ -816,7 +841,8 @@
          (when slash
            [(subs rel 0 slash) (subs rel (inc slash))]))))))
 
-(defn worktree-from-cwd
+(defn ^{:malli/schema [:=> [:cat [:? :any]] [:maybe :Path]]}
+  worktree-from-cwd
   "Resolve the worktree path for a cwd anywhere in a session's footprint —
    inside the worktree (registry → session-from-cwd) OR at the session-home
    (~/.nido/sessions/<p>/<s>/, which is not itself a jj workspace). This is the
@@ -857,7 +883,8 @@
           instance-id (engine/resolve-instance-id worktree)]
       [project-name session-name instance-id worktree])))
 
-(defn link-add!
+(defn ^{:malli/schema [:=> [:cat :any :map] :any]}
+  link-add!
   "Append/replace a link for the resolved session. opts must include
    :type and :url; :title is optional. project + session may be passed
    explicitly or auto-resolved from cwd."
@@ -870,7 +897,8 @@
     (println (str "Added link to " project "/" session
                   " (" (name (:type opts)) "  " (:url opts) ")"))))
 
-(defn link-remove!
+(defn ^{:malli/schema [:=> [:cat :any :map] :any]}
+  link-remove!
   "Drop the link with matching :url from the resolved session."
   [session-arg opts]
   (let [[project session instance-id _] (resolve-link-coords opts session-arg)
@@ -883,7 +911,8 @@
            (core/log-step (str "warning: briefing rerender: " (ex-message e)))))
     (println (str "Removed link from " project "/" session " (" url ")"))))
 
-(defn link-list
+(defn ^{:malli/schema [:=> [:cat :any :map] :any]}
+  link-list
   "Print the resolved session's links grouped by type. No-op message
    when empty."
   [session-arg opts]

@@ -10,7 +10,8 @@
   (:import
    [java.util.zip CRC32]))
 
-(defn find-pg-bin-dir []
+(defn ^{:malli/schema [:=> [:cat] [:maybe :Path]]}
+  find-pg-bin-dir []
   (let [result (shell {:continue true :out :string :err :string} "which" "initdb")]
     (if (zero? (:exit result))
       (str (fs/parent (str/trim (:out result))))
@@ -29,7 +30,8 @@
                           {:hint "Ensure initdb is on PATH or install PostgreSQL via Homebrew."})))
         found))))
 
-(defn pg-cmd [bin-dir cmd]
+(defn ^{:malli/schema [:=> [:cat :Path :string] :string]}
+  pg-cmd [bin-dir cmd]
   (let [full (str (fs/path bin-dir cmd))]
     (if (fs/exists? full) full cmd)))
 
@@ -42,7 +44,8 @@
    and CI clusters coexist here without collision."
   "/tmp/nido-pg-sock")
 
-(defn flyway-checksum
+(defn ^{:malli/schema [:=> [:cat :Path] :any]}
+  flyway-checksum
   "Computes a Flyway-compatible CRC32 checksum over a SQL file.
    Reads line-by-line, converts each line to UTF-8 bytes, updates CRC32.
    Public: nido.session.shared-pg reuses it to record history rows when advancing the
@@ -96,7 +99,8 @@
 ;; Cluster lifecycle helpers (reusable: session pg + template pg)
 ;; ---------------------------------------------------------------------------
 
-(defn initdb!
+(defn ^{:malli/schema [:=> [:cat :Path :Path :string] :any]}
+  initdb!
   "Run initdb on data-dir if not already initialized. Idempotent."
   [bin-dir data-dir db-user]
   (when-not (fs/exists? (str (fs/path data-dir "PG_VERSION")))
@@ -111,13 +115,15 @@
       (when-not (zero? (:exit result))
         (throw (ex-info "initdb failed" {:error (:err result) :output (:out result)}))))))
 
-(defn template-stopped?
+(defn ^{:malli/schema [:=> [:cat :Path] :boolean]}
+  template-stopped?
   "A PGDATA dir is considered stopped iff it has no postmaster.pid file.
    pg_ctl removes it on clean shutdown."
   [data-dir]
   (not (fs/exists? (str (fs/path data-dir "postmaster.pid")))))
 
-(defn clone-pgdata!
+(defn ^{:malli/schema [:=> [:cat :Path :Path] :any]}
+  clone-pgdata!
   "APFS-clone source-data-dir to target-data-dir using `cp -cR`. Source must be
    stopped (no postmaster.pid). Target must not yet exist. The clone is
    essentially free on APFS — blocks are shared until either side mutates."
@@ -146,7 +152,8 @@
                        :target target-data-dir
                        :error (:err result)})))))
 
-(defn pg-ctl-start!
+(defn ^{:malli/schema [:=> [:cat :Path :Path :int :Path [:? :any]] :any]}
+  pg-ctl-start!
   "Start a Postgres cluster on a given port. Overrides port and socket dir via
    `-o` so the cloned cluster's stored postgresql.conf doesn't need editing.
 
@@ -197,7 +204,8 @@
                           :log-path log-path
                           :pg-log   pg-log})))))))
 
-(defn wait-for-tcp!
+(defn ^{:malli/schema [:=> [:cat :int [:? :any]] :any]}
+  wait-for-tcp!
   "Block until the given port accepts TCP connections, or throw on timeout."
   ([pg-port] (wait-for-tcp! pg-port 15000))
   ([pg-port timeout-ms]
@@ -209,7 +217,8 @@
          (throw (ex-info "Timed out waiting for PostgreSQL" {:port pg-port}))
          :else (do (Thread/sleep 250) (recur)))))))
 
-(defn pg-ctl-stop!
+(defn ^{:malli/schema [:=> [:cat :Path] :boolean]}
+  pg-ctl-stop!
   "Stop a Postgres cluster. Returns true on clean shutdown."
   [data-dir]
   (when (and data-dir (fs/exists? data-dir))
@@ -227,7 +236,8 @@
               (proc/stop-process! pid)))))
       (boolean stopped?))))
 
-(defn read-pg-pid
+(defn ^{:malli/schema [:=> [:cat :Path] [:maybe :int]]}
+  read-pg-pid
   "Read the postmaster pid from a running cluster's postmaster.pid."
   [data-dir]
   (let [pid-file (str (fs/path data-dir "postmaster.pid"))]
@@ -249,7 +259,8 @@
             {:pid pid :port port}))
         (catch Exception _ nil)))))
 
-(defn detect-running-postmaster
+(defn ^{:malli/schema [:=> [:cat :Path] :map]}
+  detect-running-postmaster
   "Inspect PGDATA for a live postmaster. Returns:
      {:status :running :pid :port}    — live postmaster, adopt it
      {:status :stale   :pid-file …}   — pid file present but process dead
@@ -260,7 +271,8 @@
       {:status :running :pid pid :port port}
       {:status :stale :pid pid :pid-file (str (fs/path data-dir "postmaster.pid"))})))
 
-(defn dropdb!
+(defn ^{:malli/schema [:=> [:cat :Path :int :string :string] :any]}
+  dropdb!
   "Drop the named database if it exists. Wraps `dropdb --if-exists`, which
    connects to the maintenance `postgres` DB. Caller must ensure no other
    client is connected to db-name."
@@ -273,7 +285,8 @@
     (when-not (zero? (:exit result))
       (throw (ex-info "dropdb failed" {:error (:err result) :output (:out result)})))))
 
-(defn setup-fresh-database!
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  setup-fresh-database!
   "After initdb + start, create the application database and apply baseline or
    raw schema/extensions. Skipped when starting from a cloned template."
   [{:keys [bin-dir pg-port db-user db-name schema extensions baseline project-dir]}]
@@ -310,7 +323,8 @@
 ;; from the project's template cluster.
 ;; ---------------------------------------------------------------------------
 
-(defn resolve-pg-mode
+(defn ^{:malli/schema [:=> [:cat :map] :keyword]}
+  resolve-pg-mode
   "Resolve the effective PG provisioning mode from a service-def.
      :shared             — connect to the project's shared cluster (no clone).
      :isolated / :clone  — private per-session PGDATA (APFS clone of template).

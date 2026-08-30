@@ -96,7 +96,8 @@
 ;; init
 ;; ---------------------------------------------------------------------------
 
-(defn init!
+(defn ^{:malli/schema [:=> [:cat :ProjectName [:* :any]] :any]}
+  init!
   "Create a fresh template cluster from scratch: initdb, start, apply
    extensions/schema, stop. Idempotent: if the template already exists, does
    nothing unless :force is set."
@@ -148,7 +149,8 @@
 ;; refresh
 ;; ---------------------------------------------------------------------------
 
-(defn refresh!
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :any]}
+  refresh!
   "Start the template cluster and run project-declared :refresh-steps against
    it (e.g. :db/get-dump then :db/restore). Stops the cluster cleanly at the
    end so the result is APFS-clone-ready."
@@ -199,7 +201,8 @@
 ;; status / destroy
 ;; ---------------------------------------------------------------------------
 
-(defn status
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :any]}
+  status
   "Print template status for a project."
   [project-name]
   (let [data-dir (state/template-pg-data-dir project-name)
@@ -216,7 +219,8 @@
       (when-let [t (:initialized-at meta)] (println "  initialized-at:" t))
       (when-let [t (:last-refresh-at meta)] (println "  last-refresh-at:" t)))))
 
-(defn stop!
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :any]}
+  stop!
   "Stop the template cluster if running. No-op when not initialized or already
    stopped. Handles a stale postmaster.pid (e.g. left over from an aborted
    refresh) via pg-ctl-stop!'s kill fallback."
@@ -233,7 +237,8 @@
       (do (pg/pg-ctl-stop! data-dir)
           (core/log-step (str "Template stopped at " data-dir))))))
 
-(defn destroy!
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :any]}
+  destroy!
   "Stop (if running) and delete the template cluster entirely."
   [project-name]
   (let [data-dir (state/template-pg-data-dir project-name)]

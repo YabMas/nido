@@ -36,12 +36,14 @@
       (when (zero? exit) (str/trim out)))
     (catch Exception _ nil)))
 
-(defn machine-bytes
+(defn ^{:malli/schema [:=> [:cat] [:maybe :int]]}
+  machine-bytes
   "Physical RAM in bytes, or nil when it can't be read."
   []
   (some-> (sh-out "sysctl" "-n" "hw.memsize") parse-long))
 
-(defn in-use-bytes
+(defn ^{:malli/schema [:=> [:cat] [:maybe :int]]}
+  in-use-bytes
   "Memory the machine currently has committed: active + wired + compressed.
 
    This is what Activity Monitor calls \"Memory Used\", and it is the right
@@ -61,7 +63,8 @@
 
 ;; ── the worktree -> session-home join ───────────────────────────────────────
 
-(defn session-homes
+(defn ^{:malli/schema [:=> [:cat] :map]}
+  session-homes
   "Map of worktree path -> session-home path, read from the `worktree` symlink
    that every session home carries.
 
@@ -90,7 +93,8 @@
    the cwd, with `/` and `.` flattened to `-`."
   (fs/path (fs/home) ".claude" "projects"))
 
-(defn transcripts-available?
+(defn ^{:malli/schema [:=> [:cat] :boolean]}
+  transcripts-available?
   "Whether the agent-transcript signal can be read at all.
 
    Guarded because its absence is ambiguous in the dangerous direction: if the
@@ -114,7 +118,8 @@
            (reduce max 0)
            (#(when (pos? %) %))))))
 
-(defn agent-last-seen
+(defn ^{:malli/schema [:=> [:cat :Path :Path] [:maybe :int]]}
+  agent-last-seen
   "Newest agent-transcript mtime across a session's worktree and session-home,
    in ms, or nil when no agent has ever run in either.
 
@@ -196,7 +201,8 @@
    and the abandoned one was 44 hours wide."
   (* 24 60 60 1000))
 
-(defn candidate?
+(defn ^{:malli/schema [:=> [:cat :map] :boolean]}
+  candidate?
   "Whether nobody appears to be driving this session.
 
    `signals` reports which probes actually answered — `{:transcripts? :presence?
@@ -221,7 +227,8 @@
                 (or (nil? agent-seen-ms)
                     (> (or idle-ms 0) stale-agent-ms)))))
 
-(defn signals-ok?
+(defn ^{:malli/schema [:=> [:cat [:vector :map]] :boolean]}
+  signals-ok?
   "Whether every activity probe answered for this snapshot.
 
    Snapshot-wide, carried on each row because rows are what travel to callers.
@@ -231,7 +238,8 @@
   [rows]
   (every? :signals-ok? rows))
 
-(defn snapshot
+(defn ^{:malli/schema [:=> [:cat] [:vector :map]]}
+  snapshot
   "Every live session with what it costs and what has touched it lately.
 
    Rows: :instance-id :project :session :worktree :home :bytes :foreign
@@ -274,7 +282,8 @@
          (sort-by (comp - #(or % 0) :bytes))
          vec)))
 
-(defn totals
+(defn ^{:malli/schema [:=> [:cat [:vector :map] [:maybe :ProjectName]] :map]}
+  totals
   "Fleet arithmetic for a snapshot: what the sessions hold, what the machine
    holds, and the typical cost of one more.
 
@@ -302,7 +311,8 @@
    terminal, because a coalition is charged for everything spawned inside it."
   0.7)
 
-(defn over-budget?
+(defn ^{:malli/schema [:=> [:cat :map] :boolean]}
+  over-budget?
   "Whether booting one more session is projected to cross the budget. False
    whenever the machine facts could not be read — an unreadable probe must not
    manufacture a warning."
@@ -310,7 +320,8 @@
   (boolean (and in-use machine (pos? machine)
                 (> (+ in-use (or typical 0)) (* budget-fraction machine)))))
 
-(defn candidates
+(defn ^{:malli/schema [:=> [:cat [:vector :map]] [:vector :map]]}
+  candidates
   "Rows nobody appears to be driving, dearest first."
   [rows]
   (->> rows (filter :candidate?) (sort-by (comp - #(or % 0) :bytes)) vec))

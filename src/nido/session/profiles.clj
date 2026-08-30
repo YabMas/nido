@@ -34,13 +34,15 @@
   (cond-> p
     (-> p :worktree :target) (update-in [:worktree :target] expand-tilde)))
 
-(defn load-registry [project]
+(defn ^{:malli/schema [:=> [:cat :ProjectName] [:maybe :map]]}
+  load-registry [project]
   (let [path (registry-path project)]
     (if (fs/exists? path)
       (io/read-edn path)
       builtin-registry)))
 
-(defn services-provisioned?
+(defn ^{:malli/schema [:=> [:cat :Profile] :boolean]}
+  services-provisioned?
   "True when a resolved profile provisions services. `:services` is `:all`
    (full) or a vector allowlist (`[]` = lite). A nil profile reads as
    provisioned: legacy sessions predating profile.edn were all full."
@@ -51,7 +53,8 @@
         (and (sequential? svcs) (seq svcs))
         false)))
 
-(defn profile-weight
+(defn ^{:malli/schema [:=> [:cat :Profile] :keyword]}
+  profile-weight
   "The session `:weight` implied by a resolved profile — `:heavy` when it
    provisions services (a runnable environment, the thing a workstream offers
    as its dev environment), `:light` when it provisions none (the :lite shape:
@@ -65,7 +68,8 @@
   (when (some? profile)
     (if (services-provisioned? profile) :heavy :light)))
 
-(defn resolve-profile
+(defn ^{:malli/schema [:=> [:cat :ProjectName :keyword] [:maybe :Profile]]}
+  resolve-profile
   "Resolve a profile keyword (e.g. :full, :lite) for a project."
   [project profile-kw]
   (let [{:keys [profiles]} (load-registry project)]

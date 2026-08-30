@@ -31,12 +31,14 @@
    :slack-thread  "slack thread"
    :other         "other"})
 
-(defn links-path
+(defn ^{:malli/schema [:=> [:cat :InstanceId] :Path]}
+  links-path
   "Path to the per-instance links file."
   [instance-id]
   (str (fs/path (state/instance-state-dir instance-id) "links.edn")))
 
-(defn read-links
+(defn ^{:malli/schema [:=> [:cat :InstanceId] [:vector :map]]}
+  read-links
   "Read the links vector for an instance. Empty vector if the file is
    missing or malformed."
   [instance-id]
@@ -45,7 +47,8 @@
       (:links data)
       [])))
 
-(defn write-links!
+(defn ^{:malli/schema [:=> [:cat :InstanceId [:vector :map]] :any]}
+  write-links!
   "Persist the links vector for an instance."
   [instance-id links]
   (io/write-edn! (links-path instance-id) {:links (vec links)}))
@@ -86,7 +89,8 @@
     (cond-> {:type t :url (normalize-url url)}
       (and title (seq (str title))) (assoc :title (str title)))))
 
-(defn add!
+(defn ^{:malli/schema [:=> [:cat :InstanceId :map] [:vector :map]]}
+  add!
   "Append a link, deduping on :url. If a link with the same :url already
    exists, replace it (in place — order preserved). Returns the updated
    links vector."
@@ -102,7 +106,8 @@
     (write-links! instance-id next)
     next))
 
-(defn remove-by-url!
+(defn ^{:malli/schema [:=> [:cat :InstanceId :string] [:vector :map]]}
+  remove-by-url!
   "Drop the first link whose :url equals `url`. Returns the updated
    vector. Throws if no match."
   [instance-id url]
@@ -116,7 +121,8 @@
     (write-links! instance-id next)
     next))
 
-(defn group-by-type
+(defn ^{:malli/schema [:=> [:cat [:vector :map]] :any]}
+  group-by-type
   "Group `links` by :type, preserving display-order. Returns a seq of
    [type [link ...]] tuples for non-empty groups only."
   [links]

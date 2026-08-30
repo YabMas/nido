@@ -10,7 +10,8 @@
    [nido.session.engine :as engine]
    [nido.session.lifecycle :as lifecycle]))
 
-(defn session-context
+(defn ^{:malli/schema [:=> [:cat :ProjectName :Path :string :Path] :map]}
+  session-context
   "Substitution context for a session-scoped project-command. Adds the
    :session layer (so commands can template {{session.worktree}}) on top of
    the :project layer the existing template steps already use."
@@ -25,7 +26,8 @@
                       {:hint "Run `bb nido:project:add <name> <directory>` first."
                        :project-name project-name}))))
 
-(defn run-command-in-session!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :string :any] :any]}
+  run-command-in-session!
   "Resolve the session worktree and run the named :project-commands entry there
    with live (inherited) IO. Returns the babashka.process result map (:exit ...).
    Throws if the project is unregistered, the worktree is missing, or the ref

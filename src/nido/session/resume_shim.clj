@@ -37,7 +37,8 @@ fi
 exec command claude --dangerously-skip-permissions \"$@\"
 ")
 
-(defn write!
+(defn ^{:malli/schema [:=> [:cat :Path :Path] :any]}
+  write!
   "Write the shim + run-link in the given session-home pointing at run-dir."
   [session-home run-dir]
   (let [bin-dir   (fs/path session-home "bin")

@@ -2,7 +2,8 @@
   (:require [clojure.string :as str]
             [clojure.walk :as walk]))
 
-(defn resolve-ref
+(defn ^{:malli/schema [:=> [:cat :SessionContext :string] :any]}
+  resolve-ref
   "Resolve a dotted reference like \"pg.port\" against a context map.
    Returns nil if not found."
   [ctx ref-str]
@@ -10,7 +11,8 @@
         ks (map keyword parts)]
     (get-in ctx ks)))
 
-(defn substitute-value
+(defn ^{:malli/schema [:=> [:cat :SessionContext :any] :any]}
+  substitute-value
   "Substitute template references in a single value.
    - If the entire string is exactly one `{{ref}}`, returns the raw resolved value (preserving type).
    - If the string contains `{{ref}}` mixed with other text, returns a string with interpolation.
@@ -34,7 +36,8 @@
                            (str resolved)
                            (str "{{" ref "}}")))))))))
 
-(defn substitute
+(defn ^{:malli/schema [:=> [:cat :SessionContext :any] :any]}
+  substitute
   "Walk an arbitrary data structure, substituting all `{{ref}}` templates
    against the context map."
   [ctx data]
@@ -45,13 +48,15 @@
        x))
    data))
 
-(defn merge-context
+(defn ^{:malli/schema [:=> [:cat :SessionContext :any :map] :SessionContext]}
+  merge-context
   "Merge a service's contributions into the context under its name key.
    service-name is a keyword, contributions is a map."
   [ctx service-name contributions]
   (assoc ctx service-name contributions))
 
-(defn prepare-jvm
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  prepare-jvm
   "Derive joined-string forms for JVM config so service-def templates can
    reference them directly without a walk-time join step.
 

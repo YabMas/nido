@@ -189,7 +189,8 @@
         {:reserved-bytes (* (parse-long r-n) (unit->bytes r-u))
          :committed-bytes (* (parse-long c-n) (unit->bytes c-u))}))))
 
-(defn snapshot
+(defn ^{:malli/schema [:=> [:cat :any] :map]}
+  snapshot
   "Return a memory snapshot for a pid: :rss, :nmt-total, and per-category
    committed bytes for the categories we care about. Unknown/unavailable
    fields are nil."
@@ -391,7 +392,8 @@
              (fmt-mb (:classpath-bytes row))
              (if (:boot-ms row) (format "%.1f" (/ (:boot-ms row) 1000.0)) "—")))))
 
-(defn run-all!
+(defn ^{:malli/schema [:=> [:cat :ProjectName [:* :any]] :any]}
+  run-all!
   "Run all levers for a project and write a CSV with per-lever memory
    facts. Single positional arg: project-name. Options:
      :session-name  session name to use (default \"perf-bench\")

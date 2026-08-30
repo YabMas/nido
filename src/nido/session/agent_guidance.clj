@@ -59,7 +59,8 @@
   (and (fs/exists? path)
        (not (str/starts-with? (slurp path) marker))))
 
-(defn write!
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  write!
   "Render session-specific guidance files into the worktree root. Skips each
    write if an existing file lacks the nido marker (user has taken
    ownership). `ctx` is the session context produced by start-services!;
@@ -80,7 +81,8 @@
         (do (spit path content)
             (core/log-step (str "Wrote " path)))))))
 
-(defn write-codex-override!
+(defn ^{:malli/schema [:=> [:cat :Path :string] :any]}
+  write-codex-override!
   "Write Codex's worktree-local override file from the rendered session briefing.
    This leaves project-owned AGENTS.md alone while making nido's live-session
    rules the closest instruction layer when Codex starts in the worktree."
@@ -93,7 +95,8 @@
       (do (spit path content)
           (core/log-step (str "Wrote " path))))))
 
-(defn remove!
+(defn ^{:malli/schema [:=> [:cat :Path] :any]}
+  remove!
   "Remove nido-managed guidance files from the worktree root. No-op for files
    that are missing or have been taken over by the user."
   [worktree-path]
