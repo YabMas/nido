@@ -240,13 +240,17 @@ because scoping is the first claim the record makes, and the only guard against
 both failure modes: reading the whole codebase, and reading three files and
 calling it a design.
 
-### Read the design the project DECLARES, and record the scope you settled on
+### If the project declares a design, read it — and record the scope you settled on
 
-A survey that reads only the code has ignored the one artefact that is already
-checked against it. If the project has a `canvas/`, its design is a model —
-`bb nido:design:check` exits non-zero the moment the code stops obeying it, and
-the landing gate refuses on that. A baseline that contradicts it is not a
-finding, it is a survey that did not look.
+**Skip this whole section unless the project has a `canvas/` directory.** Most do
+not. A survey of an unmodelled project is complete without any of what follows,
+`:scope` is omitted, and nothing downstream is missing anything — `:bounded-by`
+already carries the boundary, in prose, as it always has.
+
+For a project that IS modelled, its design is not documentation: it is a model
+the code is checked against. `bb nido:design:check` exits non-zero the moment the
+code stops obeying it and the landing gate refuses on that, so a baseline that
+contradicts it is not a finding, it is a survey that did not look.
 
 Start with the way in, not the whole document:
 
@@ -272,8 +276,10 @@ You are the only round that can make this call. A session told its scope up
 front was told by someone who had not read the code yet; you read first and
 decide after, which is the whole reason the decision lives here.
 
-Omit `:scope` when the project declares no design. Most do not, and a baseline
-without it is not deficient — there is nothing to select from.
+`:scope` holds a SELECTION, never prose. `:bounded-by` is the prose — it is
+required, it is the claim, and it is what an unmodelled project has. Putting a
+sentence in `:scope` would fail validation, and rightly: the field exists to be
+run, and a scope that cannot be run is the one you already wrote above it.
 
 ### The level a survey is written at
 
@@ -584,7 +590,8 @@ cat > /tmp/baseline.edn <<'EDN'
 {:format       :baseline
  :area         "…"
  :bounded-by   "why the boundary sits there"
- ;; the same boundary as a runnable selection; omit when the project declares no design
+ ;; ONLY for a project with a canvas/ — omit the key entirely otherwise, which is
+ ;; the usual case. A selection, never prose: :bounded-by above is the prose.
  :scope        [(Band ?n) (named ?n "Lane")]
  :shape        "…"
  :modules      [{:id "short-stable-slug"

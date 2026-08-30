@@ -614,3 +614,14 @@
       (is (= ["/opt/nido"] (:add-dirs lc)))
       (is (re-find #"_run-status.edn" (:run-paths lc)))
       (is (re-find #"artifacts" (:run-paths lc))))))
+
+(deftest a-run-on-an-unbaselined-workstream-carries-no-scope
+  ;; The case that has to keep working: a project that does not integrate with fukan at all has
+  ;; no baseline scope to find, and every Run it mints must be valid without one. Also the
+  ;; baseline round's OWN run — establishing the scope is what that session is for.
+  (is (nil? (:design-scope
+             (runs/create-run! {:project :unmodelled
+                                :trigger {:name :t :skill :s :payload "" :source {:type :manual}}
+                                :payload {}
+                                :workstream-id "ws-does-not-exist"}
+                               {:fired-at "2026-08-30T00:00:00Z" :fired-by "test"})))))
