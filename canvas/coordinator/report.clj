@@ -54,13 +54,11 @@
     "THE READ CONTRACT. Like `validate-event`, but accepts anything that was legitimately
      writable when it was written, not only what is writable now. Every reader uses this."
     {:signature [:=> [:catn [:kind EntryKind] [:report :any]] LedgerEvent]
-     :performs  [:throws]
-     :delegates [validate-event]})
+     :performs  [:throws]})
   (Operation validate
     "The backward-compatible triage validator — `(validate-event :triage report)`."
     {:signature [:=> [:catn [:report LedgerEvent]] LedgerEvent]
-     :performs  [:throws]
-     :delegates [validate-event]})
+     :performs  [:throws]})
   (Operation entry-payload
     "For a ledger append: given an entry `kind` and raw `content`, the [extension payload] pair
      to write. A registered kind parses and validates; an unregistered one is markdown."

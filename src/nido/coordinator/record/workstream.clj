@@ -56,13 +56,15 @@
    [:facets        {:optional true} [:map-of keyword? any?]]
    [:findings      {:optional true} [:maybe [:map-of keyword? any?]]]])
 
-(defn validate [w]
+(defn ^{:malli/schema [:=> [:cat :Workstream] :Workstream]}
+  validate [w]
   (if (m/validate Workstream w)
     w
     (throw (ex-info "Invalid Workstream record"
                     {:errors (m/explain Workstream w) :workstream w}))))
 
-(defn mint-id
+(defn ^{:malli/schema [:=> [:cat] :WorkstreamId]}
+  mint-id
   "ws-YYYYMMDD-<rand6>. Date from clock/now-iso (ISO-8601, first 10 chars =
    YYYY-MM-DD); dashes stripped so the id is a single token."
   []
@@ -77,14 +79,16 @@
   [w]
   (cond-> w (= :inbox (:stage w)) (assoc :stage :incoming)))
 
-(defn read-ws
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :Workstream]]}
+  read-ws
   "Read a workstream.edn by project + id. Returns nil if absent. Normalizes the
    legacy :inbox stage to :incoming (see normalize-legacy-stage)."
   [project ws-id]
   (some-> (io/read-edn (cstate/workstream-edn-path project ws-id))
           normalize-legacy-stage))
 
-(defn write!
+(defn ^{:malli/schema [:=> [:cat :Workstream] :Workstream]}
+  write!
   "Validate then write a Workstream record (atomic; parent dirs created)."
   [w]
   (validate w)
@@ -108,7 +112,8 @@
                                     ". Ticket statuses (:planning/:implementing/…) are a "
                                     "different vocabulary — :implementing is :in-progress here.")}))))
 
-(defn create!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :map] :Workstream]}
+  create!
   "Mint an id and persist a fresh workstream at the given stage. `base` may
    carry :external-refs (default []), :intake {:trigger <kw> :payload <map>}
    (default absent), :facets <map> (default absent), and must carry :stage."
@@ -127,7 +132,8 @@
               (seq facets) (assoc :facets facets))]
     (write! w)))
 
-(defn advance-stage!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :keyword] :Workstream]}
+  advance-stage!
   "Move a workstream to `new-stage`, appending to :stage-history. No-op (no
    history entry) when already at `new-stage`. Throws if the workstream is
    absent, or if `new-stage` is outside session/storable-stages — checked ahead
@@ -143,7 +149,8 @@
                   (assoc :stage new-stage)
                   (update :stage-history conj {:at (clock/now-iso) :stage new-stage}))))))
 
-(defn set-facets!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :Workstream]}
+  set-facets!
   "Overwrite a workstream's :facets map. Throws if the workstream is absent.
    Returns the updated record. An empty map removes the key."
   [project ws-id facets]
@@ -153,7 +160,8 @@
                       {:project project :ws-id ws-id})))
     (write! (if (seq facets) (assoc w :facets facets) (dissoc w :facets)))))
 
-(defn close!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :keyword] :Workstream]}
+  close!
   "Settle a workstream terminally. `outcome` is :done, :dropped or :dismissed.
    No consumer branches on the value — every reader tests :closed for presence
    (engagement, the notion-sync/facets candidate sets) or renders (name outcome);
@@ -164,7 +172,8 @@
               (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))]
     (write! (assoc w :closed {:at (clock/now-iso) :outcome outcome}))))
 
-(defn reopen!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :keyword] :Workstream]}
+  reopen!
   "Un-terminalize a settled workstream: clear :closed, set :stage, and record a
    stage-history entry marked :reopened. No-op write when already open at `stage`.
    Throws if the workstream is absent. Returns the record."
@@ -179,7 +188,8 @@
                   (update :stage-history (fnil conj [])
                           {:at (clock/now-iso) :stage stage :reopened true}))))))
 
-(defn set-findings!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:maybe :map]] :Workstream]}
+  set-findings!
   "Overwrite the workstream's live findings tracker, or remove it when `tracker`
    is nil/empty. Throws if the workstream is absent. Returns the record."
   [project ws-id tracker]
@@ -359,14 +369,16 @@
                          :named        (mapv :phase orphan)
                          :phases       (vec claims)}))))))
 
-(defn append-lock-path
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :Path]}
+  append-lock-path
   "The lock that serialises appends to one workstream. Per workstream rather than
    global: two ledgers have no sequence to contend over, and a global lock would
    queue every writer in nido behind whichever one is slowest."
   [project ws-id]
   (str (fs/path (cstate/workstream-dir project ws-id) ".append.lock")))
 
-(defn append-entry!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map :string] :Path]}
+  append-entry!
   "Write an immutable entry file under entries/ and record it in :entries.
    `entry` = {:kind <kw> :session <str>?}. Returns the absolute file path.
 
@@ -405,7 +417,8 @@
                         (assoc entry :seq seq-n :at (clock/now-iso) :file rel)))
         abs))))
 
-(defn append-entry-at!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :int :map :string] :map]}
+  append-entry-at!
   "Append only if `expected-seq` is still the ledger's latest entry. Returns the
    absolute path on success, or {:refused :stale :latest <seq>} without writing.
 
@@ -450,7 +463,8 @@
                             (assoc entry :seq seq-n :at (clock/now-iso) :file rel)))
             abs))))))
 
-(defn latest-entry
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :keyword] [:maybe :LedgerEntry]]}
+  latest-entry
   "The most recent typed entry of `kind` on this workstream — parsed, validated,
    and stamped with its :seq and :at — or nil. Degrades to nil on a missing,
    unreadable, or schema-failing payload: a reader asking for the design record
@@ -471,7 +485,8 @@
                  (assoc :seq (:seq e) :at (:at e)))
              (catch Throwable _ nil))))))
 
-(defn unstamp
+(defn ^{:malli/schema [:=> [:cat :LedgerEntry] :map]}
+  unstamp
   "Strip what `latest-entry` and `entry-at-seq` ADD on the way out.
 
    :seq and :at are the reader's, not the author's — an entry does not carry
@@ -485,7 +500,8 @@
   [entry]
   (dissoc entry :seq :at))
 
-(defn entries-of
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :keyword] [:sequential :LedgerEntry]]}
+  entries-of
   "Every typed entry of `kind` on this workstream, oldest first, each parsed
    through the READ contract and stamped with :seq/:at. Entries that no longer
    parse are dropped, on the same degrade-to-nil contract latest-entry has.
@@ -503,7 +519,8 @@
           (->> (:entries w) (filter #(= kind (:kind %))) (sort-by :seq)))
     []))
 
-(defn entry-at-seq
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :int] [:maybe :LedgerEntry]]}
+  entry-at-seq
   "The typed entry at `seq-n` on this workstream, parsed through the READ contract
    and stamped with :seq/:at — or nil. Same degrade-to-nil contract as
    latest-entry: a reader following a citation must be able to find nothing
@@ -516,7 +533,8 @@
   (when-let [w (read-ws project ws-id)]
     (read-entry-at w seq-n)))
 
-(defn list-ids
+(defn ^{:malli/schema [:=> [:cat :ProjectName] [:vector :WorkstreamId]]}
+  list-ids
   "Vector of ws-ids under a project's workstreams dir; [] if none."
   [project]
   (let [d (cstate/workstreams-dir project)]
@@ -545,7 +563,8 @@
                      (pr-str (cond-> {:format :pr-opened :url url :title title}
                                (not (str/blank? summary)) (assoc :summary summary)))))))
 
-(defn add-ref!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map [:? [:maybe :map]]] :Workstream]}
+  add-ref!
   "Append an external ref, deduped on (adapter, id). Returns updated record.
 
    A :github ref carries a second obligation: it is the PR, so stamping it also
@@ -568,14 +587,16 @@
            (record-pr-opened! project w' ref summary))
          w')))))
 
-(defn delete!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :any]}
+  delete!
   "Remove a workstream's directory (and everything under it). Idempotent —
    no-op if absent. Used to clean up an orphan minted by a failed spawn."
   [project ws-id]
   (let [d (cstate/workstream-dir project ws-id)]
     (when (fs/exists? d) (fs/delete-tree d))))
 
-(defn find-by-ref
+(defn ^{:malli/schema [:=> [:cat :ProjectName :keyword :string] [:maybe :Workstream]]}
+  find-by-ref
   "Scan a project's workstreams for one carrying an external ref matching
    (adapter, external-id). Returns the workstream record or nil."
   [project adapter external-id]
@@ -586,7 +607,8 @@
                            (:external-refs w))
                  w)))))
 
-(defn find-by-ref-id
+(defn ^{:malli/schema [:=> [:cat :ProjectName :string] [:maybe :Workstream]]}
+  find-by-ref-id
   "The workstream carrying any external-ref whose :id = `external-id` (adapter-
    agnostic — Notion BR-#### or Slack id), or nil. Used to route a ref-keyed
    ledger append/read to its workstream. O(workstreams)."
@@ -595,7 +617,8 @@
        (keep #(read-ws project %))
        (some (fn [w] (when (some #(= external-id (:id %)) (:external-refs w)) w)))))
 
-(defn append-to-ref!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :string :map :string] [:maybe :Path]]}
+  append-to-ref!
   "Append a ledger entry to the workstream carrying `external-id`, found-or-created
    by ref (the spine: intake-triage and pickup-drive share one workstream). A minimal
    workstream is minted when none exists (adapter inferred from the id). Returns the
@@ -609,7 +632,8 @@
                                          :id external-id}]}))]
     (append-entry! project (:id w) entry content)))
 
-(defn engagement
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :keyword]}
+  engagement
   "Engagement state of a workstream: loads its sessions and projects. Returns
    :idle / :active / :parked-at-gate / :settled. Returns :idle if the workstream
    is absent (read-ws nil → no :closed, no sessions)."

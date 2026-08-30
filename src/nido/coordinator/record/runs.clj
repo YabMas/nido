@@ -82,7 +82,8 @@
                                  [:written-at string?]]]]
    [:error             [:maybe [:map-of keyword? any?]]]])
 
-(defn validate
+(defn ^{:malli/schema [:=> [:cat :Run] :Run]}
+  validate
   "Returns the run or throws ex-info with humanized errors."
   [run]
   (if (m/validate Run run)
@@ -91,7 +92,8 @@
                     {:errors (m/explain Run run)
                      :run    run}))))
 
-(defn read-run
+(defn ^{:malli/schema [:=> [:cat :RunId] [:maybe :Run]]}
+  read-run
   "Read a run.edn by id. Returns nil if absent.
    Normalizes legacy records: backfills :priority 0 when the key is absent
    so that pre-Plan-A on-disk Runs pass the closed schema on write-back."
@@ -103,7 +105,8 @@
           (update :session-profile #(if (keyword? %) % :full))
           (update :uncapped?       #(if (boolean? %) % false))))))
 
-(defn write-run!
+(defn ^{:malli/schema [:=> [:cat :Run] :Run]}
+  write-run!
   "Validate then write a Run record. Parent dir must already exist."
   [run]
   (validate run)
@@ -115,7 +118,8 @@
    terminal. :queued is the pending pool and deliberately does NOT count."
   #{:preprocessing :running :awaiting-review})
 
-(defn list-run-ids
+(defn ^{:malli/schema [:=> [:cat] [:vector :RunId]]}
+  list-run-ids
   "Vector of run-ids (directory names) under the runs dir; [] if none."
   []
   (let [d (cstate/runs-dir)]
@@ -125,7 +129,8 @@
            (mapv #(str (fs/file-name %))))
       [])))
 
-(defn in-progress-count-by-trigger
+(defn ^{:malli/schema [:=> [:cat] [:map-of :keyword :int]]}
+  in-progress-count-by-trigger
   "Map {trigger-kw → count} of runs in an in-progress state, grouped by
    :trigger. Scans the runs dir. The scheduler reads this to enforce per-trigger
    :max-in-flight caps; recomputed each tick so it is restart-safe."
@@ -135,7 +140,8 @@
        (filter #(contains? in-progress-states (:state %)))
        (reduce (fn [m r] (update m (:trigger r) (fnil inc 0))) {})))
 
-(defn find-for-session
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName] [:maybe :Run]]}
+  find-for-session
   "The newest Run owning (`ws-id`, `session-name`) in `project`, or nil. Fallback
    for resume identity: :claude-session-id lives on the session's autonomy facet
    (the authoritative source); run.edn is the execution-driver/substrate record."
@@ -162,7 +168,8 @@
    :running         #{:awaiting-review :done :failed :halted}
    :awaiting-review #{:running :done :failed :halted}})
 
-(defn valid-transition?
+(defn ^{:malli/schema [:=> [:cat :keyword :keyword] :boolean]}
+  valid-transition?
   "True iff `from` → `to` is in `allowed-transitions`. Terminal states
    have no entry and so reject every transition."
   [from to]
@@ -170,7 +177,8 @@
 
 (declare mirror-run-phase!)
 
-(defn transition!
+(defn ^{:malli/schema [:=> [:cat :RunId :keyword] :Run]}
+  transition!
   "Atomically update a Run's state with history. Throws ex-info if the
    run is absent or the transition is invalid. Returns the updated Run."
   [run-id new-state]
@@ -188,7 +196,8 @@
       (mirror-run-phase! updated)
       updated)))
 
-(defn mirror-run-phase!
+(defn ^{:malli/schema [:=> [:cat :Run] :any]}
+  mirror-run-phase!
   "Best-effort mirror of the execution-driver/substrate state onto the authoritative
    session's autonomy phase (reconcile! is the authoritative repair). No-op when the
    run has no :workstream-id (legacy / dry-run / test runs). Never throws — a
@@ -247,7 +256,8 @@
       random-name)
     random-name))
 
-(defn create-run!
+(defn ^{:malli/schema [:=> [:cat :map :map] :Run]}
+  create-run!
   "Build a :queued Run record from a fire request and persist run.edn.
    `meta` carries source-call metadata: {:fired-at <iso> :fired-by <str>}."
   [{:keys [project trigger payload priority session-profile uncapped? workstream-id]} meta]
@@ -287,7 +297,8 @@
     (fs/create-dirs (cstate/run-artifacts-dir run-id))
     (write-run! run)))
 
-(defn spawn-session-for-run!
+(defn ^{:malli/schema [:=> [:cat :Run] :any]}
+  spawn-session-for-run!
   "Bring up a session for the given Run, marked :owned-by-run. The launcher
    picks up the :run-dir we resolve here and writes the resume shim +
    run-link via nido.session.resume-shim. After session-up, also writes the
@@ -307,7 +318,8 @@
     (fs/create-sym-link link-path session-home)
     result))
 
-(defn home-present?
+(defn ^{:malli/schema [:=> [:cat :Run] :boolean]}
+  home-present?
   "Does `run`'s session-home runtime still exist? The home is ephemeral — the
    reclaimer can delete it while the run, transcript and claude-session-id
    survive on disk. `fs/exists?` follows the symlink, so a dangling/reclaimed
@@ -315,7 +327,8 @@
   [run]
   (fs/exists? (cstate/run-session-home-link (:id run))))
 
-(defn ensure-session-home!
+(defn ^{:malli/schema [:=> [:cat :Run] :any]}
+  ensure-session-home!
   "Re-provision `run`'s session-home if it was reclaimed, so a caller can land
    in it again. The transcript survives keyed by the home path, so spawning at
    the same path re-anchors it (`spawn-session-for-run!` is idempotent). Returns
@@ -330,7 +343,8 @@
                (throw (ex-info "Re-hydration failed" {:reason :rehydrate-failed} t))))
         true)))
 
-(defn teardown-session-for-run!
+(defn ^{:malli/schema [:=> [:cat :Run] :any]}
+  teardown-session-for-run!
   "Reclaim the session a Run spawned, once the Run reaches a resolved-terminal
    state (:done / :failed / :halted). Stops PG + JVM + app, removes the registry
    entry (so the session leaves the CLI/TUI list), removes the worktree (a
@@ -385,7 +399,8 @@
                          session-name " — " (ex-message e))))))
     nil)))
 
-(defn launch-context
+(defn ^{:malli/schema [:=> [:cat :Run] :map]}
+  launch-context
   "Resolve the worktree cwd + injected launch context for a run's headless agent.
    The agent boots in the worktree (not the session-home); briefing/MCP/skills are
    passed as flags, and artifact/status paths are the absolute run-dir paths the

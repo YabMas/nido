@@ -66,7 +66,8 @@
           found
           (recur nxt (conj seen nxt) nxt (dec budget)))))))
 
-(defn of-design
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :Standing]}
+  of-design
   "Whether `design` — a stamped :design record — stands, and what stops it.
 
    :decidable? is the question the design round asks before it will judge:
@@ -146,7 +147,8 @@
                      :decided?    (and (nil? blocked) (some? approval))}
               blocked (assoc :blocked blocked))))))))
 
-(defn why-not-decided
+(defn ^{:malli/schema [:=> [:cat :Standing] [:maybe :string]]}
+  why-not-decided
   "Why `standing` is not decided, in a form a human can act on, or nil.
 
    Composes the two questions the map keeps apart: what stops it being

@@ -43,23 +43,27 @@
    [:autonomy          [:maybe Autonomy]]
    [:created-at        string?]])
 
-(defn validate [s]
+(defn ^{:malli/schema [:=> [:cat :Session] :Session]}
+  validate [s]
   (if (m/validate Session s)
     s
     (throw (ex-info "Invalid Session record"
                     {:errors (m/explain Session s) :session s}))))
 
-(defn read-session
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName] [:maybe :Session]]}
+  read-session
   "Read a session.edn by project + ws-id + name. Returns nil if absent."
   [project ws-id session-name]
   (io/read-edn (cstate/session-edn-path project ws-id session-name)))
 
-(defn write! [s]
+(defn ^{:malli/schema [:=> [:cat :Session] :Session]}
+  write! [s]
   (validate s)
   (io/write-edn! (cstate/session-edn-path (:project s) (:workstream-id s) (:name s)) s)
   s)
 
-(defn create!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :Session]}
+  create!
   "Persist a fresh :live session. `opts` carries :name, :weight, and :autonomy
    (nil for human sessions, or a full Autonomy map). Reads via (:name opts)
    rather than destructuring to avoid shadowing clojure.core/name."
@@ -74,7 +78,8 @@
              :autonomy          (:autonomy opts)
              :created-at        now})))
 
-(defn list-sessions
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:sequential :Session]]}
+  list-sessions
   "Seq of session records under one workstream's sessions/ dir. Reads each
    session.edn directly (rather than re-deriving the path from the directory
    name) so a session whose name was percent-encoded into the dir key — e.g.
@@ -89,15 +94,19 @@
            (keep io/read-edn))
       [])))
 
-(defn live?       [s] (= :live (:substrate s)))
-(defn autonomous? [s] (some? (:autonomy s)))
-(defn parked?     [s] (and (live? s) (= :parked (get-in s [:autonomy :phase]))))
+(defn ^{:malli/schema [:=> [:cat :Session] :boolean]}
+  live?       [s] (= :live (:substrate s)))
+(defn ^{:malli/schema [:=> [:cat :Session] :boolean]}
+  autonomous? [s] (some? (:autonomy s)))
+(defn ^{:malli/schema [:=> [:cat :Session] :boolean]}
+  parked?     [s] (and (live? s) (= :parked (get-in s [:autonomy :phase]))))
 
 (def active-phases
   "Autonomy phases where the session is actively executing (not queued/parked)."
   #{:preprocessing :running})
 
-(defn working?
+(defn ^{:malli/schema [:=> [:cat :Session] :boolean]}
+  working?
   "A live session doing actual work: a live human session (no autonomy), or a
    live autonomous session in preprocessing/running. A queued or parked
    autonomous session is NOT working."
@@ -112,7 +121,8 @@
       (throw (ex-info "Session not found"
                       {:project project :ws-id ws-id :session session-name}))))
 
-(defn archive!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName] :Session]}
+  archive!
   "Flip a session to :archived, appending substrate-history. Idempotent (no
    duplicate history entry when already archived). Returns updated record."
   [project ws-id session-name]
@@ -124,7 +134,8 @@
                   (update :substrate-history conj
                           {:at (clock/now-iso) :substrate :archived}))))))
 
-(defn set-phase!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName :keyword] :Session]}
+  set-phase!
   "Move an autonomous session's burst phase, appending phase-history. Throws if
    the session has no autonomy facet (a human session has no phase). Returns
    updated record."
@@ -138,7 +149,8 @@
                 (update-in [:autonomy :phase-history] conj
                            {:at (clock/now-iso) :phase new-phase})))))
 
-(defn set-error!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName [:maybe :map]] :Session]}
+  set-error!
   "Set (nil clears) the last-resume error on an autonomous session's autonomy
    facet. Throws if the session has no autonomy facet (a human session has none).
    Returns the updated record."
@@ -149,7 +161,8 @@
                       {:project project :ws-id ws-id :session session-name})))
     (write! (assoc-in s [:autonomy :error] err))))
 
-(defn set-claude-session-id!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName [:maybe :string]] :Session]}
+  set-claude-session-id!
   "Persist the resumable claude conversation id onto an autonomous session's
    autonomy facet (the run captures it mid-burst; mirroring it here makes the
    session self-sufficient for resume). Throws on a human session. Idempotent."
@@ -160,7 +173,8 @@
                       {:project project :ws-id ws-id :session session-name})))
     (write! (assoc-in s [:autonomy :claude-session-id] id))))
 
-(defn engagement-state
+(defn ^{:malli/schema [:=> [:cat :any [:sequential :Session]] :keyword]}
+  engagement-state
   "Pure projection of a workstream's engagement.
    :settled        — workstream closed
    :parked-at-gate — a live session is parked awaiting human review
@@ -238,7 +252,8 @@
     (:triage :in-progress :shipping)  (boolean (some parked? sessions))
     false))
 
-(defn stage-projection
+(defn ^{:malli/schema [:=> [:cat :any :any [:sequential :Session] :any] :StageProjection]}
+  stage-projection
   "Pure lifecycle projection for a workstream → {:stage <kw> :needs-you <bool>}.
    `ticket-status` is the local ticket meta :status (nil when no ticket ref);
    `stage-override` is the workstream's stored :stage, honored only when it names
@@ -259,7 +274,8 @@
   "Notion statuses that map to the :in-progress band."
   #{"In progress" "Code Review"})
 
-(defn notion-stage
+(defn ^{:malli/schema [:=> [:cat :any :boolean] :keyword]}
+  notion-stage
   "Board stage from a Notion ticket's live status + the local triage disposition.
    Pre-implementation statuses (e.g. Needs verification / Not started / On Hold /
    nil / other) split on `triaged?` — ticket status :triaged, the ONLY disposition
@@ -273,7 +289,8 @@
     triaged?                                              :ready
     :else                                                 :triage))
 
-(defn notion-stage-projection
+(defn ^{:malli/schema [:=> [:cat :map] :StageProjection]}
+  notion-stage-projection
   "Stage + needs-you for a Notion-driven workstream (page in a watched-view cache,
    or on the merge lane). Precedence:
      1. merge-lane :shipping overlay (a session on the merge lane)
@@ -307,7 +324,8 @@
       (->> (fs/list-dir d) (filter fs/directory?) (mapv #(str (fs/file-name %))))
       [])))
 
-(defn workstream-id-for
+(defn ^{:malli/schema [:=> [:cat :ProjectName :SessionName] [:maybe :WorkstreamId]]}
+  workstream-id-for
   "The workstream-id owning the session named `session-name` in `project`, or nil.
    Scans the project's workstreams; matches on the session record's :name (which
    round-trips a percent-encoded dir key). Used by the ship handler / CLI to map a
@@ -334,7 +352,8 @@
    :halted) are excluded so a settled ticket stays re-triable."
   #{:queued :preprocessing :running :parked})
 
-(defn pending-session-for-trigger?
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :keyword] :boolean]}
+  pending-session-for-trigger?
   "True when workstream `ws-id` already has an autonomous session for `trigger`
    whose phase is still in flight (see pending-phases). The coordinator's
    pre-spawn gate uses this to drop a reconcile re-emit instead of piling a
@@ -356,7 +375,8 @@
   [project ws-id]
   (some? (:closed (io/read-edn (cstate/workstream-edn-path project ws-id)))))
 
-(defn count-by-trigger
+(defn ^{:malli/schema [:=> [:cat :ProjectName :any] [:map-of :keyword :int]]}
+  count-by-trigger
   "Map {trigger-kw → count} of LIVE autonomous sessions whose phase is in
    `phase-set`, grouped by autonomy :trigger, across all of `project`'s OPEN
    workstreams. Sessions on closed workstreams are excluded — their work is
@@ -370,20 +390,23 @@
        (filter #(contains? phase-set (get-in % [:autonomy :phase])))
        (reduce (fn [m s] (update m (get-in s [:autonomy :trigger]) (fnil inc 0))) {})))
 
-(defn in-flight-by-trigger
+(defn ^{:malli/schema [:=> [:cat :ProjectName] [:map-of :keyword :int]]}
+  in-flight-by-trigger
   "Active-work count per trigger (preprocessing+running). Distinct from
    scheduling backpressure (see gating-count-by-trigger)."
   [project]
   (count-by-trigger project in-progress-phases))
 
-(defn gating-count-by-trigger
+(defn ^{:malli/schema [:=> [:cat :ProjectName] [:map-of :keyword :int]]}
+  gating-count-by-trigger
   "Scheduling backpressure count per trigger (preprocessing+running+parked).
    The scheduler reads this to enforce per-trigger :max-in-flight — the session
    analogue of runs/in-progress-count-by-trigger."
   [project]
   (count-by-trigger project gating-phases))
 
-(defn ship-substate
+(defn ^{:malli/schema [:=> [:cat [:sequential :Session]] [:maybe :keyword]]}
+  ship-substate
   "Merge-lane sub-state for a :shipping workstream, from its LIVE autonomous
    session phase. Archived sessions (e.g. a prior triage run) are skipped so
    the board badge reflects the live merge driver, not an old parked run.

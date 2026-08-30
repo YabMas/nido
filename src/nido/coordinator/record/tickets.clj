@@ -15,7 +15,8 @@
    [nido.coordinator.record.workstream :as cws]
    [nido.platform.io :as io]))
 
-(defn ticket-dir [project br-id]
+(defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId] :Path]}
+  ticket-dir [project br-id]
   (str (fs/path (cstate/nido-root) "projects" (name project) "tickets" br-id)))
 
 (defn- meta-path [project br-id]
@@ -28,7 +29,8 @@
   [br-id]
   (or (nil? br-id) (str/blank? br-id)))
 
-(defn read-meta
+(defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId] [:maybe :Ticket]]}
+  read-meta
   "Read a ticket's meta.edn, or nil if absent. Nil-safe for a nil/blank br-id
    (e.g. a triage run whose event-payload predates the :id field): such a run
    has no ticket record, so this returns nil rather than NPEing in fs/path."
@@ -36,7 +38,8 @@
   (when-not (blank-br? br-id)
     (io/read-edn (meta-path project br-id))))
 
-(defn list-ids
+(defn ^{:malli/schema [:=> [:cat :ProjectName] [:vector :TicketId]]}
+  list-ids
   "Vector of ticket ids (dir names, e.g. BR-####) under a project's tickets
    dir; [] if the dir is absent."
   [project]
@@ -45,7 +48,8 @@
       (->> (fs/list-dir d) (filter fs/directory?) (mapv #(str (fs/file-name %))))
       [])))
 
-(defn write-meta!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId :Ticket] [:maybe :Ticket]]}
+  write-meta!
   "Persist a ticket's meta.edn. No-op (returns nil) for a nil/blank br-id — a
    run with no ticket has nothing to write. This is the write chokepoint, so
    open!/set-status!/complete! inherit the nil-safety."
@@ -54,10 +58,12 @@
     (io/write-edn! (meta-path project br-id) m)
     m))
 
-(defn status [project br-id]
+(defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId] [:maybe :keyword]]}
+  status [project br-id]
   (:status (read-meta project br-id)))
 
-(defn open!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId :map] :Ticket]}
+  open!
   "Create (or refresh the descriptive fields of) a ticket record and set status
    :investigating. `base` carries {:notion-page-id :url :title :opened-by
    :notion-last-edited-at}. Idempotent on re-open: preserves :entries."
@@ -70,10 +76,12 @@
                         (select-keys base [:notion-page-id :url :title
                                            :opened-by :notion-last-edited-at])))))
 
-(defn set-status! [project br-id new-status]
+(defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId :keyword] :Ticket]}
+  set-status! [project br-id new-status]
   (write-meta! project br-id (assoc (read-meta project br-id) :status new-status)))
 
-(defn complete!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId :keyword :any] :Ticket]}
+  complete!
   "Terminal completion of a triage verdict: set status :triaged, disposition,
    triaged-at. (Off-radar tickets use dismiss!, not complete! — :skipped retired.)"
   [project br-id new-status disposition]
@@ -83,13 +91,15 @@
                       :disposition disposition
                       :triaged-at (clock/now-iso))))
 
-(defn clear-status!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId] [:maybe :Ticket]]}
+  clear-status!
   "Make the ticket re-triable: drop :status (the gate then returns :spawn)."
   [project br-id]
   (when-let [m (read-meta project br-id)]
     (write-meta! project br-id (dissoc m :status))))
 
-(defn dismiss!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId] :Ticket]}
+  dismiss!
   "Take a ticket off the triage radar: set status :dismissed. Creates the record
    if absent so a never-triaged ticket can be dismissed. The gate then skips it
    (no auto-re-triage) and derive-stage projects it out of the triage queue.
@@ -99,7 +109,8 @@
                (assoc (or (read-meta project br-id) {:br-id br-id :entries []})
                       :status :dismissed)))
 
-(defn latest-triage-report
+(defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId] [:maybe :map]]}
+  latest-triage-report
   "The latest workstream-ledger entry (workstream resolved by the BR-#### ref)
    parsed as a TriageReport map, or nil when the latest entry isn't an `.edn`
    (e.g. a legacy markdown report or a non-triage entry)."
@@ -109,7 +120,8 @@
       (when (str/ends-with? (str (:file e)) ".edn")
         (io/read-edn (str (fs/path (cstate/workstream-dir project (:id w)) (:file e))))))))
 
-(defn gate-decision
+(defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId] :map]}
+  gate-decision
   "Decide the coordinator pre-spawn action by reading the ticket's meta status
    from disk:
      :skip-completed — terminally handled (:triaged | :dismissed)
@@ -125,7 +137,8 @@
      :planning :implementing)        :skip-active
     :spawn))
 
-(defn promote-decision
+(defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId] :map]}
+  promote-decision
   "Decide whether a ticket may be promoted to a planning Run, by reading its
    meta status:
      :promote        — status :triaged (the only promotable state)
@@ -142,7 +155,8 @@
     nil        :skip-no-record
     :skip-untriaged))
 
-(defn on-run-terminal!
+(defn ^{:malli/schema [:=> [:cat :map :keyword] :any]}
+  on-run-terminal!
   "Reconcile a ticket's meta when its triage/plan Run reaches a terminal or
    parked coordinator state. No-op for other skills and record-less tickets.
    - run ended :awaiting-review        → leave (session parked)
