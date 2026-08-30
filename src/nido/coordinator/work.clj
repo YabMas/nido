@@ -54,7 +54,8 @@
    grouped-by-stage has no key for, and the workstream dropped off every band."
   [:incoming :triage :ready :in-progress :shipping :done])
 
-(defn tab-bands
+(defn ^{:malli/schema [:=> [:cat :keyword :map] :any]}
+  tab-bands
   "Ordered [stage rows] pairs for `tab` out of a `grouped` map, empty bands
    dropped. The ONE place the band→tab mapping lives, so no surface can disagree
    about where a band belongs.
@@ -124,12 +125,14 @@
   "Action id → the position it selects."
   (into {} (map-indexed (fn [i id] [id i])) option-action-ids))
 
-(defn option-action?
+(defn ^{:malli/schema [:=> [:cat :any] :boolean]}
+  option-action?
   "True for an :option-<letter> gate action id."
   [action-id]
   (contains? option-index action-id))
 
-(defn position-carrying-action?
+(defn ^{:malli/schema [:=> [:cat :any] :boolean]}
+  position-carrying-action?
   "True for a gate action whose button is rendered with the ledger position it
    was read at, and whose resolver refuses a click that no longer names the
    ledger's latest entry.
@@ -178,7 +181,8 @@
             entry-seq (assoc :seq entry-seq)))
         options)))
 
-(defn gate-actions
+(defn ^{:malli/schema [:=> [:cat :keyword :boolean [:? :any] [:? :map]] :any]}
+  gate-actions
   "Follow-actions for a gate, derived from its spine `stage` and whether a session is
    `parked?`. Each is a descriptor {:id :label :kind :style (:input)}:
      :kind :mutation -> one-click button, resolved nido-side (resolve-gate! on :id).
@@ -307,7 +311,8 @@
        (filterv #(contains? workstream-less-actions (:id %)) actions)
        actions))))
 
-(defn classify-origin
+(defn ^{:malli/schema [:=> [:cat :Workstream] :keyword]}
+  classify-origin
   "Origin of a workstream from its RAW record: :notion :github :slack :scratch.
    Delegates to the battle-tested source classifier (ref-less-but-autonomous
    workstreams are NOT scratch — scratch is keyed on the :scratch stage marker)."
@@ -373,7 +378,8 @@
     (not (contains? unrendered-bands (:stage row)))
     (assoc :position (pipeline/of project (:ws-id row)))))
 
-(defn list-workstreams
+(defn ^{:malli/schema [:=> [:cat :ProjectName [:? :any]] [:vector :map]]}
+  list-workstreams
   "All of a project's workstreams as enriched rows on the single spine. `live-names`
    (optional set of session names actually holding ports) is threaded into the
    engagement projection — pass it so a downed one-off reads idle.
@@ -388,7 +394,8 @@
    (mapv #(with-position project (to-spine %))
          (wsv/workstream-rows project live-names))))
 
-(defn winding-down
+(defn ^{:malli/schema [:=> [:cat :ProjectName :any [:? :any]] [:vector :map]]}
+  winding-down
   "Workstreams of `project` that are FINISHED and still holding ≥1 live session —
    resources you're paying for on work that is over. Never gates (:needs-you
    false); rendered as the Active tab's trailing band with one action:
@@ -429,7 +436,8 @@
                          :needs-you false}))))
             vec)))))
 
-(defn grouped
+(defn ^{:malli/schema [:=> [:cat :ProjectName [:? :any]] :map]}
+  grouped
   "Workstreams grouped along the single spine for the board:
    {:triage {:in-flight [..] :queued [..]} :ready [..] :in-progress [..]}.
    Scratch one-offs fold into :in-progress (done via list-workstreams' remap);
@@ -618,7 +626,8 @@
            :title    (first-heading text)
            :markdown text})))))
 
-(defn latest-report
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :map]]}
+  latest-report
   "The workstream's most recent ledger entry as a `:format`-tagged gate report,
    or nil. Resolves the active ledger (the workstream's own event store), reads
    its latest entry, and finally falls back to stored intake text so an un-triaged
@@ -629,7 +638,8 @@
       (hydrate (entry->report base-dir (last entries)))
       (intake-fallback project ws-id))))
 
-(defn environment
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :map]]}
+  environment
   "The workstream's single current environment: its latest live HEAVY (impl)
    session record, or nil when none exists yet (still triage, or a light-only
    scratch). Resolved by weight + recency, NOT by liveness — a down-but-provisioned
@@ -671,7 +681,8 @@
      :environment   nil
      :sessions      []}))
 
-(defn holds
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :map]}
+  holds
   "The three records that CURRENTLY hold — what this workstream is for, what it
    found, and what it committed to — each with how many revisions it took to get
    there.
@@ -719,7 +730,8 @@
                              :blocked (:blocked st)
                              :record design}))))
 
-(defn workstream
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:? :any]] :map]}
+  workstream
   "Full detail for one workstream: origin, spine stage, label, a light ledger
    facet, a newest-first entry INDEX, the report of the entry `selected-seq` names
    (nil — nothing open — unless it names one), `:action-report` (the CURRENT report,
@@ -873,7 +885,8 @@
      :resume-error (get-in psess [:autonomy :error])
      :working?     (resuming? project (:ws-id row))}))
 
-(defn gates
+(defn ^{:malli/schema [:=> [:cat :ProjectName [:? :any]] [:vector :Gate]]}
+  gates
   "A project's gates: workstreams that want you now (needs-you), each hydrated
    with its report + follow-actions. A SETTLED (closed) workstream is never a gate,
    even if a stale stage-override still projects :needs-you.
@@ -891,14 +904,16 @@
         (remove #(= :settled (:engagement %)))
         (mapv #(->gate project %)))))
 
-(defn gate
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :Gate]]}
+  gate
   "Full gate detail for one workstream, or nil when it is absent or not a gate."
   [project ws-id]
   (->> (gates project)
        (filter #(= ws-id (:ws-id %)))
        first))
 
-(defn all-gates
+(defn ^{:malli/schema [:=> [:cat] [:vector :Gate]]}
+  all-gates
   "Gates across every registered project, needs-you/newest-first within each.
    Mirrors the dashboard's cross-project aggregation (see all-machine-rows).
    `->gate` canonicalizes each gate's :project to a string, so the raw
@@ -923,7 +938,8 @@
       (get projects (keyword (name project)))
       (get projects (name project))))
 
-(defn default-target
+(defn ^{:malli/schema [:=> [:cat :ProjectName :keyword] :keyword]}
+  default-target
   "Default target stage for a `new`/`promote` gesture in `project`. `action` is
    :promote or :new. A value configured under the project's :workstream-defaults
    is honored only when it names a spine stage; otherwise the canonical default."
@@ -934,7 +950,8 @@
       configured
       (canonical-default-target action))))
 
-(defn set-stage!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :keyword] :any]}
+  set-stage!
   "Move a workstream to `target` stage — the single mutation behind the
    new/promote/done surface verbs. A workstream-less ws-id (e.g. a bare
    watched-view row) is a no-op: {:decision :no-workstream}. Dispatch:
@@ -957,7 +974,8 @@
   [project page-id]
   (get-in (notion-cache/project-page-facts project) [page-id :br]))
 
-(defn dismiss!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :any]}
+  dismiss!
   "Take a workstream off the triage radar: record a :dismissed disposition on its
    ticket (so auto-re-triage skips it) and settle the workstream :dismissed (which
    frees its trigger's in-flight slot and removes it from the queue).
@@ -989,7 +1007,8 @@
       (do (tickets/dismiss! project br) {:decision :dismissed})
       {:decision :no-workstream})))
 
-(defn restore!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :any]}
+  restore!
   "Undo a dismiss: clear the ticket's status so it is re-triable and reopen the
    workstream. The inverse of dismiss!, with one deliberate asymmetry — the
    pre-dismiss status is NOT restored. Dismiss lets the daemon sweep tear the
@@ -1161,7 +1180,8 @@
                 (cond-> {:decision :applied}
                   (= :warn callout) (assoc :callout :warn))))))))))
 
-(defn apply!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :any]}
+  apply!
   "Accept a parked triage verdict WITHOUT resuming the review conversation. Three paths:
 
    • Slack proposal (`:proposed-ticket`, no :notion ref yet) → create the Notion page
@@ -1203,7 +1223,8 @@
        (filter #(= :triage-bug (:skill %)))
        first))
 
-(defn start-triage-page!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :any]}
+  start-triage-page!
   "Force-start a triage for a bare watched-view row, whose ws-id IS the Notion
    page-id. The triage that should have run never did (the page predates the
    watcher, or its trigger was skipping), so there is no workstream and no ledger
@@ -1271,7 +1292,8 @@
        "the code, amend or supersede the design record (/design §5) rather than "
        "patching around it."))
 
-(defn option-input
+(defn ^{:malli/schema [:=> [:cat :int :map] :string]}
+  option-input
   "What choosing option `i` resumes the parked agent with. Built nido-side from
    the ledger, for the same reason as approval-input: the browser sends an id,
    never prose, so an answer cannot arrive saying something the record never
@@ -1391,7 +1413,8 @@
               ;; it — see ui.server/resolve-failure-msg.
               {:decision :approved-unresumed})))))))
 
-(defn resolve-gate!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any [:? :any]] :map]}
+  resolve-gate!
   "Apply a gate follow-action, dispatching on `action-id`. A workstream-less ws-id
    (e.g. a bare watched-view row) is a no-op — {:decision :no-workstream} — for
    every action but :restore, :dismiss and :start-triage, which such a row
@@ -1438,7 +1461,8 @@
        :approve (approve! project ws-id payload)
        (throw (ex-info "Unknown gate action" {:action-id action-id :ws-id ws-id}))))))
 
-(defn new!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :SessionName] :any]}
+  new!
   "Birth a scratch workstream and bring its session up. Mirrors the proven add
    path: lifecycle/up! creates the worktree + services (it is heavy and slow —
    surfaces wrap this in their own progress UI); scratch/birth! births the
@@ -1450,7 +1474,8 @@
     (scratch/birth! (keyword (name project)) session-name
                     (lifecycle/session-weight session-name opts))))
 
-(defn open-target
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :map]]}
+  open-target
   "Where `open` lands for a workstream: the most-recently-active LIVE session,
    else the most-recently-active session, else nil. Returns {:project :session}.
    Ordering reuses wsv/session-rows (newest-active first)."
@@ -1464,7 +1489,8 @@
                        (first rows))]
     (when pick {:project project :session (:name pick)})))
 
-(defn reclaimed?
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any] :boolean]}
+  reclaimed?
   "True iff `session` under `ws-id` is owned by a Run whose ephemeral
    session-home was reclaimed — i.e. it CAN be re-hydrated but isn't landable
    right now. Cheap (a run lookup + a symlink stat); the interactive open path
@@ -1475,7 +1501,8 @@
    (when-let [run (runs/find-for-session project ws-id session)]
      (not (runs/home-present? run)))))
 
-(defn ensure-open!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any] :any]}
+  ensure-open!
   "Make `session` under `ws-id` landable, re-provisioning its session-home when
    the Run that owns it had the home reclaimed. Returns true if it re-hydrated,
    false if nothing was needed (home present, or no owning Run). SLOW when it
@@ -1486,7 +1513,8 @@
    (when-let [run (runs/find-for-session project ws-id session)]
      (runs/ensure-session-home! run))))
 
-(defn facet-dimensions
+(defn ^{:malli/schema [:=> [:cat :ProjectName [:? :any]] :any]}
+  facet-dimensions
   "Ordered facet keys (kebab keywords) for `source` in `project`. :notion and :all
    resolve to the configured Notion dimensions (today the only configured source);
    other sources have none yet. 1-arity = project-wide (:all).
@@ -1501,7 +1529,8 @@
      (mapv notion/normalise-property-name (views/facet-properties project))
      [])))
 
-(defn grouped-rows
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  grouped-rows
   "Flat seq of every workstream row in a `work/grouped` map (all board bands).
 
    No production caller today (views/facet-rows, its last one, is gone with the
@@ -1527,7 +1556,8 @@
           (coll? v) (seq v)
           :else [v])))
 
-(defn facet-values
+(defn ^{:malli/schema [:=> [:cat :ProjectName :keyword] :any]}
+  facet-values
   "Ordered distinct values present for facet `k` across the project's non-done
    workstreams, with :unclassified appended when any such row lacks a value."
   [project k]
@@ -1536,7 +1566,8 @@
         any-missing? (some #(nil? (facet-row-values k %)) rows)]
     (cond-> present any-missing? (conj :unclassified))))
 
-(defn facet-match?
+(defn ^{:malli/schema [:=> [:cat :map :map] :boolean]}
+  facet-match?
   "True when `row` satisfies every active selection in `facet-filter`. A value of
    :all (or absent) does not constrain. :unclassified matches a row missing that
    facet. A scalar/vector facet matches by =/contains?."
@@ -1550,7 +1581,8 @@
              (boolean (some #(= v %) vals))))))
    facet-filter))
 
-(defn session-live?
+(defn ^{:malli/schema [:=> [:cat :map] :boolean]}
+  session-live?
   "Does this registry-shaped session map hold a port RIGHT NOW? Probes the
    recorded app/nREPL ports rather than trusting that they were recorded — the
    registry is only cleaned on a graceful `down!` (engine/stop-session! →
@@ -1565,7 +1597,8 @@
   (boolean (or (and (pos-int? (:app-port s))   (proc/tcp-open? (:app-port s)))
                (and (pos-int? (:nrepl-port s)) (proc/tcp-open? (:nrepl-port s))))))
 
-(defn live-session-names
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :any]}
+  live-session-names
   "Set of session names for `project` that are actually up — i.e. hold an open
    app/nREPL port right now. THE liveness oracle: the TUI board, the web
    grouping, the adopter, and the winding-down band all read this one fn."
@@ -1612,7 +1645,8 @@
   (boolean (and (pos-int? (:repl-pid entry))
                 (proc/process-alive? (:repl-pid entry)))))
 
-(defn prune-dead-registry!
+(defn ^{:malli/schema [:=> [:cat [:? :int]] :any]}
+  prune-dead-registry!
   "Drop every registry entry whose session no longer holds a port, and return
    their instance-ids. The registry is otherwise only cleaned by a graceful
    `down!` (engine/stop-session! → state/remove-from-registry!), so a reboot, a
@@ -1644,7 +1678,8 @@
      (sstate/remove-many-from-registry! (map first dead))
      (mapv (fn [[k entry]] (or (:instance-id entry) k)) dead))))
 
-(defn bring-down!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :any]}
+  bring-down!
   "Down every live session of a workstream — the winding-down band's one action.
    Synchronous and slow (lifecycle/down! per session); callers own async + UI
    optimism. Returns {:downed [names]}."
@@ -1666,7 +1701,8 @@
        (map :name)
        set))
 
-(defn orphan-live-sessions
+(defn ^{:malli/schema [:=> [:cat :any :any] :any]}
+  orphan-live-sessions
   "Pure: the live sessions no workstream owns."
   [live owned]
   (set/difference (set live) (set owned)))
@@ -1694,7 +1730,8 @@
                      (:id w)))))
          vec)))
 
-(defn adopt-orphans!
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :any]}
+  adopt-orphans!
   "Enforce the invariant: every live session is reachable from a workstream.
    Births a scratch workstream for each live orphan (idempotent — birth! no-ops
    on an owned name), then yields bare scratch duplicates to real owners.
@@ -1713,7 +1750,8 @@
     project-name
     (str project-name "--" session-name)))
 
-(defn machine-rows
+(defn ^{:malli/schema [:=> [:cat :ProjectName :Path] [:vector :map]]}
+  machine-rows
   "Machine facts for every worktree of one project: registry entry, TCP liveness,
    RSS for the repl JVM + PG, and the configured heap ceiling. No UI-optimistic
    state — that is a surface concern injected by callers that need it."
@@ -1742,7 +1780,8 @@
                      :repl-rss repl-rss :pg-rss pg-rss :heap-max heap-max})))
            (sort-by :name)))))
 
-(defn machine-facts
+(defn ^{:malli/schema [:=> [:cat :ProjectName :any] :map]}
+  machine-facts
   "Machine facts for `names` (sessions of `project`), keyed by session name.
    The workstream pane's per-session ports/RSS/heap column feed."
   [project names]
@@ -1757,7 +1796,8 @@
                    :app-port (:app-port entry)
                    :repl-rss repl-rss :pg-rss pg-rss :heap-max heap-max}]))))
 
-(defn all-machine-rows
+(defn ^{:malli/schema [:=> [:cat [:? :any] [:? :any]] [:vector :map]]}
+  all-machine-rows
   "Machine rows across all registered projects, live-first, each tagged :project.
    2-arity is pure (inject rows-fn + projects) for tests."
   ([] (all-machine-rows machine-rows (project/list-projects)))
@@ -1800,7 +1840,8 @@
                    (when (= :improvement-decision (:format r)) r))))
          (reduce (fn [m d] (assoc m [(:analysis-seq d) (:observation d)] d)) {}))))
 
-(defn proposals
+(defn ^{:malli/schema [:=> [:cat :ProjectName] [:vector :map]]}
+  proposals
   "Every proposal this project's review-loop analyses have made, newest analysis
    first, each with whatever was decided about it.
 
@@ -1861,7 +1902,8 @@
    hand-fired trigger with."
   (delay (or (System/getenv "USER") "unknown")))
 
-(defn decide-proposal!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :map]}
+  decide-proposal!
   "Record a human decision about one proposal. Returns {:decision :recorded} or
    {:decision :stale :latest <seq>} when the position no longer names the
    ledger's latest entry.
@@ -1889,7 +1931,8 @@
       {:decision :stale :latest (:latest res)}
       {:decision :recorded :file res})))
 
-(defn all-grouped
+(defn ^{:malli/schema [:=> [:cat] [:vector :map]]}
+  all-grouped
   "[{:project <string> :grouped <grouped-map>} …] across every registered
    project (mirrors all-gates). A project that can't be read contributes
    nothing rather than failing the board."
@@ -1904,7 +1947,8 @@
   "Keep only entries whose :project matches `scope` (no-op on \"all\")."
   [scope xs] (if (= "all" scope) xs (filterv #(= scope (:project %)) xs)))
 
-(defn screen
+(defn ^{:malli/schema [:=> [:cat :map] :Screen]}
+  screen
   "The single pure derivation from view-state to the screen-model. Every render
    site (full page + SSE poll, overview + detail) renders a slice of THIS value,
    so they cannot disagree. `data` injects what only IO can produce:
@@ -1957,18 +2001,21 @@
    actually be processed, which is a question about that specific trigger's breaker."
   pickup/trigger)
 
-(defn pickup!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :string :NotionToken] :map]}
+  pickup!
   "Resolve a pasted Notion URL / page-id / BR-#### into a workstream and queue its provisioning."
   [project input token]
   (pickup/pickup! project input token))
 
-(defn file-findings!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :map]}
+  file-findings!
   "File a staging findings round on a shipped workstream. `opts` = {:items […] :staging-ref?
    :note? :session?}. Appends the event, seeds the tracker, reopens to :in-progress."
   [project ws-id opts]
   (findings/file! project ws-id opts))
 
-(defn session-started!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :SessionName] :any]}
+  session-started!
   "Tell the work plane a session came up: births its loose workstream, idempotently — a no-op
    when the session already belongs to one.
 
@@ -1978,7 +2025,8 @@
   (scratch/birth! (keyword project) session-name
                   (lifecycle/session-weight session-name {:project project})))
 
-(defn session-destroyed!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :SessionName] :any]}
+  session-destroyed!
   "Tell the work plane a session was destroyed: reaps its loose workstream, sparing one that
    carries a ref."
   [project session-name]
