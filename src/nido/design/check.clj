@@ -32,7 +32,12 @@
    project can ask. A project that consumes fukan differently overrides it."
   {:src       "src"
    :spec-dirs ["canvas"]
-   :cmd       ["clojure" "-M:fukan" "-m" "fukan.cli"]})
+   :cmd       ["clojure" "-M:fukan" "-m" "fukan.cli"]
+   ;; No selection by default: most projects declare a design small enough to read whole, and a
+   ;; default that scoped it would silently hide the rest. A project whose design has outgrown a
+   ;; briefing sets `:select` in its registry entry — datalog `:where` clauses binding `?n`,
+   ;; e.g. `[(Band ?n)]` for the architecture without the element detail underneath it.
+   :select    nil})
 
 (def ^:private check-timeout-ms
   "How long to wait for the checker. It is a cold JVM plus a model build over the whole code
@@ -97,16 +102,22 @@
    Truncated at `declaration-char-cap` with a line saying so, never silently."
   [project-name worktree]
   (when-let [design (design-of project-name worktree)]
-    (let [{:keys [spec-dirs]} design
+    (let [{:keys [spec-dirs select]} design
           done (run-fukan design worktree "describe"
-                          ["--spec-dirs" (str/join "," spec-dirs)] describe-timeout-ms)]
+                          (cond-> ["--spec-dirs" (str/join "," spec-dirs)]
+                            select (conj "--select" (pr-str select)))
+                          describe-timeout-ms)]
       (when (and (map? done) (zero? (long (:exit done))) (seq (str/trim (str (:out done)))))
         (let [full (str/trim (:out done))]
           (if (<= (count full) declaration-char-cap)
             full
             (str (subs full 0 declaration-char-cap)
-                 "\n\n;; … truncated. The whole declaration is in "
-                 (str/join ", " (:files design)) "\n")))))))
+                 "\n\n;; … truncated at " declaration-char-cap " of " (count full)
+                 " characters. The whole declaration is in "
+                 (str/join ", " (:files design))
+                 ".\n;; A design this size should be SCOPED rather than cut: set `:select` on the"
+                 "\n;; project's registry entry (datalog clauses binding ?n) so the briefing"
+                 "\n;; carries a whole answer to a narrower question instead of most of a wide one.\n")))))))
 
 (defn- parse-report
   "Read the checker's stdout. Unparseable output is UNDECIDABLE rather than clean: stdout is

@@ -135,3 +135,44 @@
           (is (< (count text) 20000))
           (is (str/includes? text "truncated") "never silently")))
       (finally (fs/delete-tree wt)))))
+
+(defn- echoing-args
+  "A `:cmd` that prints the arguments nido appended to it — the verb lands in `$0`, its flags
+   in `$*` — so a test can assert what was actually asked of fukan."
+  []
+  ["sh" "-c" "echo \"$0 $*\"; exit 0"])
+
+(deftest a-configured-selection-reaches-the-renderer
+  (testing "a design that has outgrown a briefing is SCOPED rather than cut: `:select` carries
+            datalog clauses through to fukan, which answers a narrower question in full instead
+            of a wide one truncated"
+    (let [wt (worktree-with {"canvas/bands.clj" "(ns canvas.bands)"})]
+      (try
+        (with-redefs [project/get-project
+                      (constantly {:design {:cmd (echoing-args) :select '[(Band ?n)]}})]
+          (let [asked (design/describe "p" wt)]
+            (is (str/includes? asked "describe"))
+            (is (str/includes? asked "--select [(Band ?n)]")
+                "the clauses arrive as one argument, readable by fukan's edn parse")))
+        (finally (fs/delete-tree wt))))))
+
+(deftest no-selection-asks-for-the-whole-design
+  (testing "the default is everything. Most projects declare a design small enough to read
+            whole, and a default that scoped it would hide the rest without saying so"
+    (let [wt (worktree-with {"canvas/bands.clj" "(ns canvas.bands)"})]
+      (try
+        (with-redefs [project/get-project (constantly {:design {:cmd (echoing-args)}})]
+          (is (not (str/includes? (design/describe "p" wt) "--select"))))
+        (finally (fs/delete-tree wt))))))
+
+(deftest a-truncated-declaration-names-the-remedy
+  (testing "saying `truncated` tells a reader the document is incomplete; naming `:select` tells
+            them what to do instead, which is the difference between a warning and a fix"
+    (let [wt (worktree-with {"canvas/big.clj" "(ns canvas.big)"})]
+      (try
+        (with-redefs [project/get-project
+                      (constantly {:design {:cmd (answering (str/join (repeat 20000 "x")) 0)}})]
+          (let [text (design/describe "p" wt)]
+            (is (str/includes? text ":select"))
+            (is (str/includes? text "20000") "and says how much there was")))
+        (finally (fs/delete-tree wt))))))
