@@ -240,6 +240,41 @@ because scoping is the first claim the record makes, and the only guard against
 both failure modes: reading the whole codebase, and reading three files and
 calling it a design.
 
+### Read the design the project DECLARES, and record the scope you settled on
+
+A survey that reads only the code has ignored the one artefact that is already
+checked against it. If the project has a `canvas/`, its design is a model —
+`bb nido:design:check` exits non-zero the moment the code stops obeying it, and
+the landing gate refuses on that. A baseline that contradicts it is not a
+finding, it is a survey that did not look.
+
+Start with the way in, not the whole document:
+
+```bash
+clojure -M:fukan -m fukan.cli describe --format index
+```
+
+That lists every sort the project declares, how many of each, and the selection
+that fetches it. Then ask for the part that governs your area:
+
+```bash
+clojure -M:fukan -m fukan.cli describe --select '[(Band ?n)]'
+clojure -M:fukan -m fukan.cli describe --select '[(Band ?n) (named ?n "Lane")]'
+```
+
+**Put the selection you settled on in `:scope`.** It is the same decision as
+`:bounded-by` — that one says in prose why the boundary sits there, this one is
+the query that fetches it. Prose is the claim; the selection is what lets every
+later session on this workstream be briefed with the part of the design that
+governs your area rather than all of it or none of it.
+
+You are the only round that can make this call. A session told its scope up
+front was told by someone who had not read the code yet; you read first and
+decide after, which is the whole reason the decision lives here.
+
+Omit `:scope` when the project declares no design. Most do not, and a baseline
+without it is not deficient — there is nothing to select from.
+
 ### The level a survey is written at
 
 **Describe the area as a decomposition, not as an implementation.** This is the
@@ -549,6 +584,8 @@ cat > /tmp/baseline.edn <<'EDN'
 {:format       :baseline
  :area         "…"
  :bounded-by   "why the boundary sits there"
+ ;; the same boundary as a runnable selection; omit when the project declares no design
+ :scope        [(Band ?n) (named ?n "Lane")]
  :shape        "…"
  :modules      [{:id "short-stable-slug"
                  :module "…" :hides "the decision nothing outside may depend on"

@@ -631,6 +631,20 @@
     [:format           [:= :baseline]]
     [:area             string?]
     [:bounded-by       string?]
+    ;; The same boundary decision as `:bounded-by`, made RUNNABLE. `:bounded-by` says in prose
+    ;; why the boundary sits where it does — which is the claim, and stays required. `:scope` is
+    ;; the fukan selection that fetches that region of the project's DECLARED design: datalog
+    ;; `:where` clauses binding `?n`, e.g. `[(Band ?n) (named ?n "Lane")]`.
+    ;;
+    ;; It exists because a scope should be ESTABLISHED, not configured. A session told its scope
+    ;; up front was told by someone who had not read the code yet; the baseline round is the one
+    ;; place that reads before it decides, and it already makes this decision as its first claim.
+    ;; Recording it runnably is what lets every later session on this workstream be briefed with
+    ;; the part of the design that governs the area, instead of all of it or none of it.
+    ;;
+    ;; OPTIONAL, and empty for a project that declares no design at all — most of them. A
+    ;; baseline of an unmodelled project is not deficient, it just has nothing to select from.
+    [:scope            {:optional true} [:vector any?]]
     [:shape            string?]
     ;; The decomposition and what it buys. Required, because they are the level
     ;; this record exists to operate at: a baseline that lists properties without

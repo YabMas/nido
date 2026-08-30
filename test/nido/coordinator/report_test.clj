@@ -1481,3 +1481,15 @@
             (assoc a-driven-halt :tried [{:stage :design :outcome :recut :rounds 1}]))]
     (is (str/includes? md "after 1 round"))
     (is (not (str/includes? md "after 1 rounds")))))
+
+(deftest a-baseline-may-record-the-scope-it-settled-on
+  ;; The same boundary decision as :bounded-by, made runnable. The baseline round is the one
+  ;; round that reads before it decides, which is why the scope is established here rather than
+  ;; configured somewhere upstream.
+  (is (report/validate-event
+       :baseline (assoc valid-baseline :scope '[(Band ?n) (named ?n "Lane")]))))
+
+(deftest a-baseline-without-a-scope-is-not-deficient
+  ;; Most projects declare no design at all — there is nothing to select from, and a required
+  ;; field would have made every one of their baselines invalid.
+  (is (report/validate-event :baseline (dissoc valid-baseline :scope))))
