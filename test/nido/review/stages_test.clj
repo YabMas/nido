@@ -4,7 +4,7 @@
    [babashka.fs :as fs]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
-   [nido.coordinator.daemon.agent :as agent]
+   [nido.coordinator.agent :as agent]
    [nido.platform.core :as core]
    [nido.review.cache :as cache]
    [nido.review.codex :as codex]

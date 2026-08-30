@@ -1,9 +1,9 @@
-(ns nido.coordinator.daemon.agent-test
+(ns nido.coordinator.agent-test
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
    [nido.platform.core :as core]
-   [nido.coordinator.daemon.agent :as agent]
+   [nido.coordinator.agent :as agent]
    [nido.coordinator.record.state :as cstate]))
 
 (def fake-claude

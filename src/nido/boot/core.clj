@@ -7,7 +7,7 @@
    [babashka.fs :as fs]
    [clojure.set :as set]
    [clojure.string :as str]
-   [nido.coordinator.daemon.agent :as agent]
+   [nido.coordinator.agent :as agent]
    [nido.coordinator.daemon.anomaly :as anomaly]
    [nido.coordinator.daemon.breakers :as breakers]
    [nido.coordinator.lane.brief :as brief]

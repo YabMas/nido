@@ -1,4 +1,4 @@
-(ns nido.coordinator.daemon.agent
+(ns nido.coordinator.agent
   "Headless claude launcher (autonomous phase of a Run).
 
    See spec §Agent launch."

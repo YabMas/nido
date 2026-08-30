@@ -41,7 +41,7 @@
    [clojure.java.io :as jio]
    [clojure.string :as str]
    [malli.error :as me]
-   [nido.coordinator.daemon.agent :as agent]
+   [nido.coordinator.agent :as agent]
    [nido.coordinator.report :as report]
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.state :as cstate]

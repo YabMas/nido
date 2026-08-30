@@ -3,7 +3,7 @@
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is use-fixtures]]
    [nido.platform.core :as core]
-   [nido.coordinator.daemon.agent :as agent]
+   [nido.coordinator.agent :as agent]
    [nido.coordinator.daemon.executor :as ex]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as session]

@@ -7,7 +7,7 @@
    [babashka.fs :as fs]
    [cheshire.core :as json]
    [clojure.string :as str]
-   [nido.coordinator.daemon.agent :as agent]
+   [nido.coordinator.agent :as agent]
    [nido.coordinator.record.session :as csession]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as ws]

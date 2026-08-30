@@ -80,6 +80,21 @@
   {:prefix ["nido.coordinator.record."]
    :may-depend [Platform Session Report]})
 
+(Band Agent
+  "`nido.coordinator.agent` — launch a headless agent for a run and wait for it, under a budget.
+
+   A CAPABILITY the work plane offers, and it was inside `Daemon` until the question was asked
+   directly. Nothing in Daemon reached it and it reached nothing in Daemon; its callers are two
+   lanes, three Review namespaces and the composition root. It was grouped there by theme — an
+   agent launcher sounds like part of a daemon — and the dependency graph never agreed.
+
+   Its own band rather than a move into Lane, because Review needs it and Review has no business
+   reaching eighteen lanes to get it. This is what the split buys: Review's daemon-side reach
+   goes from eleven namespaces to one, and pid, halt, breakers, launchctl and the scheduler stop
+   being things a judgment loop is permitted to touch."
+  {:prefix ["nido.coordinator.agent"]
+   :may-depend [Platform Record]})
+
 (Band Source
   "Where work arrives from: the source plugin registry, the Notion/Slack pollers, the manual
    envelope queue, and the routing and filtering that turns an arrival into a fire."
@@ -101,7 +116,7 @@
   "The verbs: pickup, promote, spawn, drive, ship, resume, intake, and the housekeeping
    reconciliations. Each lane advances a workstream from one state to the next."
   {:prefix ["nido.coordinator.lane."]
-   :may-depend [Platform Integration Session Record Source Daemon View Report]})
+   :may-depend [Platform Integration Session Record Source Daemon View Report Agent]})
 
 (Band Control
   "`nido.coordinator.control` — daemon control, as its callers ask for it: is the coordinator
@@ -134,7 +149,7 @@
 (Band Review
   "The judgment loops over a record, a design, a diff."
   {:prefix ["nido.review."]
-   :may-depend [Platform Session Vsdd Design Record Daemon Report Control]})
+   :may-depend [Platform Session Vsdd Design Record Report Control Agent]})
 
 (Band Boot
   "The daemon composition root: it wires the other bands together, and is reached
@@ -148,7 +163,7 @@
    task supplies both. The declaration is what forced that."
   {:prefix ["nido.boot."]
    :may-depend [Platform Integration Session Vsdd Review
-                Record Source Daemon Lane WorkPlane Report Control]})
+                Record Source Daemon Lane WorkPlane Report Control Agent]})
 
 (Band Surface
   "The long-lived surfaces a human looks at: the TUI, the web dashboard, the views behind them.
@@ -174,4 +189,4 @@
    a task STARTS the TUI and the dashboard, and starting them is what tasks are for."
   {:prefix ["tasks."]
    :may-depend [Platform Integration Session Vsdd Review Boot Design Surface
-                Record Source Daemon View Lane WorkPlane Report Control]})
+                Record Source Daemon View Lane WorkPlane Report Control Agent]})

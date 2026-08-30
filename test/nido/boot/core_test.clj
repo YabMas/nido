@@ -6,7 +6,7 @@
    [clojure.string :as str]
    [clojure.test :refer [deftest is use-fixtures]]
    [nido.platform.core :as nido-core]
-   [nido.coordinator.daemon.agent :as agent]
+   [nido.coordinator.agent :as agent]
    [nido.coordinator.source.events]
    [nido.coordinator.source.notion]
    [nido.platform.io]
@@ -393,7 +393,7 @@
       (let [sid-passed    (atom :unset)
             sid-at-launch (atom :unset)]
         (with-redefs [runs/spawn-session-for-run! (fn [_] nil)
-                      nido.coordinator.daemon.agent/launch!
+                      nido.coordinator.agent/launch!
                       (fn [opts]
                         (reset! sid-passed (:claude-session-id opts))
                         (reset! sid-at-launch (:claude-session-id (runs/read-run "rs")))
@@ -425,7 +425,7 @@
                         :state :queued :state-history [{:at "t" :state :queued}]
                         :artifacts [] :error nil})
       (with-redefs [runs/spawn-session-for-run! (fn [_] (throw (ex-info "boom: worktree create failed" {})))
-                    nido.coordinator.daemon.agent/launch! (fn [_] {:exit-code 0 :timed-out? false}) ; unreached
+                    nido.coordinator.agent/launch! (fn [_] {:exit-code 0 :timed-out? false}) ; unreached
                     cstate/run-session-home-link (constantly "/tmp/nope")
                     anomaly/record-failure      (fn [det _] det)
                     breakers/record-failure!    (fn [& _] nil)]
@@ -455,7 +455,7 @@
                         :state :queued :state-history [{:at "t" :state :queued}]
                         :artifacts [] :error nil})
       (with-redefs [runs/spawn-session-for-run! (fn [_] nil)
-                    nido.coordinator.daemon.agent/launch!
+                    nido.coordinator.agent/launch!
                     (fn [_] {:exit-code 0 :timed-out? false :num-turns 0
                              :result-text "Unknown command: /triage-bug"})
                     cstate/run-session-home-link (constantly "/tmp/nope")
@@ -548,7 +548,7 @@
                             :priority 0 :session-profile :lite :uncapped? false
                             :state :queued :state-history [{:at "t" :state :queued}]
                             :artifacts [] :error nil})
-          (with-redefs [nido.coordinator.daemon.agent/launch!
+          (with-redefs [nido.coordinator.agent/launch!
                         (fn [_] {:exit-code 0 :timed-out? false :num-turns 5})]
             (#'core/run-blocking! "rdone"))
           (is (= :done (:state (runs/read-run "rdone"))))
@@ -565,7 +565,7 @@
                             :priority 0 :session-profile :lite :uncapped? false
                             :state :queued :state-history [{:at "t" :state :queued}]
                             :artifacts [] :error nil})
-          (with-redefs [nido.coordinator.daemon.agent/launch!
+          (with-redefs [nido.coordinator.agent/launch!
                         (fn [_] {:exit-code 0 :timed-out? false :num-turns 5})]
             (#'core/run-blocking! "rpark"))
           (is (= :awaiting-review (:state (runs/read-run "rpark"))))
@@ -585,7 +585,7 @@
                         :state :queued :state-history [{:at "t" :state :queued}]
                         :artifacts [] :error nil})
       (with-redefs [runs/spawn-session-for-run! (fn [_] nil)
-                    nido.coordinator.daemon.agent/launch! (fn [_] {:exit-code 0 :timed-out? false})
+                    nido.coordinator.agent/launch! (fn [_] {:exit-code 0 :timed-out? false})
                     cstate/run-session-home-link (constantly "/tmp/nope")
                     status-file/read-status (fn [_] nil)
                     anomaly/record-failure      (fn [det _] det)
@@ -618,7 +618,7 @@
                           :state :queued :state-history [{:at "t" :state :queued}]
                           :artifacts [] :error nil})
         (with-redefs [runs/spawn-session-for-run! (fn [_] nil)
-                      nido.coordinator.daemon.agent/launch! (fn [opts] (reset! launch-of opts) {:exit-code 0})
+                      nido.coordinator.agent/launch! (fn [opts] (reset! launch-of opts) {:exit-code 0})
                       cstate/run-session-home-link (constantly "/tmp/nope")
                       notify/on-plan-spawn! (fn [run] (reset! notified (:id run)))
                       breakers/record-success! (fn [& _] nil)]

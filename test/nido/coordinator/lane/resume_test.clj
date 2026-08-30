@@ -3,7 +3,7 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [nido.platform.core :as core]
-            [nido.coordinator.daemon.agent :as agent]
+            [nido.coordinator.agent :as agent]
             [nido.coordinator.daemon.executor :as ex]
    [nido.coordinator.lane.resume :as resume]
             [nido.coordinator.record.runs :as runs]

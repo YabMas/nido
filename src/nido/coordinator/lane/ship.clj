@@ -7,7 +7,7 @@
   (:require
    [babashka.fs :as fs]
    [clojure.string :as str]
-   [nido.coordinator.daemon.agent :as agent]
+   [nido.coordinator.agent :as agent]
    [nido.coordinator.record.clock :as clock]
    [nido.coordinator.daemon.executor :as executor]
    [nido.coordinator.record.runs :as runs]
