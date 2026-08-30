@@ -113,7 +113,8 @@
                                   (:external-refs w))]
                 (nudge-notion! page-id on-merge))))))
 
-(defn poll-and-react!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :map] :any]}
+  poll-and-react!
   "One poll for a project. Lists merged PRs, dedups against the snapshot
    (first poll seeds + reacts to nothing), reacts to genuinely-new merges,
    persists the new snapshot.

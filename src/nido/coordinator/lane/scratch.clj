@@ -12,7 +12,8 @@
    [nido.coordinator.record.session :as session]
    [nido.coordinator.record.workstream :as workstream]))
 
-(defn scratch?
+(defn ^{:malli/schema [:=> [:cat :Workstream] :boolean]}
+  scratch?
   "A loose workstream: one carrying no external refs. Source-agnostic — Notion
    and GitHub workstreams both carry refs, so 'no refs' uniquely marks a one-off."
   [w]
@@ -38,7 +39,8 @@
       (when (not= weight (:weight s))
         (session/write! (assoc s :weight weight))))))
 
-(defn birth!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :SessionName :keyword] :any]}
+  birth!
   "Ensure a loose workstream owns a human session named `session-name`, carrying
    `weight` — the weight of what was actually provisioned for it
    (`lifecycle/session-weight`), or nil when that is unknown.
@@ -58,7 +60,8 @@
                        {:name session-name :weight (or weight :light) :autonomy nil})
       (:id w))))
 
-(defn reap!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :SessionName] :any]}
+  reap!
   "Delete the loose workstream owning `session-name` when it is safe to discard:
    it is scratch (no refs), carries no ledger entries, and owns no session other
    than this one. No-op when absent or not reapable (it grew a ref/entry, or

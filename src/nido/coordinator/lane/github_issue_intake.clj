@@ -69,7 +69,8 @@
           :when (and id (not (contains? assigned-ids id)) (unpromoted? project w))]
     (ws/delete! project ws-id)))
 
-(defn poll-and-reconcile!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :map] :any]}
+  poll-and-reconcile!
   "One reconcile poll for a project. Reverse-reconcile runs only on a SUCCESSFUL
    poll (an error never drops the queue). Returns nil."
   [project {:keys [repo issues]}]

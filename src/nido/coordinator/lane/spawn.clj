@@ -14,7 +14,8 @@
    [nido.coordinator.record.workstream :as ws]
    [nido.notion.views :as views]))
 
-(defn external-ref
+(defn ^{:malli/schema [:=> [:cat :map] [:maybe :map]]}
+  external-ref
   "External ref derived from an event payload, or nil when the payload carries
    no usable id. The adapter comes from the payload (:adapter), defaulting to
    :notion so existing Notion payloads are unchanged. Optional fields are
@@ -28,7 +29,8 @@
         (:url payload)     (assoc :url (:url payload))
         (:page-id payload) (assoc :page-id (:page-id payload))))))
 
-(defn ensure-workstream!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :map :keyword] :Workstream]}
+  ensure-workstream!
   "Find-or-create the workstream for this fire. With a derivable Notion ref,
    dedups via find-by-ref; otherwise mints a fresh ref-less workstream. New
    workstreams are stamped with :facets read from the payload (the configured
@@ -47,7 +49,8 @@
 (defn- weight-of [session-profile]
   (if (= :lite session-profile) :light :heavy))
 
-(defn autonomy-from
+(defn ^{:malli/schema [:=> [:cat :Run] :map]}
+  autonomy-from
   "Build a session :autonomy map from a freshly-created run, seeded at :queued."
   [run]
   (let [now (clock/now-iso)]
@@ -64,7 +67,8 @@
      :phase-history     [{:at now :phase :queued}]
      :error             nil}))
 
-(defn create-session-for-run!
+(defn ^{:malli/schema [:=> [:cat :Run :WorkstreamId] :Session]}
+  create-session-for-run!
   "Persist the authoritative autonomous session for a run under `ws-id`."
   [run ws-id]
   (session/create! (:project run) ws-id
@@ -77,7 +81,8 @@
   [routed]
   (or (-> routed :trigger :workstream-stage) :triaging))
 
-(defn spawn-records!
+(defn ^{:malli/schema [:=> [:cat :map :map] :map]}
+  spawn-records!
   "Orchestrate the live spawn: ensure workstream → create run (linked) → create
    session. Returns the run (carrying :workstream-id) for the executor to submit.
    Atomic w.r.t. the workstream: if run/session creation throws after we MINTED a
@@ -99,7 +104,8 @@
           (ws/delete! project (:id w)))
         (throw t)))))
 
-(defn ref-has-pending-session?
+(defn ^{:malli/schema [:=> [:cat :map] :boolean]}
+  ref-has-pending-session?
   "True when this fire's external ref already resolves to a workstream that has an
    in-flight autonomous session for the SAME trigger (queued/preprocessing/
    running/parked). The coordinator's pre-spawn gate uses this to drop a reconcile
@@ -115,7 +121,8 @@
        (session/pending-session-for-trigger?
         (:project routed) (:id w) (-> routed :trigger :name))))))
 
-(defn spawn-and-submit!
+(defn ^{:malli/schema [:=> [:cat :map :map] :any]}
+  spawn-and-submit!
   "Spawn the records for a routed fire and submit the run to the executor.
    Shared by the coordinator's live spawn branch and promote's inbox→triage
    start. Returns the created run."

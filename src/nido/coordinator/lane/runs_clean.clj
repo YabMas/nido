@@ -30,7 +30,8 @@
 ;; Parsing helpers
 ;; ---------------------------------------------------------------------------
 
-(defn parse-duration-ms
+(defn ^{:malli/schema [:=> [:cat :string] [:maybe :int]]}
+  parse-duration-ms
   "Parse '7d', '12h', '30m' to milliseconds. Returns nil when input is nil."
   [s]
   (when s
@@ -97,7 +98,8 @@
 ;; Public API
 ;; ---------------------------------------------------------------------------
 
-(defn plan-clean
+(defn ^{:malli/schema [:=> [:cat :map] [:vector :map]]}
+  plan-clean
   "Return [{:run <map> :paths [<str>...]} ...] for Runs matching the filter.
 
    opts:
@@ -131,7 +133,8 @@
                                  (instance-state-dirs-for r)))})
           matching)))
 
-(defn execute!
+(defn ^{:malli/schema [:=> [:cat [:vector :map]] :any]}
+  execute!
   "Delete every path listed in the plan. Missing paths are silently skipped.
    Returns nil."
   [plan]

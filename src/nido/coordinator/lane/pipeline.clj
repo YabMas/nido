@@ -87,7 +87,8 @@
 
 ;; ── How the work arrived ────────────────────────────────────────────────────
 
-(defn intake-kind
+(defn ^{:malli/schema [:=> [:cat :Workstream :any] [:maybe :keyword]]}
+  intake-kind
   "How this workstream came to exist, which is what decides how its intent gets
    established.
 
@@ -178,7 +179,8 @@
    :ship-submitted  :shipping
    :merged          :shipping})
 
-(defn stage-of
+(defn ^{:malli/schema [:=> [:cat :keyword] [:maybe :keyword]]}
+  stage-of
   "The arc stage an entry of `kind` belongs to, or nil for one this vocabulary
    does not place.
 
@@ -211,7 +213,8 @@
    never in it — see `arc-stages`."
   #{:halt :retraction :findings})
 
-(defn arc
+(defn ^{:malli/schema [:=> [:cat :any [:? :map]] :any]}
+  arc
   "One workstream's ledger read as the arc it travelled:
 
      {:stages     [{:stage :entries :visits :state (:last-seq :last-at :seqs)} …]
@@ -360,7 +363,8 @@
                                     (ws/entries-of project ws-id :design)))))
         (:seq latest)))))
 
-(defn baseline-verified?
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :boolean]}
+  baseline-verified?
   "True when a review found the workstream's newest baseline sufficient.
 
    Public because the surface asks it too, and there must be one answer to it.
@@ -486,7 +490,8 @@
    :analysed          nil
    :unplaceable       nil})
 
-(defn next-action
+(defn ^{:malli/schema [:=> [:cat :any :keyword] [:maybe :map]]}
+  next-action
   "The stage to run next and the mode it runs in, or nil at a terminal position.
 
    `intake-kind` changes only the first step, and only its shape rather than its
@@ -574,7 +579,8 @@
    ;; thing to advance past.
    :dry-run              :escalate})
 
-(defn disposition
+(defn ^{:malli/schema [:=> [:cat :keyword] :keyword]}
+  disposition
   "What `status` means for the workstream it finished on.
 
    An unrecognised status is :escalate, and that is the fail-safe direction: a
@@ -586,7 +592,8 @@
 
 ;; ── The arc, at stage granularity ───────────────────────────────────────────
 
-(defn of
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :map]}
+  of
   "Where workstream `ws-id` is, and what should happen to it next.
 
    Returns {:at <position> :next {:stage :mode (:from)} :intake <kind>

@@ -8,7 +8,8 @@
    [nido.coordinator.record.workstream :as ws]
    [nido.notion.views :as views]))
 
-(defn enqueue-inbox!
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  enqueue-inbox!
   "Create a session-less :incoming workstream for a queue-mode fire, deduped on the
    payload's external ref. Stores the originating trigger name + the raw event
    payload under :intake so promote can later reconstruct the triage fire.
@@ -31,7 +32,8 @@
     (- now-ms (.toEpochMilli (java.time.Instant/parse iso)))
     0))
 
-(defn expire-stale!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :int :int] :any]}
+  expire-stale!
   "Close (:dropped) every still-open :incoming workstream in `project` whose
    :created-at is older than `max-age-ms`. Promoted workstreams have left :incoming
    and closed ones are skipped. `now-ms` is epoch millis (injected for tests).

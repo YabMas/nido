@@ -49,7 +49,8 @@
       (queue/enqueue! {:target  {:project (keyword (name project)) :trigger :plan-bug}
                        :payload payload}))))
 
-(defn file!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :map]}
+  file!
   "File a staging findings round on a shipped (settled) workstream. `opts` =
    {:items [{:summary :severity (:id) (:area)} …] :staging-ref? :note? :session?}.
    Appends the immutable :findings event, seeds the tracker, reopens to
@@ -73,7 +74,8 @@
       (ws/reopen! project ws-id :in-progress)
       {:round round-n :queued (enqueue-impl! project w)})))
 
-(defn resolve!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any :any] :map]}
+  resolve!
   "Mark findings items resolved by PR/commit `by`. Moves each known id from :open
    to :resolved {id {:by by :at …}}; unknown ids are ignored. Throws when there is
    no open findings tracker. Returns the updated tracker."
@@ -91,7 +93,8 @@
       (ws/set-findings! project ws-id t')
       t')))
 
-(defn open-count
+(defn ^{:malli/schema [:=> [:cat :Workstream] :int]}
+  open-count
   "Count of unresolved finding ids on a workstream record (0 when no tracker)."
   [ws-record]
   (count (:open (:findings ws-record))))

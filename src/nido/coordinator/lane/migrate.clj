@@ -45,7 +45,8 @@
 
 ;; --- pure transforms ------------------------------------------------------
 
-(defn ticket->workstream
+(defn ^{:malli/schema [:=> [:cat :ProjectName :map] :Workstream]}
+  ticket->workstream
   "Legacy ticket meta → a Workstream record with the given id. Status becomes
    the descriptive stage; :skipped also closes the workstream (:dropped). BR +
    notion fields become a single :notion external ref. Entries carry over."
@@ -64,7 +65,8 @@
      :created-at    now
      :entries       (vec (or entries []))}))
 
-(defn run->session
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  run->session
   "Legacy run.edn → {:ws-id <str> :session <Session>}. :ws-id is the run's BR
    when present (so the run links to its ticket-derived workstream), else a
    synthetic per-run id (degenerate single-session workstream). :session-profile
@@ -109,7 +111,8 @@
 
 (def ^:private terminal-phases #{:done :failed :halted})
 
-(defn archive-orphaned-live!
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :any]}
+  archive-orphaned-live!
   "One-shot repair: archive every coordinator session whose substrate is still
    :live but whose autonomy phase is terminal (:done/:failed/:halted), EXCEPT
    provision-only (:plan-bug / :plan-github-issue) sessions (handed to the human —
@@ -161,7 +164,8 @@
      :created-at    now
      :entries       []}))
 
-(defn run-once!
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :any]}
+  run-once!
   "Migrate ONE project's legacy records into the workstream/session model, then
    archive that project's old trees under projects/<project>/_pre-unification/.
 
@@ -235,7 +239,8 @@
     (catch Exception _
       :failed)))
 
-(defn ledger->workstreams!
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :any]}
+  ledger->workstreams!
   "One-shot, best-effort migration of legacy ticket ledgers (tickets/<br>/entries/)
    into the workstream ledger that owns that ref (see the 2026-07-15 Provenance
    spine design — the workstream is now the whole-lifetime ledger). For each

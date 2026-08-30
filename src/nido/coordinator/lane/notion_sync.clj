@@ -29,7 +29,8 @@
    "Code Review"        :in-progress
    "Review"             :done})
 
-(defn sync-action
+(defn ^{:malli/schema [:=> [:cat :map] [:maybe :map]]}
+  sync-action
   "Pure decision. Given a ticket's `status` (string|nil), `ballholder-ids` (set of
    Notion user-id strings, possibly empty), `me` (my user-id), the `terminal` set,
    the `status->stage` map, and the workstream's `current-stage`, return the action:
@@ -64,7 +65,8 @@
 ;; not on every tick (load-config runs each tick, upstream of the poll throttle).
 (defonce ^:private !warned-missing-me (atom #{}))
 
-(defn load-config
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :map]}
+  load-config
   "Read + default-merge notion-sync.edn for a project. Returns nil when the file
    is absent (feature off) or when :me is missing (logs a WARN — the poller cannot
    distinguish 'claimed by me' from 'claimed by someone else' without it)."
@@ -84,7 +86,8 @@
                   :dry-run?      false}
                  raw))))))
 
-(defn page-status
+(defn ^{:malli/schema [:=> [:cat :map] [:maybe :string]]}
+  page-status
   "Status option name from a retrieved page, or nil."
   [page]
   (get-in page [:properties :Status :status :name]))
@@ -92,24 +95,28 @@
 (defn- ballholder-people [page]
   (get-in page [:properties (keyword "Ball Holder") :people]))
 
-(defn page-ballholder-ids
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  page-ballholder-ids
   "Set of Notion user-id strings on the Ball Holder property (empty when unassigned)."
   [page]
   (into #{} (keep :id) (ballholder-people page)))
 
-(defn page-ballholder-name
+(defn ^{:malli/schema [:=> [:cat :map :any] [:maybe :string]]}
+  page-ballholder-name
   "Display name for the first ball holder that isn't `me` — their :name, else :id,
    else \"someone\"."
   [page me]
   (let [other (first (remove #(= me (:id %)) (ballholder-people page)))]
     (or (:name other) (:id other) "someone")))
 
-(defn notion-page-id
+(defn ^{:malli/schema [:=> [:cat :Workstream] [:maybe :string]]}
+  notion-page-id
   "Page-id of the workstream's :notion external-ref, or nil."
   [ws]
   (some #(when (= :notion (:adapter %)) (:page-id %)) (:external-refs ws)))
 
-(defn open-notion-workstreams
+(defn ^{:malli/schema [:=> [:cat :ProjectName] [:vector :Workstream]]}
+  open-notion-workstreams
   "Open (:closed nil) workstreams carrying a :notion page-id."
   [project]
   (->> (ws/list-ids project)
@@ -160,7 +167,8 @@
           (ws/append-entry! project (:id w) {:kind :note} desc)
           (println (str "notion-sync: " (:id w) " · " desc)))))))
 
-(defn poll-and-react!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :map] :any]}
+  poll-and-react!
   "One reconcile poll for a project. For each open Notion-linked workstream, read
    its ticket's Status + Ball Holder and apply sync-action. Read-only against
    Notion; fail-safe per workstream. A token-wide :auth failure opens the

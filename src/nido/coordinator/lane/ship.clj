@@ -31,7 +31,8 @@
   [w]
   (some #(when (= :notion (:adapter %)) (:id %)) (:external-refs w)))
 
-(defn create-merge-run!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :SessionName] :Run]}
+  create-merge-run!
   "Build + persist a :queued :merge Run reusing the existing session-home.
    No new worktree/session is created — drive-home-blocking! launches into the
    session named `session-name`."
@@ -75,7 +76,8 @@
    is exactly the blocked branch the human is re-shipping after a fix."
   #{:preprocessing :running})
 
-(defn merge-run-in-flight?
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :boolean]}
+  merge-run-in-flight?
   "True if a :merge Run actively in flight already owns this workstream.
    :awaiting-review (blocked/parked) does NOT count — the user must be able
    to re-ship after fixing a blocker."
@@ -103,7 +105,8 @@
         (.println ^java.io.PrintWriter *err*
                   (str "WARN: ship — ledger append failed for " ws-id " — " (.getMessage t)))))))
 
-(defn handle-ship!
+(defn ^{:malli/schema [:=> [:cat :map] [:maybe :any]]}
+  handle-ship!
   "Process a :ship envelope. Idempotent: no-op (nil) if a merge Run is already
    in flight for this workstream. Otherwise advance the workstream to :shipping,
    create the merge Run, mark the shipment on the ledger, and submit it to the
@@ -132,7 +135,8 @@
           (executor/submit! (:id run) (:priority run) true :merge 1)
           run)))))
 
-(defn merge-lane-summary
+(defn ^{:malli/schema [:=> [:cat] :map]}
+  merge-lane-summary
   "Counts for the coordinator status line: {:driving n :queued n :blocked n}
    over all :merge Runs (running/preprocessing, queued, awaiting-review)."
   []
@@ -159,7 +163,8 @@
   (when (and br (not (str/blank? br)))
     (:kind (last (:entries (ws/find-by-ref-id project br))))))
 
-(defn classify-outcome
+(defn ^{:malli/schema [:=> [:cat :ProjectName :any :RunId :any] :keyword]}
+  classify-outcome
   "Decide a merge Run's outcome. See Interfaces for precedence."
   [project br run-id result]
   (cond
@@ -177,7 +182,8 @@
         :complete :awaiting-merge
         :blocked))))
 
-(defn drive-home-blocking!
+(defn ^{:malli/schema [:=> [:cat :RunId] :any]}
+  drive-home-blocking!
   "Executor on-spawn body for a :merge Run. Runs /drive-home headless in the
    EXISTING session-home (cwd = session-home, where bb nido:run + composed
    .claude/skills resolve), then classifies the outcome:

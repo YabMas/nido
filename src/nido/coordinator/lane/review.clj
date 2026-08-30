@@ -8,7 +8,8 @@
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.tickets :as tickets]))
 
-(defn run-state-from-ticket
+(defn ^{:malli/schema [:=> [:cat :keyword] [:maybe :keyword]]}
+  run-state-from-ticket
   "Map a ticket's status to the Run state a clean agent exit implies:
      :awaiting-input  → :awaiting-review   (triage parked for human review)
      :planning        → :awaiting-review   (plan Run owns the ticket; parked)
@@ -32,7 +33,8 @@
        (contains? #{:investigating :awaiting-input :planning}
                   (tickets/status project br-id))))
 
-(defn sweep-resolved!
+(defn ^{:malli/schema [:=> [:cat] :any]}
+  sweep-resolved!
   "Transition every :awaiting-review triage or plan run whose ticket is no
    longer in review (resolved via apply/dismiss, or cleared via cancel) → :done,
    freeing the trigger's in-flight budget AND tearing down the now-finished

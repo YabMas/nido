@@ -33,7 +33,8 @@
                              (str/replace (str cwd) #"[/.]" "-")
                              (str sid ".jsonl"))))))
 
-(defn resume-cwd
+(defn ^{:malli/schema [:=> [:cat :any :Path :Path] :Path]}
+  resume-cwd
   "The cwd to launch `claude --resume <sid>` in so it finds the conversation.
    claude keys a transcript by its launch cwd: a run spawned with cwd=worktree is
    worktree-keyed, but a LEGACY parked session (spawned when cwd was the
@@ -108,7 +109,8 @@
     (finally
       (session/set-phase! project ws-id session-name :parked))))
 
-(defn resume!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :string] :any]}
+  resume!
   "Re-engage a parked session under `ws-id` with `input`. Flips the session to
    :running synchronously, then hands one turn to the executor, which runs it when
    a slot frees.

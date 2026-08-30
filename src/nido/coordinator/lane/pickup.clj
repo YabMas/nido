@@ -37,7 +37,8 @@
 (defn- last-id [s]
   (some-> (seq (re-seq id-pattern (str s))) last))
 
-(defn extract-page-id
+(defn ^{:malli/schema [:=> [:cat :string] [:maybe :string]]}
+  extract-page-id
   "The page id of a Notion URL / uuid, returned dashed; nil if none."
   [s]
   (when s
@@ -54,7 +55,8 @@
      :url     (:url n)
      :title   (:title n)}))
 
-(defn resolve-ref
+(defn ^{:malli/schema [:=> [:cat :ProjectName :string :NotionToken] :map]}
+  resolve-ref
   "Resolve `input` (Notion URL / page-id / BR-####) → {:id :page-id :url :title},
    or {:error <kw>}. `token` is a Notion integration token."
   [project input token]
@@ -115,7 +117,8 @@
                                :opened-by :pickup})
     (tickets/set-status! project id :planning)))
 
-(defn pickup!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :string :NotionToken] :map]}
+  pickup!
   "Resolve `input` and, on success, claim the ticket as in-flight and enqueue the
    :plan-bug envelope to drive it (the daemon find-or-creates the workstream by its
    Notion ref → the shared Phase-B ledger). Reports whether an existing workstream

@@ -23,7 +23,8 @@
     (when-let [e (->> (:entries w) (filter #(= kind (:kind %))) last)]
       (str (fs/path (cstate/workstream-dir project (:id w)) (:file e))))))
 
-(defn promote!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId] :map]}
+  promote!
   "Attempt to promote a ticket to a planning Run.
    Returns {:decision <kw>}; on :promote also {:queued <envelope-path>}.
    Side effects on :promote only: sets status :planning, enqueues the envelope."
@@ -71,7 +72,8 @@
            :queued   (queue/enqueue! {:target  {:project (keyword (name project)) :trigger :plan-github-issue}
                                       :payload payload})})))))
 
-(defn start-triage!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :map]}
+  start-triage!
   "Promote a queued :incoming workstream by running its deferred triage skill.
    Reads the stored :intake {:trigger :payload}, loads that trigger, force-spawns
    the triage session onto THIS workstream (deduped on its ref), and advances the
@@ -99,7 +101,8 @@
             (ws/advance-stage! project ws-id :triaging)
             {:decision :triaging}))))))
 
-(defn promote-workstream!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :map]}
+  promote-workstream!
   "Promote a workstream by id, dispatching on its source. :notion → the existing
    triage-gated :plan-bug leg; :github → fetch the issue body + provision the
    issue-impl leg; :slack at :incoming → run the deferred triage skill (start-triage!);

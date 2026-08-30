@@ -26,7 +26,8 @@
    [nido.coordinator.lane.pipeline :as pipeline]
    [nido.session.state :as session-state]))
 
-(defn attempt
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  attempt
   "One entry for a halt's :tried — what a stage did and what it ended on.
 
    The terminal keyword is carried verbatim rather than described, so the record
@@ -37,7 +38,8 @@
     (and rounds (pos? rounds)) (assoc :rounds rounds)
     detail                     (assoc :detail detail)))
 
-(defn halt-for
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  halt-for
   "The halt record for a stage that reached `outcome`, as a value.
 
    Pure, and separate from writing it, because what a halt SAYS is the part worth
@@ -61,7 +63,8 @@
     (seq tried)   (assoc :tried (mapv attempt tried))
     (seq options) (assoc :options (vec options))))
 
-(defn park!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :map]}
+  park!
   "Stop this workstream and record why. Returns {:parked <session-or-nil>
    :seq <ledger-seq>}, or {:refused <reason>} when there is nothing to write.
 
@@ -90,7 +93,8 @@
                (catch Throwable _ nil)))
         {:parked (:name s) :seq seq-n}))))
 
-(defn park-on-escalate!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :any]}
+  park-on-escalate!
   "Park iff this outcome's disposition is :escalate; otherwise do nothing and say
    so.
 
@@ -105,7 +109,8 @@
 
 ;; ── Which workstreams the driver may advance ────────────────────────────────
 
-(defn driven
+(defn ^{:malli/schema [:=> [:cat] :any]}
+  driven
   "The workstreams the driver is allowed to advance, as #{[project ws-id]}.
 
    An ALLOW-LIST, empty by default, and that is the whole safety of this phase.
@@ -121,18 +126,21 @@
   []
   (set (map vec (io/read-edn (cstate/driving-path)))))
 
-(defn driving?
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :boolean]}
+  driving?
   [project ws-id]
   (contains? (driven) [(keyword project) ws-id]))
 
-(defn drive!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :any]}
+  drive!
   "Add a workstream to the allow-list. Returns the new set."
   [project ws-id]
   (let [next-set (conj (driven) [(keyword project) ws-id])]
     (io/write-edn! (cstate/driving-path) (vec next-set))
     next-set))
 
-(defn undrive!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :any]}
+  undrive!
   "Take a workstream off the allow-list. It stops being advanced on the next
    tick; anything already in flight for it finishes on its own."
   [project ws-id]
@@ -155,7 +163,8 @@
   {:verify-baseline {:task 'tasks.nido-review/baseline-cmd* :label "baseline"}
    :decide-design {:task 'tasks.nido-review/design-cmd*   :label "design"}})
 
-(defn fireable
+(defn ^{:malli/schema [:=> [:cat :any] :map]}
+  fireable
   "What the driver should fire for this workstream, or nil with a reason.
 
    Pure over the projection: it decides nothing about slots or Runs, only whether
@@ -209,7 +218,8 @@
   [n]
   (* 5000 n))
 
-(defn run-stage!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :keyword [:? :map]] :map]}
+  run-stage!
   "Run one mechanical stage to a settled outcome, then act on what it means.
 
    THE DRIVER DOES NOT WAIT ON A SLOT WHILE HOLDING ONE. This body runs inside
@@ -337,7 +347,8 @@
    correctly does nothing."
   (conj runs/in-progress-states :queued))
 
-(defn in-flight?
+(defn ^{:malli/schema [:=> [:cat :WorkstreamId] :boolean]}
+  in-flight?
   "Is a drive Run already claiming this workstream?
 
    The one thing the tick must not do is fire a second stage while the first is
@@ -353,7 +364,8 @@
                   (contains? claimed-states (:state r)))))
          (runs/list-run-ids))))
 
-(defn tick!
+(defn ^{:malli/schema [:=> [:cat [:? :any]] :any]}
+  tick!
   "Advance every workstream on the allow-list by at most one stage.
 
    Submits and returns. It never waits for what it fired — see run-stage! — and

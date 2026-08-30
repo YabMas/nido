@@ -60,7 +60,8 @@
         (md/comments->markdown results)))
     (catch Exception _e nil)))
 
-(defn ticket-brief
+(defn ^{:malli/schema [:=> [:cat :map :NotionToken] [:maybe :string]]}
+  ticket-brief
   "Render `ref`'s Notion page — body and comments — as a markdown ledger entry.
    Returns the markdown, or nil when there is nothing readable to record.
 
@@ -94,7 +95,8 @@
           (when comments
             ["" "## Comments" "" comments])))))))
 
-(defn ensure-ticket-brief!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map :NotionToken] :any]}
+  ensure-ticket-brief!
   "Append a `:ticket` entry carrying the ticket's body and comments to workstream
    `ws-id`, when — and only when — that workstream has no entries at all.
 

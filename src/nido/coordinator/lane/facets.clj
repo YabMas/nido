@@ -8,7 +8,8 @@
    [nido.notion.client :as notion]
    [nido.notion.views :as views]))
 
-(defn select-facets
+(defn ^{:malli/schema [:=> [:cat :any :map] :map]}
+  select-facets
   "Build a :facets map from a normalised page/payload, keeping only the
    configured properties. `facet-props` is a vector of Notion display-names
    (e.g. [\"App Domain\" \"Type\"]); each is kebab-keyed (matching normalise-page)
@@ -24,7 +25,8 @@
           {}
           facet-props))
 
-(defn refresh-ws!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:? :NotionToken]] :any]}
+  refresh-ws!
   "Re-read the workstream's :notion page and rewrite its :facets from the
    current property values. No-op (nil) for a ref-less / non-Notion workstream
    or a page-read error. 3-arg form injects the token; 2-arg reads the keychain."
@@ -38,14 +40,16 @@
                                        (notion/normalise-page page))]
              (ws/set-facets! project ws-id facets))))))))
 
-(defn refresh-for-ticket!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId] :any]}
+  refresh-for-ticket!
   "Resolve the workstream carrying Notion ref `br-id` and refresh its facets.
    No-op when no such workstream (e.g. a Slack-sourced ticket)."
   [project br-id]
   (when-let [w (ws/find-by-ref project :notion br-id)]
     (refresh-ws! project (:id w))))
 
-(defn refresh-project!
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :any]}
+  refresh-project!
   "Refresh facets for every open Notion-ref workstream in `project`. Returns the
    count refreshed. Reads the keychain token once."
   [project]
