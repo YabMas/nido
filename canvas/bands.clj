@@ -104,7 +104,7 @@
    :may-depend [Platform Integration Session Record Source Daemon View Report]})
 
 (Band Control
-  "`nido.coordinator.control` — daemon control, as a surface asks for it: is the coordinator
+  "`nido.coordinator.control` — daemon control, as its callers ask for it: is the coordinator
    healthy, will this envelope run, pause it, resume it, clear a breaker.
 
    The work plane's SECOND facade, and it is separate because the first one is about a different
@@ -134,7 +134,7 @@
 (Band Review
   "The judgment loops over a record, a design, a diff."
   {:prefix ["nido.review."]
-   :may-depend [Platform Session Vsdd Design Record Source Daemon Report]})
+   :may-depend [Platform Session Vsdd Design Record Daemon Report Control]})
 
 (Band Boot
   "The daemon composition root: it wires the other bands together, and is reached

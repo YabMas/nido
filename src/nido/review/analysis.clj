@@ -24,7 +24,7 @@
    `tasks.nido-review/append-review-entry!` does for the ledger."
   (:require
    [babashka.fs :as fs]
-   [nido.coordinator.source.queue :as queue]
+   [nido.coordinator.control :as control]
    [nido.coordinator.record.state :as cstate]))
 
 (def target
@@ -101,7 +101,7 @@
                           (boolean (and report-path (fs/exists? (str report-path)))))
     (try
       (cstate/ensure-dirs!)
-      (queue/enqueue! {:target target :payload (payload run)})
+      (control/fire! (:project target) (:trigger target) (payload run))
       (catch Exception e
         (binding [*out* *err*]
           (println (str "review-loop: could not queue the run for analysis — "
