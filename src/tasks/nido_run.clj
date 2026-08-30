@@ -27,7 +27,8 @@
       (throw (ex-info "Missing :project <name>"
                       {:hint "Pass :project <project-name> — the name used in `bb nido:project:add`."}))))
 
-(defn run
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  run
   "Run the named project-command in a session worktree and exit with its code."
   [& args]
   (let [[pos opts] (task-args/split-args args)

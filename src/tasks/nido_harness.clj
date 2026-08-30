@@ -166,7 +166,8 @@
 (defn- absolute-source [from]
   (str (fs/normalize (fs/expand-home from))))
 
-(defn sync-cmd
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  sync-cmd
   "Reconcile <nido>/.claude/ against .claude/harness.edn."
   [& _args]
   (let [{:keys [from include exclude]} (read-manifest)

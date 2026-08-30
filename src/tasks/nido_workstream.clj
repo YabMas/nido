@@ -25,7 +25,8 @@
    carve-out rescues prose; nothing rescues a leading brace."
   #{:content})
 
-(defn entry-add*
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  entry-add*
   "Append one entry. The body comes from :file when given, else :content — the
    same split nido:ticket:append makes, and for the same reason: a typed report
    is EDN, which does not survive a shell argument intact at any useful size."
@@ -34,13 +35,16 @@
                     {:kind (keyword (or kind "note"))}
                     (if file (slurp (str file)) (or content ""))))
 
-(defn stage-advance* [{:keys [project stage] :as opts}]
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  stage-advance* [{:keys [project stage] :as opts}]
   (work/set-stage! (keyword project) (resolve-ws-id opts) (keyword stage)))
 
-(defn close* [{:keys [project outcome] :as opts}]
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  close* [{:keys [project outcome] :as opts}]
   (ws/close! (keyword project) (resolve-ws-id opts) (keyword (or outcome "done"))))
 
-(defn ref-add*
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  ref-add*
   "Stamp an external ref. For :adapter github this also files the :pr-opened
    ledger event (nido.coordinator.record.workstream/add-ref!), so :summary — the design-
    terms line nido cannot write for itself — belongs on this call."
@@ -51,7 +55,8 @@
                  title (assoc :title title))
                {:summary summary}))
 
-(defn show* [{:keys [project] :as opts}]
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  show* [{:keys [project] :as opts}]
   (let [p     (keyword project)
         ws-id (resolve-ws-id opts)
         w     (work/workstream p ws-id)]
@@ -94,7 +99,8 @@
      (f opts)
      (println "ok"))))
 
-(defn entry-add
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  entry-add
   "bb nido:workstream:entry:add :project <p> (:ws-id <id> | :ref BR-####)
      :kind <kw> (:file <path> | :content <str>)
    A typed kind's body is validated at the ledger boundary; a malformed one is
@@ -109,10 +115,14 @@
           (println "append rejected:" (ex-message e))
           (when-let [ex (:explain (ex-data e))] (println (pr-str ex))))
         (System/exit 1)))))
-(defn stage-advance [& args] (run* stage-advance* args))
-(defn close-cmd     [& args] (run* close* args))
-(defn ref-add       [& args] (run* ref-add* args ref-raw-string-keys))
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  stage-advance [& args] (run* stage-advance* args))
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  close-cmd     [& args] (run* close* args))
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  ref-add       [& args] (run* ref-add* args ref-raw-string-keys))
 
-(defn show-cmd [& args]
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  show-cmd [& args]
   (let [[_ opts] (task-args/split-args args)]
     (show* opts)))

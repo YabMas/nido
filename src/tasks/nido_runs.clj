@@ -21,7 +21,8 @@
            sort
            (keep runs/read-run)))))
 
-(defn list-runs
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  list-runs
   "bb nido:runs:list [:state <kw>] [:trigger <kw>] [:project <kw>]"
   [& args]
   (let [[_ {:keys [state trigger project]}] (task-args/split-args args)
@@ -39,7 +40,8 @@
                          (name (:trigger r))
                          (:id r)))))))
 
-(defn show
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  show
   "bb nido:runs:show <run-id>"
   [& args]
   (let [[positionals _] (task-args/split-args args)

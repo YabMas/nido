@@ -25,7 +25,8 @@
        (filter #(= :postgresql (:type %)))
        first))
 
-(defn project-source-dir
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  project-source-dir
   "The project's registered source checkout (its jj root)."
   [project-name]
   (:directory (second (lifecycle/resolve-project {:project project-name}))))
@@ -36,7 +37,8 @@
      :app-user app-db-user :app-password app-db-password
      :source-repo (project-source-dir project-name)}))
 
-(defn up
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  up
   "Ensure the shared Postgres cluster for a project is up (seed+start), advance
    it to main@origin, and ensure the DDL-less app role. Idempotent.
 
@@ -47,7 +49,8 @@
         project-name (require-project opts)]
     (prn (shared/ensure-ready! project-name (ready-opts project-name)))))
 
-(defn status
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  status
   "Show shared cluster status for a project.
 
    Usage:
@@ -57,7 +60,8 @@
         project-name (require-project opts)]
     (shared/status project-name)))
 
-(defn down
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  down
   "Stop the shared cluster (preserves data).
 
    Usage:
@@ -67,7 +71,8 @@
         project-name (require-project opts)]
     (shared/down! project-name)))
 
-(defn reset
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  reset
   "Stop, drop PGDATA, re-clone from template, start — recover from a bad
    migration — then advance to main@origin and ensure the DDL-less app role.
 
@@ -79,7 +84,8 @@
     (shared/reset! project-name)
     (prn (shared/ensure-ready! project-name (ready-opts project-name)))))
 
-(defn destroy
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  destroy
   "Delete the shared cluster for a project.
 
    Usage:

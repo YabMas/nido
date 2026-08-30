@@ -35,21 +35,24 @@
     (throw (ex-info "Too many positional args; expected at most one session name"
                     {:positionals positionals}))))
 
-(defn add
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  add
   "Append/replace a link by :url on the resolved session."
   [& args]
   (let [[pos opts] (task-args/split-args args raw-string-keys)
         session    (session-positional pos)]
     (lifecycle/link-add! session opts)))
 
-(defn remove-cmd
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  remove-cmd
   "Drop a link by :url from the resolved session."
   [& args]
   (let [[pos opts] (task-args/split-args args raw-string-keys)
         session    (session-positional pos)]
     (lifecycle/link-remove! session opts)))
 
-(defn list-cmd
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  list-cmd
   "Print the resolved session's links."
   [& args]
   (let [[pos opts] (task-args/split-args args raw-string-keys)

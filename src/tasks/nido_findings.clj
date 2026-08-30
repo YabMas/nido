@@ -8,7 +8,8 @@
 
 (defn- project-kw [opts] (keyword (or (:project opts) "brian")))
 
-(defn file-cmd
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  file-cmd
   "bb nido:findings:file :project <p> :ws <ws-id> :file <edn-path> [:session <s>]
    The EDN file is {:items [{:summary :severity (:id) (:area)} …] :staging-ref? :note?}."
   [& args]
@@ -19,7 +20,8 @@
     (println "filed findings round" (:round res) "→ reopened" (:ws o))
     (pprint/pprint res)))
 
-(defn resolve-cmd
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  resolve-cmd
   "bb nido:findings:resolve :project <p> :ws <ws-id> :items [f1 f3] :by <ref>"
   [& args]
   (let [[_ o] (task-args/split-args args)

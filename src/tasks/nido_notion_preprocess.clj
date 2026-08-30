@@ -15,7 +15,8 @@
    [nido.notion.preprocess :as pp]
    [nido.platform.task-args :as task-args]))
 
-(defn exit! [code] (System/exit code))
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  exit! [code] (System/exit code))
 
 (defn- parse-duration
   "Parse a duration into integer seconds. Accepts:
@@ -33,7 +34,8 @@
     :else
     (throw (ex-info (str "Bad duration: " (pr-str s)) {:input s}))))
 
-(defn run
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  run
   "bb nido:notion:preprocess-ticket :page <id> :out <dir> [:budget 10m]"
   [& args]
   (let [[_ opts] (task-args/split-args args)

@@ -20,7 +20,8 @@
   [session-name]
   (str/starts-with? (str session-name) "run-"))
 
-(defn backfill
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  backfill
   "Birth a loose workstream for every existing *manual* session of `:project`
    that does not yet belong to one. Coordinator-run worktrees (run-*) are skipped.
    Safe to re-run."

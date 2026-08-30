@@ -18,7 +18,8 @@
       (throw (ex-info "Missing :project <name>"
                       {:hint "Pass :project \"<project-name>\" — the name used in `bb nido:project:add`."}))))
 
-(defn init
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  init
   "Initialize a fresh template cluster for a project.
 
    Usage:
@@ -30,7 +31,8 @@
         force? (boolean (or (:force? opts) (:force opts)))]
     (template/init! project-name :force? force?)))
 
-(defn refresh
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  refresh
   "Refresh the template cluster by running the project's declared
    :refresh-steps against a live copy of the template.
 
@@ -41,7 +43,8 @@
         project-name (require-project opts)]
     (template/refresh! project-name)))
 
-(defn status
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  status
   "Show template status for a project.
 
    Usage:
@@ -51,7 +54,8 @@
         project-name (require-project opts)]
     (template/status project-name)))
 
-(defn stop
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  stop
   "Stop the template cluster (no-op when already stopped).
 
    Usage:
@@ -61,7 +65,8 @@
         project-name (require-project opts)]
     (template/stop! project-name)))
 
-(defn destroy
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  destroy
   "Delete the template cluster entirely.
 
    Usage:

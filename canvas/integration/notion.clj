@@ -98,6 +98,37 @@
     {:signature [:=> [:catn [:page-id :string] [:token NotionToken]] [:vector :map]]
      :delegates [http-request]}))
 
+(Module notion-views
+  "The per-project view registry: what a view keyword means.
+
+   Local because the Notion API will not say — it does not expose view filter definitions at
+   all. That makes drift possible, which is why the checker below is not optional politeness."
+  (Operation load-registry "A project's raw view registry."
+    {:signature [:=> [:catn [:project ProjectName]] [:maybe :map]]})
+  (Operation board-views "The views that feed the board."
+    {:signature [:=> [:catn [:project ProjectName]] :any]})
+  (Operation board-poll "How often nido polls the board views on its own behalf."
+    {:signature [:=> [:catn [:project ProjectName]] [:maybe :any]]})
+  (Operation resolve-view "The database and filter behind a view keyword."
+    {:signature [:=> [:catn [:project ProjectName] [:view-kw :keyword]] [:maybe NotionView]]
+     :delegates [load-registry]})
+  (Operation facet-properties "The project's configured facet property names."
+    {:signature [:=> [:catn [:project ProjectName]] :any] :delegates [load-registry]}))
+
+(Module notion-preprocess
+  "Walk a ticket for videos and transcribe them, so an agent reads what was said rather than
+   being handed a link it cannot open."
+  (Operation classify "What kind of video a block holds, if any. Pure."
+    {:signature [:=> [:catn [:block :map]] [:maybe :map]]})
+  (Operation fetch-page-meta! "One page's metadata."
+    {:signature [:=> [:catn [:page-id :string] [:token NotionToken]] :map]})
+  (Operation shell-bb-task "Shell out to a bb task. A redef seam."
+    {:signature [:=> [:catn [:args :any]] :map]})
+  (Operation preprocess-ticket!
+    "Transcribe every video on a ticket and write a manifest beside the transcripts."
+    {:signature [:=> [:catn [:opts :map]] :map]
+     :delegates [classify fetch-page-meta! shell-bb-task]}))
+
 (Module notion-views-check
   "Validate the local registry against the live database.
 

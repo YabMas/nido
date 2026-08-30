@@ -14,7 +14,8 @@
         (throw (ex-info "Options must be key/value pairs" {:args args})))
       (apply hash-map values))))
 
-(defn run
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  run
   "Delete per-instance state dirs not referenced by any registry entry.
    Default is list-only; pass :force? true to actually delete.
    Also accepts :force (zsh users: quote it as ':force?')."

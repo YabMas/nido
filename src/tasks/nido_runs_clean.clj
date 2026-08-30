@@ -40,7 +40,8 @@
                       :else          (throw (ex-info (str "Cannot parse :state: " raw) {}))))
     :else         (throw (ex-info (str "Cannot coerce :state: " raw) {}))))
 
-(defn clean-cmd
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  clean-cmd
   "bb nido:runs:clean entry point."
   [& args]
   (let [[_ opts]  (task-args/split-args args)

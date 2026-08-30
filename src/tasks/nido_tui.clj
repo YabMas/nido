@@ -65,7 +65,8 @@
                   (str "[nido:tui] action failed: " (ex-message t)
                        " (see " (log-file) ")"))))))
 
-(defn run [& _args]
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  run [& _args]
   (try
     ;; No loop: every mutating verb runs in-app now, so run-once returns exactly
     ;; once — either :quit (stop) or an :enter action that is terminal

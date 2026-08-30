@@ -12,7 +12,8 @@
    [nido.coordinator.record.triggers :as triggers]
    [nido.platform.task-args :as task-args]))
 
-(defn fire
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  fire
   "bb nido:trigger:fire :project <p> <trigger-name> :url <v> :ticket-id <v> ..."
   [& args]
   (let [[positionals opts] (task-args/split-args args)
@@ -30,7 +31,8 @@
                     :payload payload})]
         (println "queued" path)))))
 
-(defn list-triggers
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  list-triggers
   "bb nido:trigger:list :project <p>"
   [& args]
   (let [[_ opts]   (task-args/split-args args)
@@ -46,7 +48,8 @@
                            (name (:skill t))
                            (if (:dry-run? t) " (dry-run)" ""))))))))
 
-(defn enable
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  enable
   "bb nido:trigger:enable :project <p> <trigger-name>"
   [& args]
   (let [[positionals opts] (task-args/split-args args)
@@ -57,7 +60,8 @@
     (breakers/enable! project-kw t-name)
     (println "Trigger enabled:" (name project-kw) "/" (name t-name))))
 
-(defn disable
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  disable
   "bb nido:trigger:disable :project <p> <trigger-name> [:note <str>]"
   [& args]
   (let [[positionals opts] (task-args/split-args args)

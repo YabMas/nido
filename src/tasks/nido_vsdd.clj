@@ -26,7 +26,8 @@
            {:working-dir project-dir}
            overrides)))
 
-(defn run
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  run
   "Run VSDD loop.
    Usage: bb nido:vsdd:run :project-dir <path> :module-path <path> [opts...]"
   [& args]
@@ -41,7 +42,8 @@
                                    (assoc :max-iterations (:max-iterations opts))))]
     (vsdd/run config)))
 
-(defn resume
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  resume
   "Resume an interrupted VSDD run.
    Usage: bb nido:vsdd:resume :project-dir <path> :run-id <id>"
   [& args]
@@ -60,7 +62,8 @@
                                   :run-id run-id})]
     (vsdd/resume config)))
 
-(defn analyze
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  analyze
   "Analyze a completed VSDD run for efficiency improvements.
    Usage: bb nido:vsdd:analyze :project-dir <path> :run-id <id> [:model opus]"
   [& args]
@@ -73,7 +76,8 @@
                       :run-id      run-id
                       :model       (:model opts)})))
 
-(defn sweep
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  sweep
   "Run VSDD across all changed modules in parallel.
    Usage: bb nido:vsdd:sweep :project-dir <path> [opts...]"
   [& args]

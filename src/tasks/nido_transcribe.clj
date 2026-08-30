@@ -13,9 +13,11 @@
    [nido.platform.task-args :as task-args]
    [nido.transcribe.core :as transcribe]))
 
-(defn exit! [code] (System/exit code))
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  exit! [code] (System/exit code))
 
-(defn parse-duration
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  parse-duration
   "Parse a duration into integer seconds.
    Accepts:
      - Long/Integer → treated as seconds directly
@@ -32,7 +34,8 @@
     :else
     (throw (ex-info (str "Bad duration: " (pr-str s)) {:input s}))))
 
-(defn run
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  run
   "bb nido:transcribe-video <url> :out <path> [:model :small] [:timeout 5m]"
   [& args]
   (let [[positionals opts] (task-args/split-args args)

@@ -20,7 +20,8 @@
 (defn- registry-path [project]
   (core/project-file project "notion-views.edn"))
 
-(defn load-registry [project]
+(defn ^{:malli/schema [:=> [:cat :ProjectName] [:maybe :map]]}
+  load-registry [project]
   (let [path (registry-path project)]
     (when-not (fs/exists? path)
       (throw (ex-info (str "Notion views registry missing for project " project
@@ -28,7 +29,8 @@
                       {:project project :path path})))
     (io/read-edn path)))
 
-(defn board-views
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :any]}
+  board-views
   "The set of view keywords that feed the board (`:board-views` in the registry),
    or nil when unset. nil means every watched view feeds the board (back-compat)."
   [project]
@@ -36,7 +38,8 @@
     (when (fs/exists? path)
       (some-> (io/read-edn path) :board-views set))))
 
-(defn board-poll
+(defn ^{:malli/schema [:=> [:cat :ProjectName] [:maybe :any]]}
+  board-poll
   "Poll interval for board-views nido polls on its own behalf (`:board-poll` in
    the registry, default 5m). These exist to keep the board's read of Notion
    fresh, not to catch arriving work, so they are deliberately slower than an
@@ -46,7 +49,8 @@
     (or (when (fs/exists? path) (:board-poll (io/read-edn path)))
         "5m")))
 
-(defn resolve-view
+(defn ^{:malli/schema [:=> [:cat :ProjectName :keyword] [:maybe :NotionView]]}
+  resolve-view
   "Returns {:database <id> :filter <map>} for the given (project, view-kw).
    Throws on missing registry or unknown view."
   [project view-kw]
@@ -56,7 +60,8 @@
         (throw (ex-info (str "Unknown Notion view " view-kw " for project " project)
                         {:project project :view view-kw :known (keys views)})))))
 
-(defn facet-properties
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :any]}
+  facet-properties
   "The project's configured facet property display-names (the registry's
    :facets), or [] when the registry or key is absent. Unlike load-registry,
    this never throws — facets are an optional organizational layer."

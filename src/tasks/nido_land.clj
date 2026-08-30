@@ -140,7 +140,8 @@
                          2)))
     0))
 
-(defn check
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  check
   "The landing gate: both questions, and a refusal from either is a refusal.
 
    Every check runs even when an earlier one refuses. An agent that has to
@@ -151,7 +152,8 @@
         cwd   (or (lifecycle/worktree-from-cwd given) given)]
     (apply max (mapv #(% cwd) [standing-check structure-check]))))
 
-(defn cmd
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  cmd
   "bb entry point: exits non-zero on a refusal, so a recipe that runs it before
    the push stops there without anyone having to read the output."
   [& args]

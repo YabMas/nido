@@ -135,17 +135,20 @@
 ;; Task entry points
 ;; ---------------------------------------------------------------------------
 
-(defn add
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  add
   "File a spin-out in the follow-up DB and print its ref."
   [& args]
   (guarded #(add! args)))
 
-(defn list-cmd
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  list-cmd
   "Print open follow-ups, worst-decay first. `:status <s>` reads another band."
   [& args]
   (guarded #(list! args)))
 
-(defn check-cmd
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  check-cmd
   "Validate the configured property names + vocabularies against the live DB."
   [& _args]
   (guarded check!))

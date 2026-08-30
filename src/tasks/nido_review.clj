@@ -31,13 +31,15 @@
   (:import
    [java.time Instant]))
 
-(defn exit-code
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  exit-code
   "CLI exit code for a terminal review status. review-failed is the only
    failure; escalated is a reported outcome, not an error."
   [status]
   (if (= :review-failed status) 1 0))
 
-(defn review-event
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  review-event
   "Pure: build a :review ledger payload from the loop's terminal value `final`
    ({:status :findings}) and the folded review `report` ({:summary :target})."
   [final report report-path]
@@ -50,7 +52,8 @@
    :findings-remaining (count (verdict/still-open (:findings final)))
    :report-path        report-path})
 
-(defn append-review-entry!
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  append-review-entry!
   "Resolve cwd → session → workstream (the tasks.nido-ship path) and append one :review
    entry. Best-effort: a ledger-write failure must never turn a completed review
    into a failure exit — visibility is a side record, not part of the review. No-op
@@ -68,7 +71,8 @@
                       (ex-message e))))
       nil)))
 
-(defn parked-blocker
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  parked-blocker
   "Pure: the halt a run holding parked findings owes a human, or nil.
 
    A park is the one disposition whose answer is not the loop's to give — it
@@ -102,7 +106,8 @@
                   :consequence (str "Everything judged against the old record is "
                                     "judged again, including work already fixed.")}]})))
 
-(defn append-blocker!
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  append-blocker!
   "Append the halt, if there is one. Best-effort for the same reason
    `append-review-entry!` is: a finished review must not become a failure because
    a side record could not be written. Returns the blocker, or nil."
@@ -119,7 +124,8 @@
         (println (str "review-loop: could not append the :blocker — " (ex-message e))))
       nil)))
 
-(defn queue-analysis!
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  queue-analysis!
   "Queue this run for nido-side analysis. Best-effort, for the same reason
    `append-review-entry!` is: the review is over, and a missing side record must
    not turn a finished review into a failed one.
@@ -143,7 +149,8 @@
       :reviewed-session   session
       :reviewed-ws-id     ws-id})))
 
-(defn verdict-worth-running?
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  verdict-worth-running?
   "Whether the verdict pass has anything to judge.
 
    It makes two different kinds of check, and only one of them needs findings.
@@ -162,7 +169,8 @@
                     (seq (:history final))
                     (seq (:invariants design))))))
 
-(defn append-design-verdict!
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  append-design-verdict!
   "Run the design verdict and append it as a ledger event. Best-effort throughout,
    for the same reason append-review-entry! is: a completed review must not turn
    into a failure because a side record could not be written. Returns the verdict
@@ -235,7 +243,8 @@
    loop that never returns.\""
   "30m")
 
-(defn loop-cmd* [{:keys [cwd base max-iters dry-run? budget]}]
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  loop-cmd* [{:keys [cwd base max-iters dry-run? budget]}]
   (let [cwd        (or cwd
                        (lifecycle/worktree-from-cwd)
                        (System/getProperty "user.dir"))
@@ -277,7 +286,8 @@
     (queue-analysis! cwd final @report-atom report-path config ws-id)
     status))
 
-(defn loop-cmd [& args]
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  loop-cmd [& args]
   (let [[_ opts] (task-args/split-args args)]
     (loop-cmd* opts)))
 
@@ -500,7 +510,8 @@
                                  (when-let [f (:format e)] (str " — it is a " f)))
                             {:seq n :format (:format e)})))))))
 
-(defn baseline-cmd*
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  baseline-cmd*
   "Verify a baseline against the code, and keep correcting it until the code
    stops refuting it. :seq names WHICH baseline; the default is the newest."
   ;; `seq-n`, not `seq` — destructuring the key by its own name would shadow
@@ -545,7 +556,8 @@
     (println "\n  FOR YOU TO DECIDE:")
     (println (str "  " asks))))
 
-(defn design-cmd*
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  design-cmd*
   "Decide, against the latest design record, whether this should be executed —
    repairing what is derivable and escalating what is not."
   [opts]
@@ -556,12 +568,14 @@
                      :epilogue    design-epilogue}
                     opts))
 
-(defn baseline-cmd
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  baseline-cmd
   [& args]
   (let [[_ opts] (task-args/split-args args)]
     (baseline-cmd* opts)))
 
-(defn design-cmd
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  design-cmd
   [& args]
   (let [[_ opts] (task-args/split-args args)]
     (design-cmd* opts)))

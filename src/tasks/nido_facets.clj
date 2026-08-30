@@ -6,7 +6,8 @@
 
 (defn- project-kw [opts] (keyword (or (:project opts) "brian")))
 
-(defn refresh-cmd
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  refresh-cmd
   "bb nido:facets:refresh :project <p> [:ws <ws-id>]
    Re-read Notion and rewrite classification facets. With :ws, one workstream;
    otherwise every open Notion-ref workstream in the project. On-demand only —

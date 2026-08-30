@@ -3,7 +3,8 @@
    [nido.coordinator.lane.migrate :as migrate]
    [nido.platform.task-args :as task-args]))
 
-(defn migrate-cmd
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  migrate-cmd
   "bb nido:migrate :project <p> — migrate legacy run.edn/ticket records into the
    workstream/session model, archiving the old trees under _pre-unification/.
 
@@ -31,7 +32,8 @@
       (println (format "Migrated %d workstream(s), %d session(s). Old records archived under _pre-unification/."
                        workstreams sessions)))))
 
-(defn ledger-cmd
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  ledger-cmd
   "bb nido:migrate:ledger :project <p> — one-shot, best-effort copy of each
    ticket's legacy ledger entries (tickets/<br>/entries/) into its workstream's
    ledger (found by ref). Non-destructive: ticket entry files are left in place

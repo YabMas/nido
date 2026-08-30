@@ -13,7 +13,8 @@
 
 (defn- project-kw [opts] (keyword (or (:project opts) "brian")))
 
-(defn exit!
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  exit!
   "Redefable wrapper around System/exit (matches the exit-test convention used
    elsewhere in tasks.* — see tasks.nido-transcribe / tasks.nido-notion-preprocess)
    so tests can capture the exit code without killing the test JVM."
@@ -26,7 +27,8 @@
    vector without this guard)."
   #{:url :title})
 
-(defn open-cmd
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  open-cmd
   "bb nido:ticket:open :project <p> :br BR-#### :page <id> :url <u> :title <t> :opened-by <kw>"
   [& args]
   (let [[_ o] (task-args/split-args args raw-string-keys)]
@@ -38,14 +40,16 @@
                     :notion-last-edited-at (some-> (:edited o) str)})
     (println "opened" (:br o))))
 
-(defn status-cmd
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  status-cmd
   "bb nido:ticket:status :project <p> :br BR-#### :status <kw>"
   [& args]
   (let [[_ o] (task-args/split-args args)]
     (tickets/set-status! (project-kw o) (str (:br o)) (keyword (:status o)))
     (println "status" (:br o) "->" (:status o))))
 
-(defn complete-cmd
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  complete-cmd
   "bb nido:ticket:complete :project <p> :br BR-#### :status triaged :disposition <kw>
    (Off-radar tickets use nido:ticket:dismiss — :skipped is retired.)
    Refreshes the workstream's classification facets from Notion right after the
@@ -59,7 +63,8 @@
     (facets/refresh-for-ticket! project br)
     (println "completed" br (:status o))))
 
-(defn dismiss-cmd
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  dismiss-cmd
   "bb nido:ticket:dismiss :project <p> :br BR-#### (or positional BR-####)
    Take a ticket off the triage radar (status :dismissed). Skipped by
    auto-re-triage; creates the record if the ticket was never triaged."
@@ -69,7 +74,8 @@
     (tickets/dismiss! (project-kw o) br)
     (println "dismissed" br)))
 
-(defn append-cmd
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  append-cmd
   "bb nido:ticket:append :project <p> :br BR-#### :kind <kw> :session <s> :run-id <r> :file <path>
    Reads entry body from :file. A :triage body must be valid TriageReport EDN —
    a malformed report is rejected (non-zero exit + explain) so the skill retries.
@@ -90,7 +96,8 @@
           (when-let [ex (:explain (ex-data e))] (println (pr-str ex))))
         (System/exit 1)))))
 
-(defn report-cmd
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  report-cmd
   "bb nido:ticket:report :project <p> :br <key> — print the latest triage report as
    markdown (the skill prints this into chat and reads :notion-writes from it)."
   [& args]
@@ -98,13 +105,15 @@
     (println (report/report->markdown
               (tickets/latest-triage-report (project-kw o) (str (:br o)))))))
 
-(defn show-cmd
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  show-cmd
   "bb nido:ticket:show :project <p> :br BR-#### — pretty-print meta.edn."
   [& args]
   (let [[_ o] (task-args/split-args args)]
     (pprint/pprint (tickets/read-meta (project-kw o) (str (:br o))))))
 
-(defn list-cmd
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  list-cmd
   "bb nido:tickets:list [:status <kw>]
    List ticket records grouped by lifecycle stage. The 'Ready to implement'
    group (:triaged) is what you promote next. Optional :status narrows to one."
@@ -122,7 +131,8 @@
       (doseq [t ts] (println "  " (tickets-view/format-row t)))
       (println))))
 
-(defn apply-cmd
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  apply-cmd
   "bb nido:ticket:apply :project <p> :br BR-#### — execute a parked triage's verdict via
    nido (work/apply!): reads the typed report from the ledger and writes Notion (Ball
    Holder + App Domain, deep properties + callout), then completes the record. Prints the
@@ -140,7 +150,8 @@
       (do (binding [*out* *err*] (println "no workstream for" br))
           (exit! 1)))))
 
-(defn promote-cmd
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  promote-cmd
   "bb nido:ticket:promote :project <p> :br BR-#### (or positional BR-####)
    Gate a triaged ticket → enqueue a :plan-bug planning Run. Exits non-zero
    (and enqueues nothing) when the ticket isn't promotable."

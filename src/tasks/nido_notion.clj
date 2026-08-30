@@ -6,7 +6,8 @@
    [clojure.string :as str]
    [nido.notion.client :as notion]))
 
-(defn auth-set
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  auth-set
   "bb nido:notion:auth:set — read a token from stdin, store in macOS Keychain.
    Stdin is echoed (Babashka can't trivially disable terminal echo); the user
    should clear their terminal scrollback after running this."
@@ -25,7 +26,8 @@
               (println err)
               (System/exit exit)))))))
 
-(defn auth-check
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  auth-check
   "bb nido:notion:auth:check — print whether the keychain has a token."
   [& _args]
   (let [token (notion/keychain-token)]

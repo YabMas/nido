@@ -70,7 +70,8 @@
   (let [s (str s)]
     (str s (apply str (repeat (max 0 (- n (count s))) \space)))))
 
-(defn show
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  show
   "Print a curated, grouped overview of nido tasks."
   [& _args]
   (let [width (->> groups

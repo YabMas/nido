@@ -11,7 +11,8 @@
    [nido.session.lifecycle :as lifecycle]
    [nido.platform.task-args :as task-args]))
 
-(defn enqueue-ship!
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  enqueue-ship!
   "Write a :ship envelope. Returns the envelope path."
   [{:keys [project session ws-id]}]
   (queue/enqueue! {:type :ship :project project :session session :ws-id ws-id}))
@@ -28,7 +29,8 @@
         session-name (or session-arg (:session from-cwd) (second home-coords))]
     [project-name session-name]))
 
-(defn ship
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  ship
   "`nido ship [:project <p> <session>]` — enqueue the resolved session's branch
    onto the merge lane. Run from the session home or worktree."
   [& args]

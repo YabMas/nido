@@ -17,7 +17,8 @@
 (defn- loom-url? [url] (some? (loom/extract-video-id url)))
 (defn- mp4-url?  [url] (and url (re-find mp4-ext-re url)))
 
-(defn classify
+(defn ^{:malli/schema [:=> [:cat :map] [:maybe :map]]}
+  classify
   "Return {:url :kind :block-id} or nil. Pure function.
    :kind is :loom, :notion-upload, or :other."
   [{:keys [id type] :as block}]
@@ -45,7 +46,8 @@
 
 ;; ─── Composer (Task 3) ────────────────────────────────────────────────────────
 
-(defn fetch-page-meta!
+(defn ^{:malli/schema [:=> [:cat :string :NotionToken] :map]}
+  fetch-page-meta!
   "GET /v1/pages/<id> via the notion http-request seam. Returns parsed map
    or nil on failure (last_edited_time is best-effort)."
   [page-id token]
@@ -59,7 +61,8 @@
     (when (= 200 (:status resp))
       (json/parse-string (:body resp) true))))
 
-(defn shell-bb-task
+(defn ^{:malli/schema [:=> [:cat :any] :map]}
+  shell-bb-task
   "Shell-out to a bb task. Returns {:exit :out :err}. Redef seam."
   [args]
   (let [proc @(p/process args {:out :string :err :string})]
@@ -143,7 +146,8 @@
                                   url (-> error :reason name)))))]
     (str/join "\n" (cons header sections))))
 
-(defn preprocess-ticket!
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  preprocess-ticket!
   "Walk a Notion page, transcribe every video, write manifest + digest
    to out-dir. See ns docstring. Returns {:ok? bool [:manifest m] [:error e]}."
   [{:keys [page-id token out-dir budget-s max-videos model]

@@ -29,7 +29,8 @@
   [res]
   (= "already_reacted" (:detail res)))
 
-(defn auth-set
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  auth-set
   "bb nido:slack:auth:set — read a bot token from stdin, store in macOS Keychain.
    Stdin is echoed (Babashka can't trivially disable terminal echo); the user
    should clear their terminal scrollback after running this."
@@ -48,7 +49,8 @@
               (println err)
               (System/exit exit)))))))
 
-(defn auth-check
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  auth-check
   "bb nido:slack:auth:check — print whether the keychain has a token."
   [& _args]
   (let [token (slack/keychain-token)]
@@ -63,7 +65,8 @@
       :else
       (println "Slack token present in keychain (length" (count token) ")."))))
 
-(defn react
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  react
   "bb nido:slack:react :channel <C> :ts <ts> [:name eyes]"
   [& args]
   (let [[_ o]   (task-args/split-args args react-raw-keys)
@@ -81,7 +84,8 @@
       :else
       (do (binding [*out* *err*] (println "slack react failed:" res)) (System/exit 1)))))
 
-(defn reply
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  reply
   "bb nido:slack:reply :channel <C> :thread-ts <ts> :text \"...\""
   [& args]
   (let [[_ o]      (task-args/split-args args reply-raw-keys)

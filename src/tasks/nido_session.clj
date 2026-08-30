@@ -80,7 +80,8 @@
     (let [h (quot idle-ms 3600000)]
       (if (>= h 48) (str "idle " (quot h 24) "d") (str "idle " h "h")))))
 
-(defn budget-report
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  budget-report
   "The lines shown before a session boots. Pure — takes the facts, returns
    strings — so the wording is testable without a fleet or a terminal."
   [rows {:keys [sessions fleet in-use machine typical] :as totals} project session]
@@ -109,14 +110,16 @@
        ;; idle, and usually none is. Concurrency is the constraint, not neglect.
        ["  No idle sessions — every one of them has been touched today."]))))
 
-(defn interactive?
+(defn ^{:malli/schema [:=> [:cat] :any]}
+  interactive?
   "Whether a human is on the other end. Public because it and `confirm?` are the
    only two IO seams in the pre-flight — a test redefines them and exercises the
    real decision and the real wording."
   []
   (some? (System/console)))
 
-(defn confirm?
+(defn ^{:malli/schema [:=> [:cat] :any]}
+  confirm?
   "Ask, defaulting to no. Any answer but an explicit yes leaves the fleet alone."
   []
   (print "  Continue? [y/N] ")
@@ -158,7 +161,8 @@
         (println (str "  (fleet budget unavailable: " (ex-message e) ")"))
         true))))
 
-(defn up
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  up
   "Bring the named session up. Creates the worktree (if missing) + starts
    PG/JVM/app, then prints the session-home path the user can cd into to
    start their preferred agent (claude, codex, …). Idempotent — running
@@ -188,7 +192,8 @@
           (println (str "  cd " home))
           (println (str "  bb nido:session:enter :project " project " " session)))))))
 
-(defn down
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  down
   "Stop the named session. Worktree and on-disk state are preserved."
   [& args]
   (let [[pos opts] (task-args/split-args args)
@@ -196,7 +201,8 @@
         session (require-session-name pos)]
     (lifecycle/down! session opts)))
 
-(defn reset
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  reset
   "Nuclear recovery: bring the session down, drop its PGDATA, then bring
    it back up against a fresh template clone. Use after
    `bb nido:template:pg:refresh` or when a session has wedged into a
@@ -207,7 +213,8 @@
         session (require-session-name pos)]
     (lifecycle/reset! session opts)))
 
-(defn destroy
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  destroy
   "Bring the named session down and remove its worktree.
    Pass :delete-branch? true to also drop the git branch.
    Reaps the session's loose (scratch) workstream when it never grew a ref or
@@ -219,7 +226,8 @@
     (lifecycle/destroy! session opts)
     (scratch/reap! (keyword project) session)))
 
-(defn enter
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  enter
   "Hand off a cwd to the parent shell via `~/.nido/.last-cd`. Paired with
    a tiny shell function (see Nido's CLAUDE.md → Shell wrapper) the user
    lands in the chosen directory with no nested shell.
@@ -244,7 +252,8 @@
                                                    (dissoc :auto-up)))]
     (lifecycle/enter! session opts')))
 
-(defn status
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  status
   "Print status for the named session."
   [& args]
   (let [[pos opts] (task-args/split-args args)
@@ -252,7 +261,8 @@
         session (require-session-name pos)]
     (lifecycle/status session opts)))
 
-(defn list-sessions
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  list-sessions
   "List every session for a project."
   [& args]
   (let [[pos opts] (task-args/split-args args)
@@ -260,7 +270,8 @@
     (require-no-positional pos)
     (lifecycle/list-all opts)))
 
-(defn isolate
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  isolate
   "Switch a session to a private Postgres clone so it can run destructive
    tests without affecting the shared cluster. Reverse with `share`.
    Usage: bb nido:session:isolate :project <p> <session>"
@@ -270,7 +281,8 @@
         session (require-session-name pos)]
     (lifecycle/isolate! session opts)))
 
-(defn share
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  share
   "Switch a session back to the shared Postgres cluster, dropping its private
    clone. Usage: bb nido:session:share :project <p> <session>"
   [& args]

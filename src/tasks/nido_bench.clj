@@ -24,7 +24,8 @@
       (throw (ex-info "Missing :project <name>"
                       {:hint "Pass :project \"<project-name>\"."}))))
 
-(defn memory
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  memory
   "Run the memory-bench matrix for a project. See nido.bench.memory/run-all!."
   [& args]
   (let [opts (parse-opts args)
@@ -37,7 +38,8 @@
                  settle-ms (assoc :settle-ms settle-ms))]
     (apply bench/run-all! project-name (mapcat identity kwargs))))
 
-(defn levers
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  levers
   "List known bench levers."
   [& _args]
   (doseq [{:keys [name doc cp-only?]} bench/default-levers]

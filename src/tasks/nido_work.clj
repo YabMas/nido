@@ -71,7 +71,8 @@
 (defn- normalize-agent [agent]
   (keyword (or agent :claude)))
 
-(defn work-cmd*
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  work-cmd*
   "Resolve the session for cwd and assemble the interactive agent invocation.
    Returns {:cmd <vector> :dir <worktree>}."
   [{:keys [agent] :as opts}]
@@ -82,7 +83,8 @@
       (throw (ex-info (str "Unsupported nido work agent: " agent)
                       {:agent agent :supported [:claude :codex]})))))
 
-(defn work [& args]
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  work [& args]
   (let [[_ opts] (task-args/split-args args)
         {:keys [cmd dir]} (work-cmd* opts)]
     ;; Hand off to the interactive agent in the worktree (inherit the terminal).

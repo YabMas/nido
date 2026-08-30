@@ -22,7 +22,8 @@
        (sort-by (fn [[_ {:keys [directory]}]] (- (count (str directory)))))
        ffirst))
 
-(defn coords
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  coords
   "[project worktree] for `cwd`: a nido session's if cwd is inside one, otherwise the project's
    own checkout. Returns nil when cwd belongs to no registered project at all.
 
@@ -33,7 +34,8 @@
     [project worktree]
     (when-let [p (project-for-dir cwd)] [p cwd])))
 
-(defn check
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  check
   "Report the design status of the worktree at `:cwd` (default: here). Returns the exit code."
   [& args]
   (let [[_ opts] (task-args/split-args args)
@@ -59,7 +61,8 @@
       (do (println (str "design:check ok · " cwd " belongs to no registered project — nothing to check"))
           0))))
 
-(defn cmd
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  cmd
   "bb entry point: exits non-zero on a refusal, so a recipe that runs it before the push stops
    there without anyone having to read the output."
   [& args]

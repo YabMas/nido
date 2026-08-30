@@ -36,14 +36,16 @@
     (println (format "  %-8s %-22s %-18s %s"
                      (name project) ws-id (name (:at p)) (decision-text p)))))
 
-(defn list-cmd [& _]
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  list-cmd [& _]
   (let [d (drive/driven)]
     (if (empty? d)
       (println "Nothing is being driven. `bb nido:drive:add :project <p> :ws-id <id>` to start.")
       (do (println (str (count d) " workstream(s) driven:"))
           (run! show (sort-by (comp str second) d))))))
 
-(defn add-cmd [& args]
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  add-cmd [& args]
   (let [[_ opts] (task-args/split-args args)
         project  (keyword (require-opt opts :project))
         ws-id    (require-opt opts :ws-id)]
@@ -56,7 +58,8 @@
     (println "\nThe coordinator advances it one stage per tick, and only stages it")
     (println "can run without an agent of its own. `bb nido:drive:remove` stops it.")))
 
-(defn remove-cmd [& args]
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  remove-cmd [& args]
   (let [[_ opts] (task-args/split-args args)
         project  (keyword (require-opt opts :project))
         ws-id    (require-opt opts :ws-id)]

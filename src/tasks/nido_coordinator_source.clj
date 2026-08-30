@@ -6,7 +6,8 @@
    [nido.coordinator.source.state :as sst]
    [nido.platform.task-args :as task-args]))
 
-(defn list-cmd
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  list-cmd
   "bb nido:coordinator:source:list -- one row per source-instance state file."
   [& _args]
   (let [hashes (sst/list-state-hashes)]
@@ -22,7 +23,8 @@
                          (name (or (:breaker s) :closed))
                          (or (:last-polled-at s) "never")))))))
 
-(defn reset-cmd
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  reset-cmd
   "bb nido:coordinator:source:reset :type <source-type> :database <id> [:view <name>] [:poll <dur>]
    Clears breaker + consecutive-failures for the matching source-config."
   [& args]

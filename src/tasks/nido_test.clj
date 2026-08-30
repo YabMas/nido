@@ -22,7 +22,8 @@
                      (str/starts-with? (str ns-sym) prefix))))
        sort))
 
-(defn run [& args]
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  run [& args]
   (let [[_ opts] (task-args/split-args args)
         only     (some-> (:only opts) str)
         nses     (discover-test-namespaces only)]

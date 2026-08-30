@@ -21,7 +21,8 @@
    [clojure.string :as str]
    [nido.platform.task-args :as task-args]))
 
-(defn run [& args]
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  run [& args]
   (let [[_ opts]  (task-args/split-args args)
         ms        (some-> (:poll-ms opts) str parse-long)
         dport     (some-> (:dashboard-port opts) str parse-long)
@@ -32,7 +33,8 @@
                        dport    (into [:dashboard-port dport])
                        no-dash? (into [:no-dashboard true])))))
 
-(defn status [& _args]
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  status [& _args]
   (let [p          (cstate/status-path)
         h          (halt/read-halt-info)
         pid        (pid/read)
@@ -81,20 +83,23 @@
                              "OK")
                            (or (:last-polled-at s) "never polled"))))))))
 
-(defn halt
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  halt
   "bb nido:halt [:note \"...\"] — pauses coordinator; existing Runs get SIGTERM."
   [& args]
   (let [[_ opts] (task-args/split-args args)]
     (halt/halt! {:source :user :note (some-> (:note opts) str)})
     (println "Coordinator: halted (user). Resume with: bb nido:coordinator:resume")))
 
-(defn resume
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  resume
   "bb nido:coordinator:resume — clears halted.edn so the daemon picks back up."
   [& _args]
   (halt/resume!)
   (println "Coordinator: resumed (halted.edn removed)."))
 
-(defn up
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  up
   "bb nido:coordinator:up [:poll-ms <int>] — start the daemon.
    If the LaunchAgent plist is installed (bb nido:coordinator:install),
    delegates to launchctl. Otherwise spawns a bare background daemon
@@ -138,7 +143,8 @@
           (println "Logs: " (cstate/log-path))
           (println "Stop: bb nido:coordinator:down"))))))
 
-(defn down
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  down
   "bb nido:coordinator:down [:force true] — stop the background daemon.
    If the LaunchAgent plist is installed, runs `launchctl bootout` so
    the daemon stops AND does not respawn until reinstalled or `up`'d.
@@ -213,7 +219,8 @@
         (when (zero? exit)
           (str (fs/parent (str/trim out))))))))
 
-(defn install
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  install
   "bb nido:coordinator:install — write the LaunchAgent plist and start
    the daemon. Auto-starts at every subsequent login."
   [& _args]
@@ -258,7 +265,8 @@
               (println err)
               (System/exit exit)))))))
 
-(defn uninstall
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  uninstall
   "bb nido:coordinator:uninstall — bootout and remove the plist. Idempotent."
   [& _args]
   (cond
@@ -273,7 +281,8 @@
       (lc/remove-plist!)
       (println "Coordinator: uninstalled. Run `bb nido:coordinator:up` to start manually."))))
 
-(defn restart
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  restart
   "bb nido:coordinator:restart — restart the daemon via launchctl.
    Errors when the plist is not installed (use down + up instead)."
   [& _args]
@@ -298,7 +307,8 @@
             (println err)
             (System/exit exit))))))
 
-(defn logs
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  logs
   "bb nido:coordinator:logs [:follow true] [:lines <n>]
    Default: print last 50 lines of coordinator.log and exit.
    :follow true → tail -f (blocks until Ctrl-C).

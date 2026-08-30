@@ -6,7 +6,8 @@
    [nido.notion.client :as client]
    [nido.platform.task-args :as task-args]))
 
-(defn pickup
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  pickup
   "bb nido:pickup :project <p> <notion-url-or-id>"
   [& args]
   (let [[positionals opts] (task-args/split-args args #{:url})

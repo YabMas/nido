@@ -5,7 +5,8 @@
    [nido.notion.views-check :as check]
    [nido.platform.task-args :as task-args]))
 
-(defn check-cmd
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  check-cmd
   "bb nido:notion:views:check :project <p> — validate the registry against the live DB."
   [& args]
   (let [[_ opts]   (task-args/split-args args)

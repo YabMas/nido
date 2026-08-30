@@ -3,7 +3,8 @@
   (:require [clojure.edn :as edn]
             [nido.ui.server :as server]))
 
-(defn start
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  start
   "Start the nido dashboard. Usage: bb nido:ui [:port 8800]"
   [& args]
   (let [opts (if (seq args)

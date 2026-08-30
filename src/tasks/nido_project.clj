@@ -2,12 +2,14 @@
   (:require [nido.platform.core :as core]
             [nido.platform.project :as project]))
 
-(defn init
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  init
   "Create the ~/.nido/ skeleton directory structure."
   [& _args]
   (core/ensure-nido-home!))
 
-(defn add
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  add
   "Register a project: <name> <directory>"
   [& args]
   (when (< (count args) 2)
@@ -17,7 +19,8 @@
         directory (second args)]
     (project/add! name directory)))
 
-(defn list-cmd
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  list-cmd
   "List registered projects."
   [& _args]
   (let [projects (project/list-projects)]
@@ -27,7 +30,8 @@
         (println (str "    directory: " (:directory entry))))
       (println "No projects registered."))))
 
-(defn remove-cmd
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  remove-cmd
   "Unregister a project: <name>"
   [& args]
   (when (empty? args)
