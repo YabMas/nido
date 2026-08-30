@@ -22,7 +22,8 @@
 (defn- result-event? [event]
   (= "result" (:type event)))
 
-(defn parse-budget-ms
+(defn ^{:malli/schema [:=> [:cat :string] :int]}
+  parse-budget-ms
   "Parse a budget string like '30m', '45m', '2h' into milliseconds, or throw.
 
    REFUSES rather than degrading, and that is the change. It used to answer nil
@@ -89,7 +90,8 @@
     ;; with no prompt → "Input must be provided … when using --print" (exit 1).
     :always                                (into ["--" first-message])))
 
-(defn launch!
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  launch!
   "Spawn claude headlessly for a Run. Blocks until the agent exits or the
    wall-clock budget is exceeded.
 

@@ -29,7 +29,8 @@
 
 ;; ── health: the rail dot, and the different question underneath it ───────────
 
-(defn daemon-health
+(defn ^{:malli/schema [:=> [:cat :map] :DaemonHealth]}
+  daemon-health
   "Pure: derive the rail dot state from extracted inputs.
    :halted (kill switch) > :breaker (any open) > :up (alive + running) > :down.
 
@@ -45,7 +46,8 @@
             :else                                         :down)
    :heartbeat-at (:heartbeat-at status)})
 
-(defn queue-blocker
+(defn ^{:malli/schema [:=> [:cat :map] [:maybe :keyword]]}
+  queue-blocker
   "Pure: why a queued envelope targeted at one trigger would NOT be processed,
    or nil when it will. The counterpart to `daemon-health` — same files, a
    different question ('will THIS run' vs 'is anything wrong anywhere'), so a
@@ -66,7 +68,8 @@
 (defn- read-edn-safe [path]
   (try (io/read-edn path) (catch Throwable _ nil)))
 
-(defn read-daemon-health
+(defn ^{:malli/schema [:=> [:cat] :DaemonHealth]}
+  read-daemon-health
   "Impure: read the coordinator status/halt/breaker files and derive health."
   []
   (daemon-health
@@ -77,7 +80,8 @@
     :breaker-count (count (breakers/auto-tripped-triggers))
     :status        (read-edn-safe (cstate/status-path))}))
 
-(defn read-queue-blocker
+(defn ^{:malli/schema [:=> [:cat :ProjectName :keyword] [:maybe :keyword]]}
+  read-queue-blocker
   "Impure: read the coordinator files and derive what, if anything, blocks a
    queued envelope for `project`/`trigger`. nil means it will run."
   [project trigger]
@@ -91,35 +95,41 @@
 
 ;; ── the levers ───────────────────────────────────────────────────────────────
 
-(defn halted?
+(defn ^{:malli/schema [:=> [:cat] :boolean]}
+  halted?
   "True iff the coordinator is paused."
   []
   (halt/halted?))
 
-(defn halt-info
+(defn ^{:malli/schema [:=> [:cat] [:maybe :map]]}
+  halt-info
   "Why and when the coordinator was paused, or nil when it is running.
    Named for the question rather than for the file it reads."
   []
   (halt/read-halt-info))
 
-(defn halt!
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  halt!
   "Pause the coordinator. `info` carries :source (:user | :auto) and an optional
    :reason / :note; the timestamp is stamped for you."
   [info]
   (halt/halt! info))
 
-(defn resume!
+(defn ^{:malli/schema [:=> [:cat] :any]}
+  resume!
   "Un-pause the coordinator. Idempotent."
   []
   (halt/resume!))
 
-(defn tripped-triggers
+(defn ^{:malli/schema [:=> [:cat] [:vector :map]]}
+  tripped-triggers
   "Every open breaker as {:project :trigger :info} — auto-tripped OR user-disabled,
    which is the set the daemon skips."
   []
   (breakers/tripped-triggers))
 
-(defn clear-breaker!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :keyword] :any]}
+  clear-breaker!
   "Re-enable one (project, trigger): clears both the auto-trip and any user
    disable. `clear-` rather than `enable-` because from a surface this is
    undoing a trip, not turning a feature on."
@@ -133,18 +143,21 @@
 ;; already one family of "ambient ops levers". Firing an envelope at a trigger is something you
 ;; do to the daemon, not something you do to a workstream.
 
-(defn triggers-for
+(defn ^{:malli/schema [:=> [:cat :ProjectName] [:vector :Trigger]]}
+  triggers-for
   "Every trigger configured for `project`. Unfiltered — a caller that wants only the manual ones
    says so, because the TUI's fire picker and the dashboard's fire form disagree about that."
   [project]
   (triggers/load-for-project project))
 
-(defn trigger-placeholders
+(defn ^{:malli/schema [:=> [:cat :string] [:vector :keyword]]}
+  trigger-placeholders
   "The placeholder keys in a trigger's payload template — the fields a fire form has to collect."
   [payload]
   (triggers/placeholder-keys payload))
 
-(defn fire!
+(defn ^{:malli/schema [:=> [:cat :ProjectName :keyword :map] :any]}
+  fire!
   "Queue an envelope at `project`/`trigger` with `payload`.
 
    Takes the three things a caller HAS rather than the envelope map they would otherwise each

@@ -34,12 +34,14 @@
 (defonce ^:private !driven
   (atom false))
 
-(defn configure!
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  configure!
   "Set the global concurrency cap. Pure config — does not start threads."
   [{:keys [global-cap]}]
   (swap! !state assoc :cap global-cap))
 
-(defn clear!
+(defn ^{:malli/schema [:=> [:cat] :any]}
+  clear!
   "Test-only: reset queue + in-flight. Does not cancel in-flight futures.
    Does not reset :cap — call configure! separately if needed."
   []
@@ -49,7 +51,8 @@
          :in-flight-capped   {}
          :in-flight-uncapped {}))
 
-(defn submit!
+(defn ^{:malli/schema [:function [:=> [:cat :map] :any] [:=> [:cat :RunId :int] :any] [:=> [:cat :RunId :int :boolean] :any] [:=> [:cat :RunId :int :boolean :keyword [:maybe :int]] :any]]}
+  submit!
   "Add a unit of work to the wait queue. run-id is opaque to the executor;
    priority is an int (higher pops first). uncapped? (default false) marks it
    as exempt from the global cap — it always promotes regardless of how many
@@ -84,7 +87,8 @@
                                    :received-at   (clock/now-iso)}
                             body (assoc :body body))))))))))
 
-(defn turn-id
+(defn ^{:malli/schema [:=> [:cat :RunId :int] :string]}
+  turn-id
   "The queue identity of one turn against `run-id`.
 
    Distinct per turn rather than per Run, because a Run is spawned once and
@@ -96,7 +100,8 @@
   [run-id n]
   (str run-id "#turn-" n))
 
-(defn submit-turn!
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  submit-turn!
   "Queue `body` as a unit of work against an already-spawned Run, so it waits for
    a slot like everything else.
 
@@ -134,7 +139,8 @@
         (assoc acc rid f)))
     {} m))
 
-(defn driven?
+(defn ^{:malli/schema [:=> [:cat] :boolean]}
+  driven?
   "Has anything in THIS process ever ticked the executor?
 
    The queue is a per-process atom, so submitting to an executor nobody ticks
@@ -148,7 +154,8 @@
   []
   @!driven)
 
-(defn tick!
+(defn ^{:malli/schema [:=> [:cat :any :any] :any]}
+  tick!
   "Called by the daemon every poll. Reaps finished futures, then:
    - Promotes uncapped Runs bypassing the global cap but still subject to
      per-trigger :max-in-flight (a nil :max-in-flight means promote always).
@@ -214,7 +221,8 @@
            (swap! !state assoc
                   :queue new-q :in-flight-capped new-capped :in-flight-uncapped new-uncapped)))))))
 
-(defn snapshot
+(defn ^{:malli/schema [:=> [:cat] :map]}
+  snapshot
   "Read-only view for the TUI. No locking — reads a consistent atom value.
    :in-flight is the aggregate count of capped + uncapped in-flight Runs.
    This may exceed :cap when uncapped Runs are active — that's intentional

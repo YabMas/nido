@@ -58,7 +58,8 @@
    would be read by nobody. Fukan's own self-model renders to ~40k, nido's to ~3k."
   16000)
 
-(defn design-of
+(defn ^{:malli/schema [:=> [:cat :ProjectName :string] [:maybe :DesignConfig]]}
+  design-of
   "The design configuration for `project-name` in `worktree`, or nil when the project declares
    no design.
 
@@ -87,7 +88,8 @@
     (when (= ::timeout done) (process/destroy-tree proc))
     (or (and (= ::timeout done) ::timeout) done)))
 
-(defn describe
+(defn ^{:malli/schema [:=> [:cat :ProjectName :string [:? [:maybe :any]]] [:maybe :string]]}
+  describe
   "The project's declared design as a document, or nil when it declares none — or when fukan
    could not render one.
 
@@ -132,7 +134,8 @@
   (try (let [r (edn/read-string out)] (when (map? r) r))
        (catch Exception _ nil)))
 
-(defn check
+(defn ^{:malli/schema [:=> [:cat :ProjectName :string [:? [:maybe :DesignConfig]]] :CheckResult]}
+  check
   "Run the checker over `worktree` and return what it found:
 
      {:status :unmodelled}                         no design declared — nothing to say
@@ -164,7 +167,8 @@
              {:status :undecidable
               :error  (or (:error report) (str/trim (str err)) (str "exit " exit))})))))))
 
-(defn offender-line
+(defn ^{:malli/schema [:=> [:cat [:maybe [:vector :string]] [:vector :string]] :string]}
+  offender-line
   "One offender row as a line, its columns LABELLED by the law's own offender var names.
 
    A row is a tuple — a law binding an edge carries both ends and the bands they sit in — and
@@ -177,7 +181,8 @@
     (str/join "  " (map (fn [v x] (str (str/replace (str v) #"^\?" "") "=" x)) vars row))
     (str/join " · " row)))
 
-(defn violation-text
+(defn ^{:malli/schema [:=> [:cat :CheckResult] :string]}
+  violation-text
   "The findings as text for a human or an agent to read. Empty string when there is nothing to
    say, so a caller can splice it into a document without testing first."
   [{:keys [status violations error]}]
