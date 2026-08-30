@@ -10,10 +10,17 @@
    functions take these ids, so ownership adds `state ⟶ workstream`, while `workstream ⟶ state`
    already exists because workstream calls those path functions. Same for run and session.
 
-   The cycle is real, and it is a finding about `record-state`: twelve of its twenty-eight
+   OPEN QUESTION, deliberately left open. The cycle is real, and it is a finding about
+   `record-state`: twelve of its twenty-eight
    functions are one record's layout rather than the coordinator's roots, so it holds knowledge
    the records could hold themselves. Until that is settled these stay unowned, which under-states
    the design rather than asserting a cycle that would be true only because we declared it.
+
+   Deciding it means choosing between two things that are both true: `record-state` centralises
+   the layout so it can MOVE (no caller anywhere builds a path, and a test redirects a whole run
+   by redefining one root), and centralising it puts each record's layout knowledge outside that
+   record. Whoever settles this owns both halves of that trade, and gives these three a home or
+   writes down why they have none.
 
    They earn their place by appearing in signatures. `[:=> [:catn [:project ProjectName]
    [:ws-id WorkstreamId]] Path]` says what a path function is for; `[:cat :keyword :string]`
