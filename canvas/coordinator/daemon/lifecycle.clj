@@ -95,21 +95,3 @@
   (Operation on-plan-spawn!
     "Tell the outside world a plan Run started."
     {:signature [:=> [:catn [:run :map]] :any]}))
-
-(Module daemon-preprocess
-  "Pre-Run preprocessing: work done between dequeue and spawn, which aborts the Run if it fails.
-
-   ⚠ UNREACHED. Nothing in nido calls `run!`, and no code path writes the `:preprocessing` phase
-   the Run state machine still allows — so the phase is declared, transitions to it are legal,
-   and nothing can enter it. Modelled as it stands rather than deleted, because the choice
-   between reviving it and removing it is a decision and this is only the record of one."
-  (Operation shell-bb-task
-    "Shell out to a bb task. A redef seam, so a preprocessor can be tested without running one."
-    {:signature [:=> [:catn [:args :any]] :map]})
-  (Operation invoke-notion-ticket!
-    "Run the Notion ticket preprocessor."
-    {:signature [:=> [:catn [:opts :map]] :map]
-     :delegates [shell-bb-task]})
-  (Operation run!
-    "Run every configured preprocessor for a Run, aborting it if one fails."
-    {:signature [:=> [:catn [:opts :map]] :map]}))

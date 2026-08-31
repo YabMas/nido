@@ -160,9 +160,10 @@
 (def allowed-transitions
   "Map of from-state → set of to-states.
    See spec §Runs / Lifecycle. Terminal states have no entries.
-   :preprocessing is an optional phase between :queued and :running, used
-   by triggers with a :preprocess config. Triggers without :preprocess skip
-   directly :queued → :running (both remain valid)."
+   :preprocessing is an optional phase between :queued and :running. ⚠ NOTHING
+   ENTERS IT: the dispatch that would have was deleted 2026-08-31 as dead code, so
+   every Run goes :queued → :running. The transition stays legal because persisted
+   records may name the phase and the in-flight predicates read it."
   {:queued          #{:preprocessing :running :failed :halted :dry-run-would-fire}
    :preprocessing   #{:running :failed :halted}
    :running         #{:awaiting-review :done :failed :halted}

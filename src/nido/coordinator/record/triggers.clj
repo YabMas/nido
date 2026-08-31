@@ -36,6 +36,10 @@
    [:priority       {:optional true} int?]
    [:priority-from  {:optional true} [:map [:property string?]]]
    [:session-profile {:optional true} keyword?]
+   ;; ⚠ INERT. The dispatch that ran these was deleted 2026-08-31 as dead code — nothing
+   ;; called it and no path wrote the :preprocessing phase it was meant to run in. The key
+   ;; stays because configured triggers still carry it and a closed schema would reject them;
+   ;; it names preprocessors nobody runs until something is wired to read it again.
    [:preprocess     {:optional true} [:vector keyword?]]
    [:intake         {:optional true} [:enum :spawn :queue]]
    [:dry-run?       {:optional true} boolean?]
