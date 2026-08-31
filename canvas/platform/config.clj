@@ -15,7 +15,9 @@
     "The projects map, empty when the registry does not exist yet."
     {:signature [:=> [:catn] :map]
      :delegates [projects-file io/read-edn]})
-  (Operation write-projects!
-    "Replace the projects map."
-    {:signature [:=> [:catn [:projects :map]] :any]
-     :delegates [projects-file io/write-edn!]}))
+  (Operation update-projects!
+    "Apply a function to the projects map and write the result, as one locked operation. How
+     every mutation of the registry goes: a read and a write of it are never two separate steps
+     a slow or abandoned process can be interrupted between."
+    {:signature [:=> [:catn [:f [:=> [:cat :any] :any]]] :any]
+     :delegates [projects-file io/update-edn!]}))

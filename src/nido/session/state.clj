@@ -229,25 +229,41 @@
     [(str (fs/path codex-home "nido" "sessions.edn"))
      (str (fs/path codex-home "agent-cockpit" "sessions.edn"))]))
 
+(defn- read-legacy-registry
+  "The legacy registries merged in path order. Read separately from the
+   canonical one because every mutation has to re-merge them UNDER the
+   canonical value it was handed — see read-registry."
+  []
+  (reduce (fn [acc path] (merge acc (or (io/read-edn path) {})))
+          {}
+          (legacy-registry-paths)))
+
 (defn ^{:malli/schema [:=> [:cat] :map]}
   read-registry []
-  (let [legacy (reduce (fn [acc path]
-                         (merge acc (or (io/read-edn path) {})))
-                       {}
-                       (legacy-registry-paths))]
-    (merge legacy (or (io/read-edn @registry-file-path) {}))))
+  (merge (read-legacy-registry)
+         (or (io/read-edn @registry-file-path) {})))
 
-(defn ^{:malli/schema [:=> [:cat :map] :any]}
-  write-registry! [registry]
-  (io/write-edn! @registry-file-path registry))
+(defn- update-registry!
+  "Apply `f` to the merged registry and write the result to the canonical file,
+   as one locked operation.
+
+   Every session verb in nido mutates this one file — up, down, destroy,
+   reclaim, the daemon adopting an orphan — so it is the single most contended
+   piece of state here, and the read has to happen inside the lock rather than
+   in the caller. remove-many-from-registry! already documents this race and
+   could only shrink the window from N writes to 1; the lock is what closes it."
+  [f]
+  (io/update-edn! @registry-file-path
+                  (fn [canonical]
+                    (f (merge (read-legacy-registry) (or canonical {}))))))
 
 (defn ^{:malli/schema [:=> [:cat :Path :map] :any]}
   upsert-registry! [project-dir entry]
-  (write-registry! (assoc (read-registry) project-dir entry)))
+  (update-registry! #(assoc % project-dir entry)))
 
 (defn- prune-legacy-registry!
   "Drop `k` from any legacy registry that still carries it. read-registry merges
-   those files UNDER the canonical one but write-registry! only rewrites the
+   those files UNDER the canonical one but every mutation only rewrites the
    canonical one — so without this, removing a legacy-only key is a no-op: the
    next read merges it back in and the entry is immortal."
   [k]
@@ -259,17 +275,20 @@
 (defn ^{:malli/schema [:=> [:cat :Path] :any]}
   remove-from-registry! [project-dir]
   (prune-legacy-registry! project-dir)
-  (write-registry! (dissoc (read-registry) project-dir)))
+  (update-registry! #(dissoc % project-dir)))
 
 (defn ^{:malli/schema [:=> [:cat [:vector :any]] :any]}
   remove-many-from-registry!
   "Remove several keys in ONE canonical write, still pruning each from the
-   legacy registries. The per-key remove-from-registry! re-reads and rewrites
-   for every key, so a concurrent upsert-registry! landing between one key's
-   read and its write is silently dropped — losing a just-registered session,
-   which then reads as dead and becomes reclaimable. One write shrinks that
-   window from N to 1."
+   legacy registries.
+
+   The lost update this was written against — a concurrent upsert-registry!
+   landing between one key's read and its write, losing a just-registered
+   session, which then reads as dead and becomes reclaimable — is now excluded
+   by the lock rather than merely narrowed by it. N locked updates would be
+   correct too; one write is kept because removing a set of sessions is one
+   decision, and a reader never catches it half-done."
   [ks]
   (when (seq ks)
     (doseq [k ks] (prune-legacy-registry! k))
-    (write-registry! (apply dissoc (read-registry) ks))))
+    (update-registry! #(apply dissoc % ks))))

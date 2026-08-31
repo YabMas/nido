@@ -4,6 +4,7 @@
             [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.record.state :refer [Path]]
+            [canvas.platform.io :as io]
             [canvas.platform.project :refer [ProjectName]]
             [fukan.common.typing.malli]))
 
@@ -90,14 +91,16 @@
     {:signature [:=> [:catn [:instance-id InstanceId]] :any] :delegates [session-state-file]})
   (Operation read-registry "The registry of live worktrees."
     {:signature [:=> [:catn] :map]})
-  (Operation write-registry! "Persist the registry."
-    {:signature [:=> [:catn [:registry :map]] :any]})
-  (Operation upsert-registry! "Record or update one worktree's entry."
+  (Operation upsert-registry!
+    "Record or update one worktree's entry.
+
+     Every session verb mutates this one file — up, down, destroy, reclaim, the daemon adopting
+     an orphan — so it is the most contended state here, and the read happens inside the lock."
     {:signature [:=> [:catn [:project-dir Path] [:entry :map]] :any]
-     :delegates [read-registry write-registry!]})
+     :delegates [io/update-edn!]})
   (Operation remove-from-registry! "Drop one worktree's entry."
-    {:signature [:=> [:catn [:project-dir Path]] :any] :delegates [read-registry write-registry!]})
+    {:signature [:=> [:catn [:project-dir Path]] :any] :delegates [io/update-edn!]})
   (Operation remove-many-from-registry!
-    "Drop several entries in ONE write. Removing them one at a time re-read and re-wrote the
-     registry per entry, which is both slower and a wider window for a concurrent writer."
-    {:signature [:=> [:catn [:ks [:vector :any]]] :any] :delegates [read-registry write-registry!]}))
+    "Drop several entries in ONE write. N locked updates would be correct too; one write is kept
+     because removing a set of sessions is one decision, and a reader never catches it half-done."
+    {:signature [:=> [:catn [:ks [:vector :any]]] :any] :delegates [io/update-edn!]}))

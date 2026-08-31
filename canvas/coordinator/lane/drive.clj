@@ -10,6 +10,7 @@
             [canvas.coordinator.record.state :as cstate :refer [Path RunId SessionName WorkstreamId]]
             [canvas.coordinator.record.tickets :as tickets :refer [TicketId]]
             [canvas.coordinator.record.workstream :as workstream :refer [Workstream]]
+            [canvas.platform.io :as io]
             [canvas.platform.project :refer [ProjectName]]
             [fukan.common.typing.malli]))
 
@@ -61,10 +62,10 @@
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :boolean] :delegates [driven]})
   (Operation drive! "Add a workstream to the allow-list."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :any]
-     :delegates [driven cstate/driving-path]})
+     :delegates [cstate/driving-path io/update-edn!]})
   (Operation undrive! "Take a workstream off the allow-list."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :any]
-     :delegates [driven cstate/driving-path]})
+     :delegates [cstate/driving-path io/update-edn!]})
   (Operation fireable "What the driver should fire for a workstream, or why it should not."
     {:signature [:=> [:catn [:position :any]] :map]})
   (Operation run-stage! "Run one mechanical stage to a settled outcome, then act on it."

@@ -8,11 +8,10 @@
   "Register a project. Creates project definition dir under ~/.nido/projects/<name>/."
   [name directory]
   (let [directory (str (fs/absolutize (fs/path directory)))
-        projects (config/read-projects)
         entry {:directory directory}]
     (when-not (fs/exists? directory)
       (throw (ex-info "Project directory does not exist" {:directory directory})))
-    (config/write-projects! (assoc projects name entry))
+    (config/update-projects! #(assoc % name entry))
     ;; Create project definitions dir
     (let [project-dir (str (fs/path (core/nido-home) "projects" name))]
       (fs/create-dirs project-dir))
@@ -29,15 +28,14 @@
   remove!
   "Unregister a project. Does not delete definitions."
   [name]
-  (let [projects (config/read-projects)]
-    (if (contains? projects name)
-      (do
-        (config/write-projects! (dissoc projects name))
-        (core/log-step (str "Removed project '" name "'"))
-        true)
-      (do
-        (core/log-step (str "Project '" name "' not found"))
-        false))))
+  (if (contains? (config/read-projects) name)
+    (do
+      (config/update-projects! #(dissoc % name))
+      (core/log-step (str "Removed project '" name "'"))
+      true)
+    (do
+      (core/log-step (str "Project '" name "' not found"))
+      false)))
 
 (defn ^{:malli/schema [:=> [:cat :string] [:maybe :map]]}
   get-project

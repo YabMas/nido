@@ -9,6 +9,7 @@
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.record.clock :as clock]
             [canvas.coordinator.record.state :as state]
+            [canvas.platform.io :as io]
             [canvas.platform.project :refer [ProjectName]]
             [fukan.common.typing.malli]))
 
@@ -91,22 +92,26 @@
     {:signature [:=> [:catn [:project ProjectName] [:trigger :keyword]] :boolean]
      :delegates [read-all]})
   (Operation record-failure!
-    "Count a failure, tripping the breaker at the threshold."
+    "Count a failure, tripping the breaker at the threshold.
+
+     One locked update rather than a read and a write: `bb nido:trigger:enable` clears breakers
+     from a separate process while the loop is recording failures, and the surviving write is
+     what decides whether the trigger fires at all."
     {:signature [:=> [:catn [:project ProjectName] [:trigger :keyword] [:max-failures :int]] :any]
-     :delegates [read-all]})
+     :delegates [state/breakers-path io/update-edn!]})
   (Operation record-success!
     "Clear the failure count and any auto-trip. A user disable SURVIVES a success — it was a
      decision, not a symptom."
     {:signature [:=> [:catn [:project ProjectName] [:trigger :keyword]] :any]
-     :delegates [read-all]})
+     :delegates [state/breakers-path io/update-edn!]})
   (Operation disable-by-user!
     "Pause a trigger deliberately, with a note. Persists across successes."
     {:signature [:=> [:catn [:project ProjectName] [:trigger :keyword] [:note :string]] :any]
-     :delegates [read-all]})
+     :delegates [state/breakers-path io/update-edn!]})
   (Operation enable!
     "Clear both the auto-trip and the user disable for one trigger."
     {:signature [:=> [:catn [:project ProjectName] [:trigger :keyword]] :any]
-     :delegates [read-all]})
+     :delegates [state/breakers-path io/update-edn!]})
   (Operation tripped-triggers
     "Every open breaker — the set the daemon skips."
     {:signature [:=> [:catn] [:vector :map]]

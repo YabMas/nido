@@ -56,3 +56,54 @@
                                   (mapv #(.getMessage ^Throwable %) @errors)))
         (is (map? (io/read-edn p)) "final file is valid EDN"))
       (finally (fs/delete-tree tmp)))))
+
+;; ── update-edn! ─────────────────────────────────────────────────────────────
+
+(deftest update-edn!-applies-and-returns
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (let [p (str (fs/path tmp "m.edn"))]
+        (io/write-edn! p {:n 1})
+        (is (= {:n 2} (io/update-edn! p #(update % :n inc))))
+        (is (= {:n 2} (io/read-edn p))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest update-edn!-sees-nil-for-a-missing-file
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (let [p (str (fs/path tmp "absent.edn"))]
+        (is (= {:seeded true} (io/update-edn! p #(or % {:seeded true}))))
+        (is (= {:seeded true} (io/read-edn p))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest update-edn!-throwing-f-writes-nothing
+  ;; A refusal expressed by throwing INSIDE the update must leave the file as it
+  ;; was, not rewrite it with what it already held.
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (let [p (str (fs/path tmp "m.edn"))]
+        (io/write-edn! p {:n 1})
+        (is (thrown? Exception (io/update-edn! p (fn [_] (throw (ex-info "no" {}))))))
+        (is (= {:n 1} (io/read-edn p))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest update-edn!-concurrent-updaters-lose-nothing
+  ;; The lost update, which is what this exists to prevent: 40 writers each
+  ;; adding one distinct key to the same map. Read-then-write drops most of
+  ;; them and leaves a perfectly well-formed file behind; every one must
+  ;; survive here.
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (let [p     (str (fs/path tmp "reg.edn"))
+            tasks (mapv (fn [i]
+                          (future (io/update-edn! p #(assoc (or % {}) i true))))
+                        (range 40))]
+        (run! deref tasks)
+        (is (= (set (range 40)) (set (keys (io/read-edn p))))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest lock-path-for-is-a-hidden-sibling
+  ;; Same file, same lock name, from any process — and out of the way of anything
+  ;; listing the directory.
+  (is (= "/a/b/.links.edn.lock" (io/lock-path-for "/a/b/links.edn")))
+  (is (= (io/lock-path-for "/a/b/links.edn") (io/lock-path-for "/a/b/links.edn"))))

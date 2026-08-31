@@ -6,6 +6,7 @@
             [canvas.coordinator.record.clock :as clock]
             [canvas.coordinator.record.state :as state :refer [Path]]
             [canvas.coordinator.record.workstream :as workstream]
+            [canvas.platform.io :as io]
             [canvas.platform.project :refer [ProjectName]]
             [fukan.common.typing.malli]))
 
@@ -44,31 +45,46 @@
     "Persist what is known about a ticket. A blank id writes nothing."
     {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId] [:m Ticket]] [:maybe Ticket]]
      :delegates [ticket-dir]})
+  (Operation update-meta!
+    "Read a ticket's meta, apply a function to it, write the result back — as one locked
+     operation. Every mutation below goes through it.
+
+     Not `io/update-edn!`, and the difference is the branch: `f` returning nil writes nothing,
+     which is how clear-status! declines to conjure a record for a ticket that never had one. An
+     update that may decline to write is not a function from the old value to the new one, and
+     moving that decision outside the lock is the race this exists to prevent.
+
+     The daemon reconciling a terminal Run and a person running `bb nido:ticket:*` are separate
+     processes writing this file, and :status is what the pre-spawn gate reads — a lost update
+     here is a ticket that re-triages when it should not, or one that never does."
+    {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId]
+                            [:f [:=> [:cat :any] :any]]] [:maybe Ticket]]
+     :delegates [ticket-dir io/with-file-lock io/lock-path-for]})
   (Operation status
     "The ticket's triage status, or nil when it has none."
     {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId]] [:maybe :keyword]]})
   (Operation open!
     "Create a ticket record, or refresh the descriptive fields of one that exists."
     {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId] [:base :map]] Ticket]
-     :delegates [read-meta write-meta!]})
+     :delegates [update-meta!]})
   (Operation set-status!
     "Move a ticket's triage status."
     {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId] [:new-status :keyword]] Ticket]
-     :delegates [read-meta write-meta!]})
+     :delegates [update-meta!]})
   (Operation complete!
     "Terminal completion of a triage verdict: the status, the disposition it settled on, and
      when."
     {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId] [:new-status :keyword] [:disposition :any]] Ticket]
-     :delegates [read-meta write-meta! clock/now-iso]})
+     :delegates [update-meta! clock/now-iso]})
   (Operation clear-status!
     "Make a ticket re-triable by dropping its status — which is what puts it back through the
      gate rather than around it."
     {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId]] [:maybe Ticket]]
-     :delegates [read-meta write-meta!]})
+     :delegates [update-meta!]})
   (Operation dismiss!
     "Take a ticket off the triage radar."
     {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId]] Ticket]
-     :delegates [read-meta write-meta!]})
+     :delegates [update-meta!]})
   (Operation latest-triage-report
     "The newest triage report on the workstream this ticket raised, or nil."
     {:signature [:=> [:catn [:project ProjectName] [:br-id TicketId]] [:maybe :map]]

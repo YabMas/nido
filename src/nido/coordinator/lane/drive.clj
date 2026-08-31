@@ -109,6 +109,12 @@
 
 ;; ── Which workstreams the driver may advance ────────────────────────────────
 
+(defn- driven-of
+  "The allow-list inside a raw driving.edn value. Shared by the reader and the
+   locked updates, so both agree on what an absent or empty file means."
+  [data]
+  (set (map vec (or data []))))
+
 (defn ^{:malli/schema [:=> [:cat] :any]}
   driven
   "The workstreams the driver is allowed to advance, as #{[project ws-id]}.
@@ -124,7 +130,7 @@
    is not the same as undoing the phase — records it already wrote stay written —
    but it is the difference between a bad outcome you can stop and one you watch."
   []
-  (set (map vec (io/read-edn (cstate/driving-path)))))
+  (driven-of (io/read-edn (cstate/driving-path))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :boolean]}
   driving?
@@ -135,18 +141,20 @@
   drive!
   "Add a workstream to the allow-list. Returns the new set."
   [project ws-id]
-  (let [next-set (conj (driven) [(keyword project) ws-id])]
-    (io/write-edn! (cstate/driving-path) (vec next-set))
-    next-set))
+  (driven-of
+   (io/update-edn! (cstate/driving-path)
+                   (fn [data]
+                     (vec (conj (driven-of data) [(keyword project) ws-id]))))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :any]}
   undrive!
   "Take a workstream off the allow-list. It stops being advanced on the next
    tick; anything already in flight for it finishes on its own."
   [project ws-id]
-  (let [next-set (disj (driven) [(keyword project) ws-id])]
-    (io/write-edn! (cstate/driving-path) (vec next-set))
-    next-set))
+  (driven-of
+   (io/update-edn! (cstate/driving-path)
+                   (fn [data]
+                     (vec (disj (driven-of data) [(keyword project) ws-id]))))))
 
 ;; ── What to fire ────────────────────────────────────────────────────────────
 

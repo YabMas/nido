@@ -5,6 +5,7 @@
             [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.record.state :refer [Path]]
+            [canvas.platform.io :as io]
             [canvas.platform.project :refer [ProjectName]]
             [canvas.session.state :as sstate :refer [InstanceId]]
             [fukan.common.typing.malli]))
@@ -42,19 +43,28 @@
   "The links a session carries: tickets, pull requests, threads.
 
    Per session rather than per workstream, because what an agent should have open is a property
-   of the episode, not of the work."
-  (Operation links-path "Where a session's links live."
-    {:signature [:=> [:catn [:instance-id InstanceId]] Path] :delegates [sstate/instance-state-dir]})
+   of the episode, not of the work.
+
+   In their OWN root, not beside the session's machine state. `~/.nido/state/<instance-id>/` is
+   what reclaim exists to delete once no registry entry claims it, and `down` deregisters — so
+   links kept there were swept an hour after every `down`. They are the one thing here that
+   cannot be rebuilt, so nothing sweeps them and `destroy` is the only verb that ends them."
+  (Operation links-path "Where a session's links live — under the durable links root."
+    {:signature [:=> [:catn [:instance-id InstanceId]] Path]})
+  (Operation delete-links! "Drop a session's links. Only destroy! ends a session's claim on them."
+    {:signature [:=> [:catn [:instance-id InstanceId]] :any] :delegates [links-path]})
   (Operation read-links "A session's links. Empty rather than nil when there are none."
     {:signature [:=> [:catn [:instance-id InstanceId]] [:vector :map]] :delegates [links-path]})
-  (Operation write-links! "Persist a session's links."
-    {:signature [:=> [:catn [:instance-id InstanceId] [:links [:vector :map]]] :any] :delegates [links-path]})
-  (Operation add! "Add a link, deduping on its URL so re-adding updates rather than repeats."
+  (Operation add!
+    "Add a link, deduping on its URL so re-adding updates rather than repeats.
+
+     One locked update rather than a read and a write: an abandoned `nido session:link:add`
+     that unwinds later would otherwise write its stale list over every link added since."
     {:signature [:=> [:catn [:instance-id InstanceId] [:link-input :map]] [:vector :map]]
-     :delegates [read-links write-links!]})
+     :delegates [links-path io/update-edn!]})
   (Operation remove-by-url! "Drop a link by URL."
     {:signature [:=> [:catn [:instance-id InstanceId] [:url :string]] [:vector :map]]
-     :delegates [read-links write-links!]})
+     :delegates [links-path io/update-edn!]})
   (Operation group-by-type "Links grouped by type, in display order."
     {:signature [:=> [:catn [:links [:vector :map]]] :any]}))
 

@@ -21,7 +21,7 @@
     "Register a project and create its definitions directory. Refuses a directory that does not
      exist — a registry entry pointing nowhere fails later, further from the cause."
     {:signature [:=> [:catn [:name :string] [:directory :string]] :map]
-     :delegates [config/read-projects config/write-projects! core/nido-home core/log-step]})
+     :delegates [config/update-projects! core/nido-home core/log-step]})
   (Operation list-projects
     "The projects map."
     {:signature [:=> [:catn] :map]
@@ -29,7 +29,7 @@
   (Operation remove!
     "Unregister a project, leaving its definitions on disk. True when it was there."
     {:signature [:=> [:catn [:name :string]] :boolean]
-     :delegates [config/read-projects config/write-projects! core/log-step]})
+     :delegates [config/read-projects config/update-projects! core/log-step]})
   (Operation get-project
     "One project entry, or nil."
     {:signature [:=> [:catn [:name :string]] [:maybe :map]]

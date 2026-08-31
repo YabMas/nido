@@ -17,8 +17,18 @@
       (try (io/read-edn p) (catch Exception _ {}))
       {})))
 
-(defn- write-all! [m]
-  (io/write-edn! (cstate/breakers-path) m))
+(defn- update-all!
+  "Apply `f` to the breakers map and write the result, as one locked operation.
+
+   The daemon is not the only writer: `bb nido:trigger:enable` and
+   `coordinator:source:reset` clear breakers from a separate process while the
+   loop is recording failures. A lost update here is not a cosmetic one — the
+   surviving write decides whether a trigger fires, so a dropped
+   :disabled-by-user? silently un-pauses a trigger the operator paused on
+   purpose, and a dropped enable! leaves one tripped with nothing to say why."
+  [f]
+  (io/update-edn! (cstate/breakers-path)
+                  (fn [m] (f (if (map? m) m {})))))
 
 (defn- entry [m project trigger]
   (get-in m [project trigger]
@@ -45,45 +55,49 @@
   "Increment the consecutive-failure counter for (project, trigger).
    If the new count meets max-failures, mark :tripped? true."
   [project trigger max-failures]
-  (let [m   (read-all)
-        e   (entry m project trigger)
-        n   (inc (:consecutive-failures e))
-        e'  (-> e
-                (assoc :consecutive-failures n
-                       :last-failure-at      (clock/now-iso)
-                       :tripped?             (>= n max-failures)))]
-    (write-all! (assoc-in m [project trigger] e'))))
+  (update-all!
+   (fn [m]
+     (let [e  (entry m project trigger)
+           n  (inc (:consecutive-failures e))
+           e' (-> e
+                  (assoc :consecutive-failures n
+                         :last-failure-at      (clock/now-iso)
+                         :tripped?             (>= n max-failures)))]
+       (assoc-in m [project trigger] e')))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :keyword] :any]}
   record-success!
   "Clear the consecutive-failure counter and auto-disable flag. Does
    NOT clear :disabled-by-user? — user disables stick until enable!."
   [project trigger]
-  (let [m  (read-all)
-        e  (entry m project trigger)
-        e' (-> e (assoc :consecutive-failures 0 :tripped? false))]
-    (write-all! (assoc-in m [project trigger] e'))))
+  (update-all!
+   (fn [m]
+     (let [e' (-> (entry m project trigger)
+                  (assoc :consecutive-failures 0 :tripped? false))]
+       (assoc-in m [project trigger] e')))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :keyword :string] :any]}
   disable-by-user!
   "Manual disable. Persists across success transitions."
   [project trigger note]
-  (let [m  (read-all)
-        e  (entry m project trigger)
-        e' (-> e (assoc :disabled-by-user? true :note note))]
-    (write-all! (assoc-in m [project trigger] e'))))
+  (update-all!
+   (fn [m]
+     (let [e' (-> (entry m project trigger)
+                  (assoc :disabled-by-user? true :note note))]
+       (assoc-in m [project trigger] e')))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :keyword] :any]}
   enable!
   "Clear both auto-trip and user disable for one (project, trigger).
    Mirrors `bb nido:trigger:enable`."
   [project trigger]
-  (let [m  (read-all)
-        e  (entry m project trigger)
-        e' (-> e (assoc :consecutive-failures 0
-                        :tripped? false
-                        :disabled-by-user? false))]
-    (write-all! (assoc-in m [project trigger] e'))))
+  (update-all!
+   (fn [m]
+     (let [e' (-> (entry m project trigger)
+                  (assoc :consecutive-failures 0
+                         :tripped? false
+                         :disabled-by-user? false))]
+       (assoc-in m [project trigger] e')))))
 
 (defn ^{:malli/schema [:=> [:cat] [:vector :map]]}
   tripped-triggers

@@ -579,7 +579,7 @@
 (defn ^{:malli/schema [:=> [:cat :string :map] :any]}
   destroy!
   "Bring the named session down, drop its instance state-dir (PGDATA,
-   logs, session.edn) and remove its worktree.
+   logs, session.edn) and its links, and remove its worktree.
    opts: {... :delete-branch? bool (default false)}
    Also accepts :delete-branch (no `?`) since `?` is a zsh glob char.
 
@@ -605,6 +605,10 @@
       (when (fs/exists? state-dir)
         (core/log-step (str "Dropping instance state-dir at " state-dir))
         (fs/delete-tree state-dir)))
+    ;; Links live outside the state-dir (they have to survive reclaim, which
+    ;; eats it an hour after `down`), so destroy is the one verb that has to say
+    ;; so out loud. Without this they would outlive the session that owned them.
+    (links/delete-links! instance-id)
     (cond
       (= :symlink (-> profile :worktree :strategy))
       (remove-symlink-worktree! wt-path)

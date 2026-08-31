@@ -50,13 +50,44 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId :Ticket] [:maybe :Ticket]]}
   write-meta!
-  "Persist a ticket's meta.edn. No-op (returns nil) for a nil/blank br-id — a
-   run with no ticket has nothing to write. This is the write chokepoint, so
-   open!/set-status!/complete! inherit the nil-safety."
+  "Persist a ticket's meta.edn wholesale. No-op (returns nil) for a nil/blank
+   br-id — a run with no ticket has nothing to write.
+
+   Every mutation of an EXISTING record goes through update-meta! instead; this
+   is for writing a record whose content does not depend on what is already
+   there, and so has nothing to lose to a concurrent writer."
   [project br-id m]
   (when-not (blank-br? br-id)
     (io/write-edn! (meta-path project br-id) m)
     m))
+
+(defn- ^{:malli/schema [:=> [:cat :ProjectName :TicketId [:=> [:cat :any] :any]]
+                       [:maybe :Ticket]]}
+  update-meta!
+  "Read a ticket's meta, apply `f` to it (nil when there is no record yet), and
+   write the result back — as one locked operation, sharing the lock
+   `io/update-edn!` would take on the same file. `f` returning nil writes
+   nothing, which is how clear-status! declines to conjure a record for a ticket
+   that never had one.
+
+   Written out rather than delegated to `io/update-edn!` for exactly that
+   branch: an update that may decline to write is not a function from the old
+   value to the new one, and moving the decision outside the lock is the race
+   this exists to prevent.
+
+   The daemon reconciling a terminal Run and a human running `bb nido:ticket:*`
+   are separate processes writing this file, and :status is what the pre-spawn
+   gate reads — a lost update here is a ticket that re-triages when it should
+   not, or one that never does."
+  [project br-id f]
+  (when-not (blank-br? br-id)
+    (let [path (meta-path project br-id)]
+      (io/with-file-lock
+        (io/lock-path-for path)
+        (fn []
+          (when-let [m' (f (io/read-edn path))]
+            (io/write-edn! path m')
+            m'))))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId] [:maybe :keyword]]}
   status [project br-id]
@@ -68,46 +99,44 @@
    :investigating. `base` carries {:notion-page-id :url :title :opened-by
    :notion-last-edited-at}. Idempotent on re-open: preserves :entries."
   [project br-id base]
-  (let [prior (read-meta project br-id)]
-    (write-meta! project br-id
-                 (merge {:entries []}
-                        prior
-                        {:br-id br-id :status :investigating}
-                        (select-keys base [:notion-page-id :url :title
-                                           :opened-by :notion-last-edited-at])))))
+  (update-meta! project br-id
+                (fn [prior]
+                  (merge {:entries []}
+                         prior
+                         {:br-id br-id :status :investigating}
+                         (select-keys base [:notion-page-id :url :title
+                                            :opened-by :notion-last-edited-at])))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId :keyword] :Ticket]}
   set-status! [project br-id new-status]
-  (write-meta! project br-id (assoc (read-meta project br-id) :status new-status)))
+  (update-meta! project br-id #(assoc % :status new-status)))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId :keyword :any] :Ticket]}
   complete!
   "Terminal completion of a triage verdict: set status :triaged, disposition,
    triaged-at. (Off-radar tickets use dismiss!, not complete! — :skipped retired.)"
   [project br-id new-status disposition]
-  (write-meta! project br-id
-               (assoc (read-meta project br-id)
-                      :status new-status
-                      :disposition disposition
-                      :triaged-at (clock/now-iso))))
+  (update-meta! project br-id
+                (fn [m]
+                  (assoc m :status new-status
+                           :disposition disposition
+                           :triaged-at (clock/now-iso)))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId] [:maybe :Ticket]]}
   clear-status!
   "Make the ticket re-triable: drop :status (the gate then returns :spawn)."
   [project br-id]
-  (when-let [m (read-meta project br-id)]
-    (write-meta! project br-id (dissoc m :status))))
+  (update-meta! project br-id #(when % (dissoc % :status))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId] :Ticket]}
   dismiss!
   "Take a ticket off the triage radar: set status :dismissed. Creates the record
    if absent so a never-triaged ticket can be dismissed. The gate then skips it
    (no auto-re-triage) and derive-stage projects it out of the triage queue.
-   No-op for a nil/blank br-id (inherits write-meta!'s chokepoint nil-safety)."
+   No-op for a nil/blank br-id (inherits update-meta!'s chokepoint nil-safety)."
   [project br-id]
-  (write-meta! project br-id
-               (assoc (or (read-meta project br-id) {:br-id br-id :entries []})
-                      :status :dismissed)))
+  (update-meta! project br-id
+                #(assoc (or % {:br-id br-id :entries []}) :status :dismissed)))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :TicketId] [:maybe :map]]}
   latest-triage-report

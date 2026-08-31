@@ -24,7 +24,7 @@ How "land in the session" works depends on the terminal:
 
 ```zsh
 nido() {
-  local f=~/.nido/.last-cd
+  local f=~/.nido/.last-cd rc
   rm -f "$f"
   if (( $# == 0 )) || [[ "$1" == tui ]]; then
     (cd ~/Code/nido && command bb nido:tui "${@:2}")
@@ -34,11 +34,15 @@ nido() {
     # at nido's bb.edn regardless of the project's own bb.edn in the worktree.
     command bb --config ~/Code/nido/bb.edn "nido:$1" "${@:2}"
   fi
+  rc=$?
   [[ -s "$f" ]] && { cd "$(cat "$f")" && rm -f "$f"; }
+  return $rc
 }
 ```
 
 Launch the TUI as `nido` (or `nido tui`) rather than `bb nido:tui`. (In Warp the wrapper is harmless — enter spawns a tab and never writes `.last-cd`, so the trailing `cd` is simply skipped.)
+
+**Both branches are load-bearing, and `rc` with them.** `nido:tui`'s task signature is `[& _args]` — it DISCARDS its arguments — so a wrapper without the verb branch answers `nido session:link:add …` by opening the TUI and adding nothing: no error, no output, just a full-screen app where a one-line command was expected. It went unnoticed for as long as it did because bare `nido` is the overwhelming majority of uses and works either way. And without `rc`, the trailing `[[ -s "$f" ]]` is the function's last statement, so `nido <verb>` returns 1 whenever no cd was handed off — which is every verb but `session:enter`.
 
 `nido <verb> [args]` runs `bb nido:<verb>` from your current directory — so `nido session:status`, `nido session:link:add …`, `nido review:loop …` all work from inside a project worktree, with no `cd` to the session home. `--config` makes `bb` load nido's `bb.edn` even though the worktree carries the project's own; the task then resolves which session you're in via `session-from-cwd`.
 

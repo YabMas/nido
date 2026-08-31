@@ -76,6 +76,51 @@
     (spit tmp (str (pr-str data) "\n"))
     (fs/move tmp path-s {:replace-existing true})))
 
+(defn ^{:malli/schema [:=> [:cat :string] :string]}
+  lock-path-for
+  "The lock that serialises updates to one file — a hidden sibling, so the lock
+   travels with the file it guards and every process derives the same name from
+   the same path.
+
+   Public because an update that BRANCHES — writes on one outcome and refuses on
+   another — cannot be expressed as `update-edn!`'s single function, and must
+   still take this lock rather than one of its own. A second lock name for the
+   same file excludes nobody."
+  [path]
+  (let [p (fs/path (str path))
+        n (str "." (fs/file-name p) ".lock")]
+    (str (if-let [parent (fs/parent p)]
+           (fs/path parent n)
+           (fs/path n)))))
+
+(defn ^{:malli/schema [:=> [:cat :string [:=> [:cat :any] :any] [:* :any]] :any]}
+  update-edn!
+  "Read `path`, apply `f` to what it holds (nil when the file is absent), and
+   write the result back — as ONE operation, serialised against every other
+   updater of the same path. Returns the value written; `f` throwing writes
+   nothing.
+
+   The read being INSIDE the lock is the whole point rather than an
+   implementation detail. `(write-edn! p (assoc (read-edn p) k v))` is two
+   operations wearing one form: anything that landed between the read and the
+   write is gone, the file is left perfectly well-formed, and nothing records
+   that something went missing. write-edn!'s temp-and-rename does not help —
+   that prevents a TORN write, and this is a LOST UPDATE.
+
+   The window is not the microseconds the expression takes to evaluate, which is
+   why `read` and `write` sitting on adjacent lines is not the reassurance it
+   looks like. A `bb nido:*` process reads, then blocks on a slow path — or is
+   abandoned and unwinds much later — and writes an hours-old snapshot over
+   everything added since. Reading inside the lock makes every write derive from
+   state read microseconds earlier, whatever the process did before it got here."
+  [path f & args]
+  (with-file-lock
+    (lock-path-for path)
+    (fn []
+      (let [next (apply f (read-edn path) args)]
+        (write-edn! path next)
+        next))))
+
 (defn ^{:malli/schema [:=> [:cat :string] :any]}
   read-json
   "Read a JSON file into keyword-keyed maps, returning nil if it doesn't exist.
