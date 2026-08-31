@@ -5,7 +5,6 @@
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.record.clock :as clock]
             [canvas.coordinator.record.state :as state :refer [Path]]
-            [canvas.coordinator.record.vocabulary :refer []]
             [canvas.coordinator.record.workstream :as workstream]
             [canvas.platform.project :refer [ProjectName]]
             [fukan.common.typing.malli]))

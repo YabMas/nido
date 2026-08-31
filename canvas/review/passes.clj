@@ -3,8 +3,7 @@
    orchestration, and the record rounds."
   (:require [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
-            [canvas.coordinator.record.state :refer [Path]]
-            [canvas.coordinator.record.vocabulary :refer [WorkstreamId]]
+            [canvas.coordinator.record.state :refer [Path WorkstreamId]]
             [canvas.platform.project :refer [ProjectName]]
             [canvas.review.core :refer [Finding]]
             [fukan.common.typing.malli]))

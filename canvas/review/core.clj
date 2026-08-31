@@ -5,8 +5,7 @@
             [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.control :as control]
-            [canvas.coordinator.record.state :refer [Path]]
-            [canvas.coordinator.record.vocabulary :refer [WorkstreamId]]
+            [canvas.coordinator.record.state :refer [Path WorkstreamId]]
             [canvas.design.check :as design]
             [canvas.platform.project :refer [ProjectName]]
             [fukan.common.typing.malli]))

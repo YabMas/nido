@@ -9,7 +9,7 @@
             [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.control :as control]
-            [canvas.coordinator.record.vocabulary :refer [SessionName WorkstreamId]]
+            [canvas.coordinator.record.state :refer [SessionName WorkstreamId]]
             [canvas.coordinator.report :as report]
             [canvas.coordinator.work :as work :refer [Screen]]
             [canvas.platform.project :refer [ProjectName]]

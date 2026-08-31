@@ -4,9 +4,8 @@
             [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.record.session :as session]
-            [canvas.coordinator.record.state :as state]
+            [canvas.coordinator.record.state :as state :refer [RunId SessionName WorkstreamId]]
             [canvas.coordinator.record.triggers :as triggers]
-            [canvas.coordinator.record.vocabulary :refer [RunId SessionName WorkstreamId]]
             [canvas.coordinator.record.workstream :as workstream]
             [canvas.platform.project :refer [ProjectName]]
             [fukan.common.typing.malli]))

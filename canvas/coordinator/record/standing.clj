@@ -3,7 +3,7 @@
   (:require [fukan.common.vocab.code.kind :refer [Kind]]
             [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
-            [canvas.coordinator.record.vocabulary :refer [WorkstreamId]]
+            [canvas.coordinator.record.state :refer [WorkstreamId]]
             [canvas.coordinator.record.workstream :as workstream]
             [canvas.platform.project :refer [ProjectName]]
             [fukan.common.typing.malli]))

@@ -3,7 +3,7 @@
    tickets."
   (:require [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
-            [canvas.coordinator.record.vocabulary :refer [WorkstreamId]]
+            [canvas.coordinator.record.state :refer [WorkstreamId]]
             [canvas.coordinator.record.workstream :as workstream :refer [Workstream]]
             [canvas.integration.notion :as notion]
             [canvas.platform.project :refer [ProjectName]]

@@ -6,9 +6,8 @@
    them holds state, and that is what lets the driver run them in any order it likes."
   (:require [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
-            [canvas.coordinator.record.state :refer [Path]]
+            [canvas.coordinator.record.state :refer [Path WorkstreamId SessionName]]
             [canvas.coordinator.record.tickets :as tickets :refer [TicketId]]
-            [canvas.coordinator.record.vocabulary :refer [WorkstreamId SessionName]]
             [canvas.coordinator.record.workstream :as workstream :refer [Workstream]]
             [canvas.integration.notion :as notion :refer [NotionToken]]
             [canvas.platform.project :refer [ProjectName]]

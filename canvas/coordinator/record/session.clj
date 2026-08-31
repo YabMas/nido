@@ -4,8 +4,7 @@
             [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.record.clock :as clock]
-            [canvas.coordinator.record.state :as state]
-            [canvas.coordinator.record.vocabulary :refer [WorkstreamId SessionName]]
+            [canvas.coordinator.record.state :as state :refer [WorkstreamId SessionName]]
             [canvas.platform.project :refer [ProjectName]]
             [fukan.common.typing.malli]))
 

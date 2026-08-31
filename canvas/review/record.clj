@@ -4,8 +4,7 @@
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.agent :as agent]
             [canvas.coordinator.record.standing :as standing]
-            [canvas.coordinator.record.state :refer [Path]]
-            [canvas.coordinator.record.vocabulary :refer [WorkstreamId]]
+            [canvas.coordinator.record.state :refer [Path WorkstreamId]]
             [canvas.platform.project :refer [ProjectName]]
             [fukan.common.typing.malli]))
 

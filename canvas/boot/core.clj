@@ -7,7 +7,7 @@
             [canvas.coordinator.executor :as executor]
             [canvas.coordinator.lane.drive :as drive]
             [canvas.coordinator.record.runs :as runs]
-            [canvas.coordinator.record.vocabulary :refer [RunId]]
+            [canvas.coordinator.record.state :refer [RunId]]
             [canvas.coordinator.source.core :as source]
             [fukan.common.typing.malli]))
 

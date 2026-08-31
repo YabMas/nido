@@ -2,7 +2,7 @@
   "Self-spec: `nido.coordinator.executor` — the slot-based scheduler."
   (:require [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
-            [canvas.coordinator.record.vocabulary :refer [RunId]]
+            [canvas.coordinator.record.state :refer [RunId]]
             [fukan.common.typing.malli]))
 
 (Module coordinator-executor

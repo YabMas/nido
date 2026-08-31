@@ -7,7 +7,7 @@
             [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.record.session :as session]
-            [canvas.coordinator.record.vocabulary :refer [WorkstreamId]]
+            [canvas.coordinator.record.state :refer [WorkstreamId]]
             [canvas.coordinator.record.workstream :as workstream :refer [Workstream]]
             [canvas.platform.project :refer [ProjectName]]
             [fukan.common.typing.malli]))

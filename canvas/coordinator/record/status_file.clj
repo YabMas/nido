@@ -3,8 +3,7 @@
   (:require [fukan.common.vocab.code.kind :refer [Kind]]
             [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
-            [canvas.coordinator.record.state :as state]
-            [canvas.coordinator.record.vocabulary :refer [RunId]]
+            [canvas.coordinator.record.state :as state :refer [RunId]]
             [fukan.common.typing.malli]))
 
 (Kind RunStatus

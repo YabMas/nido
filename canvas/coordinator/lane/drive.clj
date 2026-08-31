@@ -7,9 +7,8 @@
             [canvas.coordinator.executor :as executor]
             [canvas.coordinator.record.runs :as runs :refer [Run]]
             [canvas.coordinator.record.session :as session :refer [Session]]
-            [canvas.coordinator.record.state :as cstate :refer [Path]]
+            [canvas.coordinator.record.state :as cstate :refer [Path RunId SessionName WorkstreamId]]
             [canvas.coordinator.record.tickets :as tickets :refer [TicketId]]
-            [canvas.coordinator.record.vocabulary :refer [RunId SessionName WorkstreamId]]
             [canvas.coordinator.record.workstream :as workstream :refer [Workstream]]
             [canvas.platform.project :refer [ProjectName]]
             [fukan.common.typing.malli]))
