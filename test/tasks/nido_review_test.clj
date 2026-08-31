@@ -116,6 +116,39 @@
   (is (zero? (t/exit-code :escalated)))
   (is (= 1 (t/exit-code :review-failed))))
 
+(deftest review-event-carries-the-open-findings-not-only-a-count
+  ;; The handover. A run that ends holding a park is the loop asking a human for
+  ;; a decision, and until now it recorded that request as the integer 1 — with
+  ;; the request itself reachable only by opening a run dir that may be gone.
+  (let [final  {:status :escalated
+                :history [{:iter 1 :findings [{:handle "h1" :id "f1"
+                                               :title "the doc-ordering seam"
+                                               :file "src/a.clj" :line-start 42
+                                               :disposition :park
+                                               :because "no fixer has standing here"}]}]
+                :findings []}
+        report {:summary {:rounds 2 :findings-fixed 3}
+                :target  {:base "main" :base-rev "deadbee"}}
+        ev     (t/review-event final report "/runs/r/report.json")
+        [o]    (:open ev)]
+    (is (= 1 (:findings-remaining ev)))
+    (is (= "the doc-ordering seam" (:title o)))
+    (is (= "src/a.clj:42" (:where o)) "file and line are one fact to a reader")
+    (is (= :park (:disposition o)))
+    (is (= "no fixer has standing here" (:because o)))
+    ;; It has to survive the ledger, not merely be assembled — the schema is
+    ;; closed and a rejected append is swallowed to stderr, so an event that
+    ;; fails here fails invisibly in production.
+    (is (= ev (report/validate-event :review ev)))))
+
+(deftest review-event-omits-open-when-nothing-is-owed
+  (let [ev (t/review-event {:status :clean :history [] :findings []}
+                           {:summary {:rounds 1 :findings-fixed 0}
+                            :target {:base "main" :base-rev "x"}}
+                           "/runs/r/report.json")]
+    (is (= 0 (:findings-remaining ev)))
+    (is (not (contains? ev :open)) "absent rather than an empty vector")))
+
 (deftest review-event-derives-verdict-and-counts
   (let [final  {:status :escalated :findings [{:file "a" :line-start 1 :title "x"}
                                               {:file "b" :line-start 2 :title "y"}]}

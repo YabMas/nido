@@ -204,3 +204,54 @@
               (#'tasks.nido-review/print-verdict!
                 {:verdict :sound :round 1 :reason "findings were implementation details"}))]
     (is (not (str/includes? out "⚠")) "the expected outcome stays quiet")))
+
+(deftest open-across-run-finds-a-park-the-final-round-cannot-show
+  ;; The case the count was built for and could not see: a seam parked in round
+  ;; 1 is never raised again — that is what a park IS — so the final round holds
+  ;; no trace of it and `still-open` reports zero.
+  (let [final {:status  :converged
+               :history [{:iter 1 :findings [{:handle "h1" :title "the seam"
+                                              :disposition :park
+                                              :because "needs a human"}
+                                             {:handle "h2" :title "a typo"
+                                              :disposition :fix}]}
+                         {:iter 2 :findings [{:handle "h2" :title "a typo"
+                                              :disposition :closed}]}]
+               :findings []}
+        open  (verdict/open-across-run final)]
+    (is (= 0 (count (verdict/still-open (:findings final))))
+        "the final round shows nothing — this is the defect")
+    (is (= ["the seam"] (mapv :title open)))
+    (is (= "needs a human" (:because (first open))))))
+
+(deftest open-across-run-takes-the-latest-ruling-per-finding
+  ;; Parked in round 1, closed in round 3. It is closed.
+  (let [final {:status :converged
+               :history [{:iter 1 :findings [{:handle "h" :title "t" :disposition :park}]}
+                         {:iter 2 :findings [{:handle "h" :title "t" :disposition :fix}]}
+                         {:iter 3 :findings [{:handle "h" :title "t" :disposition :closed}]}]
+               :findings []}]
+    (is (empty? (verdict/open-across-run final)))))
+
+(deftest a-fix-is-owed-only-in-the-final-round
+  ;; An earlier round's fix was checked by the round after it. The last round's
+  ;; was not — there is no round after it to re-report the failure.
+  (let [earlier {:status :converged
+                 :history [{:iter 1 :findings [{:handle "h" :title "t" :disposition :fix}]}
+                           {:iter 2 :findings []}]
+                 :findings []}
+        latest  {:status :converged
+                 :history [{:iter 1 :findings []}]
+                 :findings [{:handle "h" :title "t" :disposition :fix}]}]
+    (is (empty? (verdict/open-across-run earlier)))
+    (is (= ["t"] (mapv :title (verdict/open-across-run latest))))))
+
+(deftest unruled-findings-do-not-collapse-onto-each-other
+  ;; No handle and no id: identity falls back to file/line/title. Keyed on nil
+  ;; these would fold into one, turning three open findings into one.
+  (let [final {:status :escalated
+               :history []
+               :findings [{:file "a.clj" :line-start 1 :title "x"}
+                          {:file "b.clj" :line-start 2 :title "y"}
+                          {:file "c.clj" :line-start 3 :title "z"}]}]
+    (is (= 3 (count (verdict/open-across-run final))))))

@@ -1247,6 +1247,20 @@
    [:rounds             int?]
    [:findings-fixed     int?]
    [:findings-remaining int?]
+   ;; The remaining findings themselves, not only how many. A count answers
+   ;; "did this run finish clean"; it cannot answer "what is it waiting for",
+   ;; which for a run that ended holding a park is the only question there is.
+   ;; Optional because a run with nothing open omits it rather than carrying [].
+   [:open {:optional true}
+    [:sequential
+     [:map {:closed true}
+      [:id          {:optional true} [:maybe string?]]
+      [:title       string?]
+      [:where       {:optional true} [:maybe string?]]
+      [:disposition {:optional true} [:maybe keyword?]]
+      ;; The warden's own words on why it ruled this way — written for whoever
+      ;; picks the finding up, and until now readable only inside report.json.
+      [:because     {:optional true} [:maybe string?]]]]]
    [:report-path        [:maybe string?]]
    ;; Dormant extension point: no caller populates :summary yet (review-event omits it).
    ;; Kept for a future emitter wanting a one-line human note on the timeline card.
@@ -2099,13 +2113,26 @@
   (str/join "\n" ["# Ship submitted" "" (str "`" session "` handed to the merge lane.")]))
 
 (defn- review->markdown [{:keys [status base base-rev rounds findings-fixed
-                                 findings-remaining report-path summary]}]
+                                 findings-remaining report-path summary open]}]
   (str/join "\n"
     (remove nil?
       [(str "# Review: " (name status))
        (str findings-fixed " fixed  ·  " findings-remaining " remaining  ·  "
             rounds " rounds")
        (str "base " base (when base-rev (str "@" base-rev)))
+       ;; What is still owed, in the entry itself. The counts above say a run
+       ;; stopped with something left; only this says what, and recovering it
+       ;; otherwise means opening a report.json that the run dir may no longer
+       ;; have. A park is the case that matters: the loop has no move for it, so
+       ;; the entry is the whole handover to the human who does.
+       (when (seq open)
+         (str "\n## Still open\n"
+              (str/join "\n"
+                        (for [{:keys [title where disposition because]} open]
+                          (str "- " (when disposition (str "**" (name disposition) "** — "))
+                               title
+                               (when where (str "  `" where "`"))
+                               (when because (str "\n  - " because)))))))
        (when summary (str "\n" summary))
        (when report-path (str "\nfull report → " report-path))])))
 

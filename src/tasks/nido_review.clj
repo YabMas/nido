@@ -38,19 +38,42 @@
   [status]
   (if (= :review-failed status) 1 0))
 
+(defn- open-for-ledger
+  "The still-open findings, trimmed to what a reader of the workstream needs and
+   nothing that only makes sense inside a run. `where` is assembled here because
+   file and line are two fields in the report and one fact to a reader."
+  [final]
+  (into []
+        (map (fn [{:keys [id title file line-start disposition because]}]
+               (cond-> {:title (str (or title "(untitled finding)"))}
+                 id          (assoc :id (str id))
+                 file        (assoc :where (str file (when line-start (str ":" line-start))))
+                 disposition (assoc :disposition (keyword disposition))
+                 because     (assoc :because (str because)))))
+        (verdict/open-across-run final)))
+
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   review-event
   "Pure: build a :review ledger payload from the loop's terminal value `final`
-   ({:status :findings}) and the folded review `report` ({:summary :target})."
+   ({:status :findings :history}) and the folded review `report`
+   ({:summary :target}).
+
+   The remaining findings are carried whole, not just counted. The count was the
+   entry's only account of what a run left behind, and a count cannot be acted
+   on: a run that ends with one parked finding — the case where the loop is
+   explicitly asking a human for a decision — recorded that request as the
+   integer 1, with the request itself reachable only inside report.json."
   [final report report-path]
-  {:format             :review-report
-   :status             (:status final)
-   :base               (get-in report [:target :base])
-   :base-rev           (get-in report [:target :base-rev])
-   :rounds             (or (get-in report [:summary :rounds]) 0)
-   :findings-fixed     (or (get-in report [:summary :findings-fixed]) 0)
-   :findings-remaining (count (verdict/still-open (:findings final)))
-   :report-path        report-path})
+  (let [open (open-for-ledger final)]
+    (cond-> {:format             :review-report
+             :status             (:status final)
+             :base               (get-in report [:target :base])
+             :base-rev           (get-in report [:target :base-rev])
+             :rounds             (or (get-in report [:summary :rounds]) 0)
+             :findings-fixed     (or (get-in report [:summary :findings-fixed]) 0)
+             :findings-remaining (count open)
+             :report-path        report-path}
+      (seq open) (assoc :open open))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   append-review-entry!
@@ -144,7 +167,7 @@
       :base               (get-in report [:target :base])
       :rounds             (or (get-in report [:summary :rounds]) 0)
       :findings-fixed     (or (get-in report [:summary :findings-fixed]) 0)
-      :findings-remaining (count (verdict/still-open (:findings final)))
+      :findings-remaining (count (verdict/open-across-run final))
       :reviewed-project   project
       :reviewed-session   session
       :reviewed-ws-id     ws-id})))

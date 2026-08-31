@@ -228,9 +228,63 @@
   "Findings that actually remain at the end — the warden closed the rest, by a
    named authority. Handing a closed finding to the verdict as \"still open\"
    would have it re-adjudicate something already decided, against a design it is
-   supposed to be checking."
+   supposed to be checking.
+
+   ONE round's findings. For what the whole run is still holding — which is what
+   a reader of the workstream needs — see `open-across-run`."
   [findings]
   (into [] (remove #(= :closed (:disposition %))) findings))
+
+(defn- finding-identity
+  "What makes two reports across rounds the same finding. The warden's handle
+   when it assigned one, since that is the only identity a re-wording cannot
+   move; then the id; then the same file/line/title triple the diff loop falls
+   back to.
+
+   The triple is load-bearing rather than decorative: a finding that reached no
+   warden has neither of the first two, and keying those on nil would fold every
+   one of them onto a single entry — turning a run that ended holding eight
+   unruled findings into a run reporting one. Splitting a re-worded finding into
+   two rows over-reports; collapsing distinct ones under-reports, and this fold
+   exists because under-reporting is the failure that hid a parked P1."
+  [f]
+  (or (:handle f) (:id f) [(:file f) (:line-start f) (:title f)]))
+
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  open-across-run
+  "Everything the run is still holding when it ends, folded over every round.
+
+   `still-open` reads the final round alone, which is the round least likely to
+   contain the run's open items: a finding parked in round 1 and never resolved
+   does not appear in round 9's report, so a run could end holding eight parked
+   findings and record two. What a park IS, is a thing no round will raise again
+   — so the last round is exactly where it cannot be found.
+
+   Per identity, the LATEST ruling wins: a seam parked in round 3 and closed in
+   round 7 is closed, and only its final disposition is asked about.
+
+   A `:fix` is dropped from every round but the last. It was actioned, and the
+   round after it is the check — if the fix did not take, the next round reports
+   it again and that later report is the one that survives the fold. In the FINAL
+   round there is no such round, so a finding handed to a fixer with nothing left
+   to verify it is still owed."
+  [{:keys [history findings]}]
+  (let [rounds   (conj (vec (map :findings history)) (vec findings))
+        last-idx (dec (count rounds))
+        latest   (reduce (fn [acc [idx round-findings]]
+                           (reduce (fn [a f]
+                                     (assoc a (finding-identity f)
+                                            (assoc f ::round idx)))
+                                   acc round-findings))
+                         {}
+                         (map-indexed vector rounds))]
+    (into []
+          (comp (map #(dissoc % ::round))
+                (remove #(= :closed (:disposition %))))
+          (->> (vals latest)
+               (remove #(and (= :fix (:disposition %))
+                             (< (::round %) last-idx)))
+               (sort-by (juxt ::round #(str (:id %))))))))
 
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   run!
