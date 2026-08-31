@@ -405,6 +405,24 @@
                                {:title (apply str (repeat 200 "x"))})]
     (is (every? #(<= (count %) 80) (str/split-lines s)))))
 
+(deftest a-priority-a-reviewer-put-in-its-own-title-is-not-printed-twice
+  ;; The line renders the priority from the FIELD, so a title carrying it too
+  ;; came out as "• [P2] [P2] Validate the day before …".
+  (let [out (render/final
+             {:status "warden-indeterminate" :started-at "2026-08-31T09:00:00Z"
+              :ended-at "2026-08-31T09:10:00Z"
+              :target {:cwd "/w/x" :base "main" :files [] :layers 1}
+              :rounds [{:round 1 :status "ended"
+                        :phases [{:phase "review" :status "ok"
+                                  :findings [{:priority 2 :title "[P2] Validate the day"
+                                              :file "/w/x/a.clj" :line-start 1 :line-end 1}
+                                             {:priority 1 :title "Freeze the thread"
+                                              :file "/w/x/b.clj" :line-start 2 :line-end 2}]}]}]})]
+    (is (re-find #"\[P2\] Validate the day" out))
+    (is (not (re-find #"\[P2\] \[P2\]" out)))
+    (is (re-find #"\[P1\] Freeze the thread" out)
+        "and a title without one is untouched")))
+
 (deftest an-indeterminate-ruling-says-what-stopped-it
   (let [out (render/final
              {:status "warden-indeterminate" :started-at "2026-08-31T09:00:00Z"

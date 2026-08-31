@@ -254,6 +254,21 @@
   (str (header report) "\n"
        (str/join "\n\n" (map #(round-block % (:target report) now) (:rounds report)))))
 
+(def ^:private leading-priority-re
+  "A `[P2] ` a reviewer put at the front of its own title."
+  #"^\s*\[P\d\]\s*")
+
+(defn- strip-priority
+  "The title without the priority it may already carry.
+
+   Priority is a FIELD, and this line renders it from that field — so a
+   reviewer that also writes it into the title gets `[P2] [P2] …`. Stripped
+   here rather than demanded of the reviewers: the prompt does not forbid it,
+   several of them do it, and a renderer that cannot survive a redundant prefix
+   is the wrong place to hold that rule."
+  [title]
+  (str/replace (str title) leading-priority-re ""))
+
 (defn- finding-line
   "A finding, with where it was seen and what was decided about it. The
    disposition is shown because a finding that is merely absent from the fix
@@ -267,7 +282,7 @@
    different things of whoever reads this, and the word alone cannot tell them
    apart."
   [f]
-  (str "    • [P" (:priority f) "] " (:title f)
+  (str "    • [P" (:priority f) "] " (strip-priority (:title f))
        "\n      " (:file f) ":" (:line-start f) "-" (:line-end f)
        (when-let [k (:kind f)]
          (str "  ·  " (name k)
