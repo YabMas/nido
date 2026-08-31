@@ -198,19 +198,25 @@
                            (filter #(= :manual (-> % :source :type)))
                            vec)]))})
 
-(defn- proposals-for
-  "Proposals across every project, or one when scoped. Reads the ledger on each
-   call rather than caching: the list is derived, and a decision made in another
-   tab must show up on the next poll rather than when something invalidates."
-  [scope]
-  (if (and scope (not= "all" scope))
-    (work/proposals scope)
-    (vec (mapcat (fn [[pname _]]
-                   (try (work/proposals pname) (catch Throwable _ [])))
-                 (project/list-projects)))))
+(defn- all-proposals
+  "Every proposal, from every project, unfiltered.
 
-(defn- operations-fragment-response [scope]
-  (sse-response (sse-fragment (views/operations-fragment (proposals-for scope)))))
+   Deliberately not scoped. Operating nido is a cross-project concern: an
+   analysis runs nido-side whatever it reviewed, so scoping by the project that
+   HOLDS a proposal answers a question nobody asks — it would hide every row
+   from the reviewed project's own scope, which is the scope a reader is most
+   likely to be in.
+
+   Reads the ledger on each call rather than caching: the list is derived, and a
+   decision made in another tab must show up on the next poll rather than when
+   something invalidates."
+  []
+  (vec (mapcat (fn [[pname _]]
+                 (try (work/proposals pname) (catch Throwable _ [])))
+               (project/list-projects))))
+
+(defn- operations-fragment-response []
+  (sse-response (sse-fragment (views/operations-fragment (all-proposals)))))
 
 (defn- ops-fragment-response
   "`scope` filters the badge count to one project's gates (string :project on
@@ -489,7 +495,7 @@
                         :at-seq       (:entry vs)})
                       {:decision :stale :latest nil})]
         (sse-response (sse-fragment
-                       (views/proposal-result-fragment result (proposals-for (:scope vs))))))
+                       (views/proposal-result-fragment result (all-proposals)))))
 
       ;; POST /ops/... — ambient ops levers (halt/resume, breaker clear, fire).
       ;; Every lever responds with the refreshed ops fragment + rail status.
@@ -551,14 +557,13 @@
 
       ;; GET /operations — nido's own improvement backlog, one row per proposal
       ["operations"]
-      (let [vs (view-state/parse req)]
-        (html-response 200 (views/operations-page
-                            (rail-ctx :operations (derive-screen vs))
-                            (proposals-for (:scope vs)))))
+      (html-response 200 (views/operations-page
+                          (rail-ctx :operations (derive-screen (view-state/parse req)))
+                          (all-proposals)))
 
       ;; GET /_fragment/operations — SSE proposal-list refresh
       ["_fragment" "operations"]
-      (operations-fragment-response (:scope (view-state/parse req)))
+      (operations-fragment-response)
 
       ;; GET /_fragment/ops — SSE ops-panel refresh (patches #ops-panel + rail).
       ;; Scope rides ?scope=, parsed the same way every other view-state is —

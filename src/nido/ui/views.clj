@@ -324,6 +324,10 @@
         .v-declined { background:#3a1a1a; color:#f87171; }
         .ops-empty { color:#777; padding:20px 0; }
         .ops-head { display:flex; gap:14px; align-items:baseline; margin-bottom:14px; flex-wrap:wrap; }
+        /* One reading column. Not .gate-wrap's queue+pane grid: nothing opens
+           beside a proposal, so its 38% column would leave the evidence — the
+           part you actually have to read — wrapped against two-thirds empty. */
+        .ops-col { max-width:900px; padding-top:4px; }
 "))
 
 ;; ---------------------------------------------------------------------------
@@ -350,9 +354,14 @@
                           (and scope-val (not= "all" scope-val)) (conj (str "scope=" scope-val))
                           (and workstreams? tab (not= view-state/default-tab tab)) (conj (str "tab=" (name tab))))]
               (if (seq parts) (str "?" (str/join "&" parts)) "")))
+        ;; Operations is the one destination scope does not reach — see the
+        ;; comment on its link below — so it is linked bare and never carries
+        ;; the scope the reader arrived with.
         dest (fn [id href label]
                [:a {:class (str "rail-link" (when (= id active) " active"))
-                    :href (str href (q scope (= id :workstreams)))}
+                    :href (if (= id :operations)
+                            href
+                            (str href (q scope (= id :workstreams))))}
                 [:span label]
                 (when (= id :needs) (rail-needs-badge needs-count))])
         scope-link (fn [scope-val label]
@@ -369,10 +378,16 @@
      ;; the plane the board already showed; this is a different plane — records
      ;; that are not a stage of any arc, read across workstreams.
      (dest :operations "/operations" "Operations")
-     [:div.rail-scope
-      [:div.meta "Scope"]
-      (scope-link "all" "All projects")
-      (for [p projects] (scope-link p p))]
+     ;; No scope selector on Operations. Scope picks which project's WORK you
+     ;; are looking at, and this surface is not looking at work — it is nido
+     ;; operating on itself, across every project at once. Offering the control
+     ;; where it means nothing invites the reading that an empty project scope
+     ;; means an empty backlog.
+     (when-not (= :operations active)
+       [:div.rail-scope
+        [:div.meta "Scope"]
+        (scope-link "all" "All projects")
+        (for [p projects] (scope-link p p))])
      (rail-health daemon)]))
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
@@ -2284,16 +2299,21 @@
    destination of its own rather than a tab on the board: these records are not
    a stage of any arc, and they are read ACROSS workstreams — the same defect
    proposed by four runs is four rows here and four unrelated workstreams
-   there."
+   there.
+
+   Unscoped, and the poll is too: operating nido is a cross-project concern, and
+   the project a proposal is filed under is always nido whatever it reviewed.
+
+   One column rather than the board's queue+pane split — there is no pane, since
+   a proposal carries its own evidence and nothing opens beside it."
   [ctx proposals]
   (shell
    (assoc ctx :active :operations :title "Operations")
-   [:div.gate-wrap
-    [:div.inbox {:data-on-interval__duration.5s
-                 (str "@get('/_fragment/operations"
-                      (when (and (:scope ctx) (not= "all" (:scope ctx)))
-                        (str "?scope=" (:scope ctx))) "')")}
-     [:div {:id "operations"} [:p.meta "…"]]]]))
+   [:div.ops-col {:data-on-interval__duration.5s "@get('/_fragment/operations')"}
+    ;; Rendered inline, not left as a placeholder for the first poll to fill:
+    ;; the poll is a refresh, and a surface that is blank until it fires reads
+    ;; as a surface with nothing on it.
+    (h/raw (operations-fragment proposals))]))
 
 (defn ^{:malli/schema [:=> [:cat :map :any] :any]}
   proposal-result-fragment
