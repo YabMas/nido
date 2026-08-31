@@ -724,22 +724,31 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
   "What to do about one finding whose remedy is the stack's shape — or, when
    nothing can be done about it here, which precondition failed.
 
-   `across` names the layers the defect spans, in stack order, so the lower one
-   is first and the upper one last. For an order-dependence that is the whole
-   instruction: the upper layer reaches for something the lower one does not
-   supply, so it belongs below it. For a seam or a duplication there is no order
-   to correct — the boundary itself is the defect — so the two are folded into
-   one.
+   The layers a defect spans are read back in STACK order rather than in the
+   order the finding happens to list them, so `lower` is the bottom-most named
+   layer and `upper` the top-most whatever the reviewer wrote. For an
+   order-dependence that pair is the whole instruction: the upper layer
+   establishes what the lower one reaches for, so it belongs below it. For a
+   seam or a duplication there is no order to correct — the boundary itself is
+   the defect — so the two are folded into one.
 
-   Never nil. A stage that cannot act still has to say why: a finding naming one
-   layer of this stack is by its own account not a defect of the cut, and a kind
-   whose remedy is to complete a layer is not a reshape at all — but both used
-   to leave the round with an empty phase, indistinguishable from a round that
-   had nothing to do."
+   A FOLD additionally requires the named layers to be contiguous. A fold does
+   not remove one boundary, it removes every boundary between the layers it
+   spans, and each unnamed layer in between is absorbed with them — landing
+   changes no reviewer implicated under a claim that never covered them. A seam
+   reported across layers 2 and 9 of a nine-layer stack is not a request to
+   collapse the stack; jj answers it with a conflict on everything in between,
+   and the round has spent its one attempt on an operation that could not have
+   applied. Where the span has holes the right cut is a judgement, so this says
+   so and leaves it.
+
+   Never nil. A stage that cannot act still has to say why: `:refused` with its
+   reason is what the phase shows instead of the silence that let one finding be
+   raised four rounds running with no record that anything was ever tried."
   [stack finding]
-  (let [by-label (into {} (map (juxt layer-label identity)) stack)
-        named    (vec (keep by-label (:layers finding)))
-        remedy   (remedy-by-kind (:kind finding))]
+  (let [index  (into {} (map-indexed (fn [i l] [(layer-label l) i])) stack)
+        named  (vec (sort (distinct (keep index (:layers finding)))))
+        remedy (remedy-by-kind (:kind finding))]
     (cond
       (> 2 (count named))
       {:refused :unnamed-layers
@@ -751,21 +760,43 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
        :because (str (if-let [k (:kind finding)] (name k) "this kind")
                      " is repaired by completing a layer, not by moving a boundary")}
 
-      :else {:remedy remedy :lower (first named) :upper (peek named)})))
+      :else
+      (let [lo    (long (first named))
+            hi    (long (peek named))
+            lower (nth stack lo)
+            upper (nth stack hi)
+            held  (set named)
+            gap   (mapv #(layer-label (nth stack %))
+                        (remove held (range lo (inc hi))))]
+        (if (and (= :fold remedy) (seq gap))
+          {:refused :span-has-holes
+           :because (str "folding " (layer-label lower) "…" (layer-label upper)
+                         " would absorb " (str/join ", " gap)
+                         ", which this finding does not name")}
+          {:remedy remedy :lower lower :upper upper :fold-legal? (empty? gap)})))))
 
 (defn- reshape!
   "Carry out one plan. A reorder that will not apply falls back to a fold, which
    removes the boundary instead of moving it — the defect is real either way,
    and jj refusing the reorder is jj saying the layers genuinely depend on each
-   other, which is a reason to merge them rather than to give up."
-  [cwd base {:keys [remedy lower upper]}]
+   other, which is a reason to merge them rather than to give up.
+
+   The fallback inherits the fold's own precondition. A reorder over a span with
+   holes is legal because it moves one layer and absorbs none; the fold over
+   that same span is what `reshape-plan` refuses outright, and reaching it
+   through a refused reorder would be the same unappliable squash by a longer
+   route."
+  [cwd base {:keys [remedy lower upper fold-legal?]}]
   (if (= :fold remedy)
     (assoc (layers/fold! cwd base upper lower) :did :fold)
     (let [r (layers/reorder! cwd base upper lower)]
-      (if (:ok? r)
-        (assoc r :did :reorder)
-        (assoc (layers/fold! cwd base upper lower) :did :fold
-               :after-reorder-refused (:reason r))))))
+      (cond
+        (:ok? r)    (assoc r :did :reorder)
+        fold-legal? (assoc (layers/fold! cwd base upper lower) :did :fold
+                           :after-reorder-refused (:reason r))
+        :else       (assoc r :reason
+                           (str (:reason r) "; and folding instead would absorb "
+                                "layers this finding does not name"))))))
 
 (defn- reshape-outcome
   "What became of one recut finding this round, as the phase will report it.

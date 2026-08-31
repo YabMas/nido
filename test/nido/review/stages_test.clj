@@ -642,7 +642,17 @@
 (deftest an-order-dependence-plans-the-upper-layer-below-the-lower
   ;; `across` is in stack order, so the upper layer is the one reaching for
   ;; something the lower does not supply — moving it down is the repair.
-  (is (= {:remedy :reorder :lower (first two-layer-stack) :upper (second two-layer-stack)}
+  (is (= {:remedy :reorder :lower (first two-layer-stack) :upper (second two-layer-stack)
+          :fold-legal? true}
+         (stages/reshape-plan two-layer-stack
+                              {:kind :order-dependence :layers ["lower" "upper"]}))))
+
+(deftest the-span-is-read-in-stack-order-not-the-order-it-was-written
+  ;; The reviewer writes the list; the stack decides which end is which. Trusting
+  ;; the written order puts `lower` above `upper` and reorders the stack the
+  ;; wrong way, on a finding that was right.
+  (is (= (stages/reshape-plan two-layer-stack
+                              {:kind :order-dependence :layers ["upper" "lower"]})
          (stages/reshape-plan two-layer-stack
                               {:kind :order-dependence :layers ["lower" "upper"]}))))
 
@@ -651,6 +661,26 @@
     (is (= :fold (:remedy (stages/reshape-plan two-layer-stack
                                                {:kind k :layers ["lower" "upper"]})))
         (str (name k) " has no order to correct — the boundary is the defect"))))
+
+(deftest a-fold-refuses-a-span-with-holes
+  ;; A fold removes every boundary it spans, so an unnamed layer in between is
+  ;; absorbed with them. Attempted across a nine-layer stack it is a squash jj
+  ;; can only answer with a conflict, and the round's one attempt is gone.
+  (let [p (stages/reshape-plan gapped-stack
+                               {:kind :misplaced-seam :layers ["a" "c" "d"]})]
+    (is (= :span-has-holes (:refused p)))
+    (is (re-find #"absorb b" (:because p)) "and it names what would have been absorbed"))
+  (is (= :fold (:remedy (stages/reshape-plan gapped-stack
+                                             {:kind :misplaced-seam :layers ["b" "c"]})))
+      "adjacent layers still fold — the boundary between them is the only one lost"))
+
+(deftest a-reorder-is-legal-across-a-span-with-holes
+  ;; It moves one layer and absorbs none, so the fold's precondition is not its.
+  (let [p (stages/reshape-plan gapped-stack
+                               {:kind :order-dependence :layers ["a" "d"]})]
+    (is (= :reorder (:remedy p)))
+    (is (false? (:fold-legal? p))
+        "but the fold it would fall back to is still refused")))
 
 (deftest a-finding-this-stage-cannot-act-on-says-which-precondition-failed
   (is (= :unnamed-layers
@@ -685,7 +715,6 @@
   ;; with no path at all — which is how one was raised four rounds running with
   ;; no record that anything had ever been attempted.
   (let [ctx {:config {:cwd "/w" :base "main"}
-             :carry  {:reshaped #{"h-2"}}
              :findings [{:handle "h-1" :disposition :recut :kind :claim-falsified
                          :layers ["a" "d"] :title "t1"}
                         {:handle "h-2" :disposition :recut :kind :misplaced-seam
@@ -693,7 +722,7 @@
                         {:handle "h-3" :disposition :fix :title "not a recut"}]}]
     (with-redefs [stages/session-stack (fn [_ _] gapped-stack)]
       (let [out (:reshapes ((:run stages/reshape-stage) ctx))]
-        (is (= ["no-remedy" "already-attempted"] (mapv :outcome out)))
+        (is (= ["no-remedy" "span-has-holes"] (mapv :outcome out)))
         (is (every? (comp seq :because) out) "each with the reason it could not run")))))
 
 (deftest a-dry-run-reshapes-nothing
