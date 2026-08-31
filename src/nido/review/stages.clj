@@ -384,6 +384,12 @@
   (let [{:keys [cwd base run-id]} (:config ctx)
         [project ws-id] (project+ws-from-cwd cwd)
         cached  (if ws-id (cache/read-cache project ws-id) {})
+        ;; Pin the top of the reviewed range for the whole round. `@` is
+        ;; whatever the working copy currently is, and every stage that resolved
+        ;; it again was silently asking about a different tree — a concurrent
+        ;; rebase moved it out from under a run and nothing noticed, so the
+        ;; round reviewed one state and tried to fix another.
+        at      (layers/resolve-rev cwd "@")
         all     (with-patch-hashes
                  cwd (with-composition-memory (review-targets cwd base) (:history ctx)))
         {:keys [review skipped]} (to-review cached all)
@@ -435,9 +441,28 @@
       ;; otherwise written — never runs for a round that starts clean.
       (let [nothing? (and (seq results)
                           (every? #(= :nothing-to-review (:status %)) results))
+            ;; A flat branch is reviewed by ONE pass over the whole diff, and
+            ;; one pass is a sample rather than a verdict: the round that missed
+            ;; a change's only P1 reported one of three pre-existing defects and
+            ;; called it clean. A layered stack gets several independent
+            ;; reviewers over the same code and does not need this; a 0-layer
+            ;; target has nothing to cross-check it, so it earns `clean` by
+            ;; producing nothing twice in a row rather than once.
+            ;; From this round's own targets, not from ctx: the toc is built
+            ;; below and this branch never reaches it. A round with no layer
+            ;; target reviewed the branch flat.
+            flat?    (empty? (build-toc results))
+            first-quiet-round? (and flat? (not nothing?)
+                                    (not (:quiet-once (:carry ctx))))
             ctx'     (cond-> (assoc ctx :findings [] :reviews results :skipped skipped
-                                    :control :stop
-                                    :status (if nothing? :nothing-to-review :clean))
+                                    :reviewed-at at
+                                    :control (if first-quiet-round? :continue :stop)
+                                    :status (cond
+                                              nothing?           :nothing-to-review
+                                              first-quiet-round? nil
+                                              :else              :clean))
+                       first-quiet-round?
+                       (assoc :carry (assoc (:carry ctx) :quiet-once true))
                        ;; The reviewer's correctness verdict, on the one branch
                        ;; that used to drop it. A terminal clean round is the
                        ;; round whose verdict is most worth keeping — it is the
@@ -446,12 +471,13 @@
                        ;; read nothing, because no reviewer reached a verdict.
                        (not nothing?)
                        (assoc :overall-correctness (:overall-correctness whole)))]
-        (when-not nothing? (record-convergence! cwd ctx'))
+        (when-not (or nothing? first-quiet-round?) (record-convergence! cwd ctx'))
         ctx')
       (assoc ctx
              :findings findings
              :reviews results
              :skipped skipped
+             :reviewed-at at
              :cache cached
              :toc (build-toc results)
              :overall-correctness (:overall-correctness whole)
@@ -1145,7 +1171,19 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
     (let [{:keys [cwd base run-id budget impl-session-id]} (:config ctx)
           stack (session-stack cwd base)
           plan  (fix-plan stack (:findings ctx))]
-      (if (empty? plan)
+      (cond
+        ;; The tree moved between the review and the repair. Every finding this
+        ;; round holds was found in a state that is no longer what `@` means, so
+        ;; landing fixes now writes them onto code nobody reviewed. Refusing
+        ;; names both revisions, which is what makes it actionable instead of
+        ;; the `fix-noop` this used to end as.
+        (and (:reviewed-at ctx) (not (layers/descends-from? cwd (:reviewed-at ctx))))
+        (assoc ctx :control :stop :status :workspace-drifted
+               :drift {:reviewed-at (:reviewed-at ctx)
+                       :now (layers/resolve-rev cwd "@")})
+
+        :else
+        (if (empty? plan)
         ;; Nothing was routed to a layer a fixer can touch — distinct from
         ;; fixers running and declining, which is :fix-declined below. Both used
         ;; to be :fix-noop, so the one status covered "there was no work",
@@ -1208,7 +1246,7 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                      :fixes (:fixes ctx')
                      :fixed-count (reduce + 0 (map :fixed-count (:fixes ctx')))
                      :findings (:findings ctx')
-                     :warden (:warden ctx')})))))))
+                     :warden (:warden ctx')}))))))))
 
 (def fix-stage
   "Fixes run only after every finding has an owner, one layer at a time,

@@ -107,8 +107,11 @@
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   cache/read-cache (fn [& _] {})
                   conformance/findings (fn [& _] [])]
+      ;; Second round: this branch is flat, and a flat branch earns clean by
+      ;; being quiet twice — see a-flat-branch-earns-clean-by-being-quiet-twice.
       (let [ctx ((:run stages/review-stage)
-                 {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 1})]
+                 {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 2
+                  :carry {:quiet-once true}})]
         (is (= :stop (:control ctx)))
         (is (= :clean (:status ctx)))))))
 
@@ -116,8 +119,10 @@
   (with-redefs [layers/patch-hash (fn [& _] nil)
                 codex/merge-base (fn [& _] "BASEREV")
                 codex/review! (fn [_] {:status :clean :findings []})]
+    ;; Flat branch, second quiet round — one pass over a whole diff is a sample.
     (let [ctx ((:run stages/review-stage)
-               {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 1})]
+               {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 2
+                :carry {:quiet-once true}})]
       (is (= :stop (:control ctx)))
       (is (= :clean (:status ctx))))))
 
@@ -458,12 +463,37 @@
       (is (= "a" (:from-layer (first (:findings ctx))))
           "the layer reviewer's copy wins over the whole-stack copy"))))
 
-(deftest review-stage-is-clean-only-when-no-target-found-anything
+(deftest a-flat-branch-earns-clean-by-being-quiet-twice
+  ;; One whole-diff pass over an unlayered branch is a sample, not a verdict:
+  ;; the round that missed a change's only P1 found one of three pre-existing
+  ;; defects and reported clean. A layered stack has several independent
+  ;; reviewers over the same code and needs no second look; a 0-layer target has
+  ;; nothing to cross-check it.
   (with-redefs [layers/patch-hash (fn [& _] nil)
                 codex/merge-base     (fn [& _] "FORK")
                 stages/session-stack (fn [& _] [])
                 codex/review!        (fn [_] {:status :clean :findings []})]
-    (let [ctx ((:run stages/review-stage) {:config {:cwd "/w" :base "main" :run-id "r"} :iter 1})]
+    (let [first-pass  ((:run stages/review-stage)
+                       {:config {:cwd "/w" :base "main" :run-id "r"} :iter 1})
+          second-pass ((:run stages/review-stage)
+                       {:config {:cwd "/w" :base "main" :run-id "r"} :iter 2
+                        :carry (:carry first-pass)})]
+      (is (nil? (:status first-pass)))
+      (is (= :continue (:control first-pass)) "one quiet round is not a verdict")
+      (is (= :clean (:status second-pass)))
+      (is (= :stop (:control second-pass))))))
+
+(deftest a-layered-stack-is-clean-on-one-quiet-round
+  ;; The second look is bought by the layer reviewers, not by a second round.
+  (with-redefs [layers/patch-hash (fn [& _] nil)
+                codex/merge-base     (fn [& _] "FORK")
+                stages/session-stack (fn [& _] [{:bookmark "s--a" :slug "a" :tip "cA"}
+                                                {:bookmark "s--b" :slug "b" :tip "cB"}])
+                layers/brief         (fn [& _] nil)
+                codex/changed-files  (fn [& _] [])
+                codex/review!        (fn [_] {:status :clean :findings []})]
+    (let [ctx ((:run stages/review-stage)
+               {:config {:cwd "/w" :base "main" :run-id "r"} :iter 1})]
       (is (= :clean (:status ctx)))
       (is (= :stop (:control ctx))))))
 
@@ -890,3 +920,46 @@
     (is (str/includes? out "since round 1"))
     (is (str/includes? out "the doc-ordering seam"))
     (is (str/includes? out "nothing raises a park twice"))))
+
+(deftest the-fix-stage-refuses-when-the-tree-moved-under-the-round
+  ;; Every finding this round holds was found in a state that is no longer what
+  ;; @ means, so landing fixes now writes them onto code nobody reviewed. It
+  ;; used to end as fix-noop, which says nothing a reader can act on.
+  (with-redefs [stages/session-stack (fn [& _] [])
+                layers/descends-from? (fn [_ _] false)
+                layers/resolve-rev (fn [_ _] "NOWREV")
+                agent/launch! (fn [_] (throw (ex-info "no fixer should launch" {})))]
+    (let [ctx ((:run stages/fix-stage)
+               {:config {:cwd "/w" :run-id "r1"} :iter 2
+                :reviewed-at "THENREV"
+                :findings [{:id "aa11" :title "x" :disposition :fix}]})]
+      (is (= :workspace-drifted (:status ctx)))
+      (is (= :stop (:control ctx)))
+      (is (= {:reviewed-at "THENREV" :now "NOWREV"} (:drift ctx))
+          "both revisions named — that is what makes it actionable"))))
+
+(deftest a-round-whose-tree-did-not-move-fixes-normally
+  (with-redefs [stages/session-stack (fn [& _] [])
+                layers/descends-from? (fn [_ _] true)
+                agent/launch! (fn [_] {:num-turns 3 :result-error? false :result-text "done"})
+                stages/working-copy-dirty? (fn [_] false)
+                jj/jj! (fn [& _] {:exit 0 :out "" :err ""})]
+    (let [ctx ((:run stages/fix-stage)
+               {:config {:cwd "/w" :run-id "r1"} :iter 2
+                :reviewed-at "THENREV"
+                :findings [{:id "aa11" :title "x" :disposition :fix}]})]
+      (is (not= :workspace-drifted (:status ctx))))))
+
+(deftest a-round-that-could-not-pin-the-tree-still-runs
+  ;; The guard cannot become a failure of the thing it guards: an unpinnable
+  ;; round proceeds exactly as it did before there was a check.
+  (with-redefs [stages/session-stack (fn [& _] [])
+                layers/descends-from? (fn [& _] (throw (ex-info "no jj here" {})))
+                agent/launch! (fn [_] {:num-turns 3 :result-error? false :result-text "done"})
+                stages/working-copy-dirty? (fn [_] false)
+                jj/jj! (fn [& _] {:exit 0 :out "" :err ""})]
+    (let [ctx ((:run stages/fix-stage)
+               {:config {:cwd "/w" :run-id "r1"} :iter 2
+                :reviewed-at nil
+                :findings [{:id "aa11" :title "x" :disposition :fix}]})]
+      (is (not= :workspace-drifted (:status ctx))))))

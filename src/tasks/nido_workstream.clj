@@ -65,6 +65,16 @@
       (do
         (println "ws-id:" ws-id)
         (println "stage:" (name (:stage w)) "·" (:label w))
+        ;; Loud, and above the ledger listing, because everything printed below
+        ;; is read OFF the index — so when it has fallen behind the directory,
+        ;; the listing is exactly the thing that cannot be trusted to say so.
+        (when-let [{:keys [on-disk indexed missing]} (ws/index-drift p ws-id)]
+          (println)
+          (println (format "⚠ LEDGER INDEX IS BEHIND THE DISK — %d %s not listed below"
+                           missing (if (= 1 missing) "entry" "entries")))
+          (println (format "  entries/ holds up to %04d; the index has %d rows."
+                           on-disk indexed))
+          (println "  Every reader here — the panes, the review warden — sees the index."))
         (when-let [idx (:entries w)]
           (println "ledger:")
           (doseq [{:keys [seq kind title]} idx]

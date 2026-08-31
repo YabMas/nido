@@ -377,6 +377,51 @@
   [project ws-id]
   (str (fs/path (cstate/workstream-dir project ws-id) ".append.lock")))
 
+(defn- refuse-if-taken!
+  "Throw rather than write over an entry that already exists.
+
+   The last line of defence, and it should never fire now that the seq comes off
+   the disk: a ledger is append-only by contract, and silently replacing an
+   entry breaks every citation keyed on its number. Cheap enough to keep as the
+   thing that turns a future derivation bug into a loud failure instead of a
+   record that quietly stops being what it was."
+  [abs seq-n]
+  (when (fs/exists? abs)
+    (throw (ex-info "Refusing to overwrite an existing ledger entry"
+                    {:seq seq-n :file abs}))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :int]}
+  highest-seq-on-disk
+  "The largest entry number under entries/, or 0.
+
+   The index is a projection of that directory and can fall behind it — an
+   interrupted append writes the payload and dies before `write!`, and every
+   later append then computes a seq the count says is free and the disk says is
+   taken. One workstream reached 39 files against 37 index rows, which meant two
+   design records existed that no reader could see: the review loop judged every
+   ruling of a run against a record superseded twice.
+
+   The directory is the ledger. The index is a convenience over it, and where
+   they disagree the files win."
+  [project ws-id]
+  (let [dir (fs/path (cstate/workstream-dir project ws-id) "entries")]
+    (if-not (fs/exists? dir)
+      0
+      (->> (fs/list-dir dir)
+           (keep #(some-> (re-find #"^(\d{4})-" (fs/file-name %)) second parse-long))
+           (reduce max 0)))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :map]]}
+  index-drift
+  "How far the index has fallen behind the entries directory, or nil when they
+   agree. Surfaced by `bb nido:workstream:show` so the drift is visible without
+   anybody going looking for it."
+  [project ws-id]
+  (let [on-disk (highest-seq-on-disk project ws-id)
+        indexed (count (:entries (read-ws project ws-id)))]
+    (when (> on-disk indexed)
+      {:on-disk on-disk :indexed indexed :missing (- on-disk indexed)})))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map :string] :Path]}
   append-entry!
   "Write an immutable entry file under entries/ and record it in :entries.
@@ -404,7 +449,13 @@
       (let [w     (or (read-ws project ws-id)
                       (throw (ex-info "Workstream not found"
                                       {:project project :ws-id ws-id})))
-            seq-n (inc (count (:entries w)))
+            ;; From the DISK, not from the index count. The two agree until an
+            ;; append writes its payload and dies before updating the index, and
+            ;; from then on every append computes a number the index says is
+            ;; free and the directory says is taken — overwriting a real entry
+            ;; and leaving the ledger looking consistent.
+            seq-n (inc (max (count (:entries w))
+                            (highest-seq-on-disk project ws-id)))
             [ext payload] (report/entry-payload (:kind entry) content)
             _     (check-baseline-citation! w (:kind entry) payload)
             _     (check-standing-citations! w (:kind entry) payload)
@@ -412,6 +463,7 @@
             fname (format "%04d-%s.%s" seq-n (name (:kind entry)) ext)
             rel   (str "entries/" fname)
             abs   (str (fs/path (cstate/workstream-dir project ws-id) rel))]
+        (refuse-if-taken! abs seq-n)
         (io/write-text! abs payload)
         (write! (update w :entries (fnil conj [])
                         (assoc entry :seq seq-n :at (clock/now-iso) :file rel)))
@@ -450,7 +502,7 @@
           ;; the write is the same steps inline. They are few, and the
           ;; alternative — a lock that counts its holders — buys a shared body at
           ;; the price of the one property this whole function exists for.
-          (let [seq-n (inc latest)
+          (let [seq-n (inc (max latest (highest-seq-on-disk project ws-id)))
                 [ext payload] (report/entry-payload (:kind entry) content)
                 _     (check-baseline-citation! w (:kind entry) payload)
                 _     (check-standing-citations! w (:kind entry) payload)
@@ -458,6 +510,7 @@
                 fname (format "%04d-%s.%s" seq-n (name (:kind entry)) ext)
                 rel   (str "entries/" fname)
                 abs   (str (fs/path (cstate/workstream-dir project ws-id) rel))]
+            (refuse-if-taken! abs seq-n)
             (io/write-text! abs payload)
             (write! (update w :entries (fnil conj [])
                             (assoc entry :seq seq-n :at (clock/now-iso) :file rel)))

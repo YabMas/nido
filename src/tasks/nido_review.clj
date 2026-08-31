@@ -302,6 +302,27 @@
    loop that never returns.\""
   "30m")
 
+(defn ^{:malli/schema [:=> [:cat :Path] :any]}
+  run-context
+  "What this run can and cannot reach, as {:has [..] :missing [..]}.
+
+   A review outside a nido session still runs, and should — but it runs WITHOUT
+   the convergence cache, the ledger, the design record and the project stance,
+   and every one of those absences changes what the loop does. It skips nothing,
+   judges against no invariants, writes no entry, and reports exactly as a full
+   run does. The loss was recorded nowhere at all, so a thin run and a complete
+   one produced indistinguishable reports and only the second was trustworthy."
+  [cwd]
+  (let [ws      (stages/project+ws-from-cwd cwd)
+        design  (when ws (stages/discover-design-record cwd))
+        stance  (when ws (stages/read-stance (first ws)))
+        checks  [["workstream ledger" (boolean ws)]
+                 ["convergence cache" (boolean ws)]
+                 ["design record"     (boolean design)]
+                 ["project stance"    (boolean stance)]]]
+    {:has     (mapv first (filter second checks))
+     :missing (mapv first (remove second checks))}))
+
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   loop-cmd* [{:keys [cwd base max-iters dry-run? budget]}]
   (let [cwd        (or cwd
@@ -311,6 +332,7 @@
         run-id     (str "review-" (random-uuid))
         clock      #(Instant/now)
         report-path (str (fs/path (cstate/run-dir run-id) "report.json"))
+        context    (run-context cwd)
         config     {:cwd cwd :base base
                     ;; No default cap: the loop runs until it converges,
                     ;; escalates, or stops making progress. :max-iters only
@@ -340,7 +362,13 @@
                     ;; what the last round of an :unfixable run was doing.
                     :judged-after :warden}
         report-atom (atom (report/init {:run-id run-id :cwd cwd :base base
-                                        :started-at (str (clock))}))
+                                        :started-at (str (clock))
+                                        :context context}))
+        _ (when (seq (:missing context))
+            (println (str "review-loop: running WITHOUT "
+                          (str/join ", " (:missing context))
+                          " — this run cannot skip converged layers, judge"
+                          " against a design, or record what it found")))
         final  (frontend/with-live-display
                  {:report-atom report-atom :report-path report-path :clock clock}
                  (fn [emit] (rloop/run-loop (assoc config :emit emit))))

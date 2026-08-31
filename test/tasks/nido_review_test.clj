@@ -10,6 +10,7 @@
    [nido.coordinator.record.workstream :as ws]
    [nido.review.loop :as rloop]
    [nido.review.record :as record]
+   [nido.review.report :as rreport]
    [nido.review.stages :as stages]
    [nido.session.lifecycle :as lifecycle]
    [tasks.nido-review :as t]))
@@ -552,3 +553,29 @@
   ;; prose, which is enforced after the schema and only on write.
   (let [b (t/parked-blocker [{:disposition :park :title "t"}])]
     (is (= b (report/validate-event :blocker b)))))
+
+(deftest a-run-outside-a-session-says-what-it-cannot-reach
+  ;; It runs — and should — but without the cache, the ledger, the design record
+  ;; and the stance. It skips nothing, judges against no invariants, writes no
+  ;; entry, and reports exactly as a complete run does.
+  (with-redefs [stages/project+ws-from-cwd (fn [_] nil)]
+    (let [c (t/run-context "/tmp/somewhere")]
+      (is (empty? (:has c)))
+      (is (= #{"workstream ledger" "convergence cache" "design record" "project stance"}
+             (set (:missing c))))))
+  (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                stages/discover-design-record (fn [_] {:shape "s"})
+                stages/read-stance (fn [_] "a stance")]
+    (let [c (t/run-context "/w")]
+      (is (empty? (:missing c))))))
+
+(deftest the-report-records-what-the-run-could-reach
+  ;; A thin run and a full one produced indistinguishable reports, and only the
+  ;; second was worth trusting.
+  (let [r (rreport/init {:run-id "r" :cwd "/w" :base "main" :started-at "t0"
+                         :context {:has [] :missing ["design record"]}})]
+    (is (= {:has [] :missing ["design record"]} (get-in r [:target :context]))))
+  (is (not (contains? (:target (rreport/init {:run-id "r" :cwd "/w" :base "main"
+                                              :started-at "t0"}))
+                      :context))
+      "absent rather than empty when nothing was asked"))

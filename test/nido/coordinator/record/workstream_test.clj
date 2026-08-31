@@ -826,3 +826,58 @@
           (is (= 1 (count (:entries (ws/read-ws :brian id))))
               "neither refusal wrote anything")))
       (finally (fs/delete-tree tmp)))))
+
+(deftest an-append-numbers-itself-from-the-disk-not-the-index
+  ;; An interrupted append writes its payload and dies before write!, and from
+  ;; then on the index says a number is free that the directory says is taken.
+  ;; One live workstream reached 39 files against 37 rows: two design records
+  ;; existed that no reader could see, and a review loop judged every ruling of
+  ;; a run against a record superseded twice.
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-root (constantly (str tmp))]
+        (let [id  (:id (ws/create! :brian {:stage :in-progress :external-refs []}))
+              _   (ws/append-entry! :brian id {:kind :note} "one")
+              dir (fs/path (cstate/workstream-dir :brian id) "entries")]
+          ;; Simulate the crash: a payload on disk that the index never learned
+          ;; about. The index still says 1; the directory says 2.
+          (spit (str (fs/path dir "0002-note.md")) "the lost append")
+          (is (= 2 (ws/highest-seq-on-disk :brian id)))
+          (is (= {:on-disk 2 :indexed 1 :missing 1} (ws/index-drift :brian id)))
+          (let [abs (ws/append-entry! :brian id {:kind :note} "three")]
+            (is (str/includes? abs "0003-note")
+                "the next append steps over the orphan rather than onto it")
+            (is (= "the lost append" (slurp (str (fs/path dir "0002-note.md"))))
+                "and the entry the index never knew about is still there"))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest an-append-refuses-to-write-over-an-existing-entry
+  ;; The last line of defence. It should not fire now that the seq comes off the
+  ;; disk, and it is what turns a future derivation bug into a loud failure
+  ;; rather than a record that quietly stops being what it was.
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-root (constantly (str tmp))]
+        (let [id  (:id (ws/create! :brian {:stage :in-progress :external-refs []}))
+              _   (ws/append-entry! :brian id {:kind :note} "one")
+              dir (fs/path (cstate/workstream-dir :brian id) "entries")]
+          (spit (str (fs/path dir "0002-note.md")) "already here")
+          ;; Forced back to the old derivation, which reads the index count and
+          ;; so computes 2 — a number the directory says is taken.
+          (with-redefs [ws/highest-seq-on-disk (constantly 0)]
+            (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                                  #"Refusing to overwrite"
+                                  (ws/append-entry! :brian id {:kind :note} "again"))))
+          (is (= "already here" (slurp (str (fs/path dir "0002-note.md"))))
+              "and it really did not write")))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest an-index-that-matches-the-disk-reports-no-drift
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-root (constantly (str tmp))]
+        (let [id (:id (ws/create! :brian {:stage :in-progress :external-refs []}))]
+          (ws/append-entry! :brian id {:kind :note} "one")
+          (ws/append-entry! :brian id {:kind :note} "two")
+          (is (nil? (ws/index-drift :brian id)))))
+      (finally (fs/delete-tree tmp)))))

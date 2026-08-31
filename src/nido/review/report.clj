@@ -10,11 +10,19 @@
 
 (defn ^{:malli/schema [:=> [:cat :map] :ReviewReport]}
   init
-  [{:keys [run-id cwd base started-at]}]
+  "The empty report a run folds its events into.
+
+   `:context` on the target says what this run could reach — the ledger, the
+   cache, a design record, a stance. A review outside a nido session runs
+   without any of them and reports exactly as a complete one does, so a thin run
+   and a full one were indistinguishable from their reports and only the second
+   was worth trusting."
+  [{:keys [run-id cwd base started-at context]}]
   {:schema     schema-version
    :run-id     run-id
    :status     "running"
-   :target     {:cwd cwd :base base :base-rev nil :files []}
+   :target     (cond-> {:cwd cwd :base base :base-rev nil :files []}
+                 context (assoc :context context))
    :started-at started-at
    :ended-at   nil
    :rounds     []

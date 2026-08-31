@@ -579,6 +579,10 @@
    :fix-noop             :escalate
    :fix-unrouted         :escalate
    :fix-declined         :escalate
+   ;; Somebody moved the working copy under a round in flight. Nothing is wrong
+   ;; with the branch; the round just reviewed a state that stopped being
+   ;; current, so the answer is to run it again, not to ask a human anything.
+   :workspace-drifted    :retry
    :max-iters            :escalate  ; a cap somebody asked for was reached
    :warden-indeterminate :escalate
    :arbiter-indeterminate :escalate  ; pre-rename, still readable in old ledgers

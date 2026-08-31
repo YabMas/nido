@@ -359,3 +359,41 @@
     (when (:ok? r)
       (jj/jj! cwd "bookmark" "delete" (:bookmark layer)))
     r))
+
+(defn ^{:malli/schema [:=> [:cat :Path :string] [:maybe :string]]}
+  resolve-rev
+  "The commit id `rev` names right now, or nil when it names nothing.
+
+   Used to pin `@` once per round. `@` is a moving target — it is whatever the
+   working copy happens to be — and every stage that re-resolves it is asking a
+   different question than the one the round started with.
+
+   nil when the workspace cannot be asked at all. The drift check this feeds is
+   a guard, and a guard that cannot run must not become a failure of the thing
+   it guards: an unpinnable round proceeds exactly as it did before there was a
+   check, which is the behaviour it is an improvement on."
+  [cwd rev]
+  (try
+    (let [{:keys [exit out]} (jj/jj! cwd "log" "-r" rev "-T" "commit_id" "--no-graph")]
+      (when (zero? exit)
+        (not-empty (str/trim (or out "")))))
+    (catch Throwable _ nil)))
+
+(defn ^{:malli/schema [:=> [:cat :Path :string] :boolean]}
+  descends-from?
+  "Is the working copy still at or above `rev`?
+
+   False means somebody moved the tree under a round in flight — a rebase, an
+   abandon, another session sharing the workspace. The round's reviews were of
+   content that is no longer what `@` means, so its fixes would land somewhere
+   nobody reviewed.
+
+   TRUE when the workspace cannot be asked, for the same reason `resolve-rev`
+   returns nil: this guard refusing on its own inability would stop rounds that
+   are perfectly fine, which is a worse failure than the one it prevents."
+  [cwd rev]
+  (try
+    (let [{:keys [exit out]} (jj/jj! cwd "log" "-r" (str rev "::@") "-T" "commit_id\n"
+                                     "--no-graph")]
+      (and (zero? exit) (boolean (not-empty (str/trim (or out ""))))))
+    (catch Throwable _ true)))
