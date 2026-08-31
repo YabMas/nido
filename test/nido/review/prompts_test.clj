@@ -12,6 +12,13 @@
    :rejected   [{:alternative "round at render time" :why-not "money math in the view"}]
    :standing   {:relation :challenges :note "money math needs an accumulator"}})
 
+(def ^:private a-toc
+  "Two layers. Composition rules only exist where there is a composition, so a
+   test about them has to hand the warden a stack — an empty toc now means a
+   flat branch, and the prompt correctly stops talking about layers."
+  [{:label "core" :claim "the ledger holds a decision"}
+   {:label "wiring" :claim "the surface can reach it"}])
+
 (def ^:private a-brief
   {:subject "refactor(pay): fold the rounding into the aggregate"
    :mode :mechanical
@@ -52,8 +59,10 @@
   ;; down. Collapsing them would send every seam finding to a fixer on exactly
   ;; the workstreams with the least written down about their shape.
   (let [out (prompts/warden-prompt {:findings findings :history [] :design nil})]
-    (is (str/includes? out "misplaced-seam or order-dependence finding is still `recut`"))
-    (is (str/includes? out "does not turn on the design record"))))
+    (is (str/includes? out "The RECUT kinds above are still `recut`"))
+    (is (str/includes? out "misplaced-seam \u2192 fold")
+        "which kinds those are is derived from the taxonomy, not written out here")
+    (is (str/includes? out "neither case turns on the"))))
 
 (deftest warden-prompt-marks-the-stance-as-framing-not-checklist
   (let [out (prompts/warden-prompt {:findings findings :history [] :design design
@@ -99,7 +108,8 @@
       "the count is read off the list, so a new destination cannot leave it stale"))
 
 (deftest warden-prompt-assigns-a-composition-finding-to-the-highest-layer
-  (let [out (prompts/warden-prompt {:findings findings :history [] :design design})]
+  (let [out (prompts/warden-prompt {:findings findings :history [] :design design
+                                    :toc a-toc})]
     (is (str/includes? out "assign it to the HIGHEST layer involved"))))
 
 (deftest toc-block-is-a-map-of-claims-and-files-not-diffs
@@ -248,7 +258,65 @@ layers, it is not yours"))
 (deftest warden-prompt-attributes-a-composition-finding-by-what-it-spans
   ;; The highest-layer rule itself is guarded above; this is the new half — the
   ;; warden is no longer guessing the span off file lists, the pass reports it.
-  (let [out (prompts/warden-prompt {:findings findings :history [] :design design})]
+  (let [out (prompts/warden-prompt {:findings findings :history [] :design design
+                                    :toc a-toc})]
     (is (str/includes? out "names the ones it spans after `across`"))
     (is (str/includes? out "spans only ONE layer")
         "a stack finding naming one layer is that layer's own, reported twice")))
+
+(deftest an-unlayered-branch-is-never-asked-for-an-owner-layer
+  ;; With no layers there is no label to attribute to, and asking anyway got a
+  ;; file path back on every ruling of a run — a nonsense value the loop then
+  ;; absorbed in silence.
+  (let [flat (prompts/warden-prompt {:findings findings :history [] :design design})
+        lay  (prompts/warden-prompt {:findings findings :history [] :design design
+                                     :toc a-toc})]
+    (is (not (str/includes? flat "\"owner_layer\":"))
+        "the field is absent from the answer shape, not merely unexplained")
+    (is (str/includes? flat "there is no owner_layer to give"))
+    (is (str/includes? flat "single unlayered branch"))
+    (is (str/includes? lay "\"owner_layer\":"))))
+
+(deftest a-multi-layer-stack-finding-is-not-closed-as-a-duplicate
+  ;; The one-layer rule says a stack finding naming a single layer belongs to
+  ;; that layer. Applied to two, it swallows the only cut-level signal a round
+  ;; produced — the remedy can be a duplicate while the observation is not.
+  (let [out (prompts/warden-prompt {:findings findings :history [] :design design
+                                    :toc a-toc})]
+    (is (str/includes? out "spanning TWO"))
+    (is (str/includes? out "Do not close it `duplicate`"))
+    (is (str/includes? out "absorbs the only cut-level signal"))))
+
+(deftest the-warden-can-park-a-recurrence-with-no-design-record
+  ;; It diagnosed a three-round oscillation and had no disposition for it, so it
+  ;; ruled fix a third time. The licence rests on the run's own history.
+  (let [out (prompts/warden-prompt {:findings findings :history [] :design nil})]
+    (is (str/includes? out "RECURRENCE"))
+    (is (str/includes? out "does NOT need a design record"))
+    (is (str/includes? out "Park on RECURRENCE still applies"))))
+
+(deftest a-cut-kind-with-no-mechanical-remedy-is-not-a-fixers-work
+  ;; claim-falsified asks about the cut and names no move the loop can make.
+  ;; Hardcoding two kind names sent it to fixers, and their minimal edits made
+  ;; the seam harder to see rather than gone.
+  (let [out (prompts/warden-prompt {:findings findings :history [] :design design
+                                    :toc a-toc})
+        cut-kinds (->> prompts/composition-kinds (filter #(= :cut (:asks %))))]
+    (is (str/includes? out "NOT A FIXER'S WORK"))
+    (doseq [k (remove :remedy cut-kinds)]
+      (is (str/includes? out (str "- " (:kind k)))
+          (str (:kind k) " is listed as something no fixer should get")))
+    (doseq [k (filter :remedy prompts/composition-kinds)]
+      (is (str/includes? out (str "- " (:kind k) " \u2192 " (name (:remedy k))))
+          (str (:kind k) " is listed as a recut with its move")))))
+
+(deftest the-warden-sees-the-designs-claimed-decomposition
+  ;; Without it the warden cannot tell that the stack has three layers where the
+  ;; design named two — a finding about the cut nothing else in the loop reaches.
+  (let [out (prompts/warden-prompt
+             {:findings findings :history [] :toc a-toc
+              :design (assoc design :layers [{:claim "the ledger holds a decision"
+                                              :mode :structural}])})]
+    (is (str/includes? out "CLAIMED DECOMPOSITION"))
+    (is (str/includes? out "the ledger holds a decision"))
+    (is (str/includes? out "that is a finding about the CUT"))))

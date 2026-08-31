@@ -71,8 +71,11 @@
    It is what convergence and the carried answers both read, so the two cannot
    disagree about whether a finding is still open."
   [{:disposition :fix
-    :means (str "a real defect. It will be handed to a fixer working on\n"
-                "  owner_layer.")}
+    ;; Deliberately does not name owner_layer. On an unlayered branch that field
+    ;; is not in the shape at all, and a vocabulary entry that references it
+    ;; would reintroduce the very prompt the flat case exists to suppress. Where
+    ;; there ARE layers, the PER FINDING block says which one the fixer gets.
+    :means "a real defect. It will be handed to a fixer."}
    {:disposition :closed
     :settles? true
     :requires :authority
@@ -98,19 +101,59 @@
                 "  without a reason is indistinguishable from an oversight, and\n"
                 "  the next round has no way to tell it was ever decided.")}
    {:disposition :recut
-    :means (str "the remedy is the SHAPE of the stack rather than a line in it.\n"
-                "  Its `kind` is order-dependence, misplaced-seam or\n"
-                "  duplicated-across-layers, and its `across` names the layers it\n"
+    :means (str "the remedy is the SHAPE of the stack rather than a line in it,\n"
+                "  and the loop can perform it. Its `kind` is one of the kinds\n"
+                "  listed under RECUT below, and its `across` names the layers it\n"
                 "  spans. The loop will move or merge them and let the next round\n"
                 "  judge the result. Do NOT send one of these to a fixer: a patch\n"
                 "  on one side of a bad seam makes the bad seam permanent and lets\n"
                 "  the round converge reporting success.")}
    {:disposition :park
-    :means (str "no fix, and nothing above fits: the finding contradicts a named\n"
-                "  invariant of the design, so it is a decision rather than a\n"
-                "  repair, and it is for the human. Reach for this only there —\n"
-                "  a defect whose remedy is the stack's shape is `recut`, and one\n"
-                "  that is true and not worth doing is `declined`.")}])
+    :means (str "no fix, and nothing above fits: this is a decision rather than\n"
+                "  a repair, and it is for the human. Two grounds, and only two.\n"
+                "  (a) The finding contradicts a named invariant of the design.\n"
+                "  (b) RECURRENCE: you have already had this defect fixed in an\n"
+                "  earlier round — you set `same_as` on it — and it is back. A\n"
+                "  third attempt at something two fixes did not settle is not a\n"
+                "  repair the loop knows how to make, whatever the fix prompt is\n"
+                "  told. Ground (b) does NOT need a design record: it is a fact\n"
+                "  about this run's own history, which you are holding.\n"
+                "  Otherwise: a defect whose remedy is the stack's shape is\n"
+                "  `recut`, and one that is true and not worth doing is\n"
+                "  `declined`.")}])
+
+;; Read by disposition-block, which is rendered long after load. Declared rather
+;; than moved so the kinds taxonomy stays beside the reviewer prompt it teaches.
+(declare composition-kinds)
+
+(defn- kinds-asking [asks] (filter #(= asks (:asks %)) composition-kinds))
+
+(defn- cut-routing-block
+  "Which composition kinds the loop can act on, and which it cannot — derived
+   from the taxonomy rather than written out beside it.
+
+   The distinction is `:remedy`. A kind that has one names a move the reshape
+   stage can actually perform, so `recut` is a real destination for it. A kind
+   that asks about the CUT and has no remedy — `claim-falsified` is the case —
+   names a defect whose repair is a decision about where a boundary belongs, and
+   there is no mechanical move for that. Hardcoding two kind names here sent
+   those to fixers instead, and a fixer's minimal edit on one side of a
+   misplaced seam makes the seam permanent while the round reports success."
+  []
+  (let [recut  (filter :remedy composition-kinds)
+        no-fix (remove :remedy (kinds-asking :cut))]
+    (str "RECUT — kinds the loop can act on mechanically. Use `recut` for these:\n"
+         (->> recut
+              (map #(str "- " (:kind %) " → " (name (:remedy %)) "\n"))
+              (apply str))
+         "\n"
+         "NOT A FIXER'S WORK — kinds that ask where a boundary belongs and name\n"
+         "no move the loop can make. These are decisions: `park` them, or\n"
+         "`deviation` them against the claim they contradict. Handing one to a\n"
+         "fixer asks for a minimal edit to a question about shape, and what comes\n"
+         "back makes the seam harder to see, not gone:\n"
+         (->> no-fix (map #(str "- " (:kind %) "\n")) (apply str))
+         "\n")))
 
 (defn- disposition-block
   "The vocabulary rendered for the warden, plus the rule that binds it.
@@ -134,7 +177,8 @@
        " each require their extra field. A `closed` with no authority, or\n"
        "a `deviation` with no claim in `of`, is not a decision — it is a shrug,\n"
        "and it is how a review quietly stops reviewing. If you cannot name one,\n"
-       "the answer is fix.\n\n"))
+       "the answer is fix.\n\n"
+       (cut-routing-block)))
 
 (def composition-kinds
   "The kinds of defect that exist ONLY in the composition of layers, each paired
@@ -403,11 +447,28 @@
 (defn- design-block
   "The design record, rendered for the warden. This is the yardstick: findings are
    judged against these invariants and nothing else. :rejected is included because
-   a finding that re-proposes a rejected alternative is *answered* rather than new."
-  [{:keys [shape invariants rejected standing]}]
+   a finding that re-proposes a rejected alternative is *answered* rather than new.
+
+   The claimed decomposition is here for a different reason than the invariants.
+   The warden judges a STACK, and without the design's own layer claims it cannot
+   see that the stack in front of it has three layers where the design named two
+   — a mismatch that is a finding about the cut, and one nothing else in the loop
+   can reach. `record.clj` already renders it this way for the record judge; the
+   warden was the reader that needed it and did not get it."
+  [{:keys [shape invariants rejected standing layers]}]
   (str "THE DESIGN THIS CHANGE COMMITTED TO — judge the findings against this:\n"
        "Shape: " shape "\n"
        "Invariants:\n" (bullets invariants) "\n"
+       (when (seq layers)
+         (str "CLAIMED DECOMPOSITION — one claim per layer, bottom to top. The stack\n"
+              "you are judging should correspond to these. If it does not — a layer\n"
+              "the design never named, two claims folded into one, an order that\n"
+              "does not match — that is a finding about the CUT, and you are the\n"
+              "only reader positioned to make it:\n"
+              (bullets (map #(str (:claim %)
+                                  (when-let [m (:mode %)] (str " (" (name m) ")")))
+                            layers))
+              "\n"))
        (when (seq rejected)
          (str "Already considered and rejected. A finding that re-proposes one of\n"
               "these is ANSWERED, not new — unless it gives a reason the rejection\n"
@@ -489,16 +550,28 @@
    deliberate and load-bearing. It is the component that decides to interrupt a
    human, so its inputs have to be reconstructable from the report afterwards."
   [{:keys [findings history design stance toc answered seen]}]
-  (str
-   "You are the WARDEN of an automated code-review loop over a STACK of layers.\n"
-   "You are the only reader with a view across all of them.\n\n"
+  ;; A branch with no layers is reviewed flat, and there is then no layer label
+  ;; for a finding to be attributed to. Asked for one anyway, the warden supplied
+  ;; the only stack-shaped thing it had — a file path — on every ruling of the
+  ;; run, and the loop absorbed the nonsense silently. Asking only where an
+  ;; answer exists is cheaper than validating one that never should have been
+  ;; requested.
+  (let [layered? (boolean (seq toc))]
+   (str
+   "You are the WARDEN of an automated code-review loop over "
+   (if layered? "a STACK of layers.\n" "a single unlayered branch.\n")
+   (if layered?
+     "You are the only reader with a view across all of them.\n\n"
+     "There are no layers: the branch was reviewed flat.\n\n")
    "Return EXACTLY one fenced ```json block, nothing after it, matching:\n"
    "{\"decision\": \"continue|stop|escalate\",\n"
    " \"reason\": \"...\",\n"
    " \"findings\": [{\"id\": \"<finding id>\",\n"
    "               \"same_as\": \"<id of the earlier-round finding this is the\n"
    "                             same defect as, or null>\",\n"
-   "               \"owner_layer\": \"<layer label from the stack below>\",\n"
+   (if layered?
+     "               \"owner_layer\": \"<layer label from the stack below>\",\n"
+     "")
    "               \"disposition\": \""
    (clojure.string/join "|" (map (comp name :disposition) disposition-vocabulary))
    "\",\n"
@@ -512,17 +585,33 @@
    "- escalate: a finding CONTRADICTS A NAMED INVARIANT of the design below —\n"
    "  the design is in question, not its execution. Name the invariant in your\n"
    "  reason. Do not escalate because a finding merely feels fundamental.\n\n"
-   "PER FINDING — owner_layer first. The layer that REPORTED a finding is often\n"
-   "not the layer that caused it: a defect seen from an upper layer frequently\n"
-   "originates below. Use the file lists in the stack map to attribute it, and\n"
-   "say so in `because` when you move one.\n"
-   "A finding from the `stack` pass exists only in the COMPOSITION of layers,\n"
-   "and names the ones it spans after `across`. Use them:\n"
-   "assign it to the HIGHEST layer involved, because that is the first point in\n"
-   "the stack at which the defect actually exists; every layer below it is\n"
-   "individually fine. A `stack` finding that spans only ONE layer is by its own\n"
-   "account not a composition defect — that layer's own review holds it, so\n"
-   "close it `duplicate` unless nothing from that layer reported it.\n\n"
+   (if-not layered?
+     (str "PER FINDING — there is no owner_layer to give and the field is not in\n"
+          "the shape above. Do not invent one, and do not put a file path where a\n"
+          "layer label would go: a flat branch has exactly one place a defect can\n"
+          "live, and naming it adds nothing.\n\n")
+     (str
+      "PER FINDING — owner_layer first. It is the layer the fixer will work on.\n"
+      "The layer that REPORTED a finding is often not the layer that caused it:\n"
+      "a defect seen from an upper layer frequently originates below. Use the\n"
+      "file lists in the stack map to attribute it, and say so in `because` when\n"
+      "you move one.\n"
+      "A finding from the `stack` pass exists only in the COMPOSITION of layers,\n"
+      "and names the ones it spans after `across`. Use them:\n"
+      "assign it to the HIGHEST layer involved, because that is the first point in\n"
+      "the stack at which the defect actually exists; every layer below it is\n"
+      "individually fine. A `stack` finding that spans only ONE layer is by its own\n"
+      "account not a composition defect — that layer's own review holds it, so\n"
+      "close it `duplicate` unless nothing from that layer reported it.\n"
+      "That rule is for ONE layer and stops there. A `stack` finding spanning TWO\n"
+      "OR MORE layers is a claim about the cut, and it stays one even when the\n"
+      "repair it suggests is already being made somewhere: the remedy can be a\n"
+      "duplicate while the observation is not. Do not close it `duplicate` — the\n"
+      "close absorbs the only cut-level signal the round produced, and a run can\n"
+      "converge having silently discarded the finding that mattered most. Rule on\n"
+      "the observation itself: `deviation` against the claim it departs from, or\n"
+      "`park` when it contradicts a named invariant. Either leaves a human\n"
+      "something to read.\n\n"))
    "SAME_AS — is this a defect we have already seen?\n"
    "A reviewer starts fresh every round and writes its own words, so one defect\n"
    "comes back under a new title, at a line the last round's fixes moved. You are\n"
@@ -544,9 +633,12 @@
      (str (design-block design) "\n")
      (str "No design record on this workstream. Weigh the findings on their own\n"
           "merits, and do NOT park anything for contradicting an invariant: with\n"
-          "no stated invariant there is nothing for a finding to contradict. A\n"
-          "misplaced-seam or order-dependence finding is still `recut` — that\n"
-          "case does not turn on the design record.\n\n"))
+          "no stated invariant there is nothing for a finding to contradict.\n"
+          "Park on RECURRENCE still applies — it rests on this run's history,\n"
+          "which you have, and not on any record.\n"
+          "The RECUT kinds above are still `recut`, and the kinds listed as NOT A\n"
+          "FIXER'S WORK are still not a fixer's — neither case turns on the\n"
+          "design record.\n\n"))
    (when stance (str (stance-block stance) "\n"))
    (when-let [t (toc-block toc)] (str t "\n"))
    (answered-block answered)
@@ -554,4 +646,4 @@
    "History of prior rounds (findings + what was fixed):\n"
    (pr-str history) "\n\n"
    "THIS ROUND'S FINDINGS:\n\n"
-   (findings-list findings)))
+   (findings-list findings))))
