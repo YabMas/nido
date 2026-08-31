@@ -432,16 +432,10 @@
          (catch Exception e
            (core/log-step (str "warning: failed to write profile snapshot: "
                                (ex-message e)))))
-    ;; Thread :owned-by-run and the resolved :run-dir from opts into the
-    ;; in-memory session-edn the launcher sees, so it can decorate Run-owned
-    ;; sessions (resume shim + run-link) without resolving a run-id itself.
-    ;; Project session.edn on disk is shared and stays untouched.
-    (try (launcher/write-artifacts! final-ctx
-                                    (cond-> session-edn
-                                      (:owned-by-run opts)
-                                      (assoc :owned-by-run (:owned-by-run opts))
-                                      (:run-dir opts)
-                                      (assoc :run-dir (:run-dir opts))))
+    ;; The owning Run's directory travels as its own argument: it is a per-session fact, and
+    ;; session.edn — the project's shared declaration — is not where one belongs. nil when no
+    ;; Run owns the session.
+    (try (launcher/write-artifacts! final-ctx session-edn (:run-dir opts))
          (catch Exception e
            (core/log-step (str "warning: failed to write launcher artifacts: "
                                (ex-message e)))))
@@ -505,12 +499,7 @@
             ;; no artifacts yet; (b) artifacts could have been deleted out
             ;; of band. Same content as a fresh start writes, derived from
             ;; the persisted session context.
-            (try (launcher/write-artifacts! (:context existing)
-                                            (cond-> session-edn
-                                              (:owned-by-run opts)
-                                              (assoc :owned-by-run (:owned-by-run opts))
-                                              (:run-dir opts)
-                                              (assoc :run-dir (:run-dir opts))))
+            (try (launcher/write-artifacts! (:context existing) session-edn (:run-dir opts))
                  (catch Exception e
                    (core/log-step (str "warning: refresh launcher artifacts: "
                                        (ex-message e)))))

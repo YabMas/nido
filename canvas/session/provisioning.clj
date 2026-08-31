@@ -15,10 +15,10 @@
    scripted — which is what lets a service reference `{{pg.port}}` before Postgres has chosen
    one, and what keeps nido free of per-project shell.
 
-   ⚠ The `session-edn` this hands to the launcher is the project's SHARED configuration,
-   enriched IN MEMORY with per-session facts (`:run-dir`, `:owned-by-run`) at the call site.
-   The disk copy stays untouched, and the comment there says so — but a per-session record that
-   does not exist is being faked by decorating a shared one. See the judgement list."
+   The `session-edn` this hands to the launcher is the project's SHARED configuration and
+   nothing else. Per-session facts — the owning Run's directory — travel as their own argument.
+   They used to be merged into it in memory, which made a shared record impersonate a
+   per-session record that does not exist."
   (Operation session-edn-path "Where a project's session configuration lives."
     {:signature [:=> [:catn [:project-name ProjectName]] Path]})
   (Operation read-session-edn "A project's session configuration, or nil when it has none."

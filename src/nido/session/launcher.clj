@@ -837,12 +837,22 @@
         (fs/delete path)
         (core/log-step (str "Removed legacy " path))))))
 
-(defn ^{:malli/schema [:=> [:cat :map :map] :any]}
+(defn ^{:malli/schema [:=> [:cat :map :map [:maybe :Path]] :any]}
   write-artifacts!
   "Write per-session launcher artifacts into the session home. Called from
-   start-services! after services are up. session-edn is passed in so we
-   can read DB credentials without re-loading from disk."
-  [ctx session-edn]
+   start-services! after services are up.
+
+   Three arguments, because the three facts it needs are three different KINDS of fact and
+   collapsing any two of them hides one. `ctx` is what this session resolved — its ports, its
+   worktree. `session-edn` is what the PROJECT declared: shared by every session of it, read
+   here only for DB credentials so nothing re-loads it from disk. `run-dir` is the Run that
+   owns this session, which is neither — a per-session fact known only to the caller that
+   spawned it, and nil for a session a human started.
+
+   It used to arrive by decorating the in-memory `session-edn` with a `:run-dir` key. That read
+   as project configuration and was not: the shared record was being made to impersonate a
+   per-session one that does not exist. An argument says the same thing without the disguise."
+  [ctx session-edn run-dir]
   (let [session-name (get-in ctx [:session :name])
         worktree     (get-in ctx [:session :project-dir])
         project-name (get-in ctx [:session :project-name])
@@ -859,8 +869,7 @@
     (let [profile      (read-profile-for-session instance-id)
           home         (state/session-home-dir project-name session-name)
           link-entries (when instance-id (links/read-links instance-id))
-          ws-ctx       (when-let [run-dir (:run-dir session-edn)]
-                         (run-workstream-context :run-dir run-dir))
+          ws-ctx       (when run-dir (run-workstream-context :run-dir run-dir))
           ctx-doc      (render-context (merge {:session-name     session-name
                                                :project-name     project-name
                                                :worktree         worktree
@@ -907,7 +916,7 @@
         (purge-legacy-artifacts! (get-in ctx [:session :instance-id]))
         (catch Exception e
           (core/log-step (str "warning: purge legacy artifacts: " (ex-message e)))))
-      (when-let [run-dir (:run-dir session-edn)]
+      (when run-dir
         (try
           (resume-shim/write! home run-dir)
           (core/log-step (str "Wrote " home "/bin/claude (resume shim) + run-link"))

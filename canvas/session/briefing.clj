@@ -40,8 +40,10 @@
     {:signature [:=> [:catn [:project-name ProjectName]] [:maybe :string]]})
   (Operation nido-add-dirs "The directories an agent needs beyond its worktree."
     {:signature [:=> [:catn] [:vector :string]]})
-  (Operation write-artifacts! "Write every session-home artifact."
-    {:signature [:=> [:catn [:ctx :map] [:session-edn :map]] :any]
+  (Operation write-artifacts!
+    "Write every session-home artifact. Takes the owning Run's directory as its own argument —
+     a per-session fact, kept out of the project's shared session.edn."
+    {:signature [:=> [:catn [:ctx :map] [:session-edn :map] [:run-dir [:maybe Path]]] :any]
      :delegates [claude-md-path agents-md-path mcp-path write-session-mcp!
                  read-project-briefing design/describe]})
   (Operation session-briefing "The briefing text, from persisted state and live readings."
