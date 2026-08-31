@@ -719,9 +719,10 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                    (when remedy [(keyword kind) remedy])))
         prompts/composition-kinds))
 
-(defn ^{:malli/schema [:=> [:cat :any :Finding] [:maybe :map]]}
+(defn ^{:malli/schema [:=> [:cat :any :Finding] :map]}
   reshape-plan
-  "What to do about one finding whose remedy is the stack's shape, or nil.
+  "What to do about one finding whose remedy is the stack's shape — or, when
+   nothing can be done about it here, which precondition failed.
 
    `across` names the layers the defect spans, in stack order, so the lower one
    is first and the upper one last. For an order-dependence that is the whole
@@ -730,18 +731,27 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
    to correct — the boundary itself is the defect — so the two are folded into
    one.
 
-   nil when the finding names fewer than two layers of this stack. A composition
-   finding that spans one layer is by its own account not a composition defect,
-   and one naming a label the stack does not have cannot be acted on without
-   guessing which layer was meant."
+   Never nil. A stage that cannot act still has to say why: a finding naming one
+   layer of this stack is by its own account not a defect of the cut, and a kind
+   whose remedy is to complete a layer is not a reshape at all — but both used
+   to leave the round with an empty phase, indistinguishable from a round that
+   had nothing to do."
   [stack finding]
   (let [by-label (into {} (map (juxt layer-label identity)) stack)
-        named    (keep by-label (:layers finding))]
-    (when (<= 2 (count named))
-      (let [lower (first named)
-            upper (last named)]
-        (when-let [remedy (remedy-by-kind (:kind finding))]
-          {:remedy remedy :lower lower :upper upper})))))
+        named    (vec (keep by-label (:layers finding)))
+        remedy   (remedy-by-kind (:kind finding))]
+    (cond
+      (> 2 (count named))
+      {:refused :unnamed-layers
+       :because (str "it names " (count named) " layer of this stack; a defect "
+                     "inside one layer is not a defect of the cut")}
+
+      (nil? remedy)
+      {:refused :no-remedy
+       :because (str (if-let [k (:kind finding)] (name k) "this kind")
+                     " is repaired by completing a layer, not by moving a boundary")}
+
+      :else {:remedy remedy :lower (first named) :upper (peek named)})))
 
 (defn- reshape!
   "Carry out one plan. A reorder that will not apply falls back to a fold, which
@@ -757,33 +767,66 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
         (assoc (layers/fold! cwd base upper lower) :did :fold
                :after-reorder-refused (:reason r))))))
 
+(defn- reshape-outcome
+  "What became of one recut finding this round, as the phase will report it.
+
+   Every recut the round held gets one, acted on or not. A reshape that cannot
+   run is this round's most consequential silence: the warden withheld the
+   finding from the fixers precisely BECAUSE the remedy was the shape, so a
+   stage that then does nothing and records nothing leaves the finding with no
+   path at all — raised, re-raised, and finally reported unfixable with no trace
+   that its one remedy was attempted once and rolled back."
+  [finding plan extra]
+  (merge {:handle (:handle finding)
+          :title  (:title finding)}
+         (when-let [k (:kind finding)] {:kind (name k)})
+         (when-let [l (:lower plan)] {:lower (layer-label l)})
+         (when-let [u (:upper plan)] {:upper (layer-label u)})
+         extra))
+
 (defn- run-reshape-stage
   [ctx]
   (let [{:keys [cwd base dry-run?]} (:config ctx)
-        tried (get-in ctx [:carry :reshaped] #{})
-        stack (session-stack cwd base)
-        todo  (into []
-                    (comp (filter #(= :recut (:disposition %)))
-                          (remove #(contains? tried (:handle %)))
-                          (keep (fn [f]
-                                  (when-let [p (reshape-plan stack f)]
-                                    (assoc p :finding f)))))
-                    (:findings ctx))]
-    (if (or dry-run? (empty? todo))
+        tried  (get-in ctx [:carry :reshaped] #{})
+        stack  (session-stack cwd base)
+        recuts (filterv #(= :recut (:disposition %)) (:findings ctx))]
+    (if (or dry-run? (empty? recuts))
       ctx
-      ;; One per round. A second reshape would be planned against a
-      ;; stack the first one just rewrote, and the labels it resolved
-      ;; are already stale.
-      (let [{:keys [finding] :as plan} (first todo)
-            result (reshape! cwd base plan)]
-        (layers/restore-top! cwd (session-stack cwd base))
-        (-> ctx
-            (update-in [:carry :reshaped] (fnil conj #{}) (:handle finding))
-            (assoc :reshape (merge {:handle (:handle finding)
-                                    :title  (:title finding)
-                                    :lower  (layer-label (:lower plan))
-                                    :upper  (layer-label (:upper plan))}
-                                   result)))))))
+      ;; One attempt per round. A second would be planned against a stack the
+      ;; first one just rewrote, and the labels it resolved are already stale.
+      (let [plans (mapv (fn [f] [f (reshape-plan stack f)]) recuts)
+            pick  (first (keep-indexed
+                          (fn [i [f p]]
+                            (when (and (:remedy p) (not (contains? tried (:handle f)))) i))
+                          plans))
+            done  (when pick (reshape! cwd base (second (nth plans pick))))]
+        (when pick (layers/restore-top! cwd (session-stack cwd base)))
+        (cond-> (assoc ctx :reshapes
+                       (vec (map-indexed
+                             (fn [i [f p]]
+                               (reshape-outcome
+                                f p
+                                (cond
+                                  (= i pick)
+                                  (if (:ok? done)
+                                    {:outcome (name (:did done))}
+                                    {:outcome "refused" :because (:reason done)})
+
+                                  (:refused p)
+                                  {:outcome (name (:refused p)) :because (:because p)}
+
+                                  (contains? tried (:handle f))
+                                  {:outcome "already-attempted"
+                                   :because (str "this run's one attempt at it was made "
+                                                 "and did not clear it")}
+
+                                  :else
+                                  {:outcome "deferred"
+                                   :because (str "another reshape ran this round, so the "
+                                                 "stack this was planned against has moved")})))
+                             plans)))
+          pick (update-in [:carry :reshaped] (fnil conj #{})
+                          (:handle (first (nth plans pick)))))))))
 
 (def reshape-stage
   "Findings whose remedy is the shape of the stack, acted on once each.
@@ -797,7 +840,12 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
    is what makes the attempt safe to make on a maybe: a defect the reshape did
    not clear comes back next round under new words, and without the handle it
    would be reshaped again every round for as long as the run lasted. The set
-   rides in :carry, which is the only thing a round hands the next one."
+   rides in :carry, which is the only thing a round hands the next one.
+
+   Reports on every recut it held, including the ones it did not act on. Acting
+   at most once each is what keeps the attempt cheap; saying so every round is
+   what keeps the silence from reading like a decision, because a recut is a
+   finding the warden has already kept away from the fixers."
   {:name :reshape
    :run  run-reshape-stage})
 

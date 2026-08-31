@@ -635,6 +635,10 @@
 (def ^:private two-layer-stack
   [{:bookmark "s--lower" :slug "lower"} {:bookmark "s--upper" :slug "upper"}])
 
+(def ^:private gapped-stack
+  [{:bookmark "s--a" :slug "a"} {:bookmark "s--b" :slug "b"}
+   {:bookmark "s--c" :slug "c"} {:bookmark "s--d" :slug "d"}])
+
 (deftest an-order-dependence-plans-the-upper-layer-below-the-lower
   ;; `across` is in stack order, so the upper layer is the one reaching for
   ;; something the lower does not supply — moving it down is the repair.
@@ -648,15 +652,18 @@
                                                {:kind k :layers ["lower" "upper"]})))
         (str (name k) " has no order to correct — the boundary is the defect"))))
 
-(deftest a-finding-naming-fewer-than-two-layers-of-this-stack-has-no-plan
-  (is (nil? (stages/reshape-plan two-layer-stack
-                                 {:kind :order-dependence :layers ["lower"]}))
+(deftest a-finding-this-stage-cannot-act-on-says-which-precondition-failed
+  (is (= :unnamed-layers
+         (:refused (stages/reshape-plan two-layer-stack
+                                        {:kind :order-dependence :layers ["lower"]})))
       "one layer is by its own account not a composition defect")
-  (is (nil? (stages/reshape-plan two-layer-stack
-                                 {:kind :order-dependence :layers ["lower" "gone"]}))
+  (is (= :unnamed-layers
+         (:refused (stages/reshape-plan two-layer-stack
+                                        {:kind :order-dependence :layers ["lower" "gone"]})))
       "a label this stack does not have cannot be acted on without guessing")
-  (is (nil? (stages/reshape-plan two-layer-stack
-                                 {:kind :broken-intermediate :layers ["lower" "upper"]}))
+  (is (= :no-remedy
+         (:refused (stages/reshape-plan two-layer-stack
+                                        {:kind :broken-intermediate :layers ["lower" "upper"]})))
       "a kind whose remedy is to complete a layer is not a reshape"))
 
 (deftest a-defect-is-reshaped-once-per-run
@@ -668,15 +675,33 @@
              :findings [{:handle "h-1" :disposition :recut :kind :order-dependence
                          :layers ["lower" "upper"]}]}]
     (with-redefs [stages/session-stack (fn [_ _] two-layer-stack)]
-      (is (nil? (:reshape ((:run stages/reshape-stage) ctx)))
-          "already attempted, so nothing is tried again"))))
+      (let [out ((:run stages/reshape-stage) ctx)]
+        (is (= ["already-attempted"] (mapv :outcome (:reshapes out)))
+            "nothing is tried again — and the round says so rather than passing in silence")))))
+
+(deftest every-recut-the-round-held-is-reported-on
+  ;; The silence this closes: a recut is withheld from the fixers BECAUSE the
+  ;; remedy is the shape, so a reshape phase that says nothing leaves the finding
+  ;; with no path at all — which is how one was raised four rounds running with
+  ;; no record that anything had ever been attempted.
+  (let [ctx {:config {:cwd "/w" :base "main"}
+             :carry  {:reshaped #{"h-2"}}
+             :findings [{:handle "h-1" :disposition :recut :kind :claim-falsified
+                         :layers ["a" "d"] :title "t1"}
+                        {:handle "h-2" :disposition :recut :kind :misplaced-seam
+                         :layers ["a" "d"] :title "t2"}
+                        {:handle "h-3" :disposition :fix :title "not a recut"}]}]
+    (with-redefs [stages/session-stack (fn [_ _] gapped-stack)]
+      (let [out (:reshapes ((:run stages/reshape-stage) ctx))]
+        (is (= ["no-remedy" "already-attempted"] (mapv :outcome out)))
+        (is (every? (comp seq :because) out) "each with the reason it could not run")))))
 
 (deftest a-dry-run-reshapes-nothing
   (let [ctx {:config {:cwd "/w" :base "main" :dry-run? true}
              :findings [{:handle "h-1" :disposition :recut :kind :order-dependence
                          :layers ["lower" "upper"]}]}]
     (with-redefs [stages/session-stack (fn [_ _] two-layer-stack)]
-      (is (nil? (:reshape ((:run stages/reshape-stage) ctx)))))))
+      (is (nil? (:reshapes ((:run stages/reshape-stage) ctx)))))))
 
 (deftest stance-path-falls-back-to-the-common-stance
   ;; Every project reaches a stance. Before the fallback, a project with no file

@@ -153,8 +153,9 @@
     {:signature [:=> [:catn [:cwd Path]] :map]})
   (Operation layer-label "A layer's label."
     {:signature [:=> [:catn [:layer :map]] :string]})
-  (Operation reshape-plan "What to do about one finding that asks for a reshape."
-    {:signature [:=> [:catn [:stack :any] [:finding Finding]] [:maybe :map]]})
+  (Operation reshape-plan
+    "What to do about one finding that asks for a reshape, or why nothing can be."
+    {:signature [:=> [:catn [:stack :any] [:finding Finding]] :map]})
   (Operation fix-plan "The findings the warden disposed of into fixes, by layer."
     {:signature [:=> [:catn [:stack :any] [:findings :any]] :any] :delegates [layer-label]})
   (Operation layer-fixer-session

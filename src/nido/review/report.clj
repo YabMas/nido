@@ -170,6 +170,11 @@
                                        (:rulings a))))
       :fix    (let [h (last (filter #(= (:iter ctx) (:iter %)) (:history ctx)))]
                 (assoc ph :fixes (vec (:fixes h)) :fixed-count (:fixed-count h)))
+      ;; What the stage decided about each recut, whether or not it could act.
+      ;; Kept because a reshape is the only remedy a recut has — the warden
+      ;; withholds it from the fixers — so an empty reshape phase is the report
+      ;; saying nothing about the one path the finding was left.
+      :reshape (assoc ph :reshapes (vec (:reshapes ctx)))
       ph)))
 
 (defn- resolve-target

@@ -33,7 +33,8 @@
     ;; per-layer "warden" phase from the stage that was folded in also lands
     ;; here; it carries no :decision, so it renders as a bare line.
     ("warden" "arbiter" "judge") "ruling"
-    "fix"    "fixing"
+    "fix"     "fixing"
+    "reshape" "reshaping"
     (:phase ph)))
 
 (defn- summary [ph]
@@ -56,6 +57,13 @@
                                                                      (min 8 (count (str (:commit %))))))
                                                          (:fixes ph)))
                (= "ok" (:status ph)) "no changes")
+    ;; Counted by outcome rather than summed, because "1 recut" says nothing a
+    ;; reader can act on and "1 span-has-holes" says the whole of it.
+    "reshape" (when (seq (:reshapes ph))
+                (->> (frequencies (map :outcome (:reshapes ph)))
+                     (sort-by (juxt (comp - val) key))
+                     (map (fn [[o n]] (str n " " o)))
+                     (str/join ", ")))
     nil))
 
 (defn- phase-line [ph target now]
@@ -185,6 +193,23 @@
                #(layer-glyph (:status %) now)
                layer-text))
 
+(defn- reshape-lines
+  "One indented line per recut the reshape stage held, plus its reason.
+
+   The reason is the point. Every one of these findings reached this stage
+   because the warden ruled the remedy was the stack's shape and kept it from
+   the fixers, so this phase is the only place a recut can be said to have been
+   answered — and `span-has-holes`, `already-attempted` and a jj rollback ask
+   three different things of a reader who has to finish the job by hand."
+  [ph]
+  (into []
+        (mapcat (fn [{:keys [title outcome because lower upper]}]
+                  (cond-> [(str indent "↯ " outcome
+                                (when (and lower upper) (str "  ·  " lower " … " upper))
+                                "  ·  " title)]
+                    because (conj (str indent "  " because)))))
+        (:reshapes ph)))
+
 (defn- phase-block [ph target now]
   (let [detail (case (:phase ph)
                  ;; Gated on the rows EXISTING, not on the phase being over.
@@ -194,6 +219,10 @@
                  ;; so what a COMPLETED run renders is unchanged by this.
                  "review" (when (seq (:layers ph))
                             (layer-lines ph (:layers target) now))
+                 ;; The reason, not just the verdict. A reshape refused for the
+                 ;; shape of the span and a reshape jj rolled back are the same
+                 ;; word to the loop and different work for whoever reads this.
+                 "reshape" (reshape-lines ph)
                  nil)]
     (str/join "\n" (cons (phase-line ph target now) (remove str/blank? detail)))))
 
