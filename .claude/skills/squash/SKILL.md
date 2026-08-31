@@ -137,6 +137,16 @@ republishing the whole stack as one branch beside the layers and contradicting
 `/prepare-draft-pr`'s "only `<session>--*` goes up". The glob is what makes the
 invariant hold regardless of what is tracked; it matches `/prepare-draft-pr` §2.
 
+**The glob excludes the session bookmark, not a previous arc's layers.** A
+session that has already landed layers still carries their bookmarks: a
+squash-merge leaves them pointing at commits that are not ancestors of trunk, so
+nothing prunes them and `glob:<session>--*` sweeps them back up alongside the
+live ones. Observed on a brian session holding eight layer bookmarks, five of
+them from arcs that had already shipped. Pushing those force-updates branches
+whose PRs are closed. Read the live layers from §1's `jj log -r 'trunk()..@'`
+and push those bookmarks by name, or delete the landed ones first — the glob is
+a floor, not the whole rule.
+
 **No `--allow-new`.** jj 0.42 removed the flag — a command carrying it exits
 `error: unexpected argument '--allow-new' found` and pushes nothing at all. `-b`
 already implies it: a bookmark that isn't tracking anything yet gets tracked
@@ -147,6 +157,31 @@ fine for a session's own branches.
 Then re-link, in case the shape changed since publish. `gh stack` needs the
 colocated source repo — it cannot run in this worktree. Re-derive `$SRC` here:
 **shell variables do not survive between commands** (`/stack` §4).
+
+**Export the bookmarks first, or the re-link is rejected.** `gh stack link`
+pushes the branches itself, with git, from `$SRC`. A session worktree is a
+NON-COLOCATED jj workspace whose `.jj/repo` points into that colocated repo, so
+the `jj git push` above updates the REMOTE while `$SRC`'s own
+`refs/heads/<session>--*` stay where they were — at the pre-rebase commits.
+`gh stack link` pushes those, and the remote refuses every branch at once:
+
+    ! [rejected]  <session>--<slug> (non-fast-forward)
+    ✗ failed to push branches: ... atomic push failed ... status: 2
+
+The rejection is protective — it does not overwrite what jj just pushed — but it
+aborts the link before any PR is touched. `jj git export` writes the bookmarks
+into the shared git repo, after which the same call is a fast-forward no-op and
+proceeds:
+
+```bash
+jj git export   # sync $SRC's refs with the bookmarks jj just pushed
+```
+
+It prints `Hint: Git doesn't allow a branch/tag name that looks like a parent
+directory of another` whenever ANY bookmark in the shared repo collides that way
+— usually another session's. That hint is not about this stack and does not stop
+these bookmarks exporting; confirm with `git -C "$SRC" rev-parse <branch>`
+against `origin/<branch>` rather than reading the hint as a failure.
 
 ```bash
 SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
@@ -320,6 +355,12 @@ re-derives the same bodies — idempotent, no append-drift.
   shell. Re-derive them in every block, or inline the values.
 - **Bare `jj git push`** — it also pushes the session bookmark when that bookmark
   is tracked. Always scope with `-b 'glob:<session>--*'` (§2).
+- **Pushing `glob:<session>--*` in a session that has already landed layers** —
+  the glob keeps the session bookmark out, not a shipped arc's layer bookmarks;
+  those survive a squash-merge pointing at commits trunk never took (§2).
+- **Calling `gh stack link` without `jj git export` first** — it pushes `$SRC`'s
+  pre-rebase refs, every branch is rejected non-fast-forward, and the link
+  aborts (§2).
 - **`jj bookmark list | grep -- '--'`** — that is repo-global and matches other
   sessions' layers. Anchor it: `grep "^<session>--"` (§1).
 - **Re-linking with PR numbers** — a re-link passes branch names, so a layer

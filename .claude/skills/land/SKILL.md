@@ -117,8 +117,16 @@ SLUG=$(jj git remote list | awk '/^origin/{print $2}' \
         | sed -E 's#^git@github\.com:##; s#^https://github\.com/##; s#\.git$##')
 SRC=$(cd .jj && cd "$(dirname "$(cat repo)")/.." && pwd)
 TRUNK=$(gh repo view "$SLUG" --json defaultBranchRef -q '.defaultBranchRef.name')
+jj git export   # sync $SRC's git refs with the bookmarks jj pushed — see below
 (cd "$SRC" && gh stack link --base "$TRUNK" <session>--<l1> <session>--<l2> <session>--<l3> --open 2>&1); echo "EXIT=$?"
 ```
+
+**`jj git export` is not optional before this call**, for the reason `/squash`
+§2 sets out: `gh stack link` pushes the branches itself from `$SRC`, whose git
+refs a non-colocated worktree's `jj git push` never updated, so it pushes
+pre-rebase commits and the remote rejects all of them non-fast-forward. Nothing
+is marked ready when that happens — the link aborts before it reaches the PRs,
+so this reads as "readiness silently did nothing" rather than as a push error.
 
 `--open` flips new and existing PRs from draft to ready for review — verified
 against both a newly-created and a pre-existing draft PR, each with an
@@ -247,9 +255,17 @@ finding on layer 2 is fixed *in layer 2*:
 
 ```bash
 jj new <layer-2-change-id>          # edit, then:
-jj squash --into <layer-2-change-id>
+jj squash -u --into <layer-2-change-id>
 jj git push -b 'glob:<session>--*'
 ```
+
+**`-u` is required here for the reason `/squash` §1 gives.** Folding a described
+commit into another described commit makes plain `jj squash` open `$EDITOR` to
+merge the two messages. Run headless there is nobody to answer it and the
+command hangs indefinitely — observed hanging 14 minutes on a `nvim` holding a
+`.jjdescription` tempfile, with no output and no failure. `-u` keeps the
+destination's message, which is what a fix folded into its layer wants anyway.
+Belt and braces for an unattended run: `JJ_EDITOR=true jj squash -u --into …`.
 
 Never append a fix commit on top of the stack. It lands the fix in the wrong PR,
 puts two commits in one layer, and leaves the layer it was meant for still
@@ -335,13 +351,31 @@ partial merge is a feature it ships**. `main` then carried three of seven layers
 for 2h01m, auto-deploying to staging the whole time, until a human noticed and
 re-enqueued the remainder by hand.
 
-#### The collapse: retarget, never re-create
+#### The collapse: unstack, then retarget — never re-create
 
 ```bash
+(cd "$SRC" && gh stack unstack <stack-number>)     # the number from §1
 gh pr edit <top-pr-number> -R "$SLUG" --base main
 ```
 
-That is the entire operation. **Retarget the existing top PR — do not open a new
+**The retarget alone is refused while the stack record exists:**
+
+    GraphQL: Cannot change the base branch because the pull request is part
+    of a stack. (updatePullRequest)
+
+GitHub locks a stacked PR's base — the same lock that makes `gh stack link` the
+only way to shape a stack (§2). `gh stack unstack` takes the stack NUMBER from
+§1, goes through the API so it works from anywhere in the repository, and
+removes the stack record **without touching the pull requests**: every one stays
+open on the base it had, with its reviews, its threads and its checks intact.
+Run it from `$SRC` like every other `gh stack` call.
+
+**Unstack before the merge, never after.** GitHub refuses to unstack a PR that
+is queued or has auto-merge enabled, and when any PR resists the whole stack is
+kept — so an unstack attempted after enqueueing can leave the record standing
+with no way to clear it.
+
+**Retarget the existing top PR — do not open a new
 one.** The top layer's branch already contains every layer beneath it, so moving
 its base to `main` makes its diff the whole arc without touching a commit.
 
@@ -401,6 +435,57 @@ gh pr merge <top-pr-number> -R "$SLUG" --auto
 rejects one that is passed; the queue's own `mergeMethod` decides, and pinning a
 method here would be pinning a value that is ignored. **`gh stack merge` is not
 used at all in this flow** — do not call both.
+
+**A repository can run a merge queue and still disable auto-merge, and then this
+call cannot reach the queue at all.** `--auto` is `enablePullRequestAutoMerge`
+under the skin, so such a repo answers:
+
+    GraphQL: Auto merge is not allowed for this repository
+    (enablePullRequestAutoMerge)
+
+and leaves the PR sitting at `mergeStateStatus: BLOCKED` beside a `mergeable:
+MERGEABLE` — a pair that reads like a failing gate and is really just an
+un-enqueued PR. Observed on brian, whose `main` carries the queue configuration
+quoted above with auto-merge off. The queue's own entry point takes no such
+setting:
+
+```bash
+PRID=$(gh pr view <top-pr-number> -R "$SLUG" --json id --jq '.id')
+gh api graphql -f query='mutation($id:ID!){enqueuePullRequest(input:{pullRequestId:$id}){mergeQueueEntry{position state}}}' -f id="$PRID"
+```
+
+Success returns the entry — `{"position":1,"state":"QUEUED"}` — and from there
+the watch below is unchanged.
+
+**Its refusals are the branch protection you are otherwise told not to guess
+at.** §6 says not to work out which checks are required, because `isRequired`
+comes back null and protection needs admin rights. This mutation answers that
+question by refusing, in one line, where `--auto` only ever says `BLOCKED`:
+
+    UNPROCESSABLE ... Pull request All comments must be resolved.
+
+Read the refusal, satisfy it, enqueue again.
+
+**That particular one is a review gate, so satisfy it as a reviewer would.** Every
+thread on the collapsed PR must be resolved. List them, reply on each with what
+changed, then resolve:
+
+```bash
+gh api graphql -f query='{repository(owner:"OWNER",name:"REPO"){pullRequest(number:N){
+  reviewThreads(first:50){nodes{id isResolved comments(first:1){nodes{author{login} path line}}}}}}}'
+gh api graphql -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}' -f id="<thread-id>"
+```
+
+**Resolving is a claim that the thread was answered, and it hides the thread from
+the reviewer's default view.** Resolve what §5 recorded as Fixed. A finding you
+DECLINED is answered by the reply that carries its reasoning, and resolving it
+buries that reasoning behind a fold — so when a decline is what stands between
+the arc and the queue, resolve it only with the reply already posted, and say in
+§9's report which threads were declined-then-resolved. Never resolve a thread you
+neither fixed nor answered: that is not satisfying the gate, it is removing it.
+
+Only the collapsed PR's threads gate the merge. The lower layers' threads do not
+— those PRs close unmerged (below) — so leave them as the review left them.
 
 `--auto` enqueues; it does not wait. Poll until it lands:
 
@@ -519,8 +604,13 @@ it, `/drive-home` records the outcome — `:implementation-completed` or
   don't re-request (§3).
 - A finding already replied to or already fixed → skip it. Thread replies are
   additive, so a second pass posts the same reasoning twice (§5).
+- Stack record already removed (a previous run reached §8 and halted after) →
+  §1's stacks endpoint returns empty, discovery falls through to `gh pr list`,
+  and the layers are still found. Do not read that as "never published".
 - Top PR's base already `main` → the collapse already happened; skip it and go
   straight to the merge (§8).
+- Top PR already queued → `enqueuePullRequest` answers that it is already in the
+  queue; no second entry, and the watch below is what you want anyway.
 - Top PR already merged or queued → `gh pr merge --auto` reports it; no second
   merge.
 - Already merged → §8's watch returns immediately; still emit the report.
@@ -553,6 +643,21 @@ it, `/drive-home` records the outcome — `:implementation-completed` or
 - **Omitting `--base "$TRUNK"` on the `gh stack link --open` re-link** —
   force-resets the bottom PR's base to the repo default branch unless given
   explicitly; observed doing this unasked against a non-trunk base (§2).
+- **Retargeting the top PR while the stack record still stands** — GitHub locks
+  a stacked PR's base and refuses `gh pr edit --base`. `gh stack unstack <n>`
+  first, and before the merge, never after (§8).
+- **Reading `gh pr merge --auto`'s refusal as a gate** — a repo can run a merge
+  queue and disable auto-merge, and then `--auto` cannot reach the queue at all.
+  `BLOCKED` beside `MERGEABLE` is an un-enqueued PR, not a failing check; use
+  the `enqueuePullRequest` mutation, whose refusals name the protection (§8).
+- **Resolving a review thread you neither fixed nor answered** — resolving
+  claims the thread was addressed and folds it out of sight. It satisfies the
+  "all comments resolved" gate by removing the review, not by passing it (§8).
+- **`jj squash --into` without `-u`** — folding two described commits opens an
+  editor and hangs headless, silently (§5).
+- **Calling `gh stack link` without `jj git export`** — it pushes `$SRC`'s stale
+  refs, the remote rejects them non-fast-forward, and the link aborts before
+  marking anything ready (§2).
 - **Enqueueing the layers instead of collapsing them** — this is the failure this
   section exists to prevent. A queue merges its entries one at a time, so any
   failure mid-arc lands the layers below it and evicts the rest, leaving a

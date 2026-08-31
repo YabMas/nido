@@ -102,6 +102,22 @@ After resolving trivial conflicts (`jj resolve` or editing the files), confirm
 `jj resolve --list` lists nothing before continuing — which, once everything is
 resolved, means it exits 2 with `Error: No conflicts found at this revision`.
 
+**If you resolve on a scratch commit, fold it down with `jj squash -u`.** jj's
+own conflict hint ends `Then run `jj squash` to move the resolution into the
+conflicted commit`, and that bare form opens `$EDITOR` to merge the scratch
+commit's description into the layer's whenever both are non-empty. Headless
+there is nobody to answer it and the command hangs with no output — observed at
+14 minutes, on an editor holding a `.jjdescription` tempfile. `-u`
+(`--use-destination-message`) keeps the layer's message, which is the one you
+want; `JJ_EDITOR=true` in front makes it unattended-proof. A scratch commit
+created with no `-m` at all avoids the prompt too, since only one side then has
+a description.
+
+Folding a resolution into a layer rebases the layers above it, and jj reports
+`Existing conflicts were resolved or abandoned from N commits` when the same
+conflict propagated up the stack — that line is the confirmation the whole stack
+came clean, not just the commit you edited.
+
 ## What this skill does NOT do
 
 - **No commit.** It leaves the resolved (or halted) worktree as-is; the next
@@ -118,5 +134,8 @@ resolved, means it exits 2 with `Error: No conflicts found at this revision`.
   exits 2 with `Error: No conflicts found at this revision`. Read the listing.
 - **Hardcoding `main@origin`** — use the `trunk()` revset.
 - **Running from the session home** — it's not git-colocated; `cd worktree` first.
+- **Folding a resolution with a bare `jj squash`** — jj's own hint says exactly
+  that, and it opens an editor to merge the two descriptions, which hangs a
+  headless run with no output. `jj squash -u`.
 - **Committing the resolution** — `/align` never commits; leave the worktree for
   the next phase.
