@@ -162,8 +162,13 @@
       :review (assoc ph :overall-correctness (:overall-correctness ctx)
                         :findings (vec (:findings ctx))
                         :layers (review-layers ctx))
+      ;; :cause as well as :reason, and they are not alternatives: a reason says
+      ;; what was wrong with the answer, a cause says whether there WAS one. A
+      ;; phase that kept only the first renders a 429 exactly like a malformed
+      ;; ruling.
       :warden (let [a (:warden ctx)]
                  (assoc ph :decision (some-> (:decision a) name)
+                        :cause (some-> (:cause a) name)
                         :reason (:reason a)
                         :rulings (mapv #(select-keys % [:id :owner-layer :disposition
                                                         :authority :of :because])

@@ -619,6 +619,34 @@
                 {:seen #{} :out []}
                 history)))
 
+(defn ^{:malli/schema [:=> [:cat :map :map] :map]}
+  warden-failure
+  "Why there is no ruling, when the round cannot use the answer.
+
+   THREE DIFFERENT THINGS END A ROUND HERE and they ask different things of
+   whoever reads the report: the agent never ran (a 429, a crash, a budget
+   spent), it ran and produced nothing, or it answered and the answer would not
+   parse. Only the third is a claim about JSON.
+
+   Collapsing them onto the parser's verdict is how a session limit came to be
+   reported as `no json decision block` — a complaint about a block that was
+   never going to exist, with the 429 in agent.log and nowhere a reader looks.
+   `result-error?` was already computed and already right; it was the
+   explanation that was thrown away."
+  [{:keys [num-turns result-error? result-text]} decision]
+  (cond
+    result-error?
+    {:cause  :launch-failed
+     :reason (or (some-> result-text str/trim not-empty)
+                 "the agent exited with an error and said nothing")}
+
+    (zero? (or num-turns 0))
+    {:cause  :no-answer
+     :reason "the agent ran no turns — nothing was asked of the findings"}
+
+    :else
+    {:cause :unusable-answer :reason (:reason decision)}))
+
 (defn- run-warden-stage
   [ctx]
   (let [{:keys [cwd run-id budget]} (:config ctx)
@@ -631,7 +659,7 @@
                  :stance   (read-stance (first (project+ws-from-cwd cwd)))
                  :toc      (:toc ctx)
                  :answered (answered-by-layer ctx)})
-        {:keys [num-turns result-error? result-text]}
+        {:keys [num-turns result-error? result-text] :as launch}
         (agent/launch! {:run-id run-id :cwd cwd
                         :first-message prompt :budget budget
                         :tools ""
@@ -639,7 +667,8 @@
         decision (parse-warden-decision result-text)]
     (if (or (zero? (or num-turns 0)) result-error?
             (= :indeterminate (:decision decision)))
-      (assoc ctx :warden decision :control :stop
+      (assoc ctx :warden (merge decision (warden-failure launch decision))
+             :control :stop
              :status :warden-indeterminate)
       (let [ruled (apply-rulings (:findings ctx) (:rulings decision) handles)
             ctx' (assoc ctx

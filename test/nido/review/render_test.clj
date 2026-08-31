@@ -404,3 +404,17 @@
   (let [s (render/record-frame record-report now-10s
                                {:title (apply str (repeat 200 "x"))})]
     (is (every? #(<= (count %) 80) (str/split-lines s)))))
+
+(deftest an-indeterminate-ruling-says-what-stopped-it
+  (let [out (render/final
+             {:status "warden-indeterminate" :started-at "2026-08-31T09:00:00Z"
+              :ended-at "2026-08-31T09:10:00Z"
+              :target {:cwd "/w/x" :base "main" :files [] :layers 1}
+              :rounds [{:round 1 :status "ended"
+                        :phases [{:phase "warden" :status "ok" :decision "indeterminate"
+                                  :cause "launch-failed"
+                                  :reason "You've hit your session limit"
+                                  :rulings []}]}]})]
+    (is (re-find #"launch failed" out))
+    (is (re-find #"session limit" out)
+        "so a reader is not sent to agent.log to find out the agent never ran")))

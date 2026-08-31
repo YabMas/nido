@@ -106,6 +106,8 @@
     {:signature [:=> [:catn [:f Finding]] :boolean]})
   (Operation parse-warden-decision "The warden's ruling out of what it said."
     {:signature [:=> [:catn [:text :string]] :map]})
+  (Operation warden-failure "Why a round has no ruling: no run, no answer, or no parse."
+    {:signature [:=> [:catn [:launch :map] [:decision :map]] :map]})
   (Operation project+ws-from-cwd "The project and workstream a directory belongs to."
     {:signature [:=> [:catn [:cwd Path]] :any]})
   (Operation session-stack "This session's layers, bottom first."

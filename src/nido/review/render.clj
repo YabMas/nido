@@ -50,7 +50,16 @@
                (str "→ " (:decision ph)
                     (when-let [n (seq (filter #(= "fix" (str (name (or (:disposition %) "")))) 
                                               (:rulings ph)))]
-                      (str " (fix " (count n) ")"))))
+                      (str " (fix " (count n) ")"))
+                    ;; Only where there are no rulings to show instead. A round
+                    ;; that ruled has its reason in the report and its effect on
+                    ;; screen; a round that did not has nothing but this, and
+                    ;; "→ indeterminate" alone sends a reader to agent.log to
+                    ;; find out that the agent was rate-limited.
+                    (when (= "indeterminate" (:decision ph))
+                      (str "  ·  " (or (some-> (:cause ph) (str/replace "-" " ")) "no ruling")
+                           (when-let [r (:reason ph)]
+                             (str ": " (first (str/split-lines r))))))))
     "fix"    (cond
                (seq (:fixes ph))     (str/join ", " (map #(str (or (:layer %) "branch") " "
                                                                (subs (str (:commit %)) 0

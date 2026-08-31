@@ -41,6 +41,24 @@
   (is (= :indeterminate (:decision (stages/parse-warden-decision "no json here"))))
   (is (= :indeterminate (:decision (stages/parse-warden-decision nil)))))
 
+(deftest a-warden-that-never-ran-says-so-rather-than-blaming-the-json
+  ;; Observed: a run hit `You've hit your session limit` (HTTP 429), the agent
+  ;; produced one error turn, and the report recorded `no json decision block` —
+  ;; a complaint about a block that was never going to exist, with the only
+  ;; trace of the 429 in agent.log.
+  (let [parsed (stages/parse-warden-decision "You've hit your session limit · resets 1:50pm")]
+    (is (= {:cause :launch-failed
+            :reason "You've hit your session limit · resets 1:50pm"}
+           (stages/warden-failure {:num-turns 1 :result-error? true
+                                   :result-text "You've hit your session limit · resets 1:50pm"}
+                                  parsed)))
+    (is (= :no-answer
+           (:cause (stages/warden-failure {:num-turns 0 :result-error? false} parsed)))
+        "and a silent agent is a third thing again")
+    (is (= {:cause :unusable-answer :reason "no json decision block"}
+           (stages/warden-failure {:num-turns 3 :result-error? false} parsed))
+        "only an answer that came back and would not parse blames the json")))
+
 (deftest review-stage-sets-findings
   (with-redefs [layers/patch-hash (fn [& _] nil)
                 codex/merge-base (fn [& _] "BASEREV")
