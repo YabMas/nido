@@ -28,7 +28,13 @@
   (let [phases (:phases round)
         ph     (fn [n] (last (filter #(= n (:phase %)) phases)))
         review (ph "review") warden (ph "warden") fix (ph "fix")
-        judge  (ph "judge")  amend  (ph "amend")]
+        judge  (ph "judge")  amend  (ph "amend")
+        ;; Rows a reviewer actually opened. A skipped row is a converged layer
+        ;; deliberately not re-read, which says nothing about whether the rest
+        ;; of the round had anything in it.
+        read-rows (remove #(= "skipped" (:status %)) (:layers review))
+        nothing?  (and (seq read-rows)
+                       (every? #(= "nothing-to-review" (:status %)) read-rows))]
     (cond
       (some #(= "error" (:status %)) phases)                       "failed"
       ;; A record round, whose two stages tell the same story the review's three
@@ -38,6 +44,9 @@
       (and judge amend)                                            "continued"
       judge                                                        "ended"
 
+      ;; Before "clean", because the two are indistinguishable by findings
+      ;; alone — both have none — and only this one had no reviewer read a line.
+      (and review (= "ok" (:status review)) (nil? warden) nothing?) "nothing-to-review"
       (and review (= "ok" (:status review))
            (empty? (:findings review)) (nil? warden))              "clean"
       (= "escalate" (:decision warden))                            "escalated"
@@ -128,9 +137,15 @@
         skipped  (into #{} (map :label) (:skipped ctx))
         accounted (into reviewed skipped)]
     (in-stack-order
-     (-> (mapv (fn [{:keys [target]}]
-                 (row target {:status   "reviewed"
-                              :findings (get counts (:label target) 0)}))
+     (-> (mapv (fn [{:keys [target] :as r}]
+                 ;; A target whose diff was empty is rowed as what it was, not
+                 ;; as a review that found nothing: "reviewed · 0" is the same
+                 ;; two words a genuinely clean layer earns, and the reader who
+                 ;; most needs them apart is the one asking why a run was free.
+                 (if (= :nothing-to-review (:status r))
+                   (row target {:status "nothing-to-review"})
+                   (row target {:status   "reviewed"
+                                :findings (get counts (:label target) 0)})))
                (:reviews ctx))
          (into (mapv (fn [t] (row t {:status "skipped"})) (:skipped ctx)))
          (into (for [[label n] counts
@@ -208,7 +223,7 @@
   "How far along a row is. A row only ever moves forward: events cross threads
    and can be folded out of order, and a target that flickered back to `running`
    after reporting would be the display lying about work that is done."
-  {"pending" 0 "running" 1 "reviewed" 2 "skipped" 2 "error" 2})
+  {"pending" 0 "running" 1 "reviewed" 2 "skipped" 2 "error" 2 "nothing-to-review" 2})
 
 (defn- move-target
   "Advance one target's row on the running review phase.

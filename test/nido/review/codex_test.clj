@@ -97,12 +97,15 @@
     (is (= "-" (last args)) "positional prompt is '-' (read from stdin)")
     (is (= "/w" (:dir opts)))))
 
-(deftest review!-empty-diff-is-clean
+(deftest review!-empty-diff-is-nothing-to-review-not-clean
+  ;; :clean is a reviewer's verdict on code it read. An empty manifest means no
+  ;; reviewer ran at all, and this is the last point the two can be told apart —
+  ;; past here both are a target carrying no findings.
   (with-redefs [jj/jj! (fn [_dir & args]
                          (if (= "diff" (first args))
                            {:exit 0 :out "" :err ""}            ; empty manifest
                            {:exit 0 :out "BASEREV\n" :err ""}))] ; merge-base
-    (is (= {:status :clean :findings [] :base-rev "BASEREV" :manifest ""}
+    (is (= {:status :nothing-to-review :findings [] :base-rev "BASEREV" :manifest ""}
            (codex/review! {:cwd "/w" :from "BASEREV" :run-id "r1"})))))
 
 (deftest review!-parses-codex-output

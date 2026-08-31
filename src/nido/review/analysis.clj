@@ -70,8 +70,14 @@
 
 (defn ^{:malli/schema [:=> [:cat :any :boolean :boolean] :boolean]}
   worth-analysing?
-  "Pure. Every terminal outcome is worth a look EXCEPT a dry run, and except a
-   run that left no report to read.
+  "Pure. Every terminal outcome is worth a look EXCEPT a dry run, a run that
+   reviewed nothing, and a run that left no report to read.
+
+   `:nothing-to-review` is the cheapest of all to exclude and the most obviously
+   right: no reviewer read anything, so there is no loop behaviour in the run to
+   analyse. Left in, every empty-diff review — a re-run on an unchanged branch,
+   a stack whose layers were all folded away — provisions a worktree and an hour
+   of budget to report that the loop did nothing, correctly.
 
    A dry run drove the stages without letting a fixer touch anything, so what it
    produced says how the loop behaves under a flag rather than how it behaves;
@@ -88,7 +94,10 @@
    is the outcome most worth reading, and it still writes a report — the
    frontend persists one as the events arrive, so the failure is in it."
   [status dry-run? report?]
-  (boolean (and status (not dry-run?) report?)))
+  (boolean (and status
+                (not= :nothing-to-review (keyword status))
+                (not dry-run?)
+                report?)))
 
 (defn ^{:malli/schema [:=> [:cat :map] [:maybe :any]]}
   enqueue!

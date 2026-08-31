@@ -71,6 +71,15 @@
 (deftest a-run-with-no-terminal-status-is-not-analysed
   (is (not (analysis/worth-analysing? nil false true))))
 
+(deftest a-run-that-reviewed-nothing-is-not-analysed
+  ;; Every target came back with a blank manifest, so no reviewer read a line.
+  ;; There is no loop behaviour in the run to say anything about, and left in it
+  ;; would provision a worktree and an hour of budget on every empty-diff review.
+  (is (not (analysis/worth-analysing? :nothing-to-review false true)))
+  ;; The status survives a round-trip through the report as a string, which is
+  ;; the shape the enqueue site actually reads it in.
+  (is (not (analysis/worth-analysing? "nothing-to-review" false true))))
+
 (defn- with-report
   "a-run pointed at a report file that actually exists — the enqueue gate now
    requires one."

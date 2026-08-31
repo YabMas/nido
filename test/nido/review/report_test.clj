@@ -186,6 +186,37 @@
     (is (= "clean" (:status r)))
     (is (= {:rounds 1 :findings-fixed 0 :final-status "clean"} (:summary r)))))
 
+(deftest a-round-that-read-nothing-is-not-clean
+  ;; Both rounds end with an empty finding list; only one of them had a reviewer
+  ;; look at anything. Nothing downstream can recover the difference, so the
+  ;; round has to carry it.
+  (let [r (drive
+           [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+            {:event :phase-started :iter 1 :phase :review :at "t1"}
+            {:event :phase-finished :iter 1 :phase :review :at "t2"
+             :ctx {:findings []
+                   :reviews [{:target {:label "stack" :stack? true}
+                              :status :nothing-to-review}]}}
+            {:event :run-finalized :status :nothing-to-review :ctx {} :at "t3"}])
+        row (first (:layers (first (:phases (first (:rounds r))))))]
+    (is (= "nothing-to-review" (:status (first (:rounds r)))))
+    (is (= "nothing-to-review" (:status row)))
+    (is (nil? (:findings row)) "no finding tally on a target nobody read")))
+
+(deftest one-empty-layer-among-several-is-still-a-clean-round
+  ;; The gate is EVERY read target, not any: a stack routinely holds one layer
+  ;; whose diff a rebase emptied, and calling that round unreviewed would hide a
+  ;; genuine clean bill on the layers that did have content.
+  (let [r (drive
+           [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+            {:event :phase-started :iter 1 :phase :review :at "t1"}
+            {:event :phase-finished :iter 1 :phase :review :at "t2"
+             :ctx {:findings []
+                   :reviews [{:target {:label "one" :index 1} :status :nothing-to-review}
+                             {:target {:label "two" :index 2} :status :clean}]}}
+            {:event :run-finalized :status :clean :ctx {} :at "t3"}])]
+    (is (= "clean" (:status (first (:rounds r)))))))
+
 (deftest fix-noop-round-does-not-inherit-prior-commit
   (let [r (drive
            [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}

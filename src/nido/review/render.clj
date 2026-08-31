@@ -41,11 +41,18 @@
   (case (:phase ph)
     "review" (when (= "ok" (:status ph))
                (let [n       (count (:findings ph))
-                     skipped (count (filter #(= "skipped" (:status %)) (:layers ph)))]
-                 (str n " finding" (when (not= 1 n) "s")
-                      (when (pos? skipped)
-                        (str " · " skipped " layer" (when (not= 1 skipped) "s")
-                             " converged")))))
+                     rows    (:layers ph)
+                     skipped (count (filter #(= "skipped" (:status %)) rows))
+                     read    (remove #(= "nothing-to-review" (:status %)) rows)]
+                 ;; When every row is a blank diff, say so instead of "0
+                 ;; findings" — the summary line is where a reader decides
+                 ;; whether the run means anything.
+                 (if (and (seq rows) (empty? read))
+                   "nothing to review — every diff was empty"
+                   (str n " finding" (when (not= 1 n) "s")
+                        (when (pos? skipped)
+                          (str " · " skipped " layer" (when (not= 1 skipped) "s")
+                               " converged"))))))
     ("warden" "arbiter" "judge") (when (:decision ph)
                (str "→ " (:decision ph)
                     (when-let [n (seq (filter #(= "fix" (str (name (or (:disposition %) "")))) 
@@ -141,7 +148,7 @@
 (defn- layer-glyph
   [status now]
   (case status
-    ("skipped" "pending") "·"
+    ("skipped" "pending" "nothing-to-review") "·"
     "running"             (spinner now)
     "error"               "✗"
     "✓"))
@@ -153,6 +160,9 @@
     "pending" "queued"
     "running" "reviewing …"
     "error"   "failed"
+    ;; No count: there is no finding tally to report on a target nobody read,
+    ;; and "0 findings" beside a ✓ is the reading this status exists to prevent.
+    "nothing-to-review" "empty diff"
     (str findings " finding" (when (not= 1 findings) "s"))))
 
 (defn- block-lines

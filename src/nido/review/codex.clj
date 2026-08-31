@@ -228,7 +228,10 @@
                                     :cwd cwd :from from :to to :err err})))
         manifest out]
     (if (str/blank? manifest)
-      {:status :clean :findings [] :base-rev from :manifest ""}
+      ;; Not :clean. Nothing was read, so "found nothing" is a claim no reviewer
+      ;; made — and this is the only place that can still tell the two apart:
+      ;; downstream both arrive as a target with an empty finding list.
+      {:status :nothing-to-review :findings [] :base-rev from :manifest ""}
       (let [dir         (cstate/run-dir run-id)
             _           (fs/create-dirs dir)
             schema-path (str (fs/path dir (artifact-name label iter "-schema.json")))

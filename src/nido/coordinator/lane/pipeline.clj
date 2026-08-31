@@ -549,6 +549,11 @@
    :design-retracted     :route-back
    :no-premise           :route-back  ; the design cites no baseline at all
    :nothing-to-check     :route-back  ; the baseline recorded nothing checkable; it is too thin
+   ;; The review's exact analogue: every diff was empty, so no reviewer read a
+   ;; line. Not :advance — advancing would spend the loop's clean bill on a
+   ;; review that never happened, which is the one reading the status exists to
+   ;; prevent.
+   :nothing-to-review    :route-back
    ;; The diff warden's escalate: a finding CONTRADICTS a named invariant, so the
    ;; design is in question rather than its execution. That derivation was being
    ;; made every round already and consumed by nothing — this is the wire.

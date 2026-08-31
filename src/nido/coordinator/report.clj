@@ -1236,6 +1236,10 @@
    [:status             [:enum :converged :unresolved :escalated :clean :no-progress
                                :max-iters :review-failed :dry-run
                                :fix-noop :warden-indeterminate
+                               ;; A run in which every diff was empty. Distinct
+                               ;; from :clean, which is a reviewer's verdict on
+                               ;; code it read.
+                               :nothing-to-review
                                ;; pre-rename ledger entries stay readable
                                :arbiter-indeterminate :judge-indeterminate]]
    [:base               string?]

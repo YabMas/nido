@@ -346,14 +346,29 @@
         findings (collect-findings (cond-> (vec results)
                                      (seq (:findings conform)) (conj conform)))]
     (if (empty? findings)
-      ;; Nothing was reported anywhere, so nothing is owed anywhere and
-      ;; every target reviewed at this patch has converged. Recorded
-      ;; here because this branch is terminal: the engine stops on
-      ;; :control :stop, so the warden — which is where convergence is
+      ;; Two different terminal rounds arrive here, and only one of them is a
+      ;; review that found nothing.
+      ;;
+      ;; EVERY reviewed target came back with a blank manifest: no reviewer read
+      ;; anything, so there is no clean bill to record. It is terminal all the
+      ;; same — there is nothing to fix and nothing a further round would change
+      ;; — but it is reported under its own status so the report row, the ledger
+      ;; entry and the analysis gate all inherit the distinction rather than each
+      ;; re-deriving it from an empty finding list. Nothing is cached either:
+      ;; convergence is a memory of content having been reviewed, and an empty
+      ;; patch has no content to remember.
+      ;;
+      ;; Otherwise something was genuinely reviewed and reported nothing, so
+      ;; nothing is owed anywhere and every target reviewed at this patch has
+      ;; converged. Recorded here because this branch is terminal: the engine
+      ;; stops on :control :stop, so the warden — which is where convergence is
       ;; otherwise written — never runs for a round that starts clean.
-      (let [ctx' (assoc ctx :findings [] :reviews results :skipped skipped
-                        :control :stop :status :clean)]
-        (record-convergence! cwd ctx')
+      (let [nothing? (and (seq results)
+                          (every? #(= :nothing-to-review (:status %)) results))
+            ctx'     (assoc ctx :findings [] :reviews results :skipped skipped
+                            :control :stop
+                            :status (if nothing? :nothing-to-review :clean))]
+        (when-not nothing? (record-convergence! cwd ctx'))
         ctx')
       (assoc ctx
              :findings findings
