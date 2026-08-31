@@ -147,7 +147,16 @@
                    (row target {:status   "reviewed"
                                 :findings (get counts (:label target) 0)})))
                (:reviews ctx))
-         (into (mapv (fn [t] (row t {:status "skipped"})) (:skipped ctx)))
+         ;; A skipped row carries the evidence for its own skip: the patch it
+         ;; was skipped AT, and the round the convergence it is standing on was
+         ;; recorded in. Without them the report asserts a layer needed no
+         ;; review and offers nothing to check that against — and a wrongly
+         ;; cached convergence is precisely the failure that hides a finding for
+         ;; as long as the layer sits unchanged.
+         (into (mapv (fn [t] (row t (cond-> {:status "skipped"}
+                                      (:patch-hash t)   (assoc :patch-hash (:patch-hash t))
+                                      (:converged-at t) (assoc :converged-at (:converged-at t)))))
+                     (:skipped ctx)))
          (into (for [[label n] counts
                      :when (and label (not (contains? accounted label)))]
                  (row {:label label} {:status "reported" :findings n})))))))
@@ -181,15 +190,29 @@
       ;; what was wrong with the answer, a cause says whether there WAS one. A
       ;; phase that kept only the first renders a 429 exactly like a malformed
       ;; ruling.
+      ;; :handle and :same-as are kept because they are the run's cross-round
+      ;; identity — what no-progress?, unfixable and the answered cache all key
+      ;; on. Dropped from the report, every conclusion those checks reach is
+      ;; unreadable from the artifact that is supposed to explain the run: a
+      ;; reader could see the same defect ruled on in four rounds and had no way
+      ;; to confirm the loop knew it was the same defect.
       :warden (let [a (:warden ctx)]
                  (assoc ph :decision (some-> (:decision a) name)
                         :cause (some-> (:cause a) name)
                         :reason (:reason a)
-                        :rulings (mapv #(select-keys % [:id :owner-layer :disposition
+                        :rulings (mapv #(select-keys % [:id :handle :same-as
+                                                        :owner-layer :disposition
                                                         :authority :of :because])
                                        (:rulings a))))
+      ;; The finding ids a fixer was handed, not only how many. It is the join
+      ;; every cross-round question needs — did this fix stop that finding coming
+      ;; back — and the report held one side of it and threw the other away.
+      ;; :declined comes off the ctx rather than the history entry, because a
+      ;; round in which EVERY fixer declined writes no history entry at all —
+      ;; which is exactly the round whose reasons a reader needs.
       :fix    (let [h (last (filter #(= (:iter ctx) (:iter %)) (:history ctx)))]
-                (assoc ph :fixes (vec (:fixes h)) :fixed-count (:fixed-count h)))
+                (cond-> (assoc ph :fixes (vec (:fixes h)) :fixed-count (:fixed-count h))
+                  (seq (:declined ctx)) (assoc :declined (vec (:declined ctx)))))
       ;; What the stage decided about each recut, whether or not it could act.
       ;; Kept because a reshape is the only remedy a recut has — the warden
       ;; withholds it from the fixers — so an empty reshape phase is the report
@@ -244,7 +267,15 @@
                          row))
                      (vec rows)))))))
 
-(defn- total-fixed
+(defn- total-handed-to-fixers
+  "How many findings were HANDED to a fixer across the run — not how many were
+   verified fixed, which is a fact no stage in the loop produces.
+
+   A fixer reporting success is a fixer's claim about its own work. What turns
+   that into evidence is the next round re-reviewing the layer and not raising
+   the finding again, and a run's LAST fix round has no such round after it. The
+   number is honest as a count of work dispatched and dishonest as a count of
+   defects removed, so it is named for the first."
   [report]
   (->> (:rounds report)
        (mapcat :phases)
@@ -259,7 +290,7 @@
            :status   s
            :ended-at at
            :summary  {:rounds         (count (:rounds report))
-                      :findings-fixed (total-fixed report)
+                      :findings-fixed (total-handed-to-fixers report)
                       :final-status   s})))
 
 ;; ---- fold ----------------------------------------------------------------

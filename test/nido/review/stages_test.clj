@@ -190,25 +190,47 @@
         (is (some #(= ["commit" "-m" "review-loop: iter 2 fixes"] %) @commits))
         (is (nil? (:control ctx)))))))
 
-(deftest fix-stage-noop-when-not-dirty
-  (with-redefs [agent/launch! (fn [_] {:num-turns 3 :result-error? false :result-text "done"})
+(deftest a-fixer-that-read-the-finding-and-refused-says-why
+  ;; It ran, it decided, and its reason was the only account of why the round
+  ;; did nothing. Discarded, the run ended on "no changes" with the explanation
+  ;; stated on no channel at all.
+  (with-redefs [agent/launch! (fn [_] {:num-turns 3 :result-error? false
+                                       :result-text "the seam spans two layers; no minimal edit here is right"})
                 stages/working-copy-dirty? (fn [_] false)
                 jj/jj! (fn [& _] {:exit 0 :out "" :err ""})]
     (let [ctx ((:run stages/fix-stage)
                {:config {:cwd "/w" :run-id "r1"} :iter 2
-                :findings [{:id "aa11" :title "x" :disposition :fix}]})]
+                :findings [{:id "aa11" :title "x" :disposition :fix}]})
+          [d] (:declined ctx)]
       (is (= :stop (:control ctx)))
-      (is (= :fix-noop (:status ctx))))))
+      (is (= :fix-declined (:status ctx)))
+      (is (true? (:ran? d)) "it ran")
+      (is (str/includes? (:reason d) "spans two layers")))))
 
-(deftest fix-stage-noop-stops
+(deftest a-fixer-that-never-ran-is-not-a-fixer-that-refused
+  ;; Zero turns: the agent never got going. Same empty tree, a different fact
+  ;; about the loop, and one status for both told a reader neither.
   (with-redefs [agent/launch! (fn [_] {:num-turns 0 :result-error? false :result-text ""})
                 stages/working-copy-dirty? (fn [_] false)
                 jj/jj! (fn [& _] {:exit 0 :out "" :err ""})]
     (let [ctx ((:run stages/fix-stage)
                {:config {:cwd "/w" :run-id "r1"} :iter 2
-                :findings [{:id "aa11" :title "x" :disposition :fix}]})]
+                :findings [{:id "aa11" :title "x" :disposition :fix}]})
+          [d] (:declined ctx)]
+      (is (= :fix-declined (:status ctx)))
+      (is (false? (:ran? d)) "it never ran"))))
+
+(deftest nothing-routed-to-a-fixable-layer-is-its-own-status
+  ;; No finding was owed to any layer, so no fixer was launched. Distinct from a
+  ;; fixer declining: this one is a routing question, not a refusal.
+  (with-redefs [agent/launch! (fn [_] (throw (ex-info "no fixer should launch" {})))
+                stages/working-copy-dirty? (fn [_] false)
+                jj/jj! (fn [& _] {:exit 0 :out "" :err ""})]
+    (let [ctx ((:run stages/fix-stage)
+               {:config {:cwd "/w" :run-id "r1"} :iter 2
+                :findings [{:id "aa11" :title "x" :disposition :park}]})]
       (is (= :stop (:control ctx)))
-      (is (= :fix-noop (:status ctx))))))
+      (is (= :fix-unrouted (:status ctx))))))
 
 (deftest fix-stage-dry-run-skips-fix
   (let [launched (atom false)]
@@ -769,3 +791,37 @@
       (is (str/starts-with? (stages/read-stance :stance-override-probe) "# diverges"))
       (finally (fs/delete-if-exists own)))))
 
+(deftest the-composition-target-is-keyed-on-the-cut-not-only-the-patch
+  ;; Re-cutting a stack moves code between layers and leaves base-rev..@
+  ;; byte-identical. Keyed on the patch alone, a composition pass that demanded
+  ;; a re-layering, got one, and ran again would skip the very thing it asked for.
+  (with-redefs [layers/patch-hash (fn [_ _ _] "SAMEPATCH")]
+    (let [before (first (stages/with-patch-hashes
+                          "/w" [{:label "stack" :stack? true :from "b" :to "@"
+                                 :composition {:layers [{:label "one"} {:label "two"}]}}]))
+          after  (first (stages/with-patch-hashes
+                          "/w" [{:label "stack" :stack? true :from "b" :to "@"
+                                 :composition {:layers [{:label "two"} {:label "one"}]}}]))
+          layer  (first (stages/with-patch-hashes
+                          "/w" [{:label "core" :from "b" :to "c"}]))]
+      (is (not= (:patch-hash before) (:patch-hash after))
+          "a re-cut is a different composition target")
+      (is (= "SAMEPATCH" (:patch-hash layer))
+          "a plain layer is still keyed on its patch alone"))))
+
+(deftest a-target-whose-hash-cannot-be-computed-is-never-skipped
+  ;; Unknown content is reviewed content — folding the composition in must not
+  ;; manufacture a key where there was none.
+  (with-redefs [layers/patch-hash (fn [_ _ _] nil)]
+    (let [t (first (stages/with-patch-hashes
+                     "/w" [{:label "stack" :stack? true :from "b" :to "@"
+                            :composition {:layers [{:label "one"}]}}]))]
+      (is (nil? (:patch-hash t))))))
+
+(deftest a-skipped-target-carries-the-round-it-converged-in
+  (let [{:keys [review skipped]}
+        (stages/to-review {"h1" {:status :converged :round 4}}
+                          [{:label "core" :patch-hash "h1"}
+                           {:label "wiring" :patch-hash "h2"}])]
+    (is (= ["wiring"] (mapv :label review)))
+    (is (= [4] (mapv :converged-at skipped)))))

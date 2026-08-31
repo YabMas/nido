@@ -200,19 +200,45 @@
   with-patch-hashes
   "Stamp each target with the hash of the patch it contributes — its identity
    for the cache. A target whose hash cannot be computed keeps nil and is
-   therefore never skipped."
+   therefore never skipped.
+
+   The composition target folds in the CUT as well as the patch. Its range is
+   `base-rev..@`, and re-cutting a stack — moving code between layers, splitting
+   one in two, reordering them — leaves that range byte-identical: the branch
+   still contains the same work. So a composition pass that demanded a
+   re-layering, got one, and ran again would find its own hash unchanged and
+   skip the very thing it asked for. What that pass reviews is not the patch but
+   how the patch was divided, so its identity has to include the division."
   [cwd targets]
-  (mapv #(assoc % :patch-hash (layers/patch-hash cwd (:from %) (:to %))) targets))
+  (mapv (fn [t]
+          (let [h (layers/patch-hash cwd (:from t) (:to t))]
+            (assoc t :patch-hash
+                   (when h
+                     (if-let [c (:composition t)]
+                       (str h "-" (Integer/toHexString (hash c)))
+                       h)))))
+        targets))
 
 (defn ^{:malli/schema [:=> [:cat :map :any] :map]}
   to-review
   "Split targets into those this round must review and those already converged
    at exactly this patch. A target with no hash is always reviewed: unknown
-   content is reviewed content."
+   content is reviewed content.
+
+   A skipped target is stamped with the round its convergence was recorded in.
+   A skip is the loop declining to look at something, and the report could not
+   say on what authority: the row named the layer and nothing else, so `skipped`
+   was indistinguishable from a claim the reader had to take on trust. With the
+   round and the patch hash on the row, it can be checked against the cache."
   [cache targets]
   (let [skip? (fn [t] (and (:patch-hash t) (cache/converged? cache (:patch-hash t))))]
-    {:review (into [] (remove skip?) targets)
-     :skipped (into [] (filter skip?) targets)}))
+    {:review  (into [] (remove skip?) targets)
+     :skipped (into []
+                    (comp (filter skip?)
+                          (map (fn [t]
+                                 (assoc t :converged-at
+                                        (:round (get cache (:patch-hash t)))))))
+                    targets)}))
 
 (defn- collect-findings
   "Flatten every target's findings, stamping each with the target that reported
@@ -365,9 +391,17 @@
       ;; otherwise written — never runs for a round that starts clean.
       (let [nothing? (and (seq results)
                           (every? #(= :nothing-to-review (:status %)) results))
-            ctx'     (assoc ctx :findings [] :reviews results :skipped skipped
-                            :control :stop
-                            :status (if nothing? :nothing-to-review :clean))]
+            ctx'     (cond-> (assoc ctx :findings [] :reviews results :skipped skipped
+                                    :control :stop
+                                    :status (if nothing? :nothing-to-review :clean))
+                       ;; The reviewer's correctness verdict, on the one branch
+                       ;; that used to drop it. A terminal clean round is the
+                       ;; round whose verdict is most worth keeping — it is the
+                       ;; only evidence that anyone looked — and it was the only
+                       ;; round the report had none for. Absent for a round that
+                       ;; read nothing, because no reviewer reached a verdict.
+                       (not nothing?)
+                       (assoc :overall-correctness (:overall-correctness whole)))]
         (when-not nothing? (record-convergence! cwd ctx'))
         ctx')
       (assoc ctx
@@ -499,9 +533,14 @@
    converged, correctly: nothing about it needs changing. A finding the warden
    gave no owner names no layer, so it blocks none of them — but it is still
    open, so the whole-stack target holds it, and that target converging on
-   `nothing anywhere is open` is what stops it being lost. Any fix that lands
-   changes the patch of every layer above it, so its hash stops matching on its
-   own."
+   `nothing anywhere is open` is what stops it being lost.
+
+   A landed fix invalidates the layers above it on its own, because it changes
+   their content and so their hashes. That is true of layers and NOT of the
+   composition — re-cutting a stack moves code between layers without changing
+   `base-rev..@` by a byte, so the whole-stack patch hash is identical before and
+   after a re-layering. The composition target's key folds in the cut itself for
+   exactly that reason; see `with-patch-hashes`."
   [reviews findings]
   (let [open   (remove settled? findings)
         owners (into #{} (map :owner-layer) open)]
@@ -1000,14 +1039,19 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
           stack (session-stack cwd base)
           plan  (fix-plan stack (:findings ctx))]
       (if (empty? plan)
-        (assoc ctx :control :stop :status :fix-noop)
+        ;; Nothing was routed to a layer a fixer can touch — distinct from
+        ;; fixers running and declining, which is :fix-declined below. Both used
+        ;; to be :fix-noop, so the one status covered "there was no work",
+        ;; "the fixer never started" and "the fixer read it and said no", and a
+        ;; reader could not tell which had happened.
+        (assoc ctx :control :stop :status :fix-unrouted)
         (let [ctx'
               (with-working-copy-restored
                cwd stack
                #(reduce
                (fn [acc {:keys [label layer findings]}]
                  (layers/position-for-fix! cwd layer)
-                 (let [{:keys [num-turns]}
+                 (let [{:keys [num-turns result-text]}
                        (agent/launch!
                         {:run-id run-id :cwd cwd
                          :first-message (prompts/fix-prompt {:findings findings})
@@ -1019,7 +1063,18 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                                                          (codex/safe-label label)
                                                          (or (:iter ctx) 1))))})]
                    (if (or (zero? (or num-turns 0)) (not (working-copy-dirty? cwd)))
-                     (do (layers/restore-top! cwd stack) acc)
+                     ;; The fixer left the tree unchanged. That is a decision it
+                     ;; made and explained, and the explanation was the only
+                     ;; account of why a round did nothing — discarded here, so
+                     ;; a run could end on "no changes" with the reason it
+                     ;; declined stated nowhere. It is kept per layer, and
+                     ;; distinguishes a fixer that never ran from one that read
+                     ;; the finding and refused it.
+                     (do (layers/restore-top! cwd stack)
+                         (update acc :declined (fnil conj [])
+                                 (cond-> {:layer label
+                                          :ran? (pos? (or num-turns 0))}
+                                   result-text (assoc :reason (str result-text)))))
                      (let [cid (layers/land-fix!
                                 cwd layer
                                 (str "review-loop: iter " (:iter ctx) " fixes"
@@ -1027,10 +1082,17 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                        (layers/restore-top! cwd stack)
                        (update acc :fixes (fnil conj [])
                                {:layer label :commit cid
+                                ;; What this fixer was HANDED, named rather than
+                                ;; counted. The count alone cannot answer the
+                                ;; question every cross-round read wants — did
+                                ;; this commit stop that finding coming back —
+                                ;; because it holds one end of the join and
+                                ;; discards the other.
+                                :handed (mapv (fn [f] (or (:handle f) (:id f))) findings)
                                 :fixed-count (count findings)})))))
                  ctx plan))]
           (if (empty? (:fixes ctx'))
-            (assoc ctx' :control :stop :status :fix-noop)
+            (assoc ctx' :control :stop :status :fix-declined)
             (update ctx' :history (fnil conj [])
                     {:iter (:iter ctx')
                      :fixes (:fixes ctx')

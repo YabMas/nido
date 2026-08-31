@@ -571,7 +571,14 @@
    :amend-noop           :escalate
    :amend-invalid        :escalate
    :amend-unreadable     :escalate
+   ;; Split from the single :fix-noop, which meant three different things. No
+   ;; finding reached a fixable layer; and fixers ran and every one left the tree
+   ;; alone. Both stop the run and both want a human, but they want different
+   ;; things from one — the first is a routing question, the second is a fixer
+   ;; saying no with a reason now recorded beside it.
    :fix-noop             :escalate
+   :fix-unrouted         :escalate
+   :fix-declined         :escalate
    :max-iters            :escalate  ; a cap somebody asked for was reached
    :warden-indeterminate :escalate
    :arbiter-indeterminate :escalate  ; pre-rename, still readable in old ledgers

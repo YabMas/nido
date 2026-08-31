@@ -1235,7 +1235,8 @@
    [:format             [:= :review-report]]
    [:status             [:enum :converged :unresolved :escalated :clean :no-progress
                                :max-iters :review-failed :dry-run
-                               :fix-noop :warden-indeterminate
+                               :fix-noop :fix-unrouted :fix-declined
+                               :warden-indeterminate
                                ;; A run in which every diff was empty. Distinct
                                ;; from :clean, which is a reviewer's verdict on
                                ;; code it read.
@@ -1289,8 +1290,16 @@
    trust accumulating, rather than a clean run evaporating. :strained exists so
    the gap between fine and wrong isn't rounded to fine every time, which is how
    a design decays with nobody deciding to let it. :invalidated and
-   :standing-challenged are decisions, not fixes, so both require :needs — the
-   question put to the human."
+   :standing-challenged are decisions, not fixes, so both REQUIRE :needs — the
+   question put to the human.
+
+   :needs is optional on the other two rather than absent. The prompt asks for
+   it unconditionally, and a :strained verdict's needs is the most actionable
+   paragraph the pass produces: it is what says where the pressure is and what
+   to do about it. Refusing the field there did not omit it — it rejected the
+   whole verdict at the ledger boundary, and append-design-verdict! swallows a
+   rejection to one stderr line, so the pass ran for four minutes with tools and
+   left no record on any channel."
   [:multi {:dispatch :verdict}
    [:sound
     [:map {:closed true}
@@ -1299,7 +1308,8 @@
      [:reason string?]
      [:invariants-held {:optional true} [:vector string?]]
      [:load-bearing-held {:optional true} [:vector string?]]
-     [:findings-classified {:optional true} [:vector ClassifiedFinding]]]]
+     [:findings-classified {:optional true} [:vector ClassifiedFinding]]
+     [:needs {:optional true} string?]]]
    [:strained
     [:map {:closed true}
      [:format [:= :design-verdict]] [:verdict [:= :strained]]
@@ -1309,7 +1319,8 @@
      [:invariants-broken {:optional true} [:vector BrokenInvariant]]
      [:load-bearing-held {:optional true} [:vector string?]]
      [:load-bearing-broken {:optional true} [:vector BrokenInvariant]]
-     [:findings-classified {:optional true} [:vector ClassifiedFinding]]]]
+     [:findings-classified {:optional true} [:vector ClassifiedFinding]]
+     [:needs {:optional true} string?]]]
    [:invalidated
     [:map {:closed true}
      [:format [:= :design-verdict]] [:verdict [:= :invalidated]]

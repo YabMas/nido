@@ -370,3 +370,64 @@
                :skipped  [{:label "base"}]
                :findings [{:from-layer "base"}]})]
     (is (= 1 (count rows)) "a converged layer's carried findings do not mint a second row")))
+
+(deftest the-warden-phase-keeps-the-cross-round-identity
+  ;; :handle and :same-as are what no-progress?, unfixable and the answered
+  ;; cache all key on. Dropped from the report, every conclusion those reach is
+  ;; unverifiable from the artifact that is supposed to explain the run.
+  (let [r (drive
+           [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+            {:event :phase-started :iter 1 :phase :review :at "t1"}
+            {:event :phase-finished :iter 1 :phase :review :at "t2" :ctx {:findings []}}
+            {:event :phase-started :iter 1 :phase :warden :at "t3"}
+            {:event :phase-finished :iter 1 :phase :warden :at "t4"
+             :ctx {:warden {:decision :continue
+                            :rulings [{:id "f9" :handle "h1" :same-as "f2"
+                                       :owner-layer "core" :disposition :fix
+                                       :because "same defect as round 2"}]}}}])
+        ruling (-> r :rounds first :phases (nth 1) :rulings first)]
+    (is (= "h1" (:handle ruling)))
+    (is (= "f2" (:same-as ruling)))))
+
+(deftest a-skipped-row-carries-the-evidence-for-its-own-skip
+  ;; "skipped" alone asserts a layer needed no review and offers nothing to
+  ;; check it against — and a wrongly cached convergence hides a finding for as
+  ;; long as the layer sits unchanged.
+  (let [r (drive
+           [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+            {:event :phase-started :iter 1 :phase :review :at "t1"}
+            {:event :phase-finished :iter 1 :phase :review :at "t2"
+             :ctx {:findings [] :reviews []
+                   :skipped [{:label "core" :index 1
+                              :patch-hash "abc123" :converged-at 4}]}}])
+        row (-> r :rounds first :phases first :layers first)]
+    (is (= "skipped" (:status row)))
+    (is (= "abc123" (:patch-hash row)))
+    (is (= 4 (:converged-at row)))))
+
+(deftest the-terminal-clean-round-keeps-its-correctness-verdict
+  ;; It was the only round that dropped it, and it is the round the verdict is
+  ;; most worth keeping for: the only evidence anyone looked.
+  (let [r (drive
+           [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+            {:event :phase-started :iter 1 :phase :review :at "t1"}
+            {:event :phase-finished :iter 1 :phase :review :at "t2"
+             :ctx {:findings [] :overall-correctness "correct"
+                   :reviews [{:target {:label "stack" :stack? true} :status :clean}]}}
+            {:event :run-finalized :status :clean :ctx {} :at "t3"}])]
+    (is (= "correct" (-> r :rounds first :phases first :overall-correctness)))))
+
+(deftest a-round-where-every-fixer-declined-still-records-why
+  ;; Such a round writes no history entry, so the reasons have to come off the
+  ;; ctx — otherwise the one round whose explanation a reader needs is the one
+  ;; round that has none.
+  (let [r (drive
+           [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+            {:event :phase-started :iter 1 :phase :review :at "t1"}
+            {:event :phase-finished :iter 1 :phase :review :at "t2" :ctx {:findings []}}
+            {:event :phase-started :iter 1 :phase :fix :at "t3"}
+            {:event :phase-finished :iter 1 :phase :fix :at "t4"
+             :ctx {:iter 1 :history []
+                   :declined [{:layer "core" :ran? true :reason "spans two layers"}]}}])
+        ph (-> r :rounds first :phases (nth 1))]
+    (is (= [{:layer "core" :ran? true :reason "spans two layers"}] (:declined ph)))))

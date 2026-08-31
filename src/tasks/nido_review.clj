@@ -13,6 +13,7 @@
    See docs/superpowers/specs/2026-06-30-review-tui-frontend-design.md."
   (:require
    [babashka.fs :as fs]
+   [clojure.pprint :as pprint]
    [clojure.string :as str]
    [nido.coordinator.record.session :as csession]
    [nido.coordinator.record.state :as cstate]
@@ -192,12 +193,39 @@
                     (seq (:history final))
                     (seq (:invariants design))))))
 
+(defn- verdict-reject-path
+  "Where a refused design verdict is written. Beside report.json, because a
+   reader looking for what a run produced looks in the run dir and nowhere else."
+  [run-id]
+  (str (fs/path (cstate/run-dir run-id) "design-verdict-rejected.edn")))
+
+(defn- spit-rejected-verdict!
+  "Persist a verdict the ledger would not take, with malli's own explanation of
+   why. Best-effort in its own right — a run must not fail because it could not
+   record that it failed to record something."
+  [run-id v e]
+  (try
+    (fs/create-dirs (cstate/run-dir run-id))
+    (spit (verdict-reject-path run-id)
+          (with-out-str
+            (pprint/pprint {:verdict v
+                            :refused-because (ex-message e)
+                            :explain (:explain (ex-data e))})))
+    (catch Exception _ nil)))
+
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   append-design-verdict!
   "Run the design verdict and append it as a ledger event. Best-effort throughout,
    for the same reason append-review-entry! is: a completed review must not turn
    into a failure because a side record could not be written. Returns the verdict
-   map, or nil when it did not run or produced no answer."
+   map, or nil when it did not run or produced no answer.
+
+   Best-effort is not the same as untraceable. A verdict costs minutes of an
+   agent running with tools, and a rejected append used to leave one stderr line
+   in a stream nobody keeps — so the pass could produce its most useful output
+   and lose it with no evidence anywhere that it had. The value and the reason it
+   was refused are written into the run dir, which is where the rest of the run's
+   evidence already lives."
   [cwd final report config]
   (try
     ;; Read here to answer `is there anything to judge`; verdict/run! resolves it
@@ -211,8 +239,16 @@
                                   :report report})]
         (when-let [{:keys [project session]} (lifecycle/session-from-cwd cwd)]
           (when-let [ws-id (csession/workstream-id-for (keyword project) session)]
-            (ws/append-entry! (keyword project) ws-id {:kind :design-verdict}
-                              (pr-str v))))
+            (try
+              (ws/append-entry! (keyword project) ws-id {:kind :design-verdict}
+                                (pr-str v))
+              (catch Exception e
+                (spit-rejected-verdict! (:run-id config) v e)
+                (binding [*out* *err*]
+                  (println (str "review-loop: the design verdict was REFUSED by the ledger — "
+                                (ex-message e)))
+                  (println (str "  it is in " (verdict-reject-path (:run-id config))
+                                " — this is a bug in nido, not a bad verdict")))))))
         v))
     (catch Exception e
       (binding [*out* *err*]
