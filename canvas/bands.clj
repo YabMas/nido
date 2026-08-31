@@ -183,8 +183,19 @@
   "The long-lived surfaces a human looks at: the TUI, the web dashboard, the views behind them.
 
    Five thousand lines that outlive any one command, which is why this is the band worth sealing
-   and `Tasks` is not. It may reach the work plane's TOP — `WorkPlane` to act, `View` to read —
-   and nothing beneath it."
+   and `Tasks` is not.
+
+   TWO facades above it, not one. `WorkPlane` carries the vocabulary of workstreams, tickets and
+   runs; `Control` carries daemon control — health, brakes, breakers — and they are separate
+   because they answer different questions (see `Control`). `View` reads and `Report` renders.
+
+   The seal is NOT yet what those four would make it, and this docstring used to say otherwise:
+   it claimed `WorkPlane` to act, `View` to read and nothing beneath, which is the seal intended
+   rather than the one declared. A reader trusting it believed in a seal that was never enforced,
+   and the conformance law checks the declaration. What is actually reached beneath: `Session` in
+   seventeen live call sites across five namespaces, and `Platform` plus `Integration` in sixteen
+   more. Closing the Session edge is FU-37, and the four permissions nothing uses at all —
+   `Vsdd`, `Review`, `Boot`, `Design` — are FU-38."
   {:prefix ["nido.ui."]
    :may-depend [Platform Integration Session Vsdd Review Boot Design
                 View WorkPlane Control Report]})

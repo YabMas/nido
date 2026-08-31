@@ -17,6 +17,7 @@
    [nido.coordinator.lane.facets :as facets]
    [nido.coordinator.lane.findings :as findings]
    [nido.coordinator.source.notion-cache :as notion-cache]
+   [nido.coordinator.source.queue :as queue]
    [nido.coordinator.lane.pickup :as pickup]
    [nido.coordinator.lane.promote :as promote]
    [nido.coordinator.report :as report]
@@ -1720,7 +1721,9 @@
                                           (csession/list-sessions project (:id w))))
                             open))]
     (->> open
-         (filter (fn [w] (and (scratch/scratch? w) (empty? (:entries w)))))
+         (filter (fn [w] (and (scratch/scratch? w)
+                              (empty? (:external-refs w))
+                              (empty? (:entries w)))))
          (keep (fn [w]
                  (let [sess (csession/list-sessions project (:id w))]
                    (when (and (= 1 (count sess))
@@ -2006,6 +2009,43 @@
   "Resolve a pasted Notion URL / page-id / BR-#### into a workstream and queue its provisioning."
   [project input token]
   (pickup/pickup! project input token))
+
+(def start-intent-trigger
+  "The leg a described intent is enqueued at. Named here for the same reason `pickup-trigger`
+   is: a surface asking whether a description would actually be processed is asking about this
+   specific trigger's breaker, and neither side should hardcode the answer."
+  :start-intent)
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :string] :map]}
+  start-intent!
+  "Start work from a description: enqueue it at the project's `:start-intent` leg. The daemon
+   resolves the envelope into a ref-less workstream and a session holding the text as its first
+   message, where the agent establishes the workstream's `:intent` — or halts on a `:blocker`
+   asking what the description did not say.
+
+   Resolves the leg BEFORE writing anything. A project declaring no `:start-intent` trigger is
+   refused here, with the leg named, rather than by an envelope the daemon drains, routes to
+   nothing and drops to stderr — where the person who typed the description would never see it.
+   That refusal is also the whole of phase one: the bar ships before any project declares the
+   leg, and answering `:no-leg` is what makes that state habitable rather than half-built.
+
+   Writes no workstream and no `:intent`. Both belong to what the envelope starts, not to the
+   act of starting it."
+  [project text]
+  (let [text (str/trim (str text))]
+    (cond
+      (str/blank? text)
+      {:decision :blank :trigger start-intent-trigger}
+
+      (nil? (triggers/find-by-name (triggers/load-for-project project) start-intent-trigger))
+      {:decision :no-leg :trigger start-intent-trigger}
+
+      :else
+      {:decision :queued
+       :trigger  start-intent-trigger
+       :queued   (queue/enqueue! {:target  {:project (keyword (name project))
+                                            :trigger start-intent-trigger}
+                                  :payload {:description text}})})))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :map]}
   file-findings!

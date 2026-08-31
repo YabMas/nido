@@ -5,6 +5,8 @@
             [fukan.common.vocab.code.operation :refer [Operation]]
             [canvas.coordinator.lane.work :as lanes]
             [canvas.coordinator.record.session :as session :refer [Session]]
+            [canvas.coordinator.source.core :as queue]
+            [canvas.coordinator.record.triggers :as triggers]
             [canvas.coordinator.record.state :refer [Path SessionName WorkstreamId]]
             [canvas.coordinator.record.workstream :as workstream :refer [Workstream]]
             [canvas.coordinator.view.workstreams :as view]
@@ -161,6 +163,24 @@
   (Operation pickup! "Resolve a pasted reference into a workstream."
     {:signature [:=> [:catn [:project ProjectName] [:input :string] [:token NotionToken]] :map]
      :delegates [lanes/pickup!]})
+  (Operation start-intent!
+    "Start work from a description: enqueue it for the daemon, which mints the ref-less
+     workstream and hands the text to an agent as its first message.
+
+     No lane, because there is no decision left for one to hide — `spawn/ensure-workstream!`
+     already creates a workstream for a payload carrying no external ref, and the agent writes
+     the `:intent`. A lane here would advance nothing and hide nothing, which by this project's
+     own vocabulary is a file rather than a module.
+
+     Enqueues through `Source` rather than through `control/fire!`, which builds the same
+     envelope: `WorkPlane` declares no `Control` edge, and a facade reaching a peer facade is
+     the wrong shape. That `fire!` belongs in the queue's own vocabulary is FU-39.
+
+     Resolves the leg through `Record` BEFORE it writes: a project that declares no
+     `:start-intent` trigger is refused here, rather than by an envelope the daemon drains,
+     routes to nothing and drops to stderr."
+    {:signature [:=> [:catn [:project ProjectName] [:text :string]] :map]
+     :delegates [triggers/load-for-project triggers/find-by-name queue/enqueue!]})
   (Operation file-findings! "File a findings round on a shipped workstream."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:opts :map]] :map]})
   (Operation session-started! "Tell the work plane a session came up."

@@ -77,9 +77,13 @@
     {:signature [:=> [:catn [:project ProjectName]] :any]})
   (Operation pickup-result-fragment "What a pickup attempt swaps in."
     {:signature [:=> [:catn [:result :map] [:opts :map]] :string]})
+  (Operation intent-bar "The describe-an-intent bar."
+    {:signature [:=> [:catn [:project ProjectName]] :any]})
+  (Operation intent-result-fragment "What describing an intent swaps in."
+    {:signature [:=> [:catn [:result :map] [:opts :map]] :string]})
   (Operation workstreams-page "The overview and its ledger pane."
     {:signature [:=> [:catn [:ctx :map] [:data :map]] :any]
-     :delegates [shell workstreams-fragment workstream-pane pickup-bar]})
+     :delegates [shell workstreams-fragment workstream-pane pickup-bar intent-bar]})
   (Operation operations-fragment "The proposal list."
     {:signature [:=> [:catn [:proposals :any]] :any]})
   (Operation operations-page "Every proposal the review analyses have made."
@@ -110,7 +114,8 @@
     {:signature [:=> [:catn [:result :map]] :string]})
   (Operation handle-request "One request, routed."
     {:signature [:=> [:catn [:req :map]] :map]
-     :delegates [derive-screen parse-findings-lines resolve-failure-msg read-pickup-blocker]})
+     :delegates [derive-screen parse-findings-lines resolve-failure-msg read-pickup-blocker
+                 work/start-intent!]})
   (Operation start! "Start the dashboard server."
     {:signature [:=> [:catn [:opts :map]] :any] :delegates [handle-request]})
   (Operation stop! "Stop it."

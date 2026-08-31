@@ -36,6 +36,15 @@
    [:priority       {:optional true} int?]
    [:priority-from  {:optional true} [:map [:property string?]]]
    [:session-profile {:optional true} keyword?]
+   ;; The stage a fire's workstream is BORN at. `spawn/initial-stage` has always read it
+   ;; — `(or (-> routed :trigger :workstream-stage) :triaging)` — but this map is closed
+   ;; and did not carry it, so every stanza that declared it failed validation before the
+   ;; reader ever ran. A default nothing could override is not a default.
+   ;;
+   ;; The described-intent leg is the first caller that needs it: its workstream has no
+   ;; ticket to triage, and being born :triaging would put it in the intake queue asking
+   ;; a person to classify a description they just typed.
+   [:workstream-stage {:optional true} keyword?]
    ;; ⚠ INERT. The dispatch that ran these was deleted 2026-08-31 as dead code — nothing
    ;; called it and no path wrote the :preprocessing phase it was meant to run in. The key
    ;; stays because configured triggers still carry it and a closed schema would reject them;

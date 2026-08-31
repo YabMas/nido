@@ -111,16 +111,22 @@
      :delegates [resume-cwd]}))
 
 (Module lane-scratch
-  "Loose workstreams: the ones with no external ref, for work that started from an idea rather
-   than a ticket.
+  "One-off workstreams: the ones a person started by hand, for work that began from an idea
+   rather than a ticket.
 
-   Source-agnostic by construction — a scratch workstream is just a workstream whose
-   `:external-refs` is empty, so every lane treats it the same as any other."
-  (Operation scratch? "Whether a workstream carries no external ref."
+   Disposability is MARKED, not inferred. A one-off carries the `:scratch` stage `birth!` writes,
+   and that marker is what says it may be discarded with its session. Ref-lessness used to stand
+   in for the marker, which held only while nothing else minted a ref-less workstream — the
+   described-intent leg does, so the inference and the marker stopped agreeing and the marker is
+   the one that was always authored."
+  (Operation scratch? "Whether a workstream is marked a one-off."
     {:signature [:=> [:catn [:w Workstream]] :boolean]})
-  (Operation birth! "Ensure a loose workstream owns a named human session."
+  (Operation birth! "Ensure a one-off workstream owns a named human session."
     {:signature [:=> [:catn [:project ProjectName] [:session-name SessionName] [:weight :keyword]] :any]
      :delegates [workstream/create! workstream/list-ids]})
-  (Operation reap! "Delete the loose workstream owning a session, sparing one that carries a ref."
+  (Operation reap!
+    "Delete the one-off workstream owning a session — sparing every unmarked one, and every
+     marked one that has since acquired an external ref. Two facts, not one: the marker says
+     it was born disposable, the absent ref says nothing outside has claimed it since."
     {:signature [:=> [:catn [:project ProjectName] [:session-name SessionName]] :any]
      :delegates [scratch? workstream/list-ids workstream/read-ws workstream/delete!]}))

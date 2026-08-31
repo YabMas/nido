@@ -2209,6 +2209,52 @@
              "it'll appear in the spine shortly."])
           (pickup-blocked-note blocked-by trigger project)]))])))
 
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :any]}
+  intent-bar
+  "Describe-an-intent bar at the top of /workstreams, beside the pickup bar. Binds an
+   `intent` signal, POSTs it to /workstreams/intent/<project>, and reserves an empty
+   #intent-result the SSE response patches.
+
+   A textarea rather than an input, because what belongs here is a sentence or three —
+   what you would say to a person — and the thing reading it on the other end is an agent
+   that will ask if it is not enough. Cmd+Enter submits; a bare Enter is a newline, which
+   is the opposite of the pickup bar's binding and right for the opposite kind of input.
+
+   On the page chrome for the same reason pickup-bar is: the 5s poll must not clobber the
+   result."
+  [project]
+  (let [post (str "@post('/workstreams/intent/" project "')")]
+    [:div.pickup
+     [:div.pickup-label "Start from an intent"]
+     [:div.pickup-row
+      [:textarea {"data-bind" "intent"
+                  "data-on:keydown" (str "evt.key === 'Enter' && (evt.metaKey || evt.ctrlKey) && (" post ")")
+                  :rows 2
+                  :placeholder "describe what you want done…"}]
+      [:button.btn {"data-on:click" post} "Start →"]]
+     [:div {:id "intent-result" :class "pickup-result"}]]))
+
+(defn ^{:malli/schema [:=> [:cat :map :map] :string]}
+  intent-result-fragment
+  "HTML string (root #intent-result) reporting the outcome of an intent POST. `result` is
+   start-intent!'s return; opts is {:project <str>}.
+
+   Renders whatever the facade answers, the missing-leg refusal included — and that refusal
+   is not an error path. It is the ordinary reply for a project that has not declared the
+   leg, which is every project until one does, so it says where to add it rather than
+   apologising."
+  [result {:keys [project]}]
+  (str
+   (h/html
+    [:div {:id "intent-result" :class "pickup-result" :style "margin-top:8px;"}
+     (case (:decision result)
+       :blank  [:p.meta "Say what you want done — a sentence is enough."]
+       :no-leg [:p.meta (str "No " (name (:trigger result)) " leg is declared for this project, "
+                             "so there is nothing to hand a description to. Add one to "
+                             "~/.nido/projects/" project "/triggers.edn.")]
+       [:p "✓ Queued — a session will pick this up and work out what it means. "
+        "It'll appear in the spine shortly."])])))
+
 (defn ^{:malli/schema [:=> [:cat :map :map] :any]}
   workstreams-page
   "Overview + ledger pane, rendered from the screen. The list, its poll query,
@@ -2227,6 +2273,7 @@
      [:div.gate-wrap {:data-signals__ifmissing ws-fold-signals-init}
       [:div.queue-col
        (pickup-bar project)
+       (intent-bar project)
        (tab-row screen)
        [:div.inbox {:data-on-interval__duration.5s (str "@get('/_fragment/workstreams" q "')")}
         (h/raw (workstreams-fragment screen))]]

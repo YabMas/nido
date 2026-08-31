@@ -14,10 +14,19 @@
 
 (defn ^{:malli/schema [:=> [:cat :Workstream] :boolean]}
   scratch?
-  "A loose workstream: one carrying no external refs. Source-agnostic — Notion
-   and GitHub workstreams both carry refs, so 'no refs' uniquely marks a one-off."
+  "A one-off workstream: one carrying the `:scratch` stage `birth!` writes.
+
+   MARKED, not inferred. This used to read ref-lessness — Notion and GitHub
+   workstreams both carry refs, so \"no refs\" stood in for \"disposable\" — and
+   that held exactly as long as nothing else minted a ref-less workstream. The
+   described-intent leg does, and its workstream sits with no entries until the
+   agent writes its `:intent`, which is precisely the window both reapers test
+   for. Inferred disposability would have deleted a description whose session
+   halted on a blocker before it could record what it was for.
+
+   The marker was always the authored fact; the inference was the shortcut."
   [w]
-  (empty? (:external-refs w)))
+  (= :scratch (:stage w)))
 
 (defn- find-ws-for-session
   "ws-id of the workstream whose sessions include `session-name`, or nil. Scans
@@ -62,16 +71,22 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :SessionName] :any]}
   reap!
-  "Delete the loose workstream owning `session-name` when it is safe to discard:
-   it is scratch (no refs), carries no ledger entries, and owns no session other
-   than this one. No-op when absent or not reapable (it grew a ref/entry, or
-   another session shares it). Idempotent. Returns nil."
+  "Delete the one-off workstream owning `session-name` when it is safe to discard:
+   it is MARKED `:scratch`, has acquired no external ref, carries no ledger entries,
+   and owns no session other than this one. No-op otherwise. Idempotent. Returns nil.
+
+   The marker and the ref are two facts, not one. The marker says it was born
+   disposable; the absent ref says nothing outside has claimed it since. `scratch?`
+   used to answer both at once by reading ref-lessness, which worked only while
+   nothing but `birth!` minted a ref-less workstream — and hid that a one-off which
+   later grows a ticket ref stops being discardable for a reason of its own."
   [project session-name]
   (when-let [ws-id (find-ws-for-session project session-name)]
     (let [w      (workstream/read-ws project ws-id)
           others (->> (session/list-sessions project ws-id)
                       (remove #(= session-name (:name %))))]
       (when (and (scratch? w)
+                 (empty? (:external-refs w))
                  (empty? (:entries w))
                  (empty? others))
         (workstream/delete! project ws-id))))

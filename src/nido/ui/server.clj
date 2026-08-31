@@ -438,6 +438,18 @@
              (sse-fragment
               (views/pickup-result-fragment result opts))))))
 
+      ;; POST /workstreams/intent/:project — hand a typed description to the work
+      ;; plane, which enqueues it at the project's :start-intent leg or refuses
+      ;; naming that leg. Patches #intent-result either way: the refusal is the
+      ;; ordinary answer until a project declares the leg, not an error.
+      (and (= 3 (count segs)) (= "workstreams" (first segs)) (= "intent" (nth segs 1)))
+      (let [project (nth segs 2)
+            input   (str (:intent (parse-json-body body)))
+            result  (work/start-intent! (keyword project) input)]
+        (sse-response
+         (sse-fragment
+          (views/intent-result-fragment result {:project project}))))
+
       ;; POST /ops/fleet/:project/:session/down — down ONE idle session from the
       ;; fleet card. Session-scoped on purpose: work/bring-down! is the workstream
       ;; fan-out and would take this session's siblings with it. The session name

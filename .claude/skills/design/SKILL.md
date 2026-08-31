@@ -577,6 +577,25 @@ Skip it only when the intent is already written down: a triaged ticket's
 `:triage` entry states the goal, and the design may cite that entry instead.
 Nothing else is citable — a design cannot say it is *for* a review or a blocker.
 
+**When the first message IS the description**, and nothing else — a workstream
+started from the dashboard's intent bar arrives that way — the intent is not
+already written down and there is no ticket to read. Write it from what you were
+given, and hold yourself to the same `:done-when` bar as any other: each one
+falsifiable.
+
+If the description cannot carry that bar, **do not invent the missing half**. A
+goal you guessed is worse than no goal, because everything downstream is judged
+against it and nobody can tell it was a guess. Halt on a `:blocker` naming what
+you would need — a `:blocker` entry parks the session, the workstream surfaces as
+a gate, and the answer comes back through `/resume`. That round trip costs a few
+minutes; a survey and a design built on an invented goal cost the whole
+workstream, and the review loop will not catch it, because a design can serve a
+wrong goal perfectly.
+
+The test is the one `:done-when` already states: can you write a condition whose
+failure you could observe? If yes, write the intent and carry on. If every
+condition you can think of is "the person is happy with it", ask.
+
 **A goal authored after the design is a goal the design satisfies.** That is the
 same contamination §4 exists to prevent for the current-design inference, which
 is why this is a separate record written first rather than a field on the design.
