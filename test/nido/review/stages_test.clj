@@ -23,8 +23,9 @@
         d   (stages/parse-warden-decision txt)]
     (is (= :continue (:decision d)))
     (is (= [{:id "aa11" :same-as nil :owner-layer "drop-legacy" :disposition :fix
-             :authority nil :of nil :because "real"}]
-           (:rulings d)))))
+             :authority nil :of nil :sweep false :because "real"}]
+           (:rulings d))
+        "sweep defaults false — a ruling that does not claim a class is not one")))
 
 (deftest parse-warden-decision-reads-an-unknown-disposition-as-fix
   ;; The fail-safe direction: an unrecognised ruling is worked on, never dropped.
@@ -825,3 +826,37 @@
                            {:label "wiring" :patch-hash "h2"}])]
     (is (= ["wiring"] (mapv :label review)))
     (is (= [4] (mapv :converged-at skipped)))))
+
+(deftest the-composition-target-carries-this-runs-earlier-composition-findings
+  ;; Only findings the composition pass itself made — a layer's own finding is
+  ;; already answered where it was raised, and repeating it here would tell the
+  ;; pass it reported something it never did.
+  (let [history [{:iter 1 :findings [{:from-layer "stack" :title "the seam" :kind "misplaced-seam"}
+                                     {:from-layer "core" :title "a typo"}]}
+                 {:iter 2 :findings [{:from-layer "stack" :title "the seam again"}]}]
+        [layer stack] (stages/with-composition-memory
+                        [{:label "core"}
+                         {:label "stack" :stack? true :composition {:layers [{:label "core"}]}}]
+                        history)
+        prior (get-in stack [:composition :already-reported])]
+    (is (= ["the seam" "the seam again"] (mapv :title prior)))
+    (is (= [1 2] (mapv :round prior)))
+    (is (nil? (:composition layer)) "a layer target gets no composition memory")))
+
+(deftest composition-memory-does-not-move-the-cache-key
+  ;; The key is the CUT. Fold in a value that changes every round and the cache
+  ;; misses every round — switched off rather than made correct.
+  (with-redefs [layers/patch-hash (fn [_ _ _] "SAMEPATCH")]
+    (let [cut   {:layers [{:label "core"}]}
+          cold  (first (stages/with-patch-hashes
+                         "/w" [{:label "stack" :stack? true :from "b" :to "@"
+                                :composition cut}]))
+          warm  (first (stages/with-patch-hashes
+                         "/w" [{:label "stack" :stack? true :from "b" :to "@"
+                                :composition (assoc cut :already-reported
+                                                    [{:round 1 :title "x"}])}]))]
+      (is (= (:patch-hash cold) (:patch-hash warm))))))
+
+(deftest a-run-with-no-prior-composition-findings-changes-nothing
+  (let [targets [{:label "stack" :composition {:layers [{:label "core"}]}}]]
+    (is (= targets (stages/with-composition-memory targets [])))))

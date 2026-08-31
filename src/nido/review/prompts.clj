@@ -305,7 +305,7 @@
    nil below two layers, which is not a degradation — there is no composition to
    review, the whole-stack target is the branch review, and it should be primed
    as one."
-  [{:keys [layers]}]
+  [{:keys [layers already-reported]}]
   (when (> (count layers) 1)
     (str
      "THIS IS THE COMPOSITION PASS OVER A STACKED CHANGE. Where it narrows the\n"
@@ -357,6 +357,25 @@
      "A layer's `out of scope` binds you too wherever it names something that\n"
      "layer deliberately left to another. What it does not cover is the case\n"
      "where EVERY layer pushed the same thing away — that one is yours, below.\n\n"
+     (when (seq already-reported)
+       ;; The pass runs fresh every round and is the only reader that can see
+       ;; across layers. Told nothing about its own earlier output, it has no way
+       ;; to notice it is returning the same seam a third time rather than
+       ;; looking further — so a round costs a full pass and produces a repeat.
+       (str "WHAT YOU ALREADY REPORTED IN THIS RUN\n\n"
+            "These came from THIS pass in earlier rounds. They are on the record\n"
+            "and a warden has already ruled on them. Reporting one again buys the\n"
+            "run nothing and costs it a round:\n\n"
+            (->> already-reported
+                 (map (fn [f]
+                        (str "- round " (:round f) ": " (:title f)
+                             (when-let [k (:kind f)] (str "  [" k "]"))
+                             "\n")))
+                 (apply str))
+            "\n"
+            "If one of these is genuinely unresolved, say so plainly and say what\n"
+            "is different now — do not restate it as though it were new. If they\n"
+            "are all settled, spend this round somewhere you have not looked.\n\n"))
      "THE KINDS OF DEFECT THAT ARE YOURS\n\n"
      (kinds-block :cut)
      "\n"
@@ -381,17 +400,57 @@
 
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   fix-prompt
-  "Instruction to fix the given findings. Do NOT commit — the engine commits."
-  [{:keys [findings]}]
+  "Instruction to fix the given findings. Do NOT commit — the engine commits.
+
+   Carries three things the warden had already written and the fixer never saw.
+
+   `:because` is the warden's own sentence about this finding, and it is
+   addressed to this reader: it says why the finding is real, or which layer it
+   was moved to and why. It was produced every round, stored on the ruling, and
+   rendered to nobody.
+
+   The owning layer's brief — what it claims, what it declared out of scope —
+   bounds the edit. Without it \"make the MINIMAL change\" is the only guidance
+   there is, and for a defect that spans a seam the minimal change is a patch on
+   whichever side the finding happened to be reported from.
+
+   `:sweep` widens one finding into its family. The warden recognises a recurring
+   class unprompted and had no channel to say so, so rounds surfaced its members
+   one per round: a call site fixed, the next one found, ten rounds for ten
+   instances of one defect."
+  [{:keys [findings layer]}]
   (str
    "Fix the following code-review findings in this working directory. Make the\n"
    "MINIMAL change that resolves each. Do NOT commit — the orchestrator commits.\n\n"
+   (when (or (:claim layer) (:out-of-scope layer))
+     (str "YOU ARE FIXING ONE LAYER OF A STACKED CHANGE"
+          (when (:label layer) (str " — " (:label layer))) ".\n"
+          (when-let [c (:claim layer)]
+            (str "It claims: " c "\n"))
+          (when-let [o (:out-of-scope layer)]
+            (str "It declared OUT OF SCOPE: " o "\n"
+                 "That is a prohibition. Do not fix those things here; another\n"
+                 "layer owns them, and someone has already decided which.\n"))
+          "\n"))
    (->> findings
         (map (fn [f]
                (str "- [P" (:priority f) "] " (:title f) "\n"
                     "  file: " (:file f) ":" (:line-start f) "-" (:line-end f) "\n"
+                    (when-let [k (:kind f)]
+                      (str "  kind: " k
+                           (when-let [a (seq (:across f))]
+                             (str " — spans " (str/join ", " a)))
+                           "\n"))
+                    (when-let [b (:because f)]
+                      (str "  the reviewer of the whole stack says: " b "\n"))
+                    (when (:sweep f)
+                      (str "  SWEEP: this is one instance of a recurring defect.\n"
+                           "  Fix it, then audit this layer for its siblings and fix\n"
+                           "  those too. Finding them one per round is what this is\n"
+                           "  here to stop — the minimal change rule does not apply\n"
+                           "  to the search, only to each edit.\n"))
                     "  " (:body f))))
-        (clojure.string/join "\n\n"))))
+        (str/join "\n\n"))))
 
 (defn- bullets [xs] (str/join "\n" (map #(str "- " %) xs)))
 
@@ -577,6 +636,7 @@
    "\",\n"
    "               \"authority\": \"duplicate|out-of-scope|design|spun-out|false-positive\",\n"
    "               \"of\": \"<the claim a deviation departs from>\",\n"
+   "               \"sweep\": <true if this is one instance of a recurring class>,\n"
    "               \"because\": \"<one sentence>\"}]}\n"
    "Every finding below must appear exactly once.\n\n"
    "DECISION:\n"
@@ -612,6 +672,14 @@
       "the observation itself: `deviation` against the claim it departs from, or\n"
       "`park` when it contradicts a named invariant. Either leaves a human\n"
       "something to read.\n\n"))
+   "SWEEP — is this one of many?\n"
+   "Set `sweep` true on a `fix` when the finding is one INSTANCE of a defect\n"
+   "class rather than a one-off: the same mistake made at several call sites,\n"
+   "the same guard missing in several places. The fixer is otherwise told to make\n"
+   "the minimal change, so it repairs the one line it was handed and the next\n"
+   "round finds the next instance — ten rounds for ten instances of one defect.\n"
+   "With `sweep` it is told to fix this one and then audit its layer for the\n"
+   "siblings. You are the reader that sees the class; nothing else can.\n\n"
    "SAME_AS — is this a defect we have already seen?\n"
    "A reviewer starts fresh every round and writes its own words, so one defect\n"
    "comes back under a new title, at a line the last round's fixes moved. You are\n"

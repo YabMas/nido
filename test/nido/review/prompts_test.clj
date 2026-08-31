@@ -320,3 +320,61 @@ layers, it is not yours"))
     (is (str/includes? out "CLAIMED DECOMPOSITION"))
     (is (str/includes? out "the ledger holds a decision"))
     (is (str/includes? out "that is a finding about the CUT"))))
+
+(deftest the-fixer-is-told-what-the-warden-wrote-for-it
+  ;; :because is addressed to this reader — why the finding is real, or which
+  ;; layer it was moved to and why. It was produced every round and rendered to
+  ;; nobody.
+  (let [out (prompts/fix-prompt
+             {:findings [{:priority 1 :title "t" :body "b" :file "a.clj"
+                          :line-start 1 :line-end 2
+                          :kind "misplaced-seam" :across ["core" "wiring"]
+                          :because "moved down: core is where the guarantee is dropped"}]})]
+    (is (str/includes? out "moved down: core is where the guarantee is dropped"))
+    (is (str/includes? out "misplaced-seam"))
+    (is (str/includes? out "spans core, wiring"))))
+
+(deftest the-fixer-is-bounded-by-the-layer-it-is-working-on
+  ;; "Make the MINIMAL change" is the only guidance a fixer had, and for a defect
+  ;; spanning a seam the minimal change is a patch on whichever side it was
+  ;; reported from.
+  (let [out (prompts/fix-prompt
+             {:findings [{:priority 1 :title "t" :body "b"}]
+              :layer {:label "core" :claim "the ledger holds a decision"
+                      :out-of-scope "the surface that reads it"}})]
+    (is (str/includes? out "It claims: the ledger holds a decision"))
+    (is (str/includes? out "OUT OF SCOPE: the surface that reads it"))
+    (is (str/includes? out "That is a prohibition"))))
+
+(deftest a-fixer-with-no-layer-gets-no-empty-brief
+  ;; A flat branch has no layer to be bounded by, and a heading with nothing
+  ;; under it reads as a bound that was checked and found empty.
+  (let [out (prompts/fix-prompt {:findings [{:priority 1 :title "t" :body "b"}]})]
+    (is (not (str/includes? out "ONE LAYER OF A STACKED CHANGE")))))
+
+(deftest sweep-widens-one-finding-into-its-family
+  ;; The warden sees the class and had no field to name it in, so rounds
+  ;; surfaced its members one per round.
+  (let [swept (prompts/fix-prompt
+               {:findings [{:priority 1 :title "t" :body "b" :sweep true}]})
+        plain (prompts/fix-prompt
+               {:findings [{:priority 1 :title "t" :body "b"}]})]
+    (is (str/includes? swept "SWEEP"))
+    (is (str/includes? swept "audit this layer for its siblings"))
+    (is (not (str/includes? plain "SWEEP")))))
+
+(deftest the-composition-pass-is-told-what-it-already-reported
+  ;; It is the only reader that can see across layers and it starts cold every
+  ;; round, so it returns the same seam rather than looking further.
+  (let [layers [{:label "core" :index 1 :from "a" :tip "b"}
+                {:label "wiring" :index 2 :from "b" :tip "c"}]
+        cold (prompts/composition-block {:layers layers})
+        warm (prompts/composition-block
+              {:layers layers
+               :already-reported [{:round 1 :title "the migration and its reader split"
+                                   :kind "misplaced-seam"}]})]
+    (is (not (str/includes? cold "WHAT YOU ALREADY REPORTED")))
+    (is (str/includes? warm "WHAT YOU ALREADY REPORTED IN THIS RUN"))
+    (is (str/includes? warm "the migration and its reader split"))
+    (is (str/includes? warm "round 1"))
+    (is (str/includes? warm "spend this round somewhere you have not looked"))))

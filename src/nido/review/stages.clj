@@ -58,6 +58,10 @@
      :disposition (if (contains? dispositions d) d :fix)
      :authority   (:authority r)
      :of          (:of r)
+     ;; Whether this finding is one instance of a class the fixer should sweep.
+     ;; The warden recognises a recurring family unprompted — it says so in
+     ;; `because`, in prose, every time — and had no field to say it in.
+     :sweep       (boolean (:sweep r))
      :because     (:because r)}))
 
 (defn ^{:malli/schema [:=> [:cat :string] :map]}
@@ -127,6 +131,11 @@
                           futs))))
         (partition-all n thunks)))
 
+(def ^:private stack-label
+  "The composition target's label — what its findings are stamped :from-layer
+   with, and so how they are told apart from a layer's own."
+  "stack")
+
 (defn ^{:malli/schema [:=> [:cat :Path :any] :any]}
   composition-of
   "What the composition pass is told about the stack it is composing: one entry
@@ -180,7 +189,7 @@
   [cwd base]
   (let [base-rev (codex/merge-base cwd base)
         stack    (session-stack cwd base)
-        whole    {:label "stack" :from base-rev :to "@" :brief nil :stack? true}]
+        whole    {:label stack-label :from base-rev :to "@" :brief nil :stack? true}]
     (if (< (count stack) 2)
       [whole]
       (let [per-layer (into []
@@ -195,6 +204,34 @@
         (conj per-layer
               (assoc whole :composition
                      {:layers (composition-of cwd per-layer)}))))))
+
+(defn ^{:malli/schema [:=> [:cat :any :any] :any]}
+  with-composition-memory
+  "Hand the composition target the composition findings this run already made.
+
+   It is the only reader that can see across layers, and it starts cold every
+   round: nothing tells it what it reported last time. So a pass that finds one
+   seam reports it, sees the same stack next round, and reports it again — three
+   rounds of a full fan-out to say one thing once. Its own prior findings cost
+   nothing to recognise and are the cheapest possible way to make it look
+   somewhere else.
+
+   Carried beside `:layers` rather than inside it, because `with-patch-hashes`
+   keys this target on the CUT: fold a value that changes every round into the
+   identity and the cache never hits again."
+  [targets history]
+  (let [prior (into []
+                    (comp (mapcat (fn [h]
+                                    (map #(assoc % :round (:iter h)) (:findings h))))
+                          (filter #(= stack-label (:from-layer %)))
+                          (map #(select-keys % [:round :title :kind])))
+                    history)]
+    (if (empty? prior)
+      targets
+      (mapv (fn [t]
+              (cond-> t
+                (:composition t) (assoc-in [:composition :already-reported] prior)))
+            targets))))
 
 (defn ^{:malli/schema [:=> [:cat :Path :any] :any]}
   with-patch-hashes
@@ -214,8 +251,14 @@
           (let [h (layers/patch-hash cwd (:from t) (:to t))]
             (assoc t :patch-hash
                    (when h
-                     (if-let [c (:composition t)]
-                       (str h "-" (Integer/toHexString (hash c)))
+                     ;; The LAYERS, not the whole composition map. What this
+                     ;; target reviews is the cut, so the cut is its identity —
+                     ;; and anything else living on the map (what earlier rounds
+                     ;; already reported, say) changes every round and would
+                     ;; make the key miss every time, which is the cache
+                     ;; switched off rather than made correct.
+                     (if-let [c (seq (:layers (:composition t)))]
+                       (str h "-" (Integer/toHexString (hash (vec c))))
                        h)))))
         targets))
 
@@ -341,7 +384,8 @@
   (let [{:keys [cwd base run-id]} (:config ctx)
         [project ws-id] (project+ws-from-cwd cwd)
         cached  (if ws-id (cache/read-cache project ws-id) {})
-        all     (with-patch-hashes cwd (review-targets cwd base))
+        all     (with-patch-hashes
+                 cwd (with-composition-memory (review-targets cwd base) (:history ctx)))
         {:keys [review skipped]} (to-review cached all)
         targets review
         _       (announce-targets! ctx {:review review :skipped skipped})
@@ -644,6 +688,7 @@
                                  :disposition (or (:disposition r) :fix)
                                  :authority   (:authority r)
                                  :of          (:of r)
+                                 :sweep       (boolean (:sweep r))
                                  :because     (or (:because r)
                                                   (when-not r "the warden did not rule on this finding"))})]
               (assoc merged :handle (resolve-handle handles merged))))
@@ -964,6 +1009,15 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
    :run  run-reshape-stage})
 
 
+(defn- toc-row
+  "The table-of-contents row for one layer, by label, or nil.
+
+   The fixer's bound. The row already exists — it is what the warden is given so
+   it can attribute deliberately — and the fixer, which is the reader that has
+   to STAY inside a layer, was the one shown none of it."
+  [toc label]
+  (first (filter #(= label (:label %)) toc)))
+
 (defn ^{:malli/schema [:=> [:cat :any :any] :any]}
   fix-plan
   "Findings the warden dispositioned :fix, grouped by the layer that OWNS them,
@@ -1054,7 +1108,10 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                  (let [{:keys [num-turns result-text]}
                        (agent/launch!
                         {:run-id run-id :cwd cwd
-                         :first-message (prompts/fix-prompt {:findings findings})
+                         :first-message (prompts/fix-prompt
+                                         {:findings findings
+                                          :layer (assoc (toc-row (:toc ctx) label)
+                                                        :label label)})
                          :budget budget
                          :claude-session-id (layer-fixer-session impl-session-id label)
                          :resume? (fixed-before? (:history ctx) label)
