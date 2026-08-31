@@ -1,4 +1,4 @@
-(ns tasks.nido-notion-views
+(ns tasks.nido-notion-views-cmd
   "Bb task entry points for Notion view registry validation."
   (:require
    [nido.notion.client :as client]

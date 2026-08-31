@@ -200,7 +200,17 @@
 
    Its reach is wide and DECLARED, so it is still checked: a task reaching somewhere new is a
    line in this file, not an accident. It reaches `Surface` for the same reason Boot does not:
-   a task STARTS the TUI and the dashboard, and starting them is what tasks are for."
+   a task STARTS the TUI and the dashboard, and starting them is what tasks are for.
+
+   ⚠ NAMING. A task namespace mirrors its bb task path — `bb nido:notion:views` is
+   `tasks.nido-notion-views` — and when that path also names a production namespace, the mirror
+   collides: fukan pairs a design Module to a namespace by treating `-` and `.` alike and taking
+   a dotted suffix, so `tasks.nido-notion-views` answered to `notion-views` exactly as
+   `nido.notion.views` did. Both modules then claimed both namespaces, and everything downstream
+   read a pairing that was no longer one. A task whose path shadows a production namespace ends
+   in `-cmd` — the marker has to be at the END, because a suffix match is all that reads it. Two
+   do; the rest need nothing. Forgetting it is not silent any more: fukan's
+   `:correspondence/module-ambiguous` fails the check."
   {:prefix ["tasks."]
    :may-depend [Platform Integration Session Vsdd Review Boot Design Surface
                 Record Source Daemon View Lane WorkPlane Report Control Agent Executor]})

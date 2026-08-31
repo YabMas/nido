@@ -1,5 +1,5 @@
-(ns canvas.tasks.nido-notion-views
-  "Self-spec: `tasks.nido-notion-views` — a bb task entry point.
+(ns canvas.tasks.nido-notion-views-cmd
+  "Self-spec: `tasks.nido-notion-views-cmd` — a bb task entry point.
 
    A COMPOSITION ROOT for one CLI verb: parse the arguments, call the domain, print, exit. It
    reaches widely and declares that it does, which is why Tasks is its own band rather than part
@@ -9,7 +9,7 @@
             [fukan.common.vocab.code.operation :refer [Operation]]
             [fukan.common.typing.malli]))
 
-(Module nido-notion-views
+(Module nido-notion-views-cmd
   "Bb task entry points for Notion view registry validation."
   (Operation check-cmd
     "bb nido:notion:views:check :project <p> — validate the registry against the live DB."

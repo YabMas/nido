@@ -16,7 +16,7 @@
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   exit!
   "Redefable wrapper around System/exit (matches the exit-test convention used
-   elsewhere in tasks.* — see tasks.nido-transcribe / tasks.nido-notion-preprocess)
+   elsewhere in tasks.* — see tasks.nido-transcribe / tasks.nido-notion-preprocess-cmd)
    so tests can capture the exit code without killing the test JVM."
   [code]
   (System/exit code))

@@ -43,7 +43,7 @@
 
 (deftest apply-cmd-no-workstream-exits-nonzero
   ;; apply-cmd's exit path goes through the redefable t/exit! (matches this
-  ;; codebase's exit-test convention, e.g. nido-transcribe/nido-notion-preprocess)
+  ;; codebase's exit-test convention, e.g. nido-transcribe/nido-notion-preprocess-cmd)
   ;; instead of a raw System/exit, so the test can capture the code without
   ;; killing the test JVM.
   (let [exit-code (atom nil)

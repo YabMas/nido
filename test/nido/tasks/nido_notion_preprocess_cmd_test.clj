@@ -1,10 +1,10 @@
-(ns nido.tasks.nido-notion-preprocess-test
+(ns nido.tasks.nido-notion-preprocess-cmd-test
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
    [nido.notion.client :as notion]
    [nido.notion.preprocess :as pp]
-   [tasks.nido-notion-preprocess :as task]))
+   [tasks.nido-notion-preprocess-cmd :as task]))
 
 (deftest run-requires-page-and-out
   (let [exit (atom nil)]

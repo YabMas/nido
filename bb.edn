@@ -343,14 +343,14 @@
    :task (apply nido-slack/reply *command-line-args*)}
 
   nido:notion:views:check
-  {:requires ([tasks.nido-notion-views :as nido-notion-views])
+  {:requires ([tasks.nido-notion-views-cmd :as nido-notion-views-cmd])
    :doc "Validate ~/.nido/projects/<p>/notion-views.edn against the live database. :project <p>."
-   :task (apply nido-notion-views/check-cmd *command-line-args*)}
+   :task (apply nido-notion-views-cmd/check-cmd *command-line-args*)}
 
   nido:notion:preprocess-ticket
-  {:requires ([tasks.nido-notion-preprocess :as nido-notion-preprocess])
+  {:requires ([tasks.nido-notion-preprocess-cmd :as nido-notion-preprocess-cmd])
    :doc "Preprocess a Notion ticket (transcribe videos): :page <id> :out <dir> [:budget 10m]"
-   :task (apply nido-notion-preprocess/run *command-line-args*)}
+   :task (apply nido-notion-preprocess-cmd/run *command-line-args*)}
 
   nido:coordinator:source:list
   {:requires ([tasks.nido-coordinator-source :as nido-coordinator-source])

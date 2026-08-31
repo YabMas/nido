@@ -1,4 +1,4 @@
-(ns tasks.nido-notion-preprocess
+(ns tasks.nido-notion-preprocess-cmd
   "bb task entry point for Notion ticket preprocessing.
 
    Usage:

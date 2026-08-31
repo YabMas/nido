@@ -1,5 +1,5 @@
-(ns canvas.tasks.nido-notion-preprocess
-  "Self-spec: `tasks.nido-notion-preprocess` — a bb task entry point.
+(ns canvas.tasks.nido-test
+  "Self-spec: `tasks.nido-test` — a bb task entry point.
 
    A COMPOSITION ROOT for one CLI verb: parse the arguments, call the domain, print, exit. It
    reaches widely and declares that it does, which is why Tasks is its own band rather than part
@@ -9,11 +9,8 @@
             [fukan.common.vocab.code.operation :refer [Operation]]
             [fukan.common.typing.malli]))
 
-(Module nido-notion-preprocess
-  "bb task entry point for Notion ticket preprocessing."
-  (Operation exit!
-    "The `exit!` entry point."
-    {:signature [:=> [:catn [:opts [:* :any]]] :any]})
+(Module nido-test
+  "Run unit tests under test/. Optional :only <ns-prefix> filter."
   (Operation run
-    "bb nido:notion:preprocess-ticket :page <id> :out <dir> [:budget 10m]"
+    "The `run` entry point."
     {:signature [:=> [:catn [:args [:* :any]]] :any]}))
