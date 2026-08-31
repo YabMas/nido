@@ -860,3 +860,33 @@
 (deftest a-run-with-no-prior-composition-findings-changes-nothing
   (let [targets [{:label "stack" :composition {:layers [{:label "core"}]}}]]
     (is (= targets (stages/with-composition-memory targets [])))))
+
+(deftest a-park-is-carried-until-something-settles-it
+  ;; A park is never raised again — that is what a park IS — so without carrying
+  ;; it, it leaves the findings the moment the reviewer stops mentioning it and
+  ;; the next warden re-adjudicates the same seam from scratch.
+  (let [r1 (stages/carried-parks {} [{:handle "h1" :title "the seam"
+                                      :disposition :park :because "for a human"}] 1)
+        r2 (stages/carried-parks r1 [{:handle "h9" :disposition :fix}] 2)
+        r3 (stages/carried-parks r2 [{:handle "h1" :title "the seam"
+                                      :disposition :declined}] 3)]
+    (is (= 1 (get-in r1 ["h1" :since])))
+    (is (= "for a human" (get-in r1 ["h1" :because])))
+    (is (= r1 r2) "a round that does not mention it does not resolve it")
+    (is (empty? r3) "a later round CAN settle it — a park is a question, not a verdict")))
+
+(deftest a-park-does-not-restart-its-clock-by-being-re-parked
+  (let [r1 (stages/carried-parks {} [{:handle "h1" :disposition :park}] 1)
+        r4 (stages/carried-parks r1 [{:handle "h1" :disposition :park}] 4)]
+    (is (= 1 (get-in r4 ["h1" :since]))
+        "it has been open since round 1, whatever this round called it")))
+
+(deftest the-warden-is-shown-the-parks-it-is-still-holding
+  (let [out (prompts/warden-prompt
+             {:findings [] :history [] :design nil
+              :parked [{:since 1 :title "the doc-ordering seam"
+                        :because "no fixer has standing here"}]})]
+    (is (str/includes? out "STILL PARKED"))
+    (is (str/includes? out "since round 1"))
+    (is (str/includes? out "the doc-ordering seam"))
+    (is (str/includes? out "nothing raises a park twice"))))

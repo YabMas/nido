@@ -326,7 +326,19 @@
                     ;; inside a finding, so the pipeline that knows what a
                     ;; disposition means is the one that says whether anything
                     ;; is still owed.
-                    :open?     (complement stages/settled?)}
+                    :open?     (complement stages/settled?)
+                    ;; A repair is aimed at a layer, so a finding the warden
+                    ;; re-attributes has not been attempted where it now points.
+                    ;; Without this the give-up counter reads three attempts at
+                    ;; the wrong layer as three failures and stops the run on
+                    ;; the round that first aimed it correctly.
+                    :attempt-key (rloop/default-attempt-key rloop/default-finding-key)
+                    ;; The warden is the stage that judges; everything after it
+                    ;; repairs. A run whose terminal condition is already
+                    ;; decided must not go on to spend fixer launches and land
+                    ;; commits that no round will ever review — which is exactly
+                    ;; what the last round of an :unfixable run was doing.
+                    :judged-after :warden}
         report-atom (atom (report/init {:run-id run-id :cwd cwd :base base
                                         :started-at (str (clock))}))
         final  (frontend/with-live-display

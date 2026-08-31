@@ -746,6 +746,40 @@
     :else
     {:cause :unusable-answer :reason (:reason decision)}))
 
+(def ^:private park-persists-for
+  "How many rounds an unresolved park may survive before the run stops for it.
+
+   Matched to `loop/unfixable-after`, and for the same reason: three rounds is
+   long enough that the seam is not going to resolve itself and short enough
+   that the human hears about it while the branch is still warm."
+  4)
+
+(defn ^{:malli/schema [:=> [:cat :any :any :int] :any]}
+  carried-parks
+  "The open parks this run is holding, each with the round it was first parked
+   in — the previous round's carry, updated with this round's rulings.
+
+   A park is by construction never fixed, so no later round raises it again and
+   it vanishes from the findings the moment the reviewer stops mentioning it.
+   That is why it needs carrying: the warden re-adjudicated the same seam from
+   scratch fifteen times in one run, with its own accumulating prose as the only
+   memory, and the run still reported nothing remaining.
+
+   A park that a later round SETTLES drops out. Being parked is not permanent —
+   it is a question, and a question can be answered."
+  [prior ruled iter]
+  (let [settled (into #{} (comp (filter settled?) (map #(or (:handle %) (:id %)))) ruled)
+        prior'  (into {} (remove (fn [[k _]] (contains? settled k))) prior)]
+    (reduce (fn [acc f]
+              (let [k (or (:handle f) (:id f))]
+                (if (contains? acc k)
+                  acc
+                  (assoc acc k {:since iter
+                                :title (:title f)
+                                :because (:because f)}))))
+            prior'
+            (filter #(= :park (:disposition %)) ruled))))
+
 (defn- run-warden-stage
   [ctx]
   (let [{:keys [cwd run-id budget]} (:config ctx)
@@ -757,6 +791,7 @@
                  :design   (discover-design-record cwd)
                  :stance   (read-stance (first (project+ws-from-cwd cwd)))
                  :toc      (:toc ctx)
+                 :parked   (vals (get-in ctx [:carry :parks] {}))
                  :answered (answered-by-layer ctx)})
         {:keys [num-turns result-error? result-text] :as launch}
         (agent/launch! {:run-id run-id :cwd cwd
@@ -770,6 +805,19 @@
              :control :stop
              :status :warden-indeterminate)
       (let [ruled (apply-rulings (:findings ctx) (:rulings decision) handles)
+            parks (carried-parks (get-in ctx [:carry :parks] {}) ruled (:iter ctx))
+            ;; A park is a question put to a human, and a run that keeps fixing
+            ;; around one is answering a different question. Once a park has
+            ;; stood this long the loop has nothing further to offer it, and
+            ;; stopping is the report — even while other findings are still
+            ;; fixable, because those fixes are not what the branch is waiting
+            ;; on. The warden said exactly this in its own prose and then
+            ;; returned :continue, because there was no state between "keep
+            ;; fixing" and "escalate".
+            stale (seq (for [[k p] parks
+                             :when (>= (inc (- (:iter ctx) (:since p)))
+                                       park-persists-for)]
+                         k))
             ctx' (assoc ctx
                         :warden  decision
                         :findings ruled
@@ -780,11 +828,16 @@
                         ;; replaced, so a finding that stops being
                         ;; reported keeps its filing for a later round
                         ;; that raises it again.
-                        :carry (assoc (:carry ctx) :handles
-                                      (into handles
-                                            (map (juxt :id :handle))
-                                            ruled))
-                        :control  (:decision decision))]
+                        :carry (assoc (:carry ctx)
+                                      :handles (into handles
+                                                     (map (juxt :id :handle))
+                                                     ruled)
+                                      :parks parks)
+                        :control  (:decision decision))
+            ctx' (if stale
+                   (assoc ctx' :control :stop :status :unfixable
+                          :unfixable (vec stale))
+                   ctx')]
         (record-convergence! cwd ctx')
         ctx'))))
 

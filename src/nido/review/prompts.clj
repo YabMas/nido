@@ -608,7 +608,7 @@
    Report-only (no tools): everything it reasons from is inlined here. That is
    deliberate and load-bearing. It is the component that decides to interrupt a
    human, so its inputs have to be reconstructable from the report afterwards."
-  [{:keys [findings history design stance toc answered seen]}]
+  [{:keys [findings history design stance toc answered seen parked]}]
   ;; A branch with no layers is reviewed flat, and there is then no layer label
   ;; for a finding to be attributed to. Asked for one anyway, the warden supplied
   ;; the only stack-shaped thing it had — a file path — on every ruling of the
@@ -710,6 +710,20 @@
    (when stance (str (stance-block stance) "\n"))
    (when-let [t (toc-block toc)] (str t "\n"))
    (answered-block answered)
+   (when (seq parked)
+     ;; A park is never raised again — that is what a park IS — so it leaves the
+     ;; findings the moment the reviewer stops mentioning it and the next warden
+     ;; has no idea it exists. Fifteen rounds re-adjudicated one seam from
+     ;; scratch, with prose minutes as the only memory.
+     (str "STILL PARKED, FROM EARLIER ROUNDS OF THIS RUN\n"
+          "You parked these and no one has answered them. They are open. Do not\n"
+          "re-adjudicate them from scratch, and do not treat their absence from\n"
+          "this round's findings as resolution — nothing raises a park twice:\n"
+          (->> parked
+               (map (fn [p] (str "- since round " (:since p) ": " (:title p)
+                                 (when-let [b (:because p)] (str "\n    " b)) "\n")))
+               (apply str))
+          "\n"))
    (seen-block seen)
    "History of prior rounds (findings + what was fixed):\n"
    (pr-str history) "\n\n"

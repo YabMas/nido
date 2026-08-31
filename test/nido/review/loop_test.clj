@@ -356,3 +356,38 @@
                              :finding-key :title})]
     (is (= :unfixable (:status out)))
     (is (= 4 @fixes) "every round ran its last stage, as before")))
+
+(deftest a-re-routed-finding-gets-a-fresh-attempt-count
+  ;; Three rounds aimed at the wrong layer are not three failed repairs of the
+  ;; defect where it actually lives. Counting bare appearances gave up on the
+  ;; round that first routed it correctly.
+  ;;
+  ;; Each round also carries a finding unique to it, so the whole-set stall
+  ;; check cannot fire — which is the situation `unfixable` exists for: a loop
+  ;; still fixing things while one defect refuses to move.
+  (let [fk    (fn [f] (:handle f))
+        at    (rloop/default-attempt-key fk)
+        run   (fn [layers]
+                (let [[_ emit] (capturing)
+                      pipe [(stage :judge
+                                   (fn [c]
+                                     (assoc c :findings
+                                            [{:handle "sticky"
+                                              :owner-layer (nth layers (dec (:iter c)) "core")}
+                                             {:handle (str "moves-" (:iter c))}])))
+                            (stage :amend
+                                   (fn [c] (cond-> (update c :history (fnil conj [])
+                                                           {:iter (:iter c)
+                                                            :findings (:findings c)})
+                                             (>= (:iter c) 8) (assoc :control :stop))))]]
+                  (rloop/run-loop {:run-id "r" :pipeline pipe :emit emit
+                                   :finding-key fk :attempt-key at})))
+        stuck (run ["core" "core" "core" "core"])
+        moved (run ["core" "core" "core" "wiring"])]
+    (is (= :unfixable (:status stuck))
+        "four rounds on one layer: three repairs attempted and failed")
+    (is (= ["sticky"] (:unfixable stuck))
+        "reported by the defect's identity, not by the attempt it was counted on")
+    (is (= 4 (:iter stuck)))
+    (is (< 4 (:iter moved))
+        "the fourth round re-routed it, so that round is a first attempt")))
