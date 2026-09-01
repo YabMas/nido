@@ -40,6 +40,24 @@ claims, in one sentence, with no "and". If you cannot, it is two tickets, and
 that is as true of four layers as of nine. A change with many genuine dependency
 seams is not mis-scoped for having them.
 
+**But the cut itself gets reviewed, and every layer adds to that review.** A
+reviewer holds two questions at once: does this layer's claim stand, and is this
+the right decomposition? Only the first shrinks when you split — the second
+grows, because n layers is n claims to judge plus n boundaries to justify. So a
+split is never free, and layers that are each individually defensible can still
+be the wrong cut.
+
+This asymmetry is the thing to watch, because nothing else corrects it.
+"Can this be separated?" is always more true after a split, so any check that
+asks it — including a design round's `decomposable` — ratchets one way and never
+back. **Make the merge case against yourself before you make the split one**, and
+if you cannot say what a boundary buys a reader, it does not buy anything.
+
+**The shape to aim at is a story.** Read bottom to top, the layers should
+narrate how the change was made: each a coherent, self-contained move a reader
+could stop at and still know where they are. Not "could this be separated" —
+"does separating it tell the reader something".
+
 Record the decision in the plan. A one-layer stack is exactly today's flow,
 which is why every sibling skill forks on **layer count**, not on a flag.
 
@@ -112,6 +130,23 @@ uniform rename costs a reviewer *O(1)* — confirm uniformity, spot-check, done.
 
 **Tiebreaker.** Unsure whether two things belong in one stratum? *Would these go
 to the same specialist?* Project review lanes are real subject boundaries.
+
+**A layer with no claim is not a small layer — it is not a layer.** One that
+only forwards what the layer below already accepts, or renames on the way
+through, gives a reviewer nothing to stop at. Fold it into the layer whose claim
+it serves.
+
+The way these get into a plan is always the same: **the cut was drawn against
+the call chain someone expected, not the one that exists.** A parameter
+"threaded rung by rung, so a reviewer sees which contract changed" is four
+layers if each rung names its arguments, and one layer if they pass an open map
+— and only the code says which. Check the rungs before committing to the cut.
+
+**When a layer resists on contact, suspect the cut.** Collapsing one boundary
+while executing is a local fix. Collapsing a second is a finding about the
+decomposition: stop and amend the design record then, not at the end. Two
+collapses is the signal; a third means you are executing a plan you have already
+disproved.
 
 ## 3. Universal rules
 
@@ -754,6 +789,14 @@ cleaning up a merged stack's branches.
 
 ## Common mistakes
 
+- **Splitting because you can, not because a reader gains.** "Can this be
+  separated?" is more true after every split, so it converges on more layers
+  forever. The question is what the boundary buys a reader (§0).
+- **Cutting against the call chain you expect rather than the one that exists.**
+  A parameter threaded "one rung per layer" is one layer, not four, when the
+  rungs pass an open map. Check the code before committing to the cut (§2).
+- **Collapsing a second boundary during execution without amending the design.**
+  One collapse is a local fix; two is a finding about the decomposition (§2).
 - **`gh repo view -R "$SLUG"`** — `gh repo view` takes the repo as a
   POSITIONAL argument, unlike every other `gh` command here. With `-R` it
   exits `unknown shorthand flag: 'R'`, `$TRUNK` comes out empty, and the next
