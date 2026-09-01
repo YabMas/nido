@@ -213,11 +213,18 @@
    an event that just happened, where the 5- and 15-minute averages still carry
    load that had drained before it."
   []
-  (let [{:keys [exit out]} (shell {:continue true :out :string :err :string}
-                                  "sysctl" "-n" "vm.loadavg")]
-    (when (zero? exit)
-      ;; `{ 1.83 2.05 2.11 }` — braces and all, so take the first numeric field.
-      (some-> (re-find #"\d+\.\d+" (str out)) parse-double))))
+  ;; Absolute path: /usr/sbin is not on a launchd agent's default PATH, so the
+  ;; bare name resolves interactively and throws under the daemon — which is
+  ;; where this is actually read. try/catch because a missing or changed sysctl
+  ;; must degrade to "unknown", never propagate: every caller is observability,
+  ;; and instrumentation that can break its caller is worse than no reading.
+  (try
+    (let [{:keys [exit out]} (shell {:continue true :out :string :err :string}
+                                    "/usr/sbin/sysctl" "-n" "vm.loadavg")]
+      (when (zero? exit)
+        ;; `{ 1.83 2.05 2.11 }` — braces and all, so take the first numeric field.
+        (some-> (re-find #"\d+\.\d+" (str out)) parse-double)))
+    (catch Throwable _ nil)))
 
 (defn ^{:malli/schema [:=> [:cat [:maybe :int]] :string]}
   human-bytes

@@ -666,15 +666,20 @@
   [handler]
   (fn [req]
     (let [start (System/nanoTime)
-          log!  (fn [outcome]
-                  (let [ms (/ (- (System/nanoTime) start) 1e6)]
-                    (when (>= ms slow-request-ms)
-                      (println (format "[nido] slow %-4s %6.0fms load=%s %s%s"
-                                       (name (:request-method req :get))
-                                       ms
-                                       (if-let [l (proc/load-average)] (format "%.2f" l) "?")
-                                       (:uri req)
-                                       (if-let [q (:query-string req)] (str "?" q) ""))))))]
+          log!  (fn [_outcome]
+                  ;; Nothing this does may reach the caller: a logger that can
+                  ;; throw turns an observed request into a failed one, which is
+                  ;; the one thing instrumentation must never do.
+                  (try
+                    (let [ms (/ (- (System/nanoTime) start) 1e6)]
+                      (when (>= ms slow-request-ms)
+                        (println (format "[nido] slow %-4s %6.0fms load=%s %s%s"
+                                         (name (:request-method req :get))
+                                         ms
+                                         (if-let [l (proc/load-average)] (format "%.2f" l) "?")
+                                         (:uri req)
+                                         (if-let [q (:query-string req)] (str "?" q) "")))))
+                    (catch Throwable _ nil)))]
       (try
         (let [resp (handler req)]
           (log! :ok)

@@ -8,7 +8,7 @@
             [nido.session.engine]
             [nido.session.lifecycle :as lifecycle]
             [nido.session.state]
-            [nido.platform.process]
+            [nido.platform.process :as proc]
             [nido.coordinator.work]
             [nido.platform.project :as project]))
 
@@ -29,6 +29,19 @@
         (is (str/includes? loud "load=")
             "the line carries the load average — the fact that tells a slow render apart
              from a busy machine")))))
+
+(deftest slow-request-log-survives-an-unreadable-load-average
+  ;; Regression: load-average shelled out to a bare `sysctl`, which resolves in a
+  ;; shell but not under launchd, where /usr/sbin is off PATH. The throw escaped
+  ;; the logger and turned every slow request into a failed one. A reading that
+  ;; cannot be taken must degrade to "?" and leave the response alone.
+  (with-redefs [server/slow-request-ms 30
+                proc/load-average (fn [] (throw (ex-info "no sysctl here" {})))]
+    (let [h (server/wrap-slow-request-log (fn [_] (Thread/sleep 60) {:status 200 :body "ok"}))
+          out (java.io.StringWriter.)
+          resp (binding [*out* out] (h {:request-method :get :uri "/workstreams"}))]
+      (is (= {:status 200 :body "ok"} resp)
+          "the response is untouched by a logger that cannot read the load"))))
 
 (deftest slow-request-log-still-rethrows
   ;; A handler that throws after a long stall is exactly the event worth a line;
