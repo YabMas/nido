@@ -281,6 +281,50 @@ required, it is the claim, and it is what an unmodelled project has. Putting a
 sentence in `:scope` would fail validation, and rightly: the field exists to be
 run, and a scope that cannot be run is the one you already wrote above it.
 
+**If the index itself will not finish, that is the answer, not a blocker.** A
+model large enough to be worth scoping is often too large to enumerate — nido's
+own takes over four minutes for the index and does not render whole at all,
+while `--select '[(Band ?n)]'` answers in fourteen seconds. Go straight to the
+sort you can name. Every project modelled on the shipped vocabulary has `Band`,
+`Module`, `Kind` and `Operation`, so `[(Band ?n)]` is a way in that needs no
+index to discover.
+
+**Record the scope even when the render succeeded unscoped.** The selection is
+not a workaround for a slow render; it is the claim about which part of the
+declaration governs your area, and it is what every later session on this
+workstream gets briefed with. A baseline that omits it hands the next round the
+whole model or none of it, and both are worse than the part that matters.
+
+### Then say what the change commits the DECLARATION to
+
+For a modelled project the design record has a second half that lives in the
+tree: the `canvas/` edit. A record that moves a boundary while leaving the
+declaration alone has stated it in the one place nothing checks, and the next
+round reads a model that still describes the system you are replacing.
+
+Write the edit into the working copy at design time, and review it as fukan's
+own words rather than as defstructure forms:
+
+```bash
+bb nido:design:diff                      # against main, scoped by this workstream's :scope
+bb nido:design:diff :from <rev>          # against something else
+```
+
+It exits 0 whatever it finds — it is a reading, not a gate. The code then
+follows the declaration rather than the other way round, and
+`bb nido:design:check` will report `:correspondence/operation-unrealized` until
+it does: that is the implementation's to-do list, not a failure.
+
+The diff prints a digest of what it showed. **Quote it in the approval.** A
+design reviewed over a working copy was never carried by a revision, so an
+approval that does not name the digest is a claim about a document nobody can
+produce again.
+
+**Where a claim can be a LAW, write it as one.** A design record's invariants
+are prose that a review warden judges; a `canvas/` law is judged by a machine on
+every landing. Moving a claim from the first to the second is what makes "this
+design is checked" true of the design itself and not only of the code.
+
 ### The level a survey is written at
 
 **Describe the area as a decomposition, not as an implementation.** This is the

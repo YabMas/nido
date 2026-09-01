@@ -222,12 +222,51 @@ cannot quietly disagree.
   is a decision, not a repair.
 - **Every session briefing carries the declaration verbatim**, so an agent knows
   the bands before it writes a require.
+- **`bb nido:design:diff`** shows what *this branch changes about* the
+  declaration, rendered by fukan at both ends. A reading, not a gate — it exits
+  0 whatever it finds.
 
 Changing the declaration is a legitimate fix — but it is a design change. Say in
 the commit why the rule was wrong, rather than widening it until the code fits.
 
 Any project nido drives gets this if it has a `canvas/`: detection is by
 convention, and a project without one is `:unmodelled`, never broken.
+
+### Where fukan sits in the arc
+
+The four readings above are not four features; they are one model consulted at
+four moments, and each moment is a different question.
+
+| moment | question | reading |
+|---|---|---|
+| survey (`/design` §4) | what does the project already declare, and which part governs my area? | `describe`, and the `:scope` the baseline records |
+| decide | what does my change commit the declaration to? | write the `canvas/` edit, then `bb nido:design:diff` |
+| build | what may this namespace reach? | the briefing's design section |
+| land | does the code still stand it up? | `bb nido:design:check`, `bb nido:land:check`, the review round |
+
+**The canvas edit is the design record's other half.** For a modelled project a
+design record that moves a boundary and leaves `canvas/` alone has said the
+thing in the one place nothing checks. Write the edit into the working copy,
+review it with `bb nido:design:diff`, and let the code follow — the check will
+say `:correspondence/operation-unrealized` until it does, which is the to-do
+list rather than a failure. Quote the digest the diff prints in the approval:
+a design reviewed over a working copy is carried by no revision, so nothing
+else names what was approved.
+
+**An invariant fukan can check beats one only a warden can.** A design record's
+invariants are prose judged by an agent; a `canvas/` law is judged by a machine
+on every landing. Where a claim can be written as a law, writing it there is
+what makes "this design is checked" true of the design and not only of the code.
+
+**A large design must be SCOPED, and this is not a preference.** Unscoped,
+nido's own model renders to 265k characters and does not finish inside the
+sixty seconds a session start will wait — not even `--format index`. Scoped to
+`[(Band ?n)]` it is 12k in fourteen seconds. nido's registry entry carries that
+selection; a workstream's baseline `:scope` overrides it for every session on
+that workstream. A render that fails now says so in the briefing rather than
+omitting the section, because a missing section reads exactly like a project
+with no design at all — which is how nido went unbriefed about its own bands
+without anyone noticing.
 
 ### What still applies, and what doesn't
 
