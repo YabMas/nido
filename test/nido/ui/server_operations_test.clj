@@ -75,3 +75,54 @@
                              {:request-method :get :uri "/operations" :query-string "scope=nido"}))))
         (is (str/includes? body "/operations") "the rail links to it")
         (is (str/includes? body "_fragment/operations") "and the page polls its own fragment")))))
+
+(deftest an-approval-nobody-carried-out-says-so
+  ;; The bug the whole band exists for: three proposals were approved on this
+  ;; surface and nothing in nido acts on an approval, so they read as finished.
+  (with-one-proposal
+    (fn [id]
+      (server/handle-request {:request-method :post
+                              :uri (str "/operations/nido/" id "/1/0")
+                              :query-string "entry=1&verdict=approved&scope=nido"})
+      (let [body (str (:body (server/handle-request
+                              {:request-method :get :uri "/_fragment/operations"
+                               :query-string "scope=nido"})))]
+        (is (str/includes? body "not yet implemented")
+            "an approval carries the state it is actually in")
+        (is (str/includes? body "1 approved, not yet implemented")
+            "and the head counts it, so the band is visible before you scroll")
+        (is (not (str/includes? body "1 settled"))
+            "it is not filed with the finished ones")
+        (is (str/includes? body "record it there too")
+            "and it stays on the page rather than folding into the trail")))))
+
+(deftest a-landing-discharges-the-approval
+  (with-one-proposal
+    (fn [id]
+      (server/handle-request {:request-method :post
+                              :uri (str "/operations/nido/" id "/1/0")
+                              :query-string "entry=1&verdict=approved&scope=nido"})
+      (work/record-landing! :nido id {:analysis-seq 1 :observation 0 :rev "qlosnwus"
+                                      :note "the second half is spun out"})
+      (let [body (str (:body (server/handle-request
+                              {:request-method :get :uri "/_fragment/operations"
+                               :query-string "scope=nido"})))]
+        (is (str/includes? body "landed · qlosnwus")
+            "the row names what carries it, so a reader can go and look")
+        (is (not (str/includes? body "not yet implemented")))
+        (is (str/includes? body "1 settled") "and it is finished")
+        (is (str/includes? body "the second half is spun out")
+            "the landing's own words are rendered — what it did NOT cover is the
+             one thing a reader cannot get from the proposal")))))
+
+(deftest a-declines-reason-is-shown-rather-than-only-stored
+  (with-one-proposal
+    (fn [id]
+      (work/decide-proposal! :nido id {:analysis-seq 1 :observation 0 :verdict :declined
+                                       :at-seq 1 :note "the seam it names is deliberate"})
+      (let [body (str (:body (server/handle-request
+                              {:request-method :get :uri "/_fragment/operations"
+                               :query-string "scope=nido"})))]
+        (is (str/includes? body "the seam it names is deliberate")
+            "a decline without its reason is indistinguishable from an oversight,
+             and the reason was written to the ledger and dropped by the surface")))))

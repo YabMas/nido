@@ -56,6 +56,20 @@
                {:summary summary}))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  landed*
+  "Record that an approved proposal is now in the tree.
+
+   The proposal is addressed the way every reader addresses it — the analysis
+   entry's seq and the observation's index inside it — which is what the
+   operations surface prints on every card as `proposal <seq>.<i>`."
+  [{:keys [project analysis-seq observation rev note] :as opts}]
+  (work/record-landing! (keyword project) (resolve-ws-id opts)
+                        {:analysis-seq (parse-long (str analysis-seq))
+                         :observation  (parse-long (str observation))
+                         :rev          (str rev)
+                         :note         note}))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   show* [{:keys [project] :as opts}]
   (let [p     (keyword project)
         ws-id (resolve-ws-id opts)
@@ -131,6 +145,11 @@
   close-cmd     [& args] (run* close* args))
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   ref-add       [& args] (run* ref-add* args ref-raw-string-keys))
+;; :rev and :note are prose-by-luck under parse-token and must not be: a change
+;; id is a bare word that happens to read as a symbol, and a note is a sentence
+;; that may begin with anything at all.
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  landed-cmd    [& args] (run* landed* args #{:rev :note}))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   show-cmd [& args]

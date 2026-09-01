@@ -1648,6 +1648,38 @@
    [:decided-by   string?]
    [:note         {:optional true} string?]])
 
+(def ImprovementLanded
+  "An approved proposal is now in nido's main, and here is what carries it.
+
+   The record an approval could not make. Approving is a judgement — it says
+   this ought to be done — and nothing in nido acts on one (FU-32), so a
+   proposal decided months ago and one landed this morning were the same row on
+   the operations surface: `approved`, and no way to ask which. A reader with
+   that surface in front of them could not answer the only question they came
+   with, and the honest reading of the silence was the wrong one.
+
+   Separate from the decision rather than a third :verdict on it, because it is
+   a different kind of claim by a different author. A verdict is what a human
+   decided; this is a fact about the repository, checkable by anyone holding it,
+   and it can be wrong in a way a decision cannot — the rev may not exist.
+   Folding it into the enum would also make it a decision that supersedes the
+   approval, when what it does is DISCHARGE it.
+
+   :rev is what a later reader has to be able to reach. A change id rather than
+   a commit id where there is a choice: rebasing rewrites the commit and the
+   change id survives it, and this record outlives several rebases.
+
+   :note is for what the landing did NOT cover — the proposal narrowed on the
+   way in, the second half deferred. Optional because the usual case is that the
+   proposal was carried out as written."
+  [:map {:closed true}
+   [:format       [:= :improvement-landed]]
+   [:analysis-seq int?]
+   [:observation  int?]                      ; addressed exactly as the decision is
+   [:rev          string?]
+   [:landed-by    string?]
+   [:note         {:optional true} string?]])
+
 (def Retraction
   "A named earlier entry is not true, and here is what shows it.
 
@@ -1720,6 +1752,7 @@
    :findings                 FindingsRound
    :review-analysis          ReviewAnalysis
    :improvement-decision     ImprovementDecision
+   :improvement-landed       ImprovementLanded
    :proposed-ticket          ProposedTicket
    :retraction               Retraction
    :design-approved          DesignApproved})
@@ -2320,6 +2353,14 @@
        (str "by " decided-by)
        (when note (str "\n" note))])))
 
+(defn- improvement-landed->markdown
+  [{:keys [analysis-seq observation rev landed-by note]}]
+  (str/join "\n"
+    (remove nil?
+      [(str "# Proposal " analysis-seq "." observation " — landed")
+       (str "`" rev "` by " landed-by)
+       (when note (str "\n" note))])))
+
 (defn- proposed-ticket-head
   [{:keys [title ticket-type priority]}]
   [(str "# " title)
@@ -2370,6 +2411,7 @@
     :findings                 (findings->markdown report)
     :review-analysis          (review-analysis->markdown report)
     :improvement-decision     (improvement-decision->markdown report)
+    :improvement-landed       (improvement-landed->markdown report)
     :proposed-ticket          (proposed-ticket->markdown report)
     ""))
 
@@ -2419,5 +2461,7 @@
                                     " (" (count (:observations report)) " observations)")
      :improvement-decision     (str "Proposal " (:analysis-seq report) "." (:observation report)
                                     " " (name (:verdict report)))
+     :improvement-landed       (str "Proposal " (:analysis-seq report) "." (:observation report)
+                                    " landed (" (:rev report) ")")
      :ship-submitted           "Ship submitted"
      nil)))

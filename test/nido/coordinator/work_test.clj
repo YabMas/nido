@@ -2321,6 +2321,30 @@
                  (work/decide-proposal! :nido id (assoc p :verdict :declined)))
               "the same click again is stale — the decision it made is now the latest entry"))))))
 
+(deftest a-landing-is-a-fact-about-the-repo-not-an-answer-to-a-page
+  (with-analysis-ws
+    [{:kind :waste :where "w" :summary "s" :evidence "e" :proposal "p"}]
+    (fn [id]
+      (let [p (first (work/proposals :nido))]
+        (work/decide-proposal! :nido id (assoc p :verdict :approved))
+        (is (nil? (:landed (first (work/proposals :nido))))
+            "an approval on its own discharges nothing")
+        (is (= :recorded (:landed (work/record-landing!
+                                   :nido id {:analysis-seq 1 :observation 0
+                                             :rev "abcdefgh"}))))
+        (let [after (first (work/proposals :nido))]
+          (is (= "abcdefgh" (:rev (:landed after))))
+          (is (seq (:landed-by (:landed after))))
+          (is (= :approved (:verdict (:decision after)))
+              "and the decision it discharges is untouched — the landing is a
+               second record, not a third verdict"))
+        (is (= :recorded (:landed (work/record-landing!
+                                   :nido id {:analysis-seq 1 :observation 0
+                                             :rev "zzzzzzzz"})))
+            "no at-seq guard: the ledger has moved twice and the record is still true")
+        (is (= "zzzzzzzz" (:rev (:landed (first (work/proposals :nido)))))
+            "and the newest one is where a reader should go look")))))
+
 (deftest changing-your-mind-is-an-append-and-the-last-one-counts
   (with-analysis-ws
     [{:kind :waste :where "w" :summary "s" :evidence "e" :proposal "p"}]

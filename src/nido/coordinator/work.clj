@@ -1843,6 +1843,22 @@
                    (when (= :improvement-decision (:format r)) r))))
          (reduce (fn [m d] (assoc m [(:analysis-seq d) (:observation d)] d)) {}))))
 
+(defn- landings-by-address
+  "{[analysis-seq observation] -> landing} for this workstream, latest wins.
+
+   Latest for a different reason than a decision's: a proposal can land twice —
+   carried in one change, then extended or corrected in another — and the row
+   should point at the one a reader should go read. The earlier record stays on
+   the ledger, which is where the full history belongs."
+  [project ws-id]
+  (let [{:keys [base-dir entries]} (active-ledger project ws-id)]
+    (->> entries
+         (filter #(= :improvement-landed (:kind %)))
+         (keep (fn [e]
+                 (let [r (entry->report base-dir e)]
+                   (when (= :improvement-landed (:format r)) r))))
+         (reduce (fn [m l] (assoc m [(:analysis-seq l) (:observation l)] l)) {}))))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName] [:vector :map]]}
   proposals
   "Every proposal this project's review-loop analyses have made, newest analysis
@@ -1861,7 +1877,12 @@
    `:at-seq` is the position a decision about this row must carry — the ledger's
    latest entry at the moment the row was built, NOT the analysis's own seq. A
    decision answers the workstream as it stands, and these differ the moment
-   anything else is appended."
+   anything else is appended.
+
+   `:decision` is what a human ruled and `:landed` is what became of it, and the
+   two are separate because approving does not carry anything out. A row with a
+   decision and no landing is a commitment nobody has discharged — the state
+   this surface used to render identically to a finished one."
   [project]
   (let [pk (keyword (name project))]
     (->> (cws/list-ids pk)
@@ -1871,6 +1892,7 @@
                      {:ws-id ws-id :w w}))))
          (mapcat (fn [{:keys [ws-id w]}]
                    (let [decided (decisions-by-address pk ws-id)
+                         landed  (landings-by-address pk ws-id)
                          at-seq  (count (:entries w))
                          ref     (some #(when (= :review-run (:adapter %)) %) (:external-refs w))]
                      (for [a (analysis-entries pk ws-id)
@@ -1893,7 +1915,8 @@
                         :rounds       (:rounds a)
                         :at           (:at a)
                         :title        (:title ref)
-                        :decision     (get decided [(:seq a) i])}))))
+                        :decision     (get decided [(:seq a) i])
+                        :landed       (get landed [(:seq a) i])}))))
          (sort-by :at)
          reverse
          vec)))
@@ -1916,6 +1939,9 @@
    the simplest possible version of the shape every other answer on this ledger
    has — write the durable record, and let whatever wants it read it later.
 
+   Which means an approval is a commitment and not a completion, and the surface
+   has to be able to say so. `record-landing!` is what discharges one.
+
    `at-seq` is what the reader was looking at. It is compared inside the append
    lock by cws/append-entry-at!, so two people deciding the same proposal from
    the same page cannot both be recorded: the second is told the page moved."
@@ -1933,6 +1959,34 @@
     (if (map? res)
       {:decision :stale :latest (:latest res)}
       {:decision :recorded :file res})))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :map]}
+  record-landing!
+  "Record that an approved proposal is now carried by `rev`. Returns
+   {:landed :recorded :file <path>}.
+
+   No `at-seq` guard, unlike `decide-proposal!`. That guard exists because a
+   decision is an answer to a page, and answering a page that has moved is not
+   answering what is there. This is not an answer to anything — it is a fact
+   about the repository, true whatever the ledger has grown since — so refusing
+   it on a stale position would reject a true record for a reason that does not
+   apply to it.
+
+   Nothing checks that the proposal was approved first, and nothing should. A
+   proposal implemented before anyone got round to deciding on it is a normal
+   sequence here, and a record that refused to describe it would leave the code
+   landed and the surface saying nothing happened."
+  [project ws-id {:keys [analysis-seq observation rev note]}]
+  {:landed :recorded
+   :file (cws/append-entry!
+          (keyword (name project)) ws-id
+          {:kind :improvement-landed}
+          (pr-str (cond-> {:format       :improvement-landed
+                           :analysis-seq analysis-seq
+                           :observation  observation
+                           :rev          rev
+                           :landed-by    @decided-by}
+                    (not (str/blank? (str note))) (assoc :note note))))})
 
 (defn ^{:malli/schema [:=> [:cat] [:vector :map]]}
   all-grouped

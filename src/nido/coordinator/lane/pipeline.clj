@@ -142,7 +142,7 @@
     :baseline :baseline-review
     :design :design-decision :design-verdict :design-approved
     :implementation-plan :implementation-completed
-    :review :review-analysis :improvement-decision
+    :review :review-analysis :improvement-decision :improvement-landed
     :blocker :blocker-answered :retraction
     :findings :pr-opened :ship-submitted :merged})
 
@@ -441,7 +441,7 @@
     ;; is read by that arc, not by how it started.
     (and (contains? ks :review-analysis)
          (empty? (disj (set (filter legible-kinds ks))
-                       :review-analysis :improvement-decision)))
+                       :review-analysis :improvement-decision :improvement-landed)))
     :analysed
 
     ;; An empty ledger IS :intake — that is a pickup, and its own row in the

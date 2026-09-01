@@ -311,7 +311,10 @@
            asked to accept, so it is set apart from the observation. */
         .prop { border:1px solid #2a2a2a; border-radius:6px; padding:12px 14px; margin-bottom:10px;
                 background:#141414; }
-        .prop.decided { opacity:.55; }
+        /* Only a FINISHED proposal is dimmed. An approval nobody has carried
+           out is the most actionable row on the page — dimming it alongside the
+           landed ones is what made 'approved' and 'done' look like one state. */
+        .prop.settled { opacity:.55; }
         .prop-head { display:flex; gap:8px; align-items:baseline; flex-wrap:wrap; margin-bottom:6px; }
         .prop-where { font-family:ui-monospace,monospace; font-size:12px; color:#aee0ff; }
         .prop-sum { margin:0 0 8px; }
@@ -322,6 +325,13 @@
         .prop-verdict { display:inline-block; padding:1px 6px; border-radius:3px; font-size:11px; }
         .v-approved { background:#1a3a2a; color:#4ade80; }
         .v-declined { background:#3a1a1a; color:#f87171; }
+        .prop-landed { background:#16304a; color:#7dd3fc; }
+        /* The state the surface had no way to show. Amber rather than grey:
+           it is not a quiet footnote, it is the queue of things this board has
+           agreed to and not done. */
+        .prop-waiting { background:#3a2e14; color:#fbbf24; }
+        .prop-note { font-size:12px; color:#a8b4c0; margin:8px 0 0; }
+        .prop-note b { color:#cfd8e3; font-weight:600; }
         .ops-empty { color:#777; padding:20px 0; }
         .ops-head { display:flex; gap:14px; align-items:baseline; margin-bottom:14px; flex-wrap:wrap; }
         /* One reading column. Not .gate-wrap's queue+pane grid: nothing opens
@@ -2296,6 +2306,29 @@
   [:span {:class (str "prop-verdict v-" (name verdict))}
    (name verdict) (when decided-by (str " · " decided-by))])
 
+(defn- prop-outcome-chip
+  "What became of the decision, beside what the decision was.
+
+   Three states, and the middle one is the whole reason this exists. A declined
+   proposal is finished. A landed one is finished. An APPROVED one is a promise
+   the board is holding, and nothing in nido carries it out — so it sat under
+   the same green `approved` chip as one that had shipped, and a reader could
+   not tell the two apart from the surface that was asking them to decide."
+  [{:keys [verdict]} landed]
+  (cond
+    landed              [:span.prop-verdict.prop-landed
+                         (str "landed · " (:rev landed))]
+    (= :approved verdict) [:span.prop-verdict.prop-waiting "not yet implemented"]
+    :else nil))
+
+(defn- prop-note
+  "A decision's or a landing's own words. Both were written to the ledger and
+   neither was ever rendered — including the reason a decline gives, which is
+   the one field the vocabulary makes a decline meaningless without."
+  [label note]
+  (when-not (str/blank? (str note))
+    [:p.prop-note [:b (str label ": ")] note]))
+
 (defn- proposal-card
   "One proposal, with what earned it and what was decided.
 
@@ -2304,15 +2337,19 @@
    separates an observation from an opinion — and a surface that hides it asks
    for a decision about a claim while showing only the claim."
   [{:keys [project ws-id analysis-seq observation at-seq kind where summary evidence
-           proposal run-id reviewed rounds status at decision] :as _p}]
+           proposal run-id reviewed rounds status at decision landed] :as _p}]
   (let [addr (str analysis-seq "." observation)
         base (str "/operations/" project "/" ws-id "/" analysis-seq "/" observation
-                  "?entry=" at-seq)]
-    [:div {:class (str "prop" (when decision " decided"))}
+                  "?entry=" at-seq)
+        ;; Settled means nothing further is owed — declined, or approved and
+        ;; landed. An approval on its own is not settled however old it is.
+        settled? (or landed (= :declined (:verdict decision)))]
+    [:div {:class (str "prop" (when settled? " settled"))}
      [:div.prop-head
       [:span {:class (str "chip c-" (name kind))} (name kind)]
       [:span.prop-where where]
-      (when decision (prop-decision-chip decision))]
+      (when decision (prop-decision-chip decision))
+      (when decision (prop-outcome-chip decision landed))]
      [:p.prop-sum summary]
      (when-not (str/blank? (str evidence)) [:p.prop-ev evidence])
      [:p.prop-fix proposal]
@@ -2322,31 +2359,65 @@
       (when status [:span (str status " · " rounds " round" (when (not= 1 rounds) "s"))])
       (when at [:span (subs (str at) 0 (min 10 (count (str at))))])
       (when run-id [:span.mono (subs (str run-id) 0 (min 14 (count (str run-id))))])]
+     (prop-note "decided" (:note decision))
+     (prop-note "landed" (:note landed))
      (when-not decision
        [:div.actions {:style "margin-top:10px"}
         [:button.btn.btn-primary {"data-on:click" (str "@post('" base "&verdict=approved')")} "Approve"]
         [:button.btn {"data-on:click" (str "@post('" base "&verdict=declined')")} "Decline"]])]))
 
+(defn- proposal-band
+  "Which of the three bands a row is in: what you still owe an answer, what you
+   answered and nobody has carried out, and what is finished.
+
+   `:waiting` is a band rather than a shade of `decided`, because it is the only
+   one that is nobody's turn. An open proposal is waiting on a reader and a
+   settled one is waiting on no one; an approved-and-unlanded proposal is
+   waiting on work that no part of nido will start by itself (FU-32), so it
+   disappears unless something keeps saying it is there."
+  [{:keys [decision landed]}]
+  (cond
+    (nil? decision)                 :open
+    (or landed
+        (= :declined (:verdict decision))) :settled
+    :else                           :waiting))
+
 (defn ^{:malli/schema [:=> [:cat :any] :any]}
   operations-fragment
-  "The proposal list, patched by the poll. Undecided first — a decided proposal
-   is a record and an undecided one is a question, and the questions are what
-   you came for."
+  "The proposal list, patched by the poll. Open first, then approved-and-not-done
+   — a question you have not answered and a promise nobody has kept are both
+   live, and only the finished rows fold away.
+
+   The middle band used to be folded into the trail with the settled ones, on
+   the reasoning that a decided proposal is a record. It is not: approving is
+   the start of the work rather than the end of it, and putting it behind a
+   disclosure marked `already decided` is how three approvals could sit
+   untouched with the board reporting nothing awaiting anyone."
   [proposals]
-  (let [[open done] ((juxt remove filter) :decision proposals)]
+  (let [{:keys [open waiting settled] :or {open [] waiting [] settled []}}
+        (group-by proposal-band proposals)]
     (str
      (h/html
       [:div {:id "operations"}
        [:div.ops-head
         [:strong (str (count open) " awaiting you")]
-        [:span.meta (str (count done) " decided · " (count proposals) " in all")]]
+        (when (seq waiting)
+          [:span.prop-verdict.prop-waiting
+           (str (count waiting) " approved, not yet implemented")])
+        [:span.meta (str (count settled) " settled · " (count proposals) " in all")]]
        (if (empty? proposals)
          [:p.ops-empty "No review-loop analysis has proposed anything yet."]
          (list (for [p open] (proposal-card p))
-               (when (seq done)
+               (when (seq waiting)
+                 (list
+                  [:p.meta {:style "margin:18px 0 8px"}
+                   "Approved — nothing in nido acts on an approval, so these are "
+                   "waiting on someone to do them."]
+                  (for [p waiting] (proposal-card p))))
+               (when (seq settled)
                  [:details.trail
-                  [:summary (str (count done) " already decided")]
-                  (for [p done] (proposal-card p))])))]))))
+                  [:summary (str (count settled) " settled")]
+                  (for [p settled] (proposal-card p))])))]))))
 
 (defn ^{:malli/schema [:=> [:cat :map :any] :any]}
   operations-page
