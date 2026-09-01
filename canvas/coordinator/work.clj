@@ -3,6 +3,7 @@
   (:require [fukan.common.vocab.code.kind :refer [Kind]]
             [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
+            [canvas.coordinator.lane.drive :as pipeline]
             [canvas.coordinator.lane.work :as lanes]
             [canvas.coordinator.record.session :as session :refer [Session]]
             [canvas.coordinator.source.core :as queue]
@@ -163,6 +164,16 @@
   (Operation decide-proposal! "Record a human decision about one proposal."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:decision :map]] :map]
      :delegates [workstream/append-entry-at!]})
+  (Operation grantable?
+    "May a human grant this workstream's design right now?
+
+     `lane-pipeline/design-decided?` under a WorkPlane name. Two surfaces render the Approve
+     button and one of them is Surface, which may not reach Lane — so without this the pane
+     would have to ask a different question, and it did: it read the recommendation off the
+     report the button was rendered from, which is a different answer the moment a design told
+     to proceed is later sent back."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :boolean]
+     :delegates [pipeline/design-decided?]})
   (Operation record-landing!
     "Record that an approved proposal is now carried by a revision.
 

@@ -529,7 +529,7 @@
 (deftest a-parked-design-decision-asks-to-be-approved
   (is (= [{:id :approve :label "Approve" :kind :mutation :style :primary}
           {:id :reply   :label "Reply"   :kind :resume  :style :default}]
-         (work/gate-actions :in-progress true nil {:report-format :design-decision :recommend :proceed}))
+         (work/gate-actions :in-progress true nil {:report-format :design-decision :grantable? true}))
       "Done is deliberately absent — settling a workstream is not an answer to
        'should we build this', and offering it beside Approve invites it to be
        read as one"))
@@ -542,7 +542,7 @@
 (deftest every-button-given-a-position-is-read-back-with-one
   (let [descriptors (concat
                      (work/gate-actions :in-progress true nil
-                                        {:report-format :design-decision :recommend :proceed :seq 7})
+                                        {:report-format :design-decision :grantable? true :seq 7})
                      (work/gate-actions :in-progress true nil
                                         {:options [{:label "A"} {:label "B"}] :seq 7}))
         carries-seq (into #{} (comp (filter :seq) (map :id)) descriptors)]
@@ -751,6 +751,7 @@
                                     :checks [{:check :goal-served :status :held :note "n"}]
                                     :asks "worth doing now?"})]
       [id b d dd])))
+
 
 
 (deftest approving-records-the-grant-then-resumes
@@ -2459,7 +2460,7 @@
   (is (= [{:id :approve :label "Approve" :kind :mutation :style :primary :seq 7}]
          (work/gate-actions :in-progress false nil
                             {:report-format :design-decision :seq 7
-                             :awaiting :approve-design :recommend :proceed}))
+                             :awaiting :approve-design :grantable? true}))
       "approve! records a grant with nobody to wake as :approved-unresumed —
        the ledger is what the next session reads — so nothing about an absent
        agent makes the grant premature")
@@ -2471,22 +2472,22 @@
   (is (= [:approve]
          (mapv :id (work/gate-actions :in-progress false nil
                                       {:report-format :design-decision :seq 7
-                                       :awaiting :approve-design :recommend :proceed})))
+                                       :awaiting :approve-design :grantable? true})))
       "Reply resumes a parked agent; beside a grant with none it could only fail")
   (is (= [:approve :reply]
          (mapv :id (work/gate-actions :in-progress true nil
                                       {:report-format :design-decision :seq 7
-                                       :awaiting :approve-design :recommend :proceed})))
+                                       :awaiting :approve-design :grantable? true})))
       "and when there is one, sending it back is still an answer"))
 
 (deftest only-the-approval-stage-offers-the-approval
   (is (empty? (work/gate-actions :in-progress false nil
                                  {:report-format :design-decision :seq 7
-                                  :awaiting :answer-blocker :recommend :proceed}))
+                                  :awaiting :answer-blocker :grantable? true}))
       "a blocker is a human stage too, and the question it asks is not this one")
   (is (empty? (work/gate-actions :in-progress false nil
                                  {:report-format :baseline-review :seq 7
-                                  :awaiting :approve-design :recommend :proceed}))
+                                  :awaiting :approve-design :grantable? true}))
       "and the report has to be the decision the grant is about"))
 
 (deftest a-workstream-awaiting-a-person-is-a-gate
@@ -2711,17 +2712,17 @@
   (doseq [r [:recut :amend nil]]
     (is (empty? (work/gate-actions :in-progress false nil
                                    {:report-format :design-decision
-                                    :awaiting :approve-design :recommend r}))
+                                    :awaiting :approve-design :grantable? (= r :proceed)}))
         (str (pr-str r) " judged the record, not whether to build it — a position "
              "owing a person a decision is not on its own something to grant"))
     (is (not-any? #{:approve} (map :id (work/gate-actions :in-progress true nil
                                                           {:report-format :design-decision
-                                                           :recommend r})))
+                                                           :grantable? (= r :proceed)})))
         (str (pr-str r) " must not be grantable on the parked path either — that "
              "path is where this hole actually was")))
   (is (= [:approve]
          (mapv :id (work/gate-actions :in-progress false nil
                                       {:report-format :design-decision
                                        :awaiting :approve-design
-                                       :recommend :proceed})))
+                                       :grantable? true})))
       "and a round that did recommend proceeding is still grantable"))

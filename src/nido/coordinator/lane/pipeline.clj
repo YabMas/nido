@@ -396,9 +396,16 @@
    design it had just sent back."
   [project ws-id]
   (when-let [d (ws/latest-entry project ws-id :design)]
-    (boolean (some #(and (= (:seq d) (:design-seq %))
-                         (= :proceed (:recommend %)))
-                   (ws/entries-of project ws-id :design-decision)))))
+    ;; The LATEST decision naming this design, not any of them. A design can be
+    ;; judged more than once — told to proceed, then sent back when a later round
+    ;; reads it against code that has since moved — and `some` answered yes for
+    ;; ever after the first :proceed. That made "decided" unretractable by the
+    ;; only mechanism that decides it.
+    (boolean (some->> (ws/entries-of project ws-id :design-decision)
+                      (filter #(= (:seq d) (:design-seq %)))
+                      last
+                      :recommend
+                      (= :proceed)))))
 
 ;; ── The fold ────────────────────────────────────────────────────────────────
 
