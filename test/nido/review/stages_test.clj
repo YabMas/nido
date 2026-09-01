@@ -835,6 +835,51 @@
         (is (= ["no-remedy" "span-has-holes"] (mapv :outcome out)))
         (is (every? (comp seq :because) out) "each with the reason it could not run")))))
 
+(deftest a-refused-recut-becomes-a-park-carrying-the-reshape-s-own-words
+  ;; A recut is withheld from the fixers on purpose, so a refusal left the
+  ;; finding with no path at all: it reached the round's :reshapes array and
+  ;; nothing the next warden or the termination check could see.
+  (let [ctx {:config {:cwd "/w" :base "main"} :iter 2
+             :findings [{:handle "h-1" :disposition :recut :kind :claim-falsified
+                         :layers ["a" "d"] :title "the layer's claim is not true"}
+                        {:handle "h-2" :disposition :recut :kind :misplaced-seam
+                         :layers ["a" "d"] :title "the seam runs through the migration"}]}]
+    (with-redefs [stages/session-stack (fn [_ _] gapped-stack)]
+      (let [parks (get-in ((:run stages/reshape-stage) ctx) [:carry :parks])]
+        (is (= #{"h-1" "h-2"} (set (keys parks))))
+        (is (= 2 (:since (parks "h-1"))) "raised in the round that refused it")
+        (is (str/includes? (:because (parks "h-2")) "absorb b")
+            "carrying the refusal sentence, which is the thing a human decides on")
+        (is (= "the seam runs through the migration" (:title (parks "h-2"))))))))
+
+(deftest a-deferred-recut-is-not-parked
+  ;; The one outcome that means try again: another reshape ran this round, so
+  ;; the plan was made against a stack that has since moved.
+  (let [ctx {:config {:cwd "/w" :base "main"} :iter 1
+             :findings [{:handle "h-1" :disposition :recut :kind :order-dependence
+                         :layers ["lower" "upper"] :title "t1"}
+                        {:handle "h-2" :disposition :recut :kind :order-dependence
+                         :layers ["lower" "upper"] :title "t2"}]}]
+    (with-redefs [stages/session-stack (fn [_ _] two-layer-stack)
+                  layers/reorder! (fn [& _] {:ok? true})
+                  layers/restore-top! (fn [& _] nil)]
+      (let [out   ((:run stages/reshape-stage) ctx)
+            parks (get-in out [:carry :parks])]
+        (is (= ["reorder" "deferred"] (mapv :outcome (:reshapes out))))
+        (is (empty? parks) "neither the one that worked nor the one still to be tried")))))
+
+(deftest a-park-keeps-the-round-it-was-first-raised-in
+  ;; What the give-up counter reads. A refusal repeated every round would
+  ;; otherwise reset it and the run would never stop for the seam.
+  (let [ctx {:config {:cwd "/w" :base "main"} :iter 4
+             :carry {:parks {"h-1" {:since 1 :title "t1" :because "the first reason"}}}
+             :findings [{:handle "h-1" :disposition :recut :kind :claim-falsified
+                         :layers ["a" "d"] :title "t1"}]}]
+    (with-redefs [stages/session-stack (fn [_ _] gapped-stack)]
+      (let [p (get-in ((:run stages/reshape-stage) ctx) [:carry :parks "h-1"])]
+        (is (= 1 (:since p)))
+        (is (= "the first reason" (:because p)))))))
+
 (deftest a-dry-run-reshapes-nothing
   (let [ctx {:config {:cwd "/w" :base "main" :dry-run? true}
              :findings [{:handle "h-1" :disposition :recut :kind :order-dependence

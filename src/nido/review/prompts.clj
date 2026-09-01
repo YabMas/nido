@@ -715,8 +715,14 @@
      ;; findings the moment the reviewer stops mentioning it and the next warden
      ;; has no idea it exists. Fifteen rounds re-adjudicated one seam from
      ;; scratch, with prose minutes as the only memory.
+     ;;
+     ;; "Parked" rather than "you parked": a recut the reshape stage refused
+     ;; lands here too. Its finding was withheld from the fixers on the warden's
+     ;; own ruling and then had no path at all, which is the state a park
+     ;; describes whoever put it in that state.
      (str "STILL PARKED, FROM EARLIER ROUNDS OF THIS RUN\n"
-          "You parked these and no one has answered them. They are open. Do not\n"
+          "No one has answered these — you parked them, or the loop refused the\n"
+          "recut they asked for and has no other move. They are open. Do not\n"
           "re-adjudicate them from scratch, and do not treat their absence from\n"
           "this round's findings as resolution — nothing raises a park twice:\n"
           (->> parked

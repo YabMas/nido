@@ -1022,6 +1022,55 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
          (when-let [u (:upper plan)] {:upper (layer-label u)})
          extra))
 
+(def ^:private recut-outcomes-that-park
+  "Reshape outcomes after which nothing further will happen to the finding in
+   this run.
+
+   Not `deferred`, which is the one outcome that means try again: another
+   reshape ran this round, so the plan was made against a stack that has since
+   moved, and the next round replans it. Everything else here is terminal —
+   the plan was refused, the attempt was made and failed, or the run's one
+   attempt is already spent — and terminal with no path is exactly the state a
+   park describes."
+  #{"refused" "unnamed-layers" "no-remedy" "span-has-holes" "already-attempted"})
+
+(defn ^{:malli/schema [:=> [:cat :any :any :int] :any]}
+  park-refused-recuts
+  "Add a park for every recut this round could not act on, carrying the
+   reshape's own words.
+
+   A recut is withheld from the fixers on purpose — the warden rules it `recut`
+   BECAUSE a patch on one side of a bad seam makes the seam permanent — so when
+   the reshape stage then refuses it, the finding has no path at all. It went to
+   the round's `:reshapes` array and to nothing the next warden or the
+   termination check could see: `fix-plan` filters on `:disposition :fix`, and
+   `:history` is appended by the fix stage alone. One run refused two recuts;
+   one was ruled real and then appeared in no later round's findings or rulings,
+   and the other ended the run under a status about the fixer's empty input.
+
+   A park is the same shape of answer — no fix, and a question for a human — and
+   all of its lifecycle already exists: carried across rounds, shown back to the
+   warden instead of being re-adjudicated, counted against `park-persists-for`,
+   terminal at four. The refusal sentence is what makes it decidable; \"folding
+   diary-message…teacher-diary-section would absorb seven layers this finding
+   does not name\" is precisely the thing a human needs in front of them.
+
+   An existing park is never overwritten. It holds the round it was first raised
+   in, which is what the give-up counter reads."
+  [parks outcomes iter]
+  (reduce (fn [acc {:keys [handle title outcome because]}]
+            (if (or (nil? handle)
+                    (contains? acc handle)
+                    (not (contains? recut-outcomes-that-park outcome)))
+              acc
+              (assoc acc handle
+                     {:since iter
+                      :title title
+                      :because (str "the loop refused the recut this asked for"
+                                    (when because (str ": " because)))})))
+          (or parks {})
+          outcomes))
+
 (defn- run-reshape-stage
   [ctx]
   (let [{:keys [cwd base dry-run?]} (:config ctx)
@@ -1039,8 +1088,7 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                           plans))
             done  (when pick (reshape! cwd base (second (nth plans pick))))]
         (when pick (layers/restore-top! cwd (session-stack cwd base)))
-        (cond-> (assoc ctx :reshapes
-                       (vec (map-indexed
+        (let [outcomes (vec (map-indexed
                              (fn [i [f p]]
                                (reshape-outcome
                                 f p
@@ -1062,9 +1110,15 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                                   {:outcome "deferred"
                                    :because (str "another reshape ran this round, so the "
                                                  "stack this was planned against has moved")})))
-                             plans)))
-          pick (update-in [:carry :reshaped] (fnil conj #{})
-                          (:handle (first (nth plans pick)))))))))
+                             plans))]
+          (cond-> (assoc ctx :reshapes outcomes)
+            ;; Into :carry, which is the only thing a round hands the next one —
+            ;; and the same key the warden's own parks ride in, so one lifecycle
+            ;; carries both and the termination check cannot see one kind and
+            ;; not the other.
+            true (update-in [:carry :parks] park-refused-recuts outcomes (:iter ctx))
+            pick (update-in [:carry :reshaped] (fnil conj #{})
+                            (:handle (first (nth plans pick))))))))))
 
 (def reshape-stage
   "Findings whose remedy is the shape of the stack, acted on once each.
