@@ -13,6 +13,7 @@
    [nido.coordinator.record.clock :as clock]
    [nido.coordinator.source.state :as sstate]
    [nido.coordinator.record.workstream :as ws]
+   [nido.coordinator.lane.pickup :as pickup]
    [nido.github.client :as gh]
    [nido.github.react :as react]
    [nido.notion.client :as notion]))
@@ -47,27 +48,28 @@
 (defn- pr-id [repo number] (str repo "#" number))
 
 (defn- nudge-notion!
-  "Best-effort Notion reaction for a merged PR's ticket. page-id from the
-   workstream's :notion ref; on-merge from config."
+  "Best-effort Notion reaction for a merged PR's ticket. `page-id` is resolved
+   and checked by the CALLER — this guarded on it itself until 2026-09-01, which
+   is how a workstream whose ref carried no page-id got a close, no ticket write,
+   and no word about either."
   [page-id {:keys [notion-status remove-ball-holder]}]
-  (when page-id
-    (try
-      (if-let [token (notion/keychain-token)]
-        (let [page  (when remove-ball-holder (notion/retrieve-page page-id token))
-              props (cond-> {}
-                      notion-status (assoc "Status" {:status {:name notion-status}})
-                      (and remove-ball-holder page (not (:error page)))
-                      (assoc "Ball Holder"
-                             (react/people-without
-                               (get-in page [:properties (keyword "Ball Holder")])
-                               remove-ball-holder)))]
-          (when (seq props)
-            (let [res (notion/update-page-properties! page-id props token)]
-              (when (:error res)
-                (warn (str "github-merge: Notion write failed for " page-id " — " (pr-str res)))))))
-        (warn (str "github-merge: no Notion token; skipping Notion nudge for " page-id)))
-      (catch Throwable t
-        (warn (str "github-merge: Notion nudge threw for " page-id " — " (.getMessage t)))))))
+  (try
+    (if-let [token (notion/keychain-token)]
+      (let [page  (when remove-ball-holder (notion/retrieve-page page-id token))
+            props (cond-> {}
+                    notion-status (assoc "Status" {:status {:name notion-status}})
+                    (and remove-ball-holder page (not (:error page)))
+                    (assoc "Ball Holder"
+                           (react/people-without
+                             (get-in page [:properties (keyword "Ball Holder")])
+                             remove-ball-holder)))]
+        (when (seq props)
+          (let [res (notion/update-page-properties! page-id props token)]
+            (when (:error res)
+              (warn (str "github-merge: Notion write failed for " page-id " — " (pr-str res)))))))
+      (warn (str "github-merge: no Notion token; skipping Notion nudge for " page-id)))
+    (catch Throwable t
+      (warn (str "github-merge: Notion nudge threw for " page-id " — " (.getMessage t))))))
 
 (defn- find-ws-by-github-id
   "Workstream carrying a :github ref matching `id` case-insensitively. GitHub
@@ -83,6 +85,21 @@
                                    (= target (some-> (:id %) str/lower-case)))
                              (:external-refs w))
                    w))))))
+
+(defn- notion-ref [w]
+  (some #(when (= :notion (:adapter %)) %) (:external-refs w)))
+
+(defn- ref-page-id
+  "The page-id to write a merge reaction to: the ref's stored :page-id, else the
+   id carried in its :url.
+
+   The URL fallback is load-bearing rather than belt-and-braces. A ref is stamped
+   with a :page-id only when the spawning event's payload carried one, and the
+   older spawn paths emitted just the BR-####; seven of brian's workstreams hold
+   a :notion ref with a :url and no :page-id. Reading (:page-id ref) as the whole
+   answer classified those as having no Notion ticket at all."
+  [ref]
+  (or (:page-id ref) (pickup/extract-page-id (:url ref))))
 
 (defn- record-merge!
   "Append the terminal :merged event to the workstream's ledger. Best-effort and
@@ -138,12 +155,20 @@
                  (or (:base pr) "<no base reported>") ", not " base
                  " — leaving workstream " (:id w) " open. A stack-internal merge"
                  " lands nothing on " base "."))
-      :else (do
+      :else (let [ref (notion-ref w)]
               (ws/close! project (:id w) :done)
               (record-merge! project (:id w) id pr)
-              (let [page-id (some #(when (= :notion (:adapter %)) (:page-id %))
-                                  (:external-refs w))]
-                (nudge-notion! page-id on-merge))))))
+              (if-let [page-id (ref-page-id ref)]
+                (nudge-notion! page-id on-merge)
+                ;; No :notion ref at all (a GitHub-issue or Slack workstream)
+                ;; means there is no ticket to nudge, and silence is right. A ref
+                ;; we could not resolve is a gap: the workstream is now closed
+                ;; while its ticket sits at its pre-merge status, and nobody is
+                ;; told which of the two happened.
+                (when ref
+                  (warn (str "github-merge: workstream " (:id w) " carries a :notion ref ("
+                             (:id ref) ") with no resolvable page-id — closed on " id
+                             ", but the ticket was NOT nudged."))))))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :map] :any]}
   poll-and-react!

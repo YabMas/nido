@@ -266,3 +266,74 @@
           (gm/poll-and-react! :brian (assoc cfg :base "master"))
           (is (= :done (-> (ws/read-ws :brian (:id w)) :closed :outcome))
               "a repo whose default branch is master closes on a merge into master"))))))
+
+;; ── resolving the ticket to nudge ────────────────────────────────────────────
+;;
+;; A :notion ref gets a :page-id only when the spawning event's payload carried
+;; one. Older spawn paths emitted just the BR-####, so seven of brian's
+;; workstreams hold a ref with a :url and nothing else — and the nudge used to
+;; treat those as "no ticket" and return quietly.
+
+(deftest notion-nudge-falls-back-to-the-ref-url
+  (with-tmp
+    (fn [_]
+      (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
+      (let [w (ws/create! :brian
+                {:stage :in-progress
+                 :external-refs
+                 [{:adapter :notion :id "BR-5559"
+                   :url "https://app.notion.com/p/Change-of-Question-Type-37afca9f403c80e4b658d113caf5fef6"}
+                  {:adapter :github :id "brian-study/brian#20"}]})
+            props (atom nil)]
+        (with-redefs [gh/list-merged-prs (fn [_] {:status :ok
+                                                  :prs [{:number 20 :url "u" :title "t" :merged-at "z"
+                                                         :base "main"}]})
+                      notion/keychain-token (constantly "tok")
+                      notion/retrieve-page  (fn [_ _] {:properties {}})
+                      notion/update-page-properties! (fn [pg p _] (reset! props {:page pg :props p}) {:ok true})]
+          (gm/poll-and-react! :brian cfg)
+          (is (= "37afca9f-403c-80e4-b658-d113caf5fef6" (:page @props))
+              "the page-id comes out of the ref's URL when the ref does not store one")
+          (is (= {:status {:name "Code Review"}} (get-in @props [:props "Status"]))))))))
+
+(deftest unresolvable-notion-ref-is-reported-not-swallowed
+  (with-tmp
+    (fn [_]
+      (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
+      (let [w (ws/create! :brian {:stage :in-progress
+                                  :external-refs [{:adapter :notion :id "BR-5477"}
+                                                  {:adapter :github :id "brian-study/brian#21"}]})
+            sw (java.io.StringWriter.)
+            pw (java.io.PrintWriter. sw)]
+        (with-redefs [gh/list-merged-prs (fn [_] {:status :ok
+                                                  :prs [{:number 21 :url "u" :title "t" :merged-at "z"
+                                                         :base "main"}]})
+                      notion/keychain-token (constantly "tok")
+                      notion/update-page-properties! (fn [& _] (is false "must not write with no page-id"))]
+          (binding [*err* pw]
+            (gm/poll-and-react! :brian cfg)
+            (.flush pw))
+          (is (= :done (-> (ws/read-ws :brian (:id w)) :closed :outcome))
+              "the merge is real; the close stands")
+          (is (re-find #"no resolvable page-id" (str sw))
+              "and the skipped nudge is said out loud"))))))
+
+(deftest workstream-without-a-notion-ref-nudges-nothing-quietly
+  (with-tmp
+    (fn [_]
+      (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
+      (let [w (ws/create! :brian {:stage :in-progress
+                                  :external-refs [{:adapter :github-issue :id "brian-study/brian#99"}
+                                                  {:adapter :github :id "brian-study/brian#22"}]})
+            sw (java.io.StringWriter.)
+            pw (java.io.PrintWriter. sw)]
+        (with-redefs [gh/list-merged-prs (fn [_] {:status :ok
+                                                  :prs [{:number 22 :url "u" :title "t" :merged-at "z"
+                                                         :base "main"}]})
+                      notion/keychain-token (constantly "tok")]
+          (binding [*err* pw]
+            (gm/poll-and-react! :brian cfg)
+            (.flush pw))
+          (is (= :done (-> (ws/read-ws :brian (:id w)) :closed :outcome)))
+          (is (nil? (re-find #"page-id" (str sw)))
+              "a GitHub-issue workstream has no ticket to nudge; that is not a gap"))))))
