@@ -192,10 +192,33 @@ Per finding, in order:
 1. **Read the actual error from the logs.** Never diagnose from the job name.
 2. **Dispatch the owning agent** with: the worktree path, the failing job, the
    error text, and the claim constraint below.
-3. **Verify narrowly.** Re-run the *specific* thing that failed — that test
-   namespace, that lint, that one Playwright spec — not the whole suite. A full
-   CI cycle is a Docker build across eight containers; spending one to learn
-   whether a single test now passes is how this skill becomes too slow to use.
+3. **Verify narrowly — but narrow to the BLAST RADIUS, not to the symptom.**
+   Re-run the specific thing that failed — that test namespace, that lint, that
+   one Playwright spec — not the whole suite. A full CI cycle is a Docker build
+   across eight containers; spending one to learn whether a single test now
+   passes is how this skill becomes too slow to use.
+
+   **A change to something SHARED is a different size of narrow.** When the fix
+   touches a component, constant or helper with call sites beyond the file it
+   lives in, the namespaces that can break are not the ones you edited and not
+   the ones you can bring to mind — they are every namespace that reaches the
+   thing you changed. Find them mechanically and run all of them:
+
+   ```bash
+   # every test that renders the changed component, names its classes, or calls it
+   grep -rl '<component>/\|<the-constant>\|<a-distinctive-class-it-emits>' src/test/ \
+     | sed 's|src/test/||; s|\.clj$||; s|/|.|g; s|_|-|g' | sort -u
+   ```
+
+   Then run that list in one REPL call. Measured on brian: a palette change to
+   `ui/feedback` with 16 call sites, verified against the six namespaces that
+   looked related, went green — and the merge queue then evicted the PR because
+   `user_settings_save_dirty_test`, which nobody would list from memory,
+   asserted the old colour. The grep found 30 namespaces; running all of them is
+   866 tests and takes about as long as the six did.
+
+   **The tell is the call-site count, not the line count.** A 4-line change to a
+   shared default has a wider radius than a 400-line change inside one handler.
 4. **Failed verification ⇒ one more attempt**, informed by what the first one
    learned. Still failing ⇒ unresolved. **Two attempts per finding**, then stop
    attempting that one and move to the next.
@@ -392,6 +415,11 @@ row names `lane-comments` and stops there.
   succeeded at the wrong thing.
 - **Spending a full CI cycle to verify one fix.** Re-run the specific test or
   lint. CI is eight containers and minutes; the narrow check is seconds.
+- **Narrowing to the namespaces you can think of, after changing something
+  shared.** The set that breaks is the set that REACHES what you changed, and
+  memory does not enumerate it — grep does. Verified green against six
+  hand-picked namespaces, a brian palette change was then evicted from the merge
+  queue by a seventh; the grep listed thirty (§5).
 - Looping CI to green — three full runs is the ceiling, and the last one's new
   findings are reported, not chased.
 - Treating flaky e2e / Docker infra errors as code bugs — separate them before routing.

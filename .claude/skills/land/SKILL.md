@@ -487,19 +487,35 @@ neither fixed nor answered: that is not satisfying the gate, it is removing it.
 Only the collapsed PR's threads gate the merge. The lower layers' threads do not
 — those PRs close unmerged (below) — so leave them as the review left them.
 
-`--auto` enqueues; it does not wait. Poll until it lands:
+Enqueueing does not wait. Poll until it lands — and poll the QUEUE ENTRY beside
+the merge state, because the PR's own fields cannot tell you it was evicted:
 
 ```bash
-gh pr view <top-pr-number> -R "$SLUG" --json state,mergedAt,mergeStateStatus \
-  --jq '"\(.state) merged=\(.mergedAt // "-") \(.mergeStateStatus)"'
+gh pr view <top-pr-number> -R "$SLUG" --json state,mergedAt \
+  --jq '"\(.state) merged=\(.mergedAt // "-")"'
+gh api graphql -f query='{repository(owner:"OWNER",name:"REPO"){pullRequest(number:N){
+  mergeQueueEntry{state position}}}}' \
+  --jq '.data.repository.pullRequest.mergeQueueEntry | if . == null then "no-entry" else "\(.state)@\(.position)" end'
 ```
 
 - **`MERGED`** → done. With one entry in the queue this reading is now the whole
   truth, which it was not while the stack was enqueued as n.
-- **`OPEN`, with a `removed_from_merge_queue` event and no merge** → the queue
-  **kicked it out**. Its build failed against the merged result — something the
-  PR's own checks could not have caught, since they never tested that
-  combination. Treat it exactly as §6, fix, and re-enqueue.
+- **an entry** (`AWAITING_CHECKS@1`, `QUEUED@2`, …) → still in the queue; keep
+  waiting.
+- **`no-entry` and not merged** → the queue **kicked it out**. Its build failed
+  against the merged result — something the PR's own checks could not have
+  caught, since they never tested that combination. Treat it exactly as §6, fix,
+  and re-enqueue.
+
+**Watching `state`/`mergeStateStatus` alone cannot see an eviction, and this is
+the trap.** Neither field moves when the queue drops a PR: it reads `OPEN` and
+`CLEAN` before it is enqueued, while it sits in the queue, and again after it is
+evicted — the same pair in all three states. Measured on brian PR #4807: evicted
+at 12:06:10Z, and a watch polling those two fields still printed `OPEN merged=-
+CLEAN` every minute until its 45-minute budget ran out at 12:41, reporting a
+timeout where it should have reported a failed build 35 minutes earlier. The
+`mergeQueueEntry` going null is the signal; a timeline read (below) confirms it
+after the fact but is not what a poll loop should key on.
 
 ```bash
 gh api repos/"$SLUG"/issues/<n>/timeline --paginate \
@@ -637,6 +653,11 @@ it, `/drive-home` records the outcome — `:implementation-completed` or
   trunk unread, and unlike the old stack merge nothing refuses (§2).
 - **Reading `removed_from_merge_queue` as failure** — it fires on success too;
   what distinguishes them is whether a merge landed beside it (§8).
+- **Watching only `state`/`mergeStateStatus` for the merge** — an evicted PR
+  reads `OPEN`/`CLEAN`, which is also what it reads while queued and before it
+  was ever enqueued. The watch has to poll `mergeQueueEntry`; without it an
+  eviction is invisible until the budget runs out and gets reported as a
+  timeout (§8).
 - **Watching the merge queue indefinitely** — under `nido ship` this runs on a
   cap-1 merge lane, so it blocks every other branch. Budget the watch and hand
   off to the `github-merge` poller (§8).
