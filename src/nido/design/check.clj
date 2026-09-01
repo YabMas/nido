@@ -194,6 +194,10 @@
      {:status :violated    :violations [...]}      laws fired; each carries its named offenders
      {:status :undecidable :error \"…\"}             the check itself did not complete
 
+   Every answer but `:unmodelled` also carries `:files` — where the declaration is written.
+   A reading that prints a violation has to name them, and asking for them separately meant
+   resolving the same config twice.
+
    `:undecidable` is reported, never swallowed into `:satisfied`. A caller that cannot tell
    \"the design holds\" from \"nobody could tell\" will eventually wave through the branch that
    broke the checker."
@@ -201,22 +205,28 @@
   ([_project-name worktree design]
    (if-not design
      {:status :unmodelled}
-     (let [{:keys [src spec-dirs]} design
+     (let [{:keys [src spec-dirs files]} design
            done (run-fukan design worktree "check"
-                           ["--src" src "--spec-dirs" (str/join "," spec-dirs)] check-timeout-ms)]
-       (if (= ::timeout done)
-         {:status :undecidable
-          :error  (str "the design check did not finish within "
-                       (quot check-timeout-ms 1000) "s")}
-         (let [{:keys [exit out err]} done
-               report (parse-report out)]
-           (case (long exit)
-             0 {:status :satisfied}
-             1 (if report
-                 {:status :violated :violations (:violations report)}
-                 {:status :undecidable :error (str "unreadable report: " (str/trim (str out)))})
-             {:status :undecidable
-              :error  (or (:error report) (str/trim (str err)) (str "exit " exit))})))))))
+                           ["--src" src "--spec-dirs" (str/join "," spec-dirs)] check-timeout-ms)
+           ;; carried on every modelled answer, not just the ones that print it. A caller that
+           ;; had to ask for the files separately was re-resolving a config this call already
+           ;; holds, and two resolutions of "where is the declaration" can disagree once a
+           ;; branch moves the canvas.
+           with-files (fn [m] (cond-> m (seq files) (assoc :files (vec files))))]
+       (with-files
+         (if (= ::timeout done)
+           {:status :undecidable
+            :error  (str "the design check did not finish within "
+                         (quot check-timeout-ms 1000) "s")}
+           (let [{:keys [exit out err]} done
+                 report (parse-report out)]
+             (case (long exit)
+               0 {:status :satisfied}
+               1 (if report
+                   {:status :violated :violations (:violations report)}
+                   {:status :undecidable :error (str "unreadable report: " (str/trim (str out)))})
+               {:status :undecidable
+                :error  (or (:error report) (str/trim (str err)) (str "exit " exit))}))))))))
 
 (defn ^{:malli/schema [:=> [:cat [:maybe [:vector :string]] [:vector :string]] :string]}
   offender-line

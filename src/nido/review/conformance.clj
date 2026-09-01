@@ -57,7 +57,7 @@
    branch, and reporting nothing would let the round pass on an answer nobody gave."
   [project worktree]
   (let [result (design/check project worktree)
-        files  (:files (design/design-of project worktree))
+        files  (:files result)
         mk     (fn [title body]
                  {:title      title
                   :body       body

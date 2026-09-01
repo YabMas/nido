@@ -24,8 +24,11 @@
                     cws/latest-entry (fn [& _] design)
                     standing/of-design (constantly standing)
                     nido-design/coords (fn [_] (when structure [:nido "/wt"]))
-                    design/check (constantly structure)
-                    design/design-of (constantly {:files ["/wt/canvas/bands.clj"]})]
+                    ;; :files rides on the result — the check resolved the config to run, so
+                    ;; the gate is handed where the declaration lives rather than re-resolving it
+                    design/check (constantly (cond-> structure
+                                               (and structure (not= :unmodelled (:status structure)))
+                                               (assoc :files ["/wt/canvas/bands.clj"])))]
         [(land/check ":cwd" "/wt") (str out)]))))
 
 (deftest a-standing-approved-design-lands

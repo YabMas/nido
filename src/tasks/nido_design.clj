@@ -52,7 +52,7 @@
                                        (when (not= 1 n) "s") " of " project "'s declared design\n"))
                          (println (design/violation-text result))
                          (println (str "\nThe design is declared in "
-                                       (str/join ", " (:files (design/design-of project worktree)))
+                                       (str/join ", " (:files result))
                                        ".\nEither the code moves, or the declaration does — but one of them is wrong."))
                          1)
           :undecidable (do (println (str "design:check UNDECIDABLE · " (:error result)))

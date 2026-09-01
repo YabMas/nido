@@ -6,9 +6,16 @@
    [nido.design.check :as design]
    [nido.review.conformance :as conformance]))
 
-(defn- with-status [status f]
-  (with-redefs [design/check     (constantly status)
-                design/design-of (constantly {:files ["/wt/canvas/bands.clj"]})]
+(defn- with-status
+  "Run `f` with the checker answering `status`.
+
+   `:files` rides on the result rather than being stubbed separately, because that is now the
+   contract: the check resolved the config to run at all, so a reading that needs to name the
+   declaration is handed it rather than resolving it a second time."
+  [status f]
+  (with-redefs [design/check (constantly (cond-> status
+                                           (not= :unmodelled (:status status))
+                                           (assoc :files ["/wt/canvas/bands.clj"])))]
     (f)))
 
 (deftest a-clean-or-unmodelled-project-adds-nothing-to-the-round

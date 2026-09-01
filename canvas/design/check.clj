@@ -20,15 +20,21 @@
         [:files {:optional true} [:vector :string]]])
 
 (Kind CheckResult
-  "What the checker found: a status, and the violations behind it.
+  "What the checker found: a status, the violations behind it, and where the declaration they
+   violate is written.
 
    FOUR statuses, and the fourth is the point. `:unmodelled` is not a failure — most projects
    declare no design, and a seam that reported them as broken would be switched off within a
    week, after which it would not be there for the projects that do. `:undecidable` is not a
    pass: nobody could tell, and a consumer reading it as green waves through exactly the branch
-   that broke the checker."
+   that broke the checker.
+
+   `:files` is carried rather than looked up again. Every reading that prints a violation has to
+   say where the declaration is, and each was asking the seam a second time for a config it had
+   already resolved to run the check at all."
   [:map [:status [:enum :unmodelled :satisfied :violated :undecidable]]
         [:violations {:optional true} [:vector :any]]
+        [:files {:optional true} [:vector :string]]
         [:error {:optional true} :any]])
 
 (Kind DesignDocument
@@ -69,7 +75,8 @@
                             [:scope [:? [:maybe :any]]]] DesignDocument]
      :delegates [design-of]})
   (Operation check
-    "Run the checker and return what it found, never an exit code."
+    "Run the checker and return what it found — its status, its violations, and the files the
+     declaration is written in. Never an exit code."
     {:signature [:=> [:catn [:project-name ProjectName] [:worktree :string]
                             [:design [:? [:maybe DesignConfig]]]] CheckResult]
      :delegates [design-of]})
