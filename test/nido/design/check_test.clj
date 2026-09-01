@@ -152,15 +152,19 @@
                     "the message names the escape — the reader is an agent or a hurried human")))))
         (finally (fs/delete-tree wt))))))
 
-(deftest an-oversized-declaration-is-truncated-out-loud
-  (let [wt (worktree-with {"canvas/big.clj" "(ns canvas.big)"})]
-    (try
-      (with-redefs [project/get-project
-                    (constantly {:design {:cmd (answering (str/join (repeat 20000 "x")) 0)}})]
-        (let [text (design/describe "p" wt)]
-          (is (< (count text) 20000))
-          (is (str/includes? text "truncated") "never silently")))
-      (finally (fs/delete-tree wt)))))
+(deftest the-document-is-whole-however-large-it-is
+  (testing "the seam renders, it does not budget. A cap here was inherited by every reader,
+            including the one that compares two renderings — for which a truncated document is
+            not a smaller answer but a wrong one, since every change past the cut reads as no
+            change. The briefing that has a budget applies its own."
+    (let [wt (worktree-with {"canvas/big.clj" "(ns canvas.big)"})]
+      (try
+        (with-redefs [project/get-project
+                      (constantly {:design {:cmd (answering (str/join (repeat 20000 "x")) 0)}})]
+          (let [{:keys [status document]} (design/describe "p" wt)]
+            (is (= :described status))
+            (is (= 20000 (count document)) "whole, not capped")))
+        (finally (fs/delete-tree wt))))))
 
 (defn- echoing-args
   "A `:cmd` that prints the arguments nido appended to it — the verb lands in `$0`, its flags
@@ -176,7 +180,7 @@
       (try
         (with-redefs [project/get-project
                       (constantly {:design {:cmd (echoing-args) :select '[(Band ?n)]}})]
-          (let [asked (design/describe "p" wt)]
+          (let [asked (:document (design/describe "p" wt))]
             (is (str/includes? asked "describe"))
             (is (str/includes? asked "--select [(Band ?n)]")
                 "the clauses arrive as one argument, readable by fukan's edn parse")))
@@ -188,19 +192,7 @@
     (let [wt (worktree-with {"canvas/bands.clj" "(ns canvas.bands)"})]
       (try
         (with-redefs [project/get-project (constantly {:design {:cmd (echoing-args)}})]
-          (is (not (str/includes? (design/describe "p" wt) "--select"))))
-        (finally (fs/delete-tree wt))))))
-
-(deftest a-truncated-declaration-names-the-remedy
-  (testing "saying `truncated` tells a reader the document is incomplete; naming `:select` tells
-            them what to do instead, which is the difference between a warning and a fix"
-    (let [wt (worktree-with {"canvas/big.clj" "(ns canvas.big)"})]
-      (try
-        (with-redefs [project/get-project
-                      (constantly {:design {:cmd (answering (str/join (repeat 20000 "x")) 0)}})]
-          (let [text (design/describe "p" wt)]
-            (is (str/includes? text ":select"))
-            (is (str/includes? text "20000") "and says how much there was")))
+          (is (not (str/includes? (:document (design/describe "p" wt)) "--select"))))
         (finally (fs/delete-tree wt))))))
 
 (deftest an-explicit-scope-beats-the-projects-configured-default
@@ -210,7 +202,7 @@
       (try
         (with-redefs [project/get-project
                       (constantly {:design {:cmd (echoing-args) :select '[(Band ?n)]}})]
-          (is (str/includes? (design/describe "p" wt '[(Module ?n)]) "--select [(Module ?n)]")
+          (is (str/includes? (:document (design/describe "p" wt '[(Module ?n)])) "--select [(Module ?n)]")
               "the workstream's scope, not the project's"))
         (finally (fs/delete-tree wt))))))
 
@@ -220,5 +212,5 @@
     (let [wt (worktree-with {"canvas/bands.clj" "(ns canvas.bands)"})]
       (try
         (with-redefs [project/get-project (constantly {:design {:cmd (echoing-args)}})]
-          (is (not (str/includes? (design/describe "p" wt nil) "--select"))))
+          (is (not (str/includes? (:document (design/describe "p" wt nil)) "--select"))))
         (finally (fs/delete-tree wt))))))

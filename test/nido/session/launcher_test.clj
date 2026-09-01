@@ -687,6 +687,23 @@
               "most projects nido drives declare nothing, and get a clean briefing")))
       (finally (fs/delete-tree wt)))))
 
+(deftest render-context-truncates-an-oversized-declaration-out-loud
+  (testing "the budget is the briefing's, and it is spent out loud — a design that ends
+            mid-sentence reads as a design that ends there, and the note names scoping rather
+            than a bigger cap because a whole answer to a narrower question is what fits"
+    (let [wt (fs/create-temp-dir)]
+      (try
+        (with-redefs [nido.design.check/describe
+                      (constantly {:status :described
+                                   :document (str/join (repeat 20000 "x"))})]
+          (let [doc (@#'launcher/render-context (assoc base-ctx :worktree (str wt)))]
+            (is (str/includes? doc "truncated at 16000 of 20000")
+                "never silently, and it says how much there was")
+            (is (str/includes? doc "should be SCOPED rather than cut"))
+            (is (str/includes? doc ":select")
+                "naming the remedy is the difference between a warning and a fix")))
+        (finally (fs/delete-tree wt))))))
+
 (deftest render-context-says-so-when-the-design-could-not-be-rendered
   (testing "a render that failed gets a section of its own, because omitting it briefs a
             modelled project exactly like an unmodelled one — and the landing gate still

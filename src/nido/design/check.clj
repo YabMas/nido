@@ -52,12 +52,6 @@
    it can equally well not say."
   60000)
 
-(def ^:private declaration-char-cap
-  "How much declared design to embed in a briefing before truncating. A model is prose plus
-   declarations and is meant to be read; a model that crowded out everything else in a briefing
-   would be read by nobody. Fukan's own self-model renders to ~40k, nido's to ~3k."
-  16000)
-
 (defn ^{:malli/schema [:=> [:cat :ProjectName :string] [:maybe :DesignConfig]]}
   design-of
   "The design configuration for `project-name` in `worktree`, or nil when the project declares
@@ -87,24 +81,6 @@
         done (deref proc timeout-ms ::timeout)]
     (when (= ::timeout done) (process/destroy-tree proc))
     (or (and (= ::timeout done) ::timeout) done)))
-
-(defn- capped
-  "`doc`, cut at `declaration-char-cap` with a line saying it was cut and how to ask for less.
-
-   Never silently: a design that ends mid-sentence reads as a design that ends there, and the
-   reader has no way to know a third of it is missing. The note names SCOPING rather than a
-   bigger cap, because a whole answer to a narrower question is what a briefing can use and
-   most of a wide one is not."
-  [doc {:keys [files]}]
-  (if (<= (count doc) declaration-char-cap)
-    doc
-    (str (subs doc 0 declaration-char-cap)
-         "\n\n;; … truncated at " declaration-char-cap " of " (count doc)
-         " characters. The whole declaration is in " (str/join ", " files)
-         ".\n;; A design this size should be SCOPED rather than cut: the workstream's"
-         "\n;; baseline records a `:scope`, and a project may set `:select` on its registry"
-         "\n;; entry — either carries a whole answer to a narrower question instead of"
-         "\n;; most of a wide one.\n")))
 
 (defn- unrendered-message
   "Why a render that ran out of time did, and what to do about it.
@@ -149,7 +125,10 @@
    inside the budget briefed exactly like a project with no design at all, and the agent was
    told nothing either way. The larger the design, the more certainly it vanished.
 
-   Truncated at `declaration-char-cap` with a line saying so, never silently."
+   The document is COMPLETE, and the reader that has a budget is the one that applies it. This
+   used to truncate at a briefing's cap, which is a fact about a briefing rather than about a
+   design — and a second reader arrived that compares two renderings, for which a shared cap is
+   not a smaller answer but a wrong one: every change past the cut would read as no change."
   ([project-name worktree] (describe project-name worktree nil))
   ([project-name worktree scope]
    (if-let [design (design-of project-name worktree)]
@@ -175,7 +154,7 @@
          {:status :undecidable :error "fukan rendered an empty document"}
 
          :else
-         {:status :described :document (capped (str/trim (:out done)) design)}))
+         {:status :described :document (str/trim (:out done))}))
      {:status :unmodelled})))
 
 (defn- parse-report

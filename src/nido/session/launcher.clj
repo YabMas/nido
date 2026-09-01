@@ -584,6 +584,34 @@
     (when-let [resource (jio/resource (str "project-briefings/" project-name ".md"))]
       (slurp resource))))
 
+(def ^:private declaration-char-cap
+  "How much declared design a briefing embeds before truncating.
+
+   A budget of the READER, not of the render, which is why it lives here. A model is prose plus
+   declarations and is meant to be read; one that crowded out everything else in a briefing
+   would be read by nobody. nido's own renders to 265k unscoped and 12k scoped to its bands.
+
+   It used to sit in the seam, where every reader inherited it — including the one that compares
+   two renderings, for which a truncated document is not a smaller answer but a wrong one."
+  16000)
+
+(defn- capped
+  "`doc`, cut at `declaration-char-cap` with a line saying it was cut and how to ask for less.
+
+   Never silently: a design that ends mid-sentence reads as a design that ends there, and the
+   reader has no way to know a third of it is missing. The note names SCOPING rather than a
+   larger cap, because a whole answer to a narrower question is what a briefing can use and
+   most of a wide one is not."
+  [doc]
+  (if (<= (count doc) declaration-char-cap)
+    doc
+    (str (subs doc 0 declaration-char-cap)
+         "\n\n;; … truncated at " declaration-char-cap " of " (count doc) " characters."
+         "\n;; A design this size should be SCOPED rather than cut: the workstream's baseline"
+         "\n;; records a `:scope`, and a project may set `:select` on its registry entry —"
+         "\n;; either carries a whole answer to a narrower question instead of most of a wide"
+         "\n;; one. `bb nido:design:check` reads the whole declaration either way.\n")))
+
 (defn- render-design-section
   "The project's declared design, verbatim, and what the reader is to do about it.
 
@@ -637,7 +665,7 @@
            "should have gone the other way, and it is far cheaper to not write than\n"
            "to unpick.\n"
            "\n"
-           document
+           (capped document)
            "\n"
            "If the code is right and the declaration is wrong, change the\n"
            "DECLARATION — in the same commit, saying why. What you may not do is\n"
