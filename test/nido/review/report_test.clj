@@ -1,5 +1,6 @@
 (ns nido.review.report-test
   (:require
+   [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
    [cheshire.core :as json]
    [babashka.fs :as fs]
@@ -431,3 +432,58 @@
                    :declined [{:layer "core" :ran? true :reason "spans two layers"}]}}])
         ph (-> r :rounds first :phases (nth 1))]
     (is (= [{:layer "core" :ran? true :reason "spans two layers"}] (:declined ph)))))
+
+;; ---- the design verdict --------------------------------------------------
+
+(def ^:private a-verdict
+  {:format :design-verdict :verdict :strained :round 2 :design-seq 3
+   :reason "one seam is under pressure"
+   :invariants-held ["a total is rounded exactly once"]
+   :needs "amend the invariant's wording to scope it to the act"})
+
+(deftest the-verdict-pass-leaves-its-answer-in-the-report
+  ;; The pass is the most expensive thing a run does and its answer used to
+  ;; reach only the ledger — so a run whose ledger refused it, or that had no
+  ;; ledger at all, spent minutes of an agent and recorded nothing anywhere.
+  (let [r (report/with-verdict
+            (drive [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+                    {:event :run-finalized :status :converged :at "t3"}])
+            {:outcome :answered :ledger :appended :verdict a-verdict})]
+    (is (= a-verdict (get-in r [:design-verdict :verdict]))
+        "the verdict is carried whole, so a refusal can be diagnosed from the report alone")
+    (is (= "answered" (get-in r [:design-verdict :outcome])))
+    (is (= "appended" (get-in r [:design-verdict :ledger])))
+    (is (= "t3" (:ended-at r))
+        ":ended-at is when the REVIEW ended; the verdict judges the finished run and must not move it")))
+
+(deftest a-verdict-the-ledger-refused-is-still-in-the-report
+  (let [r (report/with-verdict
+            (report/init {:run-id "r" :cwd "/w" :base "main" :started-at "t0"})
+            {:outcome :answered :ledger :refused :verdict a-verdict
+             :because "Invalid event report — [:needs] :malli.core/extra-key"})]
+    (is (= a-verdict (get-in r [:design-verdict :verdict])))
+    (is (= "refused" (get-in r [:design-verdict :ledger])))
+    (is (str/includes? (get-in r [:design-verdict :because]) "extra-key")
+        "a refusal names what the write contract objected to — it is a nido bug, not a bad verdict")))
+
+(deftest a-pass-that-answered-nothing-still-says-it-ran
+  (let [r (report/with-verdict
+            (report/init {:run-id "r" :cwd "/w" :base "main" :started-at "t0"})
+            {:outcome :no-answer :because "its answer carried no verdict"})]
+    (is (= "no-answer" (get-in r [:design-verdict :outcome]))
+        "a pass that burned its budget and produced nothing is distinguishable from one that never ran")
+    (is (not (contains? (:design-verdict r) :verdict)))
+    (is (not (contains? (:design-verdict r) :ledger)))))
+
+(deftest the-verdict-survives-the-round-trip-through-json
+  (let [dir (str (fs/create-temp-dir))
+        path (str (fs/path dir "report.json"))]
+    (report/persist! (report/with-verdict
+                       (report/init {:run-id "r" :cwd "/w" :base "main" :started-at "t0"})
+                       {:outcome :answered :ledger :appended :verdict a-verdict})
+                     path)
+    (let [parsed (json/parse-string (slurp path) true)]
+      (is (= "strained" (get-in parsed [:design-verdict :verdict :verdict])))
+      (is (= ["a total is rounded exactly once"]
+             (get-in parsed [:design-verdict :verdict :invariants-held]))
+          "report.json is what a reader of the run opens, so the verdict has to be legible there"))))

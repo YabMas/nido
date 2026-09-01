@@ -80,6 +80,13 @@
     {:signature [:=> [:catn [:ctx :map]] :any]})
   (Operation apply-event "The report with one event folded in. Pure."
     {:signature [:=> [:catn [:report ReviewReport] [:event :map]] ReviewReport]})
+  (Operation with-verdict
+    "The report carrying what became of the design-verdict pass.
+
+     Not an event, because the pass judges the finished run and so cannot report
+     into a report that is still being built. It is the one thing the report
+     learns after :run-finalized."
+    {:signature [:=> [:catn [:report ReviewReport] [:outcome :map]] ReviewReport]})
   (Operation persist! "Write the report atomically, so a reader never sees half of one."
     {:signature [:=> [:catn [:report ReviewReport] [:path Path]] :any]}))
 

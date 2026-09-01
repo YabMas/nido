@@ -13,7 +13,6 @@
    See docs/superpowers/specs/2026-06-30-review-tui-frontend-design.md."
   (:require
    [babashka.fs :as fs]
-   [clojure.pprint :as pprint]
    [clojure.string :as str]
    [nido.coordinator.record.session :as csession]
    [nido.coordinator.record.state :as cstate]
@@ -198,67 +197,104 @@
                     (seq (:history final))
                     (seq (:invariants design))))))
 
-(defn- verdict-reject-path
-  "Where a refused design verdict is written. Beside report.json, because a
-   reader looking for what a run produced looks in the run dir and nowhere else."
-  [run-id]
-  (str (fs/path (cstate/run-dir run-id) "design-verdict-rejected.edn")))
+(defn- refusal-reason
+  "Why the ledger would not take a verdict, in one line a reader can act on.
 
-(defn- spit-rejected-verdict!
-  "Persist a verdict the ledger would not take, with malli's own explanation of
-   why. Best-effort in its own right — a run must not fail because it could not
-   record that it failed to record something."
-  [run-id v e]
-  (try
-    (fs/create-dirs (cstate/run-dir run-id))
-    (spit (verdict-reject-path run-id)
-          (with-out-str
-            (pprint/pprint {:verdict v
-                            :refused-because (ex-message e)
-                            :explain (:explain (ex-data e))})))
-    (catch Exception _ nil)))
+   malli's :explain is the full diagnosis and cannot travel with the verdict —
+   a single error embeds the whole branch schema, which is larger than the report
+   it would sit in. What identifies the bug is the path and the error type
+   together: `[:needs] :malli.core/extra-key` says the parser emits a key the
+   write contract does not admit, and that is a defect in nido rather than a bad
+   verdict."
+  [e]
+  (let [errs (:errors (:explain (ex-data e)))]
+    (cond-> (ex-message e)
+      (seq errs)
+      (str " — "
+           (str/join ", " (map #(str (pr-str (vec (:in %))) " " (:type %)) errs))))))
+
+(defn- append-verdict-to-ledger!
+  "Offer the verdict to this cwd's workstream, and say what happened:
+   `{:ledger :appended | :refused | :no-workstream}`, with `:because` on a
+   refusal.
+
+   Nothing here throws. A ledger the verdict cannot reach is a fact about the
+   ledger, and the verdict itself is unharmed by it — the caller records the
+   value either way, so a refusal is diagnosis rather than loss."
+  [cwd v]
+  (let [{:keys [project session]} (lifecycle/session-from-cwd cwd)
+        ws-id (when project (csession/workstream-id-for (keyword project) session))]
+    (if-not ws-id
+      {:ledger :no-workstream}
+      (try
+        (ws/append-entry! (keyword project) ws-id {:kind :design-verdict} (pr-str v))
+        {:ledger :appended}
+        (catch Exception e
+          {:ledger :refused :because (refusal-reason e)})))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   append-design-verdict!
-  "Run the design verdict and append it as a ledger event. Best-effort throughout,
-   for the same reason append-review-entry! is: a completed review must not turn
-   into a failure because a side record could not be written. Returns the verdict
-   map, or nil when it did not run or produced no answer.
+  "Run the design verdict and say what became of it, as the outcome map
+   `report/with-verdict` folds: `:outcome` (`:answered` / `:no-answer`), the
+   verdict itself when there was one, and where the ledger put it. nil when the
+   pass never ran.
 
-   Best-effort is not the same as untraceable. A verdict costs minutes of an
-   agent running with tools, and a rejected append used to leave one stderr line
-   in a stream nobody keeps — so the pass could produce its most useful output
-   and lose it with no evidence anywhere that it had. The value and the reason it
-   was refused are written into the run dir, which is where the rest of the run's
-   evidence already lives."
+   Best-effort at the ledger, for the same reason append-review-entry! is: a
+   completed review must not turn into a failure because a side record could not
+   be written. Best-effort is not the same as untraceable, and this is the pass
+   where the difference showed: it costs minutes of an agent reading code with
+   tools, and its answer reached exactly one channel that three separate
+   conditions could swallow — a cwd belonging to no workstream, a schema that
+   refused the value, an agent whose answer carried no verdict. Each left one
+   stderr line in a stream nobody keeps. The outcome is returned so it can be
+   recorded where the run's other evidence already is.
+
+   A missing design record is the one absence with no outcome to record: report
+   init's `:context` already says the run had nothing to judge against, and the
+   pass never launches, so nothing was spent and nothing was lost."
   [cwd final report config]
   (try
     ;; Read here to answer `is there anything to judge`; verdict/run! resolves it
     ;; again for the prompt. One extra ledger read, against not handing run! a
     ;; record it is the authority on finding.
-    (when (verdict-worth-running? (:status final) final (stages/discover-design-record cwd))
-      (when-let [v (verdict/run! {:cwd cwd
+    (let [design (stages/discover-design-record cwd)]
+      (when (and design (verdict-worth-running? (:status final) final design))
+        (if-let [v (verdict/run! {:cwd cwd
                                   :run-id (:run-id config)
                                   :budget (:budget config)
                                   :final final
                                   :report report})]
-        (when-let [{:keys [project session]} (lifecycle/session-from-cwd cwd)]
-          (when-let [ws-id (csession/workstream-id-for (keyword project) session)]
-            (try
-              (ws/append-entry! (keyword project) ws-id {:kind :design-verdict}
-                                (pr-str v))
-              (catch Exception e
-                (spit-rejected-verdict! (:run-id config) v e)
-                (binding [*out* *err*]
-                  (println (str "review-loop: the design verdict was REFUSED by the ledger — "
-                                (ex-message e)))
-                  (println (str "  it is in " (verdict-reject-path (:run-id config))
-                                " — this is a bug in nido, not a bad verdict")))))))
-        v))
+          (assoc (append-verdict-to-ledger! cwd v) :outcome :answered :verdict v)
+          {:outcome :no-answer
+           :because (str "the pass ran and its answer carried no verdict"
+                         " — the transcript is agent.log in this run dir")})))
     (catch Exception e
       (binding [*out* *err*]
         (println (str "review-loop: design verdict skipped — " (ex-message e))))
       nil)))
+
+(defn- record-verdict!
+  "Fold the verdict pass's outcome into report.json, and say on the terminal when
+   it went somewhere other than where it should have.
+
+   The report is written even when the ledger took the verdict. The two records
+   answer to different readers — the ledger entry is what someone reading the
+   WORKSTREAM gets, the report is what someone reading the RUN gets — and only
+   the second is guaranteed to exist, since a review outside a session has no
+   ledger to write to at all."
+  [outcome report-atom report-path]
+  (when outcome
+    (report/persist! (swap! report-atom report/with-verdict outcome) report-path)
+    (binding [*out* *err*]
+      (case (:outcome outcome)
+        :no-answer (println (str "review-loop: the design verdict pass returned no verdict — "
+                                 (:because outcome)))
+        :answered  (when (= :refused (:ledger outcome))
+                     (println (str "review-loop: the design verdict was REFUSED by the ledger — "
+                                   (:because outcome)))
+                     (println (str "  it is in " report-path
+                                   " — this is a bug in nido, not a bad verdict")))
+        nil))))
 
 (defn- print-verdict!
   "Report the verdict on the terminal. An :invalidated / :standing-challenged
@@ -383,7 +419,9 @@
     (when-let [b (append-blocker! cwd final)]
       (println (str "review-loop: ⚠ " (:summary b)))
       (println "  → answer it at the workstream gate; the loop has no move for it"))
-    (print-verdict! (append-design-verdict! cwd final @report-atom config))
+    (let [outcome (append-design-verdict! cwd final @report-atom config)]
+      (record-verdict! outcome report-atom report-path)
+      (print-verdict! (:verdict outcome)))
     ;; Last, so the analysis session finds everything this run wrote — the
     ;; report, the :review ledger entry and the design verdict are all on disk
     ;; by the time the envelope exists.

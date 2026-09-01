@@ -340,6 +340,35 @@
 
     report))
 
+;; ---- the design verdict --------------------------------------------------
+
+(defn ^{:malli/schema [:=> [:cat :ReviewReport :map] :ReviewReport]}
+  with-verdict
+  "The report, carrying what became of the design-verdict pass.
+
+   Applied to an already-finalized report rather than folded as an event,
+   because the pass judges the whole run and so cannot start until the run has
+   ended. `:ended-at` is deliberately left where it was — it is when the REVIEW
+   ended, and moving it would silently redefine the field for every report ever
+   written.
+
+   `outcome` describes the pass and not what it decided. `:outcome` is what the
+   pass returned (`:answered`, `:no-answer`), `:ledger` is whether the workstream
+   took the verdict (`:appended`, `:refused`, `:no-workstream`), and either half
+   can be the one that went wrong: a verdict the ledger refuses is as lost as a
+   verdict that was never produced, and both used to leave one stderr line. The
+   verdict value is carried whole, byte-identical to what the ledger is offered,
+   so a refusal can be diagnosed from the report alone.
+
+   Keywords are written out as strings to match the rest of the report, whose
+   statuses have been strings since it was a JSON document."
+  [report {:keys [outcome ledger because verdict]}]
+  (assoc report :design-verdict
+         (cond-> {:outcome (name outcome)}
+           ledger  (assoc :ledger (name ledger))
+           because (assoc :because because)
+           verdict (assoc :verdict verdict))))
+
 ;; ---- persistence ---------------------------------------------------------
 
 (defn ^{:malli/schema [:=> [:cat :ReviewReport :Path] :any]}

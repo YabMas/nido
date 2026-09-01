@@ -1,6 +1,7 @@
 (ns tasks.nido-review-test
   (:require
    [babashka.fs :as fs]
+   [cheshire.core :as json]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing use-fixtures]]
    [nido.platform.core :as core]
@@ -12,6 +13,7 @@
    [nido.review.record :as record]
    [nido.review.report :as rreport]
    [nido.review.stages :as stages]
+   [nido.review.verdict :as verdict]
    [nido.session.lifecycle :as lifecycle]
    [tasks.nido-review :as t]))
 
@@ -596,3 +598,78 @@
                                               :started-at "t0"}))
                       :context))
       "absent rather than empty when nothing was asked"))
+
+;; ── The design verdict, and where it is recorded ────────────────────────────
+
+(def ^:private a-design {:seq 3 :invariants ["a total is rounded exactly once"]})
+
+(def ^:private a-verdict
+  {:format :design-verdict :verdict :strained :round 1 :design-seq 3
+   :reason "one seam is under pressure"
+   :needs "amend the invariant's wording"})
+
+(deftest a-verdict-the-ledger-refuses-is-still-returned-for-the-report
+  ;; The failure this exists to prevent: the pass ran for four minutes, produced
+  ;; the run's most informative artifact, and the ledger's write contract refused
+  ;; it — leaving one stderr line and no record on any channel.
+  (with-redefs [stages/discover-design-record (fn [_] a-design)
+                verdict/run! (fn [_] a-verdict)
+                lifecycle/session-from-cwd (fn [_] {:project "nido" :session "s1"})
+                csession/workstream-id-for (fn [_ _] "ws-1")
+                ws/append-entry! (fn [& _]
+                                   (throw (ex-info "Invalid event report"
+                                                   {:explain {:errors [{:in [:needs]
+                                                                        :type :malli.core/extra-key}]}})))]
+    (let [outcome (t/append-design-verdict! "/w" {:status :converged :findings [{:title "x"}]}
+                                            {} {:run-id "r"})]
+      (is (= :answered (:outcome outcome)))
+      (is (= :refused (:ledger outcome)))
+      (is (= a-verdict (:verdict outcome)) "the verdict itself survives the refusal")
+      (is (str/includes? (:because outcome) "[:needs]")
+          "the refusal names the key the write contract would not take")
+      (is (str/includes? (:because outcome) "extra-key")))))
+
+(deftest a-verdict-outside-a-workstream-is-still-returned-for-the-report
+  (with-redefs [stages/discover-design-record (fn [_] a-design)
+                verdict/run! (fn [_] a-verdict)
+                lifecycle/session-from-cwd (fn [_] nil)]
+    (let [outcome (t/append-design-verdict! "/w" {:status :converged :findings [{:title "x"}]}
+                                            {} {:run-id "r"})]
+      (is (= :no-workstream (:ledger outcome)))
+      (is (= a-verdict (:verdict outcome))
+          "a review with no ledger to write to still has a run dir to write to"))))
+
+(deftest a-pass-that-produced-no-verdict-says-so-rather-than-nothing
+  (with-redefs [stages/discover-design-record (fn [_] a-design)
+                verdict/run! (fn [_] nil)]
+    (let [outcome (t/append-design-verdict! "/w" {:status :converged :findings [{:title "x"}]}
+                                            {} {:run-id "r"})]
+      (is (= :no-answer (:outcome outcome))
+          "the budget was spent; a run has to be able to tell that from a pass that never started")
+      (is (nil? (:verdict outcome))))))
+
+(deftest with-no-design-record-the-pass-never-runs-and-records-nothing
+  (let [ran (atom false)]
+    (with-redefs [stages/discover-design-record (fn [_] nil)
+                  verdict/run! (fn [_] (reset! ran true) a-verdict)]
+      (is (nil? (t/append-design-verdict! "/w" {:status :converged :findings [{:title "x"}]}
+                                          {} {:run-id "r"})))
+      (is (false? @ran) "nothing to judge against, so nothing is spent"))))
+
+(deftest the-run-dir-carries-the-verdict-when-the-loop-ends
+  ;; End to end: the claim is about report.json on disk, not about a return value.
+  (with-redefs [rloop/run-loop (run-loop-writing-a-report :converged)
+                stages/discover-design-record (fn [_] a-design)
+                verdict/run! (fn [_] a-verdict)
+                lifecycle/session-from-cwd (fn [_] nil)]
+    (t/loop-cmd ":cwd" "/w")
+    (let [report (->> (fs/list-dir (cstate/runs-dir))
+                      (map #(fs/path % "report.json"))
+                      (filter fs/exists?)
+                      first
+                      str
+                      slurp
+                      (#(json/parse-string % true)))]
+      (is (= "strained" (get-in report [:design-verdict :verdict :verdict]))
+          "report.json is where the rest of the run's evidence lives, and now the verdict too")
+      (is (= "no-workstream" (get-in report [:design-verdict :ledger]))))))
