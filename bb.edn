@@ -257,6 +257,11 @@
    :doc "Check a worktree against the project's declared design (fukan canvas/). Exits 1 on a violation, 2 when undecidable. [:cwd <dir>]"
    :task (apply nido-design/cmd *command-line-args*)}
 
+  nido:design:diff
+  {:requires ([tasks.nido-design :as nido-design])
+   :doc "Show what this branch changes about the project's declared design, rendered by fukan at both ends. A reading, not a gate: exits 0 whatever it finds. [:from main] [:cwd <dir>] [:scope <selection>]"
+   :task (apply nido-design/diff-cmd *command-line-args*)}
+
   nido:test
   {:requires ([tasks.nido-test :as nido-test])
    :doc "Run unit tests. Optional :only <ns-prefix> to filter."

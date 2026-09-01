@@ -10,7 +10,8 @@
             [fukan.common.typing.malli]))
 
 (Module nido-design
-  "`bb nido:design:check` — does this worktree's code stand up the project's declared design?"
+  "`bb nido:design:check` — does this worktree's code stand up the project's declared design?
+   `bb nido:design:diff` — what does this branch change about the declaration it stands up?"
   (Operation coords
     "[project worktree] for `cwd`: a nido session's if cwd is inside one, otherwise the project's"
     {:signature [:=> [:catn [:opts [:* :any]]] :any]})
@@ -19,4 +20,11 @@
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation cmd
     "bb entry point: exits non-zero on a refusal, so a recipe that runs it before the push stops"
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
+  (Operation diff
+    "Print what this branch changes about the declared design, against a base revision."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]
+     :delegates [coords]})
+  (Operation diff-cmd
+    "bb entry point for the diff."
     {:signature [:=> [:catn [:args [:* :any]]] :any]}))
