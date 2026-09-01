@@ -637,6 +637,53 @@
     (handle-get req)))
 
 ;; ---------------------------------------------------------------------------
+;; Slow-request log
+
+(def ^:private slow-request-ms
+  "Wall-clock threshold, in milliseconds, above which a request is logged.
+
+   NIDO_SLOW_REQUEST_MS overrides it; 0 logs every request, which is how you
+   turn this into a plain access log for a session. The default sits above a
+   healthy render (~300ms on an unloaded machine) and below the latency a person
+   actually notices, so a quiet log is a real statement that the dashboard was
+   fast rather than an artefact of a threshold nothing could cross."
+  (or (some-> (System/getenv "NIDO_SLOW_REQUEST_MS") parse-long) 750))
+
+(defn ^{:malli/schema [:=> [:cat :any] :any]}
+  wrap-slow-request-log
+  "Wrap a handler so requests slower than `slow-request-ms` print one line to the
+   daemon log: when, what, how long, and the load average at the time.
+
+   Timed around the handler alone, so the number is the server's own think-time
+   and excludes the queueing and transfer a browser also sees. That is the point
+   of measuring here rather than in the browser: a page that is slow in Chrome
+   and fast in this log is slow for a reason outside this process, and the two
+   measurements together say which.
+
+   A failing handler is timed and logged too, then rethrown — an exception after
+   a two-second stall is exactly the event worth having a line for, and swallowing
+   it here would change what the server returns."
+  [handler]
+  (fn [req]
+    (let [start (System/nanoTime)
+          log!  (fn [outcome]
+                  (let [ms (/ (- (System/nanoTime) start) 1e6)]
+                    (when (>= ms slow-request-ms)
+                      (println (format "[nido] slow %-4s %6.0fms load=%s %s%s"
+                                       (name (:request-method req :get))
+                                       ms
+                                       (if-let [l (proc/load-average)] (format "%.2f" l) "?")
+                                       (:uri req)
+                                       (if-let [q (:query-string req)] (str "?" q) ""))))))]
+      (try
+        (let [resp (handler req)]
+          (log! :ok)
+          resp)
+        (catch Throwable t
+          (log! :error)
+          (throw t))))))
+
+;; ---------------------------------------------------------------------------
 ;; Server lifecycle
 
 (defonce ^:private server-atom (atom nil))
@@ -647,7 +694,7 @@
   [{:keys [port] :or {port 8800}}]
   (when-let [old @server-atom]
     (old))
-  (let [stop-fn (http/run-server handle-request {:port port})]
+  (let [stop-fn (http/run-server (wrap-slow-request-log handle-request) {:port port})]
     (reset! server-atom stop-fn)
     (println (str "[nido] Dashboard running at http://localhost:" port))
     stop-fn))

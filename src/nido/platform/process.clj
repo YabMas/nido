@@ -200,6 +200,25 @@
       (when (zero? exit)
         (some-> out str/trim parse-long (* 1024))))))
 
+(defn ^{:malli/schema [:=> [:cat] [:maybe :double]]}
+  load-average
+  "The machine's 1-minute load average, via `sysctl -n vm.loadavg`. Returns nil
+   if sysctl is missing or its output does not parse.
+
+   Shelled out rather than read from the JVM: babashka does not expose
+   java.lang.management, so the ManagementFactory route the same code would take
+   on the JVM is unavailable here.
+
+   The 1-minute figure specifically — a reading meant to be interpreted next to
+   an event that just happened, where the 5- and 15-minute averages still carry
+   load that had drained before it."
+  []
+  (let [{:keys [exit out]} (shell {:continue true :out :string :err :string}
+                                  "sysctl" "-n" "vm.loadavg")]
+    (when (zero? exit)
+      ;; `{ 1.83 2.05 2.11 }` — braces and all, so take the first numeric field.
+      (some-> (re-find #"\d+\.\d+" (str out)) parse-double))))
+
 (defn ^{:malli/schema [:=> [:cat [:maybe :int]] :string]}
   human-bytes
   "Format a byte count as a short human-readable string (e.g. \"1.8 GB\").

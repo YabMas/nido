@@ -12,6 +12,36 @@
             [nido.coordinator.work]
             [nido.platform.project :as project]))
 
+(deftest slow-request-log-logs-only-what-crosses-the-threshold
+  ;; The handler is timed, not stubbed with a fake clock: the threshold is read
+  ;; from the environment at load, so the only way to assert on it in-process is
+  ;; to be genuinely slower than it. Kept at 30ms and one call each way.
+  (let [slow (server/wrap-slow-request-log (fn [_] (Thread/sleep 60) {:status 200}))
+        fast (server/wrap-slow-request-log (fn [_] {:status 200}))
+        line #(with-out-str (%))]
+    (with-redefs [server/slow-request-ms 30]
+      (let [quiet (line #(fast {:request-method :get :uri "/fast"}))
+            loud  (line #(slow {:request-method :get :uri "/workstreams"
+                                :query-string "sel=brian:ws-1"}))]
+        (is (= "" quiet) "a request under the threshold leaves no line")
+        (is (str/includes? loud "/workstreams?sel=brian:ws-1")
+            "the line names the path AND the query, which is what identifies the screen")
+        (is (str/includes? loud "load=")
+            "the line carries the load average — the fact that tells a slow render apart
+             from a busy machine")))))
+
+(deftest slow-request-log-still-rethrows
+  ;; A handler that throws after a long stall is exactly the event worth a line;
+  ;; logging must not turn it into a 200 or swallow the cause.
+  (let [boom (server/wrap-slow-request-log
+              (fn [_] (Thread/sleep 60) (throw (ex-info "kaboom" {}))))]
+    (with-redefs [server/slow-request-ms 30]
+      (let [out (java.io.StringWriter.)]
+        (binding [*out* out]
+          (is (thrown-with-msg? clojure.lang.ExceptionInfo #"kaboom"
+                                (boom {:request-method :post :uri "/gate/x"}))))
+        (is (str/includes? (str out) "/gate/x") "the failing request is logged too")))))
+
 (deftest system-redirects-to-workstreams
   (let [resp (server/handle-request {:request-method :get :uri "/system"})]
     (is (= 302 (:status resp)))

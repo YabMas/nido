@@ -114,6 +114,10 @@
      :delegates [control/read-queue-blocker]})
   (Operation derive-screen "Gather what the screen needs and derive it."
     {:signature [:=> [:catn [:view-state :any]] Screen] :delegates [work/screen]})
+  (Operation wrap-slow-request-log
+    "Wrap a handler so a request slower than the threshold leaves one line in the daemon log.
+     The dashboard's own latency is otherwise unobservable after the fact."
+    {:signature [:=> [:catn [:handler :any]] :any]})
   (Operation parse-findings-lines "A textarea of findings as items."
     {:signature [:=> [:catn [:s :string]] :any]})
   (Operation resolve-failure-msg "Why a gate action did not do what was asked."
