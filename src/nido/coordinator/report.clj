@@ -1804,6 +1804,39 @@
    ;; loop has touched.
    :baseline-review BaselineReviewAny})
 
+(def ^:private compiled-schemas
+  "[contract kind] → a delay of the compiled schema that pair validates under,
+   where contract is :write (what may be appended now) or :read (what was
+   legitimately writable when it was written). An absent pair is an unregistered
+   kind.
+
+   Compiled instances, never the forms in `event-schemas`/`read-schemas`:
+   `m/validate` handed a schema FORM recompiles that form on every call — ~3ms
+   against ~0.02ms for an instance — and the ledger validates once per entry it
+   reads, which a board render does hundreds of times. The registries above stay
+   declarative forms because that is what they are for; this is the one place
+   they become validators, so it is the one place that has to hold instances.
+
+   Each is a delay so requiring this namespace costs nothing: a task validating
+   one kind must not compile the whole registry (bb.edn keeps per-task :requires
+   narrow for the same reason)."
+  (into {}
+        (mapcat (fn [kind]
+                  (let [write (event-schemas kind)
+                        read  (or (read-schemas kind) write)]
+                    (cond-> [[[:read kind] (delay (m/schema read))]]
+                      write (conj [[:write kind] (delay (m/schema write))])))))
+        (into #{} (concat (keys event-schemas) (keys read-schemas)))))
+
+(defn- schema-for
+  "The compiled schema `kind` validates under `contract`. Throws for a kind the
+   registry does not know — the refusal both entry points made before they
+   shared this lookup."
+  [contract kind]
+  (if-let [s (get compiled-schemas [contract kind])]
+    @s
+    (throw (ex-info "No schema for entry kind" {:kind kind}))))
+
 (defn- validate-against
   [schema kind report]
   (if (m/validate schema report)
@@ -1869,9 +1902,7 @@
    Some kinds carry a rule the schema cannot express — see
    enforce-blocker-options. Those run AFTER the schema, on the write path only."
   [kind report]
-  (cond-> (validate-against (or (event-schemas kind)
-                                (throw (ex-info "No schema for entry kind" {:kind kind})))
-                            kind report)
+  (cond-> (validate-against (schema-for :write kind) kind report)
     (= :blocker kind) enforce-blocker-options))
 
 (defn ^{:malli/schema [:=> [:cat :EntryKind :any] :LedgerEvent]}
@@ -1887,10 +1918,7 @@
    panes and from the review warden, silently, which is the failure mode the
    ledger's immutability is supposed to rule out."
   [kind report]
-  (validate-against (or (read-schemas kind)
-                        (event-schemas kind)
-                        (throw (ex-info "No schema for entry kind" {:kind kind})))
-                    kind report))
+  (validate-against (schema-for :read kind) kind report))
 
 (defn ^{:malli/schema [:=> [:cat :LedgerEvent] :LedgerEvent]}
   validate

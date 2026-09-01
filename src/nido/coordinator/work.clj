@@ -380,6 +380,36 @@
     (not (contains? unrendered-bands (:stage row)))
     (assoc :position (pipeline/of project (:ws-id row)))))
 
+(def ^:private ^:dynamic *rows-memo*
+  "Atom memoizing `list-workstreams` by [project live-names] for the extent of one
+   `with-shared-rows` call, or nil when nothing is sharing.
+
+   Scoped, never global. The rows are a projection of the ledger on disk, so a
+   memo outliving the render it serves is a board that shows a decision taken in
+   another tab only once something invalidates it — and nothing here invalidates.
+   Nil by default, so every caller outside a render reads the disk as it always
+   has."
+  nil)
+
+(defn ^{:malli/schema [:=> [:cat :any] :any]}
+  with-shared-rows
+  "Call `f` with one `list-workstreams` memo shared across it, so a render asking
+   two questions of the same project reads that project's workstreams once.
+
+   The board asks exactly two — `all-grouped` for the bands, `all-gates` for the
+   queue — and they are two folds of the same rows. Reading per question costs a
+   full ledger pass per project per question, which is the bulk of a render, paid
+   twice over for one screen. Both must be inside the SAME call for the second to
+   hit the first's rows; wrapping them separately shares nothing."
+  [f]
+  (binding [*rows-memo* (atom {})] (f)))
+
+(defn- read-rows
+  "`list-workstreams` without the memo — one full read of a project's workstreams."
+  [project live-names]
+  (mapv #(with-position project (to-spine %))
+        (wsv/workstream-rows project live-names)))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName [:? :any]] [:vector :map]]}
   list-workstreams
   "All of a project's workstreams as enriched rows on the single spine. `live-names`
@@ -393,8 +423,13 @@
    was waiting on a baseline and which on a human."
   ([project] (list-workstreams project nil))
   ([project live-names]
-   (mapv #(with-position project (to-spine %))
-         (wsv/workstream-rows project live-names))))
+   (if-let [memo *rows-memo*]
+     (let [k [project live-names]]
+       (or (get @memo k)
+           (let [rows (read-rows project live-names)]
+             (swap! memo assoc k rows)
+             rows)))
+     (read-rows project live-names))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :any [:? :any]] [:vector :map]]}
   winding-down
@@ -878,17 +913,28 @@
        (filter #(= ws-id (:ws-id %)))
        first))
 
+;; Defined below, with the session functions it reads — the liveness oracle
+;; belongs beside those, and both cross-project projections need it up here.
+(declare live-session-names)
+
 (defn ^{:malli/schema [:=> [:cat] [:vector :Gate]]}
   all-gates
   "Gates across every registered project, needs-you/newest-first within each.
    Mirrors the dashboard's cross-project aggregation (see all-machine-rows).
    `->gate` canonicalizes each gate's :project to a string, so the raw
    list-projects key threads straight through. A project that can't be read
-   contributes no gates rather than failing the board."
+   contributes no gates rather than failing the board.
+
+   Threads `live-session-names` for the same reason `all-grouped` does: engagement
+   is projected from it, and a downed one-off reads :active without it. It cannot
+   change WHICH rows are gates — :settled is a function of :closed alone, and the
+   liveness reconciliation only ever moves a row from :active toward :idle — so
+   what it buys is that the two cross-project projections describe the same
+   workstream the same way, from one read of it."
   []
   (->> (project/list-projects)
        (mapcat (fn [[pname _entry]]
-                 (try (gates pname)
+                 (try (gates pname (live-session-names pname))
                       (catch Throwable _ []))))
        vec))
 

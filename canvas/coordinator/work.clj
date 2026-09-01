@@ -50,6 +50,10 @@
                             [:opts [:? :map]]] :any]})
   (Operation classify-origin "Where a workstream came from, from its raw record."
     {:signature [:=> [:catn [:ws Workstream]] :keyword]})
+  (Operation with-shared-rows
+    "Run a thunk with one read of each project's rows shared across it. The board asks two
+     questions of the same rows, and this is what makes them one read rather than two."
+    {:signature [:=> [:catn [:f :any]] :any]})
   (Operation list-workstreams "Every workstream of a project, as enriched rows on the spine."
     {:signature [:=> [:catn [:project ProjectName] [:live-names [:? :any]]] [:vector :map]]
      :delegates [view/workstream-rows]})

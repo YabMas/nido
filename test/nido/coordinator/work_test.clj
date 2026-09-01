@@ -18,6 +18,7 @@
    [nido.coordinator.record.tickets :as tickets]
    [nido.coordinator.record.triggers]
    [nido.coordinator.record.workstream :as workstream]
+   [nido.coordinator.view.workstreams :as wsv]
    [nido.platform.io :as nido-io]
    [nido.notion.client :as notion-client]
    [nido.notion.views :as views]
@@ -973,6 +974,43 @@
         (let [gs (work/all-gates)]
           (is (= 1 (count gs)))
           (is (= "brian" (:project (first gs))) "project name threads through to each gate"))))))
+
+(deftest with-shared-rows-reads-each-project-once
+  ;; The board asks two questions of the same rows — all-grouped for the bands,
+  ;; all-gates for the queue. Sharing is a property of the RENDER, invisible to
+  ;; every output assertion (both answers are identical either way), so nothing
+  ;; else would notice it being lost — which is exactly how it would come back.
+  (with-tmp
+    (fn [_]
+      (let [w (workstream/create! :brian {:stage :triaging :external-refs []})]
+        (workstream/append-entry! :brian (:id w) {:kind :impl} "# X\n\nrep.")
+        (session/create! :brian (:id w)
+                         {:name "auto" :weight :heavy
+                          :autonomy (assoc autonomy-running :phase :parked)}))
+      (with-redefs [nido.platform.project/list-projects
+                    (constantly {"brian" {:directory "/tmp/brian"}})]
+        (let [reads (atom 0)
+              orig  wsv/workstream-rows]
+          (with-redefs [wsv/workstream-rows (fn [& args]
+                                              (swap! reads inc)
+                                              (apply orig args))]
+            (reset! reads 0)
+            (work/all-grouped)
+            (work/all-gates)
+            (is (= 2 @reads) "unshared, each projection reads the project for itself")
+
+            (reset! reads 0)
+            (work/with-shared-rows (fn [] (work/all-grouped) (work/all-gates)))
+            (is (= 1 @reads)
+                "shared, the second projection reuses the first's rows")))))))
+
+(deftest shared-rows-memo-does-not-outlive-its-render
+  ;; Scoped, never global: the rows project the ledger on disk and nothing here
+  ;; invalidates, so a memo that survived its render would serve a board another
+  ;; tab had already moved on from.
+  (is (nil? @#'work/*rows-memo*) "no memo before")
+  (is (true? (work/with-shared-rows (fn [] (some? @#'work/*rows-memo*)))) "one during")
+  (is (nil? @#'work/*rows-memo*) "and none after"))
 
 (deftest resolve-gate-promote-runs-the-promote-gesture
   (with-tmp

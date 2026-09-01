@@ -88,9 +88,15 @@
    dev layer, which work must not depend on. Every /workstreams + / render route
    runs through this one function, so no two render sites disagree."
   [view-state]
-  (let [screen (work/screen view-state
-                            {:groups           (work/all-grouped)
-                             :gates            (work/all-gates)
+  (let [{:keys [groups gates]}
+        ;; Both inside ONE with-shared-rows: they are two folds of the same
+        ;; per-project rows, and sharing is what stops the render reading every
+        ;; ledger twice.
+        (work/with-shared-rows
+          (fn [] {:groups (work/all-grouped) :gates (work/all-gates)}))
+        screen (work/screen view-state
+                            {:groups           groups
+                             :gates            gates
                              :pending          (dev/pending-resolve-keys)
                              :winddown-pending (dev/pending-winddown-keys)})
         sel (:selection view-state)
