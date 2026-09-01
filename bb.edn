@@ -542,6 +542,11 @@
    :doc "Record that an approved proposal is now in the tree. :project <p> :ws-id <id> :analysis-seq <n> :observation <n> :rev <change-id> [:note <str>]"
    :task (apply nido-workstream/landed-cmd *command-line-args*)}
 
+  nido:improvement:backfill-landings
+  {:requires ([tasks.nido-workstream :as nido-workstream])
+   :doc "One-shot: discharge every approval whose decision note already records the outcome, from before :improvement-landed existed. Idempotent. :project <p>"
+   :task (apply nido-workstream/backfill-landings-cmd *command-line-args*)}
+
   nido:workstream:show
   {:requires ([tasks.nido-workstream :as nido-workstream])
    :doc "Print a workstream's active ledger (own entries else ticket) + latest entry."

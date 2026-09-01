@@ -2345,6 +2345,42 @@
         (is (= "zzzzzzzz" (:rev (:landed (first (work/proposals :nido)))))
             "and the newest one is where a reader should go look")))))
 
+(deftest a-landing-with-no-rev-is-recorded-rather-than-refused
+  ;; The backfill's case. Its accounts name behaviours, not changes, and a
+  ;; closed schema demanding :rev of those would force an invented change id
+  ;; into a durable record — which reads as retrievable and is not.
+  (with-analysis-ws
+    [{:kind :waste :where "w" :summary "s" :evidence "e" :proposal "p"}]
+    (fn [id]
+      (work/record-landing! :nido id {:analysis-seq 1 :observation 0
+                                      :note "already closed by an earlier round"})
+      (let [l (:landed (first (work/proposals :nido)))]
+        (is (nil? (:rev l)) "absent rather than blank or invented")
+        (is (str/includes? (:note l) "already closed"))))))
+
+(deftest the-backfill-discharges-an-approval-whose-note-says-it-is-done
+  (with-analysis-ws
+    [{:kind :waste :where "w0" :summary "s0" :evidence "e0" :proposal "p0"}
+     {:kind :miss :where "w1" :summary "s1" :evidence "e1" :proposal "p1"}
+     {:kind :miss :where "w2" :summary "s2" :evidence "e2" :proposal "p2"}]
+    (fn [id]
+      (work/decide-proposal! :nido id {:analysis-seq 1 :observation 0 :verdict :approved
+                                       :at-seq 1 :note "implemented: the guard fails open"})
+      (work/decide-proposal! :nido id {:analysis-seq 1 :observation 1 :verdict :approved
+                                       :at-seq 2 :note "worth doing when someone has a day"})
+      (work/decide-proposal! :nido id {:analysis-seq 1 :observation 2 :verdict :declined
+                                       :at-seq 3 :note "the seam is deliberate"})
+      (is (= {:landed 1 :skipped 2} (work/backfill-landings! :nido)))
+      (let [by-obs (into {} (map (juxt :observation identity)) (work/proposals :nido))]
+        (is (some? (:landed (by-obs 0))))
+        (is (str/includes? (:note (:landed (by-obs 0))) "implemented: the guard fails open")
+            "the account that era wrote is carried across, not summarised away")
+        (is (nil? (:landed (by-obs 1)))
+            "an approval whose note is a plan rather than an outcome is untouched")
+        (is (nil? (:landed (by-obs 2))) "and a decline discharges nothing"))
+      (is (= {:landed 0 :skipped 3} (work/backfill-landings! :nido))
+          "idempotent — the ledger has no delete, so a second run must add nothing"))))
+
 (deftest changing-your-mind-is-an-append-and-the-last-one-counts
   (with-analysis-ws
     [{:kind :waste :where "w" :summary "s" :evidence "e" :proposal "p"}]

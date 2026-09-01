@@ -2316,8 +2316,11 @@
    not tell the two apart from the surface that was asking them to decide."
   [{:keys [verdict]} landed]
   (cond
+    ;; Without a rev for a landing recorded before there was anything to record
+    ;; it in. Saying "landed" and nothing more is the whole of what is known;
+    ;; the note beneath carries the account that era did write.
     landed              [:span.prop-verdict.prop-landed
-                         (str "landed · " (:rev landed))]
+                         (str "landed" (when-let [r (:rev landed)] (str " · " r)))]
     (= :approved verdict) [:span.prop-verdict.prop-waiting "not yet implemented"]
     :else nil))
 

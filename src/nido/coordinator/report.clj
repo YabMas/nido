@@ -1679,6 +1679,15 @@
    a commit id where there is a choice: rebasing rewrites the commit and the
    change id survives it, and this record outlives several rebases.
 
+   Optional only because this vocabulary arrived after the work it describes.
+   Sixty-one proposals were carried out while an approval was the only thing the
+   ledger could say, and their accounts are prose — `already closed: the warden
+   keys on :handle` — naming a behaviour rather than a change. A closed schema
+   that demanded :rev of those would force the writer to invent one, and an
+   invented change id in a durable record is worse than a missing one: it reads
+   as retrievable and is not. `bb nido:improvement:landed` requires it, so
+   everything recorded from here on names a change; only the backfill omits it.
+
    :note is for what the landing did NOT cover — the proposal narrowed on the
    way in, the second half deferred. Optional because the usual case is that the
    proposal was carried out as written."
@@ -1686,7 +1695,7 @@
    [:format       [:= :improvement-landed]]
    [:analysis-seq int?]
    [:observation  int?]                      ; addressed exactly as the decision is
-   [:rev          string?]
+   [:rev          {:optional true} string?]
    [:landed-by    string?]
    [:note         {:optional true} string?]])
 
@@ -2378,7 +2387,7 @@
   (str/join "\n"
     (remove nil?
       [(str "# Proposal " analysis-seq "." observation " — landed")
-       (str "`" rev "` by " landed-by)
+       (str (when rev (str "`" rev "` ")) "by " landed-by)
        (when note (str "\n" note))])))
 
 (defn- proposed-ticket-head
@@ -2482,6 +2491,7 @@
      :improvement-decision     (str "Proposal " (:analysis-seq report) "." (:observation report)
                                     " " (name (:verdict report)))
      :improvement-landed       (str "Proposal " (:analysis-seq report) "." (:observation report)
-                                    " landed (" (:rev report) ")")
+                                    " landed"
+                                    (when-let [r (:rev report)] (str " (" r ")")))
      :ship-submitted           "Ship submitted"
      nil)))

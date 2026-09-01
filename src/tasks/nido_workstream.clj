@@ -70,6 +70,17 @@
                          :note         note}))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  backfill-landings*
+  "One-shot: discharge every approval whose note already records the outcome.
+
+   For the era when an approval was the whole of the ledger's vocabulary for
+   'this is done'. Idempotent, so re-running it is safe on a ledger that has no
+   delete."
+  [{:keys [project]}]
+  (let [{:keys [landed skipped]} (work/backfill-landings! (keyword project))]
+    (println (format "landed %d · left alone %d" landed skipped))))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   show* [{:keys [project] :as opts}]
   (let [p     (keyword project)
         ws-id (resolve-ws-id opts)
@@ -150,6 +161,9 @@
 ;; that may begin with anything at all.
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   landed-cmd    [& args] (run* landed* args #{:rev :note}))
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  backfill-landings-cmd [& args]
+  (let [[_ opts] (task-args/split-args args)] (backfill-landings* opts)))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   show-cmd [& args]

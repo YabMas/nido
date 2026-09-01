@@ -1984,9 +1984,50 @@
           (pr-str (cond-> {:format       :improvement-landed
                            :analysis-seq analysis-seq
                            :observation  observation
-                           :rev          rev
                            :landed-by    @decided-by}
+                    (not (str/blank? (str rev)))  (assoc :rev rev)
                     (not (str/blank? (str note))) (assoc :note note))))})
+
+(def ^:private note-means-landed
+  "Note prefixes from before `:improvement-landed` existed that record an
+   outcome rather than a judgement.
+
+   Sixty-one proposals were carried out while `:approved` was the whole of the
+   ledger's vocabulary for it, and the account went in the note. This is the
+   only place that reads one — a migration reading the record its era produced,
+   once, into the vocabulary that replaced it. No reader sniffs prose."
+  ["implemented" "already closed" "CORRECTION" "no change proposed"])
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :map]}
+  backfill-landings!
+  "Discharge every approval whose note already says what became of it. Returns
+   {:landed <n> :skipped <n>}.
+
+   Idempotent: an address that already carries a landing is left alone, so this
+   can be re-run without stacking duplicates on a ledger that has no delete.
+
+   No `:rev`. The notes name behaviours — `the warden keys on :handle` — and
+   the changes that carry them are not recoverable from that without guessing.
+   The note is copied across verbatim instead, which is the account that era
+   actually wrote, and a reader gets it in full rather than a change id nobody
+   checked."
+  [project]
+  (let [pk (keyword (name project))]
+    (reduce
+     (fn [acc {:keys [ws-id analysis-seq observation decision landed]}]
+       (let [note (str (:note decision))]
+         (if (or landed
+                 (not= :approved (:verdict decision))
+                 (not (some #(str/starts-with? note %) note-means-landed)))
+           (update acc :skipped inc)
+           (do (record-landing! pk ws-id
+                                {:analysis-seq analysis-seq
+                                 :observation  observation
+                                 :note (str "recorded from the decision note, which "
+                                            "predates this record — " note)})
+               (update acc :landed inc)))))
+     {:landed 0 :skipped 0}
+     (proposals pk))))
 
 (defn ^{:malli/schema [:=> [:cat] [:vector :map]]}
   all-grouped
