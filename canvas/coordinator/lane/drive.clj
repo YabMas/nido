@@ -29,6 +29,14 @@
   (Operation baseline-verified? "Whether a review found the newest baseline sufficient."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :boolean]
      :delegates [workstream/entries-of]})
+  (Operation design-decided?
+    "Whether a decision round recommended PROCEEDING on the newest design.
+
+     Only `:proceed` counts — a round that answered `:recut` or `:amend` judged the record
+     rather than whether to build it. Public because the gate asks it too: a grant offered on
+     any decision at all is a one-click approval of the design its own round sent back."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :boolean]
+     :delegates [workstream/entries-of]})
   (Operation next-action "The stage to run next and the mode it runs in, or nil at a terminus."
     {:signature [:=> [:catn [:position :any] [:kind :keyword]] [:maybe :map]]})
   (Operation disposition "What a finished status means for the workstream it finished on."

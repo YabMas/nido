@@ -529,7 +529,7 @@
 (deftest a-parked-design-decision-asks-to-be-approved
   (is (= [{:id :approve :label "Approve" :kind :mutation :style :primary}
           {:id :reply   :label "Reply"   :kind :resume  :style :default}]
-         (work/gate-actions :in-progress true nil {:report-format :design-decision}))
+         (work/gate-actions :in-progress true nil {:report-format :design-decision :recommend :proceed}))
       "Done is deliberately absent — settling a workstream is not an answer to
        'should we build this', and offering it beside Approve invites it to be
        read as one"))
@@ -542,7 +542,7 @@
 (deftest every-button-given-a-position-is-read-back-with-one
   (let [descriptors (concat
                      (work/gate-actions :in-progress true nil
-                                        {:report-format :design-decision :seq 7})
+                                        {:report-format :design-decision :recommend :proceed :seq 7})
                      (work/gate-actions :in-progress true nil
                                         {:options [{:label "A"} {:label "B"}] :seq 7}))
         carries-seq (into #{} (comp (filter :seq) (map :id)) descriptors)]
@@ -751,6 +751,7 @@
                                     :checks [{:check :goal-served :status :held :note "n"}]
                                     :asks "worth doing now?"})]
       [id b d dd])))
+
 
 (deftest approving-records-the-grant-then-resumes
   ;; The order is the point, and the same one choose-option! holds: approval used
@@ -2458,7 +2459,7 @@
   (is (= [{:id :approve :label "Approve" :kind :mutation :style :primary :seq 7}]
          (work/gate-actions :in-progress false nil
                             {:report-format :design-decision :seq 7
-                             :awaiting :approve-design}))
+                             :awaiting :approve-design :recommend :proceed}))
       "approve! records a grant with nobody to wake as :approved-unresumed —
        the ledger is what the next session reads — so nothing about an absent
        agent makes the grant premature")
@@ -2470,22 +2471,22 @@
   (is (= [:approve]
          (mapv :id (work/gate-actions :in-progress false nil
                                       {:report-format :design-decision :seq 7
-                                       :awaiting :approve-design})))
+                                       :awaiting :approve-design :recommend :proceed})))
       "Reply resumes a parked agent; beside a grant with none it could only fail")
   (is (= [:approve :reply]
          (mapv :id (work/gate-actions :in-progress true nil
                                       {:report-format :design-decision :seq 7
-                                       :awaiting :approve-design})))
+                                       :awaiting :approve-design :recommend :proceed})))
       "and when there is one, sending it back is still an answer"))
 
 (deftest only-the-approval-stage-offers-the-approval
   (is (empty? (work/gate-actions :in-progress false nil
                                  {:report-format :design-decision :seq 7
-                                  :awaiting :answer-blocker}))
+                                  :awaiting :answer-blocker :recommend :proceed}))
       "a blocker is a human stage too, and the question it asks is not this one")
   (is (empty? (work/gate-actions :in-progress false nil
                                  {:report-format :baseline-review :seq 7
-                                  :awaiting :approve-design}))
+                                  :awaiting :approve-design :recommend :proceed}))
       "and the report has to be the decision the grant is about"))
 
 (deftest a-workstream-awaiting-a-person-is-a-gate
@@ -2697,3 +2698,30 @@
         (is (= 2 (count (filter #(= :improvement-landed (:kind %))
                                 (:entries (workstream/read-ws :nido ws)))))
             "the address already recorded is not recorded twice")))))
+
+
+;; ── A grant is offered where a round recommended one ───────────────────────
+;; Approve was offered on any design decision at all. A round answers one of
+;; three ways and only :proceed is a question for a human — :recut and :amend
+;; judged the RECORD rather than whether to build it, so the next move is the
+;; author's. Offering Approve there is a one-click grant of the design that
+;; round had just sent back, and approve! would have written it.
+
+(deftest a-decision-that-was-sent-back-offers-no-grant
+  (doseq [r [:recut :amend nil]]
+    (is (empty? (work/gate-actions :in-progress false nil
+                                   {:report-format :design-decision
+                                    :awaiting :approve-design :recommend r}))
+        (str (pr-str r) " judged the record, not whether to build it — a position "
+             "owing a person a decision is not on its own something to grant"))
+    (is (not-any? #{:approve} (map :id (work/gate-actions :in-progress true nil
+                                                          {:report-format :design-decision
+                                                           :recommend r})))
+        (str (pr-str r) " must not be grantable on the parked path either — that "
+             "path is where this hole actually was")))
+  (is (= [:approve]
+         (mapv :id (work/gate-actions :in-progress false nil
+                                      {:report-format :design-decision
+                                       :awaiting :approve-design
+                                       :recommend :proceed})))
+      "and a round that did recommend proceeding is still grantable"))

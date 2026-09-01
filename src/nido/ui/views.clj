@@ -2019,6 +2019,7 @@
     (action-bar project ws-id
                 (work/gate-actions stage parked? origin
                                    {:report-format (:format report)
+                                    :recommend     (:recommend report)
                                     :options       (:options report)
                                     ;; The pane draws the same button the inbox
                                     ;; does, off the same reading of the same

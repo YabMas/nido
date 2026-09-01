@@ -225,7 +225,7 @@
    correct automatically if the action sets change."
   ([stage parked?] (gate-actions stage parked? nil nil))
   ([stage parked? origin] (gate-actions stage parked? origin nil))
-  ([stage parked? _origin {:keys [bare? report-format options awaiting] entry-seq :seq}]
+  ([stage parked? _origin {:keys [bare? report-format options awaiting recommend] entry-seq :seq}]
    (let [;; The branches of the CURRENT blocker, or [] — offered whether or not a
          ;; session is parked, because answering no longer depends on one being
          ;; alive to hear it (choose-option! records the answer on the ledger and
@@ -256,7 +256,14 @@
          ;; Done is deliberately absent beside it; settling a workstream is not
          ;; an answer to "should we build this", and offering it there invites it
          ;; to be read as one.
+         ;; Gated on the RECOMMENDATION, because only :proceed is a question for a
+         ;; human. A round that answered :recut or :amend judged the RECORD rather
+         ;; than whether to build it, and the next move is the author's — so
+         ;; offering Approve there is a one-click grant of the design that round
+         ;; had just sent back, and approve! would write it: standing asks whether
+         ;; the premise is sound, not whether anybody recommended building on it.
          approving? (and (= :design-decision report-format)
+                         (= :proceed recommend)
                          (or parked? (= :approve-design awaiting)))
          actions
          (if approving?
@@ -943,6 +950,7 @@
      :report       report
      :actions      (gate-actions (:stage row) parked? (:origin row)
                                  {:report-format (:format report)
+                                  :recommend     (:recommend report)
                                   :options       (:options report)
                                   ;; From the row, not re-derived: the spine used
                                   ;; this same reading to decide the workstream is
@@ -1475,6 +1483,18 @@
       (or (nil? entry-seq)
           (not= entry-seq (:seq (latest-report project ws-id))))
       {:decision :approval-stale}
+
+      ;; The RECOMMENDATION, which the button now also checks. Re-asked here for
+      ;; the reason the premise is: a resolver reachable by posting an id must not
+      ;; trust that the only caller was a button rendered under the same rule.
+      ;; :recut and :amend judged the record rather than whether to build it, so a
+      ;; grant against one approves the design its own round sent back.
+      (not (pipeline/design-decided? project ws-id))
+      {:decision :approval-refused
+       :because  {:reason :not-recommended
+                  :detail (str "the decision round did not recommend proceeding on "
+                               "this design — re-run bb nido:review:design, or "
+                               "supersede the design first")}}
 
       :else
       (let [st (standing/of-design project ws-id design)]

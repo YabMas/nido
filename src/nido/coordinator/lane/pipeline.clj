@@ -380,12 +380,20 @@
                          (contains? #{:sufficient :accurate} (:verdict %)))
                    (ws/entries-of project ws-id :baseline-review)))))
 
-(defn- design-decided?
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :boolean]}
+  design-decided?
   "True when a decision round recommended proceeding on the newest design.
 
    Only :proceed counts. A round that answered :recut or :amend reached a
    judgement about the record, not about whether to build it, and treating one
-   as a decision would advance a design its own round sent back."
+   as a decision would advance a design its own round sent back.
+
+   PUBLIC because two things ask it and a second implementation would eventually
+   answer differently: this module, to place a workstream in the arc, and the
+   gate, to decide whether a grant is a thing a human may currently give. The
+   gate learnt that the hard way — it offered Approve on any design decision at
+   all, so a round that answered :recut showed a button that would grant the
+   design it had just sent back."
   [project ws-id]
   (when-let [d (ws/latest-entry project ws-id :design)]
     (boolean (some #(and (= (:seq d) (:design-seq %))
