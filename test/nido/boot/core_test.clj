@@ -42,10 +42,23 @@
 ;; Shared test helpers for Task 3.2
 ;; ---------------------------------------------------------------------------
 
+(def ^:private test-projects
+  "The registry every fixture here pretends `~/.nido/projects.edn` holds.
+
+   `config/read-projects` resolves through `nido-home`, which no fixture
+   redirects — only `nido-root` is — so the pre-spawn project gate would
+   otherwise read the OPERATOR's real registry, and whether a run-blocking! test
+   exercised the launch path at all would depend on which projects happen to be
+   registered on the machine running it. These are the two names the tests mint
+   Runs under. A test about the gate itself overrides this with its own."
+  {"brian" {:directory "/tmp/brian"}
+   "p"     {:directory "/tmp/p"}})
+
 (defn- with-tmp [f]
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [nido-core/nido-root (constantly (str tmp))]
+      (with-redefs [nido-core/nido-root (constantly (str tmp))
+                    project/list-projects (constantly test-projects)]
         (cstate/ensure-dirs!)
         (f))
       (finally (fs/delete-tree tmp)))))
@@ -104,6 +117,7 @@
   (let [tmp (fs/create-temp-dir)]
     (try
       (with-redefs [nido-core/nido-root (constantly (str tmp))
+                    project/list-projects (constantly test-projects)
                     agent/launch!    (fn [_]
                                        {:exit-code         0
                                         :claude-session-id "sess-x"
@@ -184,6 +198,7 @@
       ;; skill-resolution gate doesn't probe the real ~/Code/<project>/.claude.
       ;; The gate tests override resolve-profile with their own symlink target.
       (with-redefs [nido-core/nido-root (constantly (str tmp))
+                    project/list-projects (constantly test-projects)
                     runs/teardown-session-for-run! (fn [_] nil)
                     profiles/resolve-profile (fn [_ _] {:worktree {:strategy :git-worktree}})]
         (cstate/ensure-dirs!)
@@ -523,6 +538,41 @@
           (is (= :failed (:state (runs/read-run "ru"))))
           (is (= :skill-unavailable (-> (runs/read-run "ru") :error :reason)))
           (is (false? @spawned) "no session is spawned for an unresolvable skill"))))))
+
+(deftest run-blocking-fails-unregistered-project-without-charging-the-brakes
+  ;; `bb nido:project:remove` says nothing about the Runs already queued for the
+  ;; project, and reconcile! leaves :queued Runs intact across a restart — so a
+  ;; deregistration strands a backlog that can only fail. Failing it is right;
+  ;; charging the brakes for it is not, and that is what this defends.
+  (gate-with-tmp
+    (fn [_]
+      (let [spawned  (atom false)
+            failures (atom [])
+            trips    (atom [])]
+        (runs/write-run! {:id "rgp" :project :ghost-project :trigger :t
+                          :source {:type :manual} :event-payload {}
+                          :skill :noop :first-message "/noop" :agent :claude
+                          :session-name "run-rgp" :claude-session-id nil :limits {}
+                          :priority 0 :session-profile :full :uncapped? false
+                          :state :queued :state-history [{:at "t" :state :queued}]
+                          :artifacts [] :error nil})
+        (with-redefs [runs/spawn-session-for-run! (fn [_] (reset! spawned true) nil)
+                      anomaly/record-failure   (fn [det at] (swap! trips conj at) det)
+                      breakers/record-failure! (fn [& args] (swap! failures conj args) nil)]
+          (#'core/run-blocking! "rgp")
+          (let [r (runs/read-run "rgp")]
+            (is (= :failed (:state r))
+                "a run whose project cannot be resolved has nowhere to go but terminal")
+            (is (= :project-unregistered (-> r :error :reason))
+                "the reason names the configuration fault, so the run record says why")
+            (is (false? @spawned)
+                "no session is built for a project with no directory to build it in"))
+          (is (empty? @failures)
+              "a breaker keyed [project trigger] on a project that no longer exists is
+               a fault entry no success can ever clear")
+          (is (empty? @trips)
+              "the anomaly detector is global — charging it here auto-halts the
+               coordinator for every project it still serves"))))))
 
 (deftest run-blocking-tears-down-session-on-terminal-not-on-park
   ;; Resolved-terminal runs (:done/:failed) must reclaim their session so it

@@ -460,6 +460,22 @@
               true))))
     (catch Throwable _ true)))
 
+(defn- project-registered?
+  "True if the Run's project is still in ~/.nido/projects.edn.
+
+   A Run outlives the registration it was minted under. `bb nido:project:remove`
+   unregisters a project and says nothing about the Runs already queued for it,
+   so every one of them survives into a daemon that can no longer resolve a
+   directory for it — and `reconcile!` deliberately leaves :queued Runs intact
+   for re-submission, so a restart does not clear them either.
+
+   Fails CLOSED, unlike `skill-resolvable?`: an unregistered project is a fact
+   this reads directly rather than an inference about a checkout, and a Run whose
+   project cannot be resolved has nowhere to run. What that costs if the registry
+   is momentarily unreadable is one failed Run, and it charges no brake."
+  [run]
+  (contains? (set (registered-projects)) (keyword (name (:project run)))))
+
 (defn- issue-impl-brief
   "First message for a promoted GitHub issue's provision-only session: the issue
    itself as the brief (no slash command — there's no ledger to continue from)."
@@ -528,6 +544,22 @@
         ;; fail fast WITHOUT building a session — no doomed spawn, and the
         ;; breaker still trips. See skill-resolvable?.
         result       (cond
+                       ;; Ahead of every other branch, including the promote leg:
+                       ;; all of them build a session, and session bring-up is
+                       ;; where an unregistered project throws.
+                       (not (project-registered? run))
+                       ;; Logged because this is the one terminal failure that
+                       ;; rings no bell: it charges no breaker and no detector,
+                       ;; so an operator who is not reading run.edn has nothing
+                       ;; else to notice a backlog draining into nowhere.
+                       (do (binding [*err* *err*]
+                             (.println ^java.io.PrintWriter *err*
+                                       (str "WARN: run " run-id " names project "
+                                            (name (:project run))
+                                            ", which is not registered — failing it "
+                                            "without charging the breaker")))
+                           {:project-unregistered true :project (:project run)})
+
                        ;; Promote leg: bring the :full session up, flip Notion,
                        ;; then launch /continue-ticket headlessly so the session is
                        ;; oriented + clear work underway by the time the human
@@ -602,6 +634,7 @@
                      ;; (bounces the board back to :ready) and hides the blocker.
                      ;; See provision-blocked?.
                      (provision-blocked? provision-only? result) :awaiting-review
+                     (:project-unregistered result) :failed
                      (:skill-unavailable result) :failed
                      (:spawn-error result) :failed
                      (:timed-out? result) :failed
@@ -640,7 +673,11 @@
                                            (:skill-unavailable result)
                                            (assoc :reason :skill-unavailable
                                                   :detail (str "skill /" (name (:skill result))
-                                                               " did not resolve in the session checkout")))))))
+                                                               " did not resolve in the session checkout"))
+                                           (:project-unregistered result)
+                                           (assoc :reason :project-unregistered
+                                                  :detail (str "project " (name (:project result))
+                                                               " is not in projects.edn")))))))
     ;; Provision-only spawn/timeout/no-op parked as a BLOCKED gate: surface the
     ;; blocker on the session so the gate inbox shows WHY (mirrors the merge
     ;; lane), and leave the ticket :planning (board stays :in-progress) rather
@@ -663,12 +700,25 @@
     ;; Breaker update on terminal state. Default max-failures is 3; the
     ;; trigger's :limits.max-failures (snapshotted onto the Run at create
     ;; time) overrides this.
+    ;;
+    ;; An UNREGISTERED PROJECT charges neither brake, and that exemption is the
+    ;; point of the gate above rather than a tidy-up beside it. Both brakes read
+    ;; a failure as evidence about a trigger, and here there is no trigger to be
+    ;; evidence about — the project is gone, so nothing under it can run and
+    ;; nothing under it can succeed. The breaker is keyed [project trigger], so
+    ;; the entry it writes is one only `record-success!` clears and no success
+    ;; can ever arrive: a permanent fault under a phantom key, which
+    ;; `auto-tripped-triggers` then shows the operator forever. The detector is
+    ;; worse for being GLOBAL — its threshold is three failures in five minutes,
+    ;; so a handful of Runs left behind by one `bb nido:project:remove` auto-halt
+    ;; the coordinator for every project it still serves.
     (let [project      (:project run)
           trigger-name (:trigger run)
           max-failures (or (-> run :limits :max-failures) 3)]
       (case next-state
-        :failed          (do (swap! !detector anomaly/record-failure (clock/now-iso))
-                             (breakers/record-failure! project trigger-name max-failures))
+        :failed          (when-not (:project-unregistered result)
+                           (swap! !detector anomaly/record-failure (clock/now-iso))
+                           (breakers/record-failure! project trigger-name max-failures))
         :done            (breakers/record-success! project trigger-name)
         :awaiting-review (breakers/record-success! project trigger-name)
         nil))
