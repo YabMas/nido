@@ -5,7 +5,9 @@
    direct state mutation, parallel to reclaim.
 
    Correlation is by the workstream's :github external-ref, stamped at
-   PR-creation time by the prepare-draft-pr skill. Best-effort throughout."
+   PR-creation time by the prepare-draft-pr skill, AND by the branch the PR
+   merged into — a ref match alone is not a landing (see `landed-on?`).
+   Best-effort throughout."
   (:require
    [clojure.string :as str]
    [nido.coordinator.record.clock :as clock]
@@ -98,14 +100,44 @@
     (catch Throwable t
       (warn (str "github-merge: ledger append failed for " ws-id " (" id ") — " (.getMessage t))))))
 
+(def ^:private default-landing-base
+  "The branch a merge must land on before it counts as shipped, when github.edn
+   names none."
+  "main")
+
+(defn- landed-on?
+  "True when `pr` merged into `base` — the ONLY merge that ships anything.
+
+   Reads a positive signal, so it must block on absence: a `:base` we did not
+   get back (an older `gh` without --json baseRefName, a stubbed poll) answers
+   false and withholds the close. The alternative — treating a missing base as
+   \"probably the default branch\" — disarms the guard on exactly the input it
+   exists to catch, and the cost of the two directions is not symmetric. A
+   withheld close leaves a shipped workstream sitting on the board, visible and
+   one poll from correcting itself. A wrongful close is silent, terminal, and
+   takes the ticket off every surface a human looks at."
+  [pr base]
+  (= base (:base pr)))
+
 (defn- react-to-merge!
   "Correlate one merged PR to a workstream and react. Returns nil."
-  [project on-merge repo {:keys [number] :as pr}]
+  [project on-merge base repo {:keys [number] :as pr}]
   (let [id (pr-id repo number)
         w  (find-ws-by-github-id project id)]
     (cond
       (nil? w)      (warn (str "github-merge: merged PR " id " has no workstream; skipping"))
       (:closed w)   nil                                   ; idempotent no-op
+      ;; A stack merges its layers into each other while it is being restacked,
+      ;; and every one of those is a genuine `merged` PR carrying a ref this
+      ;; workstream stamped. Only the merge into `base` shipped anything. Warn
+      ;; rather than pass over it quietly: the workstream stays open, which is
+      ;; correct but indistinguishable from nothing having happened, and it was
+      ;; a silent close on exactly this input that stranded BR-5559 for a week.
+      (not (landed-on? pr base))
+      (warn (str "github-merge: PR " id " merged into "
+                 (or (:base pr) "<no base reported>") ", not " base
+                 " — leaving workstream " (:id w) " open. A stack-internal merge"
+                 " lands nothing on " base "."))
       :else (do
               (ws/close! project (:id w) :done)
               (record-merge! project (:id w) id pr)
@@ -116,8 +148,13 @@
 (defn ^{:malli/schema [:=> [:cat :ProjectName :map] :any]}
   poll-and-react!
   "One poll for a project. Lists merged PRs, dedups against the snapshot
-   (first poll seeds + reacts to nothing), reacts to genuinely-new merges,
-   persists the new snapshot.
+   (first poll seeds + reacts to nothing), reacts to genuinely-new merges that
+   landed on the config's :base (default \"main\"), persists the new snapshot.
+
+   The snapshot holds every merged PR the poll saw, INCLUDING the ones that
+   landed somewhere other than :base. They are seen rather than reacted to, so
+   a stack-internal merge is warned about exactly once instead of once per poll
+   for as long as it stays in the repo's last fifty merges.
 
    Half-open breaker: an :auth failure (or ≥3 consecutive failures) opens it.
    While open the poll is SKIPPED — no `gh` call, no warning — until
@@ -125,7 +162,7 @@
    probe runs: success clears the breaker, failure re-arms the cooldown. So a
    broken `gh` auth backs off to one retry per cooldown instead of warning every
    poll, and self-heals once the token is fixed."
-  [project {:keys [repo on-merge]}]
+  [project {:keys [repo on-merge base]}]
   (let [k     (state-key project)
         prior (sstate/read-state k)]
     (when-not (and (= :open (:breaker prior)) (not (cooldown-elapsed? prior)))
@@ -147,7 +184,7 @@
             (when-not first?
               (doseq [pr (:prs res)
                       :when (not (contains? seen (pr-id repo (:number pr))))]
-                (react-to-merge! project on-merge repo pr)))
+                (react-to-merge! project on-merge (or base default-landing-base) repo pr)))
             ;; success clears the breaker (fresh map drops :breaker-opened-at).
             (sstate/write-state! k {:type :github-merge :project project
                                     :reacted ids :consecutive-failures 0 :breaker nil})))))

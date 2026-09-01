@@ -26,7 +26,7 @@
     (fn [_]
       (let [closed (atom [])]
         (with-redefs [gh/list-merged-prs (fn [_] {:status :ok
-                                                  :prs [{:number 1 :url "u1" :title "t" :merged-at "x"}]})
+                                                  :prs [{:number 1 :url "u1" :title "t" :merged-at "x" :base "main"}]})
                       ws/find-by-ref     (fn [& _] (do (swap! closed conj :looked) nil))]
           (gm/poll-and-react! :brian cfg)
           (is (empty? @closed) "first poll must not correlate/react")
@@ -42,7 +42,7 @@
                                                   {:adapter :github :id "brian-study/brian#2"}]})
             props (atom nil)]
         (with-redefs [gh/list-merged-prs (fn [_] {:status :ok
-                                                  :prs [{:number 2 :url "u2" :title "t2" :merged-at "y"}]})
+                                                  :prs [{:number 2 :url "u2" :title "t2" :merged-at "y" :base "main"}]})
                       notion/keychain-token (constantly "tok")
                       notion/retrieve-page  (fn [_ _] {:properties {(keyword "Ball Holder") {:people [{:id "jaap"} {:id "other"}]}}})
                       notion/update-page-properties! (fn [pg p _] (reset! props {:page pg :props p}) {:ok true})]
@@ -62,7 +62,7 @@
                                   :external-refs [{:adapter :github :id "brian-study/brian#5"}]})]
         (with-redefs [gh/list-merged-prs (fn [_] {:status :ok
                                                   :prs [{:number 5 :url "https://gh/5"
-                                                         :title "Fix rounding" :merged-at "2026-08-20T10:00:00Z"}]})
+                                                         :title "Fix rounding" :merged-at "2026-08-20T10:00:00Z" :base "main"}]})
                       notion/keychain-token (constantly nil)]
           (gm/poll-and-react! :brian cfg)
           (is (= {:format :merged :pr "brian-study/brian#5" :url "https://gh/5"
@@ -79,8 +79,8 @@
                                   :external-refs [{:adapter :github :id "brian-study/brian#8"}
                                                   {:adapter :github :id "brian-study/brian#9"}]})]
         (with-redefs [gh/list-merged-prs (fn [_] {:status :ok
-                                                  :prs [{:number 8 :url "u8" :title "layer 1" :merged-at "z"}
-                                                        {:number 9 :url "u9" :title "layer 2" :merged-at "z"}]})
+                                                  :prs [{:number 8 :url "u8" :title "layer 1" :merged-at "z" :base "main"}
+                                                        {:number 9 :url "u9" :title "layer 2" :merged-at "z" :base "main"}]})
                       notion/keychain-token (constantly nil)]
           (gm/poll-and-react! :brian cfg)
           (is (= 1 (count (filter #(= :merged (:kind %))
@@ -93,7 +93,7 @@
       (let [w (ws/create! :brian {:stage :in-progress
                                   :external-refs [{:adapter :github :id "brian-study/brian#6"}]})]
         (with-redefs [gh/list-merged-prs (fn [_] {:status :ok
-                                                  :prs [{:number 6 :url "u6" :title "t6" :merged-at "y"}]})
+                                                  :prs [{:number 6 :url "u6" :title "t6" :merged-at "y" :base "main"}]})
                       notion/keychain-token (constantly nil)
                       ws/append-entry! (fn [& _] (throw (ex-info "disk full" {})))]
           (gm/poll-and-react! :brian cfg)
@@ -108,7 +108,7 @@
                                   :external-refs [{:adapter :github :id "brian-study/brian#3"}]})]
         (ws/close! :brian (:id w) :done)
         (let [calls (atom 0)]
-          (with-redefs [gh/list-merged-prs (fn [_] {:status :ok :prs [{:number 3 :url "u" :title "t" :merged-at "z"}]})
+          (with-redefs [gh/list-merged-prs (fn [_] {:status :ok :prs [{:number 3 :url "u" :title "t" :merged-at "z" :base "main"}]})
                         notion/keychain-token (fn [] (swap! calls inc) "tok")]
             (gm/poll-and-react! :brian cfg)
             (is (zero? @calls) "already-closed ⇒ no Notion work")))))))
@@ -117,7 +117,7 @@
   (with-tmp
     (fn [_]
       (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
-      (with-redefs [gh/list-merged-prs (fn [_] {:status :ok :prs [{:number 9 :url "u" :title "t" :merged-at "z"}]})]
+      (with-redefs [gh/list-merged-prs (fn [_] {:status :ok :prs [{:number 9 :url "u" :title "t" :merged-at "z" :base "main"}]})]
         (gm/poll-and-react! :brian cfg)
         (is (contains? (:reacted (sstate/read-state "github-brian")) "brian-study/brian#9")
             "uncorrelated PR still marked seen so we don't re-log it")))))
@@ -201,9 +201,68 @@
       (let [w (ws/create! :brian {:stage :in-progress
                                   ;; stored ref lower-cased ...
                                   :external-refs [{:adapter :github :id "brian-study/brian#5"}]})]
-        (with-redefs [gh/list-merged-prs (fn [_] {:status :ok :prs [{:number 5 :url "u" :title "t" :merged-at "z"}]})
+        (with-redefs [gh/list-merged-prs (fn [_] {:status :ok :prs [{:number 5 :url "u" :title "t" :merged-at "z" :base "main"}]})
                       notion/keychain-token (constantly nil)]   ; no notion work needed for this assertion
           ;; ... config repo is mixed-case; correlation must still match
           (gm/poll-and-react! :brian (assoc cfg :repo "Brian-Study/Brian"))
           (is (= :done (-> (ws/read-ws :brian (:id w)) :closed :outcome))
               "merge correlates despite repo-slug case mismatch"))))))
+
+;; ── the merge TARGET, not just the ref ───────────────────────────────────────
+;;
+;; What stranded BR-5559: layer 2 of a two-layer stack merged into layer 1's
+;; branch during a restack. It is a real merged PR carrying a ref the workstream
+;; stamped, and the poller closed the workstream on it — while `main` never
+;; received a line of the work.
+
+(deftest stack-internal-merge-leaves-the-workstream-open
+  (with-tmp
+    (fn [_]
+      (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
+      (let [w (ws/create! :brian {:stage :in-progress
+                                  :external-refs [{:adapter :notion :id "BR-5559" :page-id "PAGE"}
+                                                  {:adapter :github :id "brian-study/brian#4693"}]})
+            nudged (atom false)]
+        (with-redefs [gh/list-merged-prs (fn [_] {:status :ok
+                                                  :prs [{:number 4693 :url "u" :title "[2/2] layer two"
+                                                         :merged-at "2026-08-26T15:22:57Z"
+                                                         :base "impl-br-5559--enable-type-dropdown"}]})
+                      notion/keychain-token (fn [] (reset! nudged true) "tok")]
+          (gm/poll-and-react! :brian cfg)
+          (is (nil? (:closed (ws/read-ws :brian (:id w))))
+              "a merge into the layer beneath ships nothing; the workstream stays open")
+          (is (nil? (ws/latest-entry :brian (:id w) :merged))
+              "and no :merged event claims otherwise in the ledger")
+          (is (false? @nudged) "no Notion nudge for a merge that did not land")
+          (is (contains? (:reacted (sstate/read-state "github-brian")) "brian-study/brian#4693")
+              "still marked seen, so the warning fires once rather than every poll"))))))
+
+(deftest merge-with-no-reported-base-leaves-the-workstream-open
+  ;; The guard reads a positive signal, so absence must withhold the close —
+  ;; otherwise a `gh` that stops reporting baseRefName silently re-opens the
+  ;; whole defect.
+  (with-tmp
+    (fn [_]
+      (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
+      (let [w (ws/create! :brian {:stage :in-progress
+                                  :external-refs [{:adapter :github :id "brian-study/brian#11"}]})]
+        (with-redefs [gh/list-merged-prs (fn [_] {:status :ok
+                                                  :prs [{:number 11 :url "u" :title "t" :merged-at "z"}]})
+                      notion/keychain-token (constantly nil)]
+          (gm/poll-and-react! :brian cfg)
+          (is (nil? (:closed (ws/read-ws :brian (:id w))))
+              "no base reported ⇒ no close"))))))
+
+(deftest landing-branch-is-configurable
+  (with-tmp
+    (fn [_]
+      (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
+      (let [w (ws/create! :brian {:stage :in-progress
+                                  :external-refs [{:adapter :github :id "brian-study/brian#12"}]})]
+        (with-redefs [gh/list-merged-prs (fn [_] {:status :ok
+                                                  :prs [{:number 12 :url "u" :title "t" :merged-at "z"
+                                                         :base "master"}]})
+                      notion/keychain-token (constantly nil)]
+          (gm/poll-and-react! :brian (assoc cfg :base "master"))
+          (is (= :done (-> (ws/read-ws :brian (:id w)) :closed :outcome))
+              "a repo whose default branch is master closes on a merge into master"))))))

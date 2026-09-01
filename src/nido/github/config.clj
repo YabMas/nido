@@ -11,6 +11,7 @@
   [:map {:closed true}
    [:repo string?]                                 ; "owner/repo"
    [:poll {:optional true} string?]                ; "5m" (default applied by caller)
+   [:base {:optional true} string?]                ; landing branch; "main" by default
    [:on-merge {:optional true}
     [:map
      [:notion-status      {:optional true} string?]

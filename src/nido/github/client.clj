@@ -18,14 +18,20 @@
 (defn ^{:malli/schema [:=> [:cat :string [:? :int]] :map]}
   list-merged-prs
   "Most-recent merged PRs for a repo (newest first), capped at `limit`
-   (default 50). Returns {:status :ok :prs [{:number :url :title :merged-at}]}
-   or {:error :auth|:gh}."
+   (default 50). Returns {:status :ok :prs [{:number :url :title :merged-at :base}]}
+   or {:error :auth|:gh}.
+
+   `:base` is the branch the PR merged INTO, and it is not decoration: `gh pr
+   list --state merged` reports every merge in the repo, including a stack's
+   internal merge of one layer into the layer beneath it. Such a merge lands
+   nothing on the default branch, so a caller reacting to \"merged\" without
+   reading this closes work that never shipped."
   ([repo] (list-merged-prs repo 50))
   ([repo limit]
    (let [{:keys [exit out err]}
          (sh! ["gh" "pr" "list" "--repo" repo
                "--state" "merged"
-               "--json" "number,url,title,mergedAt"
+               "--json" "number,url,title,mergedAt,baseRefName"
                "--limit" (str limit)])]
      (if (zero? exit)
        {:status :ok
@@ -33,7 +39,8 @@
                      (mapv (fn [m] {:number    (:number m)
                                     :url       (:url m)
                                     :title     (:title m)
-                                    :merged-at (:mergedAt m)})))}
+                                    :merged-at (:mergedAt m)
+                                    :base      (:baseRefName m)})))}
        {:error (if (auth-error? err) :auth :gh) :detail (str/trim (or err ""))}))))
 
 (defn ^{:malli/schema [:=> [:cat :string :string [:? :int]] :map]}

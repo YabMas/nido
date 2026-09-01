@@ -6,17 +6,27 @@
 (deftest list-merged-parses-json
   (with-redefs [gh/sh! (fn [args]
                          (is (= ["gh" "pr" "list" "--repo" "brian-study/brian"
-                                 "--state" "merged" "--json" "number,url,title,mergedAt"
+                                 "--state" "merged" "--json" "number,url,title,mergedAt,baseRefName"
                                  "--limit" "50"] args))
                          {:exit 0
-                          :out "[{\"number\":412,\"url\":\"https://github.com/brian-study/brian/pull/412\",\"title\":\"Fix X\",\"mergedAt\":\"2026-06-12T10:00:00Z\"}]"})]
+                          :out "[{\"number\":412,\"url\":\"https://github.com/brian-study/brian/pull/412\",\"title\":\"Fix X\",\"mergedAt\":\"2026-06-12T10:00:00Z\",\"baseRefName\":\"main\"}]"})]
     (let [res (gh/list-merged-prs "brian-study/brian")]
       (is (= :ok (:status res)))
       (is (= [{:number    412
                :url       "https://github.com/brian-study/brian/pull/412"
                :title     "Fix X"
-               :merged-at "2026-06-12T10:00:00Z"}]
+               :merged-at "2026-06-12T10:00:00Z"
+               :base      "main"}]
              (:prs res))))))
+
+(deftest list-merged-reports-a-missing-base-as-nil
+  ;; An older `gh`, or one whose --json contract drifts, simply omits the field.
+  ;; It must arrive as nil rather than as a plausible default — the poller's
+  ;; landing guard is what reads it, and it blocks on absence.
+  (with-redefs [gh/sh! (fn [_]
+                         {:exit 0
+                          :out "[{\"number\":7,\"url\":\"u\",\"title\":\"t\",\"mergedAt\":\"2026-06-12T10:00:00Z\"}]"})]
+    (is (nil? (:base (first (:prs (gh/list-merged-prs "o/r"))))))))
 
 (deftest list-merged-maps-auth-error
   (with-redefs [gh/sh! (fn [_] {:exit 1 :out "" :err "gh: To get started with GitHub CLI, please run: gh auth login"})]
