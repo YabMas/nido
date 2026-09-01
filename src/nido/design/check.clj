@@ -21,7 +21,8 @@
             [babashka.process :as process]
             [clojure.edn :as edn]
             [clojure.string :as str]
-            [nido.platform.project :as project]))
+            [nido.platform.project :as project])
+  (:import [java.security MessageDigest]))
 
 (def default-design
   "What a modelled project looks like when it says nothing: fukan's own conventions.
@@ -257,3 +258,82 @@
                "\n\nEither the code moves or the declaration does — one of them is wrong."
                (when (seq files)
                  (str "\nThe declaration is in " (str/join ", " files) ".")))})
+
+(defn- digest-of
+  "A short stable name for a rendering.
+
+   Its own four lines rather than `nido.review.digest`'s: the Design band may depend on Platform
+   alone, and Review sits above it. The alternative is not sharing the function, it is inverting
+   a dependency the band declaration exists to hold."
+  [s]
+  (let [md (MessageDigest/getInstance "SHA-256")]
+    (->> (.digest md (.getBytes (str s) "UTF-8"))
+         (map #(format "%02x" %))
+         (apply str)
+         (take 12)
+         (apply str))))
+
+(defn- unified
+  "`before` against `after` as a unified diff, or nil when a diff could not be taken.
+
+   Shelled to `diff`, which is on every machine this runs on and has had its edge cases found.
+   Exit 1 means they differ and is the expected answer here; only 2 and above is a failure."
+  [before after]
+  (let [a (fs/create-temp-file {:prefix "design-base-" :suffix ".txt"})
+        b (fs/create-temp-file {:prefix "design-head-" :suffix ".txt"})]
+    (try
+      (spit (str a) before)
+      (spit (str b) after)
+      (let [{:keys [exit out]} (process/shell {:out :string :err :string :continue true}
+                                              "diff" "-u"
+                                              "--label" "the design at the base"
+                                              "--label" "the design on this branch"
+                                              (str a) (str b))]
+        (when (< (long exit) 2) out))
+      (finally (fs/delete-if-exists a) (fs/delete-if-exists b)))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :string :string [:? [:maybe :any]]] :DesignDiff]}
+  diff
+  "What this worktree changes about the project's declared design, against `base-dir` — a
+   directory holding the spec dirs as they were at some base revision:
+
+     {:status :unmodelled}                          no design declared here — nothing to compare
+     {:status :unchanged  :digest \"…\"}             the declaration is what it was
+     {:status :changed    :diff \"…\" :digest \"…\"}   what it became
+     {:status :undecidable :error \"…\"}             one of the two ends would not render
+
+   The reading that was missing. `check` answers whether the code obeys the declaration as it
+   now stands, which is the same question for a branch that rewrote `canvas/` and one that
+   touched only code — so a design change was the one change nothing here could show.
+
+   A DIRECTORY, not a revision. Materializing a revision is a VCS question and the Design band
+   may reach nothing but Platform; the caller materializes and hands the result down.
+
+   Both ends are rendered by fukan and diffed as TEXT, which is honest about what it is: a
+   reordering would read as a change. Two renderings of the same specs are byte-identical across
+   separate runs, so that is the only false positive available to it — and the alternative, a
+   structural model diff, belongs in fukan rather than here.
+
+   A base that declares no design is not an error. A branch that ADOPTS fukan changes the
+   declared design from nothing to something, and that is exactly what a reviewer wants to see."
+  ([project-name worktree base-dir] (diff project-name worktree base-dir nil))
+  ([project-name worktree base-dir scope]
+   (let [head (describe project-name worktree scope)]
+     (case (:status head)
+       :unmodelled  {:status :unmodelled}
+       :undecidable {:status :undecidable
+                     :error  (str "this branch's design did not render: " (:error head))}
+       (let [base      (describe project-name base-dir scope)
+             base-doc  (case (:status base)
+                         :described  (:document base)
+                         :unmodelled ""
+                         ::failed)
+             head-doc  (:document head)]
+         (if (= ::failed base-doc)
+           {:status :undecidable
+            :error  (str "the base's design did not render: " (:error base))}
+           (if (= base-doc head-doc)
+             {:status :unchanged :digest (digest-of head-doc)}
+             (if-let [d (unified base-doc head-doc)]
+               {:status :changed :diff d :digest (digest-of head-doc)}
+               {:status :undecidable :error "the two renderings could not be diffed"}))))))))

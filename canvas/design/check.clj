@@ -60,6 +60,22 @@
    forty."
   [:map [:count :int] [:body :string]])
 
+(Kind DesignDiff
+  "What a branch changes about the declared design: a status, the change as a unified diff over
+   two of fukan's own renderings, and a digest of the one this branch has.
+
+   `:unchanged` and `:unmodelled` are kept apart for the reason every status pair in this
+   namespace is: a branch that changed nothing about a declared design and a project that has no
+   design to change are not the same answer, and only the first is a fact about the branch.
+
+   The digest names WHAT WAS SHOWN. A design reviewed over a working copy was never carried by a
+   revision, so nothing else can identify it afterwards; an approval that quotes the digest is
+   citable, and one that does not is a claim about a document nobody can produce again."
+  [:map [:status [:enum :unmodelled :unchanged :changed :undecidable]]
+        [:diff {:optional true} :string]
+        [:digest {:optional true} :string]
+        [:error {:optional true} :string]])
+
 (Module design-check
   "Does this worktree's code still stand up the design its project declared?
 
@@ -67,7 +83,7 @@
    second opinion here would be a second design. And not an opinion about what to DO with one: a
    briefing warns, a landing gate refuses, a review loop hands it to a fixer, which is why every
    reading returns a status rather than exiting."
-  {:child [DesignConfig CheckResult DesignDocument Refusal]}
+  {:child [DesignConfig CheckResult DesignDocument Refusal DesignDiff]}
   (Operation design-of
     "A project's design configuration, or nil when it declares none."
     {:signature [:=> [:catn [:project-name ProjectName] [:worktree :string]] [:maybe DesignConfig]]
@@ -108,4 +124,19 @@
      for both. Each reading keeps its own headline for the same reason: `design:check` answers
      someone who asked, and `land:check` stops someone who did not."
     {:signature [:=> [:catn [:result CheckResult]] Refusal]
-     :delegates [violation-text]}))
+     :delegates [violation-text]})
+  (Operation diff
+    "What this worktree changes about the declared design, against a directory holding the spec
+     dirs as they were at some base.
+
+     A DIRECTORY rather than a revision, and that is a band boundary rather than a convenience:
+     materializing a revision is a VCS question, the Design band may reach nothing but Platform,
+     and a seam that learned what a revision is would have to reach past that. The caller —
+     a task, which may reach everything — materializes and hands the result down.
+
+     Composed from two renderings and a textual diff. nido gains no opinion about what a design
+     IS by doing this: it never parses the model, names no sort, and would diff a vocabulary it
+     has never heard of."
+    {:signature [:=> [:catn [:project-name ProjectName] [:worktree :string] [:base-dir :string]
+                            [:scope [:? [:maybe :any]]]] DesignDiff]
+     :delegates [describe]}))

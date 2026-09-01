@@ -214,3 +214,59 @@
         (with-redefs [project/get-project (constantly {:design {:cmd (echoing-args)}})]
           (is (not (str/includes? (:document (design/describe "p" wt nil)) "--select"))))
         (finally (fs/delete-tree wt))))))
+
+;; ── diff: what a branch changes about the declaration ────────────────────────
+
+(defn- rendering
+  "A `describe` that answers `by-dir`: {<dir> <document>}. A dir it does not know declares
+   nothing, which is how the adoption case is set up."
+  [by-dir]
+  (fn [_project dir & _]
+    (if-let [doc (get by-dir dir)]
+      {:status :described :document doc}
+      {:status :unmodelled})))
+
+(deftest a-branch-that-changed-nothing-says-so-rather-than-showing-an-empty-diff
+  (testing "unchanged and unmodelled are different answers, and only the first is a fact about
+            the branch — a project with no design never had one to leave alone"
+    (with-redefs [design/describe (rendering {"/head" "(Band A)" "/base" "(Band A)"})]
+      (let [{:keys [status digest diff]} (design/diff "p" "/head" "/base")]
+        (is (= :unchanged status))
+        (is (seq digest) "and still names what it read, so an approval can quote it")
+        (is (nil? diff))))))
+
+(deftest a-changed-declaration-comes-back-as-a-diff-of-fukans-own-renderings
+  (with-redefs [design/describe (rendering {"/head" "(Band A)\n(Band B)" "/base" "(Band A)"})]
+    (let [{:keys [status diff digest]} (design/diff "p" "/head" "/base")]
+      (is (= :changed status))
+      (is (str/includes? diff "+(Band B)") "the addition, in fukan's words rather than the file's")
+      (is (str/includes? diff "the design at the base"))
+      (is (seq digest)))))
+
+(deftest adopting-fukan-is-a-change-rather-than-an-error
+  (testing "a branch that adds a canvas changes the declared design from nothing to something,
+            which is exactly what a reviewer wants to see"
+    (with-redefs [design/describe (rendering {"/head" "(Band A)"})]
+      (let [{:keys [status diff]} (design/diff "p" "/head" "/base")]
+        (is (= :changed status))
+        (is (str/includes? diff "+(Band A)"))))))
+
+(deftest a-project-with-no-design-here-has-no-diff-to-show
+  (with-redefs [design/describe (rendering {})]
+    (is (= {:status :unmodelled} (design/diff "p" "/head" "/base")))))
+
+(deftest an-end-that-would-not-render-is-undecidable-and-says-which-end
+  (testing "the two failures need different fixes — a branch that broke its own canvas and a
+            base that cannot be rendered are not the same problem"
+    (with-redefs [design/describe (fn [_ dir & _]
+                                    (if (= dir "/head")
+                                      {:status :undecidable :error "boom"}
+                                      {:status :described :document "(Band A)"}))]
+      (is (str/includes? (:error (design/diff "p" "/head" "/base")) "this branch's")))
+    (with-redefs [design/describe (fn [_ dir & _]
+                                    (if (= dir "/base")
+                                      {:status :undecidable :error "boom"}
+                                      {:status :described :document "(Band A)"}))]
+      (let [{:keys [status error]} (design/diff "p" "/head" "/base")]
+        (is (= :undecidable status))
+        (is (str/includes? error "the base's"))))))
