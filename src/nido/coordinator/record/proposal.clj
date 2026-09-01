@@ -19,6 +19,7 @@
   (:require
    [babashka.fs :as fs]
    [clojure.string :as str]
+   [clojure.set]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as cws]
    [nido.coordinator.report :as report]
@@ -227,7 +228,8 @@
                  (let [w (cws/read-ws pk ws-id)]
                    (when-let [ref (some #(when (= improvement-adapter (:adapter %)) %)
                                         (:external-refs w))]
-                     {:address (:id ref) :ws-id ws-id :open? (nil? (:closed w))}))))
+                     {:address (:id ref) :ws-id ws-id :open? (nil? (:closed w))
+                      :outcome (:outcome (:closed w))}))))
          vec)))
 
 (defn ^{:malli/schema [:=> [:cat [:vector :map] [:vector :map]] [:maybe :map]]}
@@ -268,3 +270,150 @@
            (remove #(contains? tried (address %)))
            (sort-by (juxt :at :analysis-seq :observation))
            first))))
+
+
+;; ── What the sweep asks ─────────────────────────────────────────────────────
+
+(defn ^{:malli/schema [:=> [:cat :string :int :int] :string]}
+  claim-address
+  "The improvement ref id for one claim: `<ws-id>/<plan-seq>#<index>`.
+
+   Deliberately the same shape as `address`, with `#` where a proposal has `.`,
+   because the two are the same KIND of thing — a position in an immutable
+   ledger entry, minted by nobody — and a reader seeing one should be able to
+   read the other. The separator differs so the two cannot be confused by a
+   string match, which is how `tried` sets and ref lookups compare them."
+  [ws-id plan-seq claim-index]
+  (str ws-id "/" plan-seq "#" claim-index))
+
+(defn- dispositions-by-address
+  "{address -> disposition} across `plans`, latest plan wins.
+
+   Latest for the same reason a decision is: a plan is an append and the ledger
+   has no delete, so a later plan reconsidering an address is the one that
+   counts. Re-planning is ordinary — a claim refused at reservation returns its
+   survivors to the owed set, and tomorrow groups them differently."
+  [plans]
+  (reduce (fn [m plan]
+            (reduce (fn [m {:keys [disposition addresses]}]
+                      (reduce #(assoc %1 %2 disposition) m addresses))
+                    m
+                    (:claims plan)))
+          {}
+          plans))
+
+(defn ^{:malli/schema [:=> [:cat [:vector :map] [:vector :map] [:vector :map]] [:vector :map]]}
+  owed
+  "The proposals a plan may still claim, oldest analysis first.
+
+   Pure, and over three inputs rather than one, because owedness is a join and
+   not a property: a proposal is owed when nothing has settled it, and three
+   different kinds of record can settle one.
+
+   A DECISION settles it only by declining. This is the change that replaces
+   per-proposal approval with a veto: an approval is no longer required, so an
+   undecided proposal is owed exactly as an approved one is, and a decline is
+   the only verdict that acts.
+
+   A LANDING settles it, which is unchanged.
+
+   A PLAN settles it by dispositioning it `:file` or `:no-op` — nothing landed,
+   and nothing is going to. Those two record no landing precisely because
+   nothing landed, so without reading the plans they would be owed forever.
+
+   An ATTEMPT settles it by having been tried: an address covered by a claim
+   whose workstream closed carrying no landing is one a session gave up on, and
+   re-planning it would spend a budget every day for as long as the ledger
+   stands. The exception is a claim closed as VETOED, which is not a session
+   giving up — it is the veto working — and its addresses that carry no decline
+   of their own were never the reason it stopped. They return to the owed set
+   and are grouped again tomorrow."
+  [proposals plans attempts]
+  (let [disposed (dispositions-by-address plans)
+        tried    (into #{}
+                       (comp (remove :open?)
+                             (remove #(= :vetoed (:outcome %)))
+                             (mapcat :addresses))
+                       attempts)]
+    (->> proposals
+         (remove #(= :declined (get-in % [:decision :verdict])))
+         (remove :landed)
+         (remove #(#{:file :no-op} (get disposed (address %))))
+         (remove #(contains? tried (address %)))
+         (sort-by (juxt :at :analysis-seq :observation))
+         vec)))
+
+(defn ^{:malli/schema [:=> [:cat [:vector :map] [:vector :map]] [:maybe :map]]}
+  partition-defect
+  "Why `claims` is not a partition of `owed`, or nil when it is one.
+
+   Returns what is wrong rather than a boolean, because the only caller is a
+   verb that refuses, and a refusal a writer cannot act on costs the same round
+   trip as no check at all.
+
+   Two ways to fail and they are different mistakes. `:uncovered` is a proposal
+   the plan did not mention — the sweep would silently never carry it. `:unowed`
+   is a claim naming an address that is not owed, which means the plan was
+   derived against a state that has since moved, or against no state at all.
+
+   Double-booking is NOT checked here: an address in two claims is refused by
+   the plan's own schema, which is where a property of the record alone belongs."
+  [claims owed]
+  (let [want (into #{} (map address) owed)
+        got  (into #{} (mapcat :addresses) claims)
+        miss (clojure.set/difference want got)
+        extra (clojure.set/difference got want)]
+    (when (or (seq miss) (seq extra))
+      (cond-> {}
+        (seq miss)  (assoc :uncovered (vec (sort miss)))
+        (seq extra) (assoc :unowed (vec (sort extra)))))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName] [:vector :map]]}
+  plans-of
+  "Every `:improvement-plan` on this project's ledgers, oldest first, each with
+   the `:ws-id` and `:seq` it was appended at.
+
+   Scans every workstream rather than a known planning one, for the reason
+   `of-project` scans for analyses: which workstream holds a record is a fact
+   about how it arrived, and a reader that has to know it in advance breaks the
+   first time a plan is appended from somewhere else — by hand, by a migration,
+   by a second project. The ordering is what makes `dispositions-by-address`
+   latest-wins meaningful."
+  [project]
+  (let [pk (keyword (name project))]
+    (->> (cws/list-ids pk)
+         (mapcat (fn [ws-id]
+                   (let [{:keys [base-dir entries]} (active-ledger pk ws-id)]
+                     (->> entries
+                          (filter #(= :improvement-plan (:kind %)))
+                          (keep (fn [e]
+                                  (let [r (entry->report base-dir e)]
+                                    (when (= :improvement-plan (:format r))
+                                      (assoc r :ws-id ws-id)))))))))
+         (sort-by :at)
+         vec)))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName] [:vector :map]]}
+  claim-attempts
+  "Every claim the sweep has attempted, as `{:address :ws-id :open? :outcome
+   :addresses}`.
+
+   A claim workstream carries the SAME `:improvement` adapter a proposal-level
+   attempt carries, and only its id differs — `<ws>/<seq>#<n>` rather than
+   `<ws>/<seq>.<obs>`. That is what lets the one-at-a-time hold span its own
+   cutover: `attempts` reads by adapter, so a legacy proposal-level workstream
+   still open holds the sweep on the day it ships, with no migration and no
+   window in which the two are invisible to each other.
+
+   `:addresses` is resolved from the plan the claim belongs to rather than
+   stored on the workstream, because the plan is where a claim's membership is
+   decided and a second copy could disagree with it."
+  [project]
+  (let [pk    (keyword (name project))
+        plans (into {} (map (juxt (juxt :ws-id :seq) identity)) (plans-of pk))]
+    (->> (attempts pk)
+         (keep (fn [{:keys [address] :as a}]
+                 (when-let [[_ ws-id seq-n idx] (re-matches #"(.+)/(\d+)#(\d+)" (str address))]
+                   (let [claim (get-in plans [[ws-id (parse-long seq-n)] :claims (parse-long idx)])]
+                     (assoc a :addresses (vec (:addresses claim)))))))
+         vec)))
