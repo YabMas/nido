@@ -106,25 +106,51 @@
       (try
         (with-redefs [project/get-project
                       (constantly {:design {:cmd (answering "(Band Platform \"the floor\" {})" 0)}})]
-          (is (= "(Band Platform \"the floor\" {})" (design/describe "p" wt))
+          (is (= {:status :described :document "(Band Platform \"the floor\" {})"}
+                 (design/describe "p" wt))
               "what fukan rendered, not what the file said"))
         (finally (fs/delete-tree wt))))))
 
-(deftest a-project-with-no-canvas-is-described-as-nothing
+(deftest a-project-with-no-canvas-is-unmodelled-rather-than-undecidable
   (let [wt (worktree-with {"src/a.clj" "(ns a)"})]
     (try
       (with-redefs [project/get-project (constantly nil)]
-        (is (nil? (design/describe "p" wt))))
+        (is (= {:status :unmodelled} (design/describe "p" wt))
+            "nothing to render, and nothing went wrong — the two must not share an answer"))
       (finally (fs/delete-tree wt)))))
 
-(deftest a-renderer-that-failed-describes-nothing-rather-than-half-a-design
-  (let [wt (worktree-with {"canvas/bands.clj" "(ns canvas.bands)"})]
-    (try
-      (with-redefs [project/get-project
-                    (constantly {:design {:cmd (answering "{:undecidable true}" 2)}})]
-        (is (nil? (design/describe "p" wt))
-            "a briefing with no design section beats one asserting a design nobody rendered"))
-      (finally (fs/delete-tree wt)))))
+(deftest a-renderer-that-failed-says-so-rather-than-answering-unmodelled
+  (testing "the failure that used to be invisible. Both cases produced nil, so a briefing
+            omitted its section either way and a modelled project whose render broke was
+            briefed exactly like a project that declares nothing — while the landing gate went
+            on refusing violations of the declaration nobody was shown."
+    (let [wt (worktree-with {"canvas/bands.clj" "(ns canvas.bands)"})]
+      (try
+        (with-redefs [project/get-project
+                      (constantly {:design {:cmd (answering "{:undecidable true}" 2)}})]
+          (is (= :undecidable (:status (design/describe "p" wt)))
+              "a render that exited non-zero is nobody being able to tell, not an absent design")
+          (is (seq (:error (design/describe "p" wt)))
+              "and it carries why, since the reader's next move depends on which failure it was"))
+        (finally (fs/delete-tree wt))))))
+
+(deftest a-render-that-runs-out-of-time-names-selection-as-the-way-out
+  (testing "the case that actually bit nido: unscoped, a large model cannot render inside a
+            session start's budget, and the fix is to ask for less rather than to wait longer.
+            Said only when nothing narrowed it — a reader who already set a scope must not be
+            sent after a knob they turned."
+    (let [wt (worktree-with {"canvas/bands.clj" "(ns canvas.bands)"})]
+      (try
+        (with-redefs [project/get-project
+                      (constantly {:design {:cmd ["sh" "-c" "sleep 30"]}})]
+          ;; var-quoted because the budget is private: it is a property of the seam, not a knob
+          (with-redefs-fn {#'design/describe-timeout-ms 200}
+            (fn []
+              (let [{:keys [status error]} (design/describe "p" wt)]
+                (is (= :undecidable status))
+                (is (str/includes? error "--select")
+                    "the message names the escape — the reader is an agent or a hurried human")))))
+        (finally (fs/delete-tree wt))))))
 
 (deftest an-oversized-declaration-is-truncated-out-loud
   (let [wt (worktree-with {"canvas/big.clj" "(ns canvas.big)"})]

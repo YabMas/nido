@@ -666,7 +666,8 @@
       (try
         (fs/create-dirs (fs/path wt "canvas"))
         (with-redefs [nido.design.check/describe
-                      (constantly "(Band Platform \"the floor, depends on nothing\" {:prefix [\"p.\"]})")
+                      (constantly {:status :described
+                                   :document "(Band Platform \"the floor, depends on nothing\" {:prefix [\"p.\"]})"})
                       nido.design.check/check
                       (fn [& _] (throw (ex-info "the briefing must not run the checker" {})))]
           (let [doc (@#'launcher/render-context (assoc base-ctx :worktree (str wt)))]
@@ -680,8 +681,25 @@
 (deftest render-context-omits-the-design-section-when-none-is-declared
   (let [wt (fs/create-temp-dir)]
     (try
-      (with-redefs [nido.design.check/describe (constantly nil)]
+      (with-redefs [nido.design.check/describe (constantly {:status :unmodelled})]
         (let [doc (@#'launcher/render-context (assoc base-ctx :worktree (str wt)))]
           (is (not (str/includes? doc "## The design this project declares"))
               "most projects nido drives declare nothing, and get a clean briefing")))
       (finally (fs/delete-tree wt)))))
+
+(deftest render-context-says-so-when-the-design-could-not-be-rendered
+  (testing "a render that failed gets a section of its own, because omitting it briefs a
+            modelled project exactly like an unmodelled one — and the landing gate still
+            refuses on a declaration the agent was never shown"
+    (let [wt (fs/create-temp-dir)]
+      (try
+        (with-redefs [nido.design.check/describe
+                      (constantly {:status :undecidable
+                                   :error "the design did not render within 60s, and nothing narrowed it."})]
+          (let [doc (@#'launcher/render-context (assoc base-ctx :worktree (str wt)))]
+            (is (str/includes? doc "NOT SHOWN"))
+            (is (str/includes? doc "did not render within 60s")
+                "the reason is carried, not summarised — it names the way out")
+            (is (str/includes? doc "still refuses the landing")
+                "the danger is that a gate checks what the briefing could not show")))
+        (finally (fs/delete-tree wt))))))

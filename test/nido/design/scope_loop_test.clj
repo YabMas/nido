@@ -91,7 +91,7 @@
             (spit (str (fs/path wt "canvas" "bands.clj")) "(ns canvas.bands)")
             (with-redefs [project/get-project
                           (constantly {:design {:cmd ["sh" "-c" "echo \"$0 $*\"; exit 0"]}})]
-              (is (str/includes? (design/describe "p" wt the-scope)
+              (is (str/includes? (:document (design/describe "p" wt the-scope))
                                  "--select [(Band ?n) (named ?n \"Lane\")]")
                   "the scope the baseline settled on, asked of fukan verbatim"))
             (finally (fs/delete-tree wt))))))))

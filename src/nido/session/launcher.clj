@@ -608,31 +608,53 @@
    how to ask instead; the answer is always current.
 
    SCOPED when the workstream has been baselined. A design outgrows a briefing — nido's own is
-   20k characters against a 16k budget — and the answer is not to cut the end off it. The
-   baseline round decides which part governs its area and records the selection; every session
-   after it on that workstream is briefed with that part, whole. Before the baseline there is no
-   scope and the section carries everything, which is right: the round whose job is to establish
-   the scope cannot be handed one.
+   265k characters against a 16k budget, and does not render at all inside the time a session
+   start can wait — and the answer is not to cut the end off it. The baseline round decides
+   which part governs its area and records the selection; every session after it on that
+   workstream is briefed with that part, whole.
 
-   Nil when the project declares no design, so the briefing simply does not have the section."
+   A FAILED render gets a section of its own rather than none, which is the case this
+   docstring used to be silent about because the code was. Before its baseline a workstream has
+   no scope, so the render is asked for whole — and on a project whose design is large that is
+   the render that cannot finish, which made the round whose job is to establish the scope the
+   one round briefed with nothing. Nil is now reserved for the project that declares no design,
+   which is the only thing a briefing has nothing to say about."
   [project-name worktree design-scope]
-  (when-let [declared (try (when worktree (design/describe project-name worktree design-scope))
-                           (catch Throwable _ nil))]
-    (str "## The design this project declares\n"
-         "\n"
-         "This is not documentation. It is a model your code is CHECKED against:\n"
-         "`bb nido:design:check` exits non-zero the moment the code stops obeying\n"
-         "it, and `bb nido:land:check` refuses the landing. Read it before you add\n"
-         "a namespace or a require — nearly every violation is one import that\n"
-         "should have gone the other way, and it is far cheaper to not write than\n"
-         "to unpick.\n"
-         "\n"
-         declared
-         "\n"
-         "If the code is right and the declaration is wrong, change the\n"
-         "DECLARATION — in the same commit, saying why. What you may not do is\n"
-         "leave the two disagreeing and let the next person discover it.\n"
-         "\n")))
+  (let [{:keys [status document error]}
+        (try (if worktree
+               (design/describe project-name worktree design-scope)
+               {:status :unmodelled})
+             (catch Throwable t {:status :undecidable :error (ex-message t)}))]
+    (case status
+      :unmodelled nil
+      :described
+      (str "## The design this project declares\n"
+           "\n"
+           "This is not documentation. It is a model your code is CHECKED against:\n"
+           "`bb nido:design:check` exits non-zero the moment the code stops obeying\n"
+           "it, and `bb nido:land:check` refuses the landing. Read it before you add\n"
+           "a namespace or a require — nearly every violation is one import that\n"
+           "should have gone the other way, and it is far cheaper to not write than\n"
+           "to unpick.\n"
+           "\n"
+           document
+           "\n"
+           "If the code is right and the declaration is wrong, change the\n"
+           "DECLARATION — in the same commit, saying why. What you may not do is\n"
+           "leave the two disagreeing and let the next person discover it.\n"
+           "\n")
+      :undecidable
+      (str "## The design this project declares — NOT SHOWN\n"
+           "\n"
+           "This project declares a design, and it could not be rendered here:\n"
+           error "\n"
+           "\n"
+           "You are not on a project without a design. You are on one whose design\n"
+           "this briefing could not show you, which is the more dangerous of the\n"
+           "two: `bb nido:design:check` still refuses the landing on a violation of\n"
+           "a declaration you have not read. Run it before you add a namespace or a\n"
+           "require, and read the declaration directly if you need it.\n"
+           "\n"))))
 
 (defn- render-workstream-line
   "Render the 'Workstream:' line when workstream-id is present.

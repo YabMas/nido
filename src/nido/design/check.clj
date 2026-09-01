@@ -88,10 +88,52 @@
     (when (= ::timeout done) (process/destroy-tree proc))
     (or (and (= ::timeout done) ::timeout) done)))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :string [:? [:maybe :any]]] [:maybe :string]]}
+(defn- capped
+  "`doc`, cut at `declaration-char-cap` with a line saying it was cut and how to ask for less.
+
+   Never silently: a design that ends mid-sentence reads as a design that ends there, and the
+   reader has no way to know a third of it is missing. The note names SCOPING rather than a
+   bigger cap, because a whole answer to a narrower question is what a briefing can use and
+   most of a wide one is not."
+  [doc {:keys [files]}]
+  (if (<= (count doc) declaration-char-cap)
+    doc
+    (str (subs doc 0 declaration-char-cap)
+         "\n\n;; … truncated at " declaration-char-cap " of " (count doc)
+         " characters. The whole declaration is in " (str/join ", " files)
+         ".\n;; A design this size should be SCOPED rather than cut: the workstream's"
+         "\n;; baseline records a `:scope`, and a project may set `:select` on its registry"
+         "\n;; entry — either carries a whole answer to a narrower question instead of"
+         "\n;; most of a wide one.\n")))
+
+(defn- unrendered-message
+  "Why a render that ran out of time did, and what to do about it.
+
+   The two cases are not the same problem and must not get the same sentence. Asked WITHOUT a
+   selection, the budget is not the fault — a whole model is simply more than a session can
+   wait for, and the fix is to ask for less; nido's own canvas renders in seconds scoped to its
+   bands and does not finish at all unscoped. Asked WITH one and still too slow, the selection
+   is not the missing piece and saying so would send the reader after a knob they already
+   turned."
+  [{:keys [spec-dirs]} select]
+  (str "the design did not render within " (quot describe-timeout-ms 1000) "s"
+       (if select
+         (str ", even scoped to " (pr-str select) "."
+              " Reproduce it with `clojure -M:fukan -m fukan.cli describe --spec-dirs "
+              (str/join "," spec-dirs) " --select '" (pr-str select) "'`.")
+         (str ", and nothing narrowed it. A whole model is more than a session start can wait"
+              " for once a project has more than a few dozen declarations. Ask fukan for the"
+              " part that governs the area — `--select '[(Band ?n)]'` for the architecture —"
+              " and record it as `:select` on the project's registry entry, or as `:scope` on"
+              " the workstream's baseline."))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :string [:? [:maybe :any]]] :DesignDocument]}
   describe
-  "The project's declared design as a document, or nil when it declares none — or when fukan
-   could not render one.
+  "The project's declared design as a document:
+
+     {:status :unmodelled}                      no design declared — nothing to render
+     {:status :described   :document \"…\"}      the declaration, as fukan renders it
+     {:status :undecidable :error \"…\"}         fukan did not answer
 
    Asked of FUKAN rather than read off disk. Fukan is what knows what a design is: which
    vocabularies the project actually instantiated, which nodes are its own rather than the
@@ -101,31 +143,40 @@
    extracted, and offered no way to select. `bands.clj` is a structure expressed through fukan,
    not a privileged shape this seam should know the outline of.
 
+   `:undecidable` is reported rather than folded into `:unmodelled`, for the reason `check`
+   keeps them apart and one sharper. A render is asked for at `session:up`, where the only
+   available failure was to omit the section — so a project whose design is too large to render
+   inside the budget briefed exactly like a project with no design at all, and the agent was
+   told nothing either way. The larger the design, the more certainly it vanished.
+
    Truncated at `declaration-char-cap` with a line saying so, never silently."
   ([project-name worktree] (describe project-name worktree nil))
   ([project-name worktree scope]
-  (when-let [design (design-of project-name worktree)]
-    (let [{:keys [spec-dirs]} design
-          ;; an explicit scope WINS over the project's configured default: the caller that has
-          ;; one got it from a baseline that read the code, and the default was set by someone
-          ;; who had not
-          select (or scope (:select design))
-          done (run-fukan design worktree "describe"
-                          (cond-> ["--spec-dirs" (str/join "," spec-dirs)]
-                            select (conj "--select" (pr-str select)))
-                          describe-timeout-ms)]
-      (when (and (map? done) (zero? (long (:exit done))) (seq (str/trim (str (:out done)))))
-        (let [full (str/trim (:out done))]
-          (if (<= (count full) declaration-char-cap)
-            full
-            (str (subs full 0 declaration-char-cap)
-                 "\n\n;; … truncated at " declaration-char-cap " of " (count full)
-                 " characters. The whole declaration is in "
-                 (str/join ", " (:files design))
-                 ".\n;; A design this size should be SCOPED rather than cut: the workstream's"
-                 "\n;; baseline records a `:scope`, and a project may set `:select` on its registry"
-                 "\n;; entry — either carries a whole answer to a narrower question instead of"
-                 "\n;; most of a wide one.\n"))))))))
+   (if-let [design (design-of project-name worktree)]
+     (let [{:keys [spec-dirs]} design
+           ;; an explicit scope WINS over the project's configured default: the caller that has
+           ;; one got it from a baseline that read the code, and the default was set by someone
+           ;; who had not
+           select (or scope (:select design))
+           done   (run-fukan design worktree "describe"
+                             (cond-> ["--spec-dirs" (str/join "," spec-dirs)]
+                               select (conj "--select" (pr-str select)))
+                             describe-timeout-ms)]
+       (cond
+         (= ::timeout done)
+         {:status :undecidable :error (unrendered-message design select)}
+
+         (not (zero? (long (:exit done))))
+         {:status :undecidable
+          :error  (let [e (str/trim (str (:err done)))]
+                    (if (str/blank? e) (str "fukan exited " (:exit done)) e))}
+
+         (str/blank? (str/trim (str (:out done))))
+         {:status :undecidable :error "fukan rendered an empty document"}
+
+         :else
+         {:status :described :document (capped (str/trim (:out done)) design)}))
+     {:status :unmodelled})))
 
 (defn- parse-report
   "Read the checker's stdout. Unparseable output is UNDECIDABLE rather than clean: stdout is
