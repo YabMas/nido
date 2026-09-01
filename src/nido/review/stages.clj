@@ -946,8 +946,18 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
    reported across layers 2 and 9 of a nine-layer stack is not a request to
    collapse the stack; jj answers it with a conflict on everything in between,
    and the round has spent its one attempt on an operation that could not have
-   applied. Where the span has holes the right cut is a judgement, so this says
-   so and leaves it.
+   applied.
+
+   Where a SEAM's span has holes there is a smaller move than the fold: put the
+   file the seam runs through in the lower layer, and absorb nothing. That was
+   the repair both the reviewer and the warden named on the case this comes from
+   — layer 9 rewriting a migration whose checksum layer 1's deploy had already
+   recorded — while the stage had only the fold, and so only a refusal. Scoped
+   to the seam kind: for a duplication, moving one copy down puts both in one
+   layer without removing either, which is not what the finding asked for.
+
+   Where the span has holes and there is no file to move, the right cut is a
+   judgement, so this still says so and leaves it.
 
    Never nil. A stage that cannot act still has to say why: `:refused` with its
    reason is what the phase shows instead of the silence that let one finding be
@@ -975,27 +985,42 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
             held  (set named)
             gap   (mapv #(layer-label (nth stack %))
                         (remove held (range lo (inc hi))))]
-        (if (and (= :fold remedy) (seq gap))
+        (cond
+          (not (and (= :fold remedy) (seq gap)))
+          {:remedy remedy :lower lower :upper upper :fold-legal? (empty? gap)}
+
+          (and (= :misplaced-seam (:kind finding)) (not (str/blank? (str (:file finding)))))
+          {:remedy :move :lower lower :upper upper :fold-legal? false
+           :file (:file finding)}
+
+          :else
           {:refused :span-has-holes
            :because (str "folding " (layer-label lower) "…" (layer-label upper)
                          " would absorb " (str/join ", " gap)
-                         ", which this finding does not name")}
-          {:remedy remedy :lower lower :upper upper :fold-legal? (empty? gap)})))))
+                         ", which this finding does not name")})))))
 
 (defn- reshape!
-  "Carry out one plan. A reorder that will not apply falls back to a fold, which
-   removes the boundary instead of moving it — the defect is real either way,
-   and jj refusing the reorder is jj saying the layers genuinely depend on each
-   other, which is a reason to merge them rather than to give up.
+  "Carry out one plan: fold two layers into one, move one file's changes down
+   between two, or reorder a layer below another.
 
-   The fallback inherits the fold's own precondition. A reorder over a span with
-   holes is legal because it moves one layer and absorbs none; the fold over
-   that same span is what `reshape-plan` refuses outright, and reaching it
+   A reorder that will not apply falls back to a fold, which removes the
+   boundary instead of moving it — the defect is real either way, and jj
+   refusing the reorder is jj saying the layers genuinely depend on each other,
+   which is a reason to merge them rather than to give up.
+
+   That fallback inherits the fold's own precondition. A reorder over a span
+   with holes is legal because it moves one layer and absorbs none; the fold
+   over that same span is what `reshape-plan` refuses outright, and reaching it
    through a refused reorder would be the same unappliable squash by a longer
    route."
-  [cwd base {:keys [remedy lower upper fold-legal?]}]
-  (if (= :fold remedy)
-    (assoc (layers/fold! cwd base upper lower) :did :fold)
+  [cwd base {:keys [remedy lower upper fold-legal? file]}]
+  (case remedy
+    :fold (assoc (layers/fold! cwd base upper lower) :did :fold)
+    ;; No fallback. A move that will not apply is not evidence that the layers
+    ;; depend on each other — it is evidence about that one file — and the fold
+    ;; it would fall back to is the operation this plan exists because jj cannot
+    ;; perform.
+    :move (assoc (layers/move! cwd base upper lower file) :did :move)
     (let [r (layers/reorder! cwd base upper lower)]
       (cond
         (:ok? r)    (assoc r :did :reorder)
@@ -1004,6 +1029,7 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
         :else       (assoc r :reason
                            (str (:reason r) "; and folding instead would absorb "
                                 "layers this finding does not name"))))))
+
 
 (defn- reshape-outcome
   "What became of one recut finding this round, as the phase will report it.
@@ -1020,6 +1046,11 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
          (when-let [k (:kind finding)] {:kind (name k)})
          (when-let [l (:lower plan)] {:lower (layer-label l)})
          (when-let [u (:upper plan)] {:upper (layer-label u)})
+         ;; Which file moved, on a move and nowhere else. A move between two
+         ;; layers that both survive is invisible in the outcome otherwise —
+         ;; lower and upper are the same pair a fold would have named, and they
+         ;; are the one thing that does not say what happened to them.
+         (when-let [f (:file plan)] {:file f})
          extra))
 
 (def ^:private recut-outcomes-that-park

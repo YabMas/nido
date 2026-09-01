@@ -360,6 +360,71 @@
       (jj/jj! cwd "bookmark" "delete" (:bookmark layer)))
     r))
 
+(defn ^{:malli/schema [:=> [:cat :Path :string] :string]}
+  workspace-relative
+  "`path` as jj will read it: relative to the workspace root, whatever the
+   reviewer wrote.
+
+   A finding's location is an ABSOLUTE path — that is the field codex fills —
+   and jj resolves a bare fileset argument against the working directory. The
+   two coincide only when the review happened to run from the root, so passing
+   the reviewer's path through unchanged would silently address a different
+   file, or none."
+  [cwd path]
+  (let [root (str cwd)
+        root (if (str/ends-with? root "/") root (str root "/"))]
+    (if (str/starts-with? (str path) root)
+      (subs (str path) (count root))
+      (str path))))
+
+(defn ^{:malli/schema [:=> [:cat :Path :map :string] :boolean]}
+  layer-touches?
+  "Does `layer`'s own diff name `path`? Path is workspace-relative.
+
+   The precondition a scoped squash needs and jj will not enforce: `jj squash`
+   over a fileset the source does not touch moves nothing, says so on stdout and
+   exits 0. Without this the stage would report a move it did not make, which is
+   the same silent success the conflict check exists to stop.
+
+   FALSE when the workspace cannot be asked, unlike the drift guards, and for
+   the opposite reason: those refuse to run and let the round proceed as it
+   would have, while proceeding here means claiming a reshape happened. An
+   unaskable workspace makes this refuse, and a refusal is visible."
+  [cwd layer path]
+  (try
+    (let [{:keys [exit out]} (jj/jj! cwd "diff" "--name-only" "-r" (:bookmark layer))]
+      (and (zero? exit)
+           (boolean (some #(= path (str/trim %)) (str/split-lines (str out))))))
+    (catch Throwable _ false)))
+
+(defn ^{:malli/schema [:=> [:cat :Path :any :map :map :string] :map]}
+  move!
+  "Move `layer`'s changes to ONE file down into `into-layer`. Both layers stay.
+
+   The remedy for a seam whose two ends are not adjacent. A fold there is
+   refused, and correctly — it would absorb every unnamed layer in between,
+   landing changes no reviewer implicated under a claim that never covered them
+   — but a refusal was the ONLY answer the stage had, so a seam the warden had
+   already described a move for got none. The case it comes from: layer 9
+   rewrote a migration whose checksum layer 1's deploy had already recorded, and
+   both the reviewer and the warden named the same repair — put that file's
+   change in layer 1. That absorbs nothing.
+
+   Neither bookmark is deleted, which is what separates this from `fold!`. A
+   fold leaves one layer where there were two, so the absorbed bookmark must go
+   or it would hide a layer from every later read of the stack; here both layers
+   survive and only their contents move."
+  [cwd base layer into-layer path]
+  (let [rel (workspace-relative cwd path)]
+    (if-not (layer-touches? cwd layer rel)
+      {:ok? false
+       :reason (str "the finding names " rel " but " (:bookmark layer)
+                    " does not change it, so there is nothing there to move down")}
+      (attempt-reshape!
+       cwd base
+       #(jj/jj! cwd "squash" "--from" (:bookmark layer)
+                "--into" (:bookmark into-layer) "--use-destination-message" rel)))))
+
 (defn ^{:malli/schema [:=> [:cat :Path :string] [:maybe :string]]}
   resolve-rev
   "The commit id `rev` names right now, or nil when it names nothing.

@@ -784,6 +784,63 @@
                                              {:kind :misplaced-seam :layers ["b" "c"]})))
       "adjacent layers still fold — the boundary between them is the only one lost"))
 
+(deftest a-seam-across-a-gapped-span-is-moved-rather-than-refused
+  ;; The case: an upper layer rewrote a migration whose checksum a lower layer's
+  ;; deploy had already recorded. Folding them would absorb seven layers neither
+  ;; the reviewer nor the warden named; moving that one file down absorbs
+  ;; nothing, and is the repair both of them actually described.
+  (let [p (stages/reshape-plan gapped-stack
+                               {:kind :misplaced-seam :layers ["a" "d"]
+                                :file "/w/resources/db/V20260825__diary.sql"})]
+    (is (= :move (:remedy p)))
+    (is (= "/w/resources/db/V20260825__diary.sql" (:file p)))
+    (is (= "a" (:slug (:lower p))) "down into the bottom-most named layer")
+    (is (= "d" (:slug (:upper p))))))
+
+(deftest a-seam-with-no-file-to-move-is-still-a-judgement
+  (let [p (stages/reshape-plan gapped-stack
+                               {:kind :misplaced-seam :layers ["a" "d"] :file "  "})]
+    (is (= :span-has-holes (:refused p)))))
+
+(deftest a-duplication-across-a-gapped-span-is-not-moved
+  ;; Moving one copy down puts both in one layer without removing either, which
+  ;; is not what the finding asked for.
+  (let [p (stages/reshape-plan gapped-stack
+                               {:kind :duplicated-across-layers :layers ["a" "d"]
+                                :file "/w/src/a.clj"})]
+    (is (= :span-has-holes (:refused p)))))
+
+(deftest a-move-names-a-file-the-upper-layer-does-not-touch-and-is-refused
+  ;; jj squash over a fileset the source does not touch moves nothing, says so
+  ;; and exits 0 — so without the precondition the round reports a move it did
+  ;; not make.
+  (with-redefs [jj/jj! (fn [_dir & args]
+                         (if (= "diff" (first args))
+                           {:exit 0 :out "src/other.clj\n" :err ""}
+                           (throw (ex-info "no squash should be attempted" {}))))]
+    (let [r (layers/move! "/w" "main" {:bookmark "s--d"} {:bookmark "s--a"}
+                          "/w/src/a.clj")]
+      (is (false? (:ok? r)))
+      (is (str/includes? (:reason r) "does not change it")))))
+
+(deftest a-move-squashes-only-the-named-file-and-keeps-both-bookmarks
+  (let [calls (atom [])]
+    (with-redefs [jj/jj! (fn [_dir & args]
+                           (swap! calls conj (vec args))
+                           (cond
+                             (= "diff" (first args)) {:exit 0 :out "src/a.clj\n" :err ""}
+                             ;; the conflicts() probe attempt-reshape! makes
+                             (= "log" (first args))  {:exit 0 :out "" :err ""}
+                             :else                   {:exit 0 :out "" :err ""}))]
+      (let [r (layers/move! "/w/" "main" {:bookmark "s--d"} {:bookmark "s--a"}
+                            "/w/src/a.clj")]
+        (is (true? (:ok? r)))
+        (is (some #(= ["squash" "--from" "s--d" "--into" "s--a"
+                       "--use-destination-message" "src/a.clj"] %) @calls)
+            "scoped to the file, path made workspace-relative")
+        (is (not-any? #(= "delete" (second %)) @calls)
+            "neither bookmark is deleted — both layers survive a move")))))
+
 (deftest a-reorder-is-legal-across-a-span-with-holes
   ;; It moves one layer and absorbs none, so the fold's precondition is not its.
   (let [p (stages/reshape-plan gapped-stack
