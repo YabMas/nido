@@ -26,6 +26,7 @@
    [nido.coordinator.lane.scratch :as scratch]
    [nido.coordinator.record.session :as csession]
    [nido.coordinator.lane.spawn :as spawn]
+   [nido.coordinator.record.proposal :as proposal]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.tickets :as tickets]
    [nido.coordinator.record.triggers :as triggers]
@@ -482,52 +483,24 @@
      :status       (:status (tickets/read-meta project k))
      :report-count (count (:entries (cws/find-by-ref-id project k)))}))
 
-(defn- first-heading
-  "The text of the first markdown heading in `md` (e.g. '# Verdict' -> \"Verdict\"),
-   or nil."
-  [md]
-  (some->> md
-           str/split-lines
-           (some #(second (re-matches #"#+\s+(.*)" %)))))
+;; What a ledger entry and a proposal ARE now lives one band down, in
+;; `record.proposal`, so the improvement source can ask the same question
+;; without reaching this facade. These are the names the rest of this namespace
+;; already used; aliasing them here keeps the move structural.
+(def ^:private first-heading proposal/first-heading)
+(def ^:private entry->report proposal/entry->report)
+(def ^:private active-ledger proposal/active-ledger)
 
-(defn- entry->report
-  "Render a ledger entry as a `:format`-tagged gate report. An `.edn` file is a
-   typed event — read + validated against the schema for its `:kind`
-   (report/parse-event — the read contract, which accepts any shape that was
-   writable when the entry was written), :seq/:at stamped from the entry (the same
-   stamp cws/latest-entry applies); any other file is markdown
-   (:format :markdown). A typed `.edn` that fails to read/validate degrades to a
-   :markdown payload of its raw text rather than blanking the pane.
+(defn ^{:malli/schema [:=> [:cat :ProjectName] [:vector :map]]}
+  proposals
+  "Every proposal this project's review-loop analyses have made, newest analysis
+   first, each with whatever was decided about it and whatever became of it.
 
-   :seq is load-bearing, not decoration: it is the ledger position a rendered
-   gate binds its buttons to, so a click can be checked against the report that
-   drew it (option-actions -> choose-option!)."
-  [base-dir entry]
-  (let [f    (str (fs/path base-dir (:file entry)))
-        edn? (str/ends-with? (str (:file entry)) ".edn")]
-    (or (when edn?
-          (try (-> (report/parse-event (:kind entry) (io/read-edn f))
-                   (assoc :seq (:seq entry) :at (:at entry)))
-               (catch Throwable _ nil)))
-        (let [md (when (fs/exists? f) (slurp f))]
-          (cond-> {:format   :markdown
-                   :kind     (:kind entry)
-                   :seq      (:seq entry)
-                   :at       (:at entry)
-                   :title    (first-heading md)
-                   :markdown md}
-            ;; A typed entry that would not read is NOT freeform markdown, and
-            ;; rendering it as if it were is the same conflation this codebase
-            ;; keeps having to undo: the reader cannot tell a corrupt record from
-            ;; one it is simply too old to understand. Unmerged stacks writing
-            ;; kinds the running daemon has never heard of is a NORMAL condition
-            ;; here — the daemon reads src/ once at startup — so the honest answer
-            ;; is the common one, and it says which of the two it is.
-            edn? (assoc :degraded
-                        {:kind   (:kind entry)
-                         :reason (if (contains? report/event-schemas (:kind entry))
-                                   :schema-mismatch
-                                   :unknown-kind)}))))))
+   The derivation is `record.proposal/of-project`; this is the surface's door to
+   it, and the reason the door exists is that a surface wraps this vocabulary
+   and not the records beneath it."
+  [project]
+  (proposal/of-project project))
 
 (defn- review-detail
   "The review-loop's own report.json — target, rounds, per-round phases and their
@@ -604,14 +577,6 @@
   [base-dir entries seq]
   (let [by-seq (into {} (map (juxt :seq identity)) entries)]
     (some->> (get by-seq seq) (entry->report base-dir) hydrate)))
-
-(defn- active-ledger
-  "The workstream's own ledger — the single event store. {:base-dir <string|nil>
-   :entries <vector>}, oldest-first."
-  [project ws-id]
-  (if-let [w (cws/read-ws project ws-id)]
-    {:base-dir (cstate/workstream-dir project ws-id) :entries (vec (:entries w))}
-    {:base-dir nil :entries []}))
 
 (defn- intake-fallback
   "Synthetic markdown report from a workstream's stored intake text (un-triaged
@@ -1811,115 +1776,6 @@
                                 [])]
           (assoc row :project pname))
         (sort-by (juxt #(if (:live? %) 0 1) :project :name)))))
-
-;; ── Proposals: the unit the operations surface addresses ────────────────────
-
-(defn- analysis-entries
-  "Oldest-first [seq entry-map] for every :review-analysis on this workstream,
-   parsed. Reads through the same entry->report every other reader uses, so a
-   record too old or too new for this reader degrades the same way it does
-   everywhere else rather than blanking the proposal list."
-  [project ws-id]
-  (let [{:keys [base-dir entries]} (active-ledger project ws-id)]
-    (->> entries
-         (filter #(= :review-analysis (:kind %)))
-         (keep (fn [e]
-                 (let [r (entry->report base-dir e)]
-                   (when (= :review-analysis (:format r)) r)))))))
-
-(defn- decisions-by-address
-  "{[analysis-seq observation] -> decision} for this workstream, latest wins.
-
-   Latest rather than first because a decision is an append and the ledger has
-   no delete: changing your mind is a second entry, and the one that counts is
-   the one made last. Nothing enforces one decision per proposal, and nothing
-   should — the record of having changed it is the point."
-  [project ws-id]
-  (let [{:keys [base-dir entries]} (active-ledger project ws-id)]
-    (->> entries
-         (filter #(= :improvement-decision (:kind %)))
-         (keep (fn [e]
-                 (let [r (entry->report base-dir e)]
-                   (when (= :improvement-decision (:format r)) r))))
-         (reduce (fn [m d] (assoc m [(:analysis-seq d) (:observation d)] d)) {}))))
-
-(defn- landings-by-address
-  "{[analysis-seq observation] -> landing} for this workstream, latest wins.
-
-   Latest for a different reason than a decision's: a proposal can land twice —
-   carried in one change, then extended or corrected in another — and the row
-   should point at the one a reader should go read. The earlier record stays on
-   the ledger, which is where the full history belongs."
-  [project ws-id]
-  (let [{:keys [base-dir entries]} (active-ledger project ws-id)]
-    (->> entries
-         (filter #(= :improvement-landed (:kind %)))
-         (keep (fn [e]
-                 (let [r (entry->report base-dir e)]
-                   (when (= :improvement-landed (:format r)) r))))
-         (reduce (fn [m l] (assoc m [(:analysis-seq l) (:observation l)] l)) {}))))
-
-(defn ^{:malli/schema [:=> [:cat :ProjectName] [:vector :map]]}
-  proposals
-  "Every proposal this project's review-loop analyses have made, newest analysis
-   first, each with whatever was decided about it.
-
-   A proposal is not a stored thing: it is an observation carrying a :proposal,
-   addressed by the entry that contains it and its index in that entry. So this
-   derives rather than reads — nothing writes a proposal row, and an analysis
-   filed before any of this existed produces rows exactly like one filed today.
-
-   Observations WITHOUT a :proposal are dropped. They are real analysis and
-   worth reading, but this surface exists to be decided on and there is nothing
-   to decide about an observation that proposes nothing; they stay legible in
-   the analysis itself.
-
-   `:at-seq` is the position a decision about this row must carry — the ledger's
-   latest entry at the moment the row was built, NOT the analysis's own seq. A
-   decision answers the workstream as it stands, and these differ the moment
-   anything else is appended.
-
-   `:decision` is what a human ruled and `:landed` is what became of it, and the
-   two are separate because approving does not carry anything out. A row with a
-   decision and no landing is a commitment nobody has discharged — the state
-   this surface used to render identically to a finished one."
-  [project]
-  (let [pk (keyword (name project))]
-    (->> (cws/list-ids pk)
-         (keep (fn [ws-id]
-                 (let [w (cws/read-ws pk ws-id)]
-                   (when (some #(= :review-run (:adapter %)) (:external-refs w))
-                     {:ws-id ws-id :w w}))))
-         (mapcat (fn [{:keys [ws-id w]}]
-                   (let [decided (decisions-by-address pk ws-id)
-                         landed  (landings-by-address pk ws-id)
-                         at-seq  (count (:entries w))
-                         ref     (some #(when (= :review-run (:adapter %)) %) (:external-refs w))]
-                     (for [a (analysis-entries pk ws-id)
-                           [i o] (map-indexed vector (:observations a))
-                           :when (:proposal o)]
-                       {:project      (name pk)
-                        :ws-id        ws-id
-                        :analysis-seq (:seq a)
-                        :observation  i
-                        :at-seq       at-seq
-                        :kind         (:kind o)
-                        :where        (:where o)
-                        :summary      (:summary o)
-                        :evidence     (:evidence o)
-                        :proposal     (:proposal o)
-                        :verdict      (:verdict a)
-                        :run-id       (:run-id a)
-                        :reviewed     (:reviewed a)
-                        :status       (:status a)
-                        :rounds       (:rounds a)
-                        :at           (:at a)
-                        :title        (:title ref)
-                        :decision     (get decided [(:seq a) i])
-                        :landed       (get landed [(:seq a) i])}))))
-         (sort-by :at)
-         reverse
-         vec)))
 
 (def ^:private decided-by
   "Who a decision is recorded as. Read from the environment nido runs in, never
