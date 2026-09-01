@@ -1493,3 +1493,67 @@
   ;; Most projects declare no design at all — there is nothing to select from, and a required
   ;; field would have made every one of their baselines invalid.
   (is (report/validate-event :baseline (dissoc valid-baseline :scope))))
+
+;; ── The kinds the improvement sweep writes ──────────────────────────────────
+
+(def ^:private a-plan
+  {:format   :improvement-plan
+   :date     "2026-09-04"
+   :frontier {:proposals [{:ws-id "ws-a" :at-seq 3}]
+              :attempts  [{:ws-id "ws-claim" :closed? false}]}
+   :claims   [{:statement   "Make the answered-cache actually skip"
+               :disposition :land
+               :addresses   ["ws-a/1.1" "ws-b/1.2"]}
+              {:statement "Already on main; recorded as confirmation"
+               :disposition :no-op
+               :addresses   ["ws-c/1.3"]}]})
+
+(defn- plan-valid? [p]
+  (try (report/parse-event :improvement-plan p) true
+       (catch clojure.lang.ExceptionInfo _ false)))
+
+(deftest a-plan-carries-its-claims-and-the-frontier-it-was-derived-at
+  (is (plan-valid? a-plan)))
+
+(deftest a-file-claim-without-a-ref-is-not-a-disposition
+  ;; It is a drop: an address out of the owed set with the work it named held
+  ;; nowhere. The schema refuses it so no verb has to remember to.
+  (is (not (plan-valid? (assoc a-plan :claims
+                               [{:statement "real, and not the sweep's to make"
+                                 :disposition :file :addresses ["ws-a/1.1"]}]))))
+  (is (plan-valid? (assoc a-plan :claims
+                          [{:statement "real, and not the sweep's to make"
+                            :disposition :file :addresses ["ws-a/1.1"] :ref "FU-99"}]))))
+
+(deftest an-address-may-appear-in-only-one-claim-of-a-plan
+  ;; Half of "covers the owed set exactly once" is a property of the record
+  ;; alone. The other half needs the ledger and belongs to the appending verb.
+  (is (not (plan-valid? (update a-plan :claims conj
+                                {:statement "again" :disposition :land
+                                 :addresses ["ws-a/1.1"]})))))
+
+(deftest a-frontier-carries-attempts-as-well-as-proposals
+  ;; Owedness is a join over both, and attempt state comes from a claim
+  ;; workstream's mutable :closed — so positions alone cannot replay it.
+  (is (not (plan-valid? (update a-plan :frontier dissoc :attempts)))))
+
+(deftest a-plan-renders-every-claim-with-its-disposition
+  (let [md (report/report->markdown a-plan)]
+    (is (str/includes? md "Improvement plan 2026-09-04"))
+    (is (str/includes? md "**land**"))
+    (is (str/includes? md "**no-op**"))
+    (is (str/includes? md "ws-b/1.2"))))
+
+(deftest a-plan-has-an-index-title-naming-its-day-and-size
+  ;; Registering a kind is what STOPS it being degraded, so a kind that lands
+  ;; without a renderer and a title renders blank rather than visibly missing.
+  (is (= "Improvement plan 2026-09-04 (2 claims)" (report/report-title a-plan))))
+
+(def ^:private a-reservation
+  {:format :improvement-claim-reserved :plan-seq 12 :claim 0
+   :addresses ["ws-a/1.1" "ws-b/1.2"]})
+
+(deftest a-reservation-names-the-claim-and-what-it-covered
+  (is (= a-reservation (report/parse-event :improvement-claim-reserved a-reservation)))
+  (is (str/includes? (report/report->markdown a-reservation) "ws-b/1.2"))
+  (is (= "Claim 1 of plan 12 reserved" (report/report-title a-reservation))))

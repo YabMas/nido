@@ -1699,6 +1699,92 @@
    [:landed-by    string?]
    [:note         {:optional true} string?]])
 
+(def ImprovementClaim
+  "One claim on a day's plan: what a reader is told a single change would close,
+   and the proposals it covers.
+
+   A `^:multi` on :disposition rather than one map with an optional :ref, because
+   the three dispositions differ in what they OWE. :land and :no-op answer for
+   themselves — the statement is the whole of a :no-op, and a :land claim is
+   answered by the landing that discharges it. :file says the work is real and is
+   not the sweep's to make, and a :file claim naming no record is not a
+   disposition, it is a drop: an address out of the owed set with the work it
+   named held nowhere. Making that a shape the schema refuses is cheaper than
+   making it a rule a verb remembers to check.
+
+   :addresses are proposal addresses (`<ws-id>/<seq>.<observation>`), which stay
+   the unit of RECORD while the claim becomes the unit of scheduling."
+  (let [common [[:statement string?]
+                [:addresses [:vector {:min 1} string?]]]
+        shape  (fn [disposition & extra]
+                 (into [:map {:closed true} [:disposition [:= disposition]]]
+                       (concat common extra)))]
+    [:multi {:dispatch :disposition}
+     [:land  (shape :land)]
+     [:no-op (shape :no-op)]
+     [:file  (shape :file [:ref string?])]]))
+
+(def PlanFrontier
+  "The state a plan was derived at, in the two halves owedness is derived FROM.
+
+   Both are needed and an earlier design record carried only the first. What is
+   owed is a join over proposals and attempts: a proposal is owed when nothing
+   has landed it, and an attempt is read from a claim workstream's `:closed`,
+   which is mutable. So a claim closing between one derivation and the next moves
+   what is owed without moving any ledger position — a frontier of positions
+   alone cannot replay it, and a plan that cannot be replayed cannot be checked."
+  [:map {:closed true}
+   [:proposals [:vector [:map {:closed true} [:ws-id string?] [:at-seq int?]]]]
+   [:attempts  [:vector [:map {:closed true} [:ws-id string?] [:closed? boolean?]]]]])
+
+(def ImprovementPlan
+  "One day's partition of the owed proposals into claims — the record that takes
+   the per-proposal approval's place.
+
+   A judgement, and therefore stored. Everything else about a proposal is derived
+   from the ledger on every read (proposal/of-project), and this deliberately is
+   not: which proposals share a cause is a reading of their text that no
+   derivation reproduces, and it is what the sweep acts on. It joins
+   :improvement-decision as a stored judgement rather than sitting apart from one.
+
+   :claims is ordered, and the order is the firing order — no ordinal field,
+   because a vector already has one and a second copy could disagree with it.
+
+   Addresses are unique ACROSS the plan, which the schema checks. Covering the
+   owed set exactly once is the plan's central claim, and half of it is a
+   property of this record alone: an address in two claims is a malformed plan
+   whoever wrote it. The other half — that the claims cover everything owed —
+   needs the ledger and belongs to the verb that appends this."
+  [:and
+   [:map {:closed true}
+    [:format   [:= :improvement-plan]]
+    [:date     string?]
+    [:frontier PlanFrontier]
+    [:claims   [:vector {:min 1} ImprovementClaim]]]
+   [:fn {:error/message "an address may appear in only one claim of a plan"}
+    (fn [{:keys [claims]}]
+      (let [as (mapcat :addresses claims)]
+        (= (count as) (count (distinct as)))))]])
+
+(def ImprovementClaimReserved
+  "A claim's veto deadline has passed: it was eligible when this was written, and
+   what follows is allowed to reach main.
+
+   The entry exists so the deadline is a moment a reader can point at. A decline
+   arriving after it is late, and 'late' is otherwise a claim about an interval
+   inside an agent that nobody can observe — the board can only say what a
+   decline did if there is a record it can compare against.
+
+   :addresses is what the claim covered when the reservation was taken, rather
+   than a pointer to the plan's own list, because that is the set the landing
+   will be recorded for and a reader answering 'what did this authorise' should
+   not have to re-derive it."
+  [:map {:closed true}
+   [:format    [:= :improvement-claim-reserved]]
+   [:plan-seq  int?]
+   [:claim     int?]
+   [:addresses [:vector {:min 1} string?]]])
+
 (def Retraction
   "A named earlier entry is not true, and here is what shows it.
 
@@ -1772,6 +1858,8 @@
    :review-analysis          ReviewAnalysis
    :improvement-decision     ImprovementDecision
    :improvement-landed       ImprovementLanded
+   :improvement-plan         ImprovementPlan
+   :improvement-claim-reserved ImprovementClaimReserved
    :proposed-ticket          ProposedTicket
    :retraction               Retraction
    :design-approved          DesignApproved})
@@ -2418,6 +2506,29 @@
        (str (when rev (str "`" rev "` ")) "by " landed-by)
        (when note (str "\n" note))])))
 
+(defn- improvement-plan->markdown
+  [{:keys [date claims]}]
+  (str/join "\n"
+    (concat
+      [(str "# Improvement plan " date)
+       (str (count claims) " claim" (when (not= 1 (count claims)) "s")
+            " · " (count (mapcat :addresses claims)) " proposals")
+       ""]
+      (mapcat (fn [i {:keys [statement disposition addresses ref]}]
+                [(str "## " (inc i) ". " statement)
+                 (str "**" (name disposition) "** — " (str/join ", " addresses)
+                      (when ref (str "  ·  filed as " ref)))
+                 ""])
+              (range) claims))))
+
+(defn- improvement-claim-reserved->markdown
+  [{:keys [plan-seq claim addresses]}]
+  (str/join "\n"
+    [(str "# Claim " (inc claim) " of plan " plan-seq " — reserved")
+     "Eligible when reserved; a decline after this entry is late."
+     ""
+     (str "Covers: " (str/join ", " addresses))]))
+
 (defn- proposed-ticket-head
   [{:keys [title ticket-type priority]}]
   [(str "# " title)
@@ -2469,6 +2580,8 @@
     :review-analysis          (review-analysis->markdown report)
     :improvement-decision     (improvement-decision->markdown report)
     :improvement-landed       (improvement-landed->markdown report)
+    :improvement-plan         (improvement-plan->markdown report)
+    :improvement-claim-reserved (improvement-claim-reserved->markdown report)
     :proposed-ticket          (proposed-ticket->markdown report)
     ""))
 
@@ -2521,5 +2634,10 @@
      :improvement-landed       (str "Proposal " (:analysis-seq report) "." (:observation report)
                                     " landed"
                                     (when-let [r (:rev report)] (str " (" r ")")))
+     :improvement-plan         (str "Improvement plan " (:date report)
+                                    " (" (count (:claims report)) " claim"
+                                    (when (not= 1 (count (:claims report))) "s") ")")
+     :improvement-claim-reserved (str "Claim " (inc (:claim report))
+                                      " of plan " (:plan-seq report) " reserved")
      :ship-submitted           "Ship submitted"
      nil)))
