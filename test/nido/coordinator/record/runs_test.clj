@@ -619,9 +619,18 @@
   ;; The case that has to keep working: a project that does not integrate with fukan at all has
   ;; no baseline scope to find, and every Run it mints must be valid without one. Also the
   ;; baseline round's OWN run — establishing the scope is what that session is for.
-  (is (nil? (:design-scope
-             (runs/create-run! {:project :unmodelled
-                                :trigger {:name :t :skill :s :payload "" :source {:type :manual}}
-                                :payload {}
-                                :workstream-id "ws-does-not-exist"}
-                               {:fired-at "2026-08-30T00:00:00Z" :fired-by "test"})))))
+  ;;
+  ;; Under `with-tmp` like every other writing test here, and it was not: `create-run!` PERSISTS,
+  ;; so this wrote one run record into the operator's live ~/.nido on every suite invocation.
+  ;; A hundred and four accumulated over three days; the daemon drained them, could not resolve
+  ;; project :unmodelled to tear the session down, and six consecutive failures tripped a breaker
+  ;; whose fail-burst auto-halted the whole coordinator. A test that reaches the real state dir
+  ;; does not fail — it fails something else, later, somewhere nobody is looking.
+  (with-tmp
+    (fn [_]
+      (is (nil? (:design-scope
+                 (runs/create-run! {:project :unmodelled
+                                    :trigger {:name :t :skill :s :payload "" :source {:type :manual}}
+                                    :payload {}
+                                    :workstream-id "ws-does-not-exist"}
+                                   {:fired-at "2026-08-30T00:00:00Z" :fired-by "test"})))))))
