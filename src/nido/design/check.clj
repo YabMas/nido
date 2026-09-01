@@ -235,3 +235,25 @@
                 (str "✗ " law "\n"
                      (str/join "\n" (for [row offenders]
                                        (str "    " (offender-line vars row)))))))))
+
+(defn ^{:malli/schema [:=> [:cat :CheckResult] :Refusal]}
+  refusal
+  "A violated result as both terminal readings state it: `{:count <rows> :body \"…\"}`.
+
+   The body is the part `design:check` and `land:check` say identically — the offenders, that
+   one of the two sides is wrong, and where the declaration is. Their headlines differ because
+   they address different people (one answers a question, one stops a landing), and so does what
+   each says next.
+
+   No exit code, and that is the line rather than an omission. `status-not-exit` is what lets a
+   briefing warn where a gate refuses; a seam that returned a code would have decided for both.
+
+   The count is ROWS, not laws. One law broken in forty places is one finding for a review and
+   forty violations for a human deciding whether to look — and two readings that counted
+   differently would describe the same branch two ways."
+  [{:keys [violations files] :as result}]
+  {:count (reduce + (map (comp count :offenders) violations))
+   :body  (str (violation-text result)
+               "\n\nEither the code moves or the declaration does — one of them is wrong."
+               (when (seq files)
+                 (str "\nThe declaration is in " (str/join ", " files) ".")))})

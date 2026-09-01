@@ -47,13 +47,11 @@
                            0)
           :satisfied   (do (println (str "design:check ok · " project " stands up its declared design"))
                            0)
-          :violated    (let [n (reduce + (map (comp count :offenders) (:violations result)))]
+          :violated    (let [{:keys [body] n :count} (design/refusal result)]
                          (println (str "design:check REFUSED · " n " violation"
-                                       (when (not= 1 n) "s") " of " project "'s declared design\n"))
-                         (println (design/violation-text result))
-                         (println (str "\nThe design is declared in "
-                                       (str/join ", " (:files result))
-                                       ".\nEither the code moves, or the declaration does — but one of them is wrong."))
+                                       (when (not= 1 n) "s") " of " project
+                                       "'s declared design\n"))
+                         (println body)
                          1)
           :undecidable (do (println (str "design:check UNDECIDABLE · " (:error result)))
                            (println "\nThis is not a clean bill of health: nobody could tell. Fix the\nchecker before reading anything into a green run.")

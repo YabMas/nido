@@ -51,6 +51,15 @@
         [:document {:optional true} :string]
         [:error {:optional true} :string]])
 
+(Kind Refusal
+  "A violation stated for a terminal: how many rows fired, and the body saying what they are and
+   where the declaration they break is written.
+
+   The count is ROWS rather than laws, and having one definition of that is most of why this
+   exists — two readings counting differently would report one branch as one problem and as
+   forty."
+  [:map [:count :int] [:body :string]])
+
 (Module design-check
   "Does this worktree's code still stand up the design its project declared?
 
@@ -58,7 +67,7 @@
    second opinion here would be a second design. And not an opinion about what to DO with one: a
    briefing warns, a landing gate refuses, a review loop hands it to a fixer, which is why every
    reading returns a status rather than exiting."
-  {:child [DesignConfig CheckResult DesignDocument]}
+  {:child [DesignConfig CheckResult DesignDocument Refusal]}
   (Operation design-of
     "A project's design configuration, or nil when it declares none."
     {:signature [:=> [:catn [:project-name ProjectName] [:worktree :string]] [:maybe DesignConfig]]
@@ -88,4 +97,15 @@
     "The findings as text for a human or an agent. Empty when there is nothing to say, so a
      caller can splice it in unconditionally."
     {:signature [:=> [:catn [:result CheckResult]] :string]
-     :delegates [offender-line]}))
+     :delegates [offender-line]})
+  (Operation refusal
+    "A refusal as both terminal readings state it: the offending-row count, and the body they
+     say identically — the offenders, that one of the two sides is wrong, and where the
+     declaration is written.
+
+     The body and NOT the exit code. What a violation costs is the caller's decision — a
+     briefing warns where a gate refuses — so a seam answering with an exit code would decide
+     for both. Each reading keeps its own headline for the same reason: `design:check` answers
+     someone who asked, and `land:check` stops someone who did not."
+    {:signature [:=> [:catn [:result CheckResult]] Refusal]
+     :delegates [violation-text]}))

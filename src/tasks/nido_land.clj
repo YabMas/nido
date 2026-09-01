@@ -120,15 +120,13 @@
                          0)
         :satisfied   (do (println (str "land:check ok · the code obeys " project "'s declared structure"))
                          0)
-        :violated    (let [n (reduce + (map (comp count :offenders) (:violations result)))]
-                       (println (str "land:check REFUSED · " n " violation" (when (not= 1 n) "s")
+        :violated    (let [{:keys [body] n :count} (design/refusal result)]
+                       (println (str "land:check REFUSED · " n " violation"
+                                     (when (not= 1 n) "s")
                                      " of " project "'s declared structure\n"))
-                       (println (design/violation-text result))
+                       (println body)
                        (println "\nHow to clear it:")
-                       (println (str "  Either the code moves or the declaration does — one of them\n"
-                                     "  is wrong, and landing is where that gets decided rather than\n"
-                                     "  inherited. The declaration is in "
-                                     (str/join ", " (:files result)) ".\n"
+                       (println (str "  Landing is where that gets decided rather than inherited.\n"
                                      "  Re-run with bb nido:design:check."))
                        1)
         :undecidable (do (println (str "land:check REFUSED · the structure check did not complete: "
