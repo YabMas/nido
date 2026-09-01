@@ -1226,27 +1226,61 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                      (let [cid (layers/land-fix!
                                 cwd layer
                                 (str "review-loop: iter " (:iter ctx) " fixes"
-                                     (when label (str " (" label ")"))))]
-                       (layers/restore-top! cwd stack)
-                       (update acc :fixes (fnil conj [])
-                               {:layer label :commit cid
-                                ;; What this fixer was HANDED, named rather than
-                                ;; counted. The count alone cannot answer the
-                                ;; question every cross-round read wants — did
-                                ;; this commit stop that finding coming back —
-                                ;; because it holds one end of the join and
-                                ;; discards the other.
-                                :handed (mapv (fn [f] (or (:handle f) (:id f))) findings)
-                                :fixed-count (count findings)})))))
-                 ctx plan))]
-          (if (empty? (:fixes ctx'))
+                                     (when label (str " (" label ")"))))
+                           _   (layers/restore-top! cwd stack)
+                           acc' (update acc :fixes (fnil conj [])
+                                        {:layer label :commit cid
+                                         ;; What this fixer was HANDED, named
+                                         ;; rather than counted. The count alone
+                                         ;; cannot answer the question every
+                                         ;; cross-round read wants — did this
+                                         ;; commit stop that finding coming back
+                                         ;; — because it holds one end of the
+                                         ;; join and discards the other.
+                                         :handed (mapv (fn [f] (or (:handle f) (:id f))) findings)
+                                         :fixed-count (count findings)})
+                           ;; A fix lands by REWRITING its layer, so jj rebases
+                           ;; every layer above it, and a rebase can conflict.
+                           ;; Nothing asked. The markers rode up the stack in the
+                           ;; committed text and were found a round later by a
+                           ;; reviewer reading a namespace that no longer parsed
+                           ;; — two of that round's three findings and one of its
+                           ;; two fixers existed only to undo them. Had the round
+                           ;; before been terminal, the run would have reported
+                           ;; ten fixes on a branch whose tests do not read.
+                           ;;
+                           ;; Not covered by the :workspace-drifted guard: that
+                           ;; compares the pinned :reviewed-at against @ once, at
+                           ;; the top of the stage, so a conflict the stage
+                           ;; itself creates is invisible to it.
+                           bad (layers/conflicted cwd base)]
+                       (if (seq bad)
+                         (reduced (assoc acc' :conflicted (vec bad)))
+                         acc')))))
+                 ctx plan))
+              ctx' (if (seq (:fixes ctx'))
+                     (update ctx' :history (fnil conj [])
+                             {:iter (:iter ctx')
+                              :fixes (:fixes ctx')
+                              :fixed-count (reduce + 0 (map :fixed-count (:fixes ctx')))
+                              :findings (:findings ctx')
+                              :warden (:warden ctx')})
+                     ctx')]
+          (cond
+            ;; Stop with the stack named rather than reviewing it again. The next
+            ;; round would read conflict markers as source and spend its reviewers
+            ;; and its fixers on repairing a mess this stage made — which is
+            ;; exactly what happened, and what made the defect expensive rather
+            ;; than merely wrong. The fixes that DID land stay: throwing them away
+            ;; would discard a round's work over a rebase a human can resolve in
+            ;; a minute, and the change ids say where.
+            (seq (:conflicted ctx'))
+            (assoc ctx' :control :stop :status :fix-conflicted)
+
+            (empty? (:fixes ctx'))
             (assoc ctx' :control :stop :status :fix-declined)
-            (update ctx' :history (fnil conj [])
-                    {:iter (:iter ctx')
-                     :fixes (:fixes ctx')
-                     :fixed-count (reduce + 0 (map :fixed-count (:fixes ctx')))
-                     :findings (:findings ctx')
-                     :warden (:warden ctx')}))))))))
+
+            :else ctx')))))))
 
 (def fix-stage
   "Fixes run only after every finding has an owner, one layer at a time,

@@ -74,7 +74,12 @@
              :findings-fixed     (or (get-in report [:summary :findings-fixed]) 0)
              :findings-remaining (count open)
              :report-path        report-path}
-      (seq open) (assoc :open open))))
+      (seq open) (assoc :open open)
+      ;; Only a :fix-conflicted run has these, and it is the one run whose status
+      ;; a reader cannot act on without them: the conflict is mid-stack, so
+      ;; `jj resolve --list` reports the branch clean and the ids are the only
+      ;; pointer at what to open.
+      (seq (:conflicted final)) (assoc :conflicted (vec (:conflicted final))))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   append-review-entry!

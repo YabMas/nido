@@ -196,6 +196,45 @@
         (is (some #(= ["commit" "-m" "review-loop: iter 2 fixes"] %) @commits))
         (is (nil? (:control ctx)))))))
 
+(defn- jj-with-conflicts
+  "A jj stub whose `conflicts()` revset names `ids`. Everything else succeeds
+   silently, which is what every other fix-stage test already assumes."
+  [ids]
+  (fn [_dir & args]
+    (if (some #(str/includes? (str %) "conflicts()") args)
+      {:exit 0 :out (str/join "\n" ids) :err ""}
+      {:exit 0 :out "" :err ""})))
+
+(deftest a-fix-that-conflicts-the-stack-stops-the-round-and-names-it
+  ;; A fix lands by rewriting its layer, so jj rebases every layer above it, and
+  ;; nothing asked whether that came out clean. The markers rode up in committed
+  ;; text and were found a round later by a reviewer reading a namespace that no
+  ;; longer parsed.
+  (with-redefs [agent/launch! (fn [_] {:num-turns 4 :result-error? false :result-text "done"})
+                stages/working-copy-dirty? (fn [_] true)
+                jj/jj! (jj-with-conflicts ["xuspsuww" "b4927669"])]
+    (let [ctx ((:run stages/fix-stage)
+               {:config {:cwd "/w" :run-id "r1" :base "main"} :iter 2
+                :findings [{:id "aa11" :title "x" :disposition :fix}]})]
+      (is (= :stop (:control ctx)))
+      (is (= :fix-conflicted (:status ctx)))
+      (is (= ["xuspsuww" "b4927669"] (:conflicted ctx))
+          "the change ids, because the conflict is mid-stack and `jj resolve
+           --list` reports the branch clean")
+      (is (= 1 (count (:history ctx)))
+          "the fix that landed is still recorded — it is a rebase a human
+           resolves, not a round to throw away"))))
+
+(deftest a-clean-rebase-after-a-fix-does-not-stop-the-round
+  (with-redefs [agent/launch! (fn [_] {:num-turns 4 :result-error? false :result-text "done"})
+                stages/working-copy-dirty? (fn [_] true)
+                jj/jj! (jj-with-conflicts [])]
+    (let [ctx ((:run stages/fix-stage)
+               {:config {:cwd "/w" :run-id "r1" :base "main"} :iter 2
+                :findings [{:id "aa11" :title "x" :disposition :fix}]})]
+      (is (nil? (:control ctx)))
+      (is (nil? (:conflicted ctx))))))
+
 (deftest a-fixer-that-read-the-finding-and-refused-says-why
   ;; It ran, it decided, and its reason was the only account of why the round
   ;; did nothing. Discarded, the run ended on "no changes" with the explanation

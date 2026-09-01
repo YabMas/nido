@@ -142,6 +142,23 @@
     ;; fails here fails invisibly in production.
     (is (= ev (report/validate-event :review ev)))))
 
+(deftest a-conflicted-run-names-the-changes-in-the-ledger-entry
+  ;; The status alone says the stack is broken and leaves finding it as an
+  ;; exercise — on a branch whose conflict is mid-stack, where `jj resolve
+  ;; --list` reports clean.
+  (let [ev (t/review-event {:status :fix-conflicted :history [] :findings []
+                            :conflicted ["xuspsuww" "b4927669"]}
+                           {:summary {:rounds 2 :findings-fixed 3}
+                            :target {:base "main" :base-rev "x"}}
+                           "/runs/r/report.json")]
+    (is (= ["xuspsuww" "b4927669"] (:conflicted ev)))
+    (is (= ev (report/validate-event :review ev))
+        "the ledger's status enum admits it — a closed schema swallows a
+         rejected append to stderr, so an unadmitted status fails invisibly")
+    (let [md (report/report->markdown (assoc ev :format :review-report))]
+      (is (str/includes? md "xuspsuww") "and a reader is told where to go")
+      (is (str/includes? md "conflicted")))))
+
 (deftest review-event-omits-open-when-nothing-is-owed
   (let [ev (t/review-event {:status :clean :history [] :findings []}
                            {:summary {:rounds 1 :findings-fixed 0}

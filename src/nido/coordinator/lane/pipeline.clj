@@ -579,6 +579,10 @@
    :fix-noop             :escalate
    :fix-unrouted         :escalate
    :fix-declined         :escalate
+   ;; The fix stage's own rebase left the stack conflicted. A human has to
+   ;; resolve it — nothing here can, and a retry would land more fixes onto a
+   ;; branch that already does not parse.
+   :fix-conflicted       :escalate
    ;; Somebody moved the working copy under a round in flight. Nothing is wrong
    ;; with the branch; the round just reviewed a state that stopped being
    ;; current, so the answer is to run it again, not to ask a human anything.
