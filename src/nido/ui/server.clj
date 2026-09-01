@@ -72,6 +72,14 @@
   [project]
   (control/read-queue-blocker (keyword project) work/pickup-trigger))
 
+(defn ^{:malli/schema [:=> [:cat :ProjectName] [:maybe :keyword]]}
+  read-intent-blocker
+  "Seam over health for stubbing in tests. What blocks the leg a described intent
+   fires, or nil when nothing does. Same question as read-pickup-blocker, asked
+   about the other leg — a breaker is per-trigger, so the two answers differ."
+  [project]
+  (control/read-queue-blocker (keyword project) work/start-intent-trigger))
+
 (defn ^{:malli/schema [:=> [:cat :any] :Screen]}
   derive-screen
   "Impure wiring: gather what only IO can produce (grouped rows, gates, in-flight
@@ -445,10 +453,19 @@
       (and (= 3 (count segs)) (= "workstreams" (first segs)) (= "intent" (nth segs 1)))
       (let [project (nth segs 2)
             input   (str (:intent (parse-json-body body)))
-            result  (work/start-intent! (keyword project) input)]
+            ;; Ask what blocks THIS leg BEFORE writing anything. An open breaker is not
+            ;; a "queued, but…" here the way it is for a pickup: the daemon deletes the
+            ;; envelope on drain and only then skips it, and the description is the only
+            ;; copy of the request — clearing the breaker cannot bring it back. So refuse
+            ;; and say so, leaving the typed text in the textarea to resubmit. A down or
+            ;; halted daemon never drains, so those stay queued-with-a-note.
+            blocked (read-intent-blocker project)
+            result  (if (and (= :breaker blocked) (not (str/blank? input)))
+                      {:decision :breaker :trigger work/start-intent-trigger}
+                      (work/start-intent! (keyword project) input))]
         (sse-response
          (sse-fragment
-          (views/intent-result-fragment result {:project project}))))
+          (views/intent-result-fragment result {:project project :blocked-by blocked}))))
 
       ;; POST /ops/fleet/:project/:session/down — down ONE idle session from the
       ;; fleet card. Session-scoped on purpose: work/bring-down! is the workstream

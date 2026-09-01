@@ -6,6 +6,7 @@
    [babashka.fs :as fs]
    [clojure.string :as str]
    [malli.core :as m]
+   [nido.coordinator.record.session :as session]
    [nido.coordinator.record.state :as cstate]
    [nido.platform.io :as io]))
 
@@ -44,7 +45,12 @@
    ;; The described-intent leg is the first caller that needs it: its workstream has no
    ;; ticket to triage, and being born :triaging would put it in the intake queue asking
    ;; a person to classify a description they just typed.
-   [:workstream-stage {:optional true} keyword?]
+   ;;
+   ;; Constrained to the SAME closed vocabulary `workstream/create!` accepts, not to
+   ;; keyword?: a typo, or an arc stage like :design, otherwise validated here, routed
+   ;; normally, and threw only once the envelope had been drained — after the queue file
+   ;; was deleted, so the request was gone and the tick took the throw with it.
+   [:workstream-stage {:optional true} (into [:enum] (sort session/storable-stages))]
    ;; ⚠ INERT. The dispatch that ran these was deleted 2026-08-31 as dead code — nothing
    ;; called it and no path wrote the :preprocessing phase it was meant to run in. The key
    ;; stays because configured triggers still carry it and a closed schema would reject them;

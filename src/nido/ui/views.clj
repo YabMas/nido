@@ -2165,8 +2165,8 @@
       [:button.btn {"data-on:click" post} "Drive →"]]
      [:div {:id "pickup-result" :class "pickup-result"}]]))
 
-(defn- pickup-blocked-note
-  "The warning under a queued pickup, worded for the reason it won't run — or
+(defn- queued-blocked-note
+  "The warning under a queued envelope, worded for the reason it won't run — or
    nil when it will. Each reason has a different fix, so they can't share copy:
    a down daemon needs starting, a halted one needs resuming, and an open
    breaker needs clearing while the daemon keeps running normally."
@@ -2207,7 +2207,7 @@
              " (session spinning up…)"]
             [:p "✓ Starting " [:strong id] " \"" title "\" (new workstream) — "
              "it'll appear in the spine shortly."])
-          (pickup-blocked-note blocked-by trigger project)]))])))
+          (queued-blocked-note blocked-by trigger project)]))])))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName] :any]}
   intent-bar
@@ -2237,23 +2237,33 @@
 (defn ^{:malli/schema [:=> [:cat :map :map] :string]}
   intent-result-fragment
   "HTML string (root #intent-result) reporting the outcome of an intent POST. `result` is
-   start-intent!'s return; opts is {:project <str>}.
+   start-intent!'s return (or the route's `:breaker` refusal); opts is
+   {:project <str> :blocked-by <kw or nil>}.
 
    Renders whatever the facade answers, the missing-leg refusal included — and that refusal
    is not an error path. It is the ordinary reply for a project that has not declared the
    leg, which is every project until one does, so it says where to add it rather than
-   apologising."
-  [result {:keys [project]}]
+   apologising.
+
+   `:breaker` is the one refusal that is NOT the facade's: nothing was enqueued, because an
+   envelope the daemon drains and skips takes the description with it."
+  [result {:keys [project blocked-by]}]
   (str
    (h/html
     [:div {:id "intent-result" :class "pickup-result" :style "margin-top:8px;"}
      (case (:decision result)
-       :blank  [:p.meta "Say what you want done — a sentence is enough."]
-       :no-leg [:p.meta (str "No " (name (:trigger result)) " leg is declared for this project, "
-                             "so there is nothing to hand a description to. Add one to "
-                             "~/.nido/projects/" project "/triggers.edn.")]
-       [:p "✓ Queued — a session will pick this up and work out what it means. "
-        "It'll appear in the spine shortly."])])))
+       :blank   [:p.meta "Say what you want done — a sentence is enough."]
+       :no-leg  [:p.meta (str "No " (name (:trigger result)) " leg is declared for this project, "
+                              "so there is nothing to hand a description to. Add one to "
+                              "~/.nido/projects/" project "/triggers.edn.")]
+       :breaker [:p.meta (str "⚠ " (name (:trigger result)) "'s breaker is open — nothing was "
+                              "queued, because the daemon would drop the description rather "
+                              "than run it. Clear it (bb nido:trigger:enable :project " project
+                              " " (name (:trigger result)) ") and start again.")]
+       [:div
+        [:p "✓ Queued — a session will pick this up and work out what it means. "
+         "It'll appear in the spine shortly."]
+        (queued-blocked-note blocked-by (:trigger result) project)])])))
 
 (defn ^{:malli/schema [:=> [:cat :map :map] :any]}
   workstreams-page
