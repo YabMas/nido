@@ -8,6 +8,7 @@
    [babashka.process :as process :refer [shell]]
    [clojure.string :as str]
    [nido.platform.core :as core]
+   [nido.platform.lock :as lock]
    [nido.session.context :as ctx]))
 
 (defn ^{:malli/schema [:=> [:cat :map :any] [:maybe :any]]}
@@ -68,7 +69,16 @@
    The command def looks like:
      {:cmd \"bb db:dump staging\"   ; shell command, may contain {{refs}}
       :cwd \"{{project.dir}}\"      ; optional, substituted against context
-      :env {\"KEY\" \"{{val}}\"}}   ; optional env overrides"
+      :env {\"KEY\" \"{{val}}\"}    ; optional env overrides
+      :lock \"brian-ci\"            ; optional machine-wide mutex name
+      :lock-wait-ms 3600000}       ; how long to queue for it (default: forever-ish)
+
+   :lock is what a project uses to say \"only one of these may run on this
+   machine at a time\". nido is the only layer that knows a laptop hosts many
+   sessions, so it is the only one that can enforce it; the command itself
+   stays unaware. Waiting is the default rather than failing, because the
+   caller is usually an agent mid-flow for which \"queued behind feat/x\" is a
+   fine outcome and \"refused\" is not."
   ([commands-map ref context]
    (run-command! commands-map ref context {}))
   ([commands-map ref context opts]
@@ -76,7 +86,7 @@
           :or {continue? false out :inherit err :inherit}} opts
          cmd-def (resolve-command commands-map ref)
          resolved (ctx/substitute context cmd-def)
-         {:keys [cmd cwd env]} resolved]
+         {:keys [cmd cwd env lock lock-wait-ms]} resolved]
      (when-not cmd
        (throw (ex-info "Command has no :cmd" {:ref ref :def cmd-def})))
      (core/log-step (str "Running " ref
@@ -90,7 +100,20 @@
            shell-opts (cond-> {:continue continue? :out out :err err}
                         cwd (assoc :dir cwd)
                         (seq env) (assoc :extra-env env))
-           result (shell shell-opts "bash" "-lc" cmd)]
+           invoke #(shell shell-opts "bash" "-lc" cmd)
+           result (if lock
+                    (lock/with-lock*
+                      lock
+                      (str (get-in context [:project :name]) "/"
+                           (get-in context [:session :name]) " " ref)
+                      {:wait-ms (or lock-wait-ms (* 2 60 60 1000))
+                       :on-wait (fn [h]
+                                  (core/log-step
+                                   (str "Waiting for the " lock " lock, held by "
+                                        (:label h) " (pid " (:pid h) ") since "
+                                        (:since h))))}
+                      invoke)
+                    (invoke))]
        (when (and (not continue?) (not (zero? (:exit result))))
          (throw (ex-info (str "Project command failed: " ref)
                          {:ref ref
