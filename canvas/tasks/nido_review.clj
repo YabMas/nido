@@ -7,6 +7,7 @@
    work plane and make it shallow."
   (:require [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
+            [canvas.coordinator.record.state :refer [Path]]
             [fukan.common.typing.malli]))
 
 (Module nido-review
@@ -53,4 +54,8 @@
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation design-cmd
     "The `design-cmd` entry point."
-    {:signature [:=> [:catn [:args [:* :any]]] :any]}))
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
+  (Operation run-context
+    "What this run can and cannot reach, as {:has [..] :missing [..]}. A run outside a session
+     silently loses the cache and the ledger; this is what says so before it starts."
+    {:signature [:=> [:catn [:cwd Path]] :any]}))

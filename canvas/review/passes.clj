@@ -51,6 +51,10 @@
     {:signature [:=> [:catn [:v :any]] :boolean]})
   (Operation still-open "The findings that actually remain."
     {:signature [:=> [:catn [:findings :any]] :any]})
+  (Operation open-across-run
+    "Everything the run is still holding when it ends, folded over every round. A count answers
+     'did this finish clean' and cannot answer 'what is it waiting for'."
+    {:signature [:=> [:catn [:final :map]] :any]})
   (Operation run! "Run the verdict pass."
     {:signature [:=> [:catn [:opts :map]] :map] :delegates [build-prompt parse still-open]}))
 
@@ -94,7 +98,26 @@
      :delegates [attempt-reshape!]})
   (Operation fold! "Squash a layer into another."
     {:signature [:=> [:catn [:cwd Path] [:base :any] [:layer :map] [:into-layer :map]] :map]
-     :delegates [attempt-reshape!]}))
+     :delegates [attempt-reshape!]})
+  (Operation workspace-relative "A reviewer's absolute path as jj will read it."
+    {:signature [:=> [:catn [:cwd Path] [:path :string]] :string]})
+  (Operation layer-touches? "Whether a layer's own diff names a path."
+    {:signature [:=> [:catn [:cwd Path] [:layer :map] [:path :string]] :boolean]})
+  (Operation move!
+    "Move one file's changes from a layer down into another. The remedy for a seam whose ends
+     are not adjacent, where a fold would absorb every layer between them."
+    {:signature [:=> [:catn [:cwd Path] [:base :any] [:layer :map] [:into-layer :map]
+                            [:path :string]] :map]
+     :delegates [workspace-relative layer-touches? attempt-reshape!]})
+  (Operation resolve-rev
+    "The commit a revision names right now, or nil when the workspace cannot be asked. Pins @
+     once per round, since @ is whatever the working copy happens to be."
+    {:signature [:=> [:catn [:cwd Path] [:rev :string]] [:maybe :string]]})
+  (Operation descends-from?
+    "Whether the working copy is still at or above a revision — false means somebody moved the
+     tree under a round in flight. TRUE when the workspace cannot be asked: a guard that cannot
+     run must not become a failure of the thing it guards."
+    {:signature [:=> [:catn [:cwd Path] [:rev :string]] :boolean]}))
 
 (Module review-stages
   "What a round reviews, in what order, and what it does with the rulings.
@@ -162,4 +185,17 @@
     {:signature [:=> [:catn [:stack :any] [:findings :any]] :any] :delegates [layer-label]})
   (Operation layer-fixer-session
     "A stable session id per layer, so a fixer resumed twice continues rather than restarts."
-    {:signature [:=> [:catn [:impl-session-id :any] [:label :any]] :string]}))
+    {:signature [:=> [:catn [:impl-session-id :any] [:label :any]] :string]})
+  (Operation with-composition-memory
+    "The whole-stack target, told what it has already reported. Without it the composition pass
+     re-derives the same seam every round from an empty memory."
+    {:signature [:=> [:catn [:targets :any] [:history :any]] :any]})
+  (Operation carried-parks
+    "The open parks this run is holding, each with the round it was first parked in. A park is
+     never raised again, so it vanishes from the findings the moment the reviewer stops
+     mentioning it — carrying it is what stops the warden re-adjudicating one from scratch."
+    {:signature [:=> [:catn [:prior :any] [:ruled :any] [:iter :int]] :any]})
+  (Operation park-refused-recuts
+    "A park for every recut the reshape stage could not act on, carrying its own refusal. The
+     warden withholds a recut from the fixers on purpose, so a refusal leaves it with no path."
+    {:signature [:=> [:catn [:parks :any] [:outcomes :any] [:iter :int]] :any]}))

@@ -154,6 +154,18 @@
   (Operation decide-proposal! "Record a human decision about one proposal."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:decision :map]] :map]
      :delegates [workstream/append-entry-at!]})
+  (Operation record-landing!
+    "Record that an approved proposal is now carried by a revision.
+
+     No position guard, unlike `decide-proposal!`: that guard makes a decision an honest answer
+     to the page it was read from, and a landing is not an answer to a page — it is a fact about
+     the repository, true whatever the ledger has grown since."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:opts :map]] :map]})
+  (Operation backfill-landings!
+    "Discharge every approval whose note already says what became of it, from before there was a
+     landing record. Idempotent — the ledger has no delete."
+    {:signature [:=> [:catn [:project ProjectName]] :map]
+     :delegates [proposals record-landing!]})
   (Operation all-grouped "Grouped boards across every registered project."
     {:signature [:=> [:catn] [:vector :map]] :delegates [grouped]})
   (Operation screen

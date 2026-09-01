@@ -65,7 +65,8 @@
    evidence says the third attempt is often where progress is."
   4)
 
-(defn default-attempt-key
+(defn ^{:malli/schema [:=> [:cat :any] :any]}
+  default-attempt-key
   "How the give-up counter tells one ATTEMPT at a defect from another.
 
    The finding's identity paired with the layer the last ruling aimed the repair

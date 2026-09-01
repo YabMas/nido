@@ -92,6 +92,18 @@
     "Append an immutable entry and record it in the index, under the workstream's lock."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:entry :map] [:content :string]] Path]
      :delegates [append-lock-path read-ws write! report/entry-payload]})
+  (Operation highest-seq-on-disk
+    "The largest entry number under entries/, or 0.
+
+     The index is a projection and can fall behind the directory it projects; the entries are
+     the record. Numbering an append off the index alone is what let one workstream reach 39
+     files against 37 rows, silently overwriting two."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :int]})
+  (Operation index-drift
+    "How far the index has fallen behind the entries directory, or nil when they agree. What a
+     reader is shown, because every other reader here trusts the index."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :map]]
+     :delegates [read-ws highest-seq-on-disk]})
   (Operation append-entry-at!
     "Append only if the ledger's latest entry is still the one the caller read. The optimistic
      lock that stops two people deciding the same thing from both writing the decision."

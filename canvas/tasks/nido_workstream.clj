@@ -40,4 +40,16 @@
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
   (Operation show-cmd
     "The `show-cmd` entry point."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
+  (Operation landed*
+    "Record that an approved proposal is now in the tree."
+    {:signature [:=> [:catn [:opts [:* :any]]] :any]})
+  (Operation landed-cmd
+    "bb nido:improvement:landed — the entry point for `landed*`."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
+  (Operation backfill-landings*
+    "One-shot: discharge every approval whose note already records the outcome."
+    {:signature [:=> [:catn [:opts [:* :any]]] :any]})
+  (Operation backfill-landings-cmd
+    "bb nido:improvement:backfill-landings — the entry point for `backfill-landings*`."
     {:signature [:=> [:catn [:args [:* :any]]] :any]}))
