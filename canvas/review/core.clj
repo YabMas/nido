@@ -134,6 +134,14 @@
     {:signature [:=> [:catn [:s :string] [:geom :map]] :string]})
   (Operation with-live-frame "Animate a frame while a body runs."
     {:signature [:=> [:catn [:opts :map]] :any] :delegates [tty-size fit]})
+  (Operation read-report "A run's report off disk, or nothing when it is absent or unreadable."
+    {:signature [:=> [:catn [:path Path]] [:maybe :map]]})
+  (Operation follow!
+    "Paint someone ELSE's run until they finish. The same animator over a different frame source:
+     the holder writes its report atomically on every event and the renderer is pure over one, so
+     joining a live run is a read rather than a channel. Writes nothing anywhere — a follower
+     that touched the report, the ledger or the claim could damage the run it came to watch."
+    {:signature [:=> [:catn [:opts :map]] :any] :delegates [read-report with-live-frame]})
   (Operation with-live-display "Run a body under the live display, or plainly."
     {:signature [:=> [:catn [:opts :map]] :any] :delegates [plain? emit-fn with-live-frame]}))
 

@@ -238,3 +238,95 @@
           before (subs out (max 0 (- at 40)) at)]
       (is (not (re-find #"\x1b\[\d+A" before))
           "no cursor-up over rows that can no longer be located"))))
+
+;; ── Painting a run this process does not own ───────────────────────────────
+;; Joining a live review is a READ: the holder writes its report by atomic
+;; rename on every event and the renderer is pure over one, so a follower is
+;; this same animator pointed at somebody else's file. What these pin is that
+;; it stays a read — a follower that wrote anything could damage the run it
+;; came to watch.
+
+(deftest read-report-answers-nothing-rather-than-throwing
+  (let [dir (str (fs/create-temp-dir))]
+    (is (nil? (frontend/read-report (str (fs/path dir "absent.json"))))
+        "a holder that has taken the claim and not yet reported is normal, not an error")
+    (is (nil? (frontend/read-report nil)))
+    (let [torn (str (fs/path dir "torn.json"))]
+      (spit torn "{\"run-id\": ")
+      (is (nil? (frontend/read-report torn))
+          "unreadable reads as absent — the next poll gets the whole file"))))
+
+(deftest read-report-hands-back-what-the-holder-wrote
+  (let [dir  (str (fs/create-temp-dir))
+        path (str (fs/path dir "report.json"))
+        a    (atom nil)
+        emit (frontend/emit-fn a path clock false)]
+    (emit {:event :run-started :run-id "r" :cwd "/w" :base "main"
+           :at "2026-06-30T14:00:00Z"})
+    (let [r (frontend/read-report path)]
+      (is (= "r" (:run-id r)))
+      (is (= "running" (:status r))
+          "keywords come back as strings, which is the shape render was written
+           against — so a followed report paints exactly what its own process paints"))))
+
+(deftest follow-paints-the-holders-frame-and-stops-when-the-holder-goes
+  (let [dir     (str (fs/create-temp-dir))
+        path    (str (fs/path dir "report.json"))
+        a       (atom nil)
+        emit    (frontend/emit-fn a path clock false)
+        _       (emit {:event :run-started :run-id "held" :cwd "/w" :base "main"
+                       :at "2026-06-30T14:00:00Z"})
+        painted (atom [])
+        polls   (atom 0)
+        out     (with-out-str
+                  (reset! painted [])
+                  (frontend/follow!
+                   {:report-path path
+                    :clock       clock
+                    :poll-ms     1
+                    :plain?      false
+                    :geom-fn     (constantly {:rows 24 :cols 80})
+                    :render-fn   (fn [r _now]
+                                   (swap! painted conj (:run-id r))
+                                   "the holder is judging")
+                    :stop?       #(do (Thread/sleep 30)
+                                      (>= (swap! polls inc) 4))}))]
+    (is (some #{"held"} @painted)
+        "the frame it painted was built from the HOLDER's report, not one of its own")
+    (is (str/includes? out "the holder is judging")
+        "and that frame reached the screen")))
+
+(deftest follow-writes-nothing
+  (let [dir   (str (fs/create-temp-dir))
+        path  (str (fs/path dir "report.json"))
+        a     (atom nil)
+        emit  (frontend/emit-fn a path clock false)
+        _     (emit {:event :run-started :run-id "held" :cwd "/w" :base "main"
+                     :at "2026-06-30T14:00:00Z"})
+        before (slurp path)
+        listing #(set (map str (fs/list-dir dir)))
+        files-before (listing)]
+    (frontend/follow! {:report-path path :clock clock :poll-ms 1
+                       :geom-fn   (constantly {:rows 24 :cols 80})
+                       :render-fn (constantly "frame")
+                       :stop?     (constantly true)})
+    (is (= before (slurp path)) "the holder's report is untouched")
+    (is (= files-before (listing))
+        "and nothing new appears beside it — no lock, no ledger, no report of its own")))
+
+(deftest follow-waits-rather-than-failing-when-there-is-nothing-to-paint-yet
+  (let [dir     (str (fs/create-temp-dir))
+        painted (atom [])
+        polls   (atom 0)]
+    (is (= :detached
+           (frontend/follow!
+            {:report-path (str (fs/path dir "not-yet.json"))
+             :clock       clock
+             :poll-ms     1
+             :geom-fn     (constantly {:rows 24 :cols 80})
+             :render-fn   (fn [_ _] (swap! painted conj :rendered) "frame")
+             :stop?       #(>= (swap! polls inc) 2)}))
+        "a claim is taken before the first report is written, so a follower that
+         arrived in that window must wait rather than fail")
+    (is (empty? @painted)
+        "and it must not put an absent report through the renderer")))

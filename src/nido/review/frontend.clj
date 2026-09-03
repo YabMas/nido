@@ -5,7 +5,9 @@
    independently of events — so a long stage never looks stuck). In a non-TTY
    it degrades to one narrated line per event."
   (:require
+   [babashka.fs :as fs]
    [babashka.process :as process]
+   [cheshire.core :as json]
    [clojure.string :as str]
    [nido.review.report :as report]
    [nido.review.render :as render])
@@ -269,6 +271,66 @@
               (print (str (when (pos? (long last-lines)) (cursor-up last-lines))
                           clear-down show-cursor))
               (flush))))))))
+
+(defn ^{:malli/schema [:=> [:cat :Path] [:maybe :map]]}
+  read-report
+  "A report off disk, or nil when it is absent or unreadable.
+
+   Safe to call at any moment because `persist!` writes by atomic rename, so a
+   reader sees a whole report or the previous one — never a torn file. Keywords
+   are read back as strings, which is what the report already holds: `render`
+   was written against that shape, so a report read here paints exactly what its
+   own process paints."
+  [path]
+  (try
+    (when (and path (fs/exists? path))
+      (json/parse-string (slurp (fs/file path)) true))
+    (catch Exception _ nil)))
+
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  follow!
+  "Paint someone else's run until they finish, then return `:detached`.
+
+   The whole of joining a live review, and it costs almost nothing because two
+   things were already true: the holder writes its report by atomic rename on
+   every event, and `render` is a pure projection of a report. So a follower is
+   the same animator over a different frame source — this process reads the file
+   the holder is writing and paints the holder's own frame.
+
+   WHICH frame comes from the caller as `:render-fn` (report → now → string),
+   because the projection is not one function. A record loop paints itself with
+   `render/record-frame` and its report carries no diff-review target, so
+   following one through the default frame heads it `base nil` and puts its
+   judge and amend phases through a renderer that says nothing about a verdict
+   or an amendment: the holder's report in somebody else's frame, which is the
+   one thing following was for.
+
+   It WRITES NOTHING. Not the report, not the ledger, not the claim. A follower
+   that touched any of them could damage a run it does not own, and the run is
+   the thing a follower came to protect.
+
+   Stops when `stop?` says the holder is gone — asked on a timer rather than
+   watched, because the holder's liveness is a lock and a lock has no event.
+   Interrupting the follower unwinds through the animator's own `finally`, so
+   the screen is restored and the holder never learns it was watched."
+  [{:keys [report-path stop? clock poll-ms geom-fn render-fn] :as opts
+    :or   {clock #(Instant/now) poll-ms 400 render-fn render/frame}}]
+  (let [frame-fn (fn [now]
+                   (if-let [r (read-report report-path)]
+                     (render-fn r now)
+                     "  waiting for the run to report …"))]
+    (with-live-frame
+      (cond-> {:frame-fn frame-fn :clock clock}
+        geom-fn                  (assoc :geom-fn geom-fn)
+        ;; Passed through rather than re-detected, the seam :geom-fn already is
+        ;; and for the same reason: a test pins the animated path, and live it
+        ;; auto-detects exactly as every other frame here does.
+        (contains? opts :plain?) (assoc :plain? (:plain? opts)))
+      (fn []
+        (loop []
+          (if (stop?)
+            :detached
+            (do (Thread/sleep (long poll-ms)) (recur))))))))
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   with-live-display
