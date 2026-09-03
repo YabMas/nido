@@ -7,6 +7,7 @@
   (:require
    [clojure.string :as str]
    [nido.coordinator.source.notion-cache :as notion-cache]
+   [nido.coordinator.record.activity :as activity]
    [nido.coordinator.record.session :as session]
    [nido.coordinator.record.tickets :as tickets]
    [nido.coordinator.record.workstream :as workstream]))
@@ -201,7 +202,15 @@
                           (session/stage-projection
                             (:closed ws)
                             local-status
-                            sessions (:stage ws)))]
+                            sessions (:stage ws)))
+         ;; Bound rather than inlined because the row reports it twice — once as
+         ;; itself and once as the merge lane's sub-state — and two calls would
+         ;; be two reads of the claim, which is two moments.
+         doing          (session/doing
+                         {:closed   (when-not notion-driven? (:closed ws))
+                          :sessions sessions
+                          :stage    (:stage proj)
+                          :claim    (activity/read-live project (:id ws))})]
      {:ws-id           (:id ws)
       :project         project
       :br-id           br-id
@@ -233,8 +242,24 @@
       :session-count   (count sessions)
       :last-activity   (last-activity ws sessions)
       :facets          (:facets ws)
-      ;; Merge-lane sub-state: only populated when the projected stage is :shipping.
-      :ship-substate   (when (= :shipping (:stage proj)) (session/ship-substate sessions))
+      ;; What is underway RIGHT NOW, from the one projection that composes every
+      ;; source that can say so. The claim is read here rather than inside the
+      ;; projection so that the projection stays pure — this fn already reads
+      ;; sessions and ticket status, so it is the layer that may touch disk.
+      ;; Cheap when nothing is running: no activity has ever been claimed against
+      ;; most workstreams, so the probe is a stat that finds no lock file.
+      ;; Closure and stage are the row's EFFECTIVE ones, never the stored ones. A
+      ;; Notion-driven row ignores a stale local :closed, and a merged shipment
+      ;; leaves :stage :shipping behind on the record — so passing the stored
+      ;; pair would let one row answer the same question twice, :doing saying
+      ;; :awaiting-merge on a row projected :done.
+      :doing           doing
+      ;; A DELEGATE of that projection, not a second answer. It used to call
+      ;; ship-substate itself, which left two readings of one fact free to
+      ;; disagree the moment either learned something the other had not — and
+      ;; the projection has since learned that a shipment with nothing running
+      ;; is :queued rather than nothing. Its remaining readers are renderers.
+      :ship-substate   (when (= :merge (:source doing)) (:phase doing))
       :open-findings   (count (:open (:findings ws)))})))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :string :map] :WorkstreamRow]}
@@ -265,6 +290,8 @@
      :last-activity   nil
      :facets          nil
      :ship-substate   nil
+     ;; No workstream exists, so nothing can hold a claim against it.
+     :doing           nil
      :open-findings   0
      :dismissed?      (= :dismissed tstatus)
      :bare?           true}))

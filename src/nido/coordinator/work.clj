@@ -816,6 +816,11 @@
         :stage        (:stage row)
         :label        (:label row)
         :links        (:links row)
+        ;; What is underway right now, taken from the row rather than re-derived:
+        ;; a second read is a second moment, and a pane whose heading disagreed
+        ;; with the board row beside it would be the disagreement this facade
+        ;; exists to prevent.
+        :doing        (:doing row)
         :ledger       (ledger-summary project (:br-id row))
         ;; What the pane LEADS with: where this is and what currently holds. The
         ;; entry index below stays exactly as it was — it is the log underneath,

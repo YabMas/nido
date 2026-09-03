@@ -419,3 +419,67 @@
       :parked                   :blocked
       :done                     :awaiting-merge
       nil)))
+
+(defn ^{:malli/schema [:=> [:cat :map] [:maybe :map]]}
+  doing
+  "What this workstream is DOING right now — one source, or nil — as
+   `{:source :claim|:merge|:session, …}`.
+
+   The SECOND facet beside `engagement-state`, and the two answer different
+   questions. Engagement says whether anyone is engaged and whether they are
+   waiting on you; this says which of the things that can be underway IS. A
+   workstream reads :active with `doing` nil whenever a human is in the session
+   and has started nothing nido can name, which is the common case and not a gap.
+
+   THREE SOURCES, and the precedence is total so that exactly one ever answers.
+   That totality is the point: before it, a workstream could be described two
+   ways at once because a merge run and an autonomous burst were read by
+   different callers that never met.
+
+     over      — nothing. A settled :closed, or an effective stage of :done,
+                 which is how a Notion-driven workstream ends: its ticket goes
+                 terminal and nido never writes :closed at all, so a row that
+                 tested :closed alone reported a stage of :done and an activity
+                 in the same breath.
+     :claim    — a named process holds the workstream's activity lock right now.
+     :merge    — the workstream is stored at :shipping; the merge lane's own
+                 sub-state says how far along, or :queued when nothing of it is
+                 running yet.
+     :session  — a live autonomous session is executing.
+
+   The claim outranks the other two because it is evidence of a process alive at
+   the instant of the read, while a phase and a stage are flags written at the
+   edges of a burst and left behind by a crash. `claim` arrives as an ARGUMENT
+   and is never read here: this stays pure, so the caller that can reach the
+   filesystem is the one that does.
+
+   A PARKED session is deliberately not `doing`. It is a gate — engagement's
+   :parked-at-gate already says so, and calling it activity would report a
+   workstream waiting on a human as one that is busy."
+  [{:keys [closed sessions stage claim]}]
+  (cond
+    ;; `stage` is the row's EFFECTIVE stage, so :done covers both ways a
+    ;; workstream ends — nido's own settlement and a ticket the source system
+    ;; closed under it. Testing :closed alone let one row answer the terminality
+    ;; question two ways at once.
+    (or (some? closed) (= :done stage)) nil
+
+    (some? claim)
+    (into {:source :claim}
+          (select-keys claim [:kind :run-id :report-path :started-at :pid]))
+
+    ;; :queued is the merge lane's RESTING state, and it is an answer rather
+    ;; than an absence: the lane takes one branch at a time, so a shipment with
+    ;; no live session is waiting its turn — which is the whole reason it is
+    ;; sitting there. Answering nil would make a shipping row go blank the
+    ;; moment its session ends, indistinguishable from nothing happening.
+    (= :shipping stage)
+    {:source :merge :phase (or (ship-substate sessions) :queued)}
+
+    :else
+    ;; Filter to the ACTIVELY-EXECUTING autonomous sessions before selecting one:
+    ;; a workstream can hold several live autonomous sessions, and taking the
+    ;; first live one would answer nil whenever a parked or queued session
+    ;; happened to sort ahead of the running one.
+    (when-let [s (first (filter (every-pred autonomous? working?) sessions))]
+      {:source :session :phase (get-in s [:autonomy :phase]) :session (:name s)})))

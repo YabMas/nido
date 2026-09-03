@@ -14,7 +14,12 @@
 
 (Kind WorkstreamRow
   "One workstream as a surface shows it: its label, where it stands, whether it needs a person,
-   and how engaged it is.
+   how engaged it is, and what is underway against it right now.
+
+   ENGAGEMENT AND ACTIVITY ARE TWO FACETS, not one. Engagement says whether anyone is engaged
+   and whether they are waiting on you; activity says which of the things that can be underway
+   IS. A row commonly carries an engagement and no activity — a human is in the session and has
+   started nothing nido can name — and that is the resting state rather than a gap.
 
    DERIVED, never stored. A row is recomputed from the workstream and its sessions every time,
    which is why a board cannot show a stage the records do not support.")

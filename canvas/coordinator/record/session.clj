@@ -127,4 +127,11 @@
   (Operation ship-substate
     "Where a shipping workstream is in the merge lane, from its live autonomous sessions."
     {:signature [:=> [:catn [:sessions [:sequential Session]]] [:maybe :keyword]]
-     :delegates [live? autonomous?]}))
+     :delegates [live? autonomous?]})
+  (Operation doing
+    "Which single source says what this workstream is doing right now — a held activity claim,
+     the merge lane, or a live autonomous session — under a TOTAL precedence, so that exactly
+     one ever answers. That totality is the point: before it, a workstream could be described
+     two ways at once by callers that never met. Pure; the claim arrives as an argument."
+    {:signature [:=> [:catn [:opts :map]] [:maybe :map]]
+     :delegates [ship-substate working? autonomous?]}))
