@@ -12,6 +12,8 @@
    [nido.design.check :as design]
    [nido.platform.config :as config]
    [nido.platform.task-args :as task-args]
+   [nido.coordinator.record.session :as csession]
+   [nido.coordinator.record.workstream :as cws]
    [nido.session.lifecycle :as lifecycle]
    [nido.vsdd.jj :as jj]))
 
@@ -71,6 +73,23 @@
   (let [code (apply check args)]
     (when-not (zero? code) (System/exit code))))
 
+(defn- workstream-scope
+  "The selection the workstream running in `cwd` settled on, or nil.
+
+   The baseline round is the one round that reads the code before deciding which part of the
+   declaration governs its area, and it records that decision as `:scope`. Every later session
+   on the workstream is briefed with exactly that part — and a diff shown at a different width
+   than the briefing answers a question nobody asked.
+
+   nil outside a session, and nil before the workstream is baselined: the round whose job is to
+   establish a scope cannot be handed one."
+  [cwd]
+  (try
+    (when-let [{:keys [project session]} (lifecycle/session-from-cwd cwd)]
+      (when-let [ws-id (csession/workstream-id-for (keyword project) session)]
+        (:scope (cws/latest-entry (keyword project) ws-id :baseline))))
+    (catch Throwable _ nil)))
+
 (defn- materialize-spec-dirs!
   "Write the spec dirs as they stood at `rev` into a fresh directory, and answer it.
 
@@ -114,7 +133,10 @@
       ;; `design/diff` says :unmodelled for itself, and two paths to one answer is how the
       ;; sentence came to be written twice in this function.
       (if-let [{:keys [spec-dirs select]} (design/design-of project worktree)]
-        (let [scope    (or (:scope opts) select)
+        ;; explicit flag, then the workstream's settled scope, then the project's default.
+        ;; The middle one is the point: a session briefed with one part of the declaration is
+        ;; shown its change at the same width.
+        (let [scope    (or (:scope opts) (workstream-scope cwd) select)
               base-dir (materialize-spec-dirs! worktree from spec-dirs)]
           (if-not base-dir
             (do (println (str "design:diff · could not read " project " at " from

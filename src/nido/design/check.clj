@@ -326,26 +326,39 @@
    separate runs, so that is the only false positive available to it — and the alternative, a
    structural model diff, belongs in fukan rather than here.
 
-   A base that declares no design is not an error. A branch that ADOPTS fukan changes the
-   declared design from nothing to something, and that is exactly what a reviewer wants to see."
+   Adoption and DELETION are both changes, and neither end declaring one is what `:unmodelled`
+   means. A branch that adds a canvas changed the declaration from nothing to something; one
+   that removes the last of it changed it the other way, which is the change a reviewer would
+   least like to have reported as \"this project declares no design\"."
   ([project-name worktree base-dir] (diff project-name worktree base-dir nil))
   ([project-name worktree base-dir scope]
    (let [head (describe project-name worktree scope)]
-     (case (:status head)
-       :unmodelled  {:status :unmodelled}
-       :undecidable {:status :undecidable
-                     :error  (str "this branch's design did not render: " (:error head))}
-       (let [base      (describe project-name base-dir scope)
-             base-doc  (case (:status base)
-                         :described  (:document base)
-                         :unmodelled ""
-                         ::failed)
-             head-doc  (:document head)]
-         (if (= ::failed base-doc)
+     (if (= :undecidable (:status head))
+       {:status :undecidable
+        :error  (str "this branch's design did not render: " (:error head))}
+       (let [base     (describe project-name base-dir scope)
+             base-doc (case (:status base)
+                        :described  (:document base)
+                        :unmodelled ""
+                        ::failed)
+             ;; An unmodelled HEAD is not by itself an unmodelled diff. A branch that DELETES
+             ;; the last declaration changed the declared design from something to nothing —
+             ;; the mirror of adopting fukan, and the change a reviewer would least like to
+             ;; miss. Only when BOTH ends declare nothing is there no design here to have
+             ;; changed.
+             head-doc (if (= :unmodelled (:status head)) "" (:document head))]
+         (cond
+           (= ::failed base-doc)
            {:status :undecidable
             :error  (str "the base's design did not render: " (:error base))}
-           (if (= base-doc head-doc)
-             {:status :unchanged :digest (digest-of head-doc)}
-             (if-let [d (unified base-doc head-doc)]
-               {:status :changed :diff d :digest (digest-of head-doc)}
-               {:status :undecidable :error "the two renderings could not be diffed"}))))))))
+
+           (= "" base-doc head-doc)
+           {:status :unmodelled}
+
+           (= base-doc head-doc)
+           {:status :unchanged :digest (digest-of head-doc)}
+
+           :else
+           (if-let [d (unified base-doc head-doc)]
+             {:status :changed :diff d :digest (digest-of head-doc)}
+             {:status :undecidable :error "the two renderings could not be diffed"})))))))

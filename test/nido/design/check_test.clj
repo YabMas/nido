@@ -251,9 +251,18 @@
         (is (= :changed status))
         (is (str/includes? diff "+(Band A)"))))))
 
-(deftest a-project-with-no-design-here-has-no-diff-to-show
+(deftest a-project-with-no-design-at-either-end-has-no-diff-to-show
   (with-redefs [design/describe (rendering {})]
-    (is (= {:status :unmodelled} (design/diff "p" "/head" "/base")))))
+    (is (= {:status :unmodelled} (design/diff "p" "/head" "/base"))
+        "neither end declares one, so there is no design here to have changed")))
+
+(deftest deleting-the-last-declaration-is-a-change-not-an-unmodelled-project
+  (with-redefs [design/describe (rendering {"/base" "(Band A)"})]
+    (let [{:keys [status diff]} (design/diff "p" "/head" "/base")]
+      (is (= :changed status)
+          "the mirror of adopting fukan, and the change a reviewer would least like to see
+           reported as `this project declares no design`")
+      (is (str/includes? diff "-(Band A)")))))
 
 (deftest an-end-that-would-not-render-is-undecidable-and-says-which-end
   (testing "the two failures need different fixes — a branch that broke its own canvas and a
