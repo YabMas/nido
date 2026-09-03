@@ -14,6 +14,8 @@
   (:require
    [babashka.fs :as fs]
    [clojure.string :as str]
+   [nido.coordinator.daemon.pid :as daemon-pid]
+   [nido.coordinator.record.activity :as activity]
    [nido.coordinator.record.session :as csession]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as ws]
@@ -343,6 +345,272 @@
    loop that never returns.\""
   "30m")
 
+(def ^:private record-loop-kinds
+  "The record loops name themselves with a string that reaches the terminal and
+   the run id; the claim's vocabulary is keywords. Mapped here rather than
+   built with (keyword (str kind \"-round\")), so that adding a loop whose claim
+   nobody enumerated fails loudly instead of writing a kind no surface renders."
+  {"baseline" :baseline-round
+   "design"   :design-round})
+
+(def ^:private kind-labels
+  "What each activity is called on a terminal. The claim's :kind is a keyword and
+   a person is not reading keywords, so the two are kept apart here rather than
+   printing (name kind) at the point of refusal."
+  {:diff-review    "a branch review"
+   :baseline-round "a baseline round"
+   :design-round   "a design round"})
+
+(defn- target-words
+  "What a claim says it is judging, in words. Empty of named options is not
+   nothing — it is the command's default target — so it says so rather than
+   printing an empty map at a person."
+  [target]
+  (let [named (->> target
+                   (remove (comp nil? val))
+                   (map (fn [[k v]] (str (name k) " " v)))
+                   sort)]
+    (if (seq named) (str/join ", " named) "the default")))
+
+(defn ^{:malli/schema [:=> [:cat :any :any [:? :any]] :string]}
+  refusal-lines
+  "What to tell someone whose workstream is already busy with something else —
+   a different round, or the same round of a different thing.
+
+   Pure in the arity that takes `daemon-pid`, and it says what is running rather
+   than that something is: `refused` with no subject is the message that sends a
+   person to `ps`. The holder's own report path goes on the line because it is
+   the thing they will want next.
+
+   The pid is display, and the LAST line is where that distinction bites. A
+   mechanical round runs inside the coordinator daemon, which hosts every other
+   workstream it is driving, so `kill` there ends all of them — the instruction
+   would be the most destructive thing on the screen. Compared against the
+   daemon's own pid file rather than guessed at from the kind: a round is
+   daemon-hosted because of WHO ran it, and the same stage run by hand is an
+   ordinary process a person may end."
+  ([mine their] (refusal-lines mine their (daemon-pid/read)))
+  ;; `coordinator-pid` rather than `daemon-pid`, which is this namespace's alias
+  ;; for the pid file reader — a local of that name reads as a shadow of it.
+  ([mine their coordinator-pid]
+   (str "refused: this workstream is already running "
+        (get kind-labels (:kind their) (str (:kind their)))
+        " (pid " (:pid their) ", since " (:started-at their) ").\n"
+        (if (= (:kind mine) (:kind their))
+          ;; Same round, different subject. Naming both is the whole line: the
+          ;; reader asked for one baseline and something else is verifying
+          ;; another, which reads as `busy` and is not.
+          (str "  it is judging " (target-words (:target their))
+               " and you asked for " (target-words (:target mine))
+               " — one tree cannot answer both.\n")
+          (str "  " (get kind-labels (:kind mine) (str (:kind mine)))
+               " would review the same tree from underneath it.\n"))
+        (when-let [rp (:report-path their)] (str "  its report: " rp "\n"))
+        (if (and coordinator-pid (= (long coordinator-pid) (:pid their)))
+          (str "  the coordinator daemon is running it (pid " (:pid their)
+               ") — ending that process would take down every other workstream"
+               " it is driving, so wait for this one to finish.")
+          (str "  end it with `kill " (:pid their) "`, or wait for it to finish.")))))
+
+(defn- terminal-status
+  "The status a run has ENDED on, read off its own report, or nil while it is
+   still running — or when the report cannot be read at all, which is
+   indistinguishable from here and asks the same thing of every caller: do not
+   treat this run as finished."
+  [report-path]
+  (let [s (:status (frontend/read-report report-path))]
+    (when (and (string? s) (not= "running" s)) (keyword s))))
+
+(defn- holder-outcome
+  "The terminal status the run we followed ended on, read off its own report, or
+   :detached when the report cannot say.
+
+   A JOINER'S RETURN IS A WORK OUTCOME, not a description of what it did. The
+   record loops have an in-process caller — `lane.drive/run-stage!` — that reads
+   the returned status through `pipeline/disposition`, so a follower reporting
+   that it followed makes a holder's :sufficient into an unrecognised terminal,
+   and an unrecognised terminal parks a blocker. The holder already wrote the
+   answer by atomic rename; this reads it rather than inventing one.
+
+   :detached only when the report is unreadable or still says `running` — the
+   holder died mid-write, or its path was never published. That is a fact about
+   the machinery rather than about the work, and `pipeline` classifies it as
+   one.
+
+   Whether the run this names was really the claim's holder is the caller's
+   business rather than this fn's: a payload can be read while the claim changes
+   hands, and `join-or-refuse!` decides that from what holds the claim once
+   following stops. See the `superseded?` binding there."
+  [report-path]
+  (or (terminal-status report-path) :detached))
+
+(defn ^{:malli/schema [:=> [:cat :map :any :ProjectName :WorkstreamId] :any]}
+  join-or-refuse!
+  "What a run does when the workstream is already claimed: JOIN the holder when
+   it is doing the same work, refuse when it is doing something else.
+
+   The split is about what the second caller wanted. Asking for the review that
+   is already running means you want to see it — so you are shown it, live, and
+   Ctrl-C leaves it running. Asking for DIFFERENT work means you want something
+   the holder is not doing, and running it anyway would put two agents on one
+   tree; that is the case where a person has to choose, so it is handed back to
+   them rather than guessed at.
+
+   SAME WORK IS KIND AND TARGET, and the target half is not a refinement. A
+   baseline round names which baseline with :seq and which tree with :code-cwd,
+   a diff review names its :base — so a joiner that compared kinds alone would
+   attach to a round verifying a different entry, watch it finish, and report a
+   review of the thing it asked about that nobody performed.
+
+   `mine` is what the caller asked for: {:kind :target :render-fn}. `render-fn`
+   is the frame it would have painted, and it is the right one to follow with
+   precisely because a join happens only when the kinds agree — a baseline round
+   joined by a baseline round is painted by the record frame, not by a diff
+   review's.
+
+   Returns the holder's own terminal status after a join, or :refused."
+  [{:keys [kind target render-fn] :as mine} their project ws-id]
+  (if (and (= kind (:kind their)) (= target (:target their)))
+    (do
+      (println (str "attached to " (:run-id their) " (pid " (:pid their)
+                    ", since " (:started-at their) ")"
+                    " — Ctrl-C detaches, the run keeps going"))
+      (frontend/follow!
+       (cond-> {:report-path (:report-path their)
+                ;; The lock is still the liveness — but the question is whether
+                ;; THIS holder has it, not whether anybody does. A follower that
+                ;; asked the workstream-wide question would keep painting a
+                ;; finished run's frozen report for as long as its replacement
+                ;; ran, and call it live. Reading the claim answers both at once.
+                :stop? #(not= (:run-id their)
+                              (:run-id (activity/read-live project ws-id)))}
+         render-fn (assoc :render-fn render-fn)))
+      ;; WHY following stopped is what says whether the run we watched was the
+      ;; one that held the claim. Two things end a follow, and only one of them
+      ;; leaves a verdict this invocation may report:
+      ;;
+      ;;   the claim is free      — the holder we followed finished and let go,
+      ;;                            so its report is the answer to this request.
+      ;;   another run holds it   — the payload we attached to was the PREVIOUS
+      ;;                            holder's, read while the claim changed hands
+      ;;                            and before the replacement published. That
+      ;;                            run reached its verdict before this request
+      ;;                            existed, and adopting it would report a
+      ;;                            review nobody asked for.
+      ;;
+      ;; Asked here rather than at attach time because a terminal report cannot
+      ;; answer it: a run finalizes its report and then holds the claim through
+      ;; its post-processing, so `already finished` is the normal state of a
+      ;; holder that is still working.
+      (let [superseded? (when-let [now (activity/read-live project ws-id)]
+                          (not= (:run-id their) (:run-id now)))
+            status      (if superseded? :detached (holder-outcome (:report-path their)))]
+        (println (str "detached — " (:run-id their)
+                      (cond
+                        superseded?          " was replaced while this watched it"
+                        (= :detached status) " is no longer running, and left no terminal status"
+                        :else                (str " ended " (name status)))))
+        status))
+    (do (binding [*out* *err*] (println (refusal-lines mine their)))
+        :refused)))
+
+(def ^:private unconfirmed-holder-attempts
+  "How many times to take the claim again when the holder we lost to cannot be
+   confirmed. A hair, because every one of these windows is a read or two wide
+   and closes on its own: either the workstream is free now and the retry simply
+   runs, or somebody is holding it, has published, and the retry is handed their
+   claim."
+  3)
+
+(def ^:private unconfirmed-holder-wait-ms 100)
+
+(def ^:private unconfirmed-holder-lines
+  "What to say when the claim is held by something we cannot pin down: the
+   holder took the lock and has not published yet, ended between our failed
+   attempt and our read, or handed the claim on while we read it. Rare, and
+   printed only after retrying — but it has to be printed, because the
+   alternative was a review command that reviewed nothing, joined nobody, said
+   nothing and exited 0."
+  (str "refused: this workstream is claimed, but the holder could not be"
+       " confirmed — it ended, handed the claim on, or had not yet said what it"
+       " was running.\n"
+       "  nothing was reviewed — run it again."))
+
+(defn- confirmed-holder
+  "`their` when it is still the claim's holder and its run has not already
+   ended, or nil when nothing may be decided on it.
+
+   `read-live` has ONE accepted window, and it is the one that matters here: a
+   payload read while the claim changes hands is the PREVIOUS holder's, one
+   activity stale. Every decision downstream is identity-sensitive — a join
+   adopts that run's terminal status as the answer to a request it predates, and
+   a refusal names its pid as the process to end — so the payload is confirmed
+   rather than trusted.
+
+   Read again and require the SAME run. That catches a replacement which has
+   already published its own claim, which is the shape that can actually mislead
+   a caller: it would join or name a run that no longer owns anything.
+
+   A FINISHED REPORT IS NOT A DEAD HOLDER, and requiring otherwise was wrong. A
+   run finalizes its report and then keeps the claim through its post-processing
+   — the diff loop's design verdict launches an agent and can hold it for
+   minutes — so `report is terminal` rejected a holder that was working, and the
+   second caller was told to kill a run doing exactly what it should. The window
+   it did catch, where a replacement holds the lock and has not published so both
+   reads answer with the run that ended, is self-correcting: a follower stops on
+   the same identity test the moment the replacement publishes, and the cost is
+   one frame of a finished report rather than a refusal a person has to act on.
+
+   Unconfirmed is not refused. It is `ask again`, which is what the caller's
+   loop does, and it is the same fail-toward-absent direction the reader
+   protocol already takes: under-report a live claim for one poll rather than
+   act on a dead one."
+  [their project ws-id]
+  (when (and their
+             (= (:run-id their) (:run-id (activity/read-live project ws-id))))
+    their))
+
+(defn ^{:malli/schema [:=> [:cat :map [:=> [:cat] :any]] :any]}
+  claiming
+  "Run `f` holding this workstream's activity claim, or hand the caller to
+   whoever already has it.
+
+   A review OUTSIDE a nido session takes no claim and simply runs, which is the
+   same tolerance `run-context` already reports: there is no workstream to be the
+   singleton of, so there is nothing to exclude and nothing for a second caller
+   to join. Losing the claim is not a failure of the run — it is the run finding
+   out that the work is already being done — so the caller gets :detached or
+   :refused rather than an exception.
+
+   `:target` says WHAT this run is judging, in the caller's own terms, and it is
+   published with the claim because a second caller cannot otherwise tell the
+   round it asked for from another round of the same kind.
+
+   A refusal is read from `refused?` and never from the holder it carries. The
+   two come apart: a claim can be lost to a holder that exits before its payload
+   is read, and a refusal with nothing in it is the one result that must not be
+   mistaken for `f` having run — nothing did. A holder that cannot be confirmed
+   is the same shape of answer: take the claim again rather than decide anything
+   about a run that may already be over."
+  [{:keys [cwd kind target run-id report-path render-fn]} f]
+  (if-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
+    (loop [attempts unconfirmed-holder-attempts]
+      (let [res (activity/with-claim project ws-id
+                  {:kind kind :target target
+                   :run-id run-id :report-path report-path}
+                  f)]
+        (if-not (activity/refused? res)
+          res
+          (if-let [their (confirmed-holder (activity/refused res) project ws-id)]
+            (join-or-refuse! {:kind kind :target target :render-fn render-fn}
+                             their project ws-id)
+            (if (pos? attempts)
+              (do (Thread/sleep unconfirmed-holder-wait-ms)
+                  (recur (dec attempts)))
+              (do (binding [*out* *err*] (println unconfirmed-holder-lines))
+                  :refused))))))
+    (f)))
+
 (defn ^{:malli/schema [:=> [:cat :Path] :any]}
   run-context
   "What this run can and cannot reach, as {:has [..] :missing [..]}.
@@ -366,9 +634,15 @@
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   loop-cmd* [{:keys [cwd base max-iters dry-run? budget]}]
-  (let [cwd        (or cwd
-                       (lifecycle/worktree-from-cwd)
-                       (System/getProperty "user.dir"))
+  (let [;; Through the home-aware resolution WHETHER OR NOT a cwd was named. A
+        ;; session home is a place an agent legitimately stands, and passing one
+        ;; explicitly used to skip worktree-from-cwd entirely — so the run
+        ;; resolved no workstream, took the claimless fallback, and two
+        ;; invocations given the same home both reviewed the same worktree with
+        ;; neither able to see the other. The record loops already resolve this
+        ;; way; the diff loop did not.
+        given      (or cwd (System/getProperty "user.dir"))
+        cwd        (or (lifecycle/worktree-from-cwd given) given)
         base       (or base "main")
         run-id     (str "review-" (random-uuid))
         clock      #(Instant/now)
@@ -409,24 +683,33 @@
             (println (str "review-loop: running WITHOUT "
                           (str/join ", " (:missing context))
                           " — this run cannot skip converged layers, judge"
-                          " against a design, or record what it found")))
-        final  (frontend/with-live-display
-                 {:report-atom report-atom :report-path report-path :clock clock}
-                 (fn [emit] (rloop/run-loop (assoc config :emit emit))))
-        status (:status final)
-        ws-id  (append-review-entry! cwd final @report-atom report-path)]
-    (println (str "review-loop: " (name status) " · report " report-path))
-    (when-let [b (append-blocker! cwd final)]
-      (println (str "review-loop: ⚠ " (:summary b)))
-      (println "  → answer it at the workstream gate; the loop has no move for it"))
-    (let [outcome (append-design-verdict! cwd final @report-atom config)]
-      (record-verdict! outcome report-atom report-path)
-      (print-verdict! (:verdict outcome)))
-    ;; Last, so the analysis session finds everything this run wrote — the
-    ;; report, the :review ledger entry and the design verdict are all on disk
-    ;; by the time the envelope exists.
-    (queue-analysis! cwd final @report-atom report-path config ws-id)
-    status))
+                          " against a design, or record what it found")))]
+    ;; Everything from here runs under the claim, which is what makes a second
+    ;; invocation join this run instead of reviewing the same tree from
+    ;; underneath it. A caller that could not take it never reaches the engine.
+    (claiming
+     {:cwd cwd :kind :diff-review :run-id run-id :report-path report-path
+      ;; WHAT this reviews, so a second invocation against another base is
+      ;; refused rather than attached to a review of a different diff.
+      :target {:base base}}
+     (fn []
+       (let [final  (frontend/with-live-display
+                      {:report-atom report-atom :report-path report-path :clock clock}
+                      (fn [emit] (rloop/run-loop (assoc config :emit emit))))
+             status (:status final)
+             ws-id  (append-review-entry! cwd final @report-atom report-path)]
+         (println (str "review-loop: " (name status) " · report " report-path))
+         (when-let [b (append-blocker! cwd final)]
+           (println (str "review-loop: ⚠ " (:summary b)))
+           (println "  → answer it at the workstream gate; the loop has no move for it"))
+         (let [outcome (append-design-verdict! cwd final @report-atom config)]
+           (record-verdict! outcome report-atom report-path)
+           (print-verdict! (:verdict outcome)))
+         ;; Last, so the analysis session finds everything this run wrote — the
+         ;; report, the :review ledger entry and the design verdict are all on
+         ;; disk by the time the envelope exists.
+         (queue-analysis! cwd final @report-atom report-path config ws-id)
+         status)))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   loop-cmd [& args]
@@ -515,57 +798,14 @@
         (some #(when (keyword? %) (name %)) (rest parts))
         (pr-str k))))
 
-(defn- record-loop-cmd*
-  "Drive a record pipeline through the engine inside the live frame.
-
-   No default cap, for the same reason the diff loop has none: the run ends when
-   it converges, escalates, retreats, stalls or fails. `:max-iters` only caps it
-   when a caller asks. `:budget` bounds each amender launch — with the iteration
-   count uncapped, that per-launch wall clock is the only thing between a hung
-   claude and a loop that never returns.
-
-   Two working directories, and keeping them apart is the whole of `:code-cwd`.
-   `:cwd` anchors the LEDGER — it resolves the session and so the workstream
-   whose records this run reads and amends. `:code-cwd` is where the agents
-   read, and it defaults to `:cwd` because they are usually the same tree.
-
-   They are not the same tree when a baseline describes an area BEFORE a change
-   that is already written. A baseline is supposed to be fillable without
-   knowing the fix; judged against a worktree that carries the fix, it is told
-   its own subject does not exist — the round reports the change's new modules
-   as things the baseline failed to mention, and an amender asked to repair that
-   folds the change INTO the baseline it was supposed to be judged against. The
-   record then describes the post-change world, and every relation the design
-   declares to it is answered against a premise that already contains the
-   answer.
-
-   So the revision is an axis of its own, separate from the workstream: point
-   `:code-cwd` at a checkout of the base and the baseline is judged against the
-   area as it was, while the ledger stays where the work is.
-
-   The final block prints from a `finally`, so a loop that throws still leaves
-   its rounds, its weakenings and its objections on screen."
-  [{:keys [kind pipeline finding-key remedies epilogue]}
-   {:keys [cwd code-cwd max-iters dry-run? budget baseline]
-    :or   {budget default-launch-budget}}]
-  (let [;; Through the home-aware union whether the caller named a directory or
-        ;; not. A session home is a place an agent legitimately stands — it is
-        ;; where the briefing and the MCP config are, and every other cwd-based
-        ;; verb accepts one — but `project+ws-from-cwd` resolves only inside the
-        ;; worktree. Passing :cwd explicitly used to skip the union entirely, so
-        ;; naming a home that the no-argument form would have accepted failed as
-        ;; :no-workstream, advising the caller to go somewhere they already were.
-        given  (or cwd (System/getProperty "user.dir"))
-        cwd    (or (lifecycle/worktree-from-cwd given) given)
-        run-id (str kind "-loop-" (random-uuid))
-        clock  #(Instant/now)
-        title  (record-loop-title cwd kind)
-        report-path (str (fs/path (cstate/run-dir run-id) "report.json"))
-        report-atom (atom (report/init {:run-id run-id :cwd cwd :base nil
-                                        :started-at (str (clock))}))
-        plain  (frontend/plain?)
-        emit   (frontend/emit-fn report-atom report-path clock plain)
-        final  (try
+(defn- record-loop-body
+  "One record round, from the engine to the last printed line. Split out of
+   `record-loop-cmd*` only so the claim can wrap it — everything here is what the
+   command always did."
+  [{:keys [cwd code-cwd kind run-id clock title report-path report-atom
+           plain emit pipeline finding-key max-iters dry-run? budget baseline
+           remedies epilogue]}]
+  (let [final  (try
                  (frontend/with-live-frame
                    {:frame-fn #(render/record-frame @report-atom % {:title title})
                     :clock clock :plain? plain}
@@ -616,6 +856,88 @@
                              (str "unrecognised terminal status: " status))))
     (when epilogue (epilogue final))
     status))
+
+(defn- record-loop-cmd*
+  "Drive a record pipeline through the engine inside the live frame.
+
+   No default cap, for the same reason the diff loop has none: the run ends when
+   it converges, escalates, retreats, stalls or fails. `:max-iters` only caps it
+   when a caller asks. `:budget` bounds each amender launch — with the iteration
+   count uncapped, that per-launch wall clock is the only thing between a hung
+   claude and a loop that never returns.
+
+   Two working directories, and keeping them apart is the whole of `:code-cwd`.
+   `:cwd` anchors the LEDGER — it resolves the session and so the workstream
+   whose records this run reads and amends. `:code-cwd` is where the agents
+   read, and it defaults to `:cwd` because they are usually the same tree.
+
+   They are not the same tree when a baseline describes an area BEFORE a change
+   that is already written. A baseline is supposed to be fillable without
+   knowing the fix; judged against a worktree that carries the fix, it is told
+   its own subject does not exist — the round reports the change's new modules
+   as things the baseline failed to mention, and an amender asked to repair that
+   folds the change INTO the baseline it was supposed to be judged against. The
+   record then describes the post-change world, and every relation the design
+   declares to it is answered against a premise that already contains the
+   answer.
+
+   So the revision is an axis of its own, separate from the workstream: point
+   `:code-cwd` at a checkout of the base and the baseline is judged against the
+   area as it was, while the ledger stays where the work is.
+
+   The final block prints from a `finally`, so a loop that throws still leaves
+   its rounds, its weakenings and its objections on screen."
+  [{:keys [kind pipeline finding-key remedies epilogue]}
+   ;; `seq-n`, not `seq` — see baseline-cmd*. Read here only to publish it as
+   ;; the claim's target; which entry it names is baseline-at's business.
+   {:keys [cwd code-cwd max-iters dry-run? budget baseline] seq-n :seq
+    :or   {budget default-launch-budget}}]
+  (let [;; Through the home-aware union whether the caller named a directory or
+        ;; not. A session home is a place an agent legitimately stands — it is
+        ;; where the briefing and the MCP config are, and every other cwd-based
+        ;; verb accepts one — but `project+ws-from-cwd` resolves only inside the
+        ;; worktree. Passing :cwd explicitly used to skip the union entirely, so
+        ;; naming a home that the no-argument form would have accepted failed as
+        ;; :no-workstream, advising the caller to go somewhere they already were.
+        given  (or cwd (System/getProperty "user.dir"))
+        cwd    (or (lifecycle/worktree-from-cwd given) given)
+        run-id (str kind "-loop-" (random-uuid))
+        clock  #(Instant/now)
+        title  (record-loop-title cwd kind)
+        report-path (str (fs/path (cstate/run-dir run-id) "report.json"))
+        report-atom (atom (report/init {:run-id run-id :cwd cwd :base nil
+                                        :started-at (str (clock))}))
+        plain  (frontend/plain?)
+        emit   (frontend/emit-fn report-atom report-path clock plain)]
+    ;; Under the claim from here, exactly as the diff loop is: two record rounds
+    ;; amending one workstream's ledger at once would each judge a record the
+    ;; other is rewriting.
+    (claiming
+     {:cwd cwd
+      :kind (or (record-loop-kinds kind)
+                (throw (ex-info "Record loop has no activity kind"
+                                {:kind kind :known (vec (keys record-loop-kinds))})))
+      :run-id run-id :report-path report-path
+      ;; The two axes a record round is aimed along: WHICH record, and which
+      ;; tree it is judged against. A round of the same kind on either other
+      ;; value is different work, and joining it would report a verification of
+      ;; the entry nobody verified.
+      ;; The EFFECTIVE tree, which is what the pipeline judges with — a round
+      ;; given no :code-cwd and one given its own worktree do identical work, and
+      ;; publishing the raw value made them look like different targets, so the
+      ;; second was refused as other work rather than joined.
+      :target {:seq seq-n :code-cwd (or code-cwd cwd)}
+      ;; The frame this loop paints for itself, so an invocation that finds the
+      ;; round already running watches it in the record frame rather than
+      ;; through a diff review's header.
+      :render-fn (fn [report now] (render/record-frame report now {:title title}))}
+     (fn []
+       (record-loop-body
+        {:cwd cwd :code-cwd code-cwd :kind kind :run-id run-id :clock clock
+         :title title :report-path report-path :report-atom report-atom
+         :plain plain :emit emit :pipeline pipeline :finding-key finding-key
+         :max-iters max-iters :dry-run? dry-run? :budget budget
+         :baseline baseline :remedies remedies :epilogue epilogue})))))
 
 (def ^:private baseline-remedies
   "Only :sufficient ends a run. :insufficient is a VERDICT and never a status —

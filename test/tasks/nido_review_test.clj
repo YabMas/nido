@@ -100,17 +100,33 @@
 
 (deftest loop-cmd-resolves-worktree-when-cwd-absent
   (let [seen (atom nil)]
-    (with-redefs [lifecycle/worktree-from-cwd (fn [] "/resolved/wt")
+    (with-redefs [lifecycle/worktree-from-cwd (fn [_] "/resolved/wt")
                   rloop/run-loop (fn [cfg] (reset! seen cfg) {:status :clean :history []})]
       (t/loop-cmd)
       (is (= "/resolved/wt" (:cwd @seen))))))
 
-(deftest loop-cmd-explicit-cwd-overrides-resolution
-  (let [seen (atom nil)]
-    (with-redefs [lifecycle/worktree-from-cwd (fn [] "/resolved/wt")
-                  rloop/run-loop (fn [cfg] (reset! seen cfg) {:status :clean :history []})]
-      (t/loop-cmd ":cwd" "/explicit")
-      (is (= "/explicit" (:cwd @seen))))))
+(deftest loop-cmd-resolves-an-explicit-cwd-too
+  (testing "an explicitly named cwd goes through the same home-aware resolution.
+            A session home is a place an agent legitimately stands, and skipping
+            the resolution for it meant the run found no workstream, took the
+            claimless path, and two invocations given the same home both
+            reviewed the same worktree without seeing each other."
+    (let [seen (atom nil)]
+      (with-redefs [lifecycle/worktree-from-cwd (fn [given]
+                                                  (when (= "/session/home" given) "/resolved/wt"))
+                    rloop/run-loop (fn [cfg] (reset! seen cfg) {:status :clean :history []})]
+        (t/loop-cmd ":cwd" "/session/home")
+        (is (= "/resolved/wt" (:cwd @seen))
+            "the home resolves to the worktree it belongs to")))))
+
+(deftest loop-cmd-keeps-an-explicit-cwd-that-resolves-to-nothing
+  (testing "a directory belonging to no session is still reviewed where it was
+            named — resolution refines the cwd, it does not overrule it"
+    (let [seen (atom nil)]
+      (with-redefs [lifecycle/worktree-from-cwd (fn [_] nil)
+                    rloop/run-loop (fn [cfg] (reset! seen cfg) {:status :clean :history []})]
+        (t/loop-cmd ":cwd" "/explicit")
+        (is (= "/explicit" (:cwd @seen)))))))
 
 (deftest loop-cmd-exit-maps-status
   (with-redefs [rloop/run-loop (fn [_] {:status :clean :history []})]

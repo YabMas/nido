@@ -7,7 +7,8 @@
    work plane and make it shallow."
   (:require [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
-            [canvas.coordinator.record.state :refer [Path]]
+            [canvas.coordinator.record.state :refer [Path WorkstreamId]]
+            [canvas.platform.project :refer [ProjectName]]
             [fukan.common.typing.malli]))
 
 (Module nido-review
@@ -36,6 +37,28 @@
   (Operation append-design-verdict!
     "Run the design verdict and append it as a ledger event. Best-effort throughout,"
     {:signature [:=> [:catn [:opts [:* :any]]] :any]})
+  (Operation refusal-lines
+    "What to tell someone whose workstream is already busy with something ELSE. Pure, and it
+     says WHAT is running rather than that something is — a refusal with no subject is the
+     message that sends a person to `ps`. It offers `kill` only against a process the reader
+     owns: a round hosted by the coordinator daemon shares it with everything else that daemon
+     drives."
+    {:signature [:=> [:catn [:mine :any] [:their :any] [:coordinator-pid [:? :any]]] :string]})
+  (Operation join-or-refuse!
+    "The branch a second invocation takes: JOIN the holder when it is doing the same work,
+     refuse when it is doing something else — same work being the same KIND of round on the same
+     TARGET. Asking for the round already running means you want to see it, so a join returns
+     the holder's own terminal status; asking for anything else means you want work the holder
+     is not doing, and running it anyway would put two agents on one tree."
+    {:signature [:=> [:catn [:mine :map] [:their :any] [:project ProjectName]
+                            [:ws-id WorkstreamId]] :any]
+     :delegates [refusal-lines]})
+  (Operation claiming
+    "Run a command holding the workstream's activity claim, or hand the caller to whoever has
+     it. A review outside a nido session takes no claim and simply runs: there is no workstream
+     to be the singleton of."
+    {:signature [:=> [:catn [:opts :map] [:f [:=> [:catn] :any]]] :any]
+     :delegates [join-or-refuse!]})
   (Operation loop-cmd*
     "The `loop-cmd*` entry point."
     {:signature [:=> [:catn [:opts [:* :any]]] :any]})
