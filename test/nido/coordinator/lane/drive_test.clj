@@ -279,6 +279,22 @@
         (is (nil? (ws/latest-entry :brian id :blocker))
             "nothing to tell a human about")))))
 
+(deftest a-refused-stage-defers-instead-of-spending-the-retry-budget
+  ;; A review that holds the claim runs for minutes; the whole retry budget is
+  ;; fifteen seconds. Feeding contention into it would park a blocker against a
+  ;; perfectly healthy competing round, which is the reverse of what the budget
+  ;; is for.
+  (with-tmp
+    (fn []
+      (let [id (a-ws)
+            f  (stage-returning [:refused])
+            r  ((:run f) :brian id)]
+        (is (= 1 @(:calls f)) "asked once, then left it for the next tick")
+        (is (= [] @(:slept f)) "no backoff — this Run is not waiting for anything")
+        (is (= :claimed (:skip r)))
+        (is (nil? (ws/latest-entry :brian id :blocker))
+            "nothing to tell a human about: somebody else is reviewing")))))
+
 (deftest a-decided-round-is-never-run-twice
   ;; :disputed is the round SAYING something. Retrying it would run a decided
   ;; stage again and could only produce the same answer.

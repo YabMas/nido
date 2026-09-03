@@ -587,6 +587,20 @@
    ;; with the branch; the round just reviewed a state that stopped being
    ;; current, so the answer is to run it again, not to ask a human anything.
    :workspace-drifted    :retry
+
+   ;; The stage attached to a holder doing its work, and that run ended without
+   ;; a readable terminal. Nothing was answered and the claim is gone, so the
+   ;; next attempt runs the stage itself — machinery, like every other :retry
+   ;; here. Defaulted, it would escalate, and a blocker written because somebody
+   ;; else was reviewing is the wrong fact stated in the most believable place.
+   ;;
+   ;; :refused is deliberately NOT here. A refusal means somebody else is
+   ;; holding the workstream RIGHT NOW, which no amount of retrying inside one
+   ;; stage can change — a review runs for many minutes and the whole retry
+   ;; budget is fifteen seconds, so spending it on contention parks a blocker
+   ;; against a perfectly healthy round. `drive/run-stage!` answers that one
+   ;; before dispositions are consulted, by deferring to the next tick.
+   :detached             :retry
    :max-iters            :escalate  ; a cap somebody asked for was reached
    :warden-indeterminate :escalate
    :arbiter-indeterminate :escalate  ; pre-rename, still readable in old ledgers

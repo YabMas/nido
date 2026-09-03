@@ -252,7 +252,14 @@
    And parking is itself the stop. A halt makes the workstream :blocked, whose
    next action is a person's, so `fireable` skips it: the driver does not need to
    be told to leave a parked workstream alone, because the ledger already says
-   so."
+   so.
+
+   A REFUSED STAGE IS NOT A SETTLED ONE. The workstream is shared with whatever
+   a person is running by hand, and a round that holds its activity claim runs
+   for minutes — longer than every backoff here put together. So a refusal
+   leaves this loop without consuming an attempt: the retry budget is for
+   machinery that failed, and contention is neither a failure nor a thing this
+   Run can outwait. The next tick asks again."
   ([project ws-id stage] (run-stage! project ws-id stage {}))
   ;; :cwd and :sleep-fn are injection seams. A caller that already knows where
   ;; the workstream lives should not make this re-derive it, and a test should
@@ -280,6 +287,12 @@
                                     :detail (when (> attempt 1)
                                               (str "attempt " attempt " of " max-attempts))})]
            (cond
+             ;; Somebody else holds the claim and is doing different work, so
+             ;; the stage never ran. Neither a failure to retry nor an answer to
+             ;; park on — the next tick is where it belongs.
+             (= :refused outcome)
+             {:skip :claimed :stage stage}
+
              ;; The round said something. Whatever it said, it is not a machine
              ;; failure, so trying again would be running a decided stage twice.
              (not= :retry (pipeline/disposition outcome))

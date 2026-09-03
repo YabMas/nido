@@ -440,6 +440,14 @@
     (is (contains? @#'p/disposition-of-status s)
         (str s " must be named in the table"))))
 
+(deftest a-holder-that-left-no-terminal-is-retried-not-escalated
+  (testing "a mechanical stage shares its workstream with whatever a person is
+            running by hand, so it can attach to a holder that ends without a
+            readable terminal. Nothing was answered and the claim is gone —
+            defaulted, it would park a blocker saying the stage escalated
+            because somebody else was reviewing"
+    (is (= :retry (p/disposition :detached)))))
+
 (deftest an-unknown-terminal-escalates-rather-than-advancing
   ;; The fail-safe direction. Advancing on an outcome nobody has understood is
   ;; how a pipeline steps forward over a thing that went wrong.
