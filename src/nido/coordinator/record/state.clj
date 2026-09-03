@@ -9,7 +9,7 @@
        queue/<uuid>.edn
      ~/.nido/projects/<project>/triggers.edn
      ~/.nido/runs/<run-id>/{run.edn, _run-status.edn, artifacts/, agent.log, session-home}
-     ~/.nido/projects/<project>/workstreams/<ws-id>/{workstream.edn, entries/, sessions/<name>/session.edn}
+     ~/.nido/projects/<project>/workstreams/<ws-id>/{workstream.edn, activity.lock, activity.edn, entries/, sessions/<name>/session.edn}
      ~/.nido/projects/<project>/_pre-unification/   (legacy run/ticket records archived by migration)"
   (:require [babashka.fs :as fs]
             [clojure.string :as str]
@@ -105,6 +105,27 @@
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :Path]}
   workstream-edn-path [project ws-id]
   (str (fs/path (workstream-dir project ws-id) "workstream.edn")))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :Path]}
+  activity-lock-path
+  "The lock whose holder IS this workstream's current activity. Holds no
+   content: it is a target for an OS file lock, and the operating system
+   releasing it on process death is the whole staleness story.
+
+   Separate from activity-path so that publishing needs no second lock: the
+   payload is renamed into place beside this, never written through it. See
+   nido.coordinator.record.activity for why that is a choice and what about
+   descriptors is not."
+  [project ws-id]
+  (str (fs/path (workstream-dir project ws-id) "activity.lock")))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :Path]}
+  activity-path
+  "What the current activity says about itself — kind, run, report path. Written
+   by atomic rename while the claim is held; meaningless unless
+   activity-lock-path is held, since nothing clears it on release."
+  [project ws-id]
+  (str (fs/path (workstream-dir project ws-id) "activity.edn")))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :Path]}
   ws-entries-dir [project ws-id]

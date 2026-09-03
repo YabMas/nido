@@ -133,6 +133,16 @@
   (Operation ws-entries-dir
     "A workstream's append-only ledger — one immutable file per entry."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] Path]})
+  (Operation activity-lock-path
+    "The lock whose holder IS the workstream's current activity. Holds no content: it is a
+     target for an OS file lock, and the kernel releasing it on process death is the whole
+     staleness story. Separate from the payload so that publishing it takes no second lock —
+     the payload is renamed into place beside this rather than written through it."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] Path]})
+  (Operation activity-path
+    "What the current activity says about itself. Meaningless unless the lock beside it is
+     held — nothing clears it on release."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] Path]})
   (Operation ws-sessions-dir
     "The work episodes recorded against a workstream."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] Path]})
