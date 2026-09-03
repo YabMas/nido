@@ -46,7 +46,8 @@
     (if-let [[project worktree] (coords cwd)]
       (let [result (design/check project worktree)]
         (case (:status result)
-          :unmodelled  (do (println (str "design:check ok · " project " declares no design — nothing to check"))
+          :unmodelled  (do (println (str "design:check ok · " (design/unmodelled-line project)
+                                          " — nothing to check"))
                            0)
           :satisfied   (do (println (str "design:check ok · " project " stands up its declared design"))
                            0)
@@ -109,6 +110,9 @@
         cwd      (or (:cwd opts) (System/getProperty "user.dir"))
         from     (or (:from opts) "main")]
     (if-let [[project worktree] (coords cwd)]
+      ;; `design-of` is asked for the spec dirs to materialize with, not for the answer —
+      ;; `design/diff` says :unmodelled for itself, and two paths to one answer is how the
+      ;; sentence came to be written twice in this function.
       (if-let [{:keys [spec-dirs select]} (design/design-of project worktree)]
         (let [scope    (or (:scope opts) select)
               base-dir (materialize-spec-dirs! worktree from spec-dirs)]
@@ -120,7 +124,7 @@
               (let [{:keys [status diff digest error]}
                     (design/diff project worktree base-dir scope)]
                 (case status
-                  :unmodelled (println (str "design:diff · " project " declares no design"))
+                  :unmodelled (println (str "design:diff · " (design/unmodelled-line project)))
                   :unchanged  (println (str "design:diff · this branch changes nothing about "
                                             project "'s declared design (" digest ")"))
                   :changed    (do (println (str "design:diff · what this branch changes about "
@@ -135,7 +139,7 @@
                   :undecidable (println (str "design:diff UNDECIDABLE · " error))))
               0
               (finally (fs/delete-tree base-dir)))))
-        (do (println (str "design:diff · " project " declares no design")) 0))
+        (do (println (str "design:diff · " (design/unmodelled-line project))) 0))
       (do (println (str "design:diff · " cwd " belongs to no registered project")) 0))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}

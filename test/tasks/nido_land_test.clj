@@ -44,7 +44,10 @@
   ;; design yet, which is not what this is for.
   (let [[code out] (run {:session? true :design nil})]
     (is (zero? code))
-    (is (str/includes? out "no design"))))
+    (is (str/includes? out "design record holds nothing")
+        "the workstream's design RECORD, named as a record — the project's declared
+         design is the other subject on this gate and used to be called a structure
+         only so the two lines could not be confused")))
 
 (deftest a-cwd-that-is-no-session-lands
   (let [[code _] (run {:session? false})]
@@ -96,10 +99,11 @@
 ;; project says it has. A branch can pass one and fail the other in either
 ;; direction, so neither substitutes for the other.
 
-(deftest a-project-with-no-declared-structure-lands
+(deftest a-project-with-no-declared-design-lands
   (let [[code out] (run {:session? true :design nil :structure {:status :unmodelled}})]
     (is (zero? code))
-    (is (str/includes? out "no structure to check"))))
+    (is (str/includes? out "declares no design")
+        "one sentence, the seam's, shared by every terminal reading")))
 
 (deftest code-that-broke-the-declared-structure-is-refused-with-the-offending-edge
   (let [[code out] (run {:session? true :design nil

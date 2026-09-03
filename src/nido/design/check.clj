@@ -237,6 +237,18 @@
                      (str/join "\n" (for [row offenders]
                                        (str "    " (offender-line vars row)))))))))
 
+(defn ^{:malli/schema [:=> [:cat :ProjectName] :string]}
+  unmodelled-line
+  "The one sentence a terminal reading says when `project-name` declares no design.
+
+   The seam's words, not each reading's. Three readings said this separately and each said it
+   differently — one called the model a `design` and one called it a `structure` — and `diff`
+   arrived saying it twice, inside the very change whose record had promised not to add a
+   fourth. Only the seam knows what declaring no design means; the prefix and what to do next
+   still belong to the reading, because a gate and a question are addressing different people."
+  [project-name]
+  (str (name project-name) " declares no design"))
+
 (defn ^{:malli/schema [:=> [:cat :CheckResult] :Refusal]}
   refusal
   "A violated result as both terminal readings state it: `{:count <rows> :body \"…\"}`.

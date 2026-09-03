@@ -96,16 +96,24 @@
             (println "\nHow to clear it:")
             (println (way-out b))
             1)))
-      (do (println "land:check ok · this workstream holds no design to stand on")
+      (do (println "land:check ok · this workstream's design record holds nothing to stand on")
           0))
     (do (println (str "land:check ok · " cwd " is no nido session — nothing to stand on"))
         0)))
 
 (defn- structure-check
-  "Refuse unless the CODE still obeys the structure the project declared.
+  "Refuse unless the CODE still obeys the design the project declared.
 
    A different question from the one above, and the reason both are here. Standing
    asks whether anyone still believes the premise this branch was written against.
+
+   Both say DESIGN now, and they are still two subjects: the workstream's design
+   RECORD, which a human granted, and the project's declared design, which fukan
+   checks. This used to say `structure` for the second so the two lines could not
+   be confused — a fudge that cost the seam a second vocabulary, since every other
+   reading calls the model a design. Naming the record as a record dissolves it,
+   and one sentence now serves every reading that has to say a project declares
+   none.
    This asks whether the branch left the codebase in the shape the project says it
    has — a `canvas/` model, checked by fukan against the extracted call graph.
 
@@ -116,20 +124,20 @@
   (if-let [[project worktree] (nido-design/coords cwd)]
     (let [result (design/check project worktree)]
       (case (:status result)
-        :unmodelled  (do (println (str "land:check ok · " project " declares no structure to check"))
+        :unmodelled  (do (println (str "land:check ok · " (design/unmodelled-line project)))
                          0)
-        :satisfied   (do (println (str "land:check ok · the code obeys " project "'s declared structure"))
+        :satisfied   (do (println (str "land:check ok · the code obeys " project "'s declared design"))
                          0)
         :violated    (let [{:keys [body] n :count} (design/refusal result)]
                        (println (str "land:check REFUSED · " n " violation"
                                      (when (not= 1 n) "s")
-                                     " of " project "'s declared structure\n"))
+                                     " of " project "'s declared design\n"))
                        (println body)
                        (println "\nHow to clear it:")
                        (println (str "  Landing is where that gets decided rather than inherited.\n"
                                      "  Re-run with bb nido:design:check."))
                        1)
-        :undecidable (do (println (str "land:check REFUSED · the structure check did not complete: "
+        :undecidable (do (println (str "land:check REFUSED · the design check did not complete: "
                                        (:error result)))
                          (println "\nHow to clear it:")
                          (println (str "  This is not a clean bill of health, it is nobody being able\n"

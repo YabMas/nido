@@ -114,6 +114,14 @@
      caller can splice it in unconditionally."
     {:signature [:=> [:catn [:result CheckResult]] :string]
      :delegates [offender-line]})
+  (Operation unmodelled-line
+    "The one sentence every terminal reading says when a project declares no design.
+
+     Said three ways before this existed, and the third arrived with `diff` — which said it
+     twice, in the change whose own record had promised not to add a fourth. A sentence three
+     readings compose separately is a sentence they can come to disagree about, and the seam is
+     the only place that knows what declaring no design MEANS."
+    {:signature [:=> [:catn [:project-name ProjectName]] :string]})
   (Operation refusal
     "A refusal as both terminal readings state it: the offending-row count, and the body they
      say identically — the offenders, that one of the two sides is wrong, and where the
