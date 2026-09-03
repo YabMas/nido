@@ -920,6 +920,13 @@
      :stage        (:stage row)
      :label        (:label row)
      :links        (:links row)
+     ;; A gate is a workstream too, and the one whose activity is easiest to
+     ;; miss: a claim outranks session state, so a workstream parked on a human
+     ;; can ALSO have a round running against it. Taken from the row rather than
+     ;; re-derived, for the reason `workstream` takes it from the row — the
+     ;; inbox and the board sit on one screen, and a second read is a second
+     ;; moment.
+     :doing        (:doing row)
      :report       report
      :actions      (gate-actions (:stage row) parked? (:origin row)
                                  {:report-format (:format report)

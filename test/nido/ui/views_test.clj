@@ -51,6 +51,19 @@
                                     :selection nil :scope "all"})]
     (is (str/includes? html "working…") "a resumed gate shows working in the inbox row")))
 
+(deftest a-gate-shows-what-is-running-in-it-on-both-needs-you-surfaces
+  ;; Parked-on-a-human and busy are separate facts — a claim outranks session
+  ;; state, so a gate holds both at once — and the Needs-you queue and pane were
+  ;; the surfaces that said only the first.
+  (let [g (assoc sample-gate :doing {:source :claim :kind :diff-review})]
+    (is (str/includes? (views/needs-fragment {:gates [g] :selection nil :scope "all"})
+                       "reviewing the diff")
+        "the inbox row carries the activity badge")
+    (is (str/includes? (views/gate-pane g) "reviewing the diff")
+        "so does the pane"))
+  (is (not (str/includes? (views/gate-pane sample-gate) "doing-line"))
+      "a gate with nothing underway draws no activity line at all"))
+
 (deftest gate-pane-renders-markdown-report-and-actions
   (let [html (views/gate-pane sample-gate)]
     (is (str/includes? html "Verdict"))
@@ -877,22 +890,41 @@
 ;; ---------------------------------------------------------------------------
 
 (deftest workstreams-fragment-shipping-row-blocked-shows-loud-badge
-  ;; A :shipping row with :ship-substate :blocked must render "⚠ blocked" in
-  ;; the board fragment. This covers the loud-blocked requirement and confirms
-  ;; the CSS class is emitted (descendant selector safe — no > combinators).
+  ;; A blocked merge must be loud in the board fragment, and must be said ONCE:
+  ;; the projection folds ship-substate into :doing, so the row carries the
+  ;; activity badge alone and it keeps the loud class the merge-lane badge it
+  ;; replaced carried (descendant selector safe — no > combinators).
   (let [ship-row {:ws-id "ws-ship" :origin :notion :label "BR-99 · Checkout"
-                  :needs-you true :stage :shipping :ship-substate :blocked}
+                  :needs-you true :stage :shipping
+                  :doing {:source :merge :phase :blocked}}
         html (views/workstreams-fragment
               {:groups [{:project "brian"
                          :grouped {:shipping [ship-row]
                                    :triage {:in-flight [] :queued []}
                                    :incoming [] :ready [] :in-progress []}}]
                :selection nil :scope "all" :tab :active})]
-    (is (str/includes? html "⚠ blocked")   "blocked sub-state renders the loud badge")
-    (is (str/includes? html "ship-blocked") "loud CSS class is emitted")
-    (is (str/includes? html "ship-badge")   "ship-badge wrapper class present")
+    (is (str/includes? html "merging · blocked") "blocked merge renders on the row")
+    (is (str/includes? html "ship-blocked")      "loud CSS class is emitted")
+    (is (= 1 (count (re-seq #"blocked<" html)))  "said once, not once per vocabulary")
     (is (str/includes? html "shipping")     "shipping section header is present")
     (is (str/includes? html "sel=brian:ws-ship") "row selection carries the ws id")))
+
+(deftest workstreams-fragment-shipping-row-awaiting-its-session-reads-queued
+  ;; A :shipping workstream whose merge session has not started has nothing
+  ;; RUNNING, but it is queued behind a one-at-a-time lane — which is the only
+  ;; thing that row has to say. The PROJECTION answers that now, so the row
+  ;; arrives carrying it and this asserts the renderer does not drop it; the
+  ;; projection's own test is what pins that :queued is what it answers.
+  (let [ship-row {:ws-id "ws-ship" :origin :notion :label "BR-99 · Checkout"
+                  :stage :shipping :doing {:source :merge :phase :queued}}
+        html (views/workstreams-fragment
+              {:groups [{:project "brian"
+                         :grouped {:shipping [ship-row]
+                                   :triage {:in-flight [] :queued []}
+                                   :incoming [] :ready [] :in-progress []}}]
+               :selection nil :scope "all" :tab :active})]
+    (is (str/includes? html "merging · queued") "the merge queue's resting state still renders")
+    (is (str/includes? html "ship-queued")      "and keeps the class it always had")))
 
 ;; ---------------------------------------------------------------------------
 ;; Generic stage action bar below the reader pane (current entry only)

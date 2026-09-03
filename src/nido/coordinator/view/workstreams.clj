@@ -254,12 +254,6 @@
       ;; pair would let one row answer the same question twice, :doing saying
       ;; :awaiting-merge on a row projected :done.
       :doing           doing
-      ;; A DELEGATE of that projection, not a second answer. It used to call
-      ;; ship-substate itself, which left two readings of one fact free to
-      ;; disagree the moment either learned something the other had not — and
-      ;; the projection has since learned that a shipment with nothing running
-      ;; is :queued rather than nothing. Its remaining readers are renderers.
-      :ship-substate   (when (= :merge (:source doing)) (:phase doing))
       :open-findings   (count (:open (:findings ws)))})))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :string :map] :WorkstreamRow]}
@@ -289,7 +283,6 @@
      :session-count   0
      :last-activity   nil
      :facets          nil
-     :ship-substate   nil
      ;; No workstream exists, so nothing can hold a claim against it.
      :doing           nil
      :open-findings   0
@@ -441,6 +434,33 @@
           (if needs-you "⏸ " "  ")
           (truncate (str label) title-max)
           (engagement-substatus engagement)))
+
+(def ^:private claim-labels
+  "What a held claim is CALLED. Phrased as what someone is doing rather than as
+   the activity's name, because the reader of a board is asking what is happening
+   and not which subsystem is running."
+  {:diff-review    "reviewing the diff"
+   :baseline-round "checking the baseline"
+   :design-round   "deciding the design"})
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:maybe :string]]}
+  doing-label
+  "One short phrase for what a workstream is doing, or nil when nothing is.
+
+   Display only, and pure — the same string for every surface, which is what
+   stops the board and the pane describing one workstream two ways. It renders
+   the KIND rather than a generic `busy` on purpose: an absent label then reads
+   as `none of the things that can say so are running` rather than as `nothing is
+   running`, which is the honest reading while only the review loops take a claim.
+
+   An unrecognised kind prints its own name rather than vanishing — a claim
+   written by a newer nido should degrade to something a person can act on."
+  [{:keys [source kind phase]}]
+  (case source
+    :claim   (or (claim-labels kind) (some-> kind name))
+    :merge   (str "merging" (when phase (str " · " (name phase))))
+    :session (str "agent" (when phase (str " · " (name phase))))
+    nil))
 
 (defn ^{:malli/schema [:=> [:cat :any :map] :string]}
   promote-result-message

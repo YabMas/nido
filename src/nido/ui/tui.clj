@@ -152,25 +152,36 @@
 (defn- origin-badge [origin]
   (get origin-badges origin "?"))
 
-(defn- ship-substate-str
-  "Short terminal label for a :shipping sub-state. nil → \"queued\"."
-  [sub]
-  (case sub
-    :blocked        "⚠ blocked"
-    :driving        "driving"
-    :awaiting-merge "awaiting merge"
-    "queued"))
+(defn- doing-str
+  "What a row is doing, for a terminal: the shared label in ‹›, marked ⚠ when a
+   merge is blocked. The web board carries that emphasis in a CSS class, and a
+   terminal has no stylesheet — so the marker is where the warning lives here.
+   A stuck merge you have to read the words to notice is one you scroll past,
+   which is why the merge-lane tag this replaced spelled it ⚠ blocked.
+
+   nil when nothing is underway, so the caller appends nothing at all."
+  [r]
+  (let [doing (:doing r)]
+    (when-let [d (wsv/doing-label doing)]
+      (str "  ‹"
+           (when (and (= :merge (:source doing)) (= :blocked (:phase doing))) "⚠ ")
+           d "›"))))
 
 (defn- badged-item-row
   "One workstream row for the spine board: origin badge + the wsv display string.
    wsv/format-row and wsv/promote-result-message (below) are display-only helpers
    intentionally NOT re-exported through the nido.coordinator.work facade — they are pure
-   presentation formatters with no model logic.
-   For :shipping rows, the merge-lane sub-state is appended after the standard label."
+   presentation formatters with no model logic."
   [r]
   {:title       (str (origin-badge (:origin r)) "  " (wsv/format-row r)
-                     (when (= :shipping (:stage r))
-                       (str "  [" (ship-substate-str (:ship-substate r)) "]")))
+                     ;; What is underway RIGHT NOW, which the engagement
+                     ;; substatus in format-row cannot say: it reports :active
+                     ;; for a workstream whose agent is running and for one a
+                     ;; human is simply sitting in. A :shipping row reads its
+                     ;; merge phase from here too — the projection folds
+                     ;; ship-substate in, so the merge-lane tag this replaced
+                     ;; would have printed the same state a second time.
+                     (doing-str r))
    :description (or (:last-activity r) "")
    :data        r})
 

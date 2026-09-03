@@ -85,6 +85,28 @@
   (is (= "S" (#'tui/origin-badge :slack)))
   (is (= "·" (#'tui/origin-badge :scratch))))
 
+(deftest a-board-row-warns-on-a-blocked-merge-and-keeps-the-queued-state
+  ;; The terminal has no stylesheet, so the ⚠ the retired merge-lane tag carried
+  ;; is where a stuck merge's warning lives here — the web keeps it in a class.
+  (let [row (fn [doing] (:title (#'tui/badged-item-row
+                                 {:origin :notion :label "BR-99" :stage :shipping
+                                  :engagement :active :doing doing})))]
+    (is (str/includes? (row {:source :merge :phase :blocked}) "⚠ merging · blocked")
+        "a blocked merge is marked, not merely described")
+    (is (not (str/includes? (row {:source :merge :phase :driving}) "⚠"))
+        "and nothing else wears the warning")
+    (is (str/includes? (row {:source :merge :phase :queued}) "merging · queued")
+        "a shipping row awaiting its session still reads queued — the projection
+         is what answers :queued, and this is that answer surviving the render")
+    (is (not (str/includes? (row nil) "merging"))
+        "and a row carrying no activity renders none, rather than the renderer
+         inventing the one the projection used to be missing")
+    (is (not (str/includes? (:title (#'tui/badged-item-row
+                                     {:origin :notion :label "BR-1" :stage :in-progress
+                                      :engagement :idle :doing nil}))
+                            "‹"))
+        "and a row with nothing underway appends nothing at all")))
+
 (deftest board-rows-group-by-spine-and-filter-by-origin
   ;; :ready is no longer a band (backlog lives in Notion) — a :ready row supplied
   ;; via work/grouped simply doesn't render on the board. Feed a real :ready row

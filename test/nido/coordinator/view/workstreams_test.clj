@@ -366,29 +366,36 @@
          (wsv/promote-result-message nil :skip-not-promotable))))
 
 ;; ---------------------------------------------------------------------------
-;; workstream-row :ship-substate — populated only for :shipping workstreams
+;; workstream-row merge sub-state — carried by :doing, and only while shipping
 ;; ---------------------------------------------------------------------------
 
 (def ^:private autonomy-parked
   (assoc autonomy-running :phase :parked
          :phase-history [{:at "2026-06-01T00:00:00Z" :phase :parked}]))
 
-(deftest workstream-row-shipping-with-parked-session-has-blocked-substate
+(deftest workstream-row-shipping-with-parked-session-is-blocked
   (with-tmp
     (fn [_]
       (let [w (make-ws! :brian {:stage :shipping})]
         (make-session! :brian (:id w) "ship-auto" {:autonomy autonomy-parked})
         (let [row (wsv/workstream-row :brian (workstream/read-ws :brian (:id w)))]
           (is (= :shipping (:stage row)) "stage is projected from the stored :shipping override")
-          (is (= :blocked (:ship-substate row)) "parked autonomous session → :blocked"))))))
+          ;; The merge sub-state reaches a surface through :doing and nothing
+          ;; else. It had its own row key until the render layer took the last
+          ;; reader off it; leaving the key behind would have meant two fields
+          ;; computing merge state from the same sessions, which is the one
+          ;; projection claim not holding.
+          (is (= {:source :merge :phase :blocked} (:doing row))
+              "parked autonomous session → the merge lane is blocked"))))))
 
-(deftest workstream-row-non-shipping-has-nil-substate
+(deftest workstream-row-non-shipping-reports-the-session-not-the-lane
   (with-tmp
     (fn [_]
       (let [w (make-ws! :brian {:stage :triaging})]
         (make-session! :brian (:id w) "run-a" {:autonomy autonomy-running})
         (let [row (wsv/workstream-row :brian (workstream/read-ws :brian (:id w)))]
-          (is (nil? (:ship-substate row)) ":ship-substate is nil for non-shipping workstreams"))))))
+          (is (= :session (:source (:doing row)))
+              "a workstream that is not shipping never answers :merge"))))))
 
 (deftest by-notion-priority-orders-lowest-rank-first
   (let [rows [{:ws-id "a" :notion-priority 2 :priority 0 :last-activity "t"}

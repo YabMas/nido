@@ -3,6 +3,7 @@
    stage, close a workstream. Resolves the target workstream by id or by Notion
    external ref (BR-####). Used by the triage skill's dual-write and by humans."
   (:require
+   [nido.coordinator.view.workstreams :as wsv]
    [nido.coordinator.report :as report]
    [nido.coordinator.record.workstream :as ws]
    [nido.platform.task-args :as task-args]
@@ -90,6 +91,11 @@
       (do
         (println "ws-id:" ws-id)
         (println "stage:" (name (:stage w)) "·" (:label w))
+        ;; What is happening in it right now, which the stage cannot say: a
+        ;; workstream sits at :in-progress whether an agent is mid-round or
+        ;; nothing has run against it for a week.
+        (when-let [d (wsv/doing-label (:doing w))]
+          (println "doing:" d))
         ;; Loud, and above the ledger listing, because everything printed below
         ;; is read OFF the index — so when it has fallen behind the directory,
         ;; the listing is exactly the thing that cannot be trusted to say so.

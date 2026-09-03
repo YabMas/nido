@@ -88,4 +88,10 @@
     {:signature [:=> [:catn [:br :any] [:decision :map]] :string]})
   (Operation format-session-row
     "One session row as a display line."
-    {:signature [:=> [:catn [:row :map]] :string]}))
+    {:signature [:=> [:catn [:row :map]] :string]})
+  (Operation doing-label
+    "One short phrase for what a workstream is doing, or nothing when nothing is. Display only
+     and pure — the SAME string for every surface, which is what stops the board and the pane
+     describing one workstream two ways. It names the kind rather than saying `busy`, so an
+     absent label reads as `none of the things that can say so are running`."
+    {:signature [:=> [:catn [:doing [:maybe :map]]] [:maybe :string]]}))

@@ -3,6 +3,7 @@
   (:require [clojure.string :as str]
             [hiccup2.core :as h]
             [nido.coordinator.report :as report]
+            [nido.coordinator.view.workstreams :as wsv]
             [nido.coordinator.control :as control]
             [nido.platform.process :as process]
             [nido.ui.markdown :as md]
@@ -289,7 +290,8 @@
      .dot-halted { background:#f87171; box-shadow:0 0 6px #f87171; }
      .dot-breaker { background:#fb923c; }
      .dot-down { background:#555; }
-     .ship-badge { font-size:.8em; padding:0 .4em; border-radius:.3em; }
+     .doing-badge { font-size:.8em; padding:0 .4em; border-radius:.3em; background:#14532d; color:#bbf7d0; margin-left:6px; }
+     .doing-line { color:#bbf7d0; font-size:.9em; margin:2px 0 6px; }
      .badge-findings { color:#e0a34a; border:1px solid #4a3a20; border-radius:4px; padding:1px 6px; font-size:11px; margin-left:6px; }
      .ship-blocked { background:#b00020; color:#fff; font-weight:600; }
      .ship-driving { background:#1d4ed8; color:#fff; }
@@ -580,6 +582,23 @@
 (defn- chip [stage]
   [:span {:class (str "chip c-" (name stage))} (name stage)])
 
+(defn- doing-badge
+  "What a workstream is doing right now, as a badge — nothing when nothing is.
+   The ONE rendering of current activity: it superseded the merge-lane badge
+   rather than joining it, so a shipping row says `merging · driving` once
+   instead of saying it twice in two vocabularies.
+
+   A merge keeps its phase's severity class, which is what the badge it replaced
+   carried the colour on. A stuck merge going quiet green on the way through the
+   shared label would be the one thing the unification could cost a board that is
+   scanned rather than read."
+  [doing]
+  (when-let [d (wsv/doing-label doing)]
+    [:span {:class (str "doing-badge"
+                        (when-let [phase (and (= :merge (:source doing)) (:phase doing))]
+                          (str " ship-" (name phase))))}
+     d]))
+
 (defn- links-row
   "The workstream's followable external refs under a pane heading — one anchor per
    ref, keyed by its adapter label. Renders nothing when there are none, so a
@@ -677,13 +696,20 @@
    carries the view-state so selecting a gate preserves scope + selection. A
    `:pending?` gate (its agent was resumed / is mid-resolve) shows 'working…'.
    `:error-msg` (a gate action that came back failed) renders on the row — the
-   resolve is async, so this is the only trace a failed Apply leaves."
-  [{:keys [project origin stage label report session resume-error pending? error-msg]} sel? href]
+   resolve is async, so this is the only trace a failed Apply leaves.
+   `:doing` renders the same activity badge the workstream list shows: waiting on
+   a person and having something underway are separate facts, and a gate can hold
+   both at once."
+  [{:keys [project origin stage label report session resume-error pending? error-msg doing]} sel? href]
   [:a {:class (str "gate-card" (when sel? " sel"))
        :href  href}
    [:div.gate-top (origin-badge origin) [:span.lbl label] [:span.needs {:title "needs you"}]]
    [:div.gate-sub [:span project] (chip stage)
-    [:span (cond pending? "working…" session (str "parked · " session) :else "decide")]]
+    [:span (cond pending? "working…" session (str "parked · " session) :else "decide")]
+    ;; What a gate is PARKED on is the line above; this is what is running in it
+    ;; right now. A claim outranks session state, so the two coexist — and the
+    ;; queue would otherwise be the one surface silent about the round underway.
+    (doing-badge doing)]
    [:div.gate-prev (or (some-> report :markdown
                                (str/replace #"^#.*\n+" "")
                                str/split-lines first)
@@ -1431,7 +1457,8 @@
    and no action buttons — deriving action availability from the agent's live
    phase, so a poll can't flip it back to a fresh Apply button. `:error-msg` (a
    failed action) renders above the buttons, which stay clickable to retry."
-  [{:keys [ws-id project origin label links report actions session pending? error-msg] :as gate}]
+  [{:keys [ws-id project origin label links report actions session pending? error-msg doing]
+    :as gate}]
   (str
    (h/html
     (if-not gate
@@ -1439,6 +1466,10 @@
       [:div {:id "gate-pane"}
        (pane-heading origin label links)
        (links-row links)
+       ;; Above the report, because the report was written at the moment the
+       ;; agent stopped and this is the one line on the pane that says what is
+       ;; happening at the moment it is being read.
+       (when-let [d (wsv/doing-label doing)] [:p.doing-line "● " d])
        (when report [:div.meta (some-> report :format name) " · " (:at report)])
        (report-body report)
        (if pending?
@@ -1585,22 +1616,21 @@
   "One selectable list row. Its link carries the view-state (scope + selection),
    so selecting a workstream lands on the SAME list. `sel-id` highlights the
    open row (threaded from the screen so a poll preserves it)."
-  [screen sel-id project {:keys [ws-id origin label needs-you stage ship-substate open-findings
-                                 position]}]
+  [screen sel-id project {:keys [ws-id origin label needs-you open-findings position] :as row}]
   [:a {:class (str "gate-card" (when (= sel-id ws-id) " sel"))
        :href  (str "/workstreams" (screen-query screen {:sel (str project ":" ws-id)}))}
    [:div.gate-top (origin-badge origin) [:span.lbl label]
     (when needs-you [:span.needs {:title "needs you"}])
     (when (pos? (or open-findings 0))
-      [:span.badge-findings (str "⚑ " open-findings " open findings")])
-    (when (= :shipping stage)
-      [:span {:class (str "ship-badge ship-" (name (or ship-substate :queued)))}
-       (case ship-substate
-         :blocked        "⚠ blocked"
-         :driving        "driving"
-         :awaiting-merge "awaiting merge"
-         "queued")])]
-   [:div.gate-sub [:span project] (position-chip position)]])
+      [:span.badge-findings (str "⚑ " open-findings " open findings")])]
+   [:div.gate-sub [:span project] (position-chip position)
+    ;; Where a workstream STANDS is the position chip; this is what is happening
+    ;; in it right now, which is a different question and often has no answer.
+    ;; A :shipping row reads its merge phase from HERE — the projection folds
+    ;; ship-substate in, so a second merge-lane badge beside this one would be
+    ;; the same fact in two vocabularies. It reads `queued` while the lane has
+    ;; not reached it, which the projection answers rather than the badge.
+    (doing-badge (:doing row))]])
 
 (defn- winddown-row
   "One winding-down row: closed workstream still holding live sessions. Muted;
@@ -1632,13 +1662,18 @@
    which is exactly why this band exists. The upstream ticket is still open wherever
    it lives, so hiding these outright would be silent loss. Muted, one action:
    Restore clears the ticket status and puts it back in the triage queue.
-   POSTs to the generic pane gate route, so no dedicated endpoint is needed."
-  [{:keys [project ws-id origin label last-activity]}]
+   POSTs to the generic pane gate route, so no dedicated endpoint is needed.
+
+   Carries the activity badge for the same reason the winding-down band counts
+   live sessions: something still running against a workstream you took off the
+   radar is exactly what a muted row would otherwise hide."
+  [{:keys [project ws-id origin label last-activity doing]}]
   [:div.gate-card.dismissed
    [:div.gate-top (origin-badge origin) [:span.lbl label]]
    [:div.gate-sub
     [:span project]
     (when last-activity [:span.meta last-activity])
+    (doing-badge doing)
     [:button.btn
      {"data-on:click" (str "@post('/workstreams/" project "/" ws-id "/gate/restore')")}
      "Restore"]]])
@@ -2073,7 +2108,7 @@
    — see pane-fragment), so transient dev-env states (starting…) self-advance
    without the refresh closing whatever the reader has open."
   ([ws session-dev-states] (workstream-pane ws session-dev-states {}))
-  ([{:keys [project ws-id origin stage label links ledger report action-report entries selected-seq open-rounds open-stage history? sessions environment on-latest? error-msg bare? br-id notion-status position holds arc]
+  ([{:keys [project ws-id origin stage label links ledger report action-report entries selected-seq open-rounds open-stage history? sessions environment on-latest? error-msg bare? br-id notion-status position holds arc doing]
      :or {on-latest? true}} session-dev-states machine-facts]
    (let [pos  {:project project :ws-id ws-id :entry selected-seq :rounds open-rounds
                :stage open-stage :history? history?}
@@ -2105,6 +2140,10 @@
             ;; the confusion the standing records were added to end.
             [:h2 (status-heading position)]
             (when position (position-line position))
+            ;; Under the position, because it answers the next question a reader
+            ;; has once they know where this stands: is anything happening in it
+            ;; at this moment.
+            (when-let [d (wsv/doing-label doing)] [:p.doing-line "● " d])
             ;; The arc leads. The heading above states where the workstream is;
             ;; this states how it got there, and it is the one thing on the page
             ;; that can show the work having been sent back to an earlier stage.
