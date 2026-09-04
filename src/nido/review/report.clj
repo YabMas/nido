@@ -115,16 +115,36 @@
   (vec (sort-by (juxt #(if (:stack? %) 1 0) #(or (:index %) 0)) rows)))
 
 (defn- row
-  "A display row for `target`: its identity, its kind, and its place in the
-   stack, plus whatever this particular row reports.
+  "A display row for `target`: its identity, its kind, its place in the stack and
+   the patch it is identified by, plus whatever this particular row reports.
 
    :index is OMITTED rather than nil when the target has none — the composition
    pass, and anything from a stack too short to have layers — so an unnumbered
-   row is exactly the map it was before numbering existed."
+   row is exactly the map it was before numbering existed. :patch-hash and
+   :range-hash are omitted the same way, so a target the cache cannot key says
+   nothing rather than nil.
+
+   :patch-hash is on every row that has one, REVIEWED as much as skipped. A
+   skipped row needs it to justify the skip; a reviewed row needs it to explain
+   why there was no skip, and that is the direction that costs agents — the
+   report could prove a hit and said nothing about a miss. With it on both, `why
+   didn't this skip?` is a comparison of two numbers across rounds, rather than
+   an excavation of review-cache.edn, which lives outside the run and is
+   overwritten by the next run on the same branch.
+
+   :range-hash is the composition row's only other component: its :patch-hash is
+   not a patch hash at all but a key derived from the range's patch and the cut
+   (see stages/composition-key), and every layer's half of that cut is now the
+   :patch-hash of its own row. Carrying the range's makes the derived key
+   re-derivable from the report — so a composition that failed to skip names the
+   component that moved instead of leaving a reader to infer it. Not carrying it
+   is why a key that missed on every rebase survived fourteen review runs."
   [target extra]
   (merge (cond-> {:label  (:label target)
                   :stack? (boolean (:stack? target))}
-           (:index target) (assoc :index (:index target)))
+           (:index target)      (assoc :index (:index target))
+           (:patch-hash target) (assoc :patch-hash (:patch-hash target))
+           (:range-hash target) (assoc :range-hash (:range-hash target)))
          extra))
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
@@ -155,14 +175,12 @@
                    (row target {:status   "reviewed"
                                 :findings (get counts (:label target) 0)})))
                (:reviews ctx))
-         ;; A skipped row carries the evidence for its own skip: the patch it
-         ;; was skipped AT, and the round the convergence it is standing on was
-         ;; recorded in. Without them the report asserts a layer needed no
-         ;; review and offers nothing to check that against — and a wrongly
-         ;; cached convergence is precisely the failure that hides a finding for
-         ;; as long as the layer sits unchanged.
+         ;; On top of the patch every row carries, a skipped row names the round
+         ;; the convergence it is standing on was recorded in. Without it the
+         ;; report asserts a layer needed no review and offers nothing to check
+         ;; that against — and a wrongly cached convergence is precisely the
+         ;; failure that hides a finding for as long as the layer sits unchanged.
          (into (mapv (fn [t] (row t (cond-> {:status "skipped"}
-                                      (:patch-hash t)   (assoc :patch-hash (:patch-hash t))
                                       (:converged-at t) (assoc :converged-at (:converged-at t)))))
                      (:skipped ctx)))
          (into (for [[label n] counts

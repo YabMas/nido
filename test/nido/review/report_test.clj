@@ -406,6 +406,48 @@
     (is (= "abc123" (:patch-hash row)))
     (is (= 4 (:converged-at row)))))
 
+(deftest a-reviewed-row-carries-the-patch-it-was-reviewed-at
+  ;; The skip was auditable and the re-review was not, which is the direction
+  ;; that costs agents: answering "why didn't this skip?" meant reading
+  ;; review-cache.edn, a store outside the run that the next run on the same
+  ;; branch overwrites.
+  (let [r (drive
+           [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+            {:event :phase-started :iter 1 :phase :review :at "t1"}
+            {:event :phase-finished :iter 1 :phase :review :at "t2"
+             :ctx {:findings []
+                   :reviews [{:target {:label "core" :index 1 :patch-hash "h-core"}}
+                             {:target {:label "wiring" :index 2 :patch-hash "h-wiring"}
+                              :status :nothing-to-review}]
+                   :skipped []}}])
+        by (into {} (map (juxt :label identity))
+                 (-> r :rounds first :phases first :layers))]
+    (is (= "h-core" (:patch-hash (get by "core")))
+        "two rounds of rows compared side by side answer whether the layer moved")
+    (is (= "h-wiring" (:patch-hash (get by "wiring")))
+        "a row nobody read is still a row the cache had a key for")))
+
+(deftest a-composition-row-carries-the-range-its-key-was-derived-from
+  ;; The composition's :patch-hash is derived from the range's patch and the
+  ;; cut, and the cut reaches the report as the layer rows' own hashes. Without
+  ;; the range's, a composition that failed to skip over unchanged layers names
+  ;; no component — which is how a key that missed on every rebase survived
+  ;; fourteen review runs.
+  (let [r (drive
+           [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+            {:event :phase-started :iter 1 :phase :review :at "t1"}
+            {:event :phase-finished :iter 1 :phase :review :at "t2"
+             :ctx {:findings []
+                   :reviews [{:target {:label "core" :index 1 :patch-hash "h-core"}}
+                             {:target {:label "stack" :stack? true
+                                       :patch-hash "k-cut" :range-hash "h-range"}}]
+                   :skipped []}}])
+        row (last (-> r :rounds first :phases first :layers))]
+    (is (= "stack" (:label row)))
+    (is (= "k-cut" (:patch-hash row)))
+    (is (= "h-range" (:range-hash row))
+        "the key's other half; the cut's half is on the layer rows")))
+
 (deftest the-terminal-clean-round-keeps-its-correctness-verdict
   ;; It was the only round that dropped it, and it is the round the verdict is
   ;; most worth keeping for: the only evidence anyone looked.

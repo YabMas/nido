@@ -273,14 +273,21 @@
 
    Every layer hash is taken first because the cut is built out of them — which
    is also why the composition target has to arrive in the same vector as the
-   layers it composes, as `review-targets` hands them over."
+   layers it composes, as `review-targets` hands them over.
+
+   The range's own hash survives the fold as `:range-hash`, because the key that
+   replaces it is derived and a reader of the report can otherwise only see the
+   derivation. Each layer's half of the cut reaches report.json on that layer's
+   row; keeping this half puts the whole of the key's input there, so a
+   composition that failed to skip can be traced to the component that moved."
   [cwd targets]
   (let [hashed (mapv #(assoc % :patch-hash (layers/patch-hash cwd (:from %) (:to %)))
                      targets)
         cut    (into [] (comp (remove :stack?) (map (juxt :label :patch-hash))) hashed)]
     (mapv (fn [t]
             (cond-> t
-              (:composition t) (assoc :patch-hash (composition-key (:patch-hash t) cut))))
+              (:composition t) (assoc :range-hash (:patch-hash t)
+                                      :patch-hash (composition-key (:patch-hash t) cut))))
           hashed)))
 
 (defn ^{:malli/schema [:=> [:cat :map :any] :map]}

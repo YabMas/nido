@@ -1029,6 +1029,18 @@
                               (stack-targets [["b" "c1"] ["c1" "c2"] ["b" "@"]]))]
     (is (nil? k))))
 
+(deftest the-composition-target-keeps-the-range-its-key-was-built-from
+  ;; The key is derived, so on its own it can say only that something moved.
+  ;; Each layer's half of the cut reaches report.json on that layer's row; this
+  ;; is the other half, and without it a composition that failed to skip over
+  ;; unchanged layers names no component.
+  (with-redefs [layers/patch-hash (fn [_ from to] (str "h-" from ".." to))]
+    (let [t (last (stages/with-patch-hashes
+                    "/w" (stack-targets [["b" "c1"] ["c1" "c2"] ["b" "@"]])))]
+      (is (= "h-b..@" (:range-hash t)))
+      (is (not= (:range-hash t) (:patch-hash t))
+          "the key folds in the cut as well; the range hash is the patch alone"))))
+
 (deftest a-skipped-target-carries-the-round-it-converged-in
   (let [{:keys [review skipped]}
         (stages/to-review {"h1" {:status :converged :round 4}}
