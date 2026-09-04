@@ -9,6 +9,24 @@
   (:import
    [java.time Instant]))
 
+(def engine-statuses
+  "Every status this ENGINE can end a run on, whichever pipeline it drives.
+
+   Declared as data because the ledger's ReviewReport enum has to admit each one
+   and cannot read it: `nido.coordinator.report` is the shared-vocabulary band,
+   it may depend on nothing above it, so the two lists live apart and a test in
+   `tasks.nido-review-test` is what holds them together. Nothing held them
+   together before, and `:unfixable` is what fell through — the closed enum
+   refused the `:review` entry of every run that ended on it, and refusing a
+   best-effort side record costs nothing a reader can see.
+
+   The diff pipeline's stages end on their own statuses beside these; see
+   `nido.review.stages/stage-statuses`. The record pipelines end on statuses of
+   their own too, and those are NOT here: they reach a different ledger event,
+   under no enum this one can drift from."
+  #{:converged :unresolved :escalated :unfixable :no-progress :max-iters
+    :review-failed})
+
 (def default-pipeline
   "review (fan out) -> warden (fan in) -> reshape -> fix (serial).
    The warden is the round barrier: no fix runs until every finding has an

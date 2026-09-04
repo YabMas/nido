@@ -77,10 +77,18 @@
    repair for that no round checked. It overlaps `:findings-fixed`, which is a
    count of work dispatched, and stating the overlap is the point: without it a
    run reads as `1 fixed · 11 remaining` out of eleven findings, and the arithmetic
-   is only wrong until you know one finding is in both numbers."
+   is only wrong until you know one finding is in both numbers.
+
+   `:remaining-parked` splits the rest of it. A remainder is one of three
+   things and they ask opposite things of whoever picks it up: a park is a
+   question only a human can answer, a handed finding needs checking, and what
+   is left is work the run was cut off before it reached. A run that STOPS on a
+   park reported that question in the same integer as the fixes it never got
+   to."
   [final report report-path]
   (let [open     (open-for-ledger final)
-        repaired (count (filter :handed open))]
+        repaired (count (filter :handed open))
+        parked   (count (filter #(= :park (:disposition %)) open))]
     (cond-> {:format             :review-report
              :status             (:status final)
              :base               (get-in report [:target :base])
@@ -91,6 +99,7 @@
              :report-path        report-path}
       (seq open)      (assoc :open open)
       (pos? repaired) (assoc :remaining-handed repaired)
+      (pos? parked)   (assoc :remaining-parked parked)
       ;; Only a run that ended on a conflicted stack has these, and it is the
       ;; run whose status a reader cannot act on without them: the conflict is
       ;; mid-stack, so `jj resolve --list` reports the branch clean and the ids
@@ -178,24 +187,32 @@
    Everything the analysis is told about the reviewed branch is a NAME —
    project, session, workstream id. The path is deliberately not passed: the
    analysis runs on nido's side and has no business in the worktree the loop
-   just reviewed."
+   just reviewed.
+
+   What the run STOPPED ON is merged in whole, from the same reading the report
+   gets. The run dir being gone by the time an analysis opens it is the normal
+   end state, so an analysis of an unfixable run had a status, three counts, and
+   no way to name the findings the loop had given up on."
   [cwd final report report-path config ws-id]
   (let [{:keys [project session]} (or (lifecycle/session-from-cwd cwd) {})
         open   (verdict/open-across-run final)
         handed (verdict/handed-to-a-fixer final)]
     (analysis/enqueue!
-     {:run-id             (:run-id config)
-      :report-path        report-path
-      :status             (:status final)
-      :dry-run?           (:dry-run? config)
-      :base               (get-in report [:target :base])
-      :rounds             (or (get-in report [:summary :rounds]) 0)
-      :findings-fixed     (or (get-in report [:summary :findings-fixed]) 0)
-      :findings-remaining (count open)
-      :remaining-handed   (count (filter #(verdict/handed? handed %) open))
-      :reviewed-project   project
-      :reviewed-session   session
-      :reviewed-ws-id     ws-id})))
+     (merge
+      {:run-id             (:run-id config)
+       :report-path        report-path
+       :status             (:status final)
+       :dry-run?           (:dry-run? config)
+       :base               (get-in report [:target :base])
+       :rounds             (or (get-in report [:summary :rounds]) 0)
+       :findings-fixed     (or (get-in report [:summary :findings-fixed]) 0)
+       :findings-remaining (count open)
+       :remaining-handed   (count (filter #(verdict/handed? handed %) open))
+       :remaining-parked   (count (filter #(= :park (:disposition %)) open))
+       :reviewed-project   project
+       :reviewed-session   session
+       :reviewed-ws-id     ws-id}
+      (report/stopped-on final)))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   verdict-worth-running?
@@ -719,6 +736,16 @@
              status (:status final)
              ws-id  (append-review-entry! cwd final @report-atom report-path)]
          (println (str "review-loop: " (name status) " · report " report-path))
+         ;; A side record that fails invisibly is how a whole class of run came
+         ;; to leave no ledger entry at all: the ledger's status enum did not
+         ;; admit :unfixable, every append on that status was refused, and the
+         ;; refusal went to a stderr stream nobody keeps. nil here means the
+         ;; workstream holds nothing about this run, whether because there is no
+         ;; workstream or because it would not take the entry — and either way
+         ;; the report is the only copy.
+         (when-not ws-id
+           (println (str "review-loop: ⚠ no :review entry reached a ledger"
+                         " — this run is recorded in " report-path " alone")))
          (when-let [b (append-blocker! cwd final)]
            (println (str "review-loop: ⚠ " (:summary b)))
            (println "  → answer it at the workstream gate; the loop has no move for it"))

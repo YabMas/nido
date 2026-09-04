@@ -1233,8 +1233,22 @@
    at the full report.json rather than embedding it. `:at` is stamped by the ledger."
   [:map {:closed true}
    [:format             [:= :review-report]]
+   ;; Every terminal status the loop can reach, and the enum is CLOSED — an
+   ;; append it refuses is swallowed to stderr by design, so a status missing
+   ;; here does not fail, it erases. That is what happened to :unfixable, which
+   ;; three namespaces produced and consumed for as long as it existed while
+   ;; this list did not admit it: every run that ended on it lost its :review
+   ;; entry, and the loss looked exactly like a run that never wrote one.
+   ;; nido.review.loop/engine-statuses and nido.review.stages/stage-statuses are
+   ;; the producing side, declared as data for this reason; the Report band may
+   ;; not read them, so a test asserts this admits their union.
    [:status             [:enum :converged :unresolved :escalated :clean :no-progress
                                :max-iters :review-failed :dry-run
+                               ;; Findings raised in four consecutive rounds
+                               ;; that no repair moved, or a park that stood
+                               ;; that long. The loop has nothing further to
+                               ;; offer them and is handing them over.
+                               :unfixable
                                :fix-noop :fix-unrouted :fix-declined
                                :workspace-drifted
                                ;; The fix stage rewrote a lower layer and jj's
@@ -1274,6 +1288,13 @@
    ;; reported nine findings nobody touched as the same kind of thing.
    ;; Optional, and omitted at zero: a converged run has no such overlap.
    [:remaining-handed {:optional true} int?]
+   ;; How many of the remaining are questions put to a HUMAN — parked, because
+   ;; the finding contradicts a named invariant and the loop has no standing to
+   ;; answer it. The other half of the split `:remaining-handed` began: one
+   ;; number over a remainder reads as one kind of thing, and a run that stops
+   ;; ON a park is stopping for the one item nobody else can move. Optional and
+   ;; omitted at zero, like its sibling.
+   [:remaining-parked {:optional true} int?]
    ;; The remaining findings themselves, not only how many. A count answers
    ;; "did this run finish clean"; it cannot answer "what is it waiting for",
    ;; which for a run that ended holding a park is the only question there is.
@@ -2316,7 +2337,8 @@
   (str/join "\n" ["# Ship submitted" "" (str "`" session "` handed to the merge lane.")]))
 
 (defn- review->markdown [{:keys [status base base-rev rounds findings-fixed
-                                 findings-remaining remaining-handed report-path
+                                 findings-remaining remaining-handed
+                                 remaining-parked report-path
                                  summary open conflicted]}]
   (str/join "\n"
     (remove nil?
@@ -2325,9 +2347,19 @@
        ;; They are not disjoint — a repair landed in the final round is counted
        ;; as dispatched AND as still owed, because nothing re-read the layer —
        ;; and a reader given only the pair reads them as a partition.
+       ;;
+       ;; The remainder is then split by what it wants: a parked finding is
+       ;; waiting on a decision only a human can make, a handed one is waiting
+       ;; to be checked, and whatever is left is work the run was cut off
+       ;; before it reached. One number for all three is what let a run report
+       ;; the question it had stopped for as though it were unfinished work.
        (str findings-fixed " fixed  ·  " findings-remaining " remaining"
-            (when (pos? (or remaining-handed 0))
-              (str " (" remaining-handed " already repaired, unverified)"))
+            (let [split (remove nil?
+                                [(when (pos? (or remaining-parked 0))
+                                   (str remaining-parked " waiting on you"))
+                                 (when (pos? (or remaining-handed 0))
+                                   (str remaining-handed " already repaired, unverified"))])]
+              (when (seq split) (str " (" (str/join "; " split) ")")))
             "  ·  " rounds " rounds")
        (str "base " base (when base-rev (str "@" base-rev)))
        ;; What is still owed, in the entry itself. The counts above say a run

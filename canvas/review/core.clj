@@ -85,6 +85,14 @@
     {:signature [:=> [:catn [:rows :any]] :any]})
   (Operation review-layers "One entry per review target."
     {:signature [:=> [:catn [:ctx :map]] :any]})
+  (Operation stopped-on
+    "What the run stopped ON, off its terminal context — the findings it gave up on and
+     the questions still standing — as against :status, which is what it stopped AS.
+
+     Public because two readers need the same answer: the report folds it in at
+     :run-finalized, and the analysis payload carries it because a run dir is reclaimed
+     long before an analysis of it is read."
+    {:signature [:=> [:catn [:ctx :map]] [:maybe :map]]})
   (Operation apply-event "The report with one event folded in. Pure."
     {:signature [:=> [:catn [:report ReviewReport] [:event :map]] ReviewReport]})
   (Operation with-verdict

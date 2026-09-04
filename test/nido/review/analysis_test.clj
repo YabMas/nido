@@ -29,6 +29,30 @@
     (is (= 1 (:findings-remaining p)))
     (is (= "/r/report.json" (:report-path p)))))
 
+(deftest the-payload-names-what-the-run-stopped-on
+  ;; The run dir is reclaimable and being reclaimed is its normal end state, so
+  ;; an analysis asked whether the loop stopped for the right reason had a
+  ;; status, three counts and no way to name the findings it stopped over.
+  (let [p (analysis/payload
+           (assoc a-run
+                  :status :unfixable :findings-remaining 2 :remaining-parked 1
+                  :unfixable ["09a09d87"]
+                  :parked [{:handle "09a09d87" :since 3 :title "the source-row seam"
+                            :owner-layer "source-row-variants"}]))]
+    (is (= ["09a09d87"] (:unfixable p)))
+    (is (= "the source-row seam" (:title (first (:parked p)))))
+    (is (= 1 (:remaining-parked p))
+        "one of the two remaining is a question for a human; the counts alone
+         make it look like unfinished work")))
+
+(deftest a-run-that-stopped-on-nothing-says-nothing
+  ;; Carried only when there is something to carry, like :remaining-handed —
+  ;; a converged run's payload should not assert an empty handover.
+  (let [p (analysis/payload a-run)]
+    (is (not (contains? p :unfixable)))
+    (is (not (contains? p :parked)))
+    (is (not (contains? p :remaining-parked)))))
+
 (deftest the-reviewed-branch-is-named-never-located
   (let [p (analysis/payload a-run)]
     (is (= "brian" (:reviewed-project p)))

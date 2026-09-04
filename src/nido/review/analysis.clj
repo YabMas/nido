@@ -49,13 +49,19 @@
    run dir has been reclaimed by the time the analysis gets there — which is the
    normal end state of a run dir, not an edge case.
 
-   `:remaining-handed` is carried only when it is non-zero, so a converged run
-   says nothing rather than 0. It is how many of the remaining already have a
-   repair in the branch that no round checked — the split a run which aborted
-   its fix plan needs, where the rest of the remainder is findings no fixer was
-   launched for at all."
+   `:remaining-handed` and `:remaining-parked` are carried only when non-zero,
+   so a converged run says nothing rather than 0. They split the remainder into
+   the three things it can be: a repair already in the branch that no round
+   checked, a question put to a human that only a human can answer, and — what
+   is left over — findings no fixer was ever launched for.
+
+   `:unfixable` and `:parked` are what the run stopped ON, and they are here for
+   the same reason the counts are: a status names the KIND of ending, and an
+   analysis asked to say whether the loop stopped for the right reason needs the
+   findings themselves. Both omitted when the run had nothing to hand over."
   [{:keys [run-id report-path status rounds findings-fixed findings-remaining
-           remaining-handed base reviewed-project reviewed-session reviewed-ws-id]}]
+           remaining-handed remaining-parked unfixable parked
+           base reviewed-project reviewed-session reviewed-ws-id]}]
   (cond-> {:adapter            :review-run
            :id                 (str run-id)
            :title              (str "review-loop " (name (or status :unknown))
@@ -70,6 +76,9 @@
            :findings-fixed     (or findings-fixed 0)
            :findings-remaining (or findings-remaining 0)}
     (pos? (or remaining-handed 0)) (assoc :remaining-handed remaining-handed)
+    (pos? (or remaining-parked 0)) (assoc :remaining-parked remaining-parked)
+    (seq unfixable)  (assoc :unfixable (mapv str unfixable))
+    (seq parked)     (assoc :parked (vec parked))
     base             (assoc :base base)
     reviewed-project (assoc :reviewed-project (name reviewed-project))
     reviewed-session (assoc :reviewed-session reviewed-session)

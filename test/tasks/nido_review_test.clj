@@ -4,6 +4,7 @@
    [cheshire.core :as json]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing use-fixtures]]
+   [malli.core :as m]
    [nido.platform.core :as core]
    [nido.coordinator.report :as report]
    [nido.coordinator.record.session :as csession]
@@ -191,6 +192,66 @@
     (is (str/includes? (report/report->markdown (assoc ev :format :review-report))
                        "xlortuwzrtlu")
         "and a reader of the workstream is told where to go")))
+
+(defn- ledger-review-statuses
+  "The statuses the ledger's :review entry will accept, read off the schema
+   rather than restated here — a hand-kept copy is the thing that drifts."
+  []
+  (set (->> (m/children report/ReviewReport)
+            (some (fn [[k _ s]] (when (= :status k) (m/children s)))))))
+
+(deftest the-ledger-admits-every-status-the-loop-can-end-on
+  ;; The enum is CLOSED and `append-review-entry!` is best-effort, so a status
+  ;; the ledger has not been told about does not fail the run — it erases the
+  ;; entry. :unfixable was produced by two namespaces, printed by a third and
+  ;; classified by a fourth for as long as it existed, while this enum did not
+  ;; admit it: every run that ended on it lost its :review entry, and the loss
+  ;; is indistinguishable from a run that never had a workstream.
+  ;;
+  ;; This is the only place the two lists can be held together. The Report band
+  ;; may depend on nothing above it, so the enum cannot read the loop's own
+  ;; declaration, and the loop cannot narrow the enum.
+  (let [admitted (ledger-review-statuses)]
+    (doseq [s (into rloop/engine-statuses stages/stage-statuses)]
+      (is (contains? admitted s)
+          (str s " ends a review run, so the ledger has to admit it — an append"
+               " it refuses is swallowed, and the entry is simply not there")))))
+
+(deftest an-unfixable-run-reaches-the-ledger-with-what-it-gave-up-on
+  ;; The run that most needs a durable record is the one holding a question
+  ;; only a human can answer. Every one of them was refused.
+  (let [final {:status :unfixable
+               :history []
+               :unfixable ["09a09d87"]
+               :findings [{:handle "09a09d87" :id "09a09d87" :title "the source-row seam"
+                           :disposition :park :because "no fixer has standing here"}
+                          {:handle "2e7041ab" :id "2e7041ab" :title "nobody reached it"
+                           :disposition :fix}]}
+        ev    (t/review-event final
+                              {:summary {:rounds 6 :findings-fixed 4}
+                               :target {:base "main" :base-rev "x"}}
+                              "/runs/r/report.json")]
+    (is (= ev (report/validate-event :review ev))
+        "the ledger's status enum admits it — a closed schema swallows a
+         rejected append to stderr, so an unadmitted status loses the entry")
+    (is (= 2 (:findings-remaining ev)))
+    (is (= 1 (:remaining-parked ev))
+        "one of the two is a question for a human and the other is a repair
+         nobody reached; a single count reads them as the same kind of work")
+    (is (str/includes? (report/report->markdown (assoc ev :format :review-report))
+                       "1 waiting on you")
+        "and the split survives into what a reader of the workstream sees")))
+
+(deftest a-converged-run-claims-nobody-is-waiting-on-anything
+  ;; The counts are omitted at zero rather than carried as 0, so `waiting on
+  ;; you` never appears on a run that is waiting on no one.
+  (let [ev (t/review-event {:status :converged :history [] :findings []}
+                           {:summary {:rounds 2 :findings-fixed 3}
+                            :target {:base "main" :base-rev "x"}}
+                           "/runs/r/report.json")]
+    (is (nil? (:remaining-parked ev)))
+    (is (not (str/includes? (report/report->markdown (assoc ev :format :review-report))
+                            "waiting on you")))))
 
 (deftest a-conflicted-stack-spends-no-design-verdict
   ;; The pass reads the worktree with tools, so here it would be reading

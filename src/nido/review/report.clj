@@ -26,7 +26,38 @@
    :started-at started-at
    :ended-at   nil
    :rounds     []
-   :summary    nil})
+   :summary    nil
+   ;; Filled by `finalize` from the terminal ctx; nil while the run is going and
+   ;; nil at the end of one whose status is the whole story. See `stopped-on`.
+   :reason     nil})
+
+(defn ^{:malli/schema [:=> [:cat :map] [:maybe :map]]}
+  stopped-on
+  "What the run stopped ON, read off its terminal ctx — as against `:status`,
+   which is what it stopped AS. nil when the status says everything.
+
+   `:unfixable` is what the loop gave up on, by the identity the pipeline tells
+   findings apart with; `:parked` is every question still standing when it
+   ended, oldest first, each with the round it was raised in. Both were on the
+   ctx and reached nothing durable: the artifact for a run whose entire point
+   was that it had something specific to hand over said `unfixable` and left the
+   rest to be inferred from the last warden's prose.
+
+   A park's identity is its handle, so it is the key of the carried map and is
+   folded back into each entry — a list of anonymous questions is not a
+   handover."
+  [ctx]
+  (let [parks (get-in ctx [:carry :parks])]
+    (not-empty
+     (cond-> {}
+       (seq (:unfixable ctx))
+       (assoc :unfixable (vec (:unfixable ctx)))
+
+       (seq parks)
+       (assoc :parked (->> parks
+                           (map (fn [[handle p]] (assoc p :handle (str handle))))
+                           (sort-by (juxt #(or (:since %) 0) :handle))
+                           vec))))))
 
 ;; ---- round/phase helpers -------------------------------------------------
 
@@ -64,6 +95,13 @@
       (and review (= "ok" (:status review)) (nil? warden) nothing?) "nothing-to-review"
       (and review (= "ok" (:status review))
            (empty? (:findings review)) (nil? warden))              "clean"
+
+      ;; Before both of the warden's own decisions, because the stage can end
+      ;; the run over the warden's head: a park that has stood long enough stops
+      ;; it whatever the warden returned. Read from the decision alone, the
+      ;; round that ended a run printed `escalated` while the run printed
+      ;; `unfixable`, and the two words came out of the same phase.
+      (seq (:unfixable warden))                                    "unfixable"
       (= "escalate" (:decision warden))                            "escalated"
 
       ;; Before "continued", which is what a round holding a landed fix reads as
@@ -250,14 +288,20 @@
       ;; unreadable from the artifact that is supposed to explain the run: a
       ;; reader could see the same defect ruled on in four rounds and had no way
       ;; to confirm the loop knew it was the same defect.
+      ;; :unfixable is the stage overruling the warden — a park that has stood
+      ;; too long ends the run whatever the warden decided. It belongs on this
+      ;; phase because the phase is the only place both facts sit, and a round
+      ;; carrying only the overruled decision is the report contradicting the
+      ;; run in its own words.
       :warden (let [a (:warden ctx)]
-                 (assoc ph :decision (some-> (:decision a) name)
-                        :cause (some-> (:cause a) name)
-                        :reason (:reason a)
-                        :rulings (mapv #(select-keys % [:id :handle :same-as
-                                                        :owner-layer :disposition
-                                                        :authority :of :because])
-                                       (:rulings a))))
+                 (cond-> (assoc ph :decision (some-> (:decision a) name)
+                                :cause (some-> (:cause a) name)
+                                :reason (:reason a)
+                                :rulings (mapv #(select-keys % [:id :handle :same-as
+                                                                :owner-layer :disposition
+                                                                :authority :of :because])
+                                               (:rulings a)))
+                   (seq (:unfixable ctx)) (assoc :unfixable (vec (:unfixable ctx)))))
       ;; The finding ids a fixer was handed, not only how many. It is the join
       ;; every cross-round question needs — did this fix stop that finding coming
       ;; back — and the report held one side of it and threw the other away.
@@ -361,11 +405,12 @@
        (reduce + 0)))
 
 (defn- finalize
-  [report status at]
+  [report status ctx at]
   (let [s (name status)]
     (assoc report
            :status   s
            :ended-at at
+           :reason   (stopped-on ctx)
            :summary  {:rounds         (count (:rounds report))
                       :findings-fixed (total-handed-to-fixers report)
                       :final-status   s})))
@@ -408,7 +453,7 @@
     :run-finalized
     (-> report
         (close-current-round (:at ev))
-        (finalize (:status ev) (:at ev)))
+        (finalize (:status ev) (:ctx ev) (:at ev)))
 
     report))
 

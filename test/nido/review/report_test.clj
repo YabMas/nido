@@ -595,6 +595,86 @@
         "on the phase as well as the target — the target says what the stack
          was, the phase says what ended this round")))
 
+;; ---- what the run stopped on ----------------------------------------------
+
+(def ^:private gave-up-ctx
+  "The terminal ctx of a run the warden stage stopped over its own head: a park
+   raised in round 3 has stood long enough, and a second one joined it later."
+  {:unfixable ["09a09d87"]
+   :carry {:parks {"bf629221" {:since 5 :owner-layer "render-absence-stream"
+                               :title "the later one"}
+                   "09a09d87" {:since 3 :owner-layer "source-row-variants"
+                               :title "the source-row seam"
+                               :because "no fixer has standing here"}}}})
+
+(deftest a-run-that-gave-up-records-what-it-gave-up-on
+  ;; The status is the KIND of ending; a reader of an unfixable run needs the
+  ;; findings themselves, and had to infer them from the last warden's prose.
+  (let [r (drive
+           [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+            {:event :phase-started :iter 1 :phase :review :at "t1"}
+            {:event :phase-finished :iter 1 :phase :review :at "t2"
+             :ctx {:findings [{:title "the source-row seam"}]}}
+            {:event :run-finalized :status :unfixable :ctx gave-up-ctx :at "t3"}])
+        reason (:reason r)]
+    (is (= "unfixable" (:status r)))
+    (is (= ["09a09d87"] (:unfixable reason)))
+    (is (= ["09a09d87" "bf629221"] (mapv :handle (:parked reason)))
+        "oldest first: the round a question was raised in is what dates it, and
+         a handover ordered by a map's hash is a handover a reader re-sorts")
+    (is (= "no fixer has standing here" (:because (first (:parked reason))))
+        "a list of anonymous questions is not a handover — the park's own words
+         are the whole of what the human is being asked to answer")))
+
+(deftest a-run-with-nothing-to-hand-over-hands-over-nothing
+  ;; :reason is absent rather than an empty map, so its presence is itself the
+  ;; signal that the run stopped ON something.
+  (let [r (drive
+           [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+            {:event :phase-started :iter 1 :phase :review :at "t1"}
+            {:event :phase-finished :iter 1 :phase :review :at "t2"
+             :ctx {:findings []}}
+            {:event :run-finalized :status :clean :ctx {} :at "t3"}])]
+    (is (nil? (:reason r)))))
+
+(deftest a-round-the-run-calls-unfixable-does-not-call-itself-escalated
+  ;; The warden stage can end the run over the warden's head — a park that has
+  ;; stood park-persists-for rounds stops it whatever the warden returned. Read
+  ;; from the decision alone, the round printed one word and the run printed
+  ;; another, both out of this same phase.
+  (let [r (drive
+           [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+            {:event :phase-started :iter 1 :phase :review :at "t1"}
+            {:event :phase-finished :iter 1 :phase :review :at "t2"
+             :ctx {:findings [{:title "b"}]}}
+            {:event :phase-started :iter 1 :phase :warden :at "t3"}
+            {:event :phase-finished :iter 1 :phase :warden :at "t4"
+             :ctx (assoc gave-up-ctx
+                         :warden {:decision :escalate :reason "the seam again"
+                                  :rulings []})}
+            {:event :run-finalized :status :unfixable :ctx gave-up-ctx :at "t5"}])
+        warden (some #(when (= "warden" (:phase %)) %) (:phases (first (:rounds r))))]
+    (is (= ["09a09d87"] (:unfixable warden))
+        "the phase is the only place the decision and the override both sit")
+    (is (= "unfixable" (:status (first (:rounds r)))))
+    (is (= "escalate" (:decision warden))
+        "and the warden's own answer is still there — it was overruled, not
+         unsaid")))
+
+(deftest a-warden-that-was-not-overruled-carries-no-override
+  (let [r (drive
+           [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+            {:event :phase-started :iter 1 :phase :review :at "t1"}
+            {:event :phase-finished :iter 1 :phase :review :at "t2"
+             :ctx {:findings [{:title "b"}]}}
+            {:event :phase-started :iter 1 :phase :warden :at "t3"}
+            {:event :phase-finished :iter 1 :phase :warden :at "t4"
+             :ctx {:warden {:decision :escalate :reason "redesign" :rulings []}}}
+            {:event :run-finalized :status :escalated :ctx {} :at "t5"}])
+        warden (some #(when (= "warden" (:phase %)) %) (:phases (first (:rounds r))))]
+    (is (nil? (:unfixable warden)))
+    (is (= "escalated" (:status (first (:rounds r)))))))
+
 ;; ---- the design verdict --------------------------------------------------
 
 (def ^:private a-verdict

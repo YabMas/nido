@@ -21,6 +21,21 @@
    [nido.session.lifecycle :as lifecycle]
    [nido.vsdd.jj :as jj]))
 
+(def stage-statuses
+  "Every status these stages end a run on themselves, beside the ones the engine
+   assigns (`nido.review.loop/engine-statuses`).
+
+   The two sets together are the diff loop's whole terminal vocabulary, and the
+   ledger's ReviewReport enum has to admit all of it — that enum is closed, and
+   an append it refuses is swallowed. See `engine-statuses` for why the check
+   lives in a test rather than in the enum itself.
+
+   `:unfixable` is in both: the engine's give-up counter reaches it, and so does
+   the warden stage, over the warden's own head, when a park has stood too long."
+  #{:stack-conflicted :nothing-to-review :clean :warden-indeterminate :unfixable
+    :dry-run :workspace-drifted :fix-unrouted :fix-conflicted :fix-rolled-back
+    :fix-declined})
+
 (def ^:private fenced-json-re #"(?s)```json\s*(\{.*?\})\s*```")
 
 (def ^:private dispositions
