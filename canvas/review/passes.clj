@@ -163,8 +163,11 @@
     {:signature [:=> [:catn [:project ProjectName]] [:maybe :string]] :delegates [stance-path]})
   (Operation answered-by-layer "What earlier rounds already answered, per layer."
     {:signature [:=> [:catn [:ctx :map]] :any]})
-  (Operation converged-targets "The targets this round converged. Pure."
-    {:signature [:=> [:catn [:reviews :any] [:findings :any]] :any]})
+  (Operation converged-targets
+    "The targets this round left owing nothing — no open finding names them and no carried
+     park does either. Pure. The parks are a separate argument because they are the half a
+     round's own findings cannot carry: a park is raised once and lives in the carry after."
+    {:signature [:=> [:catn [:reviews :any] [:findings :any] [:parks :any]] :any]})
   (Operation answered-for "What one target reported as answered."
     {:signature [:=> [:catn [:label :any] [:findings :any]] :any]})
   (Operation record-convergence! "Write what converged this round into the cache."
@@ -195,9 +198,10 @@
      re-derives the same seam every round from an empty memory."
     {:signature [:=> [:catn [:targets :any] [:history :any]] :any]})
   (Operation carried-parks
-    "The open parks this run is holding, each with the round it was first parked in. A park is
-     never raised again, so it vanishes from the findings the moment the reviewer stops
-     mentioning it — carrying it is what stops the warden re-adjudicating one from scratch."
+    "The open parks this run is holding, each with the round it was first parked in and the
+     layer it names. A park is never raised again, so it vanishes from the findings the moment
+     the reviewer stops mentioning it — carrying it is what stops the warden re-adjudicating
+     one from scratch and what keeps its layer out of the convergence cache."
     {:signature [:=> [:catn [:prior :any] [:ruled :any] [:iter :int]] :any]})
   (Operation park-refused-recuts
     "A park for every recut the reshape stage could not act on, carrying its own refusal. The

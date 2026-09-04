@@ -557,14 +557,14 @@
                  {:target {:label "stack" :patch-hash "h-s" :stack? true}}]
         ;; reported by b, owned by a
         findings [{:disposition :fix :from-layer "b" :owner-layer "a"}]]
-    (is (= ["b"] (map :label (stages/converged-targets reviews findings)))
+    (is (= ["b"] (map :label (stages/converged-targets reviews findings [])))
         "a owns the fix so it is not converged; b needs no change so it is")))
 
 (deftest converged-targets-include-the-stack-only-when-nothing-needs-fixing
   (let [reviews [{:target {:label "stack" :patch-hash "h-s" :stack? true}}]]
-    (is (= ["stack"] (map :label (stages/converged-targets reviews []))))
+    (is (= ["stack"] (map :label (stages/converged-targets reviews [] []))))
     (is (= [] (stages/converged-targets
-               reviews [{:disposition :fix :owner-layer "a"}])))))
+               reviews [{:disposition :fix :owner-layer "a"}] [])))))
 
 (deftest converged-targets-hold-a-target-whose-finding-was-not-closed
   ;; The disposition that is neither :fix nor :closed is what this turns on.
@@ -575,23 +575,23 @@
                  {:target {:label "b" :patch-hash "h-b"}}
                  {:target {:label "stack" :patch-hash "h-s" :stack? true}}]]
     (is (= ["b"] (map :label (stages/converged-targets
-                              reviews [{:disposition :park :owner-layer "a"}])))
+                              reviews [{:disposition :park :owner-layer "a"}] [])))
         "a parked finding leaves its owner open, and the stack with it")
     (is (= ["a" "b" "stack"]
            (map :label (stages/converged-targets
-                        reviews [{:disposition :deviation :owner-layer "a"}])))
+                        reviews [{:disposition :deviation :owner-layer "a"}] [])))
         "a deviation is a decision, so it settles its target")
     (is (= ["b"] (map :label (stages/converged-targets
                               reviews [{:disposition :declined :owner-layer "a"}
-                                       {:disposition :park :owner-layer "a"}])))
+                                       {:disposition :park :owner-layer "a"}] [])))
         "and a decline settles, so only the park is still holding a")
     (is (= ["a" "b" "stack"]
            (map :label (stages/converged-targets
-                        reviews [{:disposition :closed :owner-layer "a"}])))
+                        reviews [{:disposition :closed :owner-layer "a"}] [])))
         "a close is a decision by a named authority, so its target converges")
     (is (= ["a" "b" "stack"]
            (map :label (stages/converged-targets
-                        reviews [{:disposition :declined :owner-layer "a"}])))
+                        reviews [{:disposition :declined :owner-layer "a"}] [])))
         "so is a decline: the finding is true and we said we are leaving it")))
 
 (deftest converged-targets-hold-the-stack-for-a-finding-that-names-no-layer
@@ -602,7 +602,25 @@
   (let [reviews [{:target {:label "a" :patch-hash "h-a"}}
                  {:target {:label "stack" :patch-hash "h-s" :stack? true}}]]
     (is (= ["a"] (map :label (stages/converged-targets
-                              reviews [{:disposition :park :owner-layer nil}]))))))
+                              reviews [{:disposition :park :owner-layer nil}] []))))))
+
+(deftest converged-targets-hold-a-target-a-carried-park-names
+  ;; A park is raised once and never again, so from the next round on it is in
+  ;; the carry and nowhere else. A round that reads only its own findings
+  ;; therefore converges the parked layer as soon as a fresh reviewer happens
+  ;; not to mention the seam — and the cache only grows, so a later run at that
+  ;; same patch skips the layer and the question a human was asked is gone.
+  (let [reviews [{:target {:label "a" :patch-hash "h-a"}}
+                 {:target {:label "b" :patch-hash "h-b"}}
+                 {:target {:label "stack" :patch-hash "h-s" :stack? true}}]]
+    (is (= ["b"] (map :label (stages/converged-targets
+                              reviews [] [{:since 3 :owner-layer "a"}])))
+        "a standing park holds its layer out of the cache with no finding to name it")
+    (is (= ["a" "b"] (map :label (stages/converged-targets
+                                  reviews [] [{:since 3 :owner-layer nil}])))
+        "a park that names no layer still holds the stack, which is what carries it")
+    (is (= ["a" "b" "stack"] (map :label (stages/converged-targets reviews [] [])))
+        "and a run holding no park converges everything it reviewed clean")))
 
 (deftest answered-for-carries-only-what-that-target-reported-and-lost
   (is (= ["aa11"]
@@ -1088,12 +1106,15 @@
   ;; it, it leaves the findings the moment the reviewer stops mentioning it and
   ;; the next warden re-adjudicates the same seam from scratch.
   (let [r1 (stages/carried-parks {} [{:handle "h1" :title "the seam"
-                                      :disposition :park :because "for a human"}] 1)
+                                      :disposition :park :because "for a human"
+                                      :owner-layer "source-row-variants"}] 1)
         r2 (stages/carried-parks r1 [{:handle "h9" :disposition :fix}] 2)
         r3 (stages/carried-parks r2 [{:handle "h1" :title "the seam"
                                       :disposition :declined}] 3)]
     (is (= 1 (get-in r1 ["h1" :since])))
     (is (= "for a human" (get-in r1 ["h1" :because])))
+    (is (= "source-row-variants" (get-in r1 ["h1" :owner-layer]))
+        "the layer rides along so convergence can hold that layer's patch back")
     (is (= r1 r2) "a round that does not mention it does not resolve it")
     (is (empty? r3) "a later round CAN settle it — a park is a question, not a verdict")))
 

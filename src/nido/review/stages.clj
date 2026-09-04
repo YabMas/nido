@@ -612,7 +612,7 @@
         (:reviews ctx)))
 
 
-(defn ^{:malli/schema [:=> [:cat :any :any] :any]}
+(defn ^{:malli/schema [:=> [:cat :any :any :any] :any]}
   converged-targets
   "Pure: the targets this round left with nothing OWED, paired with the patch
    they were reviewed at.
@@ -627,11 +627,22 @@
    exactly this reason — over-invalidating costs one review, and reading
    `not :fix` as `nothing owed` cost a P1 that no re-run would have shown again.
 
+   Owed by this round's open findings AND by the parks the run is carrying. A
+   park is by construction never raised twice — that is what a park IS — so from
+   the round after the one that raised it the findings do not mention it, and
+   the carry is the only thing that knows it is standing. Read the findings
+   alone and that silence becomes the answer: the layer converges on whatever
+   the round's fresh reviewer happens not to say, into the same store that only
+   grows. `carried-parks` holds the parks between rounds, and each names its
+   layer, so a park holds exactly the target an open finding naming that layer
+   would.
+
    A finding an upper layer reported but a lower one owns leaves the upper layer
-   converged, correctly: nothing about it needs changing. A finding the warden
-   gave no owner names no layer, so it blocks none of them — but it is still
-   open, so the whole-stack target holds it, and that target converging on
-   `nothing anywhere is open` is what stops it being lost.
+   converged, correctly: nothing about it needs changing. Something open that
+   names no layer — a finding the warden gave no owner, a park raised for the
+   shape of the stack rather than for a line in it — blocks none of them, but it
+   is still open, so the whole-stack target holds it, and that target converging
+   on `nothing anywhere is open` is what stops it being lost.
 
    A landed fix invalidates the layer it lands on and the composition, and
    nothing else. A layer ABOVE it keeps its key: a fix underneath moves what
@@ -641,15 +652,15 @@
    the whole range, so the fix moves it. Re-cutting a stack is the opposite
    case: it moves code between layers without changing `base-rev..@` by a byte,
    which is why that key folds in the cut as well; see `with-patch-hashes`."
-  [reviews findings]
-  (let [open   (remove settled? findings)
-        owners (into #{} (map :owner-layer) open)]
+  [reviews findings parks]
+  (let [owed   (concat (remove settled? findings) parks)
+        owners (into #{} (map :owner-layer) owed)]
     (into []
           (comp (map :target)
                 (filter (fn [t]
                           (and (:patch-hash t)
                                (if (:stack? t)
-                                 (empty? open)
+                                 (empty? owed)
                                  (not (contains? owners (:label t))))))))
           reviews)))
 
@@ -685,14 +696,15 @@
    outcome it forgot, so re-reviewing an untouched patch cost a full fan-out
    every time.
 
-   Safe to call from either because it reads only `:reviews` and `:findings` and
-   both are set by then, and because `converged-targets` is pure: with no
-   findings nothing is owed, so every target reviewed at this patch converges.
-   Best-effort — a cache that cannot be written costs the next run some
-   duplicated review and nothing else."
+   Safe to call from either because it reads only `:reviews`, `:findings` and
+   the carried parks, all of which are set by then, and because
+   `converged-targets` is pure: with nothing open and no park standing, every
+   target reviewed at this patch converges. Best-effort — a cache that cannot be
+   written costs the next run some duplicated review and nothing else."
   [cwd ctx]
   (when-let [[project ws-id] (project+ws-from-cwd cwd)]
-    (let [converged (converged-targets (:reviews ctx) (:findings ctx))]
+    (let [converged (converged-targets (:reviews ctx) (:findings ctx)
+                                       (vals (get-in ctx [:carry :parks] {})))]
       (when (seq converged)
         (let [now (str (java.time.Instant/now))
               c   (reduce (fn [c t]
@@ -822,7 +834,12 @@
    memory, and the run still reported nothing remaining.
 
    A park that a later round SETTLES drops out. Being parked is not permanent —
-   it is a question, and a question can be answered."
+   it is a question, and a question can be answered.
+
+   Each entry keeps the layer the warden gave the finding, because a standing
+   park is something owed and `converged-targets` has to hold that layer's patch
+   out of the cache for as long as it stands. Nil is a real answer to that: a
+   park nobody attributed names no layer and holds only the whole-stack target."
   [prior ruled iter]
   (let [settled (into #{} (comp (filter settled?) (map #(or (:handle %) (:id %)))) ruled)
         prior'  (into {} (remove (fn [[k _]] (contains? settled k))) prior)]
@@ -831,6 +848,7 @@
                 (if (contains? acc k)
                   acc
                   (assoc acc k {:since iter
+                                :owner-layer (:owner-layer f)
                                 :title (:title f)
                                 :because (:because f)}))))
             prior'
@@ -1117,7 +1135,12 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
    does not name\" is precisely the thing a human needs in front of them.
 
    An existing park is never overwritten. It holds the round it was first raised
-   in, which is what the give-up counter reads."
+   in, which is what the give-up counter reads.
+
+   It names no layer, and that is the accurate answer rather than a gap: a recut
+   asks where a boundary belongs, so what it holds open is how the pieces fit —
+   the whole-stack target's question — and no single layer's content is in
+   doubt because of it."
   [parks outcomes iter]
   (reduce (fn [acc {:keys [handle title outcome because]}]
             (if (or (nil? handle)
