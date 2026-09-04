@@ -598,6 +598,11 @@
    ;; resolve it — nothing here can, and a retry would land more fixes onto a
    ;; branch that already does not parse.
    :fix-conflicted       :escalate
+   ;; Every repair was refused by the rebase and put back, so the branch is
+   ;; clean and a retry would produce the same refusal against the same code.
+   ;; What is wanted is a human deciding whether the layers are in the right
+   ;; order at all.
+   :fix-rolled-back      :escalate
    ;; Somebody moved the working copy under a round in flight. Nothing is wrong
    ;; with the branch; the round just reviewed a state that stopped being
    ;; current, so the answer is to run it again, not to ask a human anything.

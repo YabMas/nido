@@ -1242,6 +1242,12 @@
                                ;; branch is holding conflict markers, so it is
                                ;; not reviewable until a human resolves them.
                                :fix-conflicted
+                               ;; Every repair the fix stage produced conflicted
+                               ;; the layers above it and was rolled back, so the
+                               ;; branch is intact and unchanged. Distinct from
+                               ;; :fix-declined: the fixers agreed with the
+                               ;; findings and the stack refused the edits.
+                               :fix-rolled-back
                                :warden-indeterminate
                                ;; A run in which every diff was empty. Distinct
                                ;; from :clean, which is a reviewer's verdict on

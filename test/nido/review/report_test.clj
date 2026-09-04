@@ -475,6 +475,24 @@
         ph (-> r :rounds first :phases (nth 1))]
     (is (= [{:layer "core" :ran? true :reason "spans two layers"}] (:declined ph)))))
 
+(deftest a-repair-the-stack-refused-is-named-in-the-fix-phase
+  ;; It is the one outcome with no other trace: the commit was rolled back, the
+  ;; fixer's own log says it succeeded, and the findings return next round
+  ;; looking as though nothing was ever tried on them.
+  (let [r (drive
+           [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+            {:event :phase-started :iter 1 :phase :review :at "t1"}
+            {:event :phase-finished :iter 1 :phase :review :at "t2" :ctx {:findings []}}
+            {:event :phase-started :iter 1 :phase :fix :at "t3"}
+            {:event :phase-finished :iter 1 :phase :fix :at "t4"
+             :ctx {:iter 1 :history []
+                   :rolled-back [{:layer "day-modal-design" :handed ["70529f24"]
+                                  :conflicted ["xlortuwzrtlu"]}]}}])
+        ph (-> r :rounds first :phases (nth 1))]
+    (is (= [{:layer "day-modal-design" :handed ["70529f24"]
+             :conflicted ["xlortuwzrtlu"]}]
+           (:rolled-back ph)))))
+
 ;; ---- the design verdict --------------------------------------------------
 
 (def ^:private a-verdict

@@ -1311,7 +1311,10 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
    Bottom-up is what makes the fixes cheap rather than what makes them correct:
    landing a fix on a lower layer rewrites every layer above it, so doing the
    lower one first means the upper fixer works against code that will not move
-   under it again this round.
+   under it again this round. That holds in the conflict case too, because
+   `run-fix-stage` puts a conflicting fix back: either the lower fix is in and
+   the layers above were rebased onto it before their fixers started, or it is
+   gone and they never moved.
 
    A finding whose owner_layer names no layer of this stack falls to the top
    layer — the same assign-to-highest rule the warden is told to use for a
@@ -1401,8 +1404,19 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                cwd stack
                #(reduce
                (fn [acc {:keys [label layer findings]}]
-                 (layers/position-for-fix! cwd layer)
-                 (let [{:keys [num-turns result-text]}
+                 (let [;; The point this attempt rolls back to, taken BEFORE the
+                       ;; insert so that undoing it undoes the whole attempt —
+                       ;; the inserted commit, the fixer's edits, the describe
+                       ;; and the bookmark move — rather than half of one.
+                       op     (layers/current-op cwd)
+                       _      (layers/position-for-fix! cwd layer)
+                       ;; What this fixer was HANDED, named rather than counted.
+                       ;; The count alone cannot answer the question every
+                       ;; cross-round read wants — did this commit stop that
+                       ;; finding coming back — because it holds one end of the
+                       ;; join and discards the other.
+                       handed (mapv (fn [f] (or (:handle f) (:id f))) findings)
+                       {:keys [num-turns result-text]}
                        (agent/launch!
                         {:run-id run-id :cwd cwd
                          :first-message (prompts/fix-prompt
@@ -1434,17 +1448,9 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                                 (str "review-loop: iter " (:iter ctx) " fixes"
                                      (when label (str " (" label ")"))))
                            _   (layers/restore-top! cwd stack)
-                           acc' (update acc :fixes (fnil conj [])
-                                        {:layer label :commit cid
-                                         ;; What this fixer was HANDED, named
-                                         ;; rather than counted. The count alone
-                                         ;; cannot answer the question every
-                                         ;; cross-round read wants — did this
-                                         ;; commit stop that finding coming back
-                                         ;; — because it holds one end of the
-                                         ;; join and discards the other.
-                                         :handed (mapv (fn [f] (or (:handle f) (:id f))) findings)
-                                         :fixed-count (count findings)})
+                           fix {:layer label :commit cid
+                                :handed handed
+                                :fixed-count (count findings)}
                            ;; A fix lands by REWRITING its layer, so jj rebases
                            ;; every layer above it, and a rebase can conflict.
                            ;; Nothing asked. The markers rode up the stack in the
@@ -1460,9 +1466,29 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                            ;; the top of the stage, so a conflict the stage
                            ;; itself creates is invisible to it.
                            bad (layers/conflicted cwd base)]
-                       (if (seq bad)
-                         (reduced (assoc acc' :conflicted (vec bad)))
-                         acc')))))
+                       (if (empty? bad)
+                         (update acc :fixes (fnil conj []) fix)
+                         ;; The stack refusing ONE repair is not the round refusing
+                         ;; the rest. Rolling this layer's fix back by operation id
+                         ;; — the shape `layers/attempt-reshape!` already treats a
+                         ;; refusal with — returns the stack to clean and lets every
+                         ;; fixer still in the plan run. It also makes `fix-plan`'s
+                         ;; bottom→top order true where it used to be merely
+                         ;; intended: the layer that would have moved under the
+                         ;; fixers above has been put back.
+                         (do (layers/restore-op! cwd op)
+                             (if-let [still (seq (layers/conflicted cwd base))]
+                               ;; `restore-op!` is best-effort by design, so whether
+                               ;; it took is asked rather than assumed. It did not:
+                               ;; the fix is still on the stack and so are the
+                               ;; markers, which is the one case that genuinely
+                               ;; needs a human before anything else runs.
+                               (reduced (-> acc
+                                            (update :fixes (fnil conj []) fix)
+                                            (assoc :conflicted (vec still))))
+                               (update acc :rolled-back (fnil conj [])
+                                       {:layer label :handed handed
+                                        :conflicted (vec bad)}))))))))
                  ctx plan))
               ctx' (if (seq (:fixes ctx'))
                      (update ctx' :history (fnil conj [])
@@ -1473,15 +1499,23 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                               :warden (:warden ctx')})
                      ctx')]
           (cond
-            ;; Stop with the stack named rather than reviewing it again. The next
-            ;; round would read conflict markers as source and spend its reviewers
-            ;; and its fixers on repairing a mess this stage made — which is
-            ;; exactly what happened, and what made the defect expensive rather
-            ;; than merely wrong. The fixes that DID land stay: throwing them away
+            ;; Reached only when the rollback above could not clear the conflict,
+            ;; so the stack really is holding markers. Stop with it named rather
+            ;; than reviewing it again: the next round would read those markers as
+            ;; source and spend its reviewers and its fixers on repairing a mess
+            ;; this stage made. The fixes that DID land stay — throwing them away
             ;; would discard a round's work over a rebase a human can resolve in
             ;; a minute, and the change ids say where.
             (seq (:conflicted ctx'))
             (assoc ctx' :control :stop :status :fix-conflicted)
+
+            ;; Every repair this round produced was refused by the stack and put
+            ;; back, so the tree is exactly what the reviewers already read.
+            ;; Distinct from :fix-declined, which is fixers reading the findings
+            ;; and saying no: here they said yes and the rebase said no, and the
+            ;; two want different things from whoever looks.
+            (and (empty? (:fixes ctx')) (seq (:rolled-back ctx')))
+            (assoc ctx' :control :stop :status :fix-rolled-back)
 
             (empty? (:fixes ctx'))
             (assoc ctx' :control :stop :status :fix-declined)

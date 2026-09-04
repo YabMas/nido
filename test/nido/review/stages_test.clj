@@ -197,19 +197,81 @@
         (is (nil? (:control ctx)))))))
 
 (defn- jj-with-conflicts
-  "A jj stub whose `conflicts()` revset names `ids`. Everything else succeeds
-   silently, which is what every other fix-stage test already assumes."
+  "A jj stub whose `conflicts()` revset names `ids` on every call, and whose
+   operation log is empty — so `restore-op!` has no point to roll back to and
+   the conflict stands. Everything else succeeds silently, which is what every
+   other fix-stage test already assumes."
   [ids]
   (fn [_dir & args]
     (if (some #(str/includes? (str %) "conflicts()") args)
       {:exit 0 :out (str/join "\n" ids) :err ""}
       {:exit 0 :out "" :err ""})))
 
-(deftest a-fix-that-conflicts-the-stack-stops-the-round-and-names-it
-  ;; A fix lands by rewriting its layer, so jj rebases every layer above it, and
-  ;; nothing asked whether that came out clean. The markers rode up in committed
-  ;; text and were found a round later by a reviewer reading a namespace that no
-  ;; longer parsed.
+(defn- jj-scripted
+  "A jj stub that answers the `conflicts()` revset from `answers` in order, one
+   entry per call, and [] once they run out. `op log` answers with an id so the
+   rollback has somewhere to restore to; everything else succeeds silently.
+
+   Scripted rather than fixed because the fix stage now asks the revset twice
+   per landing — once for the rebase, once to confirm the rollback took — and a
+   stub that gives one answer to both cannot tell those two apart."
+  [answers]
+  (let [remaining (atom (vec answers))]
+    (fn [_dir & args]
+      (cond
+        (some #(str/includes? (str %) "conflicts()") args)
+        (let [ids (first @remaining)]
+          (swap! remaining #(if (seq %) (subvec % 1) %))
+          {:exit 0 :out (str/join "\n" ids) :err ""})
+
+        (= "op" (first args)) {:exit 0 :out "0a1b2c3d" :err ""}
+        :else                 {:exit 0 :out "" :err ""}))))
+
+(def ^:private two-layer-stack
+  [{:bookmark "s--lower" :slug "lower" :tip "t1" :change "c1"}
+   {:bookmark "s--upper" :slug "upper" :tip "t2" :change "c2"}])
+
+(defn- fixers-run
+  "The layer labels a fixer was launched for, in order, read off the per-layer
+   error log each launch names."
+  [launches]
+  (mapv #(second (re-find #"fix-(.+)-round-\d+\.err\.log$" (str (:err-file %))))
+        launches))
+
+(deftest a-conflicting-fix-is-rolled-back-and-the-rest-of-the-plan-still-runs
+  ;; A conflict used to `reduced` the whole remainder: across four runs on one
+  ;; branch, 16 :fix rulings reached 4 fixers, and the layer owning 13 of them
+  ;; was never handed to one. The conflict is a fact about the layer that just
+  ;; landed, not about the repairs the round has not attempted yet.
+  (let [launches (atom [])]
+    (with-redefs [agent/launch! (fn [m] (swap! launches conj m)
+                                  {:num-turns 4 :result-error? false :result-text "done"})
+                  stages/working-copy-dirty? (fn [_] true)
+                  stages/session-stack (fn [_ _] two-layer-stack)
+                  ;; lower lands and conflicts; the rollback clears it; upper
+                  ;; then lands clean.
+                  jj/jj! (jj-scripted [["xuspsuww"] [] []])]
+      (let [ctx ((:run stages/fix-stage)
+                 {:config {:cwd "/w" :run-id "r1" :base "main"} :iter 2
+                  :findings [{:id "aa11" :title "x" :disposition :fix :owner-layer "lower"}
+                             {:id "bb22" :title "y" :disposition :fix :owner-layer "upper"}]})]
+        (is (= ["lower" "upper"] (fixers-run @launches))
+            "a conflict on the first layer must not cost the second its fixer")
+        (is (= [{:layer "lower" :handed ["aa11"] :conflicted ["xuspsuww"]}]
+               (:rolled-back ctx))
+            "the repair that was undone is on the record; nothing else holds it —
+             the commit is gone and the fixer's own log says it succeeded")
+        (is (= ["upper"] (mapv :layer (:fixes ctx)))
+            "only the fix that survived counts as landed")
+        (is (nil? (:control ctx)) "the stack is clean, so the round goes on")
+        (is (nil? (:conflicted ctx))
+            ":conflicted means the branch is holding markers right now, which is
+             what sends a human to resolve them")))))
+
+(deftest a-rollback-that-does-not-take-still-stops-the-round-and-names-it
+  ;; `restore-op!` is best-effort by design, so whether it took is asked rather
+  ;; than assumed. When it did not, the markers are on the stack: the next round
+  ;; would read them as source and spend its reviewers repairing them.
   (with-redefs [agent/launch! (fn [_] {:num-turns 4 :result-error? false :result-text "done"})
                 stages/working-copy-dirty? (fn [_] true)
                 jj/jj! (jj-with-conflicts ["xuspsuww" "b4927669"])]
@@ -224,6 +286,21 @@
       (is (= 1 (count (:history ctx)))
           "the fix that landed is still recorded — it is a rebase a human
            resolves, not a round to throw away"))))
+
+(deftest a-round-whose-every-repair-was-rolled-back-is-not-a-round-of-declines
+  ;; Both leave the tree as the reviewers read it, and they ask a human for
+  ;; different things: a decline is a fixer arguing the finding, a rollback is
+  ;; the stack refusing an edit the fixer stood behind.
+  (with-redefs [agent/launch! (fn [_] {:num-turns 4 :result-error? false :result-text "done"})
+                stages/working-copy-dirty? (fn [_] true)
+                jj/jj! (jj-scripted [["xuspsuww"] []])]
+    (let [ctx ((:run stages/fix-stage)
+               {:config {:cwd "/w" :run-id "r1" :base "main"} :iter 2
+                :findings [{:id "aa11" :title "x" :disposition :fix}]})]
+      (is (= :stop (:control ctx)) "nothing changed, so another round reads the same code")
+      (is (= :fix-rolled-back (:status ctx)))
+      (is (empty? (:fixes ctx)))
+      (is (= ["xuspsuww"] (:conflicted (first (:rolled-back ctx))))))))
 
 (deftest a-clean-rebase-after-a-fix-does-not-stop-the-round
   (with-redefs [agent/launch! (fn [_] {:num-turns 4 :result-error? false :result-text "done"})
@@ -766,6 +843,7 @@
                    {:bookmark "sess--top" :slug "top" :tip "c2"}]
         restored  (atom [])]
     (with-redefs [stages/session-stack      (fn [& _] stack)
+                  layers/current-op         (fn [_] "0a1b2c3d")
                   layers/position-for-fix!  (fn [_ layer]
                                               (throw (ex-info (str "cannot position " (:bookmark layer))
                                                               {:reason :review-failed})))
@@ -782,6 +860,7 @@
 
 (deftest fix-stage-restore-failure-never-masks-the-original-diagnosis
   (with-redefs [stages/session-stack     (fn [& _] [{:bookmark "sess--top" :slug "top" :tip "c1"}])
+                layers/current-op        (fn [_] "0a1b2c3d")
                 layers/position-for-fix! (fn [& _] (throw (ex-info "the real problem" {:reason :review-failed})))
                 layers/restore-top!      (fn [& _] (throw (ex-info "restore also failed" {})))
                 agent/launch!            (fn [_] {:num-turns 1})]

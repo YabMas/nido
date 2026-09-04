@@ -236,9 +236,13 @@
       ;; :declined comes off the ctx rather than the history entry, because a
       ;; round in which EVERY fixer declined writes no history entry at all —
       ;; which is exactly the round whose reasons a reader needs.
+      ;; :rolled-back beside them, because a repair the stack refused leaves no
+      ;; trace anywhere else: the commit is gone, the fixer's log says it
+      ;; succeeded, and the findings come back next round looking untouched.
       :fix    (let [h (last (filter #(= (:iter ctx) (:iter %)) (:history ctx)))]
                 (cond-> (assoc ph :fixes (vec (:fixes h)) :fixed-count (:fixed-count h))
-                  (seq (:declined ctx)) (assoc :declined (vec (:declined ctx)))))
+                  (seq (:declined ctx))    (assoc :declined (vec (:declined ctx)))
+                  (seq (:rolled-back ctx)) (assoc :rolled-back (vec (:rolled-back ctx)))))
       ;; What the stage decided about each recut, whether or not it could act.
       ;; Kept because a reshape is the only remedy a recut has — the warden
       ;; withholds it from the fixers — so an empty reshape phase is the report
