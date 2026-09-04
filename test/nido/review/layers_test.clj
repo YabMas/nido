@@ -279,8 +279,22 @@
   (let [calls (atom [])]
     (with-redefs [jj/jj! (scripted {"log" {:exit 0 :out "abc\ndef" :err ""}} calls)]
       (is (= ["abc" "def"] (layers/conflicted "/w" "main"))))
-    (is (= ["log" "-r" "conflicts() & (main..@)"] (take 3 (first @calls))))
+    (is (str/starts-with? (nth (first @calls) 2) "conflicts() & (main..@)"))
     (is (not-any? #(some #{"resolve"} %) @calls))))
+
+(deftest conflicted-leaves-out-a-working-copy-that-holds-nothing-of-its-own
+  ;; A conflict propagates to every descendant and restore-top! parks an empty
+  ;; @ on the stack top, so an unfiltered sweep leads with a change id that is
+  ;; new every round. Across three runs on one branch the two ids that named
+  ;; the actual seam were identical and the first differed each time, so
+  ;; comparing two fix-conflicted entries meant reading past the difference.
+  ;; A NON-empty @ is still swept: on an unstacked branch the session bookmark
+  ;; is on the working copy, which makes @ the top layer.
+  (let [calls (atom [])]
+    (with-redefs [jj/jj! (scripted {"log" {:exit 0 :out "abc" :err ""}} calls)]
+      (layers/conflicted "/w" "main"))
+    (is (= "conflicts() & (main..@) ~ (@ & empty())" (nth (first @calls) 2))
+        "`..@-` would exclude the working copy even when it is the top layer")))
 
 (deftest a-reshape-that-conflicts-leaves-the-stack-as-it-was
   (let [calls (atom [])]

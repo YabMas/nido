@@ -448,6 +448,36 @@
     (is (= "h-range" (:range-hash row))
         "the key's other half; the cut's half is on the layer rows")))
 
+(deftest a-conflicted-change-id-resolves-to-a-layer-within-the-report
+  ;; `layers/conflicted` answers in change ids and every other account of the
+  ;; run is by layer label, so a fix-conflicted report used to name two
+  ;; twelve-character ids that nothing in the file mapped to anything — the
+  ;; reader's only move was to open the branch and resolve them against jj.
+  (let [r (drive
+           [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+            {:event :phase-started :iter 1 :phase :review :at "t1"}
+            {:event :phase-finished :iter 1 :phase :review :at "t2"
+             :ctx {:findings []
+                   :reviews [{:target {:label "diary-paging" :index 1
+                                       :layer {:change "xlortuwzrtlu"}}}
+                             {:target {:label "day-modal-design" :index 2
+                                       :layer {:change "spxkmpurtnms"}}}
+                             {:target {:label "stack" :stack? true}}]
+                   :skipped []}}
+            {:event :phase-started :iter 1 :phase :fix :at "t3"}
+            {:event :phase-finished :iter 1 :phase :fix :at "t4"
+             :ctx {:iter 1 :history []
+                   :conflicted ["spxkmpurtnms"]}}
+            {:event :run-finalized :status :fix-conflicted :at "t5"}])
+        phases (-> r :rounds first :phases)
+        by-change (into {} (map (juxt :change :label))
+                        (:layers (first (filter #(= "review" (:phase %)) phases))))
+        conflicted (:conflicted (first (filter #(= "fix" (:phase %)) phases)))]
+    (is (= ["day-modal-design"] (mapv by-change conflicted))
+        "the report names the layer a human has to open, not the id jj knows it by")
+    (is (nil? (some :change (filter :stack? (:layers (first phases)))))
+        "the composition pass is no layer and has no change of its own")))
+
 (deftest the-terminal-clean-round-keeps-its-correctness-verdict
   ;; It was the only round that dropped it, and it is the round the verdict is
   ;; most worth keeping for: the only evidence anyone looked.

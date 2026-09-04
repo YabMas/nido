@@ -313,9 +313,21 @@
    probe stacks: identical output, identical exit code, opposite truth.
 
    Scoped to `<base>..@` because the revset is repo-wide, and this repo holds a
-   dozen workspaces whose conflicts are not ours to read."
+   dozen workspaces whose conflicts are not ours to read.
+
+   The working copy is out of the sweep when it contributes nothing of its own.
+   A conflict propagates to every descendant and `restore-top!` parks an empty
+   `@` on the stack top, so including it leads the answer with a change id that
+   is new every round and names no layer — burying the stable ids that identify
+   the seam behind noise a reader has to read past. A NON-empty `@` stays in:
+   on an unstacked branch the session bookmark sits on the working copy, so `@`
+   is itself the top layer and its conflict is the one worth knowing about.
+   That is what `~ (@ & empty())` buys over `<base>..@-`, which drops the
+   second case too — measured on jj 0.45 against a probe stack whose conflicted
+   top layer was `@`."
   [cwd base]
-  (let [{:keys [exit out]} (jj/jj! cwd "log" "-r" (str "conflicts() & (" base "..@)")
+  (let [{:keys [exit out]} (jj/jj! cwd "log" "-r"
+                                   (str "conflicts() & (" base "..@) ~ (@ & empty())")
                                    "--no-graph" "-T" "change_id.short() ++ \"\\n\"")]
     (if (zero? exit)
       (vec (remove str/blank? (str/split-lines out)))

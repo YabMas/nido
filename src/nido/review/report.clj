@@ -128,14 +128,22 @@
   (vec (sort-by (juxt #(if (:stack? %) 1 0) #(or (:index %) 0)) rows)))
 
 (defn- row
-  "A display row for `target`: its identity, its kind, its place in the stack and
-   the patch it is identified by, plus whatever this particular row reports.
+  "A display row for `target`: its identity, its kind, its place in the stack,
+   the change it sits on and the patch it is identified by, plus whatever this
+   particular row reports.
 
    :index is OMITTED rather than nil when the target has none — the composition
    pass, and anything from a stack too short to have layers — so an unnumbered
-   row is exactly the map it was before numbering existed. :patch-hash and
-   :range-hash are omitted the same way, so a target the cache cannot key says
-   nothing rather than nil.
+   row is exactly the map it was before numbering existed. :change, :patch-hash
+   and :range-hash are omitted the same way, so a target the cache cannot key
+   says nothing rather than nil.
+
+   :change is the layer's jj change id, which is what `layers/conflicted`
+   reports a conflicted stack under. It is the only join between the two, and
+   without it a fix-conflicted report names twelve-character ids and holds
+   nothing that maps them to layers — so the ids can be resolved only against a
+   branch the reader has not opened. The composition row has none, being no
+   layer.
 
    :patch-hash is on every row that has one, REVIEWED as much as skipped. A
    skipped row needs it to justify the skip; a reviewed row needs it to explain
@@ -153,12 +161,14 @@
    component that moved instead of leaving a reader to infer it. Not carrying it
    is why a key that missed on every rebase survived fourteen review runs."
   [target extra]
-  (merge (cond-> {:label  (:label target)
-                  :stack? (boolean (:stack? target))}
-           (:index target)      (assoc :index (:index target))
-           (:patch-hash target) (assoc :patch-hash (:patch-hash target))
-           (:range-hash target) (assoc :range-hash (:range-hash target)))
-         extra))
+  (let [change (get-in target [:layer :change])]
+    (merge (cond-> {:label  (:label target)
+                    :stack? (boolean (:stack? target))}
+             (:index target)      (assoc :index (:index target))
+             change               (assoc :change change)
+             (:patch-hash target) (assoc :patch-hash (:patch-hash target))
+             (:range-hash target) (assoc :range-hash (:range-hash target)))
+           extra)))
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   review-layers
