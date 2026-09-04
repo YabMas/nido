@@ -40,26 +40,27 @@
   [status]
   (if (= :review-failed status) 1 0))
 
-(defn- open-for-ledger
-  "The still-open findings, trimmed to what a reader of the workstream needs and
-   nothing that only makes sense inside a run. `where` is assembled here because
-   file and line are two fields in the report and one fact to a reader.
+(defn- ledger-findings
+  "Findings trimmed to what a reader of the workstream needs and nothing that
+   only makes sense inside a run. `where` is assembled here because file and
+   line are two fields in the report and one fact to a reader.
 
-   `:handed` is the one thing here that is not the finding's own: whether a
-   repair for it is sitting unverified in the branch. Two remainders read alike
-   in a list of titles and ask opposite things of whoever picks them up — one
-   needs checking, the other needs doing."
-  [final]
-  (let [handed (verdict/handed-to-a-fixer final)]
-    (into []
-          (map (fn [{:keys [id title file line-start disposition because] :as f}]
-                 (cond-> {:title (str (or title "(untitled finding)"))}
-                   id          (assoc :id (str id))
-                   file        (assoc :where (str file (when line-start (str ":" line-start))))
-                   disposition (assoc :disposition (keyword disposition))
-                   because     (assoc :because (str because))
-                   (verdict/handed? handed f) (assoc :handed true))))
-          (verdict/open-across-run final))))
+   `handed` is a `verdict/handed-to-a-fixer` set, and `:handed` is the one field
+   here that is not the finding's own: whether a repair for it is sitting
+   unverified in the branch. Two remainders read alike in a list of titles and
+   ask opposite things of whoever picks them up — one needs checking, the other
+   needs doing. Empty for a list where nothing is owed and the question cannot
+   arise."
+  [handed findings]
+  (into []
+        (map (fn [{:keys [id title file line-start disposition because] :as f}]
+               (cond-> {:title (str (or title "(untitled finding)"))}
+                 id          (assoc :id (str id))
+                 file        (assoc :where (str file (when line-start (str ":" line-start))))
+                 disposition (assoc :disposition (keyword disposition))
+                 because     (assoc :because (str because))
+                 (verdict/handed? handed f) (assoc :handed true))))
+        findings))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   review-event
@@ -84,9 +85,17 @@
    question only a human can answer, a handed finding needs checking, and what
    is left is work the run was cut off before it reached. A run that STOPS on a
    park reported that question in the same integer as the fixes it never got
-   to."
+   to.
+
+   `:kept` is the other half, and it is not part of the remainder at all: a
+   declined defect and a deviated claim were DECIDED, so nobody owes anything
+   and `:findings-remaining` does not count them. They still have to be written
+   down — a decision to ship a known defect is the kind a record exists to hold
+   — so they go in their own list, under their own count."
   [final report report-path]
-  (let [open     (open-for-ledger final)
+  (let [handed   (verdict/handed-to-a-fixer final)
+        open     (ledger-findings handed (verdict/open-across-run final))
+        kept     (ledger-findings #{} (verdict/kept-across-run final))
         repaired (count (filter :handed open))
         parked   (count (filter #(= :park (:disposition %)) open))]
     (cond-> {:format             :review-report
@@ -98,6 +107,7 @@
              :findings-remaining (count open)
              :report-path        report-path}
       (seq open)      (assoc :open open)
+      (seq kept)      (assoc :kept kept :findings-kept (count kept))
       (pos? repaired) (assoc :remaining-handed repaired)
       (pos? parked)   (assoc :remaining-parked parked)
       ;; Only a run that ended on a conflicted stack has these, and it is the
@@ -207,6 +217,7 @@
        :rounds             (or (get-in report [:summary :rounds]) 0)
        :findings-fixed     (or (get-in report [:summary :findings-fixed]) 0)
        :findings-remaining (count open)
+       :findings-kept      (count (verdict/kept-across-run final))
        :remaining-handed   (count (filter #(verdict/handed? handed %) open))
        :remaining-parked   (count (filter #(= :park (:disposition %)) open))
        :reviewed-project   project

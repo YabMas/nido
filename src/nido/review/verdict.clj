@@ -225,13 +225,20 @@
 
 (defn ^{:malli/schema [:=> [:cat :any] :any]}
   still-open
-  "Findings that actually remain at the end — the warden closed the rest, by a
-   named authority. Handing a closed finding to the verdict as \"still open\"
-   would have it re-adjudicate something already decided, against a design it is
-   supposed to be checking.
+  "What the verdict pass is asked to judge, out of one round's findings — the
+   warden closed the rest, by a named authority. Handing a closed finding to the
+   verdict would have it re-adjudicate something already decided, against a
+   design it is supposed to be checking.
 
-   ONE round's findings. For what the whole run is still holding — which is what
-   a reader of the workstream needs — see `open-across-run`."
+   Only a close is dropped, and the narrower filter is deliberate: a decline is
+   a real defect this branch chose to ship and a deviation is a layer's claim it
+   has stopped meeting, and both are exactly the evidence this pass is asked to
+   classify as implementation-or-design. `open-across-run` drops them because it
+   answers a different question — what is still OWED — and nobody owes anything
+   on a decision.
+
+   ONE round's findings. For what the whole run is still holding, which is what
+   a reader of the workstream needs, see `open-across-run`."
   [findings]
   (into [] (remove #(= :closed (:disposition %))) findings))
 
@@ -250,15 +257,15 @@
   [f]
   (or (:handle f) (:id f) [(:file f) (:line-start f) (:title f)]))
 
-(defn ^{:malli/schema [:=> [:cat :map] :any]}
-  open-across-run
-  "Everything the run is still holding when it ends, folded over every round.
+(defn- final-rulings
+  "Every finding the run raised, folded over all its rounds to one entry each
+   carrying the ruling that stuck, ordered by the round that ruling landed in.
 
-   `still-open` reads the final round alone, which is the round least likely to
-   contain the run's open items: a finding parked in round 1 and never resolved
-   does not appear in round 9's report, so a run could end holding eight parked
-   findings and record two. What a park IS, is a thing no round will raise again
-   — so the last round is exactly where it cannot be found.
+   The final round is the round LEAST likely to hold the run's open items: a
+   finding parked in round 1 and never resolved does not appear in round 9's
+   report, so reading it alone lets a run end holding eight parked findings and
+   record two. What a park IS, is a thing no round will raise again — so the
+   last round is exactly where it cannot be found.
 
    Per identity, the LATEST ruling wins: a seam parked in round 3 and closed in
    round 7 is closed, and only its final disposition is asked about.
@@ -278,13 +285,45 @@
                                    acc round-findings))
                          {}
                          (map-indexed vector rounds))]
-    (into []
-          (comp (map #(dissoc % ::round))
-                (remove #(= :closed (:disposition %))))
-          (->> (vals latest)
-               (remove #(and (= :fix (:disposition %))
-                             (< (::round %) last-idx)))
-               (sort-by (juxt ::round #(str (:id %))))))))
+    (->> (vals latest)
+         (remove #(and (= :fix (:disposition %))
+                       (< (::round %) last-idx)))
+         (sort-by (juxt ::round #(str (:id %))))
+         (mapv #(dissoc % ::round)))))
+
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  open-across-run
+  "Everything the run is still OWED when it ends — a fixer's work nobody
+   checked, a question put to a human, a finding no round ruled on. See
+   `final-rulings` for the fold.
+
+   Owed is `stages/settled?`, not `is not closed`. The two differ for a decline
+   and for a deviation, and reading the second counts a finding this run's own
+   convergence check has settled as one the run is still holding — so the same
+   run reports `converged` and `1 still open` about one finding, and two ledger
+   entries it wrote minutes apart disagree about how much is left.
+   `prompts/disposition-vocabulary` carries `:settles?` precisely so that
+   convergence, the carried answers and this count cannot come to different
+   views.
+
+   What a decline and a deviation leave behind is not nothing, and it is not
+   here — see `kept-across-run`."
+  [final]
+  (into [] (remove stages/settled?) (final-rulings final)))
+
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  kept-across-run
+  "What the run DECIDED to live with — the real defects it declined and the
+   layer claims it let stand. Nobody owes anything on these; that is what makes
+   them not open, and it is also what makes them easy to lose.
+
+   The other half of the remainder, and the reason `open-across-run` can afford
+   to be strict about what is owed. Counted together the two are one number that
+   answers neither question a reader has: a park is somebody must decide and a
+   decline is somebody already did, and the second is a decision to ship a
+   defect, which is precisely the kind of thing a record exists to hold."
+  [final]
+  (into [] (filter stages/kept?) (final-rulings final)))
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   handed-to-a-fixer

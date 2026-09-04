@@ -61,6 +61,27 @@
     (is (not-any? #(str/includes? (str %) "worktree") (vals p))
         "no path into the reviewed worktree reaches the analysis")))
 
+(deftest the-payload-counts-decisions-apart-from-the-remainder
+  ;; A declined defect is not owed to anyone, so it is out of the remainder —
+  ;; but a run that declines its way to `converged` and one that fixes its way
+  ;; there are the same status, and the analysis is what has to tell them apart.
+  (let [p (analysis/payload (assoc a-run :findings-remaining 1 :findings-kept 2))]
+    (is (= 1 (:findings-remaining p)))
+    (is (= 2 (:findings-kept p))))
+  (is (not (contains? (analysis/payload a-run) :findings-kept))
+      "omitted at zero, like every other optional count on this payload"))
+
+(deftest the-title-carries-the-parks-and-nothing-else
+  ;; The title is what a human reads off the board without opening anything, and
+  ;; a park is the one count that is asking them for something.
+  (let [p (analysis/payload (assoc a-run :status :unfixable
+                                   :findings-remaining 3 :remaining-parked 1
+                                   :remaining-handed 1 :findings-kept 2))]
+    (is (str/includes? (:title p) "1 parked"))
+    (is (not (str/includes? (:title p) "kept"))))
+  (is (not (str/includes? (:title (analysis/payload a-run)) "parked"))
+      "a run waiting on nobody says so by saying nothing"))
+
 (deftest the-title-says-which-run-this-was
   (let [p (analysis/payload a-run)]
     (is (str/includes? (:title p) "converged"))

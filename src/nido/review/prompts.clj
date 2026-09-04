@@ -68,8 +68,15 @@
 
    `:settles?` marks a disposition that ENDS a finding: it was decided, nobody
    owes anything further, and a later round re-raising it has found nothing new.
-   It is what convergence and the carried answers both read, so the two cannot
-   disagree about whether a finding is still open."
+   It is what convergence, the carried answers and the run's remainder all read,
+   so they cannot disagree about whether a finding is still open.
+
+   `:kept?` splits the settled ones by what the decision left behind. A `:closed`
+   finding is not this branch's — a duplicate, out of scope, already filed, or
+   simply wrong — and once it is decided there is nothing to carry. A `:declined`
+   or a `:deviation` is TRUE of the branch and stays true: the decision was to
+   live with it. Neither is owed to anyone, so neither is open; but a record that
+   drops the second kind has quietly deleted a defect a human agreed to ship."
   [{:disposition :fix
     ;; Deliberately does not name owner_layer. On an unlayered branch that field
     ;; is not in the shape at all, and a vocabulary entry that references it
@@ -86,6 +93,7 @@
                 "  say what they missed).")}
    {:disposition :deviation
     :settles? true
+    :kept? true
     :requires :of
     :means (str "the finding shows a layer's stated CLAIM is not true, and it is\n"
                 "  not something to fix — the claim was overstated. Put the claim\n"
@@ -93,6 +101,7 @@
                 "  the deviation is what actually happened. Both are kept.")}
    {:disposition :declined
     :settles? true
+    :kept? true
     :requires :because
     :means (str "the finding is TRUE and we are not acting on it. Not a\n"
                 "  duplicate, not out of scope, not wrong — a real defect this\n"

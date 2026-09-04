@@ -284,3 +284,43 @@
                :findings [{:handle "bb22" :title "t" :disposition :fix}]}
         handed (verdict/handed-to-a-fixer final)]
     (is (empty? (filter #(verdict/handed? handed %) (verdict/open-across-run final))))))
+
+(deftest a-decided-finding-is-not-owed-and-is-not-lost
+  ;; The two readers disagreeing is the defect: one run reported `converged · 2
+  ;; rounds · 2 fixed · 1 still open` about a finding its own convergence check
+  ;; had already settled, because convergence reads `stages/settled?` and this
+  ;; fold removed only :closed. Both halves of the answer are asserted — the
+  ;; count has to drop the decision AND the record has to keep it, or fixing the
+  ;; first deletes a defect somebody agreed to ship.
+  (let [final {:status  :converged
+               :history [{:iter 1 :findings [{:handle "h1" :title "the shipped defect"
+                                              :disposition :declined
+                                              :because "the shape is wrong, not this line"}
+                                             {:handle "h2" :title "the overstated claim"
+                                              :disposition :deviation
+                                              :of "every envelope resolves through policy-for-reason"}
+                                             {:handle "h3" :title "a duplicate"
+                                              :disposition :closed :authority "duplicate"}
+                                             {:handle "h4" :title "needs a human"
+                                              :disposition :park}]}]
+               :findings []}]
+    (is (= ["needs a human"] (mapv :title (verdict/open-across-run final)))
+        "only the park is still owed — a decline and a deviation were decided,
+         and convergence has said so since :settles? was introduced")
+    (is (= ["the shipped defect" "the overstated claim"]
+           (mapv :title (verdict/kept-across-run final)))
+        "and the decisions survive, because a branch shipping a known defect is
+         exactly what a record is for")
+    (is (empty? (filter #(= "a duplicate" (:title %)) (verdict/kept-across-run final)))
+        "a close is not kept: once a duplicate is decided there is nothing left
+         of it to carry")))
+
+(deftest a-decline-reversed-in-a-later-round-is-owed-again
+  ;; Both folds read the ruling that stuck, so a finding cannot sit in the two
+  ;; lists at once — which is what makes the counts add up.
+  (let [final {:status :escalated
+               :history [{:iter 1 :findings [{:handle "h" :title "t" :disposition :declined
+                                              :because "not this branch's problem"}]}]
+               :findings [{:handle "h" :title "t" :disposition :park}]}]
+    (is (= ["t"] (mapv :title (verdict/open-across-run final))))
+    (is (empty? (verdict/kept-across-run final)))))

@@ -1228,6 +1228,22 @@
    [:format  [:= :ship-submitted]]
    [:session string?]])
 
+(def ^:private ReviewFinding
+  "One finding a review run handed to the workstream, trimmed to what a reader
+   needs and nothing that only makes sense inside a run. Shared by the two lists
+   below because they hold the same thing and differ only in what is owed on it."
+  [:map {:closed true}
+   [:id          {:optional true} [:maybe string?]]
+   [:title       string?]
+   [:where       {:optional true} [:maybe string?]]
+   [:disposition {:optional true} [:maybe keyword?]]
+   ;; The warden's own words on why it ruled this way — written for whoever
+   ;; picks the finding up, and until now readable only inside report.json.
+   [:because     {:optional true} [:maybe string?]]
+   ;; A repair for this one is in the branch and nothing checked it. The rest
+   ;; of the list needs doing; this needs reading. Present only when true.
+   [:handed      {:optional true} boolean?]])
+
 (def ReviewReport
   "The review-loop outcome as one terminal ledger event (verdict + counts). Points
    at the full report.json rather than embedding it. `:at` is stamped by the ledger."
@@ -1295,23 +1311,22 @@
    ;; ON a park is stopping for the one item nobody else can move. Optional and
    ;; omitted at zero, like its sibling.
    [:remaining-parked {:optional true} int?]
+   ;; How many findings the run DECIDED to live with — declined defects and
+   ;; layer claims it let stand. Not part of `:findings-remaining`, because
+   ;; nothing is owed on a decision; carried beside it because a run that
+   ;; declines its way to `converged` and one that fixes its way there are the
+   ;; same status and different behaviour. Optional and omitted at zero.
+   [:findings-kept {:optional true} int?]
    ;; The remaining findings themselves, not only how many. A count answers
    ;; "did this run finish clean"; it cannot answer "what is it waiting for",
    ;; which for a run that ended holding a park is the only question there is.
    ;; Optional because a run with nothing open omits it rather than carrying [].
-   [:open {:optional true}
-    [:sequential
-     [:map {:closed true}
-      [:id          {:optional true} [:maybe string?]]
-      [:title       string?]
-      [:where       {:optional true} [:maybe string?]]
-      [:disposition {:optional true} [:maybe keyword?]]
-      ;; The warden's own words on why it ruled this way — written for whoever
-      ;; picks the finding up, and until now readable only inside report.json.
-      [:because     {:optional true} [:maybe string?]]
-      ;; A repair for this one is in the branch and nothing checked it. The rest
-      ;; of the list needs doing; this needs reading. Present only when true.
-      [:handed      {:optional true} boolean?]]]]
+   [:open {:optional true} [:sequential ReviewFinding]]
+   ;; The decided-and-kept ones, in their own list for the same reason `:open`
+   ;; exists: the count says a defect was kept, and only this says which one.
+   ;; A decline is the entry here a later reader is most likely to want to argue
+   ;; with, so it travels with the `:because` the warden gave it.
+   [:kept {:optional true} [:sequential ReviewFinding]]
    ;; The change ids jj left conflicted, on the two statuses that end holding
    ;; them and nowhere else. Where to go, named: the status alone says the stack
    ;; is broken and leaves finding it as an exercise, on a nine-layer branch
@@ -2336,10 +2351,28 @@
 (defn- ship-submitted->markdown [{:keys [session]}]
   (str/join "\n" ["# Ship submitted" "" (str "`" session "` handed to the merge lane.")]))
 
+(defn- review-findings->markdown
+  "One of the review entry's two finding lists. The disposition leads because it
+   is what tells the reader which list they are in even when the two are read
+   apart, and `because` is the warden's own words on the ruling.
+
+   `_(repaired, unverified)_` marks the one row that asks the opposite thing of
+   a reader: a repair for it is already in the branch and nothing checked it, so
+   it wants reading rather than doing."
+  [heading findings]
+  (str "\n## " heading "\n"
+       (str/join "\n"
+                 (for [{:keys [title where disposition because handed]} findings]
+                   (str "- " (when disposition (str "**" (name disposition) "** — "))
+                        title
+                        (when where (str "  `" where "`"))
+                        (when handed "  _(repaired, unverified)_")
+                        (when because (str "\n  - " because)))))))
+
 (defn- review->markdown [{:keys [status base base-rev rounds findings-fixed
-                                 findings-remaining remaining-handed
+                                 findings-remaining findings-kept remaining-handed
                                  remaining-parked report-path
-                                 summary open conflicted]}]
+                                 summary open kept conflicted]}]
   (str/join "\n"
     (remove nil?
       [(str "# Review: " (name status))
@@ -2360,6 +2393,11 @@
                                  (when (pos? (or remaining-handed 0))
                                    (str remaining-handed " already repaired, unverified"))])]
               (when (seq split) (str " (" (str/join "; " split) ")")))
+            ;; Its own count rather than part of the remainder: these were
+            ;; decided, so nobody is waiting on them, and a reader sent to look
+            ;; at one finds a question already answered.
+            (when (pos? (or findings-kept 0))
+              (str "  ·  " findings-kept " kept"))
             "  ·  " rounds " rounds")
        (str "base " base (when base-rev (str "@" base-rev)))
        ;; What is still owed, in the entry itself. The counts above say a run
@@ -2367,19 +2405,12 @@
        ;; otherwise means opening a report.json that the run dir may no longer
        ;; have. A park is the case that matters: the loop has no move for it, so
        ;; the entry is the whole handover to the human who does.
-       ;;
-       ;; The marked ones ask the opposite thing of a reader: a repair for them
-       ;; is already in the branch and nothing verified it, so they want reading
-       ;; rather than doing.
-       (when (seq open)
-         (str "\n## Still open\n"
-              (str/join "\n"
-                        (for [{:keys [title where disposition because handed]} open]
-                          (str "- " (when disposition (str "**" (name disposition) "** — "))
-                               title
-                               (when where (str "  `" where "`"))
-                               (when handed "  _(repaired, unverified)_")
-                               (when because (str "\n  - " because)))))))
+       (when (seq open) (review-findings->markdown "Still open" open))
+       ;; The decisions, under their own heading. Under "Still open" they read
+       ;; as work outstanding, and left out entirely the entry says nothing was
+       ;; agreed at all — and agreeing to ship a known defect is the thing here
+       ;; most worth being able to point at later.
+       (when (seq kept) (review-findings->markdown "Decided and kept" kept))
        ;; Above the summary and above the report link, because it is the one
        ;; thing here that must be acted on before anything else is read: the
        ;; branch is holding conflict markers in committed text.

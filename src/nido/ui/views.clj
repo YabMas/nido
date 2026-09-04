@@ -1277,7 +1277,7 @@
    them. A nil `pos` (the gate pane, which has no such position) renders every
    round unfolded: with nothing to click, the detail has to be on the page."
   [{:keys [status base base-rev rounds findings-fixed findings-remaining
-           remaining-handed report-path summary detail]} pos]
+           findings-kept remaining-handed report-path summary detail]} pos]
   (let [cwd    (get-in detail [:target :cwd])
         files  (get-in detail [:target :files])
         rounds* (:rounds detail)
@@ -1289,10 +1289,18 @@
       ;; The two counts overlap, and the third says by how much: a repair landed
       ;; in the final round counts as dispatched and as still owed, since nothing
       ;; re-read the layer. Shown only when there is an overlap to state.
+      ;;
+      ;; `kept` is a fourth number rather than part of `remaining`: a declined
+      ;; defect was decided, so the branch owes nothing on it and nobody should
+      ;; be sent to look. It is shown at all because deciding to ship a defect
+      ;; is a fact about the branch, and a card that omits it reads identically
+      ;; to one where the reviewers found nothing.
       [:span.meta rounds " round" (when (not= 1 rounds) "s")
        " · " findings-fixed " fixed · " findings-remaining " remaining"
        (when (pos? (or remaining-handed 0))
-         (str " (" remaining-handed " already repaired, unverified)"))]]
+         (str " (" remaining-handed " already repaired, unverified)"))
+       (when (pos? (or findings-kept 0))
+         (str " · " findings-kept " kept"))]]
      [:p.meta "base " base
       (when base-rev (str " @ " (subs base-rev 0 (min 12 (count base-rev)))))
       (when (seq files) (str " · " (count files) " file"

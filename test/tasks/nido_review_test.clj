@@ -303,6 +303,55 @@
     (is (not (str/includes? (report/report->markdown (assoc ev :format :review-report))
                             "unverified")))))
 
+(deftest a-decided-finding-leaves-the-remainder-and-lands-in-its-own-list
+  ;; One run wrote two counts of what it was holding into adjacent ledger
+  ;; entries — `:findings-remaining 2` in one and "holding 1 finding it has no
+  ;; move for" in the next — because convergence read `stages/settled?` and the
+  ;; remainder removed only :closed. The count is what propagates: to the board,
+  ;; to the analysis payload and to the banner of the session that reads it.
+  (let [final {:status  :converged
+               :history [{:iter 1 :findings [{:handle "h1" :id "h1"
+                                              :title "the shipped defect"
+                                              :file "src/a.clj" :line-start 12
+                                              :disposition :declined
+                                              :because "the shape is wrong, not this line"}
+                                             {:handle "h2" :id "h2"
+                                              :title "needs a human"
+                                              :disposition :park}]}]
+               :findings []}
+        ev    (t/review-event final
+                              {:summary {:rounds 2 :findings-fixed 2}
+                               :target {:base "main" :base-rev "x"}}
+                              "/runs/r/report.json")]
+    (is (= 1 (:findings-remaining ev))
+        "the park alone is owed; counting the decline beside it is the run
+         contradicting its own convergence check")
+    (is (= 1 (:findings-kept ev)))
+    (is (= ["the shipped defect"] (mapv :title (:kept ev)))
+        "and the decision stays on the record, with the reason the warden gave")
+    (is (= "the shape is wrong, not this line" (:because (first (:kept ev)))))
+    (is (= ev (report/validate-event :review ev))
+        "the ledger schema is closed; a rejected append is swallowed to stderr")
+    (let [md (report/report->markdown (assoc ev :format :review-report))]
+      (is (str/includes? md "1 remaining"))
+      (is (str/includes? md "1 kept"))
+      (is (str/includes? md "Decided and kept")
+          "under its own heading — read under `Still open` it tells whoever
+           picks the entry up that a settled decision is outstanding work"))))
+
+(deftest a-run-that-decided-nothing-carries-no-kept-list
+  ;; Omitted rather than empty, like every other optional count on the entry: a
+  ;; `0 kept` on every clean run trains a reader to skip the line where it says
+  ;; something.
+  (let [ev (t/review-event {:status :clean :history [] :findings []}
+                           {:summary {:rounds 1 :findings-fixed 0}
+                            :target {:base "main" :base-rev "x"}}
+                           "/runs/r/report.json")]
+    (is (not (contains? ev :kept)))
+    (is (not (contains? ev :findings-kept)))
+    (is (not (str/includes? (report/report->markdown (assoc ev :format :review-report))
+                            "kept")))))
+
 (deftest review-event-omits-open-when-nothing-is-owed
   (let [ev (t/review-event {:status :clean :history [] :findings []}
                            {:summary {:rounds 1 :findings-fixed 0}

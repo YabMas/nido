@@ -44,10 +44,9 @@
    Keyed on the run id, a re-fire of the same run lands back in the workstream
    that already holds its analysis instead of starting a second one.
 
-   The counts are duplicated out of the report on purpose. They are what the
-   payload's title is built from, and they are the whole story of the run if the
-   run dir has been reclaimed by the time the analysis gets there — which is the
-   normal end state of a run dir, not an edge case.
+   The counts are duplicated out of the report on purpose. They are the whole
+   story of the run if the run dir has been reclaimed by the time the analysis
+   gets there — which is the normal end state of a run dir, not an edge case.
 
    `:remaining-handed` and `:remaining-parked` are carried only when non-zero,
    so a converged run says nothing rather than 0. They split the remainder into
@@ -55,19 +54,31 @@
    checked, a question put to a human that only a human can answer, and — what
    is left over — findings no fixer was ever launched for.
 
+   `:findings-kept` is beside them rather than inside them. A declined defect
+   and a deviated claim were decided, so they are not owed and not part of the
+   remainder; an analysis still needs to know the run left some, because a run
+   that declines its way to `converged` and one that fixes its way there are the
+   same status and different behaviour.
+
+   The title carries the parks alone out of all of it. It is what a human reads
+   off the board without opening anything, and a park is the one count that
+   asks them for something.
+
    `:unfixable` and `:parked` are what the run stopped ON, and they are here for
    the same reason the counts are: a status names the KIND of ending, and an
    analysis asked to say whether the loop stopped for the right reason needs the
    findings themselves. Both omitted when the run had nothing to hand over."
   [{:keys [run-id report-path status rounds findings-fixed findings-remaining
-           remaining-handed remaining-parked unfixable parked
+           findings-kept remaining-handed remaining-parked unfixable parked
            base reviewed-project reviewed-session reviewed-ws-id]}]
   (cond-> {:adapter            :review-run
            :id                 (str run-id)
            :title              (str "review-loop " (name (or status :unknown))
                                     (when reviewed-session (str " · " reviewed-session))
                                     " · " (or rounds 0)
-                                    " round" (when (not= 1 rounds) "s"))
+                                    " round" (when (not= 1 rounds) "s")
+                                    (when (pos? (or remaining-parked 0))
+                                      (str " · " remaining-parked " parked")))
            :run-id             (str run-id)
            :run-dir            (cstate/run-dir (str run-id))
            :report-path        report-path
@@ -75,6 +86,7 @@
            :rounds             (or rounds 0)
            :findings-fixed     (or findings-fixed 0)
            :findings-remaining (or findings-remaining 0)}
+    (pos? (or findings-kept 0))    (assoc :findings-kept findings-kept)
     (pos? (or remaining-handed 0)) (assoc :remaining-handed remaining-handed)
     (pos? (or remaining-parked 0)) (assoc :remaining-parked remaining-parked)
     (seq unfixable)  (assoc :unfixable (mapv str unfixable))

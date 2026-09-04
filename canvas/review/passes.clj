@@ -52,8 +52,18 @@
   (Operation still-open "The findings that actually remain."
     {:signature [:=> [:catn [:findings :any]] :any]})
   (Operation open-across-run
-    "Everything the run is still holding when it ends, folded over every round. A count answers
-     'did this finish clean' and cannot answer 'what is it waiting for'."
+    "Everything the run is still OWED when it ends, folded over every round. A count answers
+     'did this finish clean' and cannot answer 'what is it waiting for'.
+
+     Owed is `review-stages/settled?`, which is the same question convergence asks. Reading it
+     as 'not closed' instead let one run report as still open the finding its own convergence
+     check had settled."
+    {:signature [:=> [:catn [:final :map]] :any]})
+  (Operation kept-across-run
+    "What the run DECIDED to live with — the defects it declined and the layer claims it let
+     stand. Nobody owes anything on these, which is what keeps them out of `open-across-run`
+     and what makes them easy to lose: a decision to ship a known defect is precisely what a
+     record is for."
     {:signature [:=> [:catn [:final :map]] :any]})
   (Operation handed-to-a-fixer
     "The findings a landed fix commit named as its own, across every round.
@@ -140,6 +150,10 @@
    converged is skipped, and announcing the skip is what stops that looking like a pass that
    silently did nothing."
   (Operation settled? "Whether a finding has been decided."
+    {:signature [:=> [:catn [:f Finding]] :boolean]})
+  (Operation kept?
+    "Whether a decided finding is still TRUE of the branch — a decline or a deviation, as
+     against a close, which was a duplicate or out of scope and leaves nothing to carry."
     {:signature [:=> [:catn [:f Finding]] :boolean]})
   (Operation parse-warden-decision "The warden's ruling out of what it said."
     {:signature [:=> [:catn [:text :string]] :map]})

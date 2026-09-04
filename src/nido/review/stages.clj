@@ -62,6 +62,27 @@
   [f]
   (contains? settling-dispositions (:disposition f)))
 
+(def ^:private kept-dispositions
+  "The settled dispositions whose finding is still TRUE of the branch — the
+   decision was to live with it rather than that it was never ours.
+
+   Read off the same list, for the same reason as `settling-dispositions`. What
+   it separates is what a record must carry: a close is a duplicate, an
+   out-of-scope or a false positive and there is nothing left of it once it is
+   decided, while a decline is a real defect this branch is shipping and a
+   deviation is a layer's own claim it has stopped meeting. Dropping those two
+   out of the record along with the closes deletes the only trace that anyone
+   agreed to them."
+  (into #{} (comp (filter :kept?) (map :disposition))
+        prompts/disposition-vocabulary))
+
+(defn ^{:malli/schema [:=> [:cat :Finding] :boolean]}
+  kept?
+  "Was this finding decided and left standing in the branch? See
+   `kept-dispositions`."
+  [f]
+  (contains? kept-dispositions (:disposition f)))
+
 (defn- ruling
   "One per-finding ruling from the warden's JSON. A disposition outside the
    four is read as :fix rather than dropped — the fail-safe direction, and the
@@ -770,7 +791,7 @@
 
 (defn- latest-rulings
   "One entry per finding across every round of the run, carrying its LATEST
-   ruling — the same fold `verdict/open-across-run` performs, and for the same
+   ruling — the same fold `verdict/final-rulings` performs, and for the same
    reason: a run's decisions are spread over its rounds and no single round
    holds them all.
 
