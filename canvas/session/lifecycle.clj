@@ -88,4 +88,20 @@
   (Operation link-remove! "Drop a link from the resolved session."
     {:signature [:=> [:catn [:session-arg :any] [:opts :map]] :any]})
   (Operation link-list "Print the resolved session's links, grouped."
-    {:signature [:=> [:catn [:session-arg :any] [:opts :map]] :any]}))
+    {:signature [:=> [:catn [:session-arg :any] [:opts :map]] :any]})
+
+  (Operation classify-push
+    "What a `jj git push` actually did, read from its output rather than its exit code.
+     Pure, and separate from the push because this is the fact a landing is recorded on:
+     jj exits 0 whether it pushed, the remote already matched, or there was no such
+     bookmark, and the last two both print `Nothing changed.` — so exit status cannot
+     tell a landing from a bookmark that was never set. :advanced and :already-there are
+     both safe to record against; an unrecognised shape is refused rather than assumed."
+    {:signature [:=> [:catn [:result :map]] :map]})
+  (Operation advance-remote!
+    "Point a bookmark at a revision and push it — the only thing in nido that advances a
+     remote ref. Never throws on a push that did not land: the outcome is the caller's to
+     read, because the caller is the only one that knows what an unpushed revision means
+     for the record it was about to write."
+    {:signature [:=> [:catn [:worktree Path] [:bookmark :string] [:rev :string]] :map]
+     :delegates [classify-push]}))

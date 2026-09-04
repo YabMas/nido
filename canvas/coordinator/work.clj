@@ -209,4 +209,32 @@
      :delegates [lanes/birth! lifecycle/session-weight]})
   (Operation session-destroyed! "Tell the work plane a session was destroyed."
     {:signature [:=> [:catn [:project ProjectName] [:session-name SessionName]] :any]
-     :delegates [lanes/reap!]}))
+     :delegates [lanes/reap!]})
+
+  (Operation record-plan!
+    "Append one day's plan of the owed proposals into claims, or refuse it.
+
+     Derives the owed set ITSELF rather than trusting the caller's, because the generic
+     ledger boundary validates an entry's shape and has no access to it — a plan appended
+     any other way would satisfy every schema and none of the claim. Derivation and append
+     happen under the append locks of every workstream the frontier names, so nothing can
+     be decided or landed between deciding what is owed and writing the partition down."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:plan :map]] :map]})
+  (Operation reserve-claim!
+    "Fix a claim's veto deadline, or refuse it because a covered address was declined.
+
+     The deadline is a ledger entry rather than a moment inside an agent, so the board can
+     answer whether a late decline stopped anything. Eligibility is re-derived under the
+     append lock of every workstream the claim's addresses live in, and the reservation is
+     appended while they are held — to the claim's OWN workstream, which is not among them."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:claim :map]] :map]})
+  (Operation discharge-claim!
+    "Push a revision and record what it carried, or refuse — the only path by which the
+     sweep reaches nido's main.
+
+     Refuses without a standing reservation, which is what makes the veto a restriction
+     rather than an instruction. The push happens under no lock. Re-runnable: an
+     interruption between the push and the last append leaves the workstream open, and
+     running it again appends only for the addresses that do not already carry a landing."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:claim :map]] :map]
+     :delegates [lifecycle/advance-remote!]}))

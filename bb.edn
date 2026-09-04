@@ -547,6 +547,21 @@
    :doc "Record that an approved proposal is now in the tree. :project <p> :ws-id <id> :analysis-seq <n> :observation <n> :rev <change-id> [:note <str>]"
    :task (apply nido-workstream/landed-cmd *command-line-args*)}
 
+  nido:improvement:plan
+  {:requires ([tasks.nido-workstream :as nido-workstream])
+   :doc "Append one day's improvement plan from a file, refusing a grouping that does not partition what is owed. :project <p> :ws-id <id> :file <path>"
+   :task (apply nido-workstream/plan-cmd *command-line-args*)}
+
+  nido:improvement:reserve
+  {:requires ([tasks.nido-workstream :as nido-workstream])
+   :doc "Fix a claim's veto deadline before pushing; exits non-zero if a decline reached it first. :project <p> :ws-id <claim-ws> :plan-seq <n> :claim <n> :addresses a,b,c"
+   :task (apply nido-workstream/reserve-cmd *command-line-args*)}
+
+  nido:improvement:discharge
+  {:requires ([tasks.nido-workstream :as nido-workstream])
+   :doc "Push a reserved claim and record a landing for every address it covers. :project <p> :ws-id <claim-ws> :worktree <dir> :rev <change-id> :addresses a,b,c [:bookmark main]"
+   :task (apply nido-workstream/discharge-cmd *command-line-args*)}
+
   nido:improvement:backfill-landings
   {:requires ([tasks.nido-workstream :as nido-workstream])
    :doc "One-shot: discharge every approval whose decision note already records the outcome, from before :improvement-landed existed. Idempotent. :project <p>"

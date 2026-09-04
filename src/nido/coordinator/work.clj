@@ -2123,3 +2123,172 @@
    carries a ref."
   [project session-name]
   (scratch/reap! (keyword project) session-name))
+
+;; ── What the improvement sweep writes ───────────────────────────────────────
+
+(defn- with-append-locks
+  "Run `f` holding the append lock of every workstream in `ws-ids`, taken in a
+   fixed order, then release them all.
+
+   Sorted, and that is the whole of the deadlock argument: two verbs asking for
+   overlapping sets in the same order cannot hold what the other is waiting for.
+
+   The locks are never held across a push. They bound a local ledger append —
+   bounded by disk — and are gone before any network call, because
+   append-lock-path is per workstream precisely so that no writer queues behind
+   whichever one is slowest, and a hanging push inside one would recreate the
+   global lock the ledger deliberately does not have.
+
+   Re-entering is safe for a DIFFERENT workstream and only for a different one:
+   cws/append-entry! takes its own target's lock, so appending to a workstream
+   not in `ws-ids` under these locks is fine, and appending to one that is would
+   deadlock on a lock this already holds."
+  [project ws-ids f]
+  (let [paths (->> ws-ids distinct sort
+                   (map #(cws/append-lock-path (keyword (name project)) %)))]
+    ((reduce (fn [thunk path] #(io/with-file-lock path thunk)) f paths))))
+
+(defn- ws-of-address
+  "The workstream an address `<ws-id>/<seq>.<obs>` names."
+  [address]
+  (second (re-matches #"(.+)/\d+\.\d+" (str address))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :map]}
+  record-plan!
+  "Append one day's plan, or refuse it. Returns {:plan :recorded :file <path>}
+   or {:plan :refused :defect <map>}.
+
+   The refusal is the point. A plan claims to partition what is owed, and the
+   generic ledger boundary cannot check that — it validates the shape of an
+   entry and has no access to the project's derived owed set — so a plan written
+   through `bb nido:workstream:entry:add` would satisfy every schema and none of
+   the claim. This derives the owed set ITSELF and refuses a grouping that does
+   not cover it exactly once.
+
+   Derivation and append happen under the append locks of every workstream the
+   frontier names, so nothing can be decided or landed between deciding what is
+   owed and writing down the partition of it. Without that the record would
+   claim a state that had already moved by the time it was durable.
+
+   Not exclusive, and the invariant does not claim it is: `entry-add` still
+   accepts any registered kind, which is what lets a person append a record the
+   code has no verb for. What makes that safe is the frontier — the sweep
+   re-derives against it before acting, so a plan written another way is either
+   consistent with the ledger or refused."
+  [project ws-id {:keys [date claims frontier]}]
+  (let [pk       (keyword (name project))
+        frontier-ws (mapv :ws-id (:proposals frontier))]
+    (with-append-locks
+      pk frontier-ws
+      (fn []
+        (let [ow     (proposal/owed (proposal/of-project pk)
+                                    (proposal/plans-of pk)
+                                    (proposal/claim-attempts pk))
+              defect (proposal/partition-defect claims ow)]
+          (if defect
+            {:plan :refused :defect defect}
+            {:plan :recorded
+             :file (cws/append-entry!
+                    pk ws-id {:kind :improvement-plan}
+                    (pr-str {:format :improvement-plan :date date
+                             :frontier frontier :claims (vec claims)}))}))))))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :map]}
+  reserve-claim!
+  "Fix a claim's veto deadline, or refuse it. Returns {:reserved :recorded} or
+   {:reserved :vetoed :declined [<address> ...]}.
+
+   The deadline has to be a ledger entry rather than a moment inside an agent,
+   because otherwise the board cannot answer the one question a late decline
+   raises: did this stop anything. A reservation is what a later decline is
+   compared against.
+
+   Eligibility is re-derived under the append lock of every workstream the
+   claim's addresses live in, and the reservation is appended while they are
+   still held — to the CLAIM's own workstream, which is not among them, so the
+   append takes a lock this does not hold. A decline goes through
+   decide-proposal!, which takes its own workstream's lock, so the two cannot
+   interleave: a decline either completes before this acquires, in which case it
+   is seen and the claim is refused, or it waits and finds a reservation
+   standing."
+  [project claim-ws-id {:keys [plan-seq claim addresses]}]
+  (let [pk (keyword (name project))]
+    (with-append-locks
+      pk (keep ws-of-address addresses)
+      (fn []
+        (let [declined (->> (proposal/of-project pk)
+                            (filter #(= :declined (get-in % [:decision :verdict])))
+                            (map proposal/address)
+                            set)
+              hit      (filterv declined addresses)]
+          (if (seq hit)
+            ;; Closed here, not left to the caller: "a refused claim releases the
+            ;; slot" is an invariant, and an invariant discharged by whoever
+            ;; remembers to call close! is an instruction. :vetoed rather than
+            ;; :dropped because the two mean opposite things to the owed set —
+            ;; a dropped claim's addresses are tried, a vetoed claim's survivors
+            ;; are owed again, and only the declined one leaves.
+            (do (cws/close! pk claim-ws-id :vetoed)
+                {:reserved :vetoed :declined hit})
+            (do (cws/append-entry!
+                 pk claim-ws-id {:kind :improvement-claim-reserved}
+                 (pr-str {:format :improvement-claim-reserved
+                          :plan-seq plan-seq :claim claim
+                          :addresses (vec addresses)}))
+                {:reserved :recorded})))))))
+
+(def ^:private push-landed
+  "Push outcomes that mean nido's main holds the revision.
+
+   Both record. `:already-there` is not a failure and treating it as one is the
+   subtler bug: a process that dies between a successful push and its first
+   ledger append leaves a retry finding the remote already at that revision, so
+   a rule of `record only if it moved` would leave that landing unwritten
+   forever."
+  #{:advanced :already-there})
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :map]}
+  discharge-claim!
+  "Push `rev` and record what it carried, or refuse. Returns
+   {:discharged :recorded :addresses [...]}, {:discharged :unreserved} or
+   {:discharged :not-pushed :outcome <kw> :detail <string>}.
+
+   The only path by which the sweep reaches nido's main. A revision arriving any
+   other way records no landing and closes no workstream, which leaves the claim
+   owed and the slot held — visible, and re-runnable.
+
+   Refuses without a standing reservation, which is what makes the veto a
+   restriction rather than an instruction: a claim refused at `reserve-claim!`
+   has no reservation, so there is nothing here that will push for it.
+
+   The push happens under NO lock. `reserve-claim!` released them before
+   returning, and the deadline it fixed is what a decline arriving now is
+   answered against.
+
+   Re-runnable, because it has to be: an interruption between the push and the
+   last append leaves the workstream open, and running it again appends only for
+   the addresses that do not already carry a landing at this revision — the same
+   skip that makes backfill-landings! re-runnable — then closes. The push it
+   re-attempts reports `:already-there` and records exactly as the first would."
+  [project claim-ws-id {:keys [worktree bookmark rev addresses]}]
+  (let [pk (keyword (name project))
+        reserved? (->> (:entries (cws/read-ws pk claim-ws-id))
+                       (some #(= :improvement-claim-reserved (:kind %)))
+                       boolean)]
+    (if-not reserved?
+      {:discharged :unreserved}
+      (let [{:keys [outcome detail]} (lifecycle/advance-remote! worktree bookmark rev)]
+        (if-not (push-landed outcome)
+          {:discharged :not-pushed :outcome outcome :detail detail}
+          (let [carried (->> (proposal/of-project pk)
+                             (filter #(= rev (get-in % [:landed :rev])))
+                             (map proposal/address)
+                             set)]
+            (doseq [a addresses
+                    :when (not (carried a))
+                    :let [[_ ws-id seq-n obs] (re-matches #"(.+)/(\d+)\.(\d+)" (str a))]]
+              (record-landing! pk ws-id {:analysis-seq (parse-long seq-n)
+                                         :observation  (parse-long obs)
+                                         :rev          rev}))
+            (cws/close! pk claim-ws-id :done)
+            {:discharged :recorded :addresses (vec addresses)}))))))

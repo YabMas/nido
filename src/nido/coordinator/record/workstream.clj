@@ -47,9 +47,17 @@
    ;; workstream with no ledger ref — there is no ticket record to stamp, so
    ;; without it the row folds to :done and leaves every board band. Widening is
    ;; backward-compatible: stored records only ever carry :done/:dropped.
+   ;;
+   ;; :vetoed is the improvement sweep's, and it is distinct from :dropped for
+   ;; the same reason :dismissed is distinct — a reader of the owed set branches
+   ;; on it. A dropped claim was attempted and given up on, so its addresses are
+   ;; tried and stay out; a vetoed one was stopped by a decline it did not earn,
+   ;; so the addresses that carry no decline of their own return to the owed set
+   ;; and are grouped again. Folding the two would make one decline bury every
+   ;; proposal that happened to be claimed beside it.
    [:closed        [:maybe [:map
                             [:at      string?]
-                            [:outcome [:enum :done :dropped :dismissed]]]]]
+                            [:outcome [:enum :done :dropped :dismissed :vetoed]]]]]
    [:created-at    string?]
    [:entries       [:vector [:map-of keyword? any?]]]
    [:intake        {:optional true} [:maybe IntakePayload]]
@@ -162,7 +170,10 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :keyword] :Workstream]}
   close!
-  "Settle a workstream terminally. `outcome` is :done, :dropped or :dismissed.
+  "Settle a workstream terminally. `outcome` is :done, :dropped, :dismissed or
+   — for a claim the improvement sweep refused at reservation — :vetoed, which
+   `proposal/owed` reads to return the claim's undeclined addresses to the owed
+   set rather than counting them as tried.
    No consumer branches on the value — every reader tests :closed for presence
    (engagement, the notion-sync/facets candidate sets) or renders (name outcome);
    the one exception is workstreams-view/workstream-row, which reads :dismissed

@@ -3,6 +3,8 @@
    stage, close a workstream. Resolves the target workstream by id or by Notion
    external ref (BR-####). Used by the triage skill's dual-write and by humans."
   (:require
+   [clojure.edn :as edn]
+   [clojure.string :as str]
    [nido.coordinator.view.workstreams :as wsv]
    [nido.coordinator.report :as report]
    [nido.coordinator.record.workstream :as ws]
@@ -159,6 +161,64 @@
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   stage-advance [& args] (run* stage-advance* args))
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  plan*
+  "Append one day's improvement plan, reading it from a file.
+
+   The plan goes through `record-plan!` and never through `entry:add`, because
+   only the verb derives the owed set and can refuse a grouping that does not
+   cover it. A refusal prints what is wrong — uncovered and unowed are different
+   mistakes, and a writer told only `no` cannot fix either."
+  [{:keys [project file] :as opts}]
+  (when-not file
+    (println "Missing :file <path> — the plan is EDN and does not survive a shell argument")
+    (System/exit 2))
+  (let [plan (edn/read-string (slurp (str file)))
+        res  (work/record-plan! (keyword project) (resolve-ws-id opts) plan)]
+    (if (= :refused (:plan res))
+      (do (println "plan REFUSED — it does not partition what is owed")
+          (when-let [u (get-in res [:defect :uncovered])]
+            (println "  owed but claimed by nothing:") (doseq [a u] (println "   " a)))
+          (when-let [u (get-in res [:defect :unowed])]
+            (println "  claimed but not owed:") (doseq [a u] (println "   " a)))
+          (System/exit 1))
+      (println (:file res)))))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  reserve*
+  "Fix a claim's veto deadline, or report that a decline reached it first.
+
+   Exits non-zero when vetoed, so a skill that runs this before pushing stops
+   there without having to read the output."
+  [{:keys [project plan-seq claim addresses] :as opts}]
+  (let [res (work/reserve-claim! (keyword project) (resolve-ws-id opts)
+                                 {:plan-seq  (parse-long (str plan-seq))
+                                  :claim     (parse-long (str claim))
+                                  :addresses (str/split (str addresses) #",")})]
+    (if (= :vetoed (:reserved res))
+      (do (println "claim VETOED — declined since it was planned:")
+          (doseq [a (:declined res)] (println "  " a))
+          (println "the claim workstream is closed; its other addresses are owed again")
+          (System/exit 1))
+      (println "reserved"))))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  discharge*
+  "Push the claim and record what it carried. Refuses without a reservation."
+  [{:keys [project worktree bookmark rev addresses] :as opts}]
+  (let [res (work/discharge-claim! (keyword project) (resolve-ws-id opts)
+                                   {:worktree  (str worktree)
+                                    :bookmark  (or (some-> bookmark str) "main")
+                                    :rev       (str rev)
+                                    :addresses (str/split (str addresses) #",")})]
+    (case (:discharged res)
+      :recorded   (println "landed" (count (:addresses res)) "proposal(s) at" rev)
+      :unreserved (do (println "REFUSED — no reservation stands for this claim; nothing was pushed")
+                      (System/exit 1))
+      :not-pushed (do (println "NOT PUSHED —" (name (:outcome res)))
+                      (when-let [d (:detail res)] (println " " d))
+                      (System/exit 1)))))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   close-cmd     [& args] (run* close* args))
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   ref-add       [& args] (run* ref-add* args ref-raw-string-keys))
@@ -167,6 +227,12 @@
 ;; that may begin with anything at all.
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   landed-cmd    [& args] (run* landed* args #{:rev :note}))
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  plan-cmd      [& args] (run* plan* args #{:file}))
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  reserve-cmd   [& args] (run* reserve* args #{:addresses}))
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  discharge-cmd [& args] (run* discharge* args #{:rev :addresses :worktree :bookmark}))
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   backfill-landings-cmd [& args]
   (let [[_ opts] (task-args/split-args args)] (backfill-landings* opts)))

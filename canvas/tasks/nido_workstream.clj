@@ -52,4 +52,28 @@
     {:signature [:=> [:catn [:opts [:* :any]]] :any]})
   (Operation backfill-landings-cmd
     "bb nido:improvement:backfill-landings — the entry point for `backfill-landings*`."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
+
+  (Operation plan*
+    "Append one day's improvement plan, read from a file. Goes through record-plan!
+     and never through entry:add, because only the verb derives the owed set and can
+     refuse a grouping that does not cover it; a refusal names what is uncovered and
+     what is claimed but not owed, because those are different mistakes."
+    {:signature [:=> [:catn [:opts [:* :any]]] :any]})
+  (Operation plan-cmd
+    "bb nido:improvement:plan — the entry point for `plan*`."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
+  (Operation reserve*
+    "Fix a claim's veto deadline. Exits non-zero when a decline reached it first, so a
+     skill that runs this before pushing stops there without reading the output."
+    {:signature [:=> [:catn [:opts [:* :any]]] :any]})
+  (Operation reserve-cmd
+    "bb nido:improvement:reserve — the entry point for `reserve*`."
+    {:signature [:=> [:catn [:args [:* :any]]] :any]})
+  (Operation discharge*
+    "Push a reserved claim and record a landing for every address it covers. Refuses
+     without a reservation, which is what stops a declined claim reaching main."
+    {:signature [:=> [:catn [:opts [:* :any]]] :any]})
+  (Operation discharge-cmd
+    "bb nido:improvement:discharge — the entry point for `discharge*`."
     {:signature [:=> [:catn [:args [:* :any]]] :any]}))

@@ -17,6 +17,7 @@
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.tickets :as tickets]
    [nido.coordinator.record.triggers]
+   [nido.coordinator.record.proposal :as proposal]
    [nido.coordinator.record.workstream :as workstream]
    [nido.coordinator.view.workstreams :as wsv]
    [nido.platform.io :as nido-io]
@@ -2526,3 +2527,173 @@
             (is (= [:approve]
                    (mapv :id (:actions (work/gate :brian id))))
                 "and the gate offers the grant")))))))
+
+
+;; ── the improvement sweep's writes ──────────────────────────────────────────
+
+(defn- seed-analysis!
+  "A workstream carrying one :review-analysis with `n` proposal-bearing
+   observations, as `of-project` derives proposals from."
+  [ws-id n]
+  (let [id (:id (workstream/create!
+                 :nido {:stage :in-progress
+                        :external-refs [{:adapter :review-run :id (str "run-" ws-id)}]}))]
+    (workstream/append-entry!
+     :nido id {:kind :review-analysis}
+     (pr-str {:format :review-analysis :verdict :degraded :run-id "r" :reviewed "nido/x"
+              :status "converged" :rounds 1 :summary "one analysis"
+              :observations (vec (for [i (range n)]
+                                   {:kind :waste :where "w" :summary (str "s" i)
+                                    :evidence "e" :proposal (str "p" i)}))}))
+    id))
+
+(deftest a-plan-covering-what-is-owed-is-recorded
+  (with-tmp
+    (fn [_]
+      (let [ws (seed-analysis! "a" 2)
+            plan-ws (:id (workstream/create! :nido {:stage :in-progress :external-refs []}))
+            res (work/record-plan!
+                 :nido plan-ws
+                 {:date "2026-09-04"
+                  :frontier {:proposals [{:ws-id ws :at-seq 1}] :attempts []}
+                  :claims [{:statement "one change" :disposition :land
+                            :addresses [(str ws "/1.0") (str ws "/1.1")]}]})]
+        (is (= :recorded (:plan res)))))))
+
+(deftest a-plan-that-leaves-an-owed-proposal-unclaimed-is-refused
+  ;; The refusal is the point: the generic ledger boundary validates shape and
+  ;; has no access to the owed set, so this is the only place the claim is real.
+  (with-tmp
+    (fn [_]
+      (let [ws (seed-analysis! "a" 2)
+            plan-ws (:id (workstream/create! :nido {:stage :in-progress :external-refs []}))
+            res (work/record-plan!
+                 :nido plan-ws
+                 {:date "2026-09-04"
+                  :frontier {:proposals [{:ws-id ws :at-seq 1}] :attempts []}
+                  :claims [{:statement "half of it" :disposition :land
+                            :addresses [(str ws "/1.0")]}]})]
+        (is (= :refused (:plan res)))
+        (is (= [(str ws "/1.1")] (get-in res [:defect :uncovered])))))))
+
+(deftest a-plan-naming-an-address-that-is-not-owed-is-refused
+  (with-tmp
+    (fn [_]
+      (let [ws (seed-analysis! "a" 1)
+            plan-ws (:id (workstream/create! :nido {:stage :in-progress :external-refs []}))
+            res (work/record-plan!
+                 :nido plan-ws
+                 {:date "2026-09-04"
+                  :frontier {:proposals [{:ws-id ws :at-seq 1}] :attempts []}
+                  :claims [{:statement "x" :disposition :land
+                            :addresses [(str ws "/1.0") "ws-gone/9.9"]}]})]
+        (is (= :refused (:plan res)))
+        (is (= ["ws-gone/9.9"] (get-in res [:defect :unowed])))))))
+
+(deftest a-claim-whose-addresses-are-clean-reserves
+  (with-tmp
+    (fn [_]
+      (let [ws (seed-analysis! "a" 1)
+            claim-ws (:id (workstream/create! :nido {:stage :in-progress :external-refs []}))
+            res (work/reserve-claim! :nido claim-ws
+                                     {:plan-seq 1 :claim 0 :addresses [(str ws "/1.0")]})]
+        (is (= :recorded (:reserved res)))
+        (is (some #(= :improvement-claim-reserved (:kind %))
+                  (:entries (workstream/read-ws :nido claim-ws))))))))
+
+(deftest a-claim-covering-a-declined-address-is-vetoed-and-reserves-nothing
+  ;; This is the veto. A refused reservation is what stops the push, because
+  ;; discharge-claim! will not push without one.
+  (with-tmp
+    (fn [_]
+      (let [ws (seed-analysis! "a" 1)
+            claim-ws (:id (workstream/create! :nido {:stage :in-progress :external-refs []}))]
+        (work/decide-proposal! :nido ws {:analysis-seq 1 :observation 0
+                                         :verdict :declined :at-seq 1})
+        (let [res (work/reserve-claim! :nido claim-ws
+                                       {:plan-seq 1 :claim 0 :addresses [(str ws "/1.0")]})]
+          (is (= :vetoed (:reserved res)))
+          (is (= [(str ws "/1.0")] (:declined res)))
+          (is (not-any? #(= :improvement-claim-reserved (:kind %))
+                        (:entries (workstream/read-ws :nido claim-ws)))))))))
+
+(deftest an-unreserved-claim-is-never-pushed
+  ;; The restriction the whole design turns on: no reservation, no push. The
+  ;; test would spawn a real jj push if this leaked, so it also proves it did not.
+  (with-tmp
+    (fn [_]
+      (let [claim-ws (:id (workstream/create! :nido {:stage :in-progress :external-refs []}))
+            pushed (atom false)]
+        (with-redefs [nido.session.lifecycle/advance-remote!
+                      (fn [& _] (reset! pushed true) {:outcome :advanced})]
+          (let [res (work/discharge-claim! :nido claim-ws
+                                           {:worktree "/tmp/x" :bookmark "main"
+                                            :rev "abc" :addresses ["ws-a/1.0"]})]
+            (is (= :unreserved (:discharged res)))
+            (is (false? @pushed) "nothing may reach the remote without a reservation")))))))
+
+(deftest a-push-that-did-not-land-records-nothing-and-leaves-the-claim-open
+  (with-tmp
+    (fn [_]
+      (let [ws (seed-analysis! "a" 1)
+            claim-ws (:id (workstream/create! :nido {:stage :in-progress :external-refs []}))]
+        (work/reserve-claim! :nido claim-ws {:plan-seq 1 :claim 0 :addresses [(str ws "/1.0")]})
+        (with-redefs [nido.session.lifecycle/advance-remote!
+                      (fn [& _] {:outcome :rejected :detail "non-fast-forward"})]
+          (let [res (work/discharge-claim! :nido claim-ws
+                                           {:worktree "/tmp/x" :bookmark "main"
+                                            :rev "abc" :addresses [(str ws "/1.0")]})]
+            (is (= :not-pushed (:discharged res)))
+            (is (nil? (:closed (workstream/read-ws :nido claim-ws))))
+            (is (not-any? #(= :improvement-landed (:kind %))
+                          (:entries (workstream/read-ws :nido ws))))))))))
+
+(deftest a-remote-that-already-held-the-revision-records-the-landing
+  ;; A crash between a successful push and its first append leaves a retry
+  ;; finding exactly this. Treating it as "did not land" loses the landing.
+  (with-tmp
+    (fn [_]
+      (let [ws (seed-analysis! "a" 2)
+            claim-ws (:id (workstream/create! :nido {:stage :in-progress :external-refs []}))
+            addrs [(str ws "/1.0") (str ws "/1.1")]]
+        (work/reserve-claim! :nido claim-ws {:plan-seq 1 :claim 0 :addresses addrs})
+        (with-redefs [nido.session.lifecycle/advance-remote!
+                      (fn [& _] {:outcome :already-there})]
+          (let [res (work/discharge-claim! :nido claim-ws
+                                           {:worktree "/tmp/x" :bookmark "main"
+                                            :rev "abc" :addresses addrs})]
+            (is (= :recorded (:discharged res)))
+            (is (= 2 (count (filter #(= :improvement-landed (:kind %))
+                                    (:entries (workstream/read-ws :nido ws))))))
+            (is (some? (:closed (workstream/read-ws :nido claim-ws))))))))))
+
+(deftest a-claim-spanning-two-proposals-lands-both-at-one-revision
+  (with-tmp
+    (fn [_]
+      (let [ws (seed-analysis! "a" 2)
+            claim-ws (:id (workstream/create! :nido {:stage :in-progress :external-refs []}))
+            addrs [(str ws "/1.0") (str ws "/1.1")]]
+        (work/reserve-claim! :nido claim-ws {:plan-seq 1 :claim 0 :addresses addrs})
+        (with-redefs [nido.session.lifecycle/advance-remote! (fn [& _] {:outcome :advanced})]
+          (work/discharge-claim! :nido claim-ws {:worktree "/tmp/x" :bookmark "main"
+                                                 :rev "deadbeef" :addresses addrs}))
+        (let [ps (proposal/of-project :nido)]
+          (is (= #{"deadbeef"} (set (map #(get-in % [:landed :rev]) ps)))
+              "one revision carries every proposal the claim covered"))))))
+
+(deftest re-running-an-interrupted-discharge-completes-it-without-doubling
+  ;; Interrupted between appends it leaves the workstream open; running again
+  ;; appends only for what does not already carry a landing at this revision.
+  (with-tmp
+    (fn [_]
+      (let [ws (seed-analysis! "a" 2)
+            claim-ws (:id (workstream/create! :nido {:stage :in-progress :external-refs []}))
+            addrs [(str ws "/1.0") (str ws "/1.1")]]
+        (work/reserve-claim! :nido claim-ws {:plan-seq 1 :claim 0 :addresses addrs})
+        (work/record-landing! :nido ws {:analysis-seq 1 :observation 0 :rev "deadbeef"})
+        (with-redefs [nido.session.lifecycle/advance-remote! (fn [& _] {:outcome :already-there})]
+          (work/discharge-claim! :nido claim-ws {:worktree "/tmp/x" :bookmark "main"
+                                                 :rev "deadbeef" :addresses addrs}))
+        (is (= 2 (count (filter #(= :improvement-landed (:kind %))
+                                (:entries (workstream/read-ws :nido ws)))))
+            "the address already recorded is not recorded twice")))))
