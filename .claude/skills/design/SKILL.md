@@ -380,6 +380,37 @@ the two is how a design round spends its rounds auditing SQL.
   coordinate could be made, which excluded every claim about the decomposition,
   because a composition property is true of no single line.
 
+  **A counterexample you can only find by auditing every caller is the wrong
+  one.** This is the field that bounds the review round — the judge is told to
+  go and look for exactly what you name — so aiming it at the implementation
+  aims the whole round there. A claim about what a MODULE promises is checked by
+  reading that module: *"`transform` is the only place a canonical attachment
+  becomes wire shape."* A claim phrased as *"every provider converts through the
+  table"* is not a decomposition claim at all — it is a conformance claim over N
+  implementations, it has a counterexample for every one that deviates, and the
+  round will find them one per pass, forever. Write the promise; let conformance
+  be checked by the thing that checks conformance.
+
+  **And when you find a deviation, it is a `:health` observation, not a
+  qualifier on the claim.** This is the split that keeps both halves useful. The
+  claim states the intent — *"`transform` hides per-provider wire encoding
+  behind `attachment->wire`"*. The deviation is a finding ABOUT that intent —
+  *"claude-code converts independently, and nothing detects a provider that
+  stops"* — and `:axis` carries the bit you often cannot infer from the outside:
+  `:implementation` if the intent is right and the code drifted, `:design` if
+  the deviation is telling you the intent itself is wrong.
+
+  Folding the exception into the claim destroys both. The claim stops saying
+  what the design intends, so nobody can tell whether the design is being met;
+  and the health signal disappears, so nothing reaches `:routes` to be decided
+  on. Which matters, because the decision is genuinely open: the design may be
+  sound and the drift tolerable, so you build against it and file a follow-up;
+  or the drift may show the design cannot carry the feature, so you restructure
+  here; or the design may be right and enforcing it may make your change
+  markedly simpler, so you enforce it here. All three are live. None of them is
+  available if the deviation has been absorbed into the sentence that was
+  supposed to state the intent.
+
   `:evidence` is still there and now optional: where you looked, when there is
   somewhere to look.
 
@@ -517,6 +548,35 @@ citable. The cost is real and accepted: the same area gets re-surveyed by every
 workstream that touches it. Baselines accumulate in ledgers, and a written
 current design can be harvested from them later if it is ever wanted — that is a
 different decision, not this one.
+
+### Correcting a survey: replace, never append
+
+**When you correct a claim, re-state it so it is simply true. Do not keep the
+sentence that was wrong and hang an exception off it.**
+
+This rule lives in the amender's own prompt, where it was written after being
+measured: over six rounds on one baseline the composition went from 405
+characters to 4091 and the shape from 271 to 2671, because every correction was
+appended as a qualifier to the sentence that was wrong. Each appended clause was
+then the next round's finding — the same field refuted three rounds running, for
+three *different* reasons, each about something the previous amendment had added.
+
+It is repeated here because the amender is not always what does the correcting.
+When the loop's amend step fails — or you are amending by hand, which is the
+common case after a `falsified` verdict you want to answer yourself — the rule
+does not reach you, and a hand-amended record grows exactly the same way. One
+run amended by hand nine times: composition 856 → 2326 characters, the record
+16.1KB → 25.4KB, monotonic, not one field ever shrinking. It never converged.
+
+A record that grows every round cannot converge, and not because anyone is
+sloppy: every clause you add is another statement the next round has to check,
+so a correction made by appending replaces one finding with several. **If a
+claim needs a page of qualification to stay true, it was the wrong claim** — say
+the simpler true thing instead, even if it says less, and put the exception
+where exceptions go (`:health`, above).
+
+Expect a corrected record to be about the size of the one it replaces. If yours
+is materially bigger, you appended.
 
 ### When a survey turns out to be wrong
 
@@ -770,6 +830,15 @@ Read back what is there with `bb nido:workstream:show :project <p> :ref <ref>`.
   nothing. Every field has to be fillable without knowing the change (§4).
 - **`:load-bearing` full of things that ought to hold.** The question is what
   breaks if you violate it, and `:falsified-by` is what keeps the answer honest.
+- **A claim quantified over implementations rather than stating a promise** —
+  "every provider does X" has a counterexample per provider and aims the whole
+  round at the code (§4).
+- **Correcting by appending an exception** instead of re-stating the claim. The
+  record grows, every added clause is the next round's finding, and it cannot
+  converge (§4).
+- **Folding a deviation into the claim** instead of recording it as `:health`
+  with an `:axis`. It hides whether the design is being met AND loses the
+  observation that `:routes` was supposed to decide on.
 - **A survey that lists files instead of modules.** If `:composition` cannot be
   written as a sentence about how the modules produce the behaviour, the area has
   not been understood yet — and every judgement made against that record will be

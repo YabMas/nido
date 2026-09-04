@@ -283,7 +283,13 @@
   [modules]
   (when (seq modules)
     (str "\nMODULES — the decomposition claimed. A module is what it HIDES; its\n"
-         "interface is what the rest of the system may depend on:\n"
+         "interface is WHAT IS DEPENDED ON FROM OUTSIDE — Parnas's `what others\n"
+         "may assume` — not what the namespace makes public. A var that is public\n"
+         "and called by nobody outside is a visibility choice, not interface, and\n"
+         "an interface list that omits one is only wrong if some caller actually\n"
+         "leans on it. Enumerating exports is not this round's work: two earlier\n"
+         "runs were spent on that disagreement, one side counting callers and the\n"
+         "other counting defns, and it settles here in favour of callers.\n"
          (str/join "\n"
                    (map (fn [{:keys [id module hides interface readings]}]
                           (str "- " (when id (str "[" id "] ")) module "\n"
@@ -310,6 +316,32 @@
                  (str "\n    read from:  " (str/join ", " evidence)))))
         load-bearing)))
 
+(defn- level-reminder
+  "The last thing in the window before control passes back.
+
+   Every one of these prompts states its level near the top — and by the time a
+   record with eight modules and six claims has been printed after it, that
+   statement is thousands of tokens back. What an agent is holding when it
+   starts is the end of the prompt, so the level is repeated there. Short on
+   purpose: it is a tone-setter, not a second specification, and anything long
+   enough to re-teach the rules is long enough to be skimmed."
+  ([] (level-reminder :decomposition))
+  ([variant]
+   (str "\n\n---\n"
+        (case variant
+          :decomposition
+          (str "Before you start: the subject is the DECOMPOSITION — which modules\n"
+               "exist, what design decision each hides, what the rest may assume of\n"
+               "it, and how they compose to produce the behaviour. Not the\n"
+               "correctness of any line. A true statement that does not change one\n"
+               "of those is not for this round.\n")
+          :commitment
+          (str "Before you start: the subject is the COMMITMENT — what this change\n"
+               "claims about structure, and whether that claim stands against the\n"
+               "area as the baseline describes it. Not whether the code is right,\n"
+               "and not whether the baseline is: a defect in either is a different\n"
+               "round's finding.\n")))))
+
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   baseline-prompt
   "The verification prompt.
@@ -320,7 +352,7 @@
    does. What makes that bound real is that each claim arrives with the
    counterexample that would refute it, so the question is never `is this any
    good` but `does that specific thing exist`."
-  [{:keys [baseline disputes confirmed]}]
+  [{:keys [baseline disputes confirmed stance]}]
   (str
    "You are checking whether a BASELINE of an area is TRUE, and whether it is\n"
    "ENOUGH. You are NOT designing anything, you are not reviewing the code for\n"
@@ -350,6 +382,16 @@
    "EVERY CLAIM CARRIES WHAT WOULD REFUTE IT. That is what you go looking for.\n"
    "Not `does this feel right` — `does that specific counterexample exist in the\n"
    "code`. Report a finding only when you found one, and say what it is.\n\n"
+   "A COUNTEREXAMPLE THAT NEEDS AN AUDIT OF EVERY CALLER IS THE WRONG ONE, and\n"
+   "when a claim names one, that is itself the finding. A property about what a\n"
+   "MODULE promises is checked by reading that module. A property phrased as\n"
+   "`every client does X` is not a decomposition claim at all — it is a\n"
+   "conformance claim over N implementations, it has a counterexample for every\n"
+   "client that deviates, and chasing those is how this round finds true things\n"
+   "forever. Where a client deviates from a contract the baseline states, the\n"
+   "deviation belongs in HEALTH — :implementation when the contract is right and\n"
+   "the code drifted, :design when the deviation shows the contract itself is\n"
+   "wrong. Say which, and say it once.\n\n"
    ;; Gated on the baseline being ABLE to carry readings, not on it having any.
    ;; Gating on presence hid the vocabulary from exactly the baseline that needed
    ;; it — one with a decomposition and no analysis — so nothing ever told anyone
@@ -433,7 +475,16 @@
    "not manufacture findings to look thorough — on this round, thoroughness is\n"
    "checking the claims that are there, not finding more to say."
    (confirmations-block confirmed)
-   (disputes-block disputes)))
+   (disputes-block disputes)
+   ;; Last thing in the window before the judge starts work. The level is stated
+   ;; near the top, thousands of tokens back by the time the record has been
+   ;; printed; restating it here is what the judge is holding when it begins.
+   (when stance
+     (str "\n\nPROJECT STANCE — the yardstick this area was designed under, framing\n"
+          "only. It tells you what the project considers essential versus\n"
+          "accidental and what a boundary is FOR. Read the decomposition through\n"
+          "it; never cite it against a line of code.\n\n" stance "\n"))
+   (level-reminder)))
 
 (defn- baseline-block
   "The baseline the design was made against, at the level the design round needs it.
@@ -639,7 +690,8 @@
    "asks is REQUIRED whatever you recommend: state the question the human still\n"
    "has to answer, in one or two sentences, with everything you derived already\n"
    "taken off the table. Never answer it yourself."
-   (disputes-block disputes)))
+   (disputes-block disputes)
+   (level-reminder :commitment)))
 
 ;; ── Running a round ─────────────────────────────────────────────────────────
 
@@ -826,7 +878,8 @@
                              :label label
                              :prompt (baseline-prompt {:baseline baseline
                                                        :disputes disputes
-                                                       :confirmed confirmed})})
+                                                       :confirmed confirmed
+                                                       :stance (stages/read-stance project)})})
                 #(parse-baseline-review % (:seq baseline)))
         {:outcome :nothing-to-check
          :detail "the baseline records no load-bearing property and no health observation"})
@@ -1040,7 +1093,7 @@
    right — and the fields that say which it is, :blocks and :needs, were on the
    record and printed nowhere. Only the gap branch is new; the refutation wording
    is the one that converged and is left alone."
-  [{:keys [baseline findings out-path]}]
+  [{:keys [baseline findings out-path stance]}]
   (let [gaps? (boolean (some :blocks findings))]
    (str
    (if gaps?
@@ -1169,7 +1222,25 @@
    "change. Omit :disputes if you accepted all of them. The record must satisfy\n"
    "the same schema the current one does; nido reads this file, validates it, and\n"
    "appends it as the superseding baseline. Do not append it yourself and do not\n"
-   "commit anything.")))
+   "commit anything.\n\n"
+   ;; The design amender is handed its :seq with a note that an amender shown no
+   ;; :seq is being asked to guess the one field the citation is checked against.
+   ;; The baseline amender was told nothing at all, so it guessed — reliably the
+   ;; entry it read the findings from, which is the review — and the loop's own
+   ;; correct default only fires when the amender supplied nothing, deferring to
+   ;; the guess. Say the field is not the amender's, and the loop now sets it.
+   "OMIT :supersedes. The loop sets it to the record you were asked to repair,\n"
+   "which is what you want in every ordinary round. Your record is handed to you\n"
+   "unstamped — :seq is the ledger's to give — so a number you write there is a\n"
+   "guess, and it is checked: the usual guess is the entry the findings came\n"
+   "from, which is the REVIEW, and a baseline may only supersede a baseline.\n"
+   "Write one only to name a DIFFERENT baseline of this workstream deliberately,\n"
+   "and only after reading the ledger to confirm the entry is one."
+   (when stance
+     (str "\n\nPROJECT STANCE — the yardstick this area was designed under, framing\n"
+          "only. What the project holds essential versus accidental, and what a\n"
+          "boundary is FOR. Correct the decomposition through it.\n\n" stance "\n"))
+   (level-reminder))))
 
 (defn- ledger-refusal
   "Why the ledger refused a record, in a form somebody can act on.
@@ -1278,7 +1349,8 @@
          {:run-id run-id :cwd code-cwd :budget budget
           :first-message (amend-prompt {:baseline prev
                                         :findings (:findings ctx)
-                                        :out-path out-path})
+                                        :out-path out-path
+                                        :stance (stages/read-stance project)})
           :err-file (str (fs/path dir (str "amend-round-" (:iter ctx) ".err.log")))})
         (cond
           (not= before (stages/working-copy-state code-cwd))
@@ -1332,8 +1404,23 @@
               ;; instead is exactly the recency the ledger's citations exist
               ;; to refuse. An amender that supplied its own is left alone:
               ;; a citation is the author's, and nothing here overrules one.
-              (let [record  (cond-> record
-                              (and (:seq prev) (not (:supersedes record)))
+              ;; A citation is still the author's — but only where it cites a
+              ;; BASELINE. An amender deliberately superseding a different record
+              ;; of this workstream (the narrow follow-up rather than the broad
+              ;; survey it sits beside) is honoured, as it always was. What is no
+              ;; longer honoured is a citation that names something which is not a
+              ;; baseline at all: an amender is handed its record unstamped, so a
+              ;; :seq it supplies is a guess unless it went and checked, and the
+              ;; guess it actually makes is the entry it read the findings from —
+              ;; the review. Nine rounds of one run cited the review and the
+              ;; ledger refused all nine, losing the amendment each time. Where
+              ;; the citation cannot be resolved at all, honour it: an unreadable
+              ;; ledger is not evidence the author was wrong.
+              (let [cited     (get-in record [:supersedes :seq])
+                    resolved  (when cited (ws/entry-at-seq project ws-id cited))
+                    misnamed? (and resolved (not= :baseline (:format resolved)))
+                    record  (cond-> record
+                              (and (:seq prev) (or (nil? cited) misnamed?))
                               (assoc :supersedes
                                      {:seq (:seq prev)
                                       :why (str "corrected against the code after round "
@@ -1536,7 +1623,8 @@
    "Omit :record if every check is disputed and the design needs no change.\n"
    "It must satisfy the same schema the current one does; nido reads this file,\n"
    "validates it, and appends it as the superseding design. Do not append it\n"
-   "yourself and do not commit anything."))
+   "yourself and do not commit anything."
+   (level-reminder :commitment)))
 
 (defn- run-design-judge-stage
   [ctx]

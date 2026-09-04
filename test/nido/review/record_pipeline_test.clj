@@ -816,6 +816,36 @@
                                  (ctx :findings [a-finding]))]
     (is (= 3 (get-in (read-string appended) [:supersedes :seq])))))
 
+(deftest a-citation-naming-something-that-is-not-a-baseline-is-replaced
+  ;; The guess an amender actually makes is the entry the findings came from —
+  ;; the review — and a baseline may only supersede a baseline, so honouring it
+  ;; loses the whole amendment to a ledger refusal. Nine rounds of one run were
+  ;; lost exactly this way before the citation was checked rather than trusted.
+  (let [corrected (assoc a-baseline :area "corrected"
+                         :supersedes {:seq 3 :why "the entry I read the findings from"})
+        [_ appended] (with-redefs [ws/entry-at-seq (fn [_ _ n]
+                                                     (when (= 3 n)
+                                                       {:format :baseline-review :seq 3}))]
+                       (with-amend {:prev (assoc a-baseline :seq 7 :at "t")
+                                    :writes (fn [p] (spit p (pr-str {:record corrected})))}
+                                   (ctx :findings [a-finding])))]
+    (is (= 7 (get-in (read-string appended) [:supersedes :seq]))
+        "replaced with the record the round was asked to repair")))
+
+(deftest a-citation-naming-another-baseline-is-still-the-authors
+  ;; The capability the check must not cost: a workstream can hold baselines of
+  ;; DIFFERENT areas, and an amender may deliberately supersede the narrow
+  ;; follow-up rather than the broad survey it sits beside.
+  (let [corrected (assoc a-baseline :area "corrected"
+                         :supersedes {:seq 3 :why "the narrow follow-up, not the broad one"})
+        [_ appended] (with-redefs [ws/entry-at-seq (fn [_ _ n]
+                                                     (when (= 3 n)
+                                                       {:format :baseline :seq 3}))]
+                       (with-amend {:prev (assoc a-baseline :seq 7 :at "t")
+                                    :writes (fn [p] (spit p (pr-str {:record corrected})))}
+                                   (ctx :findings [a-finding])))]
+    (is (= 3 (get-in (read-string appended) [:supersedes :seq])))))
+
 (deftest a-baseline-with-no-seq-to-name-gains-no-citation
   ;; The run was pointed at a record that is not in this ledger — a nested
   ;; loop's value, or a fixture. Inventing a number would be worse than none.
