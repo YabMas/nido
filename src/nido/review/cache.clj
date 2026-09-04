@@ -9,6 +9,15 @@
    and skipping it is safe — or does not, in which case the layer is reviewed
    again. Nothing decides; it falls out.
 
+   An entry carries TWO things and only one of them is the skip. `:status`
+   decides whether the patch is reviewed again, and `:converged` is the single
+   value that says no; `:answered` is what was decided about the patch, and it
+   is worth recording whatever the status. A store that held only the first was
+   a store of skips: every entry in it was by construction a patch nothing would
+   look at again, so nothing ever read the second. An entry that still owes
+   something is the one whose answers a next round actually needs — it is the
+   entry that gets reviewed.
+
    Keying on the PATCH is what makes this survive the trip to merge. Commit ids
    die at `/align`'s rebase and change ids die at `/squash`'s fold, but the patch
    a layer contributes is identical on the other side of both: a clean rebase
@@ -54,28 +63,44 @@
 
 (defn ^{:malli/schema [:=> [:cat :map :string] :boolean]}
   converged?
-  "Has this exact patch already been reviewed to convergence?"
+  "Has this exact patch already been reviewed to convergence?
+
+   The only question that grants a skip, so it is asked of `:status` exactly:
+   any other value — a patch reviewed and still owing something, an entry from a
+   writer that did not say — means review it."
   [cache patch-hash]
   (= :converged (:status (get cache patch-hash))))
 
 (defn ^{:malli/schema [:=> [:cat :map :string] :any]}
   answered
-  "Findings already closed against this exact patch, as
+  "Findings already SETTLED against this exact patch, as
    [{:id … :because …}]. Fed back to the next round's warden so a fresh
    reviewer reporting the same thing gets answered rather than re-adjudicated —
    the same job `:rejected` does for the design one altitude up.
 
    They hang off the patch hash, so they evaporate the moment the layer's
-   content changes. That is deliberate: they were answers about THAT content."
+   content changes. That is deliberate: they were answers about THAT content.
+
+   Asked only of a patch that is under review, which is the complement of what
+   `converged?` skips — so what this reads in practice is the entries that still
+   owe something. The answers on a converged entry are the record rather than an
+   input: nothing re-reads a patch it has decided not to look at."
   [cache patch-hash]
   (vec (:answered (get cache patch-hash))))
 
 (defn ^{:malli/schema [:=> [:cat :map :string :map] :map]}
   record
-  "Pure: the cache with `patch-hash` marked. Never removes an entry — the store
-   is append-only, so re-encountering a patch is a hit rather than a rebuild."
+  "Pure: the cache with `patch-hash` marked as `entry` says. Never removes an
+   entry — the store is append-only, so re-encountering a patch is a hit rather
+   than a rebuild.
+
+   `entry` supplies its own `:status`, and one that omits it is a patch nothing
+   will skip. There was a `:converged` default here, from when convergence was
+   the only thing recorded; with two statuses to write, defaulting to the one
+   that grants a skip means a caller that forgets ships unreviewed code — the
+   single failure this namespace leans away from."
   [cache patch-hash entry]
-  (assoc cache patch-hash (merge {:status :converged} entry)))
+  (assoc cache patch-hash entry))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :any]}
   write!

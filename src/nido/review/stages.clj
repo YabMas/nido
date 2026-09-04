@@ -404,8 +404,8 @@
       (catch Throwable _ nil))))
 
 ;; Defined below, beside the cache reasoning it belongs with, and called from
-;; both stages that can end a round holding nothing owed — see its docstring.
-(declare record-convergence!)
+;; both stages that can end a round — see its docstring.
+(declare record-review!)
 
 (defn- run-review-stage
   [ctx]
@@ -499,7 +499,7 @@
                        ;; read nothing, because no reviewer reached a verdict.
                        (not nothing?)
                        (assoc :overall-correctness (:overall-correctness whole)))]
-        (when-not (or nothing? first-quiet-round?) (record-convergence! cwd ctx'))
+        (when-not (or nothing? first-quiet-round?) (record-review! cwd ctx'))
         ctx')
       (assoc ctx
              :findings findings
@@ -592,14 +592,20 @@
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   answered-by-layer
-  "What earlier rounds already CLOSED, per layer, for the layers under review.
+  "What earlier rounds already SETTLED, per layer, for the layers under review.
 
-   Written by `answered-for` from this stage's own closes and hung off each
-   layer's patch hash, so an answer evaporates the moment that layer's content
-   changes. Reading it back here closes the loop: the reviewer starts fresh every
-   round and will report a closed finding again, which is not new information —
-   without this the same finding is re-adjudicated for as long as the layer sits
-   unchanged.
+   Written by `record-review!` and hung off each layer's patch hash, so an
+   answer evaporates the moment that layer's content changes. Reading it back
+   here closes the loop: the reviewer starts fresh every round and will report a
+   settled finding again, which is not new information — without this the same
+   finding is re-adjudicated for as long as the layer sits unchanged.
+
+   It reads the targets UNDER REVIEW, which is what makes what is written matter
+   as much as what is read. While convergence was the only thing recorded, the
+   entries in the cache were exactly the patches `to-review` skips, and this
+   looked up precisely their complement: every lookup missed, and the block it
+   feeds has never reached a warden. A target that owes something is recorded
+   too, and that is the entry a next round comes back to.
 
    Layers with nothing answered are dropped rather than carried as empty rows:
    the prompt block is evidence, and a layer named with nothing under it reads
@@ -664,11 +670,66 @@
                                  (not (contains? owners (:label t))))))))
           reviews)))
 
+(defn ^{:malli/schema [:=> [:cat :any :any :any] :any]}
+  reviewed-statuses
+  "Every target this round reviewed, paired with the status its patch is left
+   at: `:converged` when the target owes nothing — `converged-targets` is that
+   rule — and `:partial` when it still does.
+
+   Only `:converged` grants a skip, so a `:partial` entry is re-reviewed, which
+   is correct: something is owed of it. What the entry buys is the other half of
+   what the cache holds. Answers were recorded only against converged patches,
+   and a converged patch is by definition one the next round skips — so the
+   answers sat in a store nothing would ever come back to, and the target that
+   HAS a question outstanding, the one a fresh reviewer will report on again,
+   was the one nothing was written about at all.
+
+   A target with no patch hash is dropped rather than recorded under nil: an
+   entry keyed on unknown content is a claim about every patch and about none."
+  [reviews findings parks]
+  (let [converged (into #{} (map :label) (converged-targets reviews findings parks))]
+    (into []
+          (comp (map :target)
+                (filter :patch-hash)
+                (map (fn [t]
+                       [t (if (contains? converged (:label t)) :converged :partial)])))
+          reviews)))
+
+(defn- latest-rulings
+  "One entry per finding across every round of the run, carrying its LATEST
+   ruling — the same fold `verdict/open-across-run` performs, and for the same
+   reason: a run's decisions are spread over its rounds and no single round
+   holds them all.
+
+   Keyed on the handle, which is the identity a re-wording cannot move, falling
+   back to the id for a finding that reached no warden. A later round that
+   reverses a ruling wins, so a finding closed in round 1 and re-opened in
+   round 3 is open.
+
+   Ordered by FIRST raising, because the reader is a prompt block: a list whose
+   order is the map's is stable for a short run and arbitrary for a long one,
+   and one that reads oldest-first tells a warden how the run went."
+  [rounds]
+  (let [all    (apply concat rounds)
+        latest (reduce (fn [acc f] (assoc acc (or (:handle f) (:id f)) f)) {} all)]
+    (into []
+          (comp (map #(or (:handle %) (:id %))) (distinct) (map latest))
+          all)))
+
 (defn ^{:malli/schema [:=> [:cat :any :any] :any]}
   answered-for
-  "What this target reported and the warden SETTLED. Carried forward under the
+  "What this target reported and the warden SETTLED, over the WHOLE run —
+   `rounds` is each round's findings, oldest first. Carried forward under the
    patch hash so next round's fresh reviewer, reporting the same thing, gets
    answered rather than re-adjudicated.
+
+   Every round rather than the converging one, because the converging round is
+   the one least likely to hold anything: a run ends by finding nothing, and
+   reading its last round alone recorded `:answered` of length zero against
+   every target it had just spent three rounds adjudicating. The same silence
+   costs a round mid-run — a target's entry is rewritten at its own unchanged
+   hash every round it is reviewed, so a reviewer that happens not to re-report
+   a settled finding would erase the answer the round before had recorded.
 
    Every settling disposition, not only a close. A decline is a decision — the
    finding is true and this branch is leaving it — and a decision re-argued
@@ -676,46 +737,53 @@
    defect is declined again and again at full cost, and the reason given the
    first time is never seen by the round that needs it. The disposition rides
    along so the next warden can tell what kind of answer it is looking at."
-  [label findings]
+  [label rounds]
   (into []
         (comp (filter #(and (= label (:from-layer %)) (settled? %)))
               (map #(select-keys % [:id :title :disposition :authority :because])))
-        findings))
+        (latest-rulings rounds)))
 
 (defn ^{:malli/schema [:=> [:cat :Path :map] :any]}
-  record-convergence!
-  "Write what converged this round into the workstream's cache.
+  record-review!
+  "Write what this round's review left each target at into the workstream's
+   cache: its status, and what the run has settled about it.
 
-   Called from the two stages that can end a round with nothing owed, rather
-   than from a stage of its own: the engine short-circuits on `:control :stop`,
-   so anything sequenced after the stage that stopped would never run. Those two
-   are the warden, which stops once every finding is settled, and the review
-   stage, which stops before a warden exists when the round reported nothing at
-   all. The second is the one most worth recording and was the one missing —
-   a round that finds nothing is the loop's best outcome, and it was the only
-   outcome it forgot, so re-reviewing an untouched patch cost a full fan-out
-   every time.
+   Called from the two stages that can end a round, rather than from a stage of
+   its own: the engine short-circuits on `:control :stop`, so anything sequenced
+   after the stage that stopped would never run. Those two are the warden, which
+   stops once every finding is settled, and the review stage, which stops before
+   a warden exists when the round reported nothing at all. The second is the one
+   most worth recording and was the one missing — a round that finds nothing is
+   the loop's best outcome, and it was the only outcome it forgot, so
+   re-reviewing an untouched patch cost a full fan-out every time.
 
-   Safe to call from either because it reads only `:reviews`, `:findings` and
-   the carried parks, all of which are set by then, and because
-   `converged-targets` is pure: with nothing open and no park standing, every
-   target reviewed at this patch converges. Best-effort — a cache that cannot be
-   written costs the next run some duplicated review and nothing else."
+   Safe to call from either because it reads only `:reviews`, `:findings`, the
+   round history and the carried parks, all of which are set by then, and
+   because `reviewed-statuses` is pure.
+
+   The history plus this round's findings is the run's whole account, and it is
+   assembled here rather than in `answered-for` so that function stays pure over
+   what it is given. The fix stage appends a round to the history and the warden
+   runs before it, so the two never overlap.
+
+   Best-effort — a cache that cannot be written costs the next run some
+   duplicated review and nothing else."
   [cwd ctx]
   (when-let [[project ws-id] (project+ws-from-cwd cwd)]
-    (let [converged (converged-targets (:reviews ctx) (:findings ctx)
-                                       (vals (get-in ctx [:carry :parks] {})))]
-      (when (seq converged)
+    (let [statuses (reviewed-statuses (:reviews ctx) (:findings ctx)
+                                      (vals (get-in ctx [:carry :parks] {})))
+          rounds   (conj (mapv :findings (:history ctx)) (vec (:findings ctx)))]
+      (when (seq statuses)
         (let [now (str (java.time.Instant/now))
-              c   (reduce (fn [c t]
+              c   (reduce (fn [c [t status]]
                             (cache/record c (:patch-hash t)
-                                          {:status   :converged
+                                          {:status   status
                                            :label    (:label t)
                                            :round    (:iter ctx)
                                            :at       now
-                                           :answered (answered-for (:label t) (:findings ctx))}))
+                                           :answered (answered-for (:label t) rounds)}))
                           (or (:cache ctx) (cache/read-cache project ws-id))
-                          converged)]
+                          statuses)]
           (cache/write! project ws-id c))))))
 
 (defn ^{:malli/schema [:=> [:cat :any :Finding] :any]}
@@ -912,7 +980,7 @@
                    (assoc ctx' :control :stop :status :unfixable
                           :unfixable (vec stale))
                    ctx')]
-        (record-convergence! cwd ctx')
+        (record-review! cwd ctx')
         ctx'))))
 
 (def warden-stage

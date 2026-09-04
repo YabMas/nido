@@ -161,17 +161,31 @@
     {:signature [:=> [:catn [:project ProjectName]] Path]})
   (Operation read-stance "A project's stance text."
     {:signature [:=> [:catn [:project ProjectName]] [:maybe :string]] :delegates [stance-path]})
-  (Operation answered-by-layer "What earlier rounds already answered, per layer."
+  (Operation answered-by-layer
+    "What earlier rounds already answered, for the layers UNDER REVIEW — which is why the
+     recording side must cover more than convergence: a converged patch is one this round
+     skips, so a store of only those is a store this can never read."
     {:signature [:=> [:catn [:ctx :map]] :any]})
   (Operation converged-targets
     "The targets this round left owing nothing — no open finding names them and no carried
      park does either. Pure. The parks are a separate argument because they are the half a
      round's own findings cannot carry: a park is raised once and lives in the carry after."
     {:signature [:=> [:catn [:reviews :any] [:findings :any] [:parks :any]] :any]})
-  (Operation answered-for "What one target reported as answered."
-    {:signature [:=> [:catn [:label :any] [:findings :any]] :any]})
-  (Operation record-convergence! "Write what converged this round into the cache."
-    {:signature [:=> [:catn [:cwd Path] [:ctx :map]] :any] :delegates [converged-targets]})
+  (Operation reviewed-statuses
+    "Every reviewed target paired with the status its patch is left at — converged when it owes
+     nothing, partial when it still does. Only the first is a skip; the second is the entry a
+     next round comes back to, and so the only one whose answers anything reads."
+    {:signature [:=> [:catn [:reviews :any] [:findings :any] [:parks :any]] :any]
+     :delegates [converged-targets]})
+  (Operation answered-for
+    "What one target reported and the run settled, folded over every round. The converging
+     round is the one least likely to hold anything: a run ends by finding nothing."
+    {:signature [:=> [:catn [:label :any] [:rounds :any]] :any]})
+  (Operation record-review!
+    "Write what this round left each reviewed target at into the cache: its status, and what
+     the run has settled about it."
+    {:signature [:=> [:catn [:cwd Path] [:ctx :map]] :any]
+     :delegates [reviewed-statuses answered-for]})
   (Operation resolve-handle "The identity a finding is filed under."
     {:signature [:=> [:catn [:handles :any] [:f Finding]] :any]})
   (Operation apply-rulings "The warden's per-finding rulings, merged in."

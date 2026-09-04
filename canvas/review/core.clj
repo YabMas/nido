@@ -38,16 +38,23 @@
 
    Keyed by patch hash rather than by revision, which is the whole point: a rebase changes every
    revision id and changes no code, so a cache keyed on ids would re-review the entire stack
-   after every reshape."
+   after every reshape.
+
+   An entry holds two things and only one of them is the skip: `:status`, of which `:converged`
+   alone means do not look again, and `:answered`, what was decided about that patch. The second
+   is worth recording at either status — the patch a next round comes back to is precisely the
+   one that still owes something."
   (Operation path "Where a workstream's review cache lives."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] Path]})
   (Operation read-cache "A workstream's cache, or an empty one."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :map] :delegates [path]})
-  (Operation converged? "Whether this exact patch has already converged."
+  (Operation converged? "Whether this exact patch has already converged — the only skip."
     {:signature [:=> [:catn [:cache :map] [:patch-hash :string]] :boolean]})
-  (Operation answered "The findings already closed against this patch."
+  (Operation answered "The findings already settled against this patch."
     {:signature [:=> [:catn [:cache :map] [:patch-hash :string]] :any]})
-  (Operation record "The cache with one patch's result folded in. Pure."
+  (Operation record
+    "The cache with one patch's result folded in. Pure. The entry carries its own status, so a
+     writer that does not say leaves a patch nothing will skip."
     {:signature [:=> [:catn [:cache :map] [:patch-hash :string] [:entry :map]] :map]})
   (Operation write! "Persist the cache. Best-effort — a lost cache costs time, not correctness."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:cache :map]] :any]

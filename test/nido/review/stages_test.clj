@@ -622,26 +622,68 @@
     (is (= ["a" "b" "stack"] (map :label (stages/converged-targets reviews [] [])))
         "and a run holding no park converges everything it reviewed clean")))
 
+(deftest reviewed-statuses-record-a-target-that-owes-something-as-well
+  ;; The two halves of the store. A converged patch is skipped, so nothing ever
+  ;; reads what was answered against it; a patch still owing something is
+  ;; reviewed again, which makes it the only entry the read path can reach — and
+  ;; it was the one nothing was written about.
+  (let [reviews [{:target {:label "a" :patch-hash "h-a"}}
+                 {:target {:label "b" :patch-hash "h-b"}}
+                 {:target {:label "stack" :patch-hash "h-s" :stack? true}}]
+        out     (stages/reviewed-statuses
+                 reviews [{:disposition :fix :owner-layer "a"}] [])]
+    (is (= [["a" :partial] ["b" :converged] ["stack" :partial]]
+           (map (fn [[t s]] [(:label t) s]) out))
+        "every reviewed target is recorded; only the one owing nothing may be skipped")))
+
+(deftest reviewed-statuses-drop-a-target-whose-patch-is-unknown
+  ;; An entry keyed on nil is a claim about every patch and about none.
+  (is (= [] (stages/reviewed-statuses [{:target {:label "a" :patch-hash nil}}] [] []))))
+
 (deftest answered-for-carries-only-what-that-target-reported-and-lost
   (is (= ["aa11"]
          (map :id (stages/answered-for
-                   "a" [{:id "aa11" :from-layer "a" :disposition :closed :authority "design"}
-                        {:id "bb22" :from-layer "a" :disposition :fix}
-                        {:id "cc33" :from-layer "b" :disposition :closed}])))))
+                   "a" [[{:id "aa11" :from-layer "a" :disposition :closed :authority "design"}
+                         {:id "bb22" :from-layer "a" :disposition :fix}
+                         {:id "cc33" :from-layer "b" :disposition :closed}]])))))
 
 (deftest answered-for-carries-every-decision-not-only-a-close
   ;; A decline re-argued every round is not a decision: the reviewer has no
   ;; memory, so the reason given the first time never reaches the round that
   ;; needs it. A park is NOT carried — nothing was decided about it.
   (let [out (stages/answered-for
-             "a" [{:id "aa11" :from-layer "a" :disposition :declined
-                   :because "true, and this branch is leaving it"}
-                  {:id "bb22" :from-layer "a" :disposition :deviation :of "the claim"}
-                  {:id "cc33" :from-layer "a" :disposition :park}
-                  {:id "dd44" :from-layer "a" :disposition :fix}])]
+             "a" [[{:id "aa11" :from-layer "a" :disposition :declined
+                    :because "true, and this branch is leaving it"}
+                   {:id "bb22" :from-layer "a" :disposition :deviation :of "the claim"}
+                   {:id "cc33" :from-layer "a" :disposition :park}
+                   {:id "dd44" :from-layer "a" :disposition :fix}]])]
     (is (= ["aa11" "bb22"] (map :id out)))
     (is (= [:declined :deviation] (map :disposition out))
         "the disposition rides along so the next warden knows what kind of answer it is")))
+
+(deftest answered-for-folds-every-round-not-only-the-one-that-converged
+  ;; The converging round is the one least likely to hold anything: a run ends
+  ;; by finding nothing, so reading it alone records an empty answer against
+  ;; every target the run spent its earlier rounds adjudicating.
+  (let [out (stages/answered-for
+             "a" [[{:handle "aa11" :id "aa11" :from-layer "a" :disposition :closed
+                    :authority "design"}]
+                  []])]
+    (is (= ["aa11"] (map :id out))
+        "a run that converges on an empty round still records what it settled")))
+
+(deftest answered-for-keeps-the-latest-ruling-on-a-finding
+  ;; The same identity ruled twice is one answer, and the later round is the one
+  ;; that read the earlier one's fix — so a reversal in either direction stands.
+  (let [reopened (stages/answered-for
+                  "a" [[{:handle "aa11" :id "aa11" :from-layer "a" :disposition :closed}]
+                       [{:handle "aa11" :id "aa11" :from-layer "a" :disposition :fix}]])
+        settled  (stages/answered-for
+                  "a" [[{:handle "bb22" :id "bb22" :from-layer "a" :disposition :fix}]
+                       [{:handle "bb22" :id "bb22" :from-layer "a" :disposition :declined}]])]
+    (is (= [] reopened) "a finding a later round re-opened is not an answer any more")
+    (is (= ["bb22"] (map :id settled))
+        "and one a later round decided is, however it was ruled before")))
 
 (deftest answered-by-layer-reads-each-layers-answers-under-its-own-patch-hash
   ;; They hang off the layer's patch, so a layer whose content changed has no
@@ -654,6 +696,42 @@
     (is (= [{:label "a" :answered [{:id "aa11" :title "t" :authority "design"}]}]
            (stages/answered-by-layer ctx))
         "a layer with nothing answered is dropped, not carried as an empty row")))
+
+(deftest what-is-written-to-the-cache-is-what-the-next-round-can-read
+  ;; The two ends of the answered channel, composed the way a run composes them:
+  ;; a round writes, and the next round reads back what it did not skip. While
+  ;; only converged targets were written, `in the cache` and `under review` were
+  ;; disjoint by construction — every entry was a patch to-review skips, and this
+  ;; lookup asked about precisely the complement, so it could never return
+  ;; anything and the ALREADY SETTLED block never reached a warden.
+  (let [reviews  [{:target {:label "a" :patch-hash "h-a"}}
+                  {:target {:label "b" :patch-hash "h-b"}}]
+        ;; Round 1: `a` had one finding declined and one parked, so it is
+        ;; decided about the first and still owes the second; `b` owes nothing.
+        findings [{:id "aa11" :title "already answered" :from-layer "a"
+                   :owner-layer "a" :disposition :declined}
+                  {:id "bb22" :title "the open question" :from-layer "a"
+                   :owner-layer "a" :disposition :park}]
+        written  (reduce (fn [c [t status]]
+                           (cache/record c (:patch-hash t)
+                                         {:status   status
+                                          :label    (:label t)
+                                          :answered (stages/answered-for (:label t)
+                                                                         [findings])}))
+                         {}
+                         (stages/reviewed-statuses reviews findings []))
+        ;; Round 2, at the same content: nothing landed on `a`, because a park
+        ;; is what the loop has no move for.
+        {:keys [review skipped]} (stages/to-review written
+                                                   [{:label "a" :patch-hash "h-a"}
+                                                    {:label "b" :patch-hash "h-b"}])]
+    (is (= ["b"] (map :label skipped))
+        "b owed nothing, so it converged and the next round does not look at it")
+    (is (= [{:label "a"
+             :answered [{:id "aa11" :title "already answered" :disposition :declined}]}]
+           (stages/answered-by-layer
+            {:cache written :reviews (mapv (fn [t] {:target t}) review)}))
+        "a is reviewed again because a park stands on it — and it arrives carrying the answer")))
 
 ;; ---- announcing the round's targets before it starts ---------------------
 
