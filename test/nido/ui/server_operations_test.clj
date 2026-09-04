@@ -5,6 +5,7 @@
    [clojure.test :refer [deftest is]]
    [nido.platform.core :as core]
    [nido.coordinator.work :as work]
+   [nido.coordinator.record.proposal]
    [nido.coordinator.record.workstream :as ws]
    [nido.ui.server :as server]))
 
@@ -126,3 +127,55 @@
         (is (str/includes? body "the seam it names is deliberate")
             "a decline without its reason is indistinguishable from an oversight,
              and the reason was written to the ledger and dropped by the surface")))))
+
+;; ── the veto has to be reachable ────────────────────────────────────────────
+
+(defn- board [] (str (:body (server/handle-request
+                             {:request-method :get :uri "/_fragment/operations"
+                              :query-string "scope=nido"}))))
+
+(deftest an-approved-proposal-can-still-be-declined
+  ;; Under the sweep an approval is not what lets a proposal be carried — a
+  ;; decline is what stops it. A veto unreachable for an approved row would be
+  ;; no veto at all, and most of the backlog is approved.
+  (with-one-proposal
+    (fn [id]
+      (work/decide-proposal! :nido id {:analysis-seq 1 :observation 0
+                                       :verdict :approved :at-seq 1})
+      (let [body (board)]
+        (is (str/includes? body "verdict=declined") "the veto is still offered")
+        (is (not (str/includes? body "verdict=approved"))
+            "approving twice is not a thing to offer")))))
+
+(deftest a-declined-proposal-offers-no-further-decision
+  (with-one-proposal
+    (fn [id]
+      (work/decide-proposal! :nido id {:analysis-seq 1 :observation 0
+                                       :verdict :declined :at-seq 1})
+      (let [body (board)]
+        (is (not (str/includes? body "verdict=declined")) "declining twice changes nothing")))))
+
+(deftest a-landed-proposal-offers-no-decision-at-all
+  (with-one-proposal
+    (fn [id]
+      (work/record-landing! :nido id {:analysis-seq 1 :observation 0 :rev "abc"})
+      (let [body (board)]
+        (is (not (str/includes? body "verdict=approved")))
+        (is (not (str/includes? body "verdict=declined"))
+            "nothing to veto — it is already on main")))))
+
+(deftest a-decline-that-arrives-after-a-reservation-is-shown-as-late
+  ;; The honest reading of silence being the wrong one: without this the board
+  ;; renders this decline exactly like one that stopped something, and a reader
+  ;; believes they vetoed a change that lands minutes later.
+  (with-one-proposal
+    (fn [id]
+      (work/decide-proposal! :nido id {:analysis-seq 1 :observation 0
+                                       :verdict :declined :at-seq 1})
+      (with-redefs [nido.coordinator.record.proposal/claim-attempts
+                    (constantly [{:address "ws-p/1#0" :ws-id "ws-c" :open? true
+                                  :addresses [(str id "/1.0")]}])]
+        (let [body (board)]
+          (is (str/includes? body "declined too late"))
+          (is (str/includes? body "return to the backlog")
+              "and what happens to the proposals it was grouped with"))))))

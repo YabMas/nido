@@ -571,9 +571,22 @@
 
    The derivation is `record.proposal/of-project`; this is the surface's door to
    it, and the reason the door exists is that a surface wraps this vocabulary
-   and not the records beneath it."
+   and not the records beneath it.
+
+   `:reserved?` is added here rather than in the derivation because it is a fact
+   the SURFACE needs and no scheduling rule does. Once a claim covering an
+   address has been reserved, a decline recorded against it is late: the veto
+   deadline has passed and the landing will happen anyway. Without this the board
+   would render such a decline exactly like one that stopped something, which is
+   the honest reading of silence being the wrong one — a reader would believe
+   they had vetoed a change that lands minutes later."
   [project]
-  (proposal/of-project project))
+  (let [pk       (keyword (name project))
+        reserved (into #{}
+                       (comp (filter :open?) (mapcat :addresses))
+                       (proposal/claim-attempts pk))]
+    (mapv (fn [p] (cond-> p (reserved (proposal/address p)) (assoc :reserved? true)))
+          (proposal/of-project pk))))
 
 (defn- review-detail
   "The review-loop's own report.json — target, rounds, per-round phases and their

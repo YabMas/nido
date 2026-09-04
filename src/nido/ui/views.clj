@@ -2388,13 +2388,19 @@
    separates an observation from an opinion — and a surface that hides it asks
    for a decision about a claim while showing only the claim."
   [{:keys [project ws-id analysis-seq observation at-seq kind where summary evidence
-           proposal run-id reviewed rounds status at decision landed] :as _p}]
+           proposal run-id reviewed rounds status at decision landed reserved?] :as _p}]
   (let [addr (str analysis-seq "." observation)
         base (str "/operations/" project "/" ws-id "/" analysis-seq "/" observation
                   "?entry=" at-seq)
         ;; Settled means nothing further is owed — declined, or approved and
         ;; landed. An approval on its own is not settled however old it is.
-        settled? (or landed (= :declined (:verdict decision)))]
+        ;;
+        ;; A decline is NOT settled once a claim covering this address has been
+        ;; reserved. The veto deadline has passed, so the landing happens anyway,
+        ;; and rendering it as settled would tell a reader they stopped something
+        ;; they did not. It settles when the landing lands.
+        late?    (and (= :declined (:verdict decision)) reserved?)
+        settled? (or landed (and (= :declined (:verdict decision)) (not late?)))]
     [:div {:class (str "prop" (when settled? " settled"))}
      [:div.prop-head
       [:span {:class (str "chip c-" (name kind))} (name kind)]
@@ -2412,10 +2418,22 @@
       (when run-id [:span.mono (subs (str run-id) 0 (min 14 (count (str run-id))))])]
      (prop-note "decided" (:note decision))
      (prop-note "landed" (:note landed))
-     (when-not decision
+     (when late?
+       [:div.prop-note
+        [:strong "declined too late"]
+        " — a claim covering this proposal was already reserved, so the change lands anyway. "
+        "The other proposals that claim covered return to the backlog."])
+     ;; Decline is offered wherever nothing has landed, not only where nothing
+     ;; has been decided. Approval is no longer what lets the sweep carry a
+     ;; proposal — a decline is what stops it — so a veto that could not be
+     ;; reached for an already-approved row would be no veto at all, and most of
+     ;; the backlog is approved.
+     (when-not landed
        [:div.actions {:style "margin-top:10px"}
-        [:button.btn.btn-primary {"data-on:click" (str "@post('" base "&verdict=approved')")} "Approve"]
-        [:button.btn {"data-on:click" (str "@post('" base "&verdict=declined')")} "Decline"]])]))
+        (when-not decision
+          [:button.btn.btn-primary {"data-on:click" (str "@post('" base "&verdict=approved')")} "Approve"])
+        (when-not (= :declined (:verdict decision))
+          [:button.btn {"data-on:click" (str "@post('" base "&verdict=declined')")} "Decline"])])]))
 
 (defn- proposal-band
   "Which of the three bands a row is in: what you still owe an answer, what you
