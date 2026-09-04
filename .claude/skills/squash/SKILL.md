@@ -310,6 +310,15 @@ Every body must carry **Claims / Verify / Lane / Out of scope** (`/stack` §5 fo
 what each field means — Claims traces to the design record, Out of scope may cite
 it); that is what makes per-layer review bounded.
 
+**Carry the footer's ticket line through, verb and all.** A wholesale replace is
+what makes a `Closes BR-####` typed into a PR body by hand disappear, and the
+disappearance is silent — the body still reads correctly, and only the ticket
+that never moved says otherwise. The line survives because it is in the folded
+commit, which is where `/stack` §5 puts it; if a layer's commit lost it during
+the fold, put it back in the COMMIT and re-derive the body, rather than adding it
+to the body here. Which layer takes `Closes` and which takes `Refs` does not
+change during a squash — the top layer claims, the rest cite.
+
 This is a deterministic overwrite derived from final state, so re-running
 re-derives the same bodies — idempotent, no append-drift.
 
@@ -372,6 +381,9 @@ re-derives the same bodies — idempotent, no append-drift.
 - **Discovering the stack without `select(.open)`** — a merged stack stays
   listed forever; without the filter a re-run regenerates PR text against an
   already-shipped stack (§3).
+- **Regenerating a body from a folded commit whose ticket footer was lost** —
+  the overwrite then deletes the delivery claim silently. Fix the commit, not the
+  body (§3).
 - **Proofreading/appending to the old PR body** — §3 is a full overwrite
   synthesized from the final state, not an edit of the existing text.
 - **Stopping without pushing** — the folded commits must land on the remote;

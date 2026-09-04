@@ -62,3 +62,38 @@
                        {:repo "o/r" :issues {:assignee "@me" :unknown-key "bad"}}))
       (is (thrown-with-msg? Exception #"github.edn"
             (gh-config/load-config :brian))))))
+
+(deftest load-config-accepts-delivery-claim-block
+  (with-tmp
+    (fn [tmp]
+      (let [dir (fs/path (str tmp) "projects" "brian")]
+        (fs/create-dirs dir)
+        (io/write-edn! (str (fs/path dir "github.edn"))
+                       {:repo "o/r" :delivery-claim {:prefix "BR-" :verb "Closes"}}))
+      (let [c (gh-config/load-config :brian)]
+        (is (= "BR-" (-> c :delivery-claim :prefix)))
+        (is (= "Closes" (-> c :delivery-claim :verb)))))))
+
+;; The schema is what lets brian's github.edn carry the key at all. Without this
+;; entry the poller does not warn and skip the key — load-config THROWS, so the
+;; project's merge reaction stops entirely. That is why the schema lands a phase
+;; before the config does.
+(deftest load-config-rejects-unknown-delivery-claim-key
+  (with-tmp
+    (fn [tmp]
+      (let [dir (fs/path (str tmp) "projects" "brian")]
+        (fs/create-dirs dir)
+        (io/write-edn! (str (fs/path dir "github.edn"))
+                       {:repo "o/r"
+                        :delivery-claim {:prefix "BR-" :verb "Closes" :typo true}}))
+      (is (thrown-with-msg? Exception #"github.edn"
+            (gh-config/load-config :brian))))))
+
+(deftest load-config-absent-delivery-claim-is-legal
+  (with-tmp
+    (fn [tmp]
+      (let [dir (fs/path (str tmp) "projects" "brian")]
+        (fs/create-dirs dir)
+        (io/write-edn! (str (fs/path dir "github.edn")) {:repo "o/r"}))
+      (is (nil? (:delivery-claim (gh-config/load-config :brian)))
+          "no :delivery-claim ⇒ the skills write no claim line"))))
