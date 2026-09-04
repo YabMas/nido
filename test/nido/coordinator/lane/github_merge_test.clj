@@ -337,3 +337,58 @@
           (is (= :done (-> (ws/read-ws :brian (:id w)) :closed :outcome)))
           (is (nil? (re-find #"page-id" (str sw)))
               "a GitHub-issue workstream has no ticket to nudge; that is not a gap"))))))
+
+;; ── a page whose database has no Ball Holder ─────────────────────────────────
+;; nido's own cross-project follow-up DB issues FU-# ids through the same
+;; :notion adapter as a project ticket, and its pages define no Ball Holder.
+;; Notion applies a property update as one request, so naming a property the
+;; database does not define fails the WHOLE call — the status write included.
+;; Measured live 2026-09-04: FU-4 and FU-15 both sit at Status=Open on a select
+;; property, with merged PRs and closed workstreams behind them.
+
+(deftest ball-holder-is-skipped-when-the-page-has-no-such-property
+  (with-tmp
+    (fn [_]
+      (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
+      (ws/create! :brian {:stage :in-progress
+                          :external-refs [{:adapter :notion :id "FU-4" :page-id "FUPAGE"}
+                                          {:adapter :github :id "brian-study/brian#9"}]})
+      (let [props (atom nil)]
+        (with-redefs [gh/list-merged-prs (fn [_] {:status :ok
+                                                  :prs [{:number 9 :url "u9" :title "t9" :merged-at "y" :base "main"}]})
+                      notion/keychain-token (constantly "tok")
+                      ;; A follow-up page: no Ball Holder anywhere in :properties.
+                      notion/retrieve-page  (fn [_ _] {:properties {:Status {:type "select" :select {:name "Open"}}}})
+                      notion/update-page-properties! (fn [pg p _] (reset! props {:page pg :props p}) {:ok true})]
+          (gm/poll-and-react! :brian cfg)
+          (is (nil? (get-in @props [:props "Ball Holder"]))
+              "a property the page's database does not define is never written")
+          (is (= {:status {:name "Code Review"}} (get-in @props [:props "Status"]))
+              "the status write still goes out — it is no longer dragged down with it"))))))
+
+(deftest nothing-to-write-writes-nothing
+  (with-tmp
+    (fn [_]
+      (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
+      (let [w (ws/create! :brian {:stage :in-progress
+                                  :external-refs [{:adapter :notion :id "FU-4" :page-id "FUPAGE"}
+                                                  {:adapter :github :id "brian-study/brian#9"}]})
+            called (atom false)]
+        ;; :notion-status dropped (what brian's config becomes once its own
+        ;; notifier owns the Review transition) plus a page with no Ball Holder
+        ;; leaves an empty props map — and an empty map must not become a request.
+        (with-redefs [gh/list-merged-prs (fn [_] {:status :ok
+                                                  :prs [{:number 9 :url "u9" :title "t9" :merged-at "y" :base "main"}]})
+                      notion/keychain-token (constantly "tok")
+                      notion/retrieve-page  (fn [_ _] {:properties {:Status {:type "select"}}})
+                      notion/update-page-properties! (fn [_ _ _] (reset! called true) {:ok true})]
+          (gm/poll-and-react! :brian
+                              {:repo "brian-study/brian" :poll "5m"
+                               :on-merge {:remove-ball-holder "jaap"}})
+          ;; Asserted BEFORE the negative one: without it, a workstream that
+          ;; failed to correlate would leave @called false and the test would
+          ;; pass having exercised nothing.
+          (is (= :done (-> (ws/read-ws :brian (:id w)) :closed :outcome))
+              "the merge did correlate and the workstream closed")
+          (is (false? @called)
+              "no property to write ⇒ no Notion request at all"))))))

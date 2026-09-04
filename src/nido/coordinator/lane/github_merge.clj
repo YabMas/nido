@@ -47,21 +47,37 @@
 
 (defn- pr-id [repo number] (str repo "#" number))
 
+(def ^:private ball-holder-key
+  "The people-property the reaction clears. A page whose database does not define
+   it is not a project ticket — see `nudge-notion!`."
+  (keyword "Ball Holder"))
+
 (defn- nudge-notion!
   "Best-effort Notion reaction for a merged PR's ticket. `page-id` is resolved
    and checked by the CALLER — this guarded on it itself until 2026-09-01, which
    is how a workstream whose ref carried no page-id got a close, no ticket write,
-   and no word about either."
+   and no word about either.
+
+   Every property is written in ONE update, so one property the page's database
+   does not define fails the whole call. A workstream may carry a :notion ref to
+   a page in a database that is not the project's ticket board — nido's own
+   cross-project follow-up DB issues FU-# ids through this same adapter — and
+   such a page has no Ball Holder at all. Writing it anyway turned the reaction
+   into a rejected request whose only trace was the warn below, so a follow-up
+   read as nudged and had not been. Skip what the page cannot hold: `props` may
+   end up empty, and an empty `props` writes nothing, which is the right answer
+   for a page there is nothing to say to."
   [page-id {:keys [notion-status remove-ball-holder]}]
   (try
     (if-let [token (notion/keychain-token)]
       (let [page  (when remove-ball-holder (notion/retrieve-page page-id token))
             props (cond-> {}
                     notion-status (assoc "Status" {:status {:name notion-status}})
-                    (and remove-ball-holder page (not (:error page)))
+                    (and remove-ball-holder page (not (:error page))
+                         (contains? (:properties page) ball-holder-key))
                     (assoc "Ball Holder"
                            (react/people-without
-                             (get-in page [:properties (keyword "Ball Holder")])
+                             (get (:properties page) ball-holder-key)
                              remove-ball-holder)))]
         (when (seq props)
           (let [res (notion/update-page-properties! page-id props token)]
