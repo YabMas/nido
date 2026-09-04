@@ -65,6 +65,12 @@
       (and review (= "ok" (:status review))
            (empty? (:findings review)) (nil? warden))              "clean"
       (= "escalate" (:decision warden))                            "escalated"
+
+      ;; Before "continued", which is what a round holding a landed fix reads as
+      ;; and what this one used to be called. A round that stopped on a conflict
+      ;; it could not roll back continued nothing: the stack is holding markers,
+      ;; and the fixers above the conflict were never launched.
+      (seq (:conflicted fix))                                      "fix-conflicted"
       (and fix (seq (:fixes fix)))                                "continued"
       (= "stop" (:decision warden))                                "stopped"
       :else                                                       "ended")))
@@ -251,10 +257,17 @@
       ;; :rolled-back beside them, because a repair the stack refused leaves no
       ;; trace anywhere else: the commit is gone, the fixer's log says it
       ;; succeeded, and the findings come back next round looking untouched.
+      ;; :conflicted and :unattempted are the account of an abort: what the stack
+      ;; is holding, and which layers the stage was still going to reach. Without
+      ;; the second, the only record of a fixer that never ran is the ABSENCE of
+      ;; its fix-<layer>-round-N.err.log from the run dir — so the four lists
+      ;; together are what makes the phase add up to every :fix ruling it held.
       :fix    (let [h (last (filter #(= (:iter ctx) (:iter %)) (:history ctx)))]
                 (cond-> (assoc ph :fixes (vec (:fixes h)) :fixed-count (:fixed-count h))
                   (seq (:declined ctx))    (assoc :declined (vec (:declined ctx)))
-                  (seq (:rolled-back ctx)) (assoc :rolled-back (vec (:rolled-back ctx)))))
+                  (seq (:rolled-back ctx)) (assoc :rolled-back (vec (:rolled-back ctx)))
+                  (seq (:conflicted ctx))  (assoc :conflicted (vec (:conflicted ctx)))
+                  (seq (:unattempted ctx)) (assoc :unattempted (vec (:unattempted ctx)))))
       ;; What the stage decided about each recut, whether or not it could act.
       ;; Kept because a reshape is the only remedy a recut has — the warden
       ;; withholds it from the fixers — so an empty reshape phase is the report

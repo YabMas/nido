@@ -493,6 +493,44 @@
              :conflicted ["xlortuwzrtlu"]}]
            (:rolled-back ph)))))
 
+(deftest an-aborted-fix-plan-accounts-for-the-fixers-it-never-launched
+  ;; The fix stage stopped on a conflict it could not roll back, forfeiting
+  ;; every layer above it. Before this the only record of a forfeited layer was
+  ;; the ABSENCE of its fix-<layer>-round-N.err.log from the run dir — so the
+  ;; report showed one fix and said nothing at all about the two findings the
+  ;; abort dropped, which reads exactly like two findings a fixer let stand.
+  (let [r (drive
+           [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+            {:event :phase-started :iter 1 :phase :review :at "t1"}
+            {:event :phase-finished :iter 1 :phase :review :at "t2"
+             :ctx {:findings [{:id "dd463b20" :from-layer "diary-paging"}
+                              {:id "4a9816d2" :from-layer "day-modal-design"}
+                              {:id "d8496e53" :from-layer "day-modal-design"}]}}
+            {:event :phase-started :iter 1 :phase :warden :at "t2"}
+            {:event :phase-finished :iter 1 :phase :warden :at "t3"
+             :ctx {:warden {:decision :continue :rulings []}}}
+            {:event :phase-started :iter 1 :phase :fix :at "t3"}
+            {:event :phase-finished :iter 1 :phase :fix :at "t4"
+             :ctx {:iter 1
+                   :history [{:iter 1 :fixed-count 1
+                              :fixes [{:layer "diary-paging" :commit "d92edf80"
+                                       :handed ["dd463b20"]}]}]
+                   :conflicted ["xlortuwzrtlu" "spxkmpurtnms"]
+                   :unattempted [{:layer "day-modal-design"
+                                  :handed ["4a9816d2" "d8496e53"]}]}}
+            {:event :run-finalized :status :fix-conflicted :at "t5"}])
+        ph (first (filter #(= "fix" (:phase %)) (-> r :rounds first :phases)))]
+    (is (= ["xlortuwzrtlu" "spxkmpurtnms"] (:conflicted ph))
+        "what stopped the round, in the artifact its own terminal line points at —
+         the change ids reached the workstream ledger and never report.json")
+    (is (= [{:layer "day-modal-design" :handed ["4a9816d2" "d8496e53"]}]
+           (:unattempted ph))
+        "the findings the abort dropped, named — a reader cannot otherwise tell
+         them from findings a fixer read and refused")
+    (is (= "fix-conflicted" (-> r :rounds first :status))
+        "a round that forfeited its own plan continued nothing; it was called
+         `continued` because it happened to hold a fix")))
+
 (deftest the-conflict-preflight-lands-on-the-target-whatever-it-said
   (testing "a stack read and found clean"
     (let [r (drive

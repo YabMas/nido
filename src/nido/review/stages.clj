@@ -1431,6 +1431,31 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
       (try (layers/restore-top! cwd stack) (catch Throwable _ nil))
       (throw t))))
 
+(defn- handed-ids
+  "The findings a fix row is about, named rather than counted — the warden's
+   handle where it assigned one, else the reviewer's id."
+  [findings]
+  (mapv (fn [f] (or (:handle f) (:id f))) findings))
+
+(defn- unattempted-tail
+  "The plan entries after `from`: layers a fixer was owed and never launched
+   for, because the stage stopped on a conflict it could not roll back.
+
+   The one thing that recorded a skipped layer before this was the ABSENCE of
+   its `fix-<layer>-round-N.err.log` from the run dir. In the report a finding
+   the abort never reached was indistinguishable from one a fixer read and
+   refused — the same `:disposition :fix` in the open list, and nothing else
+   either way.
+
+   `:handed` names what the layer was OWED — nothing was handed to a fixer that
+   never ran. It keeps that name because `:fixes`, `:rolled-back` and this list
+   are one account of every :fix ruling the round held, and they only read as one
+   if the finding ids are under one key."
+  [plan from]
+  (mapv (fn [{:keys [label findings]}]
+          {:layer label :handed (handed-ids findings)})
+        (subvec plan from)))
+
 (defn- run-fix-stage
   [ctx]
   (if (:dry-run? (:config ctx))
@@ -1461,7 +1486,9 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
               (with-working-copy-restored
                cwd stack
                #(reduce
-               (fn [acc {:keys [label layer findings]}]
+               ;; Indexed, because where in the plan the stage stopped is the
+               ;; only thing that says which fixers it never reached.
+               (fn [acc [i {:keys [label layer findings]}]]
                  (let [;; The point this attempt rolls back to, taken BEFORE the
                        ;; insert so that undoing it undoes the whole attempt —
                        ;; the inserted commit, the fixer's edits, the describe
@@ -1473,7 +1500,7 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                        ;; cross-round read wants — did this commit stop that
                        ;; finding coming back — because it holds one end of the
                        ;; join and discards the other.
-                       handed (mapv (fn [f] (or (:handle f) (:id f))) findings)
+                       handed (handed-ids findings)
                        {:keys [num-turns result-text]}
                        (agent/launch!
                         {:run-id run-id :cwd cwd
@@ -1541,13 +1568,21 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                                ;; the fix is still on the stack and so are the
                                ;; markers, which is the one case that genuinely
                                ;; needs a human before anything else runs.
+                               ;;
+                               ;; What the round was still going to do is named on
+                               ;; the way out. Stopping here forfeits every fixer
+                               ;; above this layer, and a forfeited repair is still
+                               ;; owed — reported as nothing at all, it reads as a
+                               ;; finding a fixer considered and let stand.
                                (reduced (-> acc
                                             (update :fixes (fnil conj []) fix)
-                                            (assoc :conflicted (vec still))))
+                                            (assoc :conflicted (vec still))
+                                            (assoc :unattempted
+                                                   (unattempted-tail plan (inc i)))))
                                (update acc :rolled-back (fnil conj [])
                                        {:layer label :handed handed
                                         :conflicted (vec bad)}))))))))
-                 ctx plan))
+                 ctx (map-indexed vector plan)))
               ctx' (if (seq (:fixes ctx'))
                      (update ctx' :history (fnil conj [])
                              {:iter (:iter ctx')

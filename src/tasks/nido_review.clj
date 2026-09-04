@@ -43,16 +43,23 @@
 (defn- open-for-ledger
   "The still-open findings, trimmed to what a reader of the workstream needs and
    nothing that only makes sense inside a run. `where` is assembled here because
-   file and line are two fields in the report and one fact to a reader."
+   file and line are two fields in the report and one fact to a reader.
+
+   `:handed` is the one thing here that is not the finding's own: whether a
+   repair for it is sitting unverified in the branch. Two remainders read alike
+   in a list of titles and ask opposite things of whoever picks them up — one
+   needs checking, the other needs doing."
   [final]
-  (into []
-        (map (fn [{:keys [id title file line-start disposition because]}]
-               (cond-> {:title (str (or title "(untitled finding)"))}
-                 id          (assoc :id (str id))
-                 file        (assoc :where (str file (when line-start (str ":" line-start))))
-                 disposition (assoc :disposition (keyword disposition))
-                 because     (assoc :because (str because)))))
-        (verdict/open-across-run final)))
+  (let [handed (verdict/handed-to-a-fixer final)]
+    (into []
+          (map (fn [{:keys [id title file line-start disposition because] :as f}]
+                 (cond-> {:title (str (or title "(untitled finding)"))}
+                   id          (assoc :id (str id))
+                   file        (assoc :where (str file (when line-start (str ":" line-start))))
+                   disposition (assoc :disposition (keyword disposition))
+                   because     (assoc :because (str because))
+                   (verdict/handed? handed f) (assoc :handed true))))
+          (verdict/open-across-run final))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   review-event
@@ -64,9 +71,16 @@
    entry's only account of what a run left behind, and a count cannot be acted
    on: a run that ends with one parked finding — the case where the loop is
    explicitly asking a human for a decision — recorded that request as the
-   integer 1, with the request itself reachable only inside report.json."
+   integer 1, with the request itself reachable only inside report.json.
+
+   `:remaining-handed` says how many of those remaining a fixer already landed a
+   repair for that no round checked. It overlaps `:findings-fixed`, which is a
+   count of work dispatched, and stating the overlap is the point: without it a
+   run reads as `1 fixed · 11 remaining` out of eleven findings, and the arithmetic
+   is only wrong until you know one finding is in both numbers."
   [final report report-path]
-  (let [open (open-for-ledger final)]
+  (let [open     (open-for-ledger final)
+        repaired (count (filter :handed open))]
     (cond-> {:format             :review-report
              :status             (:status final)
              :base               (get-in report [:target :base])
@@ -75,7 +89,8 @@
              :findings-fixed     (or (get-in report [:summary :findings-fixed]) 0)
              :findings-remaining (count open)
              :report-path        report-path}
-      (seq open) (assoc :open open)
+      (seq open)      (assoc :open open)
+      (pos? repaired) (assoc :remaining-handed repaired)
       ;; Only a run that ended on a conflicted stack has these, and it is the
       ;; run whose status a reader cannot act on without them: the conflict is
       ;; mid-stack, so `jj resolve --list` reports the branch clean and the ids
@@ -165,7 +180,9 @@
    analysis runs on nido's side and has no business in the worktree the loop
    just reviewed."
   [cwd final report report-path config ws-id]
-  (let [{:keys [project session]} (or (lifecycle/session-from-cwd cwd) {})]
+  (let [{:keys [project session]} (or (lifecycle/session-from-cwd cwd) {})
+        open   (verdict/open-across-run final)
+        handed (verdict/handed-to-a-fixer final)]
     (analysis/enqueue!
      {:run-id             (:run-id config)
       :report-path        report-path
@@ -174,7 +191,8 @@
       :base               (get-in report [:target :base])
       :rounds             (or (get-in report [:summary :rounds]) 0)
       :findings-fixed     (or (get-in report [:summary :findings-fixed]) 0)
-      :findings-remaining (count (verdict/open-across-run final))
+      :findings-remaining (count open)
+      :remaining-handed   (count (filter #(verdict/handed? handed %) open))
       :reviewed-project   project
       :reviewed-session   session
       :reviewed-ws-id     ws-id})))

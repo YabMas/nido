@@ -47,9 +47,15 @@
    The counts are duplicated out of the report on purpose. They are what the
    payload's title is built from, and they are the whole story of the run if the
    run dir has been reclaimed by the time the analysis gets there — which is the
-   normal end state of a run dir, not an edge case."
+   normal end state of a run dir, not an edge case.
+
+   `:remaining-handed` is carried only when it is non-zero, so a converged run
+   says nothing rather than 0. It is how many of the remaining already have a
+   repair in the branch that no round checked — the split a run which aborted
+   its fix plan needs, where the rest of the remainder is findings no fixer was
+   launched for at all."
   [{:keys [run-id report-path status rounds findings-fixed findings-remaining
-           base reviewed-project reviewed-session reviewed-ws-id]}]
+           remaining-handed base reviewed-project reviewed-session reviewed-ws-id]}]
   (cond-> {:adapter            :review-run
            :id                 (str run-id)
            :title              (str "review-loop " (name (or status :unknown))
@@ -63,6 +69,7 @@
            :rounds             (or rounds 0)
            :findings-fixed     (or findings-fixed 0)
            :findings-remaining (or findings-remaining 0)}
+    (pos? (or remaining-handed 0)) (assoc :remaining-handed remaining-handed)
     base             (assoc :base base)
     reviewed-project (assoc :reviewed-project (name reviewed-project))
     reviewed-session (assoc :reviewed-session reviewed-session)

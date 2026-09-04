@@ -255,3 +255,32 @@
                           {:file "b.clj" :line-start 2 :title "y"}
                           {:file "c.clj" :line-start 3 :title "z"}]}]
     (is (= 3 (count (verdict/open-across-run final))))))
+
+(deftest a-repair-in-the-branch-is-told-from-a-finding-nobody-touched
+  ;; Both are still open and one number counted both: a run that aborted its fix
+  ;; plan reported `1 fixed · 11 still open` out of eleven findings, with the one
+  ;; repaired-but-unchecked finding sitting in the same total as nine no fixer
+  ;; was ever launched for.
+  (let [final {:status  :fix-conflicted
+               :history [{:iter 1 :fixed-count 1
+                          :fixes [{:layer "diary-paging" :commit "d92edf80"
+                                   :handed ["dd463b20"]}]
+                          :findings []}]
+               :findings [{:handle "dd463b20" :title "the repaired one" :disposition :fix}
+                          {:handle "4a9816d2" :title "nobody reached it" :disposition :fix}]}
+        handed (verdict/handed-to-a-fixer final)
+        open   (verdict/open-across-run final)]
+    (is (= 2 (count open)) "both are still owed; that much was already right")
+    (is (= ["the repaired one"]
+           (mapv :title (filter #(verdict/handed? handed %) open)))
+        "the join fixes[].handed has offered since it was added and nothing read")))
+
+(deftest a-rolled-back-repair-leaves-a-finding-as-untouched-as-any-other
+  ;; The commit is gone, so the code is exactly what the reviewers read. Counting
+  ;; it as repaired would tell a reader to go and check a fix that is not there.
+  (let [final {:status  :fix-rolled-back
+               :history []
+               :rolled-back [{:layer "upper" :handed ["bb22"] :conflicted ["xuspsuww"]}]
+               :findings [{:handle "bb22" :title "t" :disposition :fix}]}
+        handed (verdict/handed-to-a-fixer final)]
+    (is (empty? (filter #(verdict/handed? handed %) (verdict/open-across-run final))))))

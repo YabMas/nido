@@ -55,6 +55,16 @@
     "Everything the run is still holding when it ends, folded over every round. A count answers
      'did this finish clean' and cannot answer 'what is it waiting for'."
     {:signature [:=> [:catn [:final :map]] :any]})
+  (Operation handed-to-a-fixer
+    "The findings a landed fix commit named as its own, across every round.
+
+     The other half of `open-across-run`. A remainder whose repair is already in the branch and
+     a remainder no fixer was launched for are both open, and one count for both is the whole of
+     what a run that aborted its fix plan reported."
+    {:signature [:=> [:catn [:final :map]] :any]})
+  (Operation handed?
+    "Whether a repair for this finding is sitting in the branch, unverified."
+    {:signature [:=> [:catn [:handed :any] [:f :any]] :boolean]})
   (Operation run! "Run the verdict pass."
     {:signature [:=> [:catn [:opts :map]] :map] :delegates [build-prompt parse still-open]}))
 

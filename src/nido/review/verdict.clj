@@ -286,6 +286,31 @@
                              (< (::round %) last-idx)))
                (sort-by (juxt ::round #(str (:id %))))))))
 
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  handed-to-a-fixer
+  "The findings a landed fix commit named as its own, across every round.
+
+   The other half of `open-across-run`. A `:fix` in the final round stays open
+   because no round after it re-read the layer — but so does a finding no fixer
+   was ever launched for, and one number for both is the whole of what a run
+   that aborted its fix plan reported: `1 fixed · 11 still open`, with one
+   repaired-but-unchecked finding counted alongside nine nobody touched. The
+   join is `fixes[].handed`, which the fix stage has written since it was added
+   and nothing read back.
+
+   A ROLLED-BACK repair is deliberately not here. It left no commit, so the code
+   is exactly what the reviewers read and the finding is as untouched as one no
+   fixer saw."
+  [{:keys [history]}]
+  (into #{} (comp (mapcat :fixes) (mapcat :handed) (remove nil?)) history))
+
+(defn ^{:malli/schema [:=> [:cat :any :any] :boolean]}
+  handed?
+  "Whether a repair for this finding is sitting in the branch, unverified.
+   `handed` is a `handed-to-a-fixer` set."
+  [handed f]
+  (contains? handed (or (:handle f) (:id f))))
+
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   run!
   "Run the verdict pass. Returns the verdict map, or nil when there is no design

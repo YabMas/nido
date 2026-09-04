@@ -1267,6 +1267,13 @@
    [:rounds             int?]
    [:findings-fixed     int?]
    [:findings-remaining int?]
+   ;; How many of the remaining a fixer already landed a repair for that no round
+   ;; re-reviewed. It is the overlap between the two counts above, and naming it
+   ;; is what makes them add up: `1 fixed · 11 remaining` out of eleven findings
+   ;; is one finding counted twice, and a run that aborted its fix plan mid-way
+   ;; reported nine findings nobody touched as the same kind of thing.
+   ;; Optional, and omitted at zero: a converged run has no such overlap.
+   [:remaining-handed {:optional true} int?]
    ;; The remaining findings themselves, not only how many. A count answers
    ;; "did this run finish clean"; it cannot answer "what is it waiting for",
    ;; which for a run that ended holding a park is the only question there is.
@@ -1280,7 +1287,10 @@
       [:disposition {:optional true} [:maybe keyword?]]
       ;; The warden's own words on why it ruled this way — written for whoever
       ;; picks the finding up, and until now readable only inside report.json.
-      [:because     {:optional true} [:maybe string?]]]]]
+      [:because     {:optional true} [:maybe string?]]
+      ;; A repair for this one is in the branch and nothing checked it. The rest
+      ;; of the list needs doing; this needs reading. Present only when true.
+      [:handed      {:optional true} boolean?]]]]
    ;; The change ids jj left conflicted, on the two statuses that end holding
    ;; them and nowhere else. Where to go, named: the status alone says the stack
    ;; is broken and leaves finding it as an exercise, on a nine-layer branch
@@ -2306,26 +2316,37 @@
   (str/join "\n" ["# Ship submitted" "" (str "`" session "` handed to the merge lane.")]))
 
 (defn- review->markdown [{:keys [status base base-rev rounds findings-fixed
-                                 findings-remaining report-path summary open
-                                 conflicted]}]
+                                 findings-remaining remaining-handed report-path
+                                 summary open conflicted]}]
   (str/join "\n"
     (remove nil?
       [(str "# Review: " (name status))
-       (str findings-fixed " fixed  ·  " findings-remaining " remaining  ·  "
-            rounds " rounds")
+       ;; The overlap between the two counts, said out loud when there is one.
+       ;; They are not disjoint — a repair landed in the final round is counted
+       ;; as dispatched AND as still owed, because nothing re-read the layer —
+       ;; and a reader given only the pair reads them as a partition.
+       (str findings-fixed " fixed  ·  " findings-remaining " remaining"
+            (when (pos? (or remaining-handed 0))
+              (str " (" remaining-handed " already repaired, unverified)"))
+            "  ·  " rounds " rounds")
        (str "base " base (when base-rev (str "@" base-rev)))
        ;; What is still owed, in the entry itself. The counts above say a run
        ;; stopped with something left; only this says what, and recovering it
        ;; otherwise means opening a report.json that the run dir may no longer
        ;; have. A park is the case that matters: the loop has no move for it, so
        ;; the entry is the whole handover to the human who does.
+       ;;
+       ;; The marked ones ask the opposite thing of a reader: a repair for them
+       ;; is already in the branch and nothing verified it, so they want reading
+       ;; rather than doing.
        (when (seq open)
          (str "\n## Still open\n"
               (str/join "\n"
-                        (for [{:keys [title where disposition because]} open]
+                        (for [{:keys [title where disposition because handed]} open]
                           (str "- " (when disposition (str "**" (name disposition) "** — "))
                                title
                                (when where (str "  `" where "`"))
+                               (when handed "  _(repaired, unverified)_")
                                (when because (str "\n  - " because)))))))
        ;; Above the summary and above the report link, because it is the one
        ;; thing here that must be acted on before anything else is read: the

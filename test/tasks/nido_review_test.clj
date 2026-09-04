@@ -202,6 +202,46 @@
     (is (t/verdict-worth-running? :clean final design)
         "the gate still admits the clean run it was widened for")))
 
+(deftest the-remaining-count-says-how-much-of-it-is-already-repaired
+  ;; `:findings-fixed` counts work dispatched and `:findings-remaining` counts
+  ;; what is owed, and a repair landed in the final round is in BOTH — nothing
+  ;; re-read the layer, so it stays open. Given only the pair a reader takes them
+  ;; for a partition: `1 fixed · 11 remaining` out of eleven findings, with the
+  ;; nine no fixer touched reading exactly like the one that was.
+  (let [final {:status  :fix-conflicted
+               :history [{:iter 1 :fixed-count 1 :findings []
+                          :fixes [{:layer "diary-paging" :commit "d92edf80"
+                                   :handed ["dd463b20"]}]}]
+               :findings [{:handle "dd463b20" :id "dd463b20" :title "the repaired one"
+                           :disposition :fix}
+                          {:handle "4a9816d2" :id "4a9816d2" :title "nobody reached it"
+                           :disposition :fix}]}
+        ev    (t/review-event final
+                              {:summary {:rounds 1 :findings-fixed 1}
+                               :target {:base "main" :base-rev "x"}}
+                              "/runs/r/report.json")]
+    (is (= 2 (:findings-remaining ev)))
+    (is (= 1 (:remaining-handed ev)) "one of the two already has a repair in the branch")
+    (is (= {"the repaired one" true "nobody reached it" nil}
+           (into {} (map (juxt :title :handed)) (:open ev)))
+        "and per finding, because the two ask opposite things of whoever picks
+         them up — one needs checking, the other needs doing")
+    (is (= ev (report/validate-event :review ev))
+        "the ledger schema is closed; a rejected append is swallowed to stderr")
+    (let [md (report/report->markdown (assoc ev :format :review-report))]
+      (is (str/includes? md "1 already repaired, unverified")))))
+
+(deftest a-converged-run-carries-no-repaired-count-at-all
+  ;; Zero overlap is the normal case, and a `0 already repaired` on every clean
+  ;; run is noise that trains a reader to skip the line where it matters.
+  (let [ev (t/review-event {:status :converged :history [] :findings []}
+                           {:summary {:rounds 2 :findings-fixed 3}
+                            :target {:base "main" :base-rev "x"}}
+                           "/runs/r/report.json")]
+    (is (not (contains? ev :remaining-handed)))
+    (is (not (str/includes? (report/report->markdown (assoc ev :format :review-report))
+                            "unverified")))))
+
 (deftest review-event-omits-open-when-nothing-is-owed
   (let [ev (t/review-event {:status :clean :history [] :findings []}
                            {:summary {:rounds 1 :findings-fixed 0}

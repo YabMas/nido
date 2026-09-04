@@ -1277,7 +1277,7 @@
    them. A nil `pos` (the gate pane, which has no such position) renders every
    round unfolded: with nothing to click, the detail has to be on the page."
   [{:keys [status base base-rev rounds findings-fixed findings-remaining
-           report-path summary detail]} pos]
+           remaining-handed report-path summary detail]} pos]
   (let [cwd    (get-in detail [:target :cwd])
         files  (get-in detail [:target :files])
         rounds* (:rounds detail)
@@ -1286,8 +1286,13 @@
      [:h2 "Review"]
      [:div.report-meta
       (review-chip (get review-status-tone status :warn) (name status))
+      ;; The two counts overlap, and the third says by how much: a repair landed
+      ;; in the final round counts as dispatched and as still owed, since nothing
+      ;; re-read the layer. Shown only when there is an overlap to state.
       [:span.meta rounds " round" (when (not= 1 rounds) "s")
-       " · " findings-fixed " fixed · " findings-remaining " remaining"]]
+       " · " findings-fixed " fixed · " findings-remaining " remaining"
+       (when (pos? (or remaining-handed 0))
+         (str " (" remaining-handed " already repaired, unverified)"))]]
      [:p.meta "base " base
       (when base-rev (str " @ " (subs base-rev 0 (min 12 (count base-rev)))))
       (when (seq files) (str " · " (count files) " file"

@@ -340,6 +340,36 @@
           "the fix that landed is still recorded — it is a rebase a human
            resolves, not a round to throw away"))))
 
+(deftest an-abort-names-the-layers-its-plan-never-reached
+  ;; Stopping forfeits every fixer above the conflict, and a forfeited repair is
+  ;; still owed. Recorded as nothing, it is indistinguishable from a finding a
+  ;; fixer read and let stand — one run dropped three that way, and the only
+  ;; trace was a fix-<layer>-round-1.err.log that did not exist.
+  (with-redefs [agent/launch! (fn [_] {:num-turns 4 :result-error? false :result-text "done"})
+                stages/working-copy-dirty? (fn [_] true)
+                stages/session-stack (fn [_ _] two-layer-stack)
+                jj/jj! (jj-with-conflicts ["xuspsuww"])]
+    (let [ctx ((:run stages/fix-stage)
+               {:config {:cwd "/w" :run-id "r1" :base "main"} :iter 2
+                :findings [{:id "aa11" :title "x" :disposition :fix :owner-layer "lower"}
+                           {:handle "bb22" :id "b2" :title "y" :disposition :fix
+                            :owner-layer "upper"}]})]
+      (is (= :fix-conflicted (:status ctx)))
+      (is (= [{:layer "upper" :handed ["bb22"]}] (:unattempted ctx))
+          "the layer the abort skipped, with the findings it was owed — by the
+           same :handed key a landed fix carries, so the two join")))
+  (testing "an abort on the last layer of the plan forfeits nothing"
+    (with-redefs [agent/launch! (fn [_] {:num-turns 4 :result-error? false :result-text "done"})
+                  stages/working-copy-dirty? (fn [_] true)
+                  stages/session-stack (fn [_ _] two-layer-stack)
+                  jj/jj! (jj-with-conflicts ["xuspsuww"])]
+      (let [ctx ((:run stages/fix-stage)
+                 {:config {:cwd "/w" :run-id "r1" :base "main"} :iter 2
+                  :findings [{:id "aa11" :title "x" :disposition :fix :owner-layer "upper"}]})]
+        (is (= [] (:unattempted ctx))
+            "[] is the stage saying it forfeited nothing; an absent key would be
+             a round that never got as far as asking")))))
+
 (deftest a-round-whose-every-repair-was-rolled-back-is-not-a-round-of-declines
   ;; Both leave the tree as the reviewers read it, and they ask a human for
   ;; different things: a decline is a fixer arguing the finding, a rollback is
