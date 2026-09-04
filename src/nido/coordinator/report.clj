@@ -1242,6 +1242,13 @@
                                ;; branch is holding conflict markers, so it is
                                ;; not reviewable until a human resolves them.
                                :fix-conflicted
+                               ;; The stack was ALREADY holding conflict markers
+                               ;; when the run asked, before a reviewer read a
+                               ;; line. Distinct from :fix-conflicted, which is
+                               ;; this run having caused them: the two want the
+                               ;; same repair from a human and say different
+                               ;; things about what put it there.
+                               :stack-conflicted
                                ;; Every repair the fix stage produced conflicted
                                ;; the layers above it and was rolled back, so the
                                ;; branch is intact and unchanged. Distinct from
@@ -1274,10 +1281,10 @@
       ;; The warden's own words on why it ruled this way — written for whoever
       ;; picks the finding up, and until now readable only inside report.json.
       [:because     {:optional true} [:maybe string?]]]]]
-   ;; The change ids jj left conflicted, on a :fix-conflicted run and nowhere
-   ;; else. Where to go, named: the status alone says the stack is broken and
-   ;; leaves finding it as an exercise, on a nine-layer branch whose conflict is
-   ;; mid-stack and which `jj resolve --list` reports as clean.
+   ;; The change ids jj left conflicted, on the two statuses that end holding
+   ;; them and nowhere else. Where to go, named: the status alone says the stack
+   ;; is broken and leaves finding it as an exercise, on a nine-layer branch
+   ;; whose conflict is mid-stack and which `jj resolve --list` reports as clean.
    [:conflicted {:optional true} [:sequential string?]]
    [:report-path        [:maybe string?]]
    ;; Dormant extension point: no caller populates :summary yet (review-event omits it).
@@ -2325,8 +2332,8 @@
        ;; branch is holding conflict markers in committed text.
        (when (seq conflicted)
          (str "\n## The stack is conflicted\n"
-              "jj left these changes conflicted while rebasing the layers above a"
-              " fix. Resolve them before reviewing again — `jj resolve --list`"
+              "These changes are holding conflict markers in committed text."
+              " Resolve them before reviewing again — `jj resolve --list`"
               " will not show them, they are mid-stack.\n"
               (str/join "\n" (for [c conflicted] (str "- `" c "`")))))
        (when summary (str "\n" summary))

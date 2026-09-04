@@ -79,6 +79,13 @@
    a stack whose layers were all folded away — provisions a worktree and an hour
    of budget to report that the loop did nothing, correctly.
 
+   `:stack-conflicted` is excluded on the same ground and for a sharper reason:
+   the run exists to stop in a second instead of spending six agents on a branch
+   it cannot read, and queueing an analysis session would spend an hour of
+   budget to say so. What that run found is a fact about the BRANCH, and it
+   reaches a human already — through the :review ledger entry that names the
+   change ids, and through the lane escalating on the status.
+
    A dry run drove the stages without letting a fixer touch anything, so what it
    produced says how the loop behaves under a flag rather than how it behaves;
    analysing it would fill the record with runs that were never trying.
@@ -95,7 +102,7 @@
    frontend persists one as the events arrive, so the failure is in it."
   [status dry-run? report?]
   (boolean (and status
-                (not= :nothing-to-review (keyword status))
+                (not (#{:nothing-to-review :stack-conflicted} (keyword status)))
                 (not dry-run?)
                 report?)))
 

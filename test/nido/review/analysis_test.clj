@@ -80,6 +80,17 @@
   ;; the shape the enqueue site actually reads it in.
   (is (not (analysis/worth-analysing? "nothing-to-review" false true))))
 
+(deftest a-run-that-stopped-on-a-conflicted-stack-is-not-analysed
+  ;; The run exists to stop in a second rather than spend six agents on a branch
+  ;; it cannot read; queueing a session with an hour of budget to say so would
+  ;; give the saving straight back. What it found is a fact about the branch and
+  ;; reaches a human through the ledger entry and the lane's escalation.
+  (is (not (analysis/worth-analysing? :stack-conflicted false true)))
+  (is (not (analysis/worth-analysing? "stack-conflicted" false true)))
+  ;; The status the FIX stage produces is a different case: the loop ran, judged
+  ;; and repaired, and how it got there is exactly what an analysis reads.
+  (is (analysis/worth-analysing? :fix-conflicted false true)))
+
 (defn- with-report
   "a-run pointed at a report file that actually exists — the enqueue gate now
    requires one."

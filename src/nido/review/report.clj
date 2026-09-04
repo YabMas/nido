@@ -52,6 +52,13 @@
       (and judge amend)                                            "continued"
       judge                                                        "ended"
 
+      ;; Before both readings below, which are the ones a round with no findings
+      ;; and no warden otherwise falls into. This round has neither because it
+      ;; never fanned out: the stack was holding conflict markers when it was
+      ;; asked, so nothing was reviewed and "clean" would be the report asserting
+      ;; a clean bill nobody issued.
+      (seq (:conflicted review))                                   "stack-conflicted"
+
       ;; Before "clean", because the two are indistinguishable by findings
       ;; alone — both have none — and only this one had no reviewer read a line.
       (and review (= "ok" (:status review)) (nil? warden) nothing?) "nothing-to-review"
@@ -209,9 +216,14 @@
                         :amended? (boolean (:amended? ctx))
                         :resurveyed (some-> (:resurveyed ctx) name))
 
-      :review (assoc ph :overall-correctness (:overall-correctness ctx)
-                        :findings (vec (:findings ctx))
-                        :layers (review-layers ctx))
+      ;; :conflicted is what ended THIS round, where the copy on the target is
+      ;; what the stack looked like when the run last asked. A round that stopped
+      ;; on it has no findings and no warden, so without it here the only two
+      ;; facts left about the round say a reviewer read the branch and liked it.
+      :review (cond-> (assoc ph :overall-correctness (:overall-correctness ctx)
+                             :findings (vec (:findings ctx))
+                             :layers (review-layers ctx))
+                (seq (:conflicted ctx)) (assoc :conflicted (vec (:conflicted ctx))))
       ;; :cause as well as :reason, and they are not alternatives: a reason says
       ;; what was wrong with the answer, a cause says whether there WAS one. A
       ;; phase that kept only the first renders a 429 exactly like a malformed
@@ -271,6 +283,18 @@
       (update-current-phase
        "review"
        (fn [ph] (assoc ph :layers (in-stack-order targets))))))
+
+(defn- record-conflicts
+  "Put the round's conflict preflight on the target, whatever it said.
+
+   Written even when it is empty, and that is the point: `[]` is the stack read
+   and found clean, and an ABSENT key is a run that never got an answer — a
+   review outside a jj workspace, or a report written before this was asked.
+   Four consecutive runs on one branch ended holding the same two change ids
+   with no artifact saying whether they had been standing since the run before,
+   which is the question that decides whether anything upstream can help."
+  [report {:keys [conflicted]}]
+  (assoc-in report [:target :conflicted] (vec conflicted)))
 
 (def ^:private row-rank
   "How far along a row is. A row only ever moves forward: events cross threads
@@ -343,6 +367,9 @@
     (let [ctx (assoc (:ctx ev) :iter (:iter ev))]
       (update-current-phase report (name (:phase ev))
                             #(finish-phase % (:phase ev) ctx (:at ev))))
+
+    :stack-conflicts
+    (record-conflicts report ev)
 
     :targets-resolved
     (resolve-target report ev)

@@ -403,11 +403,51 @@
                    extra))
       (catch Throwable _ nil))))
 
+(defn- stack-conflicts
+  "The change ids `<base>..@` is holding conflict markers on, or nil when the
+   workspace could not be asked.
+
+   Nil and [] are different answers and every reader here keeps them apart: []
+   is the stack read and found clean, nil is a run that got no answer at all.
+   That distinction is the whole value of asking — four consecutive runs on one
+   branch ended holding the same two change ids, and nothing recorded whether
+   they were standing when the run began or created by it.
+
+   Swallowing the failure, where the fix stage's own call deliberately does not:
+   a preflight that cannot run must not stop a round that would otherwise
+   proceed, which is the reading `layers/resolve-rev` takes of an unaskable
+   workspace. Mid-repair the answer is load-bearing and an exception there is
+   the right outcome."
+  [cwd base]
+  (try (vec (layers/conflicted cwd base))
+       (catch Throwable _ nil)))
+
+(defn- announce-conflicts!
+  "Publish what the stack's conflict state was at the start of this round.
+
+   Emitted whatever the answer is, including the empty one. A report that
+   records the ids only when there are some cannot tell a stack that was read
+   and found clean from a run that never looked — and the clean answer is the
+   one that settles whether a recurring conflict is being re-created each run
+   or has been standing since the last one.
+
+   Best-effort like `announce-targets!`: a display event that cannot be built
+   must not end a round."
+  [ctx conflicted]
+  (when conflicted
+    (when-let [emit (get-in ctx [:config :emit])]
+      (try
+        (emit {:event      :stack-conflicts
+               :iter       (:iter ctx)
+               :at         (str (java.time.Instant/now))
+               :conflicted conflicted})
+        (catch Throwable _ nil)))))
+
 ;; Defined below, beside the cache reasoning it belongs with, and called from
 ;; both stages that can end a round — see its docstring.
 (declare record-review!)
 
-(defn- run-review-stage
+(defn- fan-out-reviews
   [ctx]
   (let [{:keys [cwd base run-id]} (:config ctx)
         [project ws-id] (project+ws-from-cwd cwd)
@@ -511,6 +551,24 @@
              :overall-correctness (:overall-correctness whole)
              :base-rev (:base-rev whole)
              :manifest (:manifest whole)))))
+
+(defn- run-review-stage
+  "Ask whether the stack can be reviewed at all, then review it.
+
+   A stack holding conflict markers is not reviewable: the markers are in
+   committed text, so a reviewer reads a namespace that does not parse and a
+   fixer spends its round undoing them. That was reached the long way round —
+   four consecutive runs on one branch fanned out six agents, ruled on what they
+   found, and aborted at the first landing when jj refused it. The answer was
+   one revset call away the whole time, and asking it first turns twenty minutes
+   into a second."
+  [ctx]
+  (let [{:keys [cwd base]} (:config ctx)
+        conflicted (stack-conflicts cwd base)]
+    (announce-conflicts! ctx conflicted)
+    (if (seq conflicted)
+      (assoc ctx :control :stop :status :stack-conflicted :conflicted conflicted)
+      (fan-out-reviews ctx))))
 
 (def review-stage
   "Every layer and the whole stack, reviewed in one round.

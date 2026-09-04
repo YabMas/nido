@@ -598,6 +598,11 @@
    ;; resolve it — nothing here can, and a retry would land more fixes onto a
    ;; branch that already does not parse.
    :fix-conflicted       :escalate
+   ;; The stack was conflicted before the run started, so a retry re-reads the
+   ;; same markers and stops in the same second. Escalating is the only move
+   ;; that changes anything, and it is cheap here: the run stopped before it
+   ;; spent a reviewer.
+   :stack-conflicted     :escalate
    ;; Every repair was refused by the rebase and put back, so the branch is
    ;; clean and a retry would produce the same refusal against the same code.
    ;; What is wanted is a human deciding whether the layers are in the right

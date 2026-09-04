@@ -177,6 +177,31 @@
       (is (str/includes? md "xuspsuww") "and a reader is told where to go")
       (is (str/includes? md "conflicted")))))
 
+(deftest a-stack-conflicted-run-reaches-the-ledger-with-its-change-ids
+  ;; The status is new and the ReviewReport enum is closed, so an unadmitted one
+  ;; is refused and the refusal is swallowed to stderr — the entry naming where
+  ;; the conflict is would simply never appear.
+  (let [ev (t/review-event {:status :stack-conflicted :history [] :findings []
+                            :conflicted ["xlortuwzrtlu" "spxkmpurtnms"]}
+                           {:summary {:rounds 1 :findings-fixed 0}
+                            :target {:base "main" :base-rev "x"}}
+                           "/runs/r/report.json")]
+    (is (= ["xlortuwzrtlu" "spxkmpurtnms"] (:conflicted ev)))
+    (is (= ev (report/validate-event :review ev)))
+    (is (str/includes? (report/report->markdown (assoc ev :format :review-report))
+                       "xlortuwzrtlu")
+        "and a reader of the workstream is told where to go")))
+
+(deftest a-conflicted-stack-spends-no-design-verdict
+  ;; The pass reads the worktree with tools, so here it would be reading
+  ;; committed conflict markers as source — and the run's whole point is to stop
+  ;; before it spends an agent on a branch nothing can judge.
+  (let [design {:invariants ["a total is rounded exactly once"]}
+        final  {:findings [] :history []}]
+    (is (not (t/verdict-worth-running? :stack-conflicted final design)))
+    (is (t/verdict-worth-running? :clean final design)
+        "the gate still admits the clean run it was widened for")))
+
 (deftest review-event-omits-open-when-nothing-is-owed
   (let [ev (t/review-event {:status :clean :history [] :findings []}
                            {:summary {:rounds 1 :findings-fixed 0}

@@ -493,6 +493,40 @@
              :conflicted ["xlortuwzrtlu"]}]
            (:rolled-back ph)))))
 
+(deftest the-conflict-preflight-lands-on-the-target-whatever-it-said
+  (testing "a stack read and found clean"
+    (let [r (drive
+             [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+              {:event :phase-started :iter 1 :phase :review :at "t1"}
+              {:event :stack-conflicts :iter 1 :conflicted [] :at "t1"}])]
+      (is (= [] (-> r :target :conflicted))
+          "[] is an answer and an absent key is not — four runs on one branch
+           ended holding the same two change ids with nothing saying whether
+           they had been standing since the run before")))
+  (testing "a stack holding markers"
+    (let [r (drive
+             [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+              {:event :phase-started :iter 1 :phase :review :at "t1"}
+              {:event :stack-conflicts :iter 1 :at "t1"
+               :conflicted ["xlortuwzrtlu" "spxkmpurtnms"]}])]
+      (is (= ["xlortuwzrtlu" "spxkmpurtnms"] (-> r :target :conflicted))))))
+
+(deftest a-round-that-never-fanned-out-is-not-a-clean-round
+  ;; No findings and no warden is also the shape of a round a reviewer read and
+  ;; liked, and "clean" is the report issuing a bill nobody wrote: this round
+  ;; stopped before a reviewer opened a file.
+  (let [r (drive
+           [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+            {:event :phase-started :iter 1 :phase :review :at "t1"}
+            {:event :stack-conflicts :iter 1 :conflicted ["xlortuwzrtlu"] :at "t1"}
+            {:event :phase-finished :iter 1 :phase :review :at "t2"
+             :ctx {:findings [] :conflicted ["xlortuwzrtlu"]}}
+            {:event :run-finalized :status :stack-conflicted :at "t3"}])]
+    (is (= "stack-conflicted" (-> r :rounds first :status)))
+    (is (= ["xlortuwzrtlu"] (-> r :rounds first :phases first :conflicted))
+        "on the phase as well as the target — the target says what the stack
+         was, the phase says what ended this round")))
+
 ;; ---- the design verdict --------------------------------------------------
 
 (def ^:private a-verdict

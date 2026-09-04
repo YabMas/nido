@@ -115,6 +115,59 @@
         (is (= :stop (:control ctx)))
         (is (= :clean (:status ctx)))))))
 
+(deftest a-stack-that-arrives-conflicted-costs-no-reviewer
+  ;; Four consecutive runs on one branch fanned out six agents, ruled on what
+  ;; they found, and aborted at the first landing when jj refused it — reaching
+  ;; by twenty minutes an answer the same revset call gives in a second.
+  (let [launched (atom 0)]
+    (with-redefs [layers/conflicted (fn [_ _] ["xlortuwzrtlu" "spxkmpurtnms"])
+                  codex/merge-base  (fn [& _] "BASEREV")
+                  codex/review!     (fn [_] (swap! launched inc) {:findings []})]
+      (let [ctx ((:run stages/review-stage)
+                 {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 1})]
+        (is (= :stack-conflicted (:status ctx)))
+        (is (= :stop (:control ctx)))
+        (is (= ["xlortuwzrtlu" "spxkmpurtnms"] (:conflicted ctx))
+            "the change ids, because the conflict is mid-stack and `jj resolve
+             --list` reports the branch clean")
+        (is (zero? @launched)
+            "not one reviewer launched — the saving is the whole claim")))))
+
+(deftest the-conflict-preflight-answers-on-a-clean-stack-too
+  ;; [] and never-asked are different answers, and only the first one can settle
+  ;; whether a recurring conflict was standing before a run or created by it.
+  (let [emitted (atom [])]
+    (with-redefs [layers/conflicted (fn [_ _] [])
+                  layers/patch-hash (fn [& _] nil)
+                  codex/merge-base  (fn [& _] "BASEREV")
+                  codex/review!     (fn [_] {:status nil :findings []})]
+      (let [ctx ((:run stages/review-stage)
+                 {:config {:cwd "/w" :base "main" :run-id "r1"
+                           :emit #(swap! emitted conj %)}
+                  :iter 1})]
+        (is (nil? (:status ctx)) "a clean stack is reviewed exactly as before")
+        (is (= [[]] (mapv :conflicted
+                          (filter #(= :stack-conflicts (:event %)) @emitted)))
+            "the empty answer is published, so the report can record it")))))
+
+(deftest a-workspace-that-cannot-be-asked-still-reviews
+  ;; A guard that cannot run must not become a failure of the thing it guards:
+  ;; a review outside a jj workspace ran before this preflight existed and runs
+  ;; the same way now, with the report recording no answer rather than a clean
+  ;; bill it never got.
+  (let [emitted (atom [])]
+    (with-redefs [layers/conflicted (fn [_ _] (throw (ex-info "no workspace" {})))
+                  layers/patch-hash (fn [& _] nil)
+                  codex/merge-base  (fn [& _] "BASEREV")
+                  codex/review!     (fn [_] {:status nil :findings [{:title "x"}]})]
+      (let [ctx ((:run stages/review-stage)
+                 {:config {:cwd "/w" :base "main" :run-id "r1"
+                           :emit #(swap! emitted conj %)}
+                  :iter 1})]
+        (is (= [{:title "x" :from-layer "stack"}] (:findings ctx)))
+        (is (empty? (filter #(= :stack-conflicts (:event %)) @emitted))
+            "and nothing is published, so an absent key means unanswered")))))
+
 (deftest review-stage-clean-diff-stops
   (with-redefs [layers/patch-hash (fn [& _] nil)
                 codex/merge-base (fn [& _] "BASEREV")

@@ -76,10 +76,10 @@
              :findings-remaining (count open)
              :report-path        report-path}
       (seq open) (assoc :open open)
-      ;; Only a :fix-conflicted run has these, and it is the one run whose status
-      ;; a reader cannot act on without them: the conflict is mid-stack, so
-      ;; `jj resolve --list` reports the branch clean and the ids are the only
-      ;; pointer at what to open.
+      ;; Only a run that ended on a conflicted stack has these, and it is the
+      ;; run whose status a reader cannot act on without them: the conflict is
+      ;; mid-stack, so `jj resolve --list` reports the branch clean and the ids
+      ;; are the only pointer at what to open.
       (seq (:conflicted final)) (assoc :conflicted (vec (:conflicted final))))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
@@ -192,9 +192,11 @@
    the comparison is the only evidence there is.
 
    So: a design carrying invariants is enough on its own. A failed review still
-   has nothing to judge, and a dry run changed nothing to judge."
+   has nothing to judge, a dry run changed nothing to judge, and a stack holding
+   conflict markers is not code anyone can judge — the pass reads the worktree
+   with tools, so it would be reading committed conflict markers as source."
   [status final design]
-  (and (not (#{:review-failed :dry-run} status))
+  (and (not (#{:review-failed :dry-run :stack-conflicted} status))
        (boolean (or (seq (:findings final))
                     (seq (:history final))
                     (seq (:invariants design))))))
