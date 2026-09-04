@@ -206,6 +206,12 @@
    so the buttons and the card can never disagree about the question — and :seq
    is what lets the resolver notice that the question itself has since changed.
 
+   `{:awaiting <stage>}` is the stage the pipeline says a PERSON owes this
+   workstream, or nil — `(:stage (:next position))` when that position's mode is
+   :human. It is what lets a design decision be granted: the round that writes
+   one is mechanical and parks nobody, so `parked?` is false exactly when the
+   grant is due.
+
    `{:bare? true}` marks a row with no workstream behind it (wsv/bare-row). On
    :triage that swaps Apply/Reply — which need an agent — for :start-triage. Then,
    for EVERY stage, a bare row's action set is filtered down to
@@ -219,16 +225,46 @@
    correct automatically if the action sets change."
   ([stage parked?] (gate-actions stage parked? nil nil))
   ([stage parked? origin] (gate-actions stage parked? origin nil))
-  ([stage parked? _origin {:keys [bare? report-format options] entry-seq :seq}]
+  ([stage parked? _origin {:keys [bare? report-format options awaiting] entry-seq :seq}]
    (let [;; The branches of the CURRENT blocker, or [] — offered whether or not a
          ;; session is parked, because answering no longer depends on one being
          ;; alive to hear it (choose-option! records the answer on the ledger and
-         ;; resumes only if there is someone to resume). Every OTHER action here
-         ;; stays gated on parked?: Reply, Apply, Approve and Done all reach for an
-         ;; agent, and offering them with none is a button that can only fail.
+         ;; resumes only if there is someone to resume). Reply, Apply and Done
+         ;; stay gated on parked?: each one resumes an agent, and offering it
+         ;; with none is a button that can only fail.
          answers (option-actions entry-seq options)
+         ;; Approve is not one of those, which is what `awaiting` is for. It asks
+         ;; the PIPELINE whether a person owes this workstream a decision, and
+         ;; the board stage cannot answer that: the round that produces a design
+         ;; decision is :mechanical, so it runs as a task with no agent, and the
+         ;; workstream that most needs this button is exactly the one no session
+         ;; is parked on. approve! has always accepted a grant with nobody to
+         ;; wake — it records it and answers :approved-unresumed, because the
+         ;; ledger is what the next session reads — so withholding the button was
+         ;; the only thing keeping the grant out of reach.
+         ;;
+         ;; Composed here rather than inside the case because it belongs to the
+         ;; position rather than to a band: the same question is owed whatever
+         ;; stage the board projects the workstream into.
+         ;;
+         ;; Approve carries the ledger position it was rendered from, exactly as
+         ;; an option button does and for the same reason one round further on: a
+         ;; grant made against a stale page is not a grant about what is there
+         ;; now. Omitted when unknown, which fails closed in approve! rather than
+         ;; granting blind.
+         ;;
+         ;; Done is deliberately absent beside it; settling a workstream is not
+         ;; an answer to "should we build this", and offering it there invites it
+         ;; to be read as one.
+         approving? (and (= :design-decision report-format)
+                         (or parked? (= :approve-design awaiting)))
          actions
-         (case stage
+         (if approving?
+           (cond-> [(cond-> {:id :approve :label "Approve"
+                             :kind :mutation :style :primary}
+                      entry-seq (assoc :seq entry-seq))]
+             parked? (conj {:id :reply :label "Reply" :kind :resume :style :default}))
+           (case stage
            :incoming    [{:id :promote :label "Promote" :kind :mutation :style :primary}
                          {:id :drop    :label "Dismiss" :kind :mutation :style :danger}]
            :triage      (let [dismiss {:id :dismiss :label "Dismiss" :kind :mutation :style :danger}]
@@ -255,30 +291,6 @@
            :ready       [{:id :promote :label "Promote" :kind :mutation :style :primary}
                          {:id :drop    :label "Drop"    :kind :mutation :style :danger}]
            :in-progress (cond
-                          ;; A parked session whose latest entry is a design decision
-                          ;; is asking ONE question — the irreducible judgement the
-                          ;; round could not derive. So the gate asks one question:
-                          ;; grant the approval, or send it back. Done is deliberately
-                          ;; absent here; settling a workstream is not an answer to
-                          ;; "should we build this", and offering it beside Approve
-                          ;; invites it to be read as one.
-                          ;;
-                          ;; No new stage: this is the SAME :in-progress gate, told
-                          ;; apart by what the ledger holds last. Widening the spine
-                          ;; for it would put every reader's band mapping at risk for
-                          ;; something the report already distinguishes.
-                          (and parked? (= :design-decision report-format))
-                          ;; Approve carries the ledger position it was rendered
-                          ;; from, exactly as an option button does and for the
-                          ;; same reason one round further on: a grant made
-                          ;; against a stale page is not a grant about what is
-                          ;; there now. Omitted when unknown, which fails closed
-                          ;; in approve! rather than granting blind.
-                          [(cond-> {:id :approve :label "Approve"
-                                    :kind :mutation :style :primary}
-                             entry-seq (assoc :seq entry-seq))
-                           {:id :reply   :label "Reply"   :kind :resume  :style :default}]
-
                           ;; A blocker that named its branches is the same shape of
                           ;; gate: one question, answerable. Each option is a button;
                           ;; Reply stays for the answer that is none of them ("B, but
@@ -308,7 +320,7 @@
                           parked?       [{:id :reply :label "Reply" :kind :resume   :style :default}
                                          {:id :drop  :label "Drop"  :kind :mutation :style :danger}]
                           :else         [])
-           [])]
+           []))]
      (if bare?
        (filterv #(contains? workstream-less-actions (:id %)) actions)
        actions))))
@@ -364,6 +376,22 @@
    inside it rather than the workstream around it."
   #{:done :dismissed :analysed})
 
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:maybe :keyword]]}
+  awaiting-human
+  "The stage a PERSON owes this position, or nil when the next move is nido's.
+
+   One reading of `:next`, named because three surfaces need exactly it: the
+   spine marks the workstream as wanting you, the gate offers the decision, and
+   the pane draws the same button beside the report. Spelling it three times is
+   how they come to disagree about which workstreams are waiting.
+
+   A workstream stops at a :human stage whether or not an agent is asleep inside
+   it — the rounds that hand work back to a person run as tasks and park nobody —
+   so this, and not a session phase, is what says a person is holding things up."
+  [position]
+  (let [{:keys [stage mode]} (:next position)]
+    (when (= :human mode) stage)))
+
 (defn- with-position
   "Stamp the pipeline position on a row the board will actually render.
 
@@ -376,9 +404,19 @@
    the board), which is affordable against a multi-second poll and worth not
    paying 150 times over for rows in :done."
   [project row]
-  (cond-> row
-    (not (contains? unrendered-bands (:stage row)))
-    (assoc :position (pipeline/of project (:ws-id row)))))
+  (if (contains? unrendered-bands (:stage row))
+    row
+    (let [position (pipeline/of project (:ws-id row))]
+      (cond-> (assoc row :position position)
+        ;; A workstream whose next move is a person's IS a gate, and nothing else
+        ;; was going to say so. :needs-you is projected from session phases, and
+        ;; the rounds that hand work back to a human run as tasks that park no
+        ;; session — so a design decision waiting to be granted read as nobody
+        ;; waiting, and never reached the inbox that is supposed to carry it.
+        ;;
+        ;; Only ever set, never cleared: the session-parked reading underneath is
+        ;; a different way to be a gate and stays exactly as true as it was.
+        (awaiting-human position) (assoc :needs-you true)))))
 
 (def ^:private ^:dynamic *rows-memo*
   "Atom memoizing `list-workstreams` by [project live-names] for the extent of one
@@ -881,6 +919,11 @@
      :actions      (gate-actions (:stage row) parked? (:origin row)
                                  {:report-format (:format report)
                                   :options       (:options report)
+                                  ;; From the row, not re-derived: the spine used
+                                  ;; this same reading to decide the workstream is
+                                  ;; a gate at all, and a second read is a second
+                                  ;; moment.
+                                  :awaiting      (awaiting-human (:position row))
                                   :seq           (:seq report)})
      :session      (:name psess)
      :resume-error (get-in psess [:autonomy :error])

@@ -1973,14 +1973,23 @@
    gate showing a design decision offers a different question from one showing a
    blocker that named its branches, and the pane and the gate inbox must not
    disagree about which. Callers still gate on :on-latest?, so an older entry
-   being read renders no action bar at all."
-  [project ws-id origin stage sessions report]
+   being read renders no action bar at all.
+
+   `position` is the workstream's pipeline position — the pane already has it for
+   its heading — and is here because one of the buttons is owed by a PERSON
+   rather than by a parked agent (work/awaiting-human)."
+  [project ws-id origin stage sessions report position]
   (let [parked? (boolean (some :parked? sessions))
         session (:name (first (filter :parked? sessions)))]
     (action-bar project ws-id
                 (work/gate-actions stage parked? origin
                                    {:report-format (:format report)
                                     :options       (:options report)
+                                    ;; The pane draws the same button the inbox
+                                    ;; does, off the same reading of the same
+                                    ;; position — a design decision is owed a
+                                    ;; person whether or not an agent is parked.
+                                    :awaiting      (work/awaiting-human position)
                                     :seq           (:seq report)})
                 session pane-route)))
 
@@ -2108,7 +2117,7 @@
             ;; which is the one thing they are not.
             (when (and on-latest? error-msg)
               [:div.action-err "⚠ " error-msg])
-            (when on-latest? (pane-action-bar project ws-id origin stage sessions action-report))
+            (when on-latest? (pane-action-bar project ws-id origin stage sessions action-report position))
             (when (= :done stage) (file-findings-form project ws-id))
 
             ;; Collapsed by default. The arc above is the reading a driver

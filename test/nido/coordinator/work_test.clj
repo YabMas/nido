@@ -2432,3 +2432,97 @@
           (is (= "on reflection" (:note d)))
           (is (= 3 (count (:entries (workstream/read-ws :nido id))))
               "and the first one is still there — the ledger has no delete"))))))
+
+;; ── The approval a person owes ─────────────────────────────────────────────
+;; The round that writes a design decision is :mechanical: it runs as a task and
+;; parks nobody. So a grant gated on a parked session was unreachable for every
+;; design decision nido produces — land:check refused `not-approved` and sent the
+;; reader to a button that could not exist. What is owed is a fact about the
+;; POSITION, and these pin that it is read from there.
+
+(deftest awaiting-human-reads-a-human-position-and-nothing-else
+  (is (= :approve-design
+         (work/awaiting-human {:next {:stage :approve-design :mode :human}})))
+  (is (= :answer-blocker
+         (work/awaiting-human {:next {:stage :answer-blocker :mode :human}}))
+      "every human stage answers — which one it is belongs to the caller")
+  (is (nil? (work/awaiting-human {:next {:stage :decide-design :mode :mechanical}}))
+      "a stage nido runs itself owes a person nothing")
+  (is (nil? (work/awaiting-human {:next nil})) "a terminal position owes nothing")
+  (is (nil? (work/awaiting-human nil))
+      "and a row that carries no position at all must not throw — :done,
+       :dismissed and :analysed are never stamped with one"))
+
+(deftest a-design-decision-is-granted-from-the-position-not-from-a-parked-agent
+  (is (= [{:id :approve :label "Approve" :kind :mutation :style :primary :seq 7}]
+         (work/gate-actions :in-progress false nil
+                            {:report-format :design-decision :seq 7
+                             :awaiting :approve-design}))
+      "approve! records a grant with nobody to wake as :approved-unresumed —
+       the ledger is what the next session reads — so nothing about an absent
+       agent makes the grant premature")
+  (is (empty? (work/gate-actions :in-progress false nil
+                                 {:report-format :design-decision :seq 7}))
+      "and with no position saying a person is owed anything, nothing is offered"))
+
+(deftest reply-still-needs-an-agent-to-resume
+  (is (= [:approve]
+         (mapv :id (work/gate-actions :in-progress false nil
+                                      {:report-format :design-decision :seq 7
+                                       :awaiting :approve-design})))
+      "Reply resumes a parked agent; beside a grant with none it could only fail")
+  (is (= [:approve :reply]
+         (mapv :id (work/gate-actions :in-progress true nil
+                                      {:report-format :design-decision :seq 7
+                                       :awaiting :approve-design})))
+      "and when there is one, sending it back is still an answer"))
+
+(deftest only-the-approval-stage-offers-the-approval
+  (is (empty? (work/gate-actions :in-progress false nil
+                                 {:report-format :design-decision :seq 7
+                                  :awaiting :answer-blocker}))
+      "a blocker is a human stage too, and the question it asks is not this one")
+  (is (empty? (work/gate-actions :in-progress false nil
+                                 {:report-format :baseline-review :seq 7
+                                  :awaiting :approve-design}))
+      "and the report has to be the decision the grant is about"))
+
+(deftest a-workstream-awaiting-a-person-is-a-gate
+  (with-tmp
+    (fn [_]
+      (let [id   (:id (workstream/create! :brian {:stage :scratch :external-refs []}))
+            add! (fn [kind record]
+                   (workstream/append-entry! :brian id {:kind kind} (pr-str record))
+                   (count (:entries (workstream/read-ws :brian id))))
+            row  #(first (filter (comp #{id} :ws-id) (work/list-workstreams :brian)))]
+        (add! :intent {:format :intent :goal "g" :done-when ["d"]})
+        (let [b (add! :baseline
+                      {:format :baseline :area "a" :bounded-by "b" :shape "s"
+                       :modules [{:id "m" :module "m" :hides "h" :interface "i"}]
+                       :composition "c"
+                       :load-bearing [{:id "c1" :property "p" :falsified-by "f"
+                                       :evidence ["src/a.clj:1"]}]
+                       :read ["src/a.clj"]})]
+          (add! :baseline-review {:format :baseline-review :verdict :sufficient
+                                  :baseline-seq b :reason "it holds"})
+          (is (false? (boolean (:needs-you (row))))
+              "nothing is owed while the next move is nido's own")
+
+          (let [d (add! :design
+                        {:format :design :summary "s" :shape "sh"
+                         :invariants ["one path"] :standing {:relation :conforms}
+                         :baseline {:seq b :relation :within}
+                         :intent {:seq 1} :effort :S})]
+            (add! :design-decision
+                  {:format :design-decision :recommend :proceed :design-seq d
+                   :reason "r" :asks "worth it?"
+                   :checks [{:check :relation-honest :status :held :note "n"}]})
+
+            (is (= :approve-design (:stage (:next (:position (row)))))
+                "the pipeline says a person owes this workstream a decision")
+            (is (true? (:needs-you (row)))
+                "so the spine calls it a gate — with no session parked anywhere,
+                 which is the whole point: the round that decided it was a task")
+            (is (= [:approve]
+                   (mapv :id (:actions (work/gate :brian id))))
+                "and the gate offers the grant")))))))
