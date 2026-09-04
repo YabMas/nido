@@ -29,6 +29,7 @@
    [nido.coordinator.source.slack :as slack-source]
    [nido.coordinator.source.slack-reaction :as slack-reaction-source]
    [nido.coordinator.source.improvement :as improvement-source]
+   [nido.coordinator.source.sweep :as sweep-source]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.status-file :as status-file]
    [nido.coordinator.lane.drive :as drive]
@@ -1003,6 +1004,7 @@
   (slack-source/register!)                            ; register Slack source plugin
   (slack-reaction-source/register!)                   ; register Slack-reaction source plugin
   (improvement-source/register!)                      ; register the approved-improvement source
+  (sweep-source/register!)                            ; register the daily improvement sweep
   (loop []
     (tick!)
     (Thread/sleep poll-ms)
