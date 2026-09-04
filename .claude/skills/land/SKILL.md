@@ -425,6 +425,23 @@ So the body carries the layer manifest, and the layers stay legible on trunk:
 Title: the whole arc's one sentence, no "and", no `[n/m]` prefix. It is not a
 layer any more.
 
+**And the body ends with the delivery claim.** This is the one PR body in the
+flow that no commit generates, so nothing carries the claim here for you — and
+it is the only body that matters to a merge-reading automation, because it is
+the only PR of the stack that merges. Take the line from the TOP layer's commit
+footer verbatim:
+
+    Closes BR-4312
+
+Left off, brian's `bb notify:deploy` finds no claim on the PR the merge maps to,
+and the ticket sits where it was while the work is on `main` — the exact silent
+failure the claim exists to prevent. Take `Refs` layers' citations *out*: with
+the layers gone, several `Refs BR-####` lines describe PRs that no longer exist,
+and a second `Closes` would claim a ticket this arc does not deliver. See
+`/prepare-draft-pr` §"The delivery claim" for when the verb is legal at all —
+a stack for a follow-up `FU-#`, or in a project with no `:delivery-claim`
+config, carries no claim line here either.
+
 #### Merge and watch — one PR
 
 ```bash
@@ -686,6 +703,9 @@ it, `/drive-home` records the outcome — `:implementation-completed` or
 - **Reading `gh stack merge`'s "all-or-nothing" as covering a queued merge** — it
   covers the direct-merge path only. On a queue-protected branch the call
   enqueues n entries and the queue decides per entry (§8).
+- **Collapsing without carrying the delivery claim onto the top PR** — its body
+  is authored, not generated, so the claim is lost unless you write it. The PR
+  merges, the ticket never moves, and nothing says so (§"Rewrite the top PR").
 - **Pushing after the collapse** — a `synchronize` is a new head commit, which
   re-fires CI and re-fires Codex on the full arc. The frozen head SHA is the
   whole reason the layer reviews still stand (§8).

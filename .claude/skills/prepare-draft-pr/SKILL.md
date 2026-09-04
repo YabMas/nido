@@ -79,8 +79,12 @@ poller needs to react when the PR later merges.
    Omit any line the record doesn't carry rather than padding it. The rejected
    alternatives are the highest-value part: they are what stops a reviewer
    proposing something you already weighed, and they turn that exchange into
-   *here is why not* instead of a round trip. If a PR already exists for this
-   branch, reuse it instead of creating a second one:
+   *here is why not* instead of a round trip.
+
+   **End the body with the ticket line** — `Closes BR-####` on the single-PR
+   path, since this PR is the one that merges. See §"The delivery claim" for
+   when that verb is legal and when the line is `Refs` or absent. If a PR already
+   exists for this branch, reuse it instead of creating a second one:
 
    ```bash
    cd worktree
@@ -154,6 +158,58 @@ poller needs to react when the PR later merges.
    Notion page-id (from the `:notion` external-ref on the workstream, visible in
    the session briefing/CLAUDE.md), set its `GitHub PR` property (type `url`) to the
    PR URL with `notion page set <page-id> "GitHub PR=<pr-url>"`.
+
+## The delivery claim
+
+A ticket id in a PR body is prose until a closing verb turns it into a claim a
+machine acts on. brian's `bb notify:deploy` moves the Notion ticket to Review
+when the PR reaches staging, and it reads a line-anchored closing verb and
+nothing else — a bare `BR-####` moves nothing. Before this rule, nido stamped
+the PR↔ticket link into its own ledger and left the body saying nothing a
+machine could read: measured 2026-09-04, 53 of the 56 PRs nido had linked to a
+brian ticket carried no claim, so the link existed only on one laptop.
+
+**Read the project's config first.** The verb and the ids that may carry it are
+the project's, never nido's:
+
+```bash
+cat ~/.nido/projects/<project>/github.edn
+```
+
+    :delivery-claim {:prefix "BR-" :verb "Closes"}
+
+**No `:delivery-claim` key → write no claim line.** Every project but brian is
+in this state, and a guessed verb there produces a line that reads as a promise
+and that nothing keeps. Cite with `Refs <id>` and stop.
+
+With the key present, write `<verb> <id>` — one line, at the start of its own
+line, nothing before it — **when all three hold**:
+
+1. **The workstream has a `:notion` ref** whose `:id` starts with `:prefix`.
+   `BR-6153` claims. `FU-4` does not: follow-ups come from nido's own
+   cross-project DB through the same `:notion` adapter, brian's parser matches
+   only `BR-`, and its Status vocabulary has no Review. A claim there would be a
+   line nothing honours. A Slack- or GitHub-issue-sourced workstream has no
+   `:notion` ref and likewise never claims.
+2. **This PR is the one that merges** — the single PR, or a stack's TOP layer
+   (`/land` collapses the stack into it). Layers beneath cite with `Refs`.
+3. **This landing delivers the ticket.** On a phased change (`/phase`), only the
+   last phase does; the earlier ones cite with `Refs`.
+
+Fail any one and the line is `Refs <id>`, or absent when there is no ticket.
+
+**It goes in the COMMIT message, not only in the PR body.** `/squash` §3
+replaces every layer PR's body wholesale from its folded commit, so a claim
+typed into the body alone is deleted by the next `/squash` — and silently, since
+the PR reads correctly until nobody is looking. `/stack` §5 puts it in the
+commit footer for exactly this reason.
+
+**Check what you wrote, on the PR.** brian answers within a minute or two, on
+drafts too: the `Deploy notifier preview` comment says either `move BR-N to
+Review` or `On merge, the staging deploy will not touch any Notion ticket for
+this PR.` The second on a PR that should claim means the line is malformed —
+indented past three spaces, inside a fence or an HTML comment, or carrying a
+typo'd number. Fix it and push; the comment is upserted, not stacked.
 
 ## Publishing a stack
 
@@ -243,6 +299,12 @@ gh pr create -R "$SLUG" --base <session>--<l2>   --head <session>--<l3> --draft 
 
 Every body must carry the brief's four fields — **Claims**, **Verify**, **Lane**,
 **Out of scope**. That is what makes per-layer review bounded.
+
+**The TOP layer carries the delivery claim; every layer beneath cites with
+`Refs`.** The top PR is the one `/land` collapses the stack into and the only
+one that merges, so it is the only body a merge-reading automation ever sees.
+See §"The delivery claim". This is the opposite end of the stack from the Design
+section, which sits on the bottom PR — the entry point a reviewer reads first.
 
 **The bottom layer's body additionally carries the Design section** (step 3's
 template), since it is the entry point a reviewer reads first and the design
@@ -378,6 +440,14 @@ the fix is a **new** PR — not an edit of the merged one:
   `headRefName` and edits rather than creates.
 - **Assuming `$SLUG`/`$SRC` carry between commands** — each Bash call is a fresh
   shell. Re-derive them in every block.
+- **Putting the delivery claim on the bottom PR of a stack, or on every layer** —
+  it belongs on the TOP layer alone, the only PR that merges. On every layer it
+  earns brian's `This PR claims N tickets` warning on each of them; on the bottom
+  it is collapsed away unread.
+- **Writing the claim into the PR body but not the commit** — `/squash` §3
+  regenerates bodies wholesale from the folded commits and deletes it.
+- **Claiming a follow-up `FU-#` ref, or guessing a verb for a project with no
+  `:delivery-claim` config** — both write a line no automation honours.
 - **Stamping only one `:github` ref for a stack** — the poller needs one per PR.
 - **Stamping a stack's layers before its bottom PR** — the first `:github` ref
   is the one that files `:pr-opened`, so the bottom PR (and its `:summary`) goes

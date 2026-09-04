@@ -511,6 +511,42 @@ lifts this into the PR body; `/squash` regenerates it.
 
     Refs BR-####
 
+### The footer line is a delivery claim or a citation, never both
+
+The last line names the ticket, and **which verb it uses decides whether a
+machine acts on it.** A project may run automation that reads PR bodies and
+moves a ticket when one says it was delivered — brian's `bb notify:deploy` moves
+the Notion ticket to Review on staging deploy — and such automation reads a
+closing verb, never a bare id.
+
+    Closes BR-4312     ← this PR delivers the ticket; the ticket moves
+    Refs BR-4312       ← this PR does work on the ticket; nothing moves
+
+So a layer whose PR is not the one that merges writes `Refs`. **Exactly one PR
+per workstream carries the closing verb** — the single PR, or a stack's TOP
+layer, because `/land` collapses the stack into the top PR and only that one
+merges. Every layer beneath it cites with `Refs`, which is what the example
+above shows.
+
+Two more cases take `Refs`, not `Closes`:
+
+- **A phase that is not the last.** Phase 2 of 3 does not deliver the ticket, so
+  it does not claim it — `/phase`'s whole point is that the intermediate states
+  are deliberate, and a claim there moves the ticket before the work is done.
+- **A ticket this change merely cites** — merge narration, archaeology, a
+  related ticket. A closing verb in front of a ticket this PR does not deliver
+  is how a ticket gets marked delivered by a PR that never touched it.
+
+**The verb and which ticket ids may carry it are the project's, not nido's.**
+Read `~/.nido/projects/<project>/github.edn` for a `:delivery-claim` key:
+
+    :delivery-claim {:prefix "BR-" :verb "Closes"}
+
+No such key — every project but brian today — and no claim line is written at
+all: cite with `Refs` and leave the machinery out of it. `/prepare-draft-pr`
+§"The delivery claim" has the full rule, including why a follow-up `FU-#` ref
+never claims.
+
 **On a phased change, the PR body opens with where in the plan this lands** —
 a reviewer's first question is what state the system is being left in:
 
