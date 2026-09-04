@@ -489,3 +489,42 @@
   ;; The daemon's orphan sweep calls this per live session. An unresolvable
   ;; project must degrade to "unknown", not abort the adoption invariant.
   (is (nil? (lifecycle/session-weight "whatever" {:project "no-such-project"}))))
+
+;; ── advancing a remote ref ──────────────────────────────────────────────────
+;;
+;; Every string below was captured from jj 0.45 rather than imagined. The three
+;; exit-0 cases are the point: a landing recorded on exit status alone would be
+;; recorded for a bookmark that was never pushed.
+
+(deftest a-push-that-moved-the-remote-advanced
+  (is (= {:outcome :advanced}
+         (lifecycle/classify-push
+          {:exit 0
+           :out "Changes to push to origin:\n  bookmark: main [move forward from a1 to b2]\n"
+           :err ""}))))
+
+(deftest a-remote-that-already-held-the-revision-is-not-a-failure
+  ;; A retry after a crash between the push and the first ledger append finds
+  ;; exactly this. Treating it as "did not move" would leave that landing
+  ;; unrecorded forever.
+  (is (= {:outcome :already-there}
+         (lifecycle/classify-push
+          {:exit 0 :out "" :err "Bookmark main@origin already matches main\nNothing changed.\n"}))))
+
+(deftest a-bookmark-that-does-not-exist-is-not-a-successful-push
+  ;; jj exits 0 and prints "Nothing changed." here, exactly as it does when the
+  ;; remote already matched — so this is the case exit status cannot see.
+  (is (= :no-such-bookmark
+         (:outcome (lifecycle/classify-push
+                    {:exit 0 :out ""
+                     :err "Warning: No matching bookmarks for names: main\nNothing changed.\n"})))))
+
+(deftest a-non-zero-exit-is-rejected-and-carries-what-jj-said
+  (let [r (lifecycle/classify-push
+           {:exit 1 :out "" :err "Error: Refusing to push a bookmark that moved backwards\n"})]
+    (is (= :rejected (:outcome r)))
+    (is (str/includes? (:detail r) "moved backwards"))))
+
+(deftest an-output-shape-nobody-recognises-is-refused-rather-than-assumed-good
+  ;; Failing closed: a landing is what gets recorded on the strength of this.
+  (is (= :rejected (:outcome (lifecycle/classify-push {:exit 0 :out "???" :err ""})))))

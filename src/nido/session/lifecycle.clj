@@ -255,6 +255,70 @@
                       {:exit (:exit result) :err (:err result)})))
     result))
 
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  classify-push
+  "What a `jj git push` actually did, read from its output rather than its exit
+   code. Pure, and separated from the push for that reason: this is the fact a
+   landing is recorded on, and a fact that can only be established by pushing is
+   one nobody can test.
+
+   Reading the OUTPUT is not fastidiousness. jj exits 0 for three outcomes that
+   a landing must tell apart:
+
+     Changes to push to origin: …          the remote moved          :advanced
+     Bookmark x@origin already matches x   the remote already had it :already-there
+     Warning: No matching bookmarks…       nothing was pushed at all :no-such-bookmark
+
+   The last two both print `Nothing changed.`, so a caller keying on exit status
+   would record a landing for a bookmark it never managed to set.
+
+   :advanced and :already-there are BOTH safe to record against, and collapsing
+   them would be the subtler bug: a process that dies between a successful push
+   and its first ledger append leaves a retry finding the remote already at that
+   revision, so a rule of `record only if it moved` would leave that landing
+   unwritten forever.
+
+   A non-zero exit is `:rejected` and carries what jj said. Neither convention
+   already in this namespace fits a push — the local commands throw on any
+   non-zero exit, which would abort a landing on a transient timeout, and
+   `fetch-base!` swallows failure so offline work still functions, which would
+   let a rejected push be recorded as a landing. The caller is handed the
+   outcome and decides."
+  [{:keys [exit out err]}]
+  (let [text (str out "\n" err)]
+    (cond
+      (not (zero? exit))
+      {:outcome :rejected :detail (str/trim text)}
+
+      (str/includes? text "No matching bookmarks")
+      {:outcome :no-such-bookmark :detail (str/trim text)}
+
+      (re-find #"already matches" text)
+      {:outcome :already-there}
+
+      (str/includes? text "Changes to push to origin")
+      {:outcome :advanced}
+
+      :else
+      {:outcome :rejected :detail (str "unrecognised push result: " (str/trim text))})))
+
+(defn ^{:malli/schema [:=> [:cat :Path :string :string] :map]}
+  advance-remote!
+  "Point `bookmark` at `rev` in `worktree` and push it to origin. Returns what
+   `classify-push` made of the result.
+
+   The first operation in nido that advances a remote ref. Everything nido has
+   pushed until now was pushed by an agent following a skill's prose, which is
+   why no landing could be made conditional on a check the system enforces: the
+   party running the push was the party choosing whether to obey the gate.
+
+   Never throws on a push that did not land. The outcome is the caller's to
+   read, because the caller is the only one that knows what an unpushed
+   revision means for the record it was about to write."
+  [worktree bookmark rev]
+  (jj! worktree ["bookmark" "set" bookmark "-r" rev])
+  (classify-push (jj! worktree ["git" "push" "-b" bookmark] :continue? true)))
+
 (defn- jj-source-repo?
   "True if `dir` is a jj-colocated source repo. The source's `.jj/repo` is a
    directory (the actual jj data); a workspace's `.jj/repo` is a pointer file."
