@@ -68,8 +68,12 @@
     {:signature [:=> [:catn [:cwd Path] [:session :any] [:base :any]] :any]})
   (Operation ranges "Each layer paired with the range it covers."
     {:signature [:=> [:catn [:stack :any] [:base-rev :any]] :any]})
+  (Operation contribution
+    "A range's diff with the coordinates saying where it sits taken out."
+    {:signature [:=> [:catn [:git-diff :string]] :string]})
   (Operation patch-hash "The identity of what a range changes."
-    {:signature [:=> [:catn [:cwd Path] [:from :any] [:to :any]] :string]})
+    {:signature [:=> [:catn [:cwd Path] [:from :any] [:to :any]] :string]
+     :delegates [contribution]})
   (Operation description "A revision's full message."
     {:signature [:=> [:catn [:cwd Path] [:rev :any]] :string]})
   (Operation parse-brief "A layer message as its review brief."

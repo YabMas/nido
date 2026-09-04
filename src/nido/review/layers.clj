@@ -105,19 +105,52 @@
                               :to   (:tip layer))))
         stack))
 
+(def ^:private index-line
+  "git's `index <blob>..<blob> <mode>` header. Each blob id names a whole file
+   on one side of the diff, so both move whenever anything at all changes that
+   file — a commit BELOW this range included."
+  #"(?m)^index [0-9a-f]+\.\.[0-9a-f]+.*\R")
+
+(def ^:private hunk-offsets
+  "The line numbers in a `@@ -a,b +c,d @@` header. Only the header itself is
+   matched, so any function context git appends after it survives."
+  #"(?m)^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@")
+
+(defn ^{:malli/schema [:=> [:cat :string] :string]}
+  contribution
+  "A git-format diff with the two fields that say where it SITS removed: the
+   blob ids and the hunk offsets.
+
+   Neither is part of what a range contributes, and both move under a commit
+   below it. Measured on jj 0.45, a one-line edit near the bottom of a file came
+   back with new blob ids and `@@ -15` → `@@ -17` once a fix two commits down had
+   inserted two lines near the top — every line this range adds or removes
+   byte-identical either side. Leave them in and a layer nobody edited takes a
+   fresh identity every time anything lands beneath it, so the review cache
+   never hits on a stack whose layers share a file.
+
+   Paths, modes and every body line survive. Two ranges therefore collide only
+   by making the same edit to the same files in the same surrounding context —
+   this is `git patch-id`'s normalisation, which is how git itself recognises a
+   patch across a rebase."
+  [git-diff]
+  (-> (str git-diff)
+      (str/replace index-line "")
+      (str/replace hunk-offsets "@@")))
+
 (defn ^{:malli/schema [:=> [:cat :Path :any :any] :string]}
   patch-hash
   "The identity of what a range CONTRIBUTES, as against where it sits.
 
-   Hashes the range's git-format diff, so it is stable across everything the
-   ship path does to commit ids: a clean rebase preserves the patch, and folding
-   the range into one commit produces exactly the diff the range already had.
+   Hashes the range's `contribution`, so it is stable across everything that
+   rewrites commits without changing what this range adds: a clean rebase, a
+   fold of the range into one commit, and a fix landing on a layer below it.
    nil when jj cannot produce the diff — the caller must then review rather than
    assume anything about it."
   [cwd from to]
   (let [{:keys [exit out]} (jj/jj! cwd "diff" "--git" "--from" from "--to" (or to "@"))]
     (when (zero? exit)
-      (digest/sha256-hex out))))
+      (digest/sha256-hex (contribution out)))))
 
 (defn ^{:malli/schema [:=> [:cat :Path :any] :string]}
   description

@@ -15,6 +15,7 @@
    [nido.review.cache :as cache]
    [nido.review.codex :as codex]
    [nido.review.conformance :as conformance]
+   [nido.review.digest :as digest]
    [nido.review.layers :as layers]
    [nido.review.prompts :as prompts]
    [nido.session.lifecycle :as lifecycle]
@@ -216,9 +217,9 @@
    nothing to recognise and are the cheapest possible way to make it look
    somewhere else.
 
-   Carried beside `:layers` rather than inside it, because `with-patch-hashes`
-   keys this target on the CUT: fold a value that changes every round into the
-   identity and the cache never hits again."
+   Nothing it adds reaches the target's cache key: `with-patch-hashes` builds
+   that from the layers and their patches, so a value that changes every round
+   cannot switch the cache off by living here."
   [targets history]
   (let [prior (into []
                     (comp (mapcat (fn [h]
@@ -233,6 +234,29 @@
                 (:composition t) (assoc-in [:composition :already-reported] prior)))
             targets))))
 
+(defn- composition-key
+  "The composition target's identity: the patch it spans, plus the cut that
+   divides it — each layer's label paired with its own patch hash, in stack
+   order.
+
+   Every component is derived from content, so the key holds across a rebase, a
+   squash or an amend exactly as a layer's key does. Built from `composition-of`
+   instead, it would carry each range's commit ids and the text of its brief,
+   and miss whenever the stack was rewritten at all: one run reviewed a
+   composition that had converged eight minutes earlier while both of its layers
+   hit the cache at their own unchanged hashes.
+
+   The patch stays in beside the cut, because the layers do not quite cover the
+   range: they end at the top bookmark and the range ends at `@`, so anything
+   sitting above the stack reaches the key through the patch and nowhere else.
+
+   nil when the range or any one layer's hash is unknown. A key built over a
+   hole would let a later run skip content nothing has established is
+   unchanged."
+  [whole-hash cut]
+  (when (and whole-hash (seq cut) (every? (comp some? second) cut))
+    (digest/sha256-hex (pr-str [whole-hash cut]))))
+
 (defn ^{:malli/schema [:=> [:cat :Path :any] :any]}
   with-patch-hashes
   "Stamp each target with the hash of the patch it contributes — its identity
@@ -245,22 +269,19 @@
    still contains the same work. So a composition pass that demanded a
    re-layering, got one, and ran again would find its own hash unchanged and
    skip the very thing it asked for. What that pass reviews is not the patch but
-   how the patch was divided, so its identity has to include the division."
+   how the patch was divided, so its identity has to include the division.
+
+   Every layer hash is taken first because the cut is built out of them — which
+   is also why the composition target has to arrive in the same vector as the
+   layers it composes, as `review-targets` hands them over."
   [cwd targets]
-  (mapv (fn [t]
-          (let [h (layers/patch-hash cwd (:from t) (:to t))]
-            (assoc t :patch-hash
-                   (when h
-                     ;; The LAYERS, not the whole composition map. What this
-                     ;; target reviews is the cut, so the cut is its identity —
-                     ;; and anything else living on the map (what earlier rounds
-                     ;; already reported, say) changes every round and would
-                     ;; make the key miss every time, which is the cache
-                     ;; switched off rather than made correct.
-                     (if-let [c (seq (:layers (:composition t)))]
-                       (str h "-" (Integer/toHexString (hash (vec c))))
-                       h)))))
-        targets))
+  (let [hashed (mapv #(assoc % :patch-hash (layers/patch-hash cwd (:from %) (:to %)))
+                     targets)
+        cut    (into [] (comp (remove :stack?) (map (juxt :label :patch-hash))) hashed)]
+    (mapv (fn [t]
+            (cond-> t
+              (:composition t) (assoc :patch-hash (composition-key (:patch-hash t) cut))))
+          hashed)))
 
 (defn ^{:malli/schema [:=> [:cat :map :any] :map]}
   to-review
@@ -605,12 +626,14 @@
    open, so the whole-stack target holds it, and that target converging on
    `nothing anywhere is open` is what stops it being lost.
 
-   A landed fix invalidates the layers above it on its own, because it changes
-   their content and so their hashes. That is true of layers and NOT of the
-   composition — re-cutting a stack moves code between layers without changing
-   `base-rev..@` by a byte, so the whole-stack patch hash is identical before and
-   after a re-layering. The composition target's key folds in the cut itself for
-   exactly that reason; see `with-patch-hashes`."
+   A landed fix invalidates the layer it lands on and the composition, and
+   nothing else. A layer ABOVE it keeps its key: a fix underneath moves what
+   that layer sits on rather than what it contributes, and its reviewer would be
+   handed the same diff again. What the fix can still have broken is how the
+   pieces fit — which is the composition target's question, and its key spans
+   the whole range, so the fix moves it. Re-cutting a stack is the opposite
+   case: it moves code between layers without changing `base-rev..@` by a byte,
+   which is why that key folds in the cut as well; see `with-patch-hashes`."
   [reviews findings]
   (let [open   (remove settled? findings)
         owners (into #{} (map :owner-layer) open)]

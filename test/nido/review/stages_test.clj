@@ -963,23 +963,55 @@
       (is (str/starts-with? (stages/read-stance :stance-override-probe) "# diverges"))
       (finally (fs/delete-if-exists own)))))
 
-(deftest the-composition-target-is-keyed-on-the-cut-not-only-the-patch
-  ;; Re-cutting a stack moves code between layers and leaves base-rev..@
-  ;; byte-identical. Keyed on the patch alone, a composition pass that demanded
-  ;; a re-layering, got one, and ran again would skip the very thing it asked for.
+(defn- stack-targets
+  "A two-layer round's targets: `one`, `two`, and the composition over both.
+   `revs` gives each of the three ranges, so a caller can rewrite the commit ids
+   without touching anything else."
+  [[one two whole]]
+  [{:label "one" :from (first one) :to (second one)}
+   {:label "two" :from (first two) :to (second two)}
+   {:label "stack" :stack? true :from (first whole) :to (second whole)
+    :composition {:layers [{:label "one" :from (first one) :tip (second one)}
+                           {:label "two" :from (first two) :tip (second two)}]}}])
+
+(defn- composition-key-of
+  "The composition target's key, with each range's patch hash supplied by
+   `hash-of` — which is what a rewrite that changes no content holds constant."
+  [hash-of targets]
+  (with-redefs [layers/patch-hash (fn [_ from to] (hash-of [from to]))]
+    (:patch-hash (last (stages/with-patch-hashes "/w" targets)))))
+
+(deftest the-composition-key-survives-a-rewrite-that-changes-no-layer
+  ;; A rebase, a squash and an amend all give every layer new commit ids and
+  ;; leave what they contribute alone. Keyed on composition-of's :from/:tip, the
+  ;; composition target missed on all three: one run reviewed a stack that had
+  ;; converged eight minutes earlier while both of its layers hit the cache at
+  ;; their own unchanged hashes.
+  (let [contributes {["b" "c1"] "h-one" ["c1" "c2"] "h-two" ["b" "@"] "h-whole"
+                     ["b" "d1"] "h-one" ["d1" "d2"] "h-two"}
+        before (composition-key-of contributes
+                                   (stack-targets [["b" "c1"] ["c1" "c2"] ["b" "@"]]))
+        after  (composition-key-of contributes
+                                   (stack-targets [["b" "d1"] ["d1" "d2"] ["b" "@"]]))]
+    (is (some? before) "a stack of two known layers has a key")
+    (is (= before after)
+        "same labels, same order, same contributions — the cut has not moved")))
+
+(deftest re-cutting-a-stack-is-a-different-composition-target
+  ;; Re-cutting moves code between layers and leaves base-rev..@ byte-identical.
+  ;; Keyed on the patch alone, a composition pass that demanded a re-layering,
+  ;; got one, and ran again would skip the very thing it asked for.
+  (let [flat  (constantly "SAMEPATCH")
+        cut   (fn [targets] (composition-key-of flat targets))
+        as-is (cut (stack-targets [["b" "c1"] ["c1" "c2"] ["b" "@"]]))
+        moved (cut (update (stack-targets [["b" "c1"] ["c1" "c2"] ["b" "@"]])
+                           1 assoc :label "renamed"))]
+    (is (not= as-is moved) "the cut is part of what the composition pass reviews")))
+
+(deftest a-layer-is-keyed-on-its-patch-alone
   (with-redefs [layers/patch-hash (fn [_ _ _] "SAMEPATCH")]
-    (let [before (first (stages/with-patch-hashes
-                          "/w" [{:label "stack" :stack? true :from "b" :to "@"
-                                 :composition {:layers [{:label "one"} {:label "two"}]}}]))
-          after  (first (stages/with-patch-hashes
-                          "/w" [{:label "stack" :stack? true :from "b" :to "@"
-                                 :composition {:layers [{:label "two"} {:label "one"}]}}]))
-          layer  (first (stages/with-patch-hashes
-                          "/w" [{:label "core" :from "b" :to "c"}]))]
-      (is (not= (:patch-hash before) (:patch-hash after))
-          "a re-cut is a different composition target")
-      (is (= "SAMEPATCH" (:patch-hash layer))
-          "a plain layer is still keyed on its patch alone"))))
+    (is (= "SAMEPATCH" (:patch-hash (first (stages/with-patch-hashes
+                                             "/w" [{:label "core" :from "b" :to "c"}])))))))
 
 (deftest a-target-whose-hash-cannot-be-computed-is-never-skipped
   ;; Unknown content is reviewed content — folding the composition in must not
@@ -989,6 +1021,13 @@
                      "/w" [{:label "stack" :stack? true :from "b" :to "@"
                             :composition {:layers [{:label "one"}]}}]))]
       (is (nil? (:patch-hash t))))))
+
+(deftest one-unknown-layer-leaves-the-whole-composition-unkeyed
+  ;; The key is built over the layers, so a hole in them is a hole in it — and a
+  ;; key over a hole would let a later run skip a layer nothing has checked.
+  (let [k (composition-key-of {["b" "c1"] "h-one" ["b" "@"] "h-whole"}
+                              (stack-targets [["b" "c1"] ["c1" "c2"] ["b" "@"]]))]
+    (is (nil? k))))
 
 (deftest a-skipped-target-carries-the-round-it-converged-in
   (let [{:keys [review skipped]}

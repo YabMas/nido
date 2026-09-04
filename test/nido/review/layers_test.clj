@@ -147,6 +147,52 @@
     (is (= [["FORK" "cA"] ["cA" "cB"] ["cB" "cC"]]
            (map (juxt :from :to) (layers/ranges st "FORK"))))))
 
+;; ---- what a range contributes -------------------------------------------
+;;
+;; Both diffs below are jj 0.45 output for ONE layer, captured either side of a
+;; fix landing two commits beneath it that inserted two lines near the top of the
+;; file they share. What that layer adds and removes is byte-identical; the blob
+;; ids and the hunk offset are not.
+
+(def ^:private upper-layer-before
+  (str "diff --git a/shared.txt b/shared.txt\n"
+       "index 494fdae787..9c1e1983c8 100644\n"
+       "--- a/shared.txt\n"
+       "+++ b/shared.txt\n"
+       "@@ -15,6 +15,6 @@\n"
+       " l15\n l16\n l17\n-l18\n+l18-upper\n l19\n l20\n"))
+
+(def ^:private upper-layer-after
+  (str "diff --git a/shared.txt b/shared.txt\n"
+       "index 51c80da62f..5fd2c4c831 100644\n"
+       "--- a/shared.txt\n"
+       "+++ b/shared.txt\n"
+       "@@ -17,6 +17,6 @@\n"
+       " l15\n l16\n l17\n-l18\n+l18-upper\n l19\n l20\n"))
+
+(deftest a-fix-beneath-a-layer-does-not-change-what-that-layer-contributes
+  (is (= (layers/contribution upper-layer-before)
+         (layers/contribution upper-layer-after))
+      "a layer nobody edited must keep one identity, or the cache cannot skip it"))
+
+(deftest contribution-keeps-the-edit-and-the-file-it-lands-in
+  (let [c (layers/contribution upper-layer-before)]
+    (is (str/includes? c "-l18\n+l18-upper")
+        "dropping the coordinates must not drop the change they were around")
+    (is (str/includes? c "--- a/shared.txt")
+        "which file a range touches is part of what it contributes")))
+
+(deftest a-different-edit-is-a-different-contribution
+  (is (not= (layers/contribution upper-layer-before)
+            (layers/contribution (str/replace upper-layer-before "l18-upper" "l18-other")))
+      "under-invalidating ships unreviewed code, so only coordinates may be removed"))
+
+(deftest patch-hash-is-taken-over-the-contribution-not-over-jjs-output
+  (let [h (fn [out] (with-redefs [jj/jj! (fn [& _] {:exit 0 :out out :err ""})]
+                      (layers/patch-hash "/w" "a" "b")))]
+    (is (= (h upper-layer-before) (h upper-layer-after))
+        "the identity the cache is keyed on is what the range changes")))
+
 (deftest ranges-of-an-empty-stack-are-empty
   (is (= [] (layers/ranges [] "FORK"))))
 

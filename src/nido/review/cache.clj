@@ -13,7 +13,13 @@
    die at `/align`'s rebase and change ids die at `/squash`'s fold, but the patch
    a layer contributes is identical on the other side of both: a clean rebase
    preserves it, and folding N commits into one produces exactly the diff the
-   range already had. Verified against jj 0.42.
+   range already had.
+
+   `The patch` means what `layers/contribution` leaves once the blob ids and
+   hunk offsets are gone. Those answer where a range sits rather than what it
+   changes, and they move under a fix landing on a layer below — so keyed on
+   jj's raw output this claim holds for `/align` and not for the in-loop rebase
+   it is relied on for.
 
    Keyed by hash and never by slug: a restack renames and reorders slugs, so a
    slug reused for different content would silently skip a changed layer — the
