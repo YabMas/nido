@@ -1,0 +1,39 @@
+Say what a terminal review status asks of the reader
+
+A finished diff-review run printed `review-loop: <status> · report <path>`
+and stopped. The status names a condition; what it asks of the reader was
+written in words nowhere. :fix-conflicted is the worst-off of the eighteen —
+it hands the branch back holding conflict markers, and the change ids saying
+where reached report.json and the workstream ledger only, on a conflict that
+`jj resolve --list` calls clean because it sits mid-stack. A round the
+coordinator drives says it again through the lane's disposition and a gate
+entry; a round a person ran themselves said it here or nowhere.
+
+`diff-remedies` is the counterpart of the record loops' `shared-remedies`
+over the diff loop's own vocabulary, and `outcome-lines` composes the status,
+the particulars only this run holds, and the remedy. Returned rather than
+printed because these sentences are the surface, not a by-product of one.
+
+Both conflicted statuses print their ids, not only :fix-conflicted: they
+share the key and the reader's next move. :workspace-drifted's two revisions
+stay in the report, where forensics belong — its remedy is `re-run`. The map
+is total over the vocabulary and holds nothing outside it, both asserted,
+because those statuses are declared two bands down in namespaces that cannot
+read it and a status with no line is silent rather than broken.
+
+Layer: behavioral
+
+Claims: every terminal status of the diff loop arrives as a sentence about
+  what it asks of the reader, and the two conflicted ones name the changes a
+  human has to resolve.
+Verify: bb nido:test — four new tests in tasks.nido-review-test cover the
+  map's totality, the :fix-conflicted lines, the two-line shape of a run with
+  no particulars, and an unavailable reviewer's own message surviving ahead
+  of the remedy. bb nido:land:check for the canvas Operation.
+Lane: judgment.
+Out of scope: naming the conflicted layers beside their ids — report.json
+  carries the :change join, the terminal does not read it — and the drift
+  revisions on :workspace-drifted.
+
+Closes ws-20260903-d00ae6/1.3, claim 8 of the plan at ws-20260905-50125a
+entry 1.

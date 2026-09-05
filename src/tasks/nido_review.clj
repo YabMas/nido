@@ -694,6 +694,77 @@
     {:has     (mapv first (filter second checks))
      :missing (mapv first (remove second checks))}))
 
+(def diff-remedies
+  "The ways a diff run can end, and what each one asks of the reader.
+
+   `nido.review.loop/engine-statuses` and `nido.review.stages/stage-statuses`
+   are together the diff loop's whole terminal vocabulary, and every member of
+   them needs a line here: a status with none arrives as the bare word this map
+   exists to replace. Neither of those sets can see this one — they are declared
+   two bands down — so a test is what holds the three together.
+
+   Data rather than a cond, for the reason `shared-remedies` is: no two of these
+   may collapse onto a shared line, and what separates them is what a reader
+   does next rather than how the run felt. `:clean`, `:nothing-to-review` and
+   `:review-failed` all end a run reporting no finding, and they mean a verdict,
+   an empty diff and no verdict at all."
+  {;; ── the run reached the end of what it can do ──
+   :converged "the warden stopped with nothing still owed — every finding was fixed, closed or declined"
+   :clean "a reviewer read the diff and reported nothing"
+   :dry-run "nothing was fixed"
+
+   ;; ── it stopped holding something only you can settle ──
+   :unresolved "the warden stopped the round with findings still owed — no fixer was asked for them"
+   :escalated "a finding contradicts an invariant the design names, so what is in question is the design rather than its execution"
+   :unfixable "raised round after round and never moved, or a park that has stood too long — the loop has nothing further to offer them"
+   :no-progress "the round changed nothing the reviewers can see — the findings it left are what you get"
+   :fix-declined "every fixer read what it was handed and said no — the findings stand, with their reasons beside them in the report"
+   :fix-unrouted "no finding reached a layer a fixer can touch — what is in question is the routing, not any repair"
+   :fix-rolled-back "every repair was refused by the rebase and put back, so the branch is exactly what was reviewed — a re-run earns the same refusal; what is in question is the layer order"
+   :max-iters "the cap you passed was reached — this is not convergence, and the findings were still open"
+
+   ;; ── the branch is holding conflict markers ──
+   ;; Named apart because they say different things about what put the markers
+   ;; there, and one of them costs a round's work: on :fix-conflicted the
+   ;; repairs below the conflict have landed and the fixers above it never ran.
+   :fix-conflicted "a repair conflicted the layers above it and would not roll back, so the branch is holding markers — resolve them and re-run; the repairs that did land are kept"
+   :stack-conflicted "the branch was already holding markers before a reviewer read a line — resolve them and re-run; nothing was reviewed"
+
+   ;; ── nothing was learned about the branch ──
+   :nothing-to-review "every diff was empty — nothing was read, so this is not a clean bill; check the base you passed"
+   :review-failed "the reviewer broke — this is not a clean bill, and the branch is unjudged"
+   :reviewer-unavailable "the reviewer could not be run at all; nothing was reviewed and the branch is unjudged"
+   :warden-indeterminate "the warden returned no decision, so nothing was attributed and no repair was attempted — re-run"
+   :workspace-drifted "the working copy moved after the reviewers read it, so no repair could land on the tree they judged — re-run"})
+
+(defn ^{:malli/schema [:=> [:cat :map :string] [:sequential :string]]}
+  outcome-lines
+  "What a finished run says on the terminal: the status, the particulars only
+   this run holds, and the sentence saying what the status asks of you.
+
+   Returned rather than printed so the sentences can be asserted on — this is
+   the whole of what an operator gets when the run is over, and the report it
+   points at is a JSON file in a run dir."
+  [final report-path]
+  (let [status (:status final)
+        {:keys [unavailable conflicted]} final]
+    (cond-> [(str "review-loop: " (name status) " · report " report-path)]
+      ;; A reviewer that refused said what it wants — credits, a login, an hour
+      ;; to come back at — and a reader standing here has nowhere else to have
+      ;; got that from.
+      unavailable
+      (conj (str "  " (:message unavailable)))
+
+      ;; The ids `jj resolve` takes. The conflict is mid-stack, so
+      ;; `jj resolve --list` answers that the branch is clean and these are the
+      ;; only pointer at what to open.
+      (seq conflicted)
+      (conj (str "  conflicted: " (str/join ", " conflicted)))
+
+      :always
+      (conj (str "  → " (or (diff-remedies status)
+                            (str "unrecognised terminal status: " status)))))))
+
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   loop-cmd* [{:keys [cwd base max-iters dry-run? budget]}]
   (let [;; Through the home-aware resolution WHETHER OR NOT a cwd was named. A
@@ -760,14 +831,11 @@
                       (fn [emit] (rloop/run-loop (assoc config :emit emit))))
              status (:status final)
              ws-id  (append-review-entry! cwd final @report-atom report-path)]
-         (println (str "review-loop: " (name status) " · report " report-path))
-         ;; The status names the condition; this is the remedy, and the only
-         ;; place it is written in words. A reviewer that refused said what it
-         ;; wants — credits, a login, an hour to come back at — and a reader
-         ;; standing at this line has nowhere else to have got that from.
-         (when-let [u (:unavailable final)]
-           (println (str "  " (:message u)))
-           (println "  → nothing was reviewed; the branch is unjudged"))
+         ;; The status names the condition and `diff-remedies` says what it asks
+         ;; of whoever ran this. A coordinator-driven round says it a second
+         ;; time, through the lane's disposition and a gate entry; a round a
+         ;; person ran themselves says it here or nowhere.
+         (run! println (outcome-lines final report-path))
          ;; A side record that fails invisibly is how a whole class of run came
          ;; to leave no ledger entry at all: the ledger's status enum did not
          ;; admit :unfixable, every append on that status was refused, and the

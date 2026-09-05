@@ -238,6 +238,51 @@
           (str s " ends a review run, so the ledger has to admit it — an append"
                " it refuses is swallowed, and the entry is simply not there")))))
 
+(deftest every-terminal-status-arrives-as-a-sentence-not-a-word
+  ;; The remedy map is written here and the vocabulary is declared two bands
+  ;; down in two namespaces, neither of which can read it — so nothing but this
+  ;; holds them together, and an unremedied status is silent rather than broken.
+  (let [statuses (into rloop/engine-statuses stages/stage-statuses)]
+    (doseq [s statuses]
+      (is (string? (t/diff-remedies s))
+          (str s " ends a review run, and the operator standing at the terminal"
+               " is told what it asks of them nowhere else")))
+    (is (empty? (remove statuses (keys t/diff-remedies)))
+        "a line for a status the loop can no longer reach is prose nobody will
+         ever read being maintained as if somebody might")))
+
+(deftest a-fix-conflicted-run-names-the-changes-on-the-terminal
+  ;; The one status that hands the branch back holding markers, and the ids
+  ;; reached report.json and the ledger alone — leaving the operator who ran it
+  ;; the one reader not told. `jj resolve --list` answers `No conflicts` on a
+  ;; conflict this shape, so there is no second way to find them.
+  (let [lines (t/outcome-lines {:status :fix-conflicted
+                                :conflicted ["nnpkqnmnkznn" "xlortuwzrtlu"]}
+                               "/runs/r/report.json")
+        out   (str/join "\n" lines)]
+    (is (str/includes? out "nnpkqnmnkznn"))
+    (is (str/includes? out "xlortuwzrtlu"))
+    (is (str/includes? out "resolve them and re-run"))
+    (is (str/includes? out "the repairs that did land are kept")
+        "and whether the round's work survived, which decides whether resolving
+         is worth more than abandoning the fixes")))
+
+(deftest a-run-with-no-particulars-says-the-status-and-what-it-asks
+  ;; Two lines, and the second is the whole of what most runs ask of a reader.
+  (is (= ["review-loop: clean · report /runs/r/report.json"
+          "  → a reviewer read the diff and reported nothing"]
+         (t/outcome-lines {:status :clean} "/runs/r/report.json"))))
+
+(deftest an-unavailable-reviewer-says-what-it-wants-before-what-it-asks
+  ;; The reviewer's own sentence carries the reset hour, which is the one fact
+  ;; that decides whether to wait or to go and buy credits.
+  (let [lines (t/outcome-lines {:status :reviewer-unavailable
+                                :unavailable {:signal :usage-limit
+                                              :message "You've hit your usage limit. … try again at Sep 7th, 2026 9:42 AM."}}
+                               "/runs/r/report.json")]
+    (is (str/includes? (second lines) "Sep 7th, 2026 9:42 AM"))
+    (is (str/includes? (last lines) "the branch is unjudged"))))
+
 (deftest an-unfixable-run-reaches-the-ledger-with-what-it-gave-up-on
   ;; The run that most needs a durable record is the one holding a question
   ;; only a human can answer. Every one of them was refused.

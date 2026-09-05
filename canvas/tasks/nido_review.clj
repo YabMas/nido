@@ -59,6 +59,12 @@
      to be the singleton of."
     {:signature [:=> [:catn [:opts :map] [:f [:=> [:catn] :any]]] :any]
      :delegates [join-or-refuse!]})
+  (Operation outcome-lines
+    "What a finished diff run says on the terminal: the status, the particulars only that run
+     holds, and the sentence saying what the status asks of the reader. Pure, so the sentences
+     can be asserted on — for a round somebody ran themselves these lines are the whole of what
+     they get, the report they point at being a JSON file in a run dir."
+    {:signature [:=> [:catn [:final :map] [:report-path :string]] [:sequential :string]]})
   (Operation loop-cmd*
     "The `loop-cmd*` entry point."
     {:signature [:=> [:catn [:opts [:* :any]]] :any]})
