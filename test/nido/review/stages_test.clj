@@ -1543,3 +1543,184 @@
                   @events)
             "the report names the reviewer that died, not just the phase — an
              aborted round used to leave every unfinished row reading `running`")))))
+
+(deftest a-layer-is-told-what-a-fixer-already-landed-on-it
+  ;; :handed has recorded the join since it was added and no reviewer used it,
+  ;; so nobody was ever asked whether a fix closed what it was handed — a swept
+  ;; defect came back at the same window three rounds running.
+  (let [history [{:iter 1
+                  :fixes [{:layer "core" :commit "4d52d218" :handed ["h1"]
+                           :account "fixed the enum check; V243 is untouched"}]
+                  :findings [{:handle "h1" :id "aa11" :title "bad enum reaches the insert"
+                              :sweep true}]}]
+        [core wiring] (stages/with-fix-memory
+                        [{:label "core"} {:label "wiring"}] history)
+        [prior] (:prior-fixes core)]
+    (is (= 1 (:round prior)))
+    (is (= "4d52d218" (:commit prior)))
+    (is (= [{:title "bad enum reaches the insert" :sweep true}] (:findings prior))
+        "the words the fixer saw, from the round it saw them in")
+    (is (= "fixed the enum check; V243 is untouched" (:account prior)))
+    (is (nil? (:prior-fixes wiring)) "a layer no fixer touched is told nothing")))
+
+(deftest a-flat-branchs-fix-reaches-the-target-that-reviews-it
+  ;; fix-plan groups an unlayered branch under nil and review-targets labels its
+  ;; one target "stack". The two vocabularies meet only here, and matching on
+  ;; the review label alone loses the memory in the commonest case there is.
+  (let [history [{:iter 1 :fixes [{:layer nil :commit "c1" :handed ["h1"]}]
+                  :findings [{:handle "h1" :title "the defect"}]}]
+        [whole] (stages/with-fix-memory
+                  [{:label "stack" :stack? true}] history)]
+    (is (= ["the defect"] (mapv :title (:findings (first (:prior-fixes whole)))))))
+
+  (testing "and a stacked branch's composition target is not the flat one"
+    (let [history [{:iter 1 :fixes [{:layer nil :commit "c1" :handed ["h1"]}]
+                    :findings [{:handle "h1" :title "the defect"}]}]
+          [whole] (stages/with-fix-memory
+                    [{:label "stack" :stack? true :composition {:layers [{:label "core"}]}}]
+                    history)]
+      (is (nil? (:prior-fixes whole))))))
+
+(deftest a-run-with-no-landed-fix-changes-nothing
+  (let [targets [{:label "core"}]]
+    (is (= targets (stages/with-fix-memory targets [])))
+    (is (= targets (stages/with-fix-memory targets [{:iter 1 :fixes [] :findings []}])))))
+
+(deftest fix-memory-does-not-move-the-cache-key
+  ;; A value that changes every round folded into the key switches the cache
+  ;; off rather than making it correct.
+  (with-redefs [layers/patch-hash (fn [_ _ _] "SAMEPATCH")]
+    (let [cold (first (stages/with-patch-hashes "/w" [{:label "core" :from "a" :to "b"}]))
+          warm (first (stages/with-patch-hashes
+                        "/w" [{:label "core" :from "a" :to "b"
+                               :prior-fixes [{:round 1 :commit "c1"}]}]))]
+      (is (= (:patch-hash cold) (:patch-hash warm))))))
+
+(deftest the-reviewer-is-handed-what-a-fixer-landed-on-its-target
+  (let [seen (atom nil)]
+    (with-redefs [layers/patch-hash (fn [& _] nil)
+                  codex/merge-base (fn [& _] "BASEREV")
+                  codex/review! (fn [opts] (reset! seen opts)
+                                  {:status :clean :findings []})]
+      ((:run stages/review-stage)
+       {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 2
+        :history [{:iter 1 :fixes [{:layer nil :commit "c1" :handed ["h1"]}]
+                   :findings [{:handle "h1" :title "the defect"}]}]})
+      (is (= ["the defect"] (mapv :title (:findings (first (:prior-fixes @seen)))))
+          "the memory reaches the reviewer, not only the target it was stamped on"))))
+
+(deftest a-fixer-that-refuses-names-what-it-was-handed
+  ;; :handed on the decline row for the same reason it is on a landed fix and on
+  ;; an unattempted layer: the four lists are one account of every :fix ruling
+  ;; the round held, and this was the row that named a layer and nothing else.
+  (with-redefs [agent/launch! (fn [_] {:num-turns 3 :result-error? false
+                                       :result-text "the seam spans two layers"})
+                stages/working-copy-dirty? (fn [_] false)
+                jj/jj! (fn [& _] {:exit 0 :out "" :err ""})]
+    (let [ctx ((:run stages/fix-stage)
+               {:config {:cwd "/w" :run-id "r1"} :iter 2
+                :findings [{:id "aa11" :handle "h1" :title "x" :disposition :fix}]})]
+      (is (= ["h1"] (:handed (first (:declined ctx))))))))
+
+(deftest a-fixers-refusal-is-carried-to-the-next-round
+  ;; A fixer that changes nothing leaves the finding at :fix, so the round after
+  ;; it re-derives the same repair from a fresh session and puts it to a warden
+  ;; that has never read the refutation the last fixer spent its turns building.
+  (with-redefs [agent/launch! (fn [_] {:num-turns 3 :result-error? false
+                                       :result-text "Datastar binds $ to one global root"})
+                stages/working-copy-dirty? (fn [_] false)
+                jj/jj! (fn [& _] {:exit 0 :out "" :err ""})]
+    (let [ctx ((:run stages/fix-stage)
+               {:config {:cwd "/w" :run-id "r1"} :iter 2
+                :findings [{:id "aa11" :handle "h1" :title "$ is not per element"
+                            :disposition :fix}]})
+          entry (get-in ctx [:carry :fixer-declines nil])]
+      (is (= 2 (:since entry)))
+      (is (= "Datastar binds $ to one global root" (:reason entry)))
+      (is (= [{:id "h1" :title "$ is not per element"}] (:findings entry))
+          "named by handle, as :handed is, so the two point at one finding"))))
+
+(deftest a-fixer-that-never-ran-carries-no-argument
+  ;; Zero turns is a no-show, not a refutation. Carried, it would tell the next
+  ;; warden a fixer argued something nobody ever said.
+  (with-redefs [agent/launch! (fn [_] {:num-turns 0 :result-error? false :result-text ""})
+                stages/working-copy-dirty? (fn [_] false)
+                jj/jj! (fn [& _] {:exit 0 :out "" :err ""})]
+    (let [ctx ((:run stages/fix-stage)
+               {:config {:cwd "/w" :run-id "r1"} :iter 2
+                :findings [{:id "aa11" :title "x" :disposition :fix}]})]
+      (is (empty? (get-in ctx [:carry :fixer-declines]))))))
+
+(deftest a-layer-whose-fixer-argued-resumes-rather-than-restarts
+  (let [seen (atom nil)]
+    (with-redefs [agent/launch! (fn [opts] (reset! seen opts)
+                                  {:num-turns 4 :result-error? false :result-text "done"})
+                  stages/working-copy-dirty? (fn [_] true)
+                  jj/jj! (fn [& _] {:out "cid-1" :err "" :exit 0})]
+      ((:run stages/fix-stage)
+       {:config {:cwd "/w" :run-id "r1" :impl-session-id "impl-1"} :iter 2
+        :carry {:fixer-declines {nil {:since 1 :reason "no minimal edit here is right"}}}
+        :findings [{:id "aa11" :title "x" :disposition :fix}]})
+      (is (true? (:resume? @seen))
+          "the session holding the argument is the one to put the finding back to"))))
+
+(deftest a-carried-decline-lives-exactly-as-long-as-the-finding-is-open
+  (let [prior {"core" {:layer "core" :since 1 :reason "the bundle says otherwise"
+                       :findings [{:id "h1" :title "a"} {:id "h2" :title "b"}]}}]
+    (is (= [{:id "h2" :title "b"}]
+           (:findings (get (stages/carried-declines
+                            prior [{:handle "h1" :disposition :declined :because "shipping it"}])
+                           "core")))
+        "half the batch answered leaves the other half still argued")
+    (is (empty? (stages/carried-declines
+                 prior [{:handle "h1" :disposition :closed :authority "duplicate"}
+                        {:handle "h2" :disposition :deviation :of "the claim"}]))
+        "a layer whose every finding was settled drops out")
+    (is (= prior (stages/carried-declines prior [{:handle "h1" :disposition :fix}]))
+        "a finding handed back to a fixer is not an answer to the argument")))
+
+(deftest a-landed-fix-keeps-the-fixers-own-account
+  ;; A repair and a blocked verification arrive in one message. Kept on the
+  ;; decline branch alone, the second half of every such message was deleted —
+  ;; one fixer reported that neither gate it was told to run could build a
+  ;; classpath in that worktree, and it survived only in agent.log.
+  (with-redefs [agent/launch! (fn [_] {:num-turns 4 :result-error? false
+                                       :result-text "fixed; bb lint:comments cannot resolve a private dep"})
+                stages/working-copy-dirty? (fn [_] true)
+                jj/jj! (fn [& _] {:out "cid-1" :err "" :exit 0})]
+    (let [ctx ((:run stages/fix-stage)
+               {:config {:cwd "/w" :run-id "r1"} :iter 2
+                :findings [{:id "aa11" :title "x" :disposition :fix}]})]
+      (is (= "fixed; bb lint:comments cannot resolve a private dep"
+             (:account (first (:fixes ctx))))))))
+
+(deftest a-silent-fixer-adds-no-empty-account
+  ;; An empty string on the row reads as a fixer that was asked and said
+  ;; nothing, which is not what a missing result-text means.
+  (with-redefs [agent/launch! (fn [_] {:num-turns 4 :result-error? false :result-text ""})
+                stages/working-copy-dirty? (fn [_] true)
+                jj/jj! (fn [& _] {:out "cid-1" :err "" :exit 0})]
+    (let [ctx ((:run stages/fix-stage)
+               {:config {:cwd "/w" :run-id "r1"} :iter 2
+                :findings [{:id "aa11" :title "x" :disposition :fix}]})]
+      (is (not (contains? (first (:fixes ctx)) :account))))))
+
+(deftest the-warden-reads-a-carried-decline-and-drops-it-once-it-has-answered
+  (let [captured (atom nil)
+        ruling "```json\n{\"decision\":\"stop\",\"reason\":\"r\",\"findings\":[{\"id\":\"aa11\",\"disposition\":\"declined\",\"because\":\"the bundle behaves as the fixer says\"}]}\n```"]
+    (with-redefs [agent/launch! (fn [{:keys [first-message]}]
+                                  (reset! captured first-message)
+                                  {:num-turns 3 :result-error? false :result-text ruling})
+                  stages/discover-design-record (fn [_] nil)
+                  stages/project+ws-from-cwd (fn [_] nil)]
+      (let [ctx ((:run stages/warden-stage)
+                 {:config {:cwd "/w" :run-id "r1"} :iter 2
+                  :carry {:fixer-declines
+                          {"core" {:layer "core" :since 1
+                                   :reason "Datastar binds $ to one global root"
+                                   :findings [{:id "aa11" :title "$ is not per element"}]}}}
+                  :findings [{:id "aa11" :title "$ is not per element"}]})]
+        (is (str/includes? @captured "Datastar binds $ to one global root")
+            "the argument reaches the reader that can settle the finding")
+        (is (empty? (get-in ctx [:carry :fixer-declines]))
+            "and stops being carried the moment it has")))))

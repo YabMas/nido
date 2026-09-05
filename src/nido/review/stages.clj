@@ -338,6 +338,70 @@
                 (:composition t) (assoc-in [:composition :already-reported] prior)))
             targets))))
 
+(defn- fix-label
+  "The label a fix stage records against this target, which is not always the
+   label the review stage gave it.
+
+   A branch with no layers is reviewed by one whole-stack target labelled
+   `stack`, and `fix-plan` groups the same branch under nil — it has no layer to
+   name. The two vocabularies meet only here, and matching them on the review
+   label alone silently loses the memory in exactly the flat case, which is most
+   sessions. A whole-stack target with no `:composition` is by construction the
+   flat one: `review-targets` attaches that key only when there are layers to
+   compose."
+  [t]
+  (if (and (:stack? t) (not (:composition t))) nil (:label t)))
+
+(defn ^{:malli/schema [:=> [:cat :any :any] :any]}
+  with-fix-memory
+  "Hand each target the repairs a fixer already landed on it in this run.
+
+   Every reviewer starts cold and is shown a diff, so nothing in the loop ever
+   asks whether a fix closed what it was handed. The fix stage has recorded the
+   join since `:handed` was added — the commit, and the findings that commit was
+   for — and no reader used it to go and check. A swept defect came back at the
+   same window in rounds 2, 3 and 4 of one run, each time as a fresh finding,
+   because the reviewer reading those lines had never been told a repair for
+   them had already landed there.
+
+   Keyed on the layer label, which is what `fix-plan` groups by and what the
+   commit is recorded under — except on a branch with no layers, where the two
+   sides spell the same thing differently; see `fix-label`.
+
+   Titles come from the round the fix was in rather than from this one: a
+   finding is handed by handle-or-id and a later round rewords it, so the words
+   the fixer actually saw are the ones on that round's findings.
+
+   Like `with-composition-memory`, nothing it adds reaches the cache key —
+   `with-patch-hashes` builds that from the range, so a value that changes every
+   round cannot switch the cache off by living here."
+  [targets history]
+  (let [by-label (reduce
+                  (fn [acc {:keys [iter fixes findings]}]
+                    (let [by-id (into {} (map (juxt #(or (:handle %) (:id %)) identity))
+                                      findings)]
+                      (reduce (fn [a {:keys [layer commit handed account]}]
+                                (update a layer (fnil conj [])
+                                        {:round iter
+                                         :commit commit
+                                         :account account
+                                         :findings (mapv (fn [h]
+                                                           (let [f (get by-id h)]
+                                                             {:title (or (:title f) h)
+                                                              :sweep (boolean (:sweep f))}))
+                                                         handed)}))
+                              acc
+                              fixes)))
+                  {}
+                  history)]
+    (if (empty? by-label)
+      targets
+      (mapv (fn [t]
+              (if-let [prior (seq (get by-label (fix-label t)))]
+                (assoc t :prior-fixes (vec prior))
+                t))
+            targets))))
+
 (defn- composition-key
   "The composition target's identity: the patch it spans, plus the cut that
    divides it — each layer's label paired with its own patch hash, in stack
@@ -575,7 +639,8 @@
                       {:cwd cwd :run-id run-id :iter (:iter ctx)
                        :from (:from t) :to (:to t)
                        :label (:label t) :brief (:brief t)
-                       :composition (:composition t)})
+                       :composition (:composition t)
+                       :prior-fixes (:prior-fixes t)})
                      :target t)]
         (announce-target! ctx "reviewed" t {:findings (count (:findings r))})
         r)
@@ -598,7 +663,9 @@
         ;; round reviewed one state and tried to fix another.
         at      (layers/resolve-rev cwd "@")
         all     (with-patch-hashes
-                 cwd (with-composition-memory (review-targets cwd base) (:history ctx)))
+                 cwd (-> (review-targets cwd base)
+                         (with-composition-memory (:history ctx))
+                         (with-fix-memory (:history ctx))))
         {:keys [review skipped]} (to-review cached all)
         targets review
         _       (announce-targets! ctx {:review review :skipped skipped})
@@ -1165,6 +1232,37 @@
             prior'
             (filter #(= :park (:disposition %)) ruled))))
 
+(defn ^{:malli/schema [:=> [:cat :any :any] :any]}
+  carried-declines
+  "The fixer declines this run is still holding — the previous round's carry,
+   with everything this round SETTLED taken out.
+
+   A fixer decline is not the warden's `:declined` disposition and the two are
+   kept apart everywhere they meet: that one is a decision that the defect is
+   real and the branch is shipping it, this one is a fixer refusing work it was
+   handed and deciding nothing at all.
+
+   A decline is an argument about a finding, so it lives exactly as long as the
+   finding is open: the round that accepts the argument and closes, declines or
+   deviates the finding has answered it, and carrying it past that point tells a
+   later warden a decided thing is still owed. Mirrors `carried-parks`, which
+   drops a park a later round settles for the same reason.
+
+   A layer whose every finding was settled drops out entirely. A layer holding a
+   mix keeps its argument beside the findings still open — the fixer made one
+   case about the batch it was handed, and half of it being answered does not
+   make the other half unargued."
+  [prior ruled]
+  (let [settled (into #{} (comp (filter settled?) (map #(or (:handle %) (:id %)))) ruled)]
+    (reduce-kv (fn [acc label entry]
+                 (let [open (into [] (remove #(contains? settled (:id %)))
+                                  (:findings entry))]
+                   (if (seq open)
+                     (assoc acc label (assoc entry :findings open))
+                     acc)))
+               {}
+               prior)))
+
 (defn- run-warden-stage
   [ctx]
   (let [{:keys [cwd run-id budget]} (:config ctx)
@@ -1177,6 +1275,7 @@
                  :stance   (read-stance (first (project+ws-from-cwd cwd)))
                  :toc      (:toc ctx)
                  :parked   (vals (get-in ctx [:carry :parks] {}))
+                 :fixer-declines (vals (get-in ctx [:carry :fixer-declines] {}))
                  :answered (answered-by-layer ctx)})
         {:keys [num-turns result-error? result-text] :as launch}
         (agent/launch! {:run-id run-id :cwd cwd
@@ -1191,6 +1290,7 @@
              :status :warden-indeterminate)
       (let [ruled (apply-rulings (:findings ctx) (:rulings decision) handles)
             parks (carried-parks (get-in ctx [:carry :parks] {}) ruled (:iter ctx))
+            declines (carried-declines (get-in ctx [:carry :fixer-declines] {}) ruled)
             ;; A park is a question put to a human, and a run that keeps fixing
             ;; around one is answering a different question. Once a park has
             ;; stood this long the loop has nothing further to offer it, and
@@ -1217,7 +1317,8 @@
                                       :handles (into handles
                                                      (map (juxt :id :handle))
                                                      ruled)
-                                      :parks parks)
+                                      :parks parks
+                                      :fixer-declines declines)
                         :control  (:decision decision))
             ctx' (if stale
                    (assoc ctx' :control :stop :status :unfixable
@@ -1590,11 +1691,19 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
   (str (java.util.UUID/nameUUIDFromBytes
         (.getBytes (str impl-session-id "|" label) "UTF-8"))))
 
-(defn- fixed-before?
-  "Has this layer been fixed in an earlier round? Its fixer resumes only then —
-   a fresh layer starts a fresh session."
-  [history label]
-  (boolean (some (fn [h] (some #(= label (:layer %)) (:fixes h))) history)))
+(defn- worked-before?
+  "Has a fixer already worked this layer in an earlier round? Its session
+   resumes only then — a layer no fixer has opened starts a fresh one.
+
+   A DECLINE counts, and reading only the landed fixes is what made it not.
+   A fixer that refuses changes nothing, so the round writes no history entry
+   for it at all, and the next round put the same finding to a new session
+   holding none of the argument the last one spent its turns building. It then
+   either rebuilt that argument from scratch or made the edit the round before
+   had explained it should not."
+  [history declines label]
+  (boolean (or (contains? declines label)
+               (some (fn [h] (some #(= label (:layer %)) (:fixes h))) history))))
 
 (defn- with-working-copy-restored
   "Run `f`, and whatever happens put the working copy back on top of `stack`
@@ -1695,7 +1804,9 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                                                         :label label)})
                          :budget budget
                          :claude-session-id (layer-fixer-session impl-session-id label)
-                         :resume? (fixed-before? (:history ctx) label)
+                         :resume? (worked-before? (:history ctx)
+                                                  (get-in ctx [:carry :fixer-declines] {})
+                                                  label)
                          :err-file (str (fs/path (cstate/run-dir run-id)
                                                  (format "fix-%s-round-%d.err.log"
                                                          (codex/safe-label label)
@@ -1708,19 +1819,60 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                      ;; declined stated nowhere. It is kept per layer, and
                      ;; distinguishes a fixer that never ran from one that read
                      ;; the finding and refused it.
-                     (do (layers/restore-top! cwd stack)
-                         (update acc :declined (fnil conj [])
-                                 (cond-> {:layer label
-                                          :ran? (pos? (or num-turns 0))}
-                                   result-text (assoc :reason (str result-text)))))
+                     (let [ran?   (pos? (or num-turns 0))
+                           ;; An argument, as against a no-show. A fixer that
+                           ;; ran no turns refused nothing and said nothing, and
+                           ;; carrying it would tell the next warden a fixer had
+                           ;; made a case nobody ever made.
+                           argued? (and ran? (not (str/blank? (str result-text))))]
+                       (layers/restore-top! cwd stack)
+                       (cond-> (update acc :declined (fnil conj [])
+                                       ;; :handed for the same reason it is on a
+                                       ;; landed fix and on an unattempted layer:
+                                       ;; the four lists are one account of every
+                                       ;; :fix ruling the round held, and they add
+                                       ;; up only if the finding ids are under one
+                                       ;; key. This was the row that named a layer
+                                       ;; and nothing else.
+                                       (cond-> {:layer label :ran? ran? :handed handed}
+                                         result-text (assoc :reason (str result-text))))
+                         ;; Into :carry, the only thing a round hands the next
+                         ;; one. A refusal leaves its finding at :fix, so without
+                         ;; this the argument reaches report.json and no reader —
+                         ;; not the warden that could settle it, not the session
+                         ;; that would otherwise have to build it again.
+                         argued?
+                         (assoc-in [:carry :fixer-declines label]
+                                   {:layer label
+                                    :since (:iter ctx)
+                                    :reason (str result-text)
+                                    ;; Named by handle where the warden gave one,
+                                    ;; exactly as :handed is, so the carry and the
+                                    ;; report row point at one finding rather than
+                                    ;; at two spellings of it a round apart.
+                                    :findings (mapv (fn [f]
+                                                      {:id (or (:handle f) (:id f))
+                                                       :title (:title f)})
+                                                    findings)})))
                      (let [cid (layers/land-fix!
                                 cwd layer
                                 (str "review-loop: iter " (:iter ctx) " fixes"
                                      (when label (str " (" label ")"))))
                            _   (layers/restore-top! cwd stack)
-                           fix {:layer label :commit cid
-                                :handed handed
-                                :fixed-count (count findings)}
+                           ;; :account is what the fixer SAID, kept on the
+                           ;; branch where it landed something and not only where
+                           ;; it refused. A repair and a blocked verification
+                           ;; arrive in one message — one fixer landed its fix
+                           ;; and reported that babashka could not build a
+                           ;; classpath in that worktree, so neither gate it was
+                           ;; told to run had actually run — and keeping the text
+                           ;; on the decline branch alone deleted the second half
+                           ;; of every such message.
+                           fix (cond-> {:layer label :commit cid
+                                        :handed handed
+                                        :fixed-count (count findings)}
+                                 (not (str/blank? (str result-text)))
+                                 (assoc :account (str result-text)))
                            ;; A fix lands by REWRITING its layer, so jj rebases
                            ;; every layer above it, and a rebase can conflict.
                            ;; Nothing asked. The markers rode up the stack in the

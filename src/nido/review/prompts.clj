@@ -49,6 +49,67 @@
      "  place that got special handling, not to reopen the decision. A\n"
      "  `judgment` layer owns a decision: weigh it.\n\n")))
 
+(def ^:private fixer-account-chars
+  "How much of a fixer's own account the next round's reviewer is shown.
+
+   Enough for the summary a fixer ends on — what it changed, and what it could
+   not check — and short of the transcript some end on instead. The whole text
+   is on the fix row in report.json either way, so the cap costs a reader
+   nothing and bounds a prompt that is otherwise sized by however talkative one
+   agent was."
+  1200)
+
+(defn- handed-line
+  [{:keys [title sweep]}]
+  (str "    · " title (when sweep "  [SWEEP]") "\n"))
+
+(defn ^{:malli/schema [:=> [:cat :any] [:maybe :string]]}
+  prior-fixes-block
+  "What a fixer already landed on the range under review, the findings it was
+   handed, and what it said about them.
+
+   The reviewer starts cold every round and is shown a diff, never a history, so
+   nobody in the loop is ever asked the one question a repair raises: did that
+   fix close what it was handed. A sweep is where it costs most — the fixer is
+   told to repair one instance and then audit for its siblings, so a partially
+   completed sweep is its expected failure and it leaves the rest at exactly the
+   lines this reviewer is already reading. One such defect was repaired in round
+   1, went unreported in round 2, and came back at the same window in rounds 3
+   and 4, recognised each time only by the warden chaining handles across the
+   gap.
+
+   The account is handed over as a CLAIM rather than as a record, and stated as
+   one: a reviewer that believes it has been talked out of the diff, which is
+   worse than not being told. What it buys is something falsifiable — a fixer
+   that says it covered the enum check but not the cross-field rule has named
+   where to look."
+  [prior-fixes]
+  (when (seq prior-fixes)
+    (str
+     "A FIXER ALREADY WORKED ON WHAT YOU ARE REVIEWING, EARLIER IN THIS RUN.\n\n"
+     "Each entry is a repair that landed, what it was handed, and the fixer's\n"
+     "own words about it. Those words are a CLAIM about the code, not a record\n"
+     "of it — check them against the range below rather than accepting them.\n\n"
+     (->> prior-fixes
+          (map (fn [{:keys [round commit findings account]}]
+                 (str "- round " round
+                      (when commit (str ", landed " commit))
+                      (when (seq findings) " — handed:") "\n"
+                      (apply str (map handed-line findings))
+                      (when-not (str/blank? (str account))
+                        (str "  the fixer says: "
+                             (let [a (str/trim (str account))]
+                               (if (> (count a) fixer-account-chars)
+                                 (str (subs a 0 fixer-account-chars) " …[truncated]")
+                                 a))
+                             "\n")))))
+          (str/join "\n"))
+     "\n"
+     "A finding here that is STILL TRUE is the most valuable thing you can\n"
+     "return: say which one, and what you saw that the repair did not reach. A\n"
+     "SWEEP was told to fix its instance and then audit for the rest, so a\n"
+     "sibling it missed is at these same lines and is yours to find.\n\n")))
+
 (def disposition-vocabulary
   "What may become of a finding. One entry per destination: the word the warden
    answers with, what it means, and the extra field it may not omit.
@@ -632,6 +693,42 @@
               (str/join "\n"))
          "\n\n")))
 
+(defn- fixer-declines-block
+  "The findings a fixer was handed, refused, and argued against — carried from
+   the round it happened in, because nothing else carries it.
+
+   A fixer that changes nothing leaves the finding at `:fix`, so the round after
+   it re-derives the same repair from a fresh session and hands it to a fixer
+   whose own refutation it has never read. One fixer refused a P1 with four
+   hundred words out of the shipped bundle it had gone and read; the finding's
+   disposition did not move, the words reached report.json and nothing else, and
+   only a conflict ending the run stopped the next round paying for them again.
+
+   Deliberately NOT called a decline in the text below. `declined` is a
+   disposition the warden issues — a decision that the defect is real and this
+   branch is shipping it — and a fixer refusing work it was handed has decided
+   nothing. One word for both is how a warden comes to read this block as a
+   ruling already made."
+  [declines]
+  (when (seq declines)
+    (str "A FIXER WAS HANDED THESE AND CHANGED NOTHING\n"
+         "It read the finding, refused to repair it, and said why. That is an\n"
+         "argument, not a ruling: the finding is still open and nobody has\n"
+         "answered it. Answer it now — accept the argument and settle the\n"
+         "finding, or reject it and say what the fixer missed. Handing it back\n"
+         "unchanged buys another refusal from the same session:\n"
+         (->> declines
+              (map (fn [{:keys [layer since findings reason]}]
+                     (str "- " (or layer "the branch") ", refused in round " since "\n"
+                          (->> findings
+                               (map (fn [{:keys [id title]}]
+                                      (str "    · " id " " title "\n")))
+                               (apply str))
+                          (when-not (str/blank? (str reason))
+                            (str "  its argument: " reason "\n")))))
+              (apply str))
+         "\n")))
+
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   warden-prompt
   "Build the warden prompt. The warden is the only thing in the loop with a
@@ -641,7 +738,7 @@
    Report-only (no tools): everything it reasons from is inlined here. That is
    deliberate and load-bearing. It is the component that decides to interrupt a
    human, so its inputs have to be reconstructable from the report afterwards."
-  [{:keys [findings history design stance toc answered seen parked]}]
+  [{:keys [findings history design stance toc answered seen parked fixer-declines]}]
   ;; A branch with no layers is reviewed flat, and there is then no layer label
   ;; for a finding to be attributed to. Asked for one anyway, the warden supplied
   ;; the only stack-shaped thing it had — a file path — on every ruling of the
@@ -765,6 +862,7 @@
                                  (when-let [b (:because p)] (str "\n    " b)) "\n")))
                (apply str))
           "\n"))
+   (fixer-declines-block fixer-declines)
    (seen-block seen)
    "History of prior rounds (findings + what was fixed):\n"
    (pr-str history) "\n\n"

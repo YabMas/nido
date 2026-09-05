@@ -282,6 +282,10 @@
    target is one layer or the composition of several, never both, and a
    composition has no single brief to be bounded by.
 
+   `prior-fixes` is what a fixer already landed on this exact target earlier in
+   the run, and it is orthogonal to both: a layer and the composition alike can
+   have been repaired, and neither reviewer is told so by anything else.
+
    The schema follows the primer and not the target: the composition variant
    demands a `kind` and the `layers` a defect spans, and asking that of a
    reviewer that was never taught the taxonomy is a contract nothing can meet.
@@ -291,7 +295,7 @@
    Codex pulls each file's diff itself and reads file content AT `to` — never
    from the working copy, which for a layer review sits at a different revision
    than the one under review."
-  [{:keys [cwd from to run-id iter label brief composition]}]
+  [{:keys [cwd from to run-id iter label brief composition prior-fixes]}]
   (let [to       (or to "@")
         {:keys [exit out err]} (diff-name-only cwd from to)
         _        (when-not (zero? exit)
@@ -315,6 +319,12 @@
             composed    (prompts/composition-block composition)
             prompt      (str prompts/review-prompt
                              "\n\n" (or (prompts/layer-brief-block brief) composed)
+                             ;; Appended rather than folded into the brief block,
+                             ;; because a layer with no brief still gets fixed and
+                             ;; that block is nil for one. What a fixer landed here
+                             ;; is a fact about the range under review, not about
+                             ;; how the range was bounded.
+                             (prompts/prior-fixes-block prior-fixes)
                              "\nBase revision (use this exact value as <base> in the"
                              " commands above): " from "\n"
                              "Head revision (use this exact value as <head>): " to "\n"

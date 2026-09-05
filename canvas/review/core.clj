@@ -185,6 +185,9 @@
     {:signature [:=> [:catn [:brief :map]] :string]})
   (Operation composition-block "The primer for the pass that reviews the stack as a whole."
     {:signature [:=> [:catn [:opts :map]] :string]})
+  (Operation prior-fixes-block
+    "What a fixer already landed on this target, put to the reviewer as a claim to check."
+    {:signature [:=> [:catn [:prior-fixes :any]] [:maybe :string]]})
   (Operation fix-prompt "The instruction to fix given findings."
     {:signature [:=> [:catn [:opts :map]] :string]})
   (Operation toc-block "The stack's table of contents."

@@ -403,3 +403,56 @@ layers, it is not yours"))
     (is (str/includes? warm "the migration and its reader split"))
     (is (str/includes? warm "round 1"))
     (is (str/includes? warm "spend this round somewhere you have not looked"))))
+
+(deftest the-reviewer-is-told-what-a-fixer-already-landed-here
+  ;; Nobody in the loop was asked whether a fix closed what it was handed: the
+  ;; reviewer that reads those lines next round is shown a diff and no history,
+  ;; so a partially-completed sweep came back at the same window as a fresh
+  ;; finding two rounds running.
+  (let [out (prompts/prior-fixes-block
+             [{:round 1 :commit "4d52d218"
+               :findings [{:title "reject a bad enum before the blob insert" :sweep true}]
+               :account "fixed the enum check; the V243 cross-field rule is untouched"}])]
+    (is (str/includes? out "A FIXER ALREADY WORKED ON WHAT YOU ARE REVIEWING"))
+    (is (str/includes? out "4d52d218") "the commit, so the claim can be checked against it")
+    (is (str/includes? out "reject a bad enum before the blob insert"))
+    (is (str/includes? out "[SWEEP]")
+        "a sweep is where a partial fix costs most — its siblings are at these lines")
+    (is (str/includes? out "the V243 cross-field rule is untouched")
+        "the fixer's own account is what tells the reviewer where to look")
+    (is (str/includes? out "CLAIM about the code, not a record")
+        "a reviewer that believes the account has been talked out of the diff")))
+
+(deftest a-target-no-fixer-touched-is-told-nothing
+  ;; nil, not an empty heading: a block saying a fixer worked here and naming
+  ;; nothing reads as a repair the reviewer failed to be shown.
+  (is (nil? (prompts/prior-fixes-block []))))
+
+(deftest a-long-fixer-account-is-truncated-rather-than-inlined-whole
+  ;; The prompt is otherwise sized by how talkative one agent was. The whole
+  ;; text stays on the fix row in report.json.
+  (let [out (prompts/prior-fixes-block
+             [{:round 1 :commit "c1" :findings [{:title "t"}]
+               :account (apply str (repeat 4000 "x"))}])]
+    (is (str/includes? out "…[truncated]"))
+    (is (< (count out) 2500))))
+
+(deftest the-warden-is-told-which-findings-a-fixer-refused-and-why
+  ;; A fixer that changes nothing leaves the finding at :fix, so without this
+  ;; the next round hands the same finding to a fresh session and the warden
+  ;; that could settle it never reads the argument the last fixer built.
+  (let [out (prompts/warden-prompt
+             {:findings findings :history []
+              :fixer-declines [{:layer "teacher-diary-section" :since 1
+                                :findings [{:id "5cb720f4" :title "$ is not bound per element"}]
+                                :reason "Datastar 1.0.2 ships one global signal root"}]})]
+    (is (str/includes? out "A FIXER WAS HANDED THESE AND CHANGED NOTHING"))
+    (is (str/includes? out "teacher-diary-section"))
+    (is (str/includes? out "5cb720f4"))
+    (is (str/includes? out "Datastar 1.0.2 ships one global signal root"))
+    (is (str/includes? out "argument, not a ruling")
+        "the warden's own `declined` is a decision; a fixer refusing has decided nothing")))
+
+(deftest a-round-no-fixer-refused-anything-in-says-so-by-silence
+  (let [out (prompts/warden-prompt {:findings findings :history []})]
+    (is (not (str/includes? out "A FIXER WAS HANDED THESE")))))
