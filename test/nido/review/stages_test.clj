@@ -6,6 +6,7 @@
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
    [nido.coordinator.agent :as agent]
+   [nido.coordinator.record.workstream :as ws]
    [nido.platform.core :as core]
    [nido.review.cache :as cache]
    [nido.review.codex :as codex]
@@ -1724,3 +1725,14 @@
             "the argument reaches the reader that can settle the finding")
         (is (empty? (get-in ctx [:carry :fixer-declines]))
             "and stops being carried the moment it has")))))
+
+(deftest a-verdict-against-a-superseded-design-record-is-not-a-standing-answer
+  ;; The pass is asked whether THIS design survived. A verdict reached against
+  ;; the record before it was superseded answered a different question, and
+  ;; handing it back would have the judge defend a yardstick nobody is using.
+  (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                ws/latest-entry (fn [_ _ _] {:verdict :sound :design-seq 3 :seq 9})]
+    (is (= 9 (:seq (stages/discover-prior-verdict "/w" {:seq 3}))))
+    (is (nil? (stages/discover-prior-verdict "/w" {:seq 4})))
+    (is (nil? (stages/discover-prior-verdict "/w" {}))
+        "a design record with no seq is not a record any verdict could be about")))

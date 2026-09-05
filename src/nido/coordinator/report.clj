@@ -1399,12 +1399,20 @@
    to do about it. Refusing the field there did not omit it — it rejected the
    whole verdict at the ledger boundary, and append-design-verdict! swallows a
    rejection to one stderr line, so the pass ran for four minutes with tools and
-   left no record on any channel."
+   left no record on any channel.
+
+   :carried-from names the entry an agent actually reached this judgment at,
+   and is present exactly when no agent ran for it: the pass is skipped when the
+   run gave a standing verdict nothing to revisit. It is what stops a held
+   position reading as repeated independent confirmation — six unmarked
+   identical verdicts claim six readings of the code, and only the first of them
+   is one."
   [:multi {:dispatch :verdict}
    [:sound
     [:map {:closed true}
      [:format [:= :design-verdict]] [:verdict [:= :sound]]
      [:round int?] [:design-seq {:optional true} [:maybe int?]]
+     [:carried-from {:optional true} int?]
      [:reason string?]
      [:invariants-held {:optional true} [:vector string?]]
      [:load-bearing-held {:optional true} [:vector string?]]
@@ -1414,6 +1422,7 @@
     [:map {:closed true}
      [:format [:= :design-verdict]] [:verdict [:= :strained]]
      [:round int?] [:design-seq {:optional true} [:maybe int?]]
+     [:carried-from {:optional true} int?]
      [:reason string?]
      [:invariants-held {:optional true} [:vector string?]]
      [:invariants-broken {:optional true} [:vector BrokenInvariant]]
@@ -1425,6 +1434,7 @@
     [:map {:closed true}
      [:format [:= :design-verdict]] [:verdict [:= :invalidated]]
      [:round int?] [:design-seq {:optional true} [:maybe int?]]
+     [:carried-from {:optional true} int?]
      [:reason string?]
      [:invariants-broken [:vector {:min 1} BrokenInvariant]]
      [:load-bearing-held {:optional true} [:vector string?]]
@@ -1435,6 +1445,7 @@
     [:map {:closed true}
      [:format [:= :design-verdict]] [:verdict [:= :standing-challenged]]
      [:round int?] [:design-seq {:optional true} [:maybe int?]]
+     [:carried-from {:optional true} int?]
      [:reason string?]
      [:invariants-broken {:optional true} [:vector BrokenInvariant]]
      [:load-bearing-held {:optional true} [:vector string?]]

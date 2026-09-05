@@ -1322,13 +1322,20 @@
      (when report-path [:p.meta "full report → " [:code report-path]])]))
 
 (defn- design-verdict-card
+  "A carried verdict is labelled on the meta line rather than rendered as a
+   fresh one. The card's whole claim is that a judge read this code against this
+   record; a carry is the same judgment standing, and letting the two look alike
+   turns a held position into repeated confirmation."
   [{:keys [verdict round reason invariants-held invariants-broken
-           load-bearing-held load-bearing-broken findings-classified needs]}]
+           load-bearing-held load-bearing-broken findings-classified needs
+           carried-from]}]
   [:div.md
    [:h2 "Design verdict"]
    [:div.report-meta
     [:span {:class (str "chip c-verdict-" (name verdict))} (name verdict)]
-    [:span.meta "after round " round]]
+    [:span.meta "after round " round]
+    (when carried-from
+      [:span.meta "· still standing from entry " carried-from])]
    (md/render reason)
    (when (seq invariants-held)
      [:div [:h3 "Confirmed this round"]

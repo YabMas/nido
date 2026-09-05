@@ -364,10 +364,16 @@
    worse than saying nothing: a broken load-bearing property means the change did
    not do what it said, while a finding classified :baseline means the baseline was
    wrong and the design may be fine. Redesign and re-survey are not the same
-   instruction."
+   instruction.
+
+   A carried verdict says so on the line under it. Read as a fresh judgment it
+   would tell the human the code was looked at again and came back the same,
+   which is the one thing a carry does not establish."
   [v]
   (when v
     (println (str "review-loop: design verdict — " (name (:verdict v))))
+    (when-let [n (:carried-from v)]
+      (println (str "  (carried from entry " n " — nothing this run gave it to revisit)")))
     (println (str "  " (:reason v)))
     (when-let [broken (seq (:load-bearing-broken v))]
       (println "  ⚠ load-bearing properties broken without being declared:")

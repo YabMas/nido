@@ -52,7 +52,13 @@
   "The pass that decides whether the round is done.
 
    Separate from the reviewers, because a reviewer that also decided when to stop would stop
-   when it ran out of things to say rather than when the work was right."
+   when it ran out of things to say rather than when the work was right.
+
+   It has a MEMORY of its own last answer, which is what makes it one judge rather than a fresh
+   opinion per run: the verdict rests on a design record, a baseline and a stance, none of which
+   move between runs, so a pass told nothing about its predecessor re-derives the same
+   outstanding question in new prose every time — and can contradict itself with neither half
+   knowing the other exists."
   (Operation build-prompt "The verdict prompt for this round."
     {:signature [:=> [:catn [:opts :map]] :string]})
   (Operation parse "The verdict out of what the agent said."
@@ -85,8 +91,25 @@
   (Operation handed?
     "Whether a repair for this finding is sitting in the branch, unverified."
     {:signature [:=> [:catn [:handed :any] [:f :any]] :boolean]})
-  (Operation run! "Run the verdict pass."
-    {:signature [:=> [:catn [:opts :map]] :map] :delegates [build-prompt parse still-open]}))
+  (Operation still-answers?
+    "Whether a standing verdict is still this run's answer, so no agent need be launched at all.
+
+     Three things could move a judgment: the record it judges, the code it reads and the
+     findings it classifies. The first is held fixed by matching :design-seq; this asks the
+     other two, and holds when the run raised nothing, decided nothing and dispatched no fix.
+     Never for a DECISION — a question owed to a human is re-asked rather than re-asserted
+     unlooked-at."
+    {:signature [:=> [:catn [:prior :any] [:final :map] [:report :any]] :boolean]
+     :delegates [decision? open-across-run kept-across-run]})
+  (Operation carried-forward
+    "A standing verdict re-stated as this run's, marked with the entry an agent actually
+     reached it at. The mark is what keeps the ledger honest: six unmarked identical verdicts
+     claim six readings of the code, and only the first of them is one."
+    {:signature [:=> [:catn [:prior :map] [:rounds :int]] :map]})
+  (Operation run!
+    "Run the verdict pass, or carry the standing one when this run gave it nothing to revisit."
+    {:signature [:=> [:catn [:opts :map]] :map]
+     :delegates [build-prompt parse still-open still-answers? carried-forward]}))
 
 (Module review-layers
   "The session's stack of layers, and the reshaping the review may do to it.
@@ -190,6 +213,12 @@
   (Operation discover-baseline
     "The baseline a design CITED, not the newest one. A design committed to a particular
      reading, and judging it against a later baseline checks it against a premise it never made."
+    {:signature [:=> [:catn [:cwd Path] [:design :map]] [:maybe :map]]})
+  (Operation discover-prior-verdict
+    "The verdict this workstream last recorded against the SAME design record. Matched on
+     :design-seq for the reason `discover-baseline` follows a citation rather than reading the
+     newest: a verdict against a superseded record answered a different question, and offering
+     it as a standing answer would have the judge defend a yardstick nobody is using."
     {:signature [:=> [:catn [:cwd Path] [:design :map]] [:maybe :map]]})
   (Operation stance-path "Where a project's stance text lives."
     {:signature [:=> [:catn [:project ProjectName]] Path]})

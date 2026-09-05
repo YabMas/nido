@@ -816,6 +816,27 @@
       (let [e (ws/entry-at-seq project ws-id n)]
         (when (= :baseline (:format e)) e)))))
 
+(defn ^{:malli/schema [:=> [:cat :Path :map] [:maybe :map]]}
+  discover-prior-verdict
+  "The verdict this workstream last recorded against the SAME design record, or
+   nil.
+
+   Matched on :design-seq rather than taken as the newest, for the same reason
+   `discover-baseline` follows a citation instead of reading the latest
+   baseline: a verdict against a superseded record answered a different
+   question, and offering it as a standing answer would have the pass defend a
+   yardstick nobody is using. A design record carrying no :seq matches nothing —
+   there is no record such a verdict could be about.
+
+   Only the latest is offered. The ones before it are the same answer at an
+   earlier round, and a judge handed all of them is reading a changelog when the
+   question is what stands now."
+  [cwd design]
+  (when-let [n (:seq design)]
+    (when-let [[project ws-id] (project+ws-from-cwd cwd)]
+      (let [v (ws/latest-entry project ws-id :design-verdict)]
+        (when (= n (:design-seq v)) v)))))
+
 (def ^:private stance-char-cap 12000)
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName] :Path]}

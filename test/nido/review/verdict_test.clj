@@ -4,6 +4,8 @@
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
    [nido.coordinator.report :as report]
+   [nido.coordinator.agent :as agent]
+   [nido.review.stages :as stages]
    [nido.review.verdict :as verdict]
    [tasks.nido-review :as nido-review]))
 
@@ -324,3 +326,134 @@
                :findings [{:handle "h" :title "t" :disposition :park}]}]
     (is (= ["t"] (mapv :title (verdict/open-across-run final))))
     (is (empty? (verdict/kept-across-run final)))))
+
+;; ── The standing verdict ───────────────────────────────────────────────────
+
+(def ^:private standing
+  "A verdict already on the ledger against `design`, at entry 12."
+  {:format :design-verdict :verdict :strained :round 4 :design-seq 3
+   :seq 12 :at "2026-09-03T22:15:00Z"
+   :reason "the unread indicator is read in two places"
+   :needs "reconcile the indicator with the header badge, or say why both"})
+
+(deftest the-prompt-hands-the-judge-what-it-already-concluded
+  ;; Six passes on one branch each rewrote the same outstanding question in
+  ;; fresh prose, so one standing decision read as six and two of them
+  ;; contradicted each other about a broken invariant.
+  (let [p (verdict/build-prompt {:design design :prior standing
+                                 :findings [] :history [] :rounds 5})]
+    (is (str/includes? p "the unread indicator is read in two places"))
+    (is (str/includes? p "reconcile the indicator with the header badge"))
+    (is (str/includes? p "verdict strained"))
+    (is (str/includes? p "Do NOT\n  restate the outstanding question in new words")
+        "restating it is what turns one held position into several decisions")
+    (is (str/includes? p "Overturning it is allowed")
+        "a standing answer is a default to confirm or move, never a ruling to defer to")))
+
+(deftest the-standing-verdict-comes-after-this-rounds-evidence
+  ;; It is what the new evidence is weighed against, not the frame it is read
+  ;; through — so the findings have to be read first.
+  (let [p (verdict/build-prompt
+           {:design design :prior standing :rounds 1 :history []
+            :findings [{:priority 1 :title "a real one" :body "b" :reach :structural}]})]
+    (is (< (str/index-of p "a real one") (str/index-of p "WHAT YOU CONCLUDED LAST TIME")))))
+
+(deftest a-pass-with-no-standing-verdict-is-told-nothing
+  (let [p (verdict/build-prompt {:design design :prior nil
+                                 :findings [] :history [] :rounds 1})]
+    (is (not (str/includes? p "WHAT YOU CONCLUDED LAST TIME"))
+        "a first pass has no prior answer, and one is not invented for it")))
+
+(deftest a-standing-verdict-answers-a-run-that-moved-nothing
+  (let [quiet {:status :clean :findings [] :history []}]
+    (is (verdict/still-answers? standing quiet {:summary {:findings-fixed 0}}))
+    (is (not (verdict/still-answers? nil quiet {:summary {:findings-fixed 0}}))
+        "no prior verdict is nothing to carry, not a licence to skip the pass")))
+
+(deftest a-run-holding-anything-re-derives-the-verdict
+  ;; Each of these is evidence the standing verdict was never shown.
+  (let [rpt {:summary {:findings-fixed 0}}]
+    (is (not (verdict/still-answers?
+              standing
+              ;; A park raised in round 1 is never raised again, so the final
+              ;; round is empty and only the across-run fold can see it.
+              {:status :escalated :findings []
+               :history [{:iter 1 :findings [{:handle "h" :title "t" :disposition :park}]}]}
+              rpt))
+        "a question put to a human is exactly the evidence this pass classifies")
+    (is (not (verdict/still-answers?
+              standing
+              {:status :converged :findings []
+               :history [{:iter 1 :findings [{:handle "h" :title "the shipped defect"
+                                              :disposition :declined
+                                              :because "the shape is wrong, not this line"}]}]}
+              rpt))
+        "a defect the branch decided to ship is a real defect the last verdict never saw")
+    (is (not (verdict/still-answers?
+              standing {:status :converged :findings [] :history []}
+              {:summary {:findings-fixed 2}}))
+        "a fixer edits code, and a repair that moves a boundary is what this pass exists to catch")))
+
+(deftest a-decision-is-re-asked-rather-than-re-asserted
+  ;; :invalidated and :standing-challenged are questions owed to a human.
+  ;; Carrying one unlooked-at would escalate every run over a design that may
+  ;; since have been repaired in the code.
+  (let [quiet {:status :clean :findings [] :history []}
+        rpt   {:summary {:findings-fixed 0}}]
+    (is (not (verdict/still-answers?
+              (assoc standing :verdict :invalidated
+                     :invariants-broken [{:invariant "i" :finding "f"}])
+              quiet rpt)))
+    (is (not (verdict/still-answers?
+              (assoc standing :verdict :standing-challenged) quiet rpt)))))
+
+(deftest a-carried-verdict-says-where-it-was-reached
+  (let [v (verdict/carried-forward standing 7)]
+    (is (= 7 (:round v)) "it answers for THIS run's rounds")
+    (is (= 12 (:carried-from v)))
+    (is (nil? (:seq v)) "the reader's stamp cannot be written back")
+    (is (nil? (:at v)))
+    (is (= v (report/validate-event :design-verdict v))
+        "an unmarked carry would claim a reading of the code that never happened,
+         so the write contract has to admit the mark")))
+
+(deftest a-carry-of-a-carry-still-names-the-entry-a-judge-reached-it-at
+  ;; Five runs later the pointer must still land on the one place a judgment was
+  ;; made, not on the last copy of it.
+  (let [once  (assoc (verdict/carried-forward standing 7) :seq 15)
+        twice (verdict/carried-forward once 9)]
+    (is (= 12 (:carried-from twice)))))
+
+(deftest the-pass-is-not-launched-when-the-standing-verdict-answers
+  (let [launched (atom false)]
+    (with-redefs [stages/discover-design-record (fn [_] design)
+                  stages/discover-prior-verdict (fn [_ _] standing)
+                  agent/launch! (fn [_] (reset! launched true) {:num-turns 1 :result-text ""})]
+      (let [v (verdict/run! {:cwd "/w" :run-id "r" :budget "30m"
+                             :final {:status :clean :findings [] :history []}
+                             :report {:summary {:rounds 2 :findings-fixed 0}}})]
+        (is (false? @launched) "the minutes an agent costs are the whole point of the carry")
+        (is (= 12 (:carried-from v)))
+        (is (= 2 (:round v)))))))
+
+(deftest a-run-with-something-to-judge-launches-the-pass-holding-the-prior
+  (let [seen (atom nil)]
+    (with-redefs [stages/discover-design-record (fn [_] design)
+                  stages/discover-prior-verdict (fn [_ _] standing)
+                  stages/discover-baseline (fn [_ _] nil)
+                  stages/read-stance (fn [_] nil)
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  agent/launch! (fn [{:keys [first-message]}]
+                                  (reset! seen first-message)
+                                  {:num-turns 1
+                                   :result-text (fenced "{\"verdict\":\"strained\",\"reason\":\"unmoved\"}")})]
+      (let [v (verdict/run! {:cwd "/w" :run-id "r" :budget "30m"
+                             :final {:status :escalated
+                                     :findings [{:title "t" :body "b" :disposition :park}]
+                                     :history []}
+                             :report {:summary {:rounds 3 :findings-fixed 0}}})]
+        (is (str/includes? @seen "reconcile the indicator with the header badge")
+            "the judge that does run is still shown what it already concluded")
+        (is (= :strained (:verdict v)))
+        (is (nil? (:carried-from v)) "a verdict an agent reached is not marked as carried")
+        (is (= 3 (:design-seq v)))))))

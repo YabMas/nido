@@ -16,6 +16,7 @@
    [nido.coordinator.agent :as agent]
    [nido.coordinator.report :as report]
    [nido.coordinator.record.state :as cstate]
+   [nido.coordinator.record.workstream :as ws]
    [nido.review.stages :as stages]))
 
 (def ^:private fenced-json-re #"(?s)```json\s*(\{.*?\})\s*```")
@@ -99,12 +100,54 @@
          "Invariants marked \"holds always\" are the ones that must be true at\n"
          "EVERY phase boundary, including this one; judge those normally.\n")))
 
+(defn- prior-verdict-section
+  "The standing answer — what this pass last concluded about this same design
+   record — and what a fresh pass owes it.
+
+   Every input this judgment rests on moves slowly or not at all: the design
+   record, the baseline it cites, the project stance. Only the run's findings
+   are new. Without the standing answer a branch reviewed six times produces six
+   independent opinions rather than one held position: each rewrites the
+   outstanding question in fresh prose, so a reader of the ledger sees six
+   decisions where there is one, and two of them can contradict each other about
+   whether an invariant is broken with neither knowing the other exists.
+
+   Offered as a default to confirm or overturn, never as a ruling to defer to —
+   the same footing `prompts/answered-block` puts an earlier round's closes on.
+   The design's own :rejected list does this for alternatives somebody else
+   proposed; nothing did it for a decision this pass raised itself."
+  [prior]
+  (when prior
+    (str "\nWHAT YOU CONCLUDED LAST TIME, about this same design record, after\n"
+         "round " (:round prior) " — verdict " (name (:verdict prior)) ":\n"
+         (:reason prior) "\n"
+         (when-let [b (seq (:invariants-broken prior))]
+           (str "It named these invariants contradicted:\n"
+                (bullets (map #(str (:invariant %) " — by " (:finding %)) b)) "\n"))
+         (when-let [b (seq (:load-bearing-broken prior))]
+           (str "And these load-bearing properties broken without being declared:\n"
+                (bullets (map #(str (:invariant %) " — by " (:finding %)) b)) "\n"))
+         (when-let [n (:needs prior)]
+           (str "It left this outstanding, and nobody has answered it:\n" n "\n"))
+         "\n"
+         "That verdict STANDS unless this round moved it, and your job is to say\n"
+         "which:\n"
+         "- Nothing moved: reach the same verdict and say so in a line. Do NOT\n"
+         "  restate the outstanding question in new words. It is above, it is\n"
+         "  still open, and rewriting it every run makes one standing decision\n"
+         "  read as several.\n"
+         "- Something moved: name WHAT — a finding that contradicts it, an\n"
+         "  invariant this round confirmed, a boundary since repaired — and\n"
+         "  reach the verdict that follows from it.\n"
+         "Overturning it is allowed. Re-deriving it from scratch is not.\n")))
+
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   build-prompt
   "The verdict prompt. `design` is the workstream's :design record, `baseline` the
    :baseline record it cited (nil when it predates them), `findings` the findings
-   still open at the end, `history` the per-round digest."
-  [{:keys [design baseline stance findings history rounds]}]
+   still open at the end, `history` the per-round digest, `prior` the last
+   verdict against this same design record (nil when there is none)."
+  [{:keys [design baseline stance findings history rounds prior]}]
   (str
    "You are judging whether a DESIGN survived a code review, not whether the code\n"
    "is correct. The review loop has finished; the fixes it wanted are already in.\n\n"
@@ -147,7 +190,12 @@
                                       (:title f) " — " (:body f))))
           (str/join "\n"))
      "(none)")
-   "\n\n"
+   "\n"
+   ;; Last, so the judge reads this round's evidence before it is reminded what
+   ;; it already decided — the standing answer is what the new evidence is
+   ;; weighed against, not the frame it is read through.
+   (prior-verdict-section prior)
+   "\n"
    "Return EXACTLY one fenced ```json block, nothing after it:\n"
    "{\"verdict\": \"sound|strained|invalidated|standing_challenged\",\n"
    " \"reason\": \"...\",\n"
@@ -350,25 +398,96 @@
   [handed f]
   (contains? handed (or (:handle f) (:id f))))
 
+(defn ^{:malli/schema [:=> [:cat :any :map :any] :boolean]}
+  still-answers?
+  "Whether `prior` — a verdict against this run's own design record — is still
+   this run's answer, so the pass need not be launched at all.
+
+   Three things could move a verdict: the record it judges, the code it reads,
+   and the findings it classifies. The record is held fixed by the caller, which
+   only offers a verdict carrying the same :design-seq. The other two are what
+   this asks about, and nido can answer them without an agent:
+
+   - The run raised nothing and decided nothing. Every finding is settled and
+     none was kept, so there is no evidence in front of this pass that was not
+     in front of the last one. `open-across-run` and `kept-across-run` are read
+     rather than the final round's findings, because a park raised in round 1
+     is never raised again and so leaves the final round empty.
+   - No fix was dispatched. A fixer edits code, and a repair that moves a
+     boundary is a thing no reviewer judged against the design — which is
+     precisely what this pass exists to catch. A run that landed one has a tree
+     the standing verdict never saw.
+
+   A DECISION is never carried. :invalidated and :standing-challenged put a
+   question to a human, and re-asserting one unlooked-at would keep escalating a
+   design that may since have been repaired in the code without the record being
+   amended. That case is worth the minutes.
+
+   What this cannot know is whether an invariant has been NEWLY broken — that is
+   the judgment, and it costs the pass. What it knows is that this round produced
+   no evidence one could have been: `tasks.nido-review/verdict-worth-running?`
+   admits a clean review because a design's invariants still need confirming
+   against the code, and this is the other half of that reasoning — once a verdict
+   has confirmed them against this same record, a second silent review confirms
+   nothing new."
+  [prior final report]
+  (boolean
+   (and prior
+        (not (decision? prior))
+        (empty? (open-across-run final))
+        (empty? (kept-across-run final))
+        (zero? (or (get-in report [:summary :findings-fixed]) 0)))))
+
+(defn ^{:malli/schema [:=> [:cat :map :int] :map]}
+  carried-forward
+  "`prior` re-stated as this run's verdict: the same judgment, stamped with the
+   round it now answers for and with the entry an agent actually reached it at.
+
+   :carried-from is what keeps the ledger honest, and it is the reason this is a
+   re-statement rather than a silence. A run that records a verdict no agent
+   reached this time has to say so on the entry itself — six unmarked identical
+   judgments read as six independent confirmations, which is a stronger claim
+   than nido has evidence for. Appending nothing would be the other lie: a
+   reader of the workstream could not tell a run whose verdict was carried from
+   one whose pass never ran.
+
+   It names the ORIGINAL entry, not the one just read, so a verdict carried
+   across five runs still points at the single place a judgment was made.
+
+   `unstamp` because :seq and :at belong to the reader: the write schema is
+   closed and refuses an entry carrying them."
+  [prior rounds]
+  (-> prior
+      ws/unstamp
+      (assoc :round rounds
+             :carried-from (or (:carried-from prior) (:seq prior)))))
+
 (defn ^{:malli/schema [:=> [:cat :map] :map]}
   run!
   "Run the verdict pass. Returns the verdict map, or nil when there is no design
    record to judge against, the agent no-ops, or the answer is unparseable — all
-   three mean 'nothing to record', never a fabricated :sound."
+   three mean 'nothing to record', never a fabricated :sound.
+
+   A standing verdict this run gave no reason to revisit is carried forward
+   instead of re-derived; see `still-answers?` for when that holds and
+   `carried-forward` for what the entry then says."
   [{:keys [cwd run-id budget final report]}]
   (when-let [design (stages/discover-design-record cwd)]
-    (let [prompt (build-prompt
-                  {:design design
-                   :baseline (stages/discover-baseline cwd design)
-                   :stance (stages/read-stance (first (stages/project+ws-from-cwd cwd)))
-                   :findings (still-open (:findings final))
-                   :history (mapv #(dissoc % :findings) (:history final))
-                   :rounds (or (get-in report [:summary :rounds]) 0)})
-          {:keys [num-turns result-error? result-text]}
-          (agent/launch! {:run-id run-id :cwd cwd
-                          :first-message prompt :budget budget
-                          :err-file (str (fs/path (cstate/run-dir run-id) "agent.err.log"))})]
-      (when-not (or (zero? (or num-turns 0)) result-error?)
-        (parse result-text
-               (or (get-in report [:summary :rounds]) 0)
-               (:seq design))))))
+    (let [prior  (stages/discover-prior-verdict cwd design)
+          rounds (or (get-in report [:summary :rounds]) 0)]
+      (if (still-answers? prior final report)
+        (carried-forward prior rounds)
+        (let [prompt (build-prompt
+                      {:design design
+                       :baseline (stages/discover-baseline cwd design)
+                       :stance (stages/read-stance (first (stages/project+ws-from-cwd cwd)))
+                       :findings (still-open (:findings final))
+                       :history (mapv #(dissoc % :findings) (:history final))
+                       :rounds rounds
+                       :prior prior})
+              {:keys [num-turns result-error? result-text]}
+              (agent/launch! {:run-id run-id :cwd cwd
+                              :first-message prompt :budget budget
+                              :err-file (str (fs/path (cstate/run-dir run-id) "agent.err.log"))})]
+          (when-not (or (zero? (or num-turns 0)) result-error?)
+            (parse result-text rounds (:seq design))))))))
