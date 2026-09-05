@@ -500,3 +500,15 @@ layers, it is not yours"))
 (deftest a-round-no-fixer-refused-anything-in-says-so-by-silence
   (let [out (prompts/warden-prompt {:findings findings :history []})]
     (is (not (str/includes? out "A FIXER WAS HANDED THESE")))))
+
+(deftest the-reviewer-is-told-its-jj-commands-are-the-whole-set
+  ;; A skill whose description demands first activation on anything VCS-shaped
+  ;; gets opened before any code is read, and this reviewer never writes a
+  ;; revision — so the prohibition has to name it, and has to be paid for by the
+  ;; prompt still carrying the commands it calls complete.
+  (let [out prompts/review-prompt]
+    (is (str/includes? out "COMPLETE set"))
+    (is (str/includes? out "jujutsu")
+        "a prohibition that does not name the skill does not reach the one that gets opened")
+    (is (str/includes? out "jj --ignore-working-copy diff")
+        "calling a set complete is a lie the moment the prompt stops carrying it")))
