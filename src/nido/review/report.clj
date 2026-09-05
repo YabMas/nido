@@ -494,12 +494,13 @@
    written.
 
    `outcome` describes the pass and not what it decided. `:outcome` is what the
-   pass returned (`:answered`, `:no-answer`), `:ledger` is whether the workstream
-   took the verdict (`:appended`, `:refused`, `:no-workstream`), and either half
-   can be the one that went wrong: a verdict the ledger refuses is as lost as a
-   verdict that was never produced, and both used to leave one stderr line. The
-   verdict value is carried whole, byte-identical to what the ledger is offered,
-   so a refusal can be diagnosed from the report alone.
+   pass returned (`:answered`, `:no-answer`, `:skipped` — the pass never
+   launched, and `:because` says what stopped it), `:ledger` is whether the
+   workstream took the verdict (`:appended`, `:refused`, `:no-workstream`), and
+   either half can be the one that went wrong: a verdict the ledger refuses is
+   as lost as a verdict that was never produced, and both used to leave one
+   stderr line. The verdict value is carried whole, byte-identical to what the
+   ledger is offered, so a refusal can be diagnosed from the report alone.
 
    Keywords are written out as strings to match the rest of the report, whose
    statuses have been strings since it was a JSON document."

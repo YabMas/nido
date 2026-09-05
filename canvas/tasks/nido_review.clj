@@ -34,6 +34,9 @@
   (Operation verdict-worth-running?
     "Whether the verdict pass has anything to judge."
     {:signature [:=> [:catn [:opts [:* :any]]] :any]})
+  (Operation unreadable-tree
+    "Conflict markers in `base..@`: the change ids holding them, or nil for none."
+    {:signature [:=> [:catn [:opts [:* :any]]] :any]})
   (Operation append-design-verdict!
     "Run the design verdict and append it as a ledger event. Best-effort throughout,"
     {:signature [:=> [:catn [:opts [:* :any]]] :any]})

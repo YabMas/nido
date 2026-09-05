@@ -10,6 +10,7 @@
    [nido.coordinator.record.session :as csession]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as ws]
+   [nido.review.layers :as layers]
    [nido.review.loop :as rloop]
    [nido.review.record :as record]
    [nido.review.report :as rreport]
@@ -318,16 +319,6 @@
     (is (nil? (:remaining-parked ev)))
     (is (not (str/includes? (report/report->markdown (assoc ev :format :review-report))
                             "waiting on you")))))
-
-(deftest a-conflicted-stack-spends-no-design-verdict
-  ;; The pass reads the worktree with tools, so here it would be reading
-  ;; committed conflict markers as source — and the run's whole point is to stop
-  ;; before it spends an agent on a branch nothing can judge.
-  (let [design {:invariants ["a total is rounded exactly once"]}
-        final  {:findings [] :history []}]
-    (is (not (t/verdict-worth-running? :stack-conflicted final design)))
-    (is (t/verdict-worth-running? :clean final design)
-        "the gate still admits the clean run it was widened for")))
 
 (deftest the-remaining-count-says-how-much-of-it-is-already-repaired
   ;; `:findings-fixed` counts work dispatched and `:findings-remaining` counts
@@ -904,6 +895,52 @@
       (is (= :no-answer (:outcome outcome))
           "the budget was spent; a run has to be able to tell that from a pass that never started")
       (is (nil? (:verdict outcome))))))
+
+(deftest a-tree-holding-conflict-markers-spends-no-design-verdict
+  ;; The pass gives an agent tools and points it at the working copy, so
+  ;; committed markers arrive as source and the design is judged against text jj
+  ;; wrote. It ran on such a branch once and came out clean only because of
+  ;; which files had happened to conflict.
+  (let [ran (atom false)]
+    (with-redefs [stages/discover-design-record (fn [_] a-design)
+                  layers/conflicted (fn [_ _] ["xlortuwzrtlu" "spxkmpurtnms"])
+                  verdict/run! (fn [_] (reset! ran true) a-verdict)]
+      (doseq [status [:fix-conflicted :stack-conflicted :converged]]
+        (let [outcome (t/append-design-verdict! "/w" {:status status :findings []}
+                                                {} {:run-id "r" :base "main"})]
+          (is (= :skipped (:outcome outcome))
+              (str "the tree decides and not the status: " status
+                   " reads the same markers as any other status does"))
+          (is (str/includes? (:because outcome) "xlortuwzrtlu")
+              "the change ids are the only pointer at what to resolve, and a
+               skipped pass is recorded nowhere but here")))
+      (is (false? @ran) "no agent is launched against a tree nothing can parse"))))
+
+(deftest a-readable-tree-still-gets-its-verdict
+  ;; The gate is a probe and not a blanket refusal on a status that sounds
+  ;; risky. This pass is the run's most valuable artifact and a legible tree
+  ;; must not lose it.
+  (with-redefs [stages/discover-design-record (fn [_] a-design)
+                layers/conflicted (fn [_ _] [])
+                verdict/run! (fn [_] a-verdict)
+                lifecycle/session-from-cwd (fn [_] nil)]
+    (is (= :answered (:outcome (t/append-design-verdict!
+                                "/w" {:status :clean :findings [] :history []}
+                                {} {:run-id "r" :base "main"})))
+        "a clean review still has the design's invariants left to confirm")))
+
+(deftest a-workspace-that-cannot-be-asked-reads-as-legible
+  ;; `layers/conflicted` already takes a non-zero exit for [], so the only thing
+  ;; left to throw is jj not running at all — and a branch with no jj holds none
+  ;; of jj's markers. Refusing there would cost every plain-git project its
+  ;; verdict to guard against a state it cannot be in.
+  (with-redefs [stages/discover-design-record (fn [_] a-design)
+                layers/conflicted (fn [_ _] (throw (java.io.IOException. "no such program: jj")))
+                verdict/run! (fn [_] a-verdict)
+                lifecycle/session-from-cwd (fn [_] nil)]
+    (is (= :answered (:outcome (t/append-design-verdict!
+                                "/w" {:status :clean :findings [] :history []}
+                                {} {:run-id "r" :base "main"}))))))
 
 (deftest with-no-design-record-the-pass-never-runs-and-records-nothing
   (let [ran (atom false)]

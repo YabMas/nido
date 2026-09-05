@@ -21,6 +21,7 @@
    [nido.coordinator.record.workstream :as ws]
    [nido.review.analysis :as analysis]
    [nido.review.frontend :as frontend]
+   [nido.review.layers :as layers]
    [nido.review.record :as record]
    [nido.review.loop :as rloop]
    [nido.review.render :as render]
@@ -245,15 +246,37 @@
 
    So: a design carrying invariants is enough on its own. A review that did not
    happen has nothing to judge — whether it broke or no reviewer could be run —
-   a dry run changed nothing to judge, and a stack holding conflict markers is
-   not code anyone can judge: the pass reads the worktree with tools, so it
-   would be reading committed conflict markers as source."
+   and a dry run changed nothing to judge.
+
+   Every status named here is a fact about the RUN. Whether the tree is legible
+   is a fact about the WORKING COPY, no status answers it, and `unreadable-tree`
+   asks the tree instead."
   [status final design]
-  (and (not (#{:review-failed :reviewer-unavailable :dry-run :stack-conflicted}
-             status))
+  (and (not (#{:review-failed :reviewer-unavailable :dry-run} status))
        (boolean (or (seq (:findings final))
                     (seq (:history final))
                     (seq (:invariants design))))))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  unreadable-tree
+  "Conflict markers in `base..@`: the change ids holding them, or nil for none.
+
+   The verdict pass gives an agent tools and points it at the working copy, so
+   committed markers arrive as source: it judges a design against a namespace
+   that does not parse, and its answer is appended to the ledger and printed as
+   a decision for a human. Asking the tree is the only thing that settles it —
+   a status list had `:stack-conflicted` in it and not `:fix-conflicted`, which
+   leaves markers by a different route, so what the pass read was decided by
+   which files happened to conflict.
+
+   A workspace that cannot be asked reads as legible. `layers/conflicted`
+   already takes a non-zero exit for `[]`, so the only thing left to throw is jj
+   not running at all — and a branch with no jj holds none of jj's markers.
+   Refusing there would cost every plain-git project the run's most valuable
+   artifact to guard against a state it cannot be in."
+  [cwd base]
+  (try (seq (layers/conflicted cwd base))
+       (catch Throwable _ nil)))
 
 (defn- refusal-reason
   "Why the ledger would not take a verdict, in one line a reader can act on.
@@ -293,9 +316,9 @@
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   append-design-verdict!
   "Run the design verdict and say what became of it, as the outcome map
-   `report/with-verdict` folds: `:outcome` (`:answered` / `:no-answer`), the
-   verdict itself when there was one, and where the ledger put it. nil when the
-   pass never ran.
+   `report/with-verdict` folds: `:outcome` (`:answered` / `:no-answer` /
+   `:skipped`), the verdict itself when there was one, and where the ledger put
+   it. nil when there was nothing to judge against at all.
 
    Best-effort at the ledger, for the same reason append-review-entry! is: a
    completed review must not turn into a failure because a side record could not
@@ -317,15 +340,25 @@
     ;; record it is the authority on finding.
     (let [design (stages/discover-design-record cwd)]
       (when (and design (verdict-worth-running? (:status final) final design))
-        (if-let [v (verdict/run! {:cwd cwd
-                                  :run-id (:run-id config)
-                                  :budget (:budget config)
-                                  :final final
-                                  :report report})]
-          (assoc (append-verdict-to-ledger! cwd v) :outcome :answered :verdict v)
-          {:outcome :no-answer
-           :because (str "the pass ran and its answer carried no verdict"
-                         " — the transcript is agent.log in this run dir")})))
+        (if-let [markers (unreadable-tree cwd (:base config))]
+          ;; Recorded rather than dropped. Every other reason this pass does not
+          ;; run is legible from the status sitting beside it in the report; a
+          ;; conflicted tree is legible from nothing the run wrote, so a reader
+          ;; would find the field the pass exists to fill simply absent.
+          {:outcome :skipped
+           :because (str "the branch is holding conflict markers on "
+                         (str/join ", " markers)
+                         " — resolve them and re-run; the pass reads the worktree"
+                         " with tools and would judge the design against them")}
+          (if-let [v (verdict/run! {:cwd cwd
+                                    :run-id (:run-id config)
+                                    :budget (:budget config)
+                                    :final final
+                                    :report report})]
+            (assoc (append-verdict-to-ledger! cwd v) :outcome :answered :verdict v)
+            {:outcome :no-answer
+             :because (str "the pass ran and its answer carried no verdict"
+                           " — the transcript is agent.log in this run dir")}))))
     (catch Exception e
       (binding [*out* *err*]
         (println (str "review-loop: design verdict skipped — " (ex-message e))))
@@ -333,7 +366,7 @@
 
 (defn- record-verdict!
   "Fold the verdict pass's outcome into report.json, and say on the terminal when
-   it went somewhere other than where it should have.
+   the verdict never happened or went somewhere other than where it should have.
 
    The report is written even when the ledger took the verdict. The two records
    answer to different readers — the ledger entry is what someone reading the
@@ -346,6 +379,11 @@
     (binding [*out* *err*]
       (case (:outcome outcome)
         :no-answer (println (str "review-loop: the design verdict pass returned no verdict — "
+                                 (:because outcome)))
+        ;; Said here as well as in the report because the reader who most needs
+        ;; it is the one sitting in front of a conflicted branch deciding
+        ;; whether resolving it buys them anything.
+        :skipped   (println (str "review-loop: the design verdict pass did not run — "
                                  (:because outcome)))
         :answered  (when (= :refused (:ledger outcome))
                      (println (str "review-loop: the design verdict was REFUSED by the ledger — "
