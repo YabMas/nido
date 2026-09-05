@@ -1416,3 +1416,82 @@
                 :reviewed-at nil
                 :findings [{:id "aa11" :title "x" :disposition :fix}]})]
       (is (not= :workspace-drifted (:status ctx))))))
+
+;; ---- what an aborted round leaves behind ---------------------------------
+
+(deftest salvaged-statuses-converge-a-layer-that-read-and-reported-nothing
+  ;; A reviewer that read a manifest and found nothing has issued a clean bill
+  ;; on that exact patch, and a sibling's billing quota does not retract it.
+  ;; Recording it is what stops the next run re-paying for a review that already
+  ;; happened — one round threw away two finished layer reviews, 265,708 codex
+  ;; tokens between them, because the third reviewer could not be launched.
+  (let [out (stages/salvaged-statuses
+             [{:target {:label "a" :patch-hash "h-a"} :findings []}
+              {:target {:label "b" :patch-hash "h-b"} :findings [{:title "a bug"}]}])]
+    (is (= [["a" :converged] ["b" :partial]]
+           (map (fn [[t s]] [(:label t) s]) out))
+        "a target that reported something is re-reviewed; only the quiet one
+         may be skipped")))
+
+(deftest salvaged-statuses-never-converge-the-composition-target
+  ;; It converges on `nothing anywhere is open`, and a round that lost a
+  ;; reviewer cannot know that — the target nobody read is exactly the one that
+  ;; might have had something for it.
+  (is (= [["stack" :partial]]
+         (map (fn [[t s]] [(:label t) s])
+              (stages/salvaged-statuses
+               [{:target {:label "stack" :patch-hash "h-s" :stack? true} :findings []}])))))
+
+(deftest salvaged-statuses-record-nothing-about-a-patch-nobody-read
+  ;; Convergence is a memory of content having been reviewed. An empty patch has
+  ;; no content to remember, and an entry keyed on nil is a claim about every
+  ;; patch and about none.
+  (is (= [] (stages/salvaged-statuses
+             [{:target {:label "a" :patch-hash "h-a"} :status :nothing-to-review
+               :findings []}
+              {:target {:label "b" :patch-hash nil} :findings []}]))))
+
+(deftest an-aborted-fan-out-records-the-reviews-it-already-paid-for
+  ;; The stage has no round after it — the engine short-circuits on the throw —
+  ;; so this is the last point at which anything can be kept. Before, the whole
+  ;; round evaporated: the cache file kept the previous round's mtime and a
+  ;; re-run after the quota reset re-reviewed every layer from scratch.
+  (let [written (atom nil)
+        events  (atom [])]
+    (with-redefs [layers/patch-hash    (fn [_ from to] (str "h-" from "-" to))
+                  codex/merge-base     (fn [& _] "FORK")
+                  layers/resolve-rev   (fn [& _] "AT")
+                  layers/brief         (fn [& _] nil)
+                  codex/changed-files  (fn [& _] [])
+                  stages/session-stack (fn [& _] [{:bookmark "s--a" :slug "a" :tip "cA"}
+                                                  {:bookmark "s--b" :slug "b" :tip "cB"}])
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  cache/read-cache     (fn [& _] {})
+                  cache/write!         (fn [_ _ c] (reset! written c) true)
+                  codex/review!        (fn [{:keys [label]}]
+                                         (if (= "b" label)
+                                           (throw (ex-info "You've hit your usage limit."
+                                                           {:reason :reviewer-unavailable}))
+                                           {:status nil :findings [] :manifest "x"}))]
+      (let [thrown (try ((:run stages/review-stage)
+                         {:config {:cwd "/w" :base "main" :run-id "r"
+                                   :emit #(swap! events conj %)}
+                          :iter 2 :history []})
+                        nil
+                        (catch clojure.lang.ExceptionInfo e e))
+            entries (vals @written)]
+        (is (= :reviewer-unavailable (:reason (ex-data thrown)))
+            "the round still fails — salvaging is not swallowing")
+        (is (= [["a" :converged]]
+               (map (juxt :label :status) (filter #(= :converged (:status %)) entries)))
+            "layer a read its patch and reported nothing, so a re-run skips it")
+        (is (= #{"a" "stack"} (set (map :label entries)))
+            "the composition target is recorded as still owing something, and
+             the layer nobody reviewed is not recorded at all")
+        (is (= 2 (:round (first (filter #(= "a" (:label %)) entries))))
+            "stamped with the round it was reviewed in, like any other entry")
+        (is (some #(and (= :target-moved (:event %)) (= "b" (:label %))
+                        (= "error" (:status %)))
+                  @events)
+            "the report names the reviewer that died, not just the phase — an
+             aborted round used to leave every unfinished row reading `running`")))))

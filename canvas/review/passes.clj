@@ -34,9 +34,19 @@
     {:signature [:=> [:catn [:cwd Path] [:from :any] [:to :any]] :any]})
   (Operation safe-label "A label made safe to put in a path."
     {:signature [:=> [:catn [:label :any]] :string]})
+  (Operation unavailability
+    "Why no reviewer ran, out of the log codex streamed — or nothing, when the log does not say
+     the reviewer was unavailable.
+
+     The distinction the review path exists to draw at all: a review that BROKE is evidence
+     about the branch and a reviewer that could not be RUN is evidence about a quota, a rate
+     limit or a credential, and only one of them is answered by opening the diff. Carries the
+     line verbatim, because the remedy and the reset hour are in the vendor's words and nowhere
+     else."
+    {:signature [:=> [:catn [:tail [:maybe :string]]] [:maybe :map]]})
   (Operation review! "Review one range and answer with its findings."
     {:signature [:=> [:catn [:opts :map]] :map]
-     :delegates [run-codex! schema-json safe-label]}))
+     :delegates [run-codex! schema-json safe-label unavailability]}))
 
 (Module review-verdict
   "The pass that decides whether the round is done.
@@ -201,6 +211,13 @@
      next round comes back to, and so the only one whose answers anything reads."
     {:signature [:=> [:catn [:reviews :any] [:findings :any] [:parks :any]] :any]
      :delegates [converged-targets]})
+  (Operation salvaged-statuses
+    "The same, for a round that ABORTED mid-fan-out. No warden ran, so no finding carries an
+     owner and convergence cannot be asked the usual way; what a reviewer that returned SAID
+     about its own patch can be, and a clean bill is not retracted by a sibling losing its
+     reviewer. The composition target never converges here — it converges on nothing anywhere
+     being open, which a round holding a target nobody read cannot know."
+    {:signature [:=> [:catn [:results :any]] :any]})
   (Operation answered-for
     "What one target reported and the run settled, folded over every round. The converging
      round is the one least likely to hold anything: a run ends by finding nothing."

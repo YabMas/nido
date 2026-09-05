@@ -1279,6 +1279,15 @@
                                ;; same repair from a human and say different
                                ;; things about what put it there.
                                :stack-conflicted
+                               ;; codex could not be RUN at all — a billing
+                               ;; quota, a rate limit, a credential. Split from
+                               ;; :review-failed, which is this run breaking:
+                               ;; nothing here is evidence about the branch, and
+                               ;; what it asks of a reader is to wait or to
+                               ;; authenticate rather than to open the diff.
+                               ;; `:unavailable` carries the sentence that said
+                               ;; so.
+                               :reviewer-unavailable
                                ;; Every repair the fix stage produced conflicted
                                ;; the layers above it and was rolled back, so the
                                ;; branch is intact and unchanged. Distinct from
@@ -1332,6 +1341,27 @@
    ;; is broken and leaves finding it as an exercise, on a nine-layer branch
    ;; whose conflict is mid-stack and which `jj resolve --list` reports as clean.
    [:conflicted {:optional true} [:sequential string?]]
+   ;; Why no reviewer ran, on the one status that ends that way. `:message` is
+   ;; the line the reviewer printed, kept verbatim because it is the only place
+   ;; the remedy and the reset hour exist — a quota exhaustion recorded as
+   ;; `codex review failed` left both in a 500 KB log nothing pointed at.
+   ;; `:signal` is nido's own reading of that line, beside it rather than
+   ;; inferred from it: whether to wait or to authenticate is what a reader
+   ;; came for, and the prose it would be inferred from is a vendor's to reword.
+   [:unavailable {:optional true}
+    [:map {:closed true}
+     ;; Not an enum, and unlike :status that is the safe choice rather than a
+     ;; concession: the producing side is a signature table in nido.review.codex
+     ;; that this band may not read, and a value a closed enum refused would
+     ;; lose the WHOLE entry — status, counts, findings — over one descriptive
+     ;; field.
+     [:signal   keyword?]
+     [:message  string?]
+     ;; When the reviewer said to come back, in the words it said it — codex
+     ;; prints a human date ("Sep 7th, 2026 9:42 AM"), and parsing it to an
+     ;; instant would be nido inventing a precision the source does not carry.
+     ;; Absent when nothing said; a credential failure has no reset time.
+     [:retry-at {:optional true} string?]]]
    [:report-path        [:maybe string?]]
    ;; Dormant extension point: no caller populates :summary yet (review-event omits it).
    ;; Kept for a future emitter wanting a one-line human note on the timeline card.

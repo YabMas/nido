@@ -134,7 +134,28 @@
     (is (zero? (t/exit-code :clean))))
   (is (zero? (t/exit-code :converged)))
   (is (zero? (t/exit-code :escalated)))
-  (is (= 1 (t/exit-code :review-failed))))
+  (is (= 1 (t/exit-code :review-failed)))
+  ;; A run with no reviewer produced no review, which is the same failure to a
+  ;; caller gating on the exit code — /drive-home must not treat it as a branch
+  ;; that was looked at and passed.
+  (is (= 1 (t/exit-code :reviewer-unavailable))))
+
+(deftest the-ledger-entry-carries-why-no-reviewer-ran
+  ;; The only durable copy. report.json lives in a run dir that is routinely
+  ;; gone by the time anybody reads the workstream, and the reviewer's own log
+  ;; goes with it — so a quota exhaustion recorded as a bare status leaves the
+  ;; remedy and the reset hour nowhere at all.
+  (let [u  {:signal :usage-limit
+            :message "You've hit your usage limit. … try again at Sep 7th, 2026 9:42 AM."
+            :retry-at "Sep 7th, 2026 9:42 AM"}
+        ev (t/review-event {:status :reviewer-unavailable :unavailable u}
+                           {:target {:base "main" :base-rev nil}}
+                           "/runs/r/report.json")]
+    (is (= :reviewer-unavailable (:status ev)))
+    (is (= u (:unavailable ev)))
+    (is (nil? (m/explain report/ReviewReport ev))
+        "the enum is closed and a refused append is swallowed to stderr, so an
+         entry this schema will not take is an entry that silently never exists")))
 
 (deftest review-event-carries-the-open-findings-not-only-a-count
   ;; The handover. A run that ends holding a park is the loop asking a human for

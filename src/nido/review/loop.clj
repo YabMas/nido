@@ -25,7 +25,22 @@
    their own too, and those are NOT here: they reach a different ledger event,
    under no enum this one can drift from."
   #{:converged :unresolved :escalated :unfixable :no-progress :max-iters
-    :review-failed})
+    :review-failed :reviewer-unavailable})
+
+(def ^:private review-failure-reasons
+  "The `:reason`s a review stage throws with — each of which is also the status
+   the run ends on.
+
+   No review happened either way; they are split by whether the REVIEWER could be
+   run at all, which is the difference between a diff someone should open and a
+   quota or a credential they must clear first. `nido.review.codex/unavailability`
+   is what derives the second and carries the sentence that said so.
+
+   Read at two moments for one throw — the phase event that records what stopped
+   the round, and the run's own terminal status — so a reason admitted by one and
+   not the other would emit an error the report keeps and then crash the loop out
+   from under it."
+  #{:review-failed :reviewer-unavailable})
 
 (def default-pipeline
   "review (fan out) -> warden (fan in) -> reshape -> fix (serial).
@@ -184,7 +199,7 @@
      (let [ctx' (try
                   ((:run stage) ctx)
                   (catch clojure.lang.ExceptionInfo e
-                    (when (= :review-failed (:reason (ex-data e)))
+                    (when (review-failure-reasons (:reason (ex-data e)))
                       (emit {:event :phase-errored :iter (:iter ctx)
                              :phase (:name stage) :error (ex-message e)
                              :at (str (clock))}))
@@ -275,9 +290,15 @@
             ctx  (try
                    (run-pipeline ctx0 pipeline emit clock judged-after end? open?)
                    (catch clojure.lang.ExceptionInfo e
-                     (if (= :review-failed (:reason (ex-data e)))
-                       (assoc ctx0 :status :review-failed :error (ex-message e))
-                       (throw e))))
+                     (let [{:keys [reason] :as data} (ex-data e)]
+                       (if (review-failure-reasons reason)
+                         ;; `:unavailable` rides across opaque. The engine is
+                         ;; told what stopped the run and carries the words
+                         ;; without reading them, which is what keeps it shared
+                         ;; with pipelines that have no reviewer at all.
+                         (merge (assoc ctx0 :status reason :error (ex-message e))
+                                (select-keys data [:unavailable]))
+                         (throw e)))))
             final (or (when (:status ctx) ctx)
                       ;; The whole pipeline ran without ending. `butlast`
                       ;; because a stage after the judgement has since appended

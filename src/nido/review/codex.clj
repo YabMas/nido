@@ -171,6 +171,81 @@
         []))
     (catch Throwable _ [])))
 
+(def ^:private unavailability-signatures
+  "What codex prints when the REVIEWER could not be run, as against when it ran
+   and the review failed.
+
+   Each row is a phrase codex emits for a condition outside this process — a
+   billing quota, a rate limit, a credential. What they share is that the run is
+   no evidence at all about the branch, and that running the same command again
+   changes nothing until a clock or a person intervenes. That is what makes the
+   distinction worth drawing: it decides whether the next move is to open the
+   diff or to wait.
+
+   Literal vendor phrasing, and deliberately narrow. A looser pattern that also
+   matched an ordinary failure would report a working reviewer as an absent one,
+   and a reader who believes the status stops looking at the code. A phrase codex
+   re-words falls back to the unclassified reading, which costs a classification
+   and nothing else — the cheap direction.
+
+   Order decides ties, and the ties are near-synonyms; no row is a superset of
+   another."
+  [{:signal :usage-limit  :re #"(?i)you'?ve hit your usage limit"}
+   {:signal :usage-limit  :re #"(?i)usage limit reached"}
+   {:signal :rate-limited :re #"(?i)429 too many requests"}
+   {:signal :unauthorized :re #"(?i)401 unauthorized"}
+   {:signal :unauthorized :re #"(?i)\bnot logged in\b"}])
+
+(def ^:private unavailability-tail-chars
+  "How much of the END of a review log to classify against.
+
+   A review log is the model's whole streamed trace — hundreds of kilobytes on a
+   real layer — and the line saying how the run stopped is the last thing in it.
+   Reading the body would match a reviewer DISCUSSING a rate limit in the code
+   it was reviewing, which is the one false positive that matters here."
+  8192)
+
+(defn- log-tail
+  "The last `n` characters of `path`, or nil when it cannot be read. Nil is a
+   legitimate answer: the log is codex's own stream, and a reviewer that died
+   before opening it leaves nothing to classify."
+  [path n]
+  (try
+    (let [s (slurp path)]
+      (cond-> s (> (count s) n) (subs (- (count s) n))))
+    (catch Throwable _ nil)))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :string]] [:maybe :map]]}
+  unavailability
+  "Why no reviewer ran, read out of the tail of the log codex streamed — or nil
+   when nothing in it says the reviewer was unavailable.
+
+   {:signal :usage-limit|:rate-limited|:unauthorized
+    :message <the line codex printed>
+    :retry-at <when it said to come back, when it said>}
+
+   The line VERBATIM, never a sentence of ours: it is the only place the remedy
+   and the reset hour exist. A quota exhaustion reported as `codex review failed`
+   sent a reader to look for a broken review, while the sentence naming the
+   credits page and the hour the window lifts sat unreferenced in a 500 KB log.
+
+   The signal is nido's own reading of that line and is kept beside it rather
+   than left to be inferred from it: whether to wait or to authenticate is the
+   operator's next move, and the prose it would be inferred from is a vendor's
+   to re-word.
+
+   The LAST matching line, because codex retries internally and narrates each
+   attempt; the one that ended the run is the last one it printed."
+  [tail]
+  (when tail
+    (let [lines (str/split-lines tail)]
+      (some (fn [{:keys [signal re]}]
+              (when-let [line (some-> (last (filter #(re-find re %) lines)) str/trim)]
+                (let [when-back (second (re-find #"(?i)try again at (.+?)\.?\s*$" line))]
+                  (cond-> {:signal signal :message line}
+                    when-back (assoc :retry-at when-back)))))
+            unavailability-signatures))))
+
 (defn ^{:malli/schema [:=> [:cat :any] :string]}
   safe-label
   "A label made safe to put in a filename. Layer labels come from bookmarks, and
@@ -249,7 +324,15 @@
                                           :out-path out-path :log-path log-path
                                           :prompt prompt})]
           (when (or (not (zero? exit)) (not (fs/exists? out-path)))
-            (throw (ex-info "codex review failed"
-                            {:reason :review-failed :exit exit :cwd cwd :label label})))
+            ;; Two reasons, because they ask opposite things of a reader. A
+            ;; classified failure is a condition outside the branch that must be
+            ;; waited out or authenticated past; an unclassified one is this run
+            ;; failing, and the diff is where to look. See `unavailability`.
+            (if-let [u (unavailability (log-tail log-path unavailability-tail-chars))]
+              (throw (ex-info (:message u)
+                              {:reason :reviewer-unavailable :unavailable u
+                               :exit exit :cwd cwd :label label}))
+              (throw (ex-info "codex review failed"
+                              {:reason :review-failed :exit exit :cwd cwd :label label}))))
           (assoc (parse-output (slurp out-path))
                  :status nil :manifest manifest :base-rev from))))))

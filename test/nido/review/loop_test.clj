@@ -79,6 +79,25 @@
         out (rloop/run-loop {:run-id "r1" :max-iters 3 :pipeline pipe :emit emit})]
     (is (= :review-failed (:status out)))))
 
+(deftest an-unavailable-reviewer-is-its-own-terminal-and-keeps-what-it-was-told
+  ;; A quota exhaustion is not the review failing; it is the review never
+  ;; happening, and the two ask opposite things of a reader. The classification
+  ;; rides across opaque — the engine transports what stopped the run without
+  ;; reading it, which is what keeps it shared with pipelines that have no
+  ;; reviewer at all.
+  (let [[_ emit] (capturing)
+        u    {:signal :usage-limit :message "You've hit your usage limit."
+              :retry-at "Sep 7th, 2026 9:42 AM"}
+        pipe [(stage :review (fn [_] (throw (ex-info (:message u)
+                                                     {:reason :reviewer-unavailable
+                                                      :unavailable u}))))]
+        out  (rloop/run-loop {:run-id "r1" :max-iters 3 :pipeline pipe :emit emit})]
+    (is (= :reviewer-unavailable (:status out)))
+    (is (= u (:unavailable out))
+        "the sentence and the reset hour reach the ledger from here — the run
+         dir they were read out of is routinely gone by the time anyone looks")
+    (is (= (:message u) (:error out)))))
+
 (deftest emit-narrates-the-lifecycle
   (let [[events emit] (capturing)
         pipe [(stage :review (fn [c] (assoc c :findings [{:title "x"}])))

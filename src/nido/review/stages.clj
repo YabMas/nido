@@ -154,9 +154,13 @@
   "Run each thunk, at most `n` at a time, preserving order.
 
    An exception in any thunk propagates carrying its ORIGINAL ex-data: a bare
-   future deref wraps it in ExecutionException, which would hide the
-   :review-failed reason the engine branches on and turn a failed review into an
-   unhandled crash."
+   future deref wraps it in ExecutionException, which would hide the `:reason` a
+   caller branches on and turn a handled failure into an unhandled crash.
+
+   The review fan-out deliberately does NOT lean on that. A throw here abandons
+   the futures after it in the same chunk, and for a fan-out of codex reviews
+   those are results that have already been paid for — so `review-target!`
+   returns its failure as a value and the stage decides what to do with it."
   [n thunks]
   (into []
         (mapcat (fn [chunk]
@@ -479,13 +483,48 @@
                :conflicted conflicted})
         (catch Throwable _ nil)))))
 
-;; Defined below, beside the cache reasoning it belongs with, and called from
-;; both stages that can end a round — see its docstring.
-(declare record-review!)
+;; Defined below, beside the cache reasoning they belong with. `record-review!`
+;; is called from both stages that can end a round — see its docstring — and
+;; `record-statuses!` from the fan-out, for a round that ends by aborting.
+(declare record-review! record-statuses! salvaged-statuses)
+
+(defn- review-target!
+  "One target's review, as a VALUE: the reviewer's result, or `{:target …
+   :failure <throwable>}` when it could not produce one.
+
+   Returned rather than thrown because the siblings are the point. A fan-out is
+   the round's whole spend, and a thrown reviewer takes every review that had
+   already finished down with it — one round lost two completed layer reviews,
+   265,708 codex tokens between them, to a billing quota the third reviewer hit.
+   What to do about a failure is the stage's decision, and it cannot make it
+   while the exception is still in flight.
+
+   Every throwable, not only the ex-infos the review path raises: a reviewer
+   that dies some other way costs its siblings exactly as much. The stage
+   rethrows what it catches, so nothing above here sees a different exception
+   than it did before."
+  [ctx t]
+  (let [{:keys [cwd run-id]} (:config ctx)]
+    (announce-target! ctx "running" t nil)
+    (try
+      (let [r (assoc (codex/review!
+                      {:cwd cwd :run-id run-id :iter (:iter ctx)
+                       :from (:from t) :to (:to t)
+                       :label (:label t) :brief (:brief t)
+                       :composition (:composition t)})
+                     :target t)]
+        (announce-target! ctx "reviewed" t {:findings (count (:findings r))})
+        r)
+      (catch Throwable e
+        ;; Which target failed, on the row for it. A round that aborted used to
+        ;; leave every unfinished row reading `running` for ever, so the report
+        ;; named the phase that died and not the reviewer that died in it.
+        (announce-target! ctx "error" t {:error (ex-message e)})
+        {:target t :failure e}))))
 
 (defn- fan-out-reviews
   [ctx]
-  (let [{:keys [cwd base run-id]} (:config ctx)
+  (let [{:keys [cwd base]} (:config ctx)
         [project ws-id] (project+ws-from-cwd cwd)
         cached  (if ws-id (cache/read-cache project ws-id) {})
         ;; Pin the top of the reviewed range for the whole round. `@` is
@@ -499,21 +538,23 @@
         {:keys [review skipped]} (to-review cached all)
         targets review
         _       (announce-targets! ctx {:review review :skipped skipped})
-        results (in-parallel
-                 max-concurrent-reviews
-                 (map (fn [t]
-                        #(do
-                           (announce-target! ctx "running" t nil)
-                           (let [r (assoc (codex/review!
-                                           {:cwd cwd :run-id run-id :iter (:iter ctx)
-                                            :from (:from t) :to (:to t)
-                                            :label (:label t) :brief (:brief t)
-                                            :composition (:composition t)})
-                                          :target t)]
-                             (announce-target! ctx "reviewed" t
-                                               {:findings (count (:findings r))})
-                             r)))
-                      targets))
+        outcomes (in-parallel max-concurrent-reviews
+                              (map (fn [t] #(review-target! ctx t)) targets))
+        failed   (filterv :failure outcomes)
+        results  (filterv (complement :failure) outcomes)
+        ;; The last point at which this round can leave anything behind: the
+        ;; engine has no stage after a throw, so a clean bill a reviewer already
+        ;; paid for is discarded unless it is written here. Best-effort like
+        ;; every other cache write — a salvage that cannot be persisted costs
+        ;; the next run some duplicated review and nothing else.
+        ;;
+        ;; The FIRST failure is rethrown, in target order. Which of several
+        ;; matters most is a judgement this makes no claim about; ordering it
+        ;; makes the report of a round two reviewers died in reproducible.
+        _        (when (seq failed)
+                   (record-statuses! cwd (assoc ctx :cache cached)
+                                     (salvaged-statuses results))
+                   (throw (:failure (first failed))))
         whole    (or (first (filter #(:stack? (:target %)) results))
                      (first results))
         ;; The mechanical reviewer joins the fan-out, but not the layer bookkeeping:
@@ -789,6 +830,39 @@
                        [t (if (contains? converged (:label t)) :converged :partial)])))
           reviews)))
 
+(defn ^{:malli/schema [:=> [:cat :any] :any]}
+  salvaged-statuses
+  "Every target of an ABORTED round paired with the status its patch is left at
+   — the partial-round counterpart of `reviewed-statuses`.
+
+   A round that loses a reviewer never reaches a warden, so no finding carries a
+   disposition or an owner and the rule `converged-targets` applies cannot be
+   asked here. What CAN be asked is what each reviewer that returned said about
+   its own patch, and a reviewer that read a manifest and reported nothing has
+   issued a clean bill on that exact content — a bill a sibling's quota does not
+   retract.
+
+   The composition target never converges here, whatever it reported. It
+   converges on `nothing anywhere is open`, and a round holding a target nobody
+   read cannot know that.
+
+   Under-recording is the safe direction and this leans it: a `:partial` entry
+   is simply reviewed again, and the worst a missing entry costs is the review
+   the abort had already paid for. A target that read nothing is dropped rather
+   than recorded, because convergence is a memory of content having been
+   reviewed and an empty patch has no content to remember; so is one with no
+   patch hash, because an entry keyed on unknown content is a claim about every
+   patch and about none."
+  [results]
+  (into []
+        (comp (filter #(:patch-hash (:target %)))
+              (remove #(= :nothing-to-review (:status %)))
+              (map (fn [{:keys [target findings]}]
+                     [target (if (and (not (:stack? target)) (empty? findings))
+                               :converged
+                               :partial)])))
+        results))
+
 (defn- latest-rulings
   "One entry per finding across every round of the run, carrying its LATEST
    ruling — the same fold `verdict/final-rulings` performs, and for the same
@@ -855,18 +929,29 @@
    round history and the carried parks, all of which are set by then, and
    because `reviewed-statuses` is pure.
 
-   The history plus this round's findings is the run's whole account, and it is
-   assembled here rather than in `answered-for` so that function stays pure over
-   what it is given. The fix stage appends a round to the history and the warden
-   runs before it, so the two never overlap.
-
    Best-effort — a cache that cannot be written costs the next run some
    duplicated review and nothing else."
   [cwd ctx]
+  (record-statuses! cwd ctx
+                    (reviewed-statuses (:reviews ctx) (:findings ctx)
+                                       (vals (get-in ctx [:carry :parks] {})))))
+
+(defn- record-statuses!
+  "Write one cache entry per `[target status]` pair, each carrying what the run
+   has settled about that target.
+
+   Split out because a round that ABORTS mid-fan-out derives its statuses by a
+   different rule — `salvaged-statuses` rather than `reviewed-statuses`, since
+   no warden ran to rule on anything — while WHAT is written about each target,
+   and where, is the same either way.
+
+   The history plus this round's findings is the run's whole account, and it is
+   assembled here rather than in `answered-for` so that function stays pure over
+   what it is given. The fix stage appends a round to the history and the warden
+   runs before it, so the two never overlap."
+  [cwd ctx statuses]
   (when-let [[project ws-id] (project+ws-from-cwd cwd)]
-    (let [statuses (reviewed-statuses (:reviews ctx) (:findings ctx)
-                                      (vals (get-in ctx [:carry :parks] {})))
-          rounds   (conj (mapv :findings (:history ctx)) (vec (:findings ctx)))]
+    (let [rounds (conj (mapv :findings (:history ctx)) (vec (:findings ctx)))]
       (when (seq statuses)
         (let [now (str (java.time.Instant/now))
               c   (reduce (fn [c [t status]]

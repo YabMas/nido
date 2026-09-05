@@ -608,6 +608,14 @@
    ;; What is wanted is a human deciding whether the layers are in the right
    ;; order at all.
    :fix-rolled-back      :escalate
+   ;; codex could not be run: a quota, a rate limit, a credential. Not :retry
+   ;; with the machinery failures above it, and the split is the point. Three
+   ;; attempts on a five-second backoff cannot outwait a quota window that lifts
+   ;; in two days, and arriving at the park through them reports the repetition
+   ;; — "the review stage failed to run 3 times" — where the condition and its
+   ;; remedy are the whole content of the outcome. The one thing a person can do
+   ;; about it is the only thing that changes anything.
+   :reviewer-unavailable :escalate
    ;; Somebody moved the working copy under a round in flight. Nothing is wrong
    ;; with the branch; the round just reviewed a state that stopped being
    ;; current, so the answer is to run it again, not to ask a human anything.

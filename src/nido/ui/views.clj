@@ -1139,10 +1139,12 @@
 ;; verdict, then one block per round, each round three phase lines deep.
 
 (def ^:private review-status-tone
-  "Terminal review status → chip tone. Only :review-failed is an error; the rest
+  "Terminal review status → chip tone. Only a run that produced no review at all
+   is an error — whether the review broke or no reviewer could be run; the rest
    of the non-clean statuses stopped short of converging, which is a result, not a
    failure (mirrors nido.review's own reading — see tasks.nido-review/exit-code)."
-  {:converged :ok :clean :ok :dry-run :ok :review-failed :bad})
+  {:converged :ok :clean :ok :dry-run :ok
+   :review-failed :bad :reviewer-unavailable :bad})
 
 (defn- review-chip [tone text]
   [:span {:class (str "chip c-rv-" (name tone))} text])

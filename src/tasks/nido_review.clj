@@ -35,10 +35,11 @@
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   exit-code
-  "CLI exit code for a terminal review status. review-failed is the only
-   failure; escalated is a reported outcome, not an error."
+  "CLI exit code for a terminal review status. A run that produced no review at
+   all is the only failure — whether the review broke or no reviewer could be
+   run; escalated is a reported outcome, not an error."
   [status]
-  (if (= :review-failed status) 1 0))
+  (if (#{:review-failed :reviewer-unavailable} status) 1 0))
 
 (defn- ledger-findings
   "Findings trimmed to what a reader of the workstream needs and nothing that
@@ -110,6 +111,11 @@
       (seq kept)      (assoc :kept kept :findings-kept (count kept))
       (pos? repaired) (assoc :remaining-handed repaired)
       (pos? parked)   (assoc :remaining-parked parked)
+      ;; Why no reviewer ran, when that is how the run ended. The status names
+      ;; the condition and this is the only durable copy of what to do about it:
+      ;; the report lives in a run dir that is routinely gone by the time anyone
+      ;; reads the workstream, and the reviewer's own log is gone with it.
+      (:unavailable final) (assoc :unavailable (:unavailable final))
       ;; Only a run that ended on a conflicted stack has these, and it is the
       ;; run whose status a reader cannot act on without them: the conflict is
       ;; mid-stack, so `jj resolve --list` reports the branch clean and the ids
@@ -237,12 +243,14 @@
    compared the change to the design it committed to, which is the case where
    the comparison is the only evidence there is.
 
-   So: a design carrying invariants is enough on its own. A failed review still
-   has nothing to judge, a dry run changed nothing to judge, and a stack holding
-   conflict markers is not code anyone can judge — the pass reads the worktree
-   with tools, so it would be reading committed conflict markers as source."
+   So: a design carrying invariants is enough on its own. A review that did not
+   happen has nothing to judge — whether it broke or no reviewer could be run —
+   a dry run changed nothing to judge, and a stack holding conflict markers is
+   not code anyone can judge: the pass reads the worktree with tools, so it
+   would be reading committed conflict markers as source."
   [status final design]
-  (and (not (#{:review-failed :dry-run :stack-conflicted} status))
+  (and (not (#{:review-failed :reviewer-unavailable :dry-run :stack-conflicted}
+             status))
        (boolean (or (seq (:findings final))
                     (seq (:history final))
                     (seq (:invariants design))))))
@@ -747,6 +755,13 @@
              status (:status final)
              ws-id  (append-review-entry! cwd final @report-atom report-path)]
          (println (str "review-loop: " (name status) " · report " report-path))
+         ;; The status names the condition; this is the remedy, and the only
+         ;; place it is written in words. A reviewer that refused said what it
+         ;; wants — credits, a login, an hour to come back at — and a reader
+         ;; standing at this line has nowhere else to have got that from.
+         (when-let [u (:unavailable final)]
+           (println (str "  " (:message u)))
+           (println "  → nothing was reviewed; the branch is unjudged"))
          ;; A side record that fails invisibly is how a whole class of run came
          ;; to leave no ledger entry at all: the ledger's status enum did not
          ;; admit :unfixable, every append on that status was refused, and the

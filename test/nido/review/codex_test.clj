@@ -1,5 +1,6 @@
 (ns nido.review.codex-test
   (:require
+   [clojure.string :as str]
    [clojure.test :refer [deftest is]]
    [nido.review.codex :as codex]
    [nido.review.prompts :as prompts]
@@ -309,3 +310,70 @@
       (is (re-find #"BOUNDED TO ONE LAYER" @captured))
       (is (nil? (re-find #"COMPOSITION PASS" @captured)))
       (is (nil? (re-find #"misplaced-seam" @schema))))))
+
+;; ── When the reviewer could not be run at all ───────────────────────────────
+
+(def usage-limit-log
+  "The tail of a real review log that died on codex's billing quota. The whole
+   remedy — where to buy credits, and the hour the window lifts — is in the one
+   line, and this is the only place it exists."
+  (str "thinking\n"
+       "exec jj diff --name-only in /w\n"
+       "ERROR: You've hit your usage limit. Visit"
+       " https://chatgpt.com/codex/settings/usage to purchase more credits or"
+       " try again at Sep 7th, 2026 9:42 AM.\n"))
+
+(deftest a-quota-exhaustion-keeps-the-sentence-and-the-hour-it-lifts
+  ;; The failure this exists for. Reported as "codex review failed", the remedy
+  ;; and the reset time were stated nowhere a reader would look, so a standing
+  ;; quota read as a broken review for as long as it stood.
+  (let [u (codex/unavailability usage-limit-log)]
+    (is (= :usage-limit (:signal u)))
+    (is (= "Sep 7th, 2026 9:42 AM" (:retry-at u))
+        "the reset hour decides whether to wait or to buy credits, so it is
+         lifted out rather than left inside a sentence")
+    (is (str/includes? (:message u) "purchase more credits")
+        "the line is kept verbatim — it is the vendor's, and paraphrasing it
+         would drop the URL that is half the remedy")))
+
+(deftest a-credential-failure-names-no-hour-to-come-back-at
+  ;; :retry-at is absent rather than invented. Nothing about an expired login
+  ;; resolves on a clock, and a reader handed a time would wait for it.
+  (let [u (codex/unavailability "stream error: unexpected status 401 Unauthorized\n")]
+    (is (= :unauthorized (:signal u)))
+    (is (not (contains? u :retry-at)))))
+
+(deftest an-ordinary-failure-is-not-classified-as-an-absent-reviewer
+  ;; The direction that must not go wrong. A reviewer reported as unavailable is
+  ;; a reader told to wait for a quota instead of opening a diff that broke.
+  (is (nil? (codex/unavailability
+             "exec jj diff in /w\nERROR: unexpected EOF from model stream\n")))
+  (is (nil? (codex/unavailability nil))))
+
+(deftest the-line-that-ended-the-run-wins-over-the-ones-before-it
+  ;; codex retries internally and narrates each attempt, so an early 429 it
+  ;; recovered from is not what stopped the run.
+  (let [u (codex/unavailability
+           (str "stream error: unexpected status 429 Too Many Requests; retrying\n"
+                "stream error: unexpected status 429 Too Many Requests; giving up\n"))]
+    (is (str/includes? (:message u) "giving up"))))
+
+(deftest review!-tells-an-unavailable-reviewer-from-a-failed-review
+  (let [tmp (str (fs/create-temp-dir))
+        run (fn [log]
+              (with-redefs [jj/jj!           (fn [_ & _] {:exit 0 :out "diff --git a/x b/x"
+                                                          :err ""})
+                            cstate/run-dir   (fn [_] tmp)
+                            codex/run-codex! (fn [_]
+                                               (spit (str (fs/path tmp "stack-round-1.log")) log)
+                                               {:exit 1})]
+                (try (codex/review! {:cwd "/w" :from "BASEREV" :run-id "r1"})
+                     nil
+                     (catch clojure.lang.ExceptionInfo e e))))]
+    (let [e (run usage-limit-log)]
+      (is (= :reviewer-unavailable (:reason (ex-data e))))
+      (is (= (:message (:unavailable (ex-data e))) (ex-message e))
+          "the message is the channel: it is what reaches the phase in the
+           report and the printed line, and ex-data reaches neither"))
+    (is (= :review-failed (:reason (ex-data (run "ERROR: model stream closed\n"))))
+        "an unclassifiable failure keeps the old reading rather than guessing")))
