@@ -107,6 +107,31 @@
                      (str "one of those " (count prompts/disposition-vocabulary)))
       "the count is read off the list, so a new destination cannot leave it stale"))
 
+(def ^:private closing-authorities
+  ;; Read off the vocabulary rather than off the helper that renders it, so this
+  ;; checks the prompt against the declaration and not against itself.
+  (some #(when (= :authority (:requires %)) (:one-of %))
+        prompts/disposition-vocabulary))
+
+(deftest every-authority-the-parser-accepts-is-one-the-warden-is-offered
+  ;; The published half of the :one-of contract. The parser demotes a close on
+  ;; an authority outside this list, so a ground the warden is never shown is a
+  ;; close it cannot make — and one shown but not listed is a close the parser
+  ;; silently refuses.
+  (let [out (prompts/warden-prompt {:findings findings :history [] :design design})]
+    (doseq [a closing-authorities]
+      (is (str/includes? out a)
+          (str a " is offered as an authority the warden may close on")))
+    (is (str/includes? out (str/join "|" closing-authorities))
+        "and the answer shape's enum is the list itself, in order")))
+
+(deftest warden-prompt-says-what-becomes-of-a-ruling-that-omits-its-field
+  ;; The demotion is not a surprise to spring on the warden: a close it thought
+  ;; it made and the loop read as a fix is a disagreement about the round's
+  ;; result, so the rule it will be held to is stated where it answers.
+  (let [out (prompts/warden-prompt {:findings findings :history [] :design design})]
+    (is (str/includes? out "is read as `fix`"))))
+
 (deftest warden-prompt-assigns-a-composition-finding-to-the-highest-layer
   (let [out (prompts/warden-prompt {:findings findings :history [] :design design
                                     :toc a-toc})]

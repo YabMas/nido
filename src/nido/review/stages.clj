@@ -83,23 +83,87 @@
   [f]
   (contains? kept-dispositions (:disposition f)))
 
+(def ^:private requirements
+  "Per disposition, the field it is not a decision without and the values that
+   field may take — read off the same list the warden is told.
+
+   Derived for the same reason `dispositions` is: a requirement stated to the
+   warden and not checked here is prompt text, and one checked here and not
+   stated is a rule the warden is failed by without being told."
+  (into {}
+        (comp (filter :requires)
+              (map (juxt :disposition #(select-keys % [:requires :one-of]))))
+        prompts/disposition-vocabulary))
+
+(defn- unmet-requirement
+  "Why disposition `d` is not a decision on ruling `r`, as a sentence for the
+   fixer, or nil when it is one.
+
+   The field has to be PROSE — a non-blank string — because that is what the
+   next round reads: the answered block hands a close's authority back to the
+   reviewer verbatim, and the fix prompt hands a `because` to the fixer. A JSON
+   `true` there says nothing to either, and one run returned exactly that.
+
+   A settling disposition is the loop deciding a finding is owed to nobody, so
+   the cost of accepting a bad one is a defect that leaves the run looking
+   answered. That is the asymmetry the demotion trades on."
+  [d r]
+  (when-let [{:keys [requires one-of]} (get requirements d)]
+    (let [v     (get r requires)
+          ruled (str "ruled `" (name d) "` ")
+          field (str "`" (name requires) "`")]
+      (cond
+        (or (nil? v) (and (string? v) (str/blank? v)))
+        (str ruled "with no " field)
+
+        (not (string? v))
+        (str ruled "with " (pr-str v) " where " field " wants a sentence")
+
+        (and one-of (not (some #{v} one-of)))
+        (str ruled "on an " field " of \"" v "\", which is not one of "
+             (str/join ", " one-of))))))
+
 (defn- ruling
-  "One per-finding ruling from the warden's JSON. A disposition outside the
-   four is read as :fix rather than dropped — the fail-safe direction, and the
-   one that keeps \"nothing is dropped\" true of a malformed answer."
+  "One per-finding ruling from the warden's JSON.
+
+   A disposition outside the vocabulary is read as :fix rather than dropped —
+   the fail-safe direction, and the one that keeps \"nothing is dropped\" true
+   of a malformed answer. A disposition INSIDE it that omits what the
+   vocabulary says it requires goes the same way, and for the stronger reason:
+   an unknown word settles nothing, while a close on an authority nobody named
+   ends a finding while appearing to have grounds, and rides into the next
+   round as an answer the reviewer is told not to re-argue.
+
+   The rejected field is dropped rather than carried, so no reader downstream
+   renders a ground the loop refused; `:because` says what was rejected, in
+   front of whatever the warden wrote, because that is the one channel that
+   reaches both the report and the fixer."
   [r]
-  (let [d (some-> (:disposition r) keyword)]
-    {:id          (:id r)
-     :same-as     (:same_as r)
-     :owner-layer (:owner_layer r)
-     :disposition (if (contains? dispositions d) d :fix)
-     :authority   (:authority r)
-     :of          (:of r)
-     ;; Whether this finding is one instance of a class the fixer should sweep.
-     ;; The warden recognises a recurring family unprompted — it says so in
-     ;; `because`, in prose, every time — and had no field to say it in.
-     :sweep       (boolean (:sweep r))
-     :because     (:because r)}))
+  (let [d     (some-> (:disposition r) keyword)
+        d     (if (contains? dispositions d) d :fix)
+        unmet (unmet-requirement d r)
+        base  {:id          (:id r)
+               :same-as     (:same_as r)
+               :owner-layer (:owner_layer r)
+               :disposition d
+               :authority   (:authority r)
+               :of          (:of r)
+               ;; Whether this finding is one instance of a class the fixer
+               ;; should sweep. The warden recognises a recurring family
+               ;; unprompted — it says so in `because`, in prose, every time —
+               ;; and had no field to say it in.
+               :sweep       (boolean (:sweep r))
+               :because     (:because r)}]
+    (if-not unmet
+      base
+      (-> base
+          (assoc (get-in requirements [d :requires]) nil)
+          (assoc :disposition :fix
+                 :because (str "the warden " unmet
+                               ", so this is being fixed rather than settled"
+                               (let [b (:because r)]
+                                 (when (and (string? b) (not (str/blank? b)))
+                                   (str " — it said: " b)))))))))
 
 (defn ^{:malli/schema [:=> [:cat :string] :map]}
   parse-warden-decision

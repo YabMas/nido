@@ -62,9 +62,16 @@
    for the same reason, as `composition-kinds` and the schema codex builds from
    it.
 
-   `:requires` is the field a disposition is not a decision without. A close with
-   no authority and a deviation with no claim are shrugs, and a shrug is how a
-   review quietly stops reviewing.
+   `:requires` is the field a disposition is not a decision without, and
+   `nido.review.stages` enforces it: a ruling that omits the field is not a
+   decision and is read as `fix`. A close with no authority and a deviation with
+   no claim are shrugs, and a shrug is how a review quietly stops reviewing.
+
+   `:one-of` closes the field further, where the answers are enumerable. An
+   authority is one of five named grounds; a deviation's claim and a decline's
+   reason are prose and have no such list. It is here rather than beside the
+   parser for the same reason the words are: a set of grounds the warden is
+   offered and the parser refuses is a destination that silently becomes `fix`.
 
    `:settles?` marks a disposition that ENDS a finding: it was decided, nobody
    owes anything further, and a later round re-raising it has found nothing new.
@@ -86,6 +93,7 @@
    {:disposition :closed
     :settles? true
     :requires :authority
+    :one-of ["duplicate" "out-of-scope" "design" "spun-out" "false-positive"]
     :means (str "no fix, AND you name the authority — duplicate (of another id\n"
                 "  in this round), out-of-scope (a layer's Out of scope names it),\n"
                 "  design (the record puts it behind a boundary), spun-out (it is\n"
@@ -130,6 +138,17 @@
                 "  Otherwise: a defect whose remedy is the stack's shape is\n"
                 "  `recut`, and one that is true and not worth doing is\n"
                 "  `declined`.")}])
+
+(defn- values-for
+  "The values a required field may take, in the order the vocabulary declares
+   them, or nil where the field is prose.
+
+   Two blocks of the warden prompt name the authorities and `stages` refuses a
+   close outside them, so all three come off the one entry: an authority the
+   warden is invited to give and the parser rejects is a close that silently
+   becomes a fix."
+  [field]
+  (some #(when (= field (:requires %)) (:one-of %)) disposition-vocabulary))
 
 ;; Read by disposition-block, which is rendered long after load. Declared rather
 ;; than moved so the kinds taxonomy stays beside the reviewer prompt it teaches.
@@ -185,8 +204,13 @@
             (clojure.string/join " and "))
        " each require their extra field. A `closed` with no authority, or\n"
        "a `deviation` with no claim in `of`, is not a decision — it is a shrug,\n"
-       "and it is how a review quietly stops reviewing. If you cannot name one,\n"
-       "the answer is fix.\n\n"
+       "and it is how a review quietly stops reviewing. So the loop does not\n"
+       "take one: a ruling that omits its field, or closes on an authority\n"
+       "outside\n"
+       "  " (clojure.string/join ", " (values-for :authority)) "\n"
+       "is read as `fix` and handed to a fixer. If you cannot name the field,\n"
+       "the answer is `fix` — say so yourself, and put your reasoning in\n"
+       "`because`, where the fixer reads it.\n\n"
        (cut-routing-block)))
 
 (def composition-kinds
@@ -643,7 +667,9 @@
    "               \"disposition\": \""
    (clojure.string/join "|" (map (comp name :disposition) disposition-vocabulary))
    "\",\n"
-   "               \"authority\": \"duplicate|out-of-scope|design|spun-out|false-positive\",\n"
+   "               \"authority\": \""
+   (clojure.string/join "|" (values-for :authority))
+   "\",\n"
    "               \"of\": \"<the claim a deviation departs from>\",\n"
    "               \"sweep\": <true if this is one instance of a recurring class>,\n"
    "               \"because\": \"<one sentence>\"}]}\n"

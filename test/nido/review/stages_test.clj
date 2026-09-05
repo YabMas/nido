@@ -2,6 +2,7 @@
 (ns nido.review.stages-test
   (:require
    [babashka.fs :as fs]
+   [cheshire.core :as json]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
    [nido.coordinator.agent :as agent]
@@ -449,15 +450,62 @@
         (is (= :dry-run (:status ctx)))
         (is (false? @launched))))))
 
+(defn- ruling-json
+  "A one-finding warden answer, given the fields of the ruling."
+  [ruling]
+  (str "```json\n"
+       (json/generate-string {:decision "continue"
+                              :findings [(merge {:id "aa11"} ruling)]})
+       "\n```"))
+
+(defn- sole-ruling [ruling] (first (:rulings (stages/parse-warden-decision (ruling-json ruling)))))
+
+(defn- satisfying
+  "A value that discharges `:requires` for a vocabulary entry — the first
+   permitted authority where the field is enumerated, prose where it is not."
+  [{:keys [one-of]}]
+  (or (first one-of) "because I say so"))
+
 (deftest every-disposition-the-warden-is-offered-is-one-the-parser-accepts
   ;; The accepted half of the contract. A word offered to the warden that the
-  ;; parser silently rewrites to :fix is a destination nobody can reach.
-  (doseq [{:keys [disposition]} prompts/disposition-vocabulary]
-    (let [d (stages/parse-warden-decision
-             (str "```json\n{\"decision\":\"continue\",\"findings\":"
-                  "[{\"id\":\"aa11\",\"disposition\":\"" (name disposition) "\"}]}\n```"))]
-      (is (= disposition (:disposition (first (:rulings d))))
+  ;; parser silently rewrites to :fix is a destination nobody can reach — so
+  ;; each is offered WITH the field the vocabulary says it cannot decide
+  ;; without, which is the only form of it that is a decision at all.
+  (doseq [{:keys [disposition requires] :as entry} prompts/disposition-vocabulary]
+    (let [r (cond-> {:disposition (name disposition)}
+              requires (assoc requires (satisfying entry)))]
+      (is (= disposition (:disposition (sole-ruling r)))
           (str (name disposition) " survives the parser")))))
+
+(deftest a-ruling-missing-what-its-disposition-requires-is-not-a-decision
+  ;; A close on no authority ENDS a finding: it is settled, the answered cache
+  ;; hands it back to the next reviewer as decided, and nobody is owed
+  ;; anything. Demotion to :fix is the same fail-safe an unknown disposition
+  ;; takes, and it is what keeps "settled" meaning someone actually decided.
+  (doseq [{:keys [disposition requires]} (filter :requires prompts/disposition-vocabulary)]
+    (let [r (sole-ruling {:disposition (name disposition)})]
+      (is (= :fix (:disposition r))
+          (str (name disposition) " with no " (name requires) " is demoted"))
+      (is (str/includes? (:because r) (str "no `" (name requires) "`"))
+          "and the report names the field that was missing")))
+  (is (str/includes? (:because (sole-ruling {:disposition "closed"
+                                             :because "same defect as aa11"}))
+                     "same defect as aa11")
+      "a demotion keeps what the warden did say — the fixer is the next reader of it"))
+
+(deftest a-close-on-an-authority-outside-the-vocabulary-is-not-a-decision
+  ;; Observed: a warden returned `"authority": true`. It landed on a :fix that
+  ;; round and did no harm; the same value on a :closed would end the finding
+  ;; on no grounds and carry `closed (true)` into the next round as an answer
+  ;; the reviewer is told not to re-argue.
+  (doseq [bad [true "whatever" "" nil]]
+    (let [r (sole-ruling {:disposition "closed" :authority bad})]
+      (is (= :fix (:disposition r))
+          (str "authority " (pr-str bad) " is no authority"))
+      (is (nil? (:authority r))
+          "and the rejected ground is dropped, not carried into the report")))
+  (is (= :closed (:disposition (sole-ruling {:disposition "closed" :authority "spun-out"})))
+      "a named authority still closes — this refuses the shrug, not the close"))
 
 (deftest apply-rulings-defaults-an-unruled-finding-to-fix
   ;; "Nothing is dropped" has to survive a malformed answer: a finding the
