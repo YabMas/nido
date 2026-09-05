@@ -385,8 +385,36 @@ layers, it is not yours"))
         plain (prompts/fix-prompt
                {:findings [{:priority 1 :title "t" :body "b"}]})]
     (is (str/includes? swept "SWEEP"))
-    (is (str/includes? swept "audit this layer for its siblings"))
+    (is (str/includes? swept "find its siblings and fix those too"))
     (is (not (str/includes? plain "SWEEP")))))
+
+(deftest a-sweep-searches-the-defect-class-not-the-diff
+  ;; A sweep bounded to "this layer" is bounded to the patch, and the sibling
+  ;; that then survives is the pre-existing line beside the one just edited —
+  ;; one run swept an envelope-construction class, fixed the site in its diff,
+  ;; and left the identical defect two lines above it for a design verdict to
+  ;; catch two rounds later.
+  (let [out (prompts/fix-prompt
+             {:findings [{:priority 1 :title "t" :body "b" :sweep true}]})]
+    (is (str/includes? out "over the defect CLASS, not over this")
+        "the class is the search space; the diff is where the first instance happened to be")
+    (is (str/includes? out "read every file this change touched"))
+    (is (not (str/includes? out "audit this layer"))
+        "a layer is its diff, so bounding the search to it excludes pre-existing siblings")
+    (is (str/includes? out "NAMED in your final message")
+        "a sibling out of this fixer's reach reaches the next round only if it is said")))
+
+(deftest minimal-does-not-license-leaving-an-artifact-contradicting-itself
+  ;; For a declarative artifact the smallest edit that resolves a finding is
+  ;; often the one that breaks it: one round declared a field required on a
+  ;; schema without supplying it at the outcomes, and the next round existed to
+  ;; report the spec as self-contradictory.
+  (let [out (prompts/fix-prompt {:findings [{:priority 1 :title "t" :body "b"}]})]
+    (is (str/includes? out "MINIMAL bounds how much you change, not what you may leave broken")
+        "minimality is about the size of the edit, not about what may be left broken")
+    (is (str/includes? out "leave it self-consistent"))
+    (is (str/includes? out "say so in your final\nmessage")
+        "a consistency repair too big to make must be reported, not silently skipped")))
 
 (deftest the-composition-pass-is-told-what-it-already-reported
   ;; It is the only reader that can see across layers and it starts cold every

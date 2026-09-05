@@ -511,11 +511,35 @@
    `:sweep` widens one finding into its family. The warden recognises a recurring
    class unprompted and had no channel to say so, so rounds surfaced its members
    one per round: a call site fixed, the next one found, ten rounds for ten
-   instances of one defect."
+   instances of one defect.
+
+   Two clauses then bound the reach the prompt would otherwise narrow itself,
+   against one reading of it: that the fixer's subject is the patch.
+
+   A sweep searches the defect CLASS, over every file the change touched and not
+   over its diff. \"Audit this layer\" reads as the diff, so the sibling that
+   survives a sweep is the pre-existing line beside the one just edited. Where a
+   sibling is somewhere this fixer may not touch, naming it in the final message
+   is what puts it in front of the next round: that text lands on the fix row as
+   `:account` and `prior-fixes-block` renders it to the reviewer.
+
+   MINIMAL says how much to change, not what may be left broken. For a
+   declarative artifact — a spec, a schema, a policy table — the smallest edit
+   that resolves a finding is often exactly the edit that makes the artifact
+   contradict itself: a type declared required that no rule in the file produces
+   is a defect the next round reports as new."
   [{:keys [findings layer]}]
   (str
    "Fix the following code-review findings in this working directory. Make the\n"
    "MINIMAL change that resolves each. Do NOT commit — the orchestrator commits.\n\n"
+   "MINIMAL bounds how much you change, not what you may leave broken. Re-read\n"
+   "each artifact you edit WHOLE before you finish, and leave it self-consistent:\n"
+   "for a spec, a schema or a policy table the smallest edit that resolves a\n"
+   "finding is very often the one that makes the artifact contradict itself — a\n"
+   "type declared required that no rule in the file produces, a case the table no\n"
+   "longer covers — and the next round finds that as a fresh defect. If restoring\n"
+   "consistency would go past what you were asked for, say so in your final\n"
+   "message rather than landing the contradiction.\n\n"
    (when (or (:claim layer) (:out-of-scope layer))
      (str "YOU ARE FIXING ONE LAYER OF A STACKED CHANGE"
           (when (:label layer) (str " — " (:label layer))) ".\n"
@@ -539,10 +563,17 @@
                       (str "  the reviewer of the whole stack says: " b "\n"))
                     (when (:sweep f)
                       (str "  SWEEP: this is one instance of a recurring defect.\n"
-                           "  Fix it, then audit this layer for its siblings and fix\n"
-                           "  those too. Finding them one per round is what this is\n"
+                           "  Fix it, then find its siblings and fix those too.\n"
+                           "  The search is over the defect CLASS, not over this\n"
+                           "  change's diff: read every file this change touched\n"
+                           "  WHOLE, because the sibling that survives a sweep is\n"
+                           "  usually the pre-existing line beside the one you just\n"
+                           "  edited. Finding them one per round is what this is\n"
                            "  here to stop — the minimal change rule does not apply\n"
-                           "  to the search, only to each edit.\n"))
+                           "  to the search, only to each edit. A sibling you may\n"
+                           "  not touch here — another layer's, or outside this\n"
+                           "  change — is to be NAMED in your final message, never\n"
+                           "  silently left.\n"))
                     "  " (:body f))))
         (str/join "\n\n"))))
 
