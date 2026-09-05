@@ -35,7 +35,7 @@ ls "<run-dir>"
 cat "<report-path>" | jq '{status: .status, rounds: .summary.rounds, target: .target}'
 ```
 
-`report.json` is the whole run: `:target` (cwd, base, base-rev, layers, files), then one entry per round under `:rounds`, each with its phases — `review` (per-layer `:layers` rows and every `:findings` body), `warden` (`:decision`, `:reason`, and per-finding `:rulings`), and `fix` (`:fixes`, `:fixed-count`, and the three ways a repair does not happen — `:declined` a fixer that read the finding and refused, `:rolled-back` a repair the stack would not take, `:unattempted` a layer whose fixer was never launched because the stage stopped on a `:conflicted` it could not undo).
+`report.json` is the whole run: `:target` (cwd, base, base-rev, layers, files), then one entry per round under `:rounds`, each with its phases — `review` (per-layer `:layers` rows and every `:findings` body), `warden` (`:decision`, `:reason`, and per-finding `:rulings` — each carrying `:handle`, the identity the loop tells findings apart by across rounds, and `:sweep`, whether the fixer was ordered to audit the layer for siblings of it), and `fix` (`:fixes`, `:fixed-count`, and the three ways a repair does not happen — `:declined` a fixer that read the finding and refused, `:rolled-back` a repair the stack would not take, `:unattempted` a layer whose fixer was never launched because the stage stopped on a `:conflicted` it could not undo).
 
 Also in the run dir: `agent.err.log` (the warden's stderr) and `*-round-N.err.log` per stage. A run that ended `:review-failed` or `:warden-indeterminate` has its whole story in those, not in the report.
 

@@ -133,8 +133,9 @@
                    :base-rev "B" :manifest "a"}}
             {:event :phase-started :iter 1 :phase :warden :at "t3"}
             {:event :phase-finished :iter 1 :phase :warden :at "t4"
-             :ctx {:warden {:decision :continue :reason "real"
-                             :rulings [{:id "aa11" :owner-layer "a" :disposition :fix}]}}}
+             :ctx {:warden   {:decision :continue :reason "real"}
+                   :findings [{:id "aa11" :title "b" :owner-layer "a"
+                               :disposition :fix :handle "aa11" :sweep false}]}}
             {:event :phase-started :iter 1 :phase :fix :at "t5"}
             {:event :phase-finished :iter 1 :phase :fix :at "t6"
              :ctx {:history [{:iter 1 :fixes [{:layer "a" :commit "abc1234567"}]
@@ -143,7 +144,10 @@
         warden  (some #(when (= "warden" (:phase %)) %) phases)
         fix    (some #(when (= "fix" (:phase %)) %) phases)]
     (is (= "continue" (:decision warden)))
-    (is (= [{:id "aa11" :owner-layer "a" :disposition :fix}] (:rulings warden)))
+    (is (= [{:id "aa11" :owner-layer "a" :disposition :fix
+             :handle "aa11" :sweep false}]
+           (:rulings warden))
+        "a ruling is the decision recorded against the finding, not the whole finding")
     (is (= [{:layer "a" :commit "abc1234567"}] (:fixes fix)))
     (is (= 1 (:fixed-count fix)))))
 
@@ -376,19 +380,67 @@
   ;; :handle and :same-as are what no-progress?, unfixable and the answered
   ;; cache all key on. Dropped from the report, every conclusion those reach is
   ;; unverifiable from the artifact that is supposed to explain the run.
+  ;;
+  ;; The handle is on the RULED FINDING and on nothing else — `apply-rulings`
+  ;; resolves it and the warden's own answer never carries one — so this drives
+  ;; the phase the way the loop does, off :findings.
   (let [r (drive
            [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
             {:event :phase-started :iter 1 :phase :review :at "t1"}
             {:event :phase-finished :iter 1 :phase :review :at "t2" :ctx {:findings []}}
             {:event :phase-started :iter 1 :phase :warden :at "t3"}
             {:event :phase-finished :iter 1 :phase :warden :at "t4"
-             :ctx {:warden {:decision :continue
-                            :rulings [{:id "f9" :handle "h1" :same-as "f2"
-                                       :owner-layer "core" :disposition :fix
-                                       :because "same defect as round 2"}]}}}])
+             :ctx {:warden   {:decision :continue}
+                   :findings [{:id "f9" :title "stale contract" :handle "h1"
+                               :same-as "f2" :owner-layer "core" :disposition :fix
+                               :sweep false :because "same defect as round 2"}]}}])
         ruling (-> r :rounds first :phases (nth 1) :rulings first)]
     (is (= "h1" (:handle ruling)))
     (is (= "f2" (:same-as ruling)))))
+
+(deftest a-ruled-class-says-so-in-the-report
+  ;; :sweep is the difference between a round that repaired a line and one that
+  ;; repaired a shape, and it is what the NEXT round has to be read against.
+  ;; Absent from the report, recovering it means reading megabytes of agent.log.
+  (let [r (drive
+           [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+            {:event :phase-started :iter 1 :phase :review :at "t1"}
+            {:event :phase-finished :iter 1 :phase :review :at "t2" :ctx {:findings []}}
+            {:event :phase-started :iter 1 :phase :warden :at "t3"}
+            {:event :phase-finished :iter 1 :phase :warden :at "t4"
+             :ctx {:warden   {:decision :continue}
+                   :findings [{:id "f1" :title "one envelope" :handle "f1"
+                               :disposition :fix :sweep true
+                               :because "one instance of a class"}
+                              ;; No ruling came back for this one; apply-rulings
+                              ;; defaults it to :fix, and the fixer is handed it
+                              ;; all the same.
+                              {:id "f2" :title "unruled" :handle "f2"
+                               :disposition :fix :sweep false
+                               :because "the warden did not rule on this finding"}]}}])
+        rulings (-> r :rounds first :phases (nth 1) :rulings)]
+    (is (= [true false] (mapv :sweep rulings))
+        "the sweep order the fixer was given is readable from the artifact alone")
+    (is (= ["f1" "f2"] (mapv :id rulings))
+        "a finding the warden passed over was still decided, so it is still a ruling")))
+
+(deftest a-warden-that-could-not-rule-rules-on-nothing
+  ;; A rate-limited or unparseable warden leaves the round's findings exactly as
+  ;; the reviewers raised them — undecided. Listing them as rulings would report
+  ;; a decision nobody made.
+  (let [r (drive
+           [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+            {:event :phase-started :iter 1 :phase :review :at "t1"}
+            {:event :phase-finished :iter 1 :phase :review :at "t2"
+             :ctx {:findings [{:id "f1" :title "unjudged"}]}}
+            {:event :phase-started :iter 1 :phase :warden :at "t3"}
+            {:event :phase-finished :iter 1 :phase :warden :at "t4"
+             :ctx {:warden   {:decision :indeterminate :cause :usage-limit
+                              :reason "429"}
+                   :findings [{:id "f1" :title "unjudged"}]}}])
+        warden (-> r :rounds first :phases (nth 1))]
+    (is (= "indeterminate" (:decision warden)))
+    (is (= [] (:rulings warden)))))
 
 (deftest a-skipped-row-carries-the-evidence-for-its-own-skip
   ;; "skipped" alone asserts a layer needed no review and offers nothing to

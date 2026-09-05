@@ -248,6 +248,38 @@
                      :when (and label (not (contains? accounted label)))]
                  (row {:label label} {:status "reported" :findings n})))))))
 
+(def ^:private ruling-keys
+  "What one per-finding ruling keeps in the report.
+
+   :handle and :same-as are the run's cross-round identity — what `no-progress?`,
+   `unfixable` and the answered cache all key on. Without them a reader can see
+   the same defect ruled on in four rounds and has nothing saying the loop knew
+   it was one defect.
+
+   :sweep is whether the warden read this finding as one instance of a class and
+   ordered the fixer to audit for siblings. It is the difference between a round
+   that repaired a line and a round that repaired a shape, so it is what the
+   round after it has to be read against — a sibling reported next round is the
+   sweep's scope being wrong, and an instance reported next round is the sweep
+   not having happened."
+  [:id :handle :same-as :owner-layer :disposition :authority :of :because :sweep])
+
+(defn- rulings
+  "One entry per finding the warden's decision was applied to, projected to
+   `ruling-keys`.
+
+   Read off the RULED findings rather than off the parsed decision, because the
+   parsed decision is only the INPUT to a ruling: `stages/apply-rulings` is what
+   assigns the handle, and what rules a finding the warden passed over as :fix
+   with a `:because` saying nobody ruled on it. Both are decisions this phase is
+   the record of, and neither is on the answer the warden returned.
+
+   A finding carries a disposition only once that merge has run, so a warden
+   that could not answer — rate-limited, unparseable — reports no rulings here
+   rather than a list of bare ids."
+  [findings]
+  (into [] (comp (filter :disposition) (map #(select-keys % ruling-keys))) findings))
+
 (defn- finish-phase
   [ph phase ctx at]
   (let [ph (assoc ph :status "ok" :ended-at at)]
@@ -282,12 +314,7 @@
       ;; what was wrong with the answer, a cause says whether there WAS one. A
       ;; phase that kept only the first renders a 429 exactly like a malformed
       ;; ruling.
-      ;; :handle and :same-as are kept because they are the run's cross-round
-      ;; identity — what no-progress?, unfixable and the answered cache all key
-      ;; on. Dropped from the report, every conclusion those checks reach is
-      ;; unreadable from the artifact that is supposed to explain the run: a
-      ;; reader could see the same defect ruled on in four rounds and had no way
-      ;; to confirm the loop knew it was the same defect.
+      ;; :rulings come off the round's ruled findings; see `rulings`.
       ;; :unfixable is the stage overruling the warden — a park that has stood
       ;; too long ends the run whatever the warden decided. It belongs on this
       ;; phase because the phase is the only place both facts sit, and a round
@@ -297,10 +324,7 @@
                  (cond-> (assoc ph :decision (some-> (:decision a) name)
                                 :cause (some-> (:cause a) name)
                                 :reason (:reason a)
-                                :rulings (mapv #(select-keys % [:id :handle :same-as
-                                                                :owner-layer :disposition
-                                                                :authority :of :because])
-                                               (:rulings a)))
+                                :rulings (rulings (:findings ctx)))
                    (seq (:unfixable ctx)) (assoc :unfixable (vec (:unfixable ctx)))))
       ;; The finding ids a fixer was handed, not only how many. It is the join
       ;; every cross-round question needs — did this fix stop that finding coming
