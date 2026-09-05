@@ -21,6 +21,22 @@
     (is (= [] (:rounds r)))
     (is (nil? (:summary r)))))
 
+(deftest machinery-sits-beside-the-target-and-not-inside-it
+  (let [machinery {:root "/Users/x/Code/nido/src" :rev "cafe1234"}
+        r (report/init {:run-id "review-1" :cwd "/w" :base "main"
+                        :started-at "2026-06-30T14:00:00Z"
+                        :machinery machinery})]
+    (is (= machinery (:machinery r))
+        "which copy of the loop ran is what tells a live defect in it from an artefact of a stale invocation")
+    (is (nil? (:machinery (:target r)))
+        "a run reviewing nido's own repo carries two revisions, and folding them together loses the distinction")))
+
+(deftest a-report-with-no-machinery-stamp-still-has-the-key
+  (let [r (report/init {:run-id "review-1" :cwd "/w" :base "main"
+                        :started-at "2026-06-30T14:00:00Z"})]
+    (is (contains? r :machinery)
+        "present-and-nil, like :base-rev and :reason — a reader asks one question rather than two")))
+
 (deftest review-round-records-findings-and-target
   (let [r (drive
            [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}

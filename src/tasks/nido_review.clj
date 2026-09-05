@@ -24,6 +24,7 @@
    [nido.review.layers :as layers]
    [nido.review.record :as record]
    [nido.review.loop :as rloop]
+   [nido.review.provenance :as provenance]
    [nido.review.render :as render]
    [nido.review.retreat :as retreat]
    [nido.review.stages :as stages]
@@ -849,7 +850,8 @@
                     :judged-after :warden}
         report-atom (atom (report/init {:run-id run-id :cwd cwd :base base
                                         :started-at (str (clock))
-                                        :context context}))
+                                        :context context
+                                        :machinery (provenance/loaded-from)}))
         _ (when (seq (:missing context))
             (println (str "review-loop: running WITHOUT "
                           (str/join ", " (:missing context))
@@ -1091,7 +1093,8 @@
         title  (record-loop-title cwd kind)
         report-path (str (fs/path (cstate/run-dir run-id) "report.json"))
         report-atom (atom (report/init {:run-id run-id :cwd cwd :base nil
-                                        :started-at (str (clock))}))
+                                        :started-at (str (clock))
+                                        :machinery (provenance/loaded-from)}))
         plain  (frontend/plain?)
         emit   (frontend/emit-fn report-atom report-path clock plain)]
     ;; Under the claim from here, exactly as the diff loop is: two record rounds

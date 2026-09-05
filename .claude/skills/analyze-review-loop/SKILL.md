@@ -32,10 +32,10 @@ The payload names the run dir and the report. Start there:
 
 ```bash
 ls "<run-dir>"
-cat "<report-path>" | jq '{status: .status, rounds: .summary.rounds, target: .target}'
+cat "<report-path>" | jq '{status: .status, rounds: .summary.rounds, target: .target, machinery: .machinery}'
 ```
 
-`report.json` is the whole run: `:target` (cwd, base, base-rev, layers, files), then one entry per round under `:rounds`, each with its phases — `review` (per-layer `:layers` rows and every `:findings` body), `warden` (`:decision`, `:reason`, and per-finding `:rulings` — each carrying `:handle`, the identity the loop tells findings apart by across rounds, and `:sweep`, whether the fixer was ordered to audit the layer for siblings of it), and `fix` (`:fixes`, `:fixed-count`, and the three ways a repair does not happen — `:declined` a fixer that read the finding and refused, `:rolled-back` a repair the stack would not take, `:unattempted` a layer whose fixer was never launched because the stage stopped on a `:conflicted` it could not undo).
+`report.json` is the whole run: `:target` (cwd, base, base-rev, layers, files), `:machinery` (the source root the loop's OWN namespaces were loaded from, and the revision it stood at — §4 is what you need it for), then one entry per round under `:rounds`, each with its phases — `review` (per-layer `:layers` rows and every `:findings` body), `warden` (`:decision`, `:reason`, and per-finding `:rulings` — each carrying `:handle`, the identity the loop tells findings apart by across rounds, and `:sweep`, whether the fixer was ordered to audit the layer for siblings of it), and `fix` (`:fixes`, `:fixed-count`, and the three ways a repair does not happen — `:declined` a fixer that read the finding and refused, `:rolled-back` a repair the stack would not take, `:unattempted` a layer whose fixer was never launched because the stage stopped on a `:conflicted` it could not undo).
 
 Also in the run dir: `agent.err.log` (the warden's stderr) and `*-round-N.err.log` per stage. A run that ended `:review-failed` or `:warden-indeterminate` has its whole story in those, not in the report.
 
@@ -61,9 +61,20 @@ Then read three things off that table.
 
 **The termination.** The loop stopped for exactly one reason (`loop.clj`): converged, escalated, clean, no-progress, review-failed, fix-noop, warden-indeterminate, or — only if a cap was asked for — max-iters. Was it the right one? A `:no-progress` that fired while real work remained, or a `:converged` reached because the reviewer went quiet rather than because the code got fixed, are both the loop stopping on the wrong signal, and neither is visible from inside a single round.
 
-## 4. Read the machinery the run exercised
+## 4. Read the machinery the run exercised — at the revision that ran it
 
-You are in nido's checkout. The loop is:
+**Not the checkout you are standing in.** `report.json`'s `:machinery` names the source root the run's `nido.review.*` namespaces were loaded from and the revision it stood at, and that is the code whose behaviour you are explaining. Read it there:
+
+```bash
+REV=$(jq -r '.machinery.rev // empty' "<report-path>")
+jj --ignore-working-copy file show -r "$REV" src/nido/review/stages.clj
+```
+
+`--ignore-working-copy` because your worktree is a symlink to nido's main checkout and an analysis must not snapshot it. Nido's checkout and every nido session worktree are workspaces of one repo sharing one store, so the revision resolves from here whichever of them the run loaded from — and `:machinery.root` is what says which it was.
+
+**Say how far behind the run was, before you file anything.** `jj --ignore-working-copy log -r "$REV::main"` is the answer. A review run holds the code it started with, and the improvement sweep lands changes to that code daily, so the gap is normally non-empty and sometimes large. One analysis read the current files instead and filed four already-fixed defects as fresh bugs; establishing that took bisecting main. Anything main has since fixed is not an observation — say so in a sentence and move on.
+
+If `:machinery` is absent (a report written before the stamp existed) or the revision will not resolve, fall back to the checkout you are in and **say in the entry that you did** — every observation below is then provisional.
 
 | file | what to check it against |
 |---|---|

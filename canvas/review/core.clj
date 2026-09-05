@@ -76,6 +76,16 @@
     {:signature [:=> [:catn [:project ProjectName] [:worktree Path]] [:vector Finding]]
      :delegates [design/check design/design-of]}))
 
+(Module review-provenance
+  "Which copy of the review loop's own code a run is executing.
+
+   The counterpart of the report's target: the target pins the code under review, this pins the
+   code that did the reviewing. Without it a finding about the loop cannot be told from an
+   artefact of a stale invocation — a run eleven commits behind main reproduced four record
+   defects those commits had already fixed, and nothing in it said so."
+  (Operation loaded-from "The source root the review namespaces came from, and the commit it stands at."
+    {:signature [:=> [:catn] [:maybe :map]]}))
+
 (Module review-report
   "The run's own record, built up event by event and written as it goes."
   {:child [ReviewReport]}

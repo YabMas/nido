@@ -16,13 +16,22 @@
    cache, a design record, a stance. A review outside a nido session runs
    without any of them and reports exactly as a complete one does, so a thin run
    and a full one were indistinguishable from their reports and only the second
-   was worth trusting."
-  [{:keys [run-id cwd base started-at context]}]
+   was worth trusting.
+
+   `:machinery` is the counterpart of `:target`: the target pins the code under
+   review, this pins the code that did the reviewing. Beside rather than inside,
+   because a run over nido's own repo would otherwise read as one fact where
+   there are two. Not `:reviewer` — that word is already the codex process, and
+   `:reviewer-unavailable` is a status about it. Supplied by the caller — see
+   `nido.review.provenance/loaded-from` — because this namespace is pure and
+   answering it means reading the classpath and asking jj."
+  [{:keys [run-id cwd base started-at context machinery]}]
   {:schema     schema-version
    :run-id     run-id
    :status     "running"
    :target     (cond-> {:cwd cwd :base base :base-rev nil :files []}
                  context (assoc :context context))
+   :machinery  machinery
    :started-at started-at
    :ended-at   nil
    :rounds     []
