@@ -192,6 +192,22 @@
     (is (str/includes? s "mechanical"))
     (is (str/includes? s "lane-malli"))))
 
+(deftest layer-brief-block-makes-a-named-test-namespace-evidence-to-read
+  ;; The run this defends against: a layer split a rendered `60%` into a figure
+  ;; and a unit span, the reviewer had `(is (str/includes? html "60%"))` open in
+  ;; front of it, and reported nothing. A second round found it.
+  (let [s (prompts/layer-brief-block a-brief)]
+    (is (str/includes? s "EVIDENCE you must read")
+        "unmarked, a test namespace in Verify reads as background a reviewer may skip")
+    (is (str/includes? s "<head>")
+        "an assertion read at the working copy may be one this layer already updated")
+    (is (str/includes? s "you cannot run them")
+        "the sandbox forbids running a test, so discharge has to be defined as reading")
+    (is (str/includes? s "left standing is a")
+        "a contradicted assertion the layer did not update has to arrive as a finding")
+    (is (str/includes? s "UPDATED")
+        "a test the layer rewrote on purpose must not read as one")))
+
 (deftest layer-brief-block-is-nil-for-a-whole-stack-review
   ;; Saying "no brief" would read as an instruction to go wide; saying nothing
   ;; leaves the unbounded pass unbounded, which is what it is for.

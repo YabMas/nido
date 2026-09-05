@@ -23,7 +23,14 @@
    `Out of scope` is the field that makes bounded review work: without it every
    reviewer re-derives the whole change and the stack's benefit is lost. It is
    stated as a prohibition here rather than as context, because a reviewer given
-   it as context flags the item anyway and lets the reader sort it out."
+   it as context flags the item anyway and lets the reader sort it out.
+
+   `Verify` is stated as evidence for the same reason. The reviewer works under
+   a read-only sandbox and cannot execute a test, so a Verify field naming a
+   test namespace is discharged by READING it — each assertion the layer left
+   standing, held against what the layer changed. Phrase it as checks to run
+   and a reviewer with the contradicted assertion open in front of it reports
+   nothing: it has no reading of an instruction it cannot carry out."
   [{:keys [subject mode claims verify lane out-of-scope]}]
   (when (or claims verify out-of-scope)
     (str
@@ -43,8 +50,13 @@
      "- Claims is what this layer asserts about itself. A finding that shows a\n"
      "  claim is FALSE is the most valuable thing you can return — say plainly\n"
      "  which claim, and what you saw that contradicts it.\n"
-     "- Verify names the concrete checks this layer should pass. Discharge them\n"
-     "  and report any that fail.\n"
+     "- Verify names the concrete checks this layer should pass, and the test\n"
+     "  namespaces it names are EVIDENCE you must read rather than background.\n"
+     "  Read each at <head> and hold every assertion still standing there\n"
+     "  against what this layer changed — you cannot run them, so that reading\n"
+     "  is the whole discharge. An assertion this layer UPDATED is the author\n"
+     "  keeping its own brief true; one it contradicted and left standing is a\n"
+     "  finding, and it goes red the moment anybody runs it.\n"
      "- A `mechanical` layer asserts uniformity: your job is to find the one\n"
      "  place that got special handling, not to reopen the decision. A\n"
      "  `judgment` layer owns a decision: weigh it.\n\n")))
