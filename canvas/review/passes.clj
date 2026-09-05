@@ -208,6 +208,14 @@
     {:signature [:=> [:catn [:cache :map] [:targets :any]] :map]})
   (Operation announce-targets! "Publish what this round is reviewing and what it skipped."
     {:signature [:=> [:catn [:ctx :map] [:split :map]] :any]})
+  (Operation round-correctness
+    "The round's correctness verdict: the worst answer its reviewers gave, or nil when none
+     reached one. A round has as many verdicts as it opened targets and the whole-stack pass's
+     is not the round's — on a layered stack that pass reviews the CUT rather than the code, so
+     publishing its answer alone put `correct` on a report row whose own findings array held a
+     P1. A dissent carries through VERBATIM: an answer outside the vocabulary is a reviewer
+     that said something, and normalising it would hide that it was never asked for."
+    {:signature [:=> [:catn [:results :any]] [:maybe :string]]})
   (Operation discover-design-record "This workstream's latest design record."
     {:signature [:=> [:catn [:cwd Path]] [:maybe :map]]})
   (Operation discover-baseline

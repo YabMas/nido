@@ -711,6 +711,71 @@
       (is (= "a" (:from-layer (first (:findings ctx))))
           "the layer reviewer's copy wins over the whole-stack copy"))))
 
+(deftest a-rounds-verdict-is-the-worst-answer-its-reviewers-gave
+  ;; Observed: a report row read overall-correctness "correct" beside a P1 its
+  ;; own findings array held, because the round published the composition pass's
+  ;; answer under the round's name while the layer pass on the same round said
+  ;; "incorrect". The two fields on one row then contradicted each other with
+  ;; nothing to say which was lying.
+  (with-redefs [layers/patch-hash    (fn [& _] nil)
+                codex/merge-base     (fn [& _] "FORK")
+                codex/changed-files  (fn [& _] [])
+                stages/session-stack (fn [& _] [{:bookmark "s--a" :slug "a" :tip "cA"}
+                                                {:bookmark "s--b" :slug "b" :tip "cB"}])
+                layers/brief         (fn [& _] nil)
+                codex/review!        (fn [{:keys [label]}]
+                                       (if (= "stack" label)
+                                         {:status nil :findings []
+                                          :overall-correctness "correct"}
+                                         {:status nil
+                                          :findings [{:title (str "f-" label)
+                                                      :file "x.clj" :line-start 1}]
+                                          :overall-correctness "incorrect"}))]
+    (let [ctx ((:run stages/review-stage)
+               {:config {:cwd "/w" :base "main" :run-id "r"} :iter 1})]
+      (is (= "incorrect" (:overall-correctness ctx))
+          "a composition pass happy with the cut cannot clear a round whose layers
+           reported defects — the row would deny its own findings"))))
+
+(deftest a-terminal-clean-round-still-publishes-a-reviewer-that-would-not-clear
+  ;; The clean branch assigns the verdict separately, and it is the round whose
+  ;; verdict is most worth keeping: a reviewer withholding clearance on a layer
+  ;; it found nothing in is the only trace of a doubt the loop is about to end on.
+  (let [answers (fn [by-label]
+                  (with-redefs [layers/patch-hash    (fn [& _] nil)
+                                codex/merge-base     (fn [& _] "FORK")
+                                codex/changed-files  (fn [& _] [])
+                                stages/session-stack (fn [& _] [{:bookmark "s--a" :slug "a" :tip "cA"}
+                                                                {:bookmark "s--b" :slug "b" :tip "cB"}])
+                                layers/brief         (fn [& _] nil)
+                                codex/review!        (fn [{:keys [label]}]
+                                                       {:status nil :findings []
+                                                        :overall-correctness (by-label label)})]
+                    ((:run stages/review-stage)
+                     {:config {:cwd "/w" :base "main" :run-id "r"} :iter 1})))]
+    (let [ctx (answers {"a" "correct" "b" "incorrect" "stack" "correct"})]
+      (is (= :clean (:status ctx)) "no findings, so the round is still terminal")
+      (is (= "incorrect" (:overall-correctness ctx))
+          "the withheld clearance survives the round it would otherwise be lost in"))
+    (is (= "correct" (:overall-correctness (answers (constantly "correct"))))
+        "and a round every reviewer cleared reads correct, as it always did")))
+
+(deftest round-correctness-takes-the-first-dissent-verbatim
+  (is (= "incorrect" (stages/round-correctness [{:overall-correctness "correct"}
+                                                {:overall-correctness "incorrect"}
+                                                {:overall-correctness "unsure"}]))
+      "target order breaks the tie, so a round two reviewers dissented in reports the
+       same answer every time it is read")
+  (is (= "unsure" (stages/round-correctness [{:overall-correctness "unsure"}
+                                             {:overall-correctness "incorrect"}]))
+      "an answer outside the vocabulary is a reviewer that said something; flattening
+       it to incorrect would hide that it was never asked for")
+  (is (= "correct" (stages/round-correctness [{:overall-correctness "correct"}
+                                              {:overall-correctness "correct"}])))
+  (is (nil? (stages/round-correctness [{:status :nothing-to-review :findings []}]))
+      "a target that read nothing reached no verdict, and a round of them has none
+       to publish rather than a clearance nobody gave"))
+
 (deftest a-flat-branch-earns-clean-by-being-quiet-twice
   ;; One whole-diff pass over an unlayered branch is a sample, not a verdict:
   ;; the round that missed a change's only P1 found one of three pre-existing

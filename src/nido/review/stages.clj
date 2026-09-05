@@ -521,6 +521,39 @@
                                                  (str/split-lines (or manifest ""))))})))
         results))
 
+(def ^:private cleared-verdict
+  "The only correctness answer that clears a target. `review_prompt.md` asks for
+   \"correct\" when the patch is free of blocking issues and \"incorrect\"
+   otherwise, and the schema types the field as a bare string — so a reviewer
+   that answered anything else did not clear what it read."
+  "correct")
+
+(defn ^{:malli/schema [:=> [:cat :any] [:maybe :string]]}
+  round-correctness
+  "The round's correctness verdict: the worst answer its reviewers gave, or nil
+   when none of them reached one.
+
+   A round has as many verdicts as it opened targets, and the whole-stack pass's
+   is not the round's. On a layered stack that pass is the COMPOSITION reviewer
+   — asked whether the cut holds, not whether the code inside a layer is right —
+   so a round that took its answer alone published `correct` on a report row
+   whose own findings array held a P1 the layer pass had reported `incorrect`
+   for. A reader comparing the two fields had no way to tell which was lying.
+
+   A dissent is carried through VERBATIM rather than flattened to \"incorrect\":
+   an unrecognised answer is a reviewer that said something, and normalising it
+   into the vocabulary would hide that it was never in it. Ties break on target
+   order for the same reason the fan-out rethrows the first failure in target
+   order — which of several dissents matters most is a judgement this makes no
+   claim about, and fixing the order is what makes the round reproducible.
+
+   Silent targets contribute nothing: one that read nothing carries no verdict,
+   and a layer skipped on a converged hash had no reviewer this round at all."
+  [results]
+  (let [answers (keep :overall-correctness results)]
+    (or (first (remove #(= cleared-verdict %) answers))
+        (first answers))))
+
 (defn ^{:malli/schema [:=> [:cat :map :map] :any]}
   announce-targets!
   "Publish what this round is about to review, BEFORE any agent starts.
@@ -686,6 +719,11 @@
                    (record-statuses! cwd (assoc ctx :cache cached)
                                      (salvaged-statuses results))
                    (throw (:failure (first failed))))
+        ;; The whole-range target, and only what is a fact about that range:
+        ;; where the review started from and which files it covered. NOT where a
+        ;; round-level answer comes from — on a layered stack this target is the
+        ;; composition pass, which reviews the cut rather than the code. See
+        ;; `round-correctness`.
         whole    (or (first (filter #(:stack? (:target %)) results))
                      (first results))
         ;; The mechanical reviewer joins the fan-out, but not the layer bookkeeping:
@@ -739,14 +777,14 @@
                                               :else              :clean))
                        first-quiet-round?
                        (assoc :carry (assoc (:carry ctx) :quiet-once true))
-                       ;; The reviewer's correctness verdict, on the one branch
+                       ;; The round's correctness verdict, on the one branch
                        ;; that used to drop it. A terminal clean round is the
                        ;; round whose verdict is most worth keeping — it is the
                        ;; only evidence that anyone looked — and it was the only
                        ;; round the report had none for. Absent for a round that
                        ;; read nothing, because no reviewer reached a verdict.
                        (not nothing?)
-                       (assoc :overall-correctness (:overall-correctness whole)))]
+                       (assoc :overall-correctness (round-correctness results)))]
         (when-not (or nothing? first-quiet-round?) (record-review! cwd ctx'))
         ctx')
       (assoc ctx
@@ -756,7 +794,7 @@
              :reviewed-at at
              :cache cached
              :toc (build-toc results)
-             :overall-correctness (:overall-correctness whole)
+             :overall-correctness (round-correctness results)
              :base-rev (:base-rev whole)
              :manifest (:manifest whole)))))
 
