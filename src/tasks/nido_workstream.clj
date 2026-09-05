@@ -101,12 +101,16 @@
         ;; Loud, and above the ledger listing, because everything printed below
         ;; is read OFF the index — so when it has fallen behind the directory,
         ;; the listing is exactly the thing that cannot be trusted to say so.
-        (when-let [{:keys [on-disk indexed missing]} (ws/index-drift p ws-id)]
+        ;; Named one per line rather than counted: the count alone leaves a
+        ;; reader with a ledger it cannot trust and no way to go look, and these
+        ;; are the paths to open.
+        (when-let [unindexed (ws/index-drift p ws-id)]
           (println)
           (println (format "⚠ LEDGER INDEX IS BEHIND THE DISK — %d %s not listed below"
-                           missing (if (= 1 missing) "entry" "entries")))
-          (println (format "  entries/ holds up to %04d; the index has %d rows."
-                           on-disk indexed))
+                           (count unindexed)
+                           (if (= 1 (count unindexed)) "entry" "entries")))
+          (doseq [f unindexed]
+            (println (str "  entries/" f)))
           (println "  Every reader here — the panes, the review warden — sees the index."))
         (when-let [idx (:entries w)]
           (println "ledger:")

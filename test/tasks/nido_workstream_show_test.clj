@@ -35,3 +35,25 @@
             (is (str/includes? out (:id w)))                ; prints the ws-id
             (is (str/includes? out "Findings round 1"))      ; renders the findings event
             (is (str/includes? out "Save button 500s"))))))))
+
+(deftest show-names-the-unindexed-entries-and-stays-quiet-about-gaps
+  (with-tmp
+    (fn []
+      (let [w   (ws/create! :brian {:stage :in-progress :external-refs []})
+            _   (ws/append-entry! :brian (:id w) {:kind :note} "one")
+            dir (fs/path (cstate/workstream-dir :brian (:id w)) "entries")]
+        ;; An interrupted append: the payload reached the disk, the index never
+        ;; learned of it, and every line show prints below comes off the index.
+        (spit (str (fs/path dir "0002-note.md")) "the lost append")
+        (let [out (with-out-str (t/show* {:project "brian" :ws-id (:id w)}))]
+          (is (str/includes? out "LEDGER INDEX IS BEHIND THE DISK"))
+          (is (str/includes? out "entries/0002-note.md")
+              "a reader told the ledger is untrustworthy needs the path to open"))
+        ;; Numbering past the orphan and clearing it leaves a permanent gap in
+        ;; the seq sequence — the state every long-lived ledger reaches, and one
+        ;; a reader must not be warned about.
+        (ws/append-entry! :brian (:id w) {:kind :note} "three")
+        (fs/delete (fs/path dir "0002-note.md"))
+        (let [out (with-out-str (t/show* {:project "brian" :ws-id (:id w)}))]
+          (is (not (str/includes? out "BEHIND THE DISK"))
+              "an intact ledger is reported by silence, or the warning means nothing"))))))

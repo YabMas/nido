@@ -401,6 +401,31 @@
     (throw (ex-info "Refusing to overwrite an existing ledger entry"
                     {:seq seq-n :file abs}))))
 
+(def ^:private entry-file-pattern
+  "The prefix `append-entry!` gives every entry file: a four-digit :seq, then a
+   hyphen. Group 1 is the number.
+
+   Shared by the two readings of entries/ — what the next :seq must clear, and
+   which files the index does not name — so a stray file in the directory is
+   either an entry to both of them or to neither."
+  #"^(\d{4})-")
+
+(defn- entry-filenames
+  "The entry filenames under entries/, in :seq order. Empty when the workstream
+   has no entries directory yet.
+
+   Name order IS :seq order because the number is zero-padded; unpad it and this
+   sorts 0010 before 0009."
+  [project ws-id]
+  (let [dir (fs/path (cstate/workstream-dir project ws-id) "entries")]
+    (if-not (fs/exists? dir)
+      []
+      (->> (fs/list-dir dir)
+           (map fs/file-name)
+           (filter #(re-find entry-file-pattern %))
+           sort
+           vec))))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :int]}
   highest-seq-on-disk
   "The largest entry number under entries/, or 0.
@@ -415,23 +440,30 @@
    The directory is the ledger. The index is a convenience over it, and where
    they disagree the files win."
   [project ws-id]
-  (let [dir (fs/path (cstate/workstream-dir project ws-id) "entries")]
-    (if-not (fs/exists? dir)
-      0
-      (->> (fs/list-dir dir)
-           (keep #(some-> (re-find #"^(\d{4})-" (fs/file-name %)) second parse-long))
-           (reduce max 0)))))
+  (->> (entry-filenames project ws-id)
+       (keep #(some-> (re-find entry-file-pattern %) second parse-long))
+       (reduce max 0)))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe :map]]}
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] [:maybe [:vector :string]]]}
   index-drift
-  "How far the index has fallen behind the entries directory, or nil when they
-   agree. Surfaced by `bb nido:workstream:show` so the drift is visible without
-   anybody going looking for it."
+  "The entry files under entries/ that no index row names, in :seq order, or nil
+   when the index names every one of them. Surfaced by `bb nido:workstream:show`,
+   which reads its listing off the index and so cannot otherwise say what it is
+   not showing.
+
+   Set against set, and never the highest :seq on disk against the number of
+   index rows. The :seq sequence is SPARSE by design: `append-entry!` numbers
+   from (inc (max rows highest)), so it steps over a number it cannot claim
+   rather than onto it, and a ledger that has done that once has more numbers
+   than files from then on. Comparing the two measures an ordinal against a
+   cardinality, which reports drift on an intact ledger — telling every reader,
+   the review warden included, that the record it is judging against may be
+   stale."
   [project ws-id]
-  (let [on-disk (highest-seq-on-disk project ws-id)
-        indexed (count (:entries (read-ws project ws-id)))]
-    (when (> on-disk indexed)
-      {:on-disk on-disk :indexed indexed :missing (- on-disk indexed)})))
+  (let [indexed (into #{} (keep #(some-> (:file %) fs/file-name))
+                      (:entries (read-ws project ws-id)))]
+    (when-let [unindexed (seq (remove indexed (entry-filenames project ws-id)))]
+      (vec unindexed))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map :string] :Path]}
   append-entry!

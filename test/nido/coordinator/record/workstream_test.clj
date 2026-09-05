@@ -843,7 +843,8 @@
           ;; about. The index still says 1; the directory says 2.
           (spit (str (fs/path dir "0002-note.md")) "the lost append")
           (is (= 2 (ws/highest-seq-on-disk :brian id)))
-          (is (= {:on-disk 2 :indexed 1 :missing 1} (ws/index-drift :brian id)))
+          (is (= ["0002-note.md"] (ws/index-drift :brian id))
+              "and the drift names the file, which is what a reader has to open")
           (let [abs (ws/append-entry! :brian id {:kind :note} "three")]
             (is (str/includes? abs "0003-note")
                 "the next append steps over the orphan rather than onto it")
@@ -880,4 +881,33 @@
           (ws/append-entry! :brian id {:kind :note} "one")
           (ws/append-entry! :brian id {:kind :note} "two")
           (is (nil? (ws/index-drift :brian id)))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest a-gap-in-the-seq-sequence-is-not-drift
+  ;; A ledger that has once stepped over an orphan carries more numbers than
+  ;; files from then on, so the highest :seq on disk stops being the number of
+  ;; entries. A live workstream sat at 82 index rows against 82 files agreeing
+  ;; one-to-one with seqs 75 and 80 unused, and a count comparison announced two
+  ;; entries missing from the listing — which tells the review warden the record
+  ;; it is judging against may be stale.
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-root (constantly (str tmp))]
+        (let [id  (:id (ws/create! :brian {:stage :in-progress :external-refs []}))
+              _   (ws/append-entry! :brian id {:kind :note} "one")
+              dir (fs/path (cstate/workstream-dir :brian id) "entries")]
+          ;; The orphan that consumed 0002, since cleaned up: the number it took
+          ;; is out of the sequence for good, because nothing renumbers.
+          (spit (str (fs/path dir "0002-note.md")) "the lost append")
+          (ws/append-entry! :brian id {:kind :note} "three")
+          (fs/delete (fs/path dir "0002-note.md"))
+          ;; A stray file in the directory is not a ledger entry either — and a
+          ;; false alarm here costs exactly what a real one is meant to buy.
+          (spit (str (fs/path dir ".DS_Store")) "")
+          (is (= 3 (ws/highest-seq-on-disk :brian id))
+              "the gap is permanent: the next append still numbers past it")
+          (is (= 2 (count (:entries (ws/read-ws :brian id))))
+              "more numbers than files, which is the normal state, not a defect")
+          (is (nil? (ws/index-drift :brian id))
+              "every entry file is named by an index row, so the listing hides nothing")))
       (finally (fs/delete-tree tmp)))))

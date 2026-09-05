@@ -100,10 +100,15 @@
      files against 37 rows, silently overwriting two."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :int]})
   (Operation index-drift
-    "How far the index has fallen behind the entries directory, or nil when they agree. What a
-     reader is shown, because every other reader here trusts the index."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe :map]]
-     :delegates [read-ws highest-seq-on-disk]})
+    "The entry files under entries/ that no index row names, or nil when the index names every
+     one of them. What a reader is shown, because every other reader here trusts the index.
+
+     Set against set, and never the highest `:seq` on disk against the number of index rows.
+     `append-entry!` steps OVER a number it cannot claim rather than onto it, so the sequence is
+     sparse by design and the highest number on disk is not the count of files. Comparing the two
+     measures an ordinal against a cardinality and reports drift on an intact ledger."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] [:maybe [:vector :string]]]
+     :delegates [read-ws]})
   (Operation append-entry-at!
     "Append only if the ledger's latest entry is still the one the caller read. The optimistic
      lock that stops two people deciding the same thing from both writing the decision."
