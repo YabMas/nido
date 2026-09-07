@@ -1,7 +1,7 @@
 (ns nido.review.prompts-test
   (:require
    [clojure.string :as str]
-   [clojure.test :refer [deftest is]]
+   [clojure.test :refer [deftest is testing]]
    [nido.review.prompts :as prompts]))
 
 (def ^:private findings [{:priority 1 :title "t" :body "b"}])
@@ -186,6 +186,21 @@
     (is (str/includes? s "the new validation logic"))
     (is (str/includes? s "PROHIBITION"))))
 
+(deftest a-layer-reviewer-owns-its-own-claim-and-can-say-it-cannot-check-it
+  ;; A claim only falsifiable by reading the layer ABOVE was written at the wrong
+  ;; altitude, and the layer reviewer is the only reader holding that claim
+  ;; against that diff. Without a way to say "I cannot check this from here" the
+  ;; question travelled to the composition pass, which reported it as a defect in
+  ;; the cut and got it parked.
+  (let [s (prompts/layer-brief-block a-brief)]
+    (is (str/includes? s "CHECKING IT IS"))
+    (is (str/includes? s "CANNOT check a claim from this diff alone")
+        "the reviewer is given the sentence it had no way to say")
+    (is (str/includes? s "wrong altitude")
+        "and told what that means about the cut")
+    (is (str/includes? s "`mechanical`")
+        "the sharp case is named, not left to be inferred")))
+
 (deftest layer-brief-block-carries-the-claims-and-the-review-mode
   (let [s (prompts/layer-brief-block a-brief)]
     (is (str/includes? s "uniform across all 40 call sites"))
@@ -335,6 +350,27 @@ layers, it is not yours"))
     (is (str/includes? out "RECURRENCE"))
     (is (str/includes? out "does NOT need a design record"))
     (is (str/includes? out "Park on RECURRENCE still applies"))))
+
+(deftest the-composition-pass-is-forbidden-the-module-boundary-subject
+  ;; Where a module boundary belongs is judged before code exists, by the design
+  ;; round's `decomposable`, which reads the surveyed modules. This pass has
+  ;; neither. Of the 19 parked misplaced-cut findings in the corpus, several were
+  ;; module-boundary observations wearing a layer's clothes — "put the lock
+  ;; protocol in a database foundation layer" — and every one of them was ruled
+  ;; un-actionable after costing a round.
+  (let [out (prompts/composition-block
+             {:layers [{:label "a" :from "x" :tip "y"}
+                       {:label "b" :from "y" :tip "z"}]})]
+    (is (str/includes? out "MODULE BOUNDARIES ARE NOT YOUR SUBJECT"))
+    (is (str/includes? out "decomposable")
+        "and it names where the subject does belong")
+    (is (str/includes? out "belongs in a Y layer")
+        "the phrasing to recognise it by is given")
+    (testing "and the pass is told what earns a finding instead"
+      (is (str/includes? out "WHAT EARNS A FINDING HERE"))
+      (is (str/includes? out "INTERMEDIATE revisions")
+          "its value is the reach no other reader has, not the wider range")
+      (is (str/includes? out "Coming back empty is the common\ncorrect answer")))))
 
 (deftest a-cut-kind-with-no-mechanical-remedy-is-not-a-fixers-work
   ;; claim-falsified asks about the cut and names no move the loop can make.

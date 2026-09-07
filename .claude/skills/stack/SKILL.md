@@ -140,6 +140,17 @@ uniform rename costs a reviewer *O(1)* — confirm uniformity, spot-check, done.
 **Tiebreaker.** Unsure whether two things belong in one stratum? *Would these go
 to the same specialist?* Project review lanes are real subject boundaries.
 
+**Every layer's claim must be checkable from that layer's own diff.** This is
+the test that decides where a boundary goes once dependency order has narrowed
+it. A reviewer is handed one layer and its `Claims:`, and nothing else — so a
+claim they cannot confirm or refute from what is in front of them is a claim
+written at the wrong altitude, and no amount of care further up recovers it. If
+verifying "this is mechanical" needs the layer above to see what compensates for
+it, the boundary is in the wrong place or the claim is overstated; fix one of
+them, and do it now rather than discovering it in review. A reviewer saying *I
+cannot check this from here* is reporting a defect in the cut, not asking a
+question.
+
 **A layer with no claim is not a small layer — it is not a layer.** One that
 only forwards what the layer below already accepts, or renames on the way
 through, gives a reviewer nothing to stop at. Fold it into the layer whose claim
