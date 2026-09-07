@@ -252,6 +252,11 @@
    :doc "Refuse a landing whose design does not stand: retracted, never decided, or decided on a survey retracted since. Exits non-zero and prints the way out. [:cwd <dir>]"
    :task (apply nido-land/cmd *command-line-args*)}
 
+  nido:reentry:report
+  {:requires ([tasks.nido-reentry :as nido-reentry])
+   :doc "Which open workstreams the ledger no longer stands behind, and where each goes back to. A reading, not a gate: exits 0 whatever it finds. [:project <p>]"
+   :task (apply nido-reentry/report *command-line-args*)}
+
   nido:design:check
   {:requires ([tasks.nido-design :as nido-design])
    :doc "Check a worktree against the project's declared design (fukan canvas/). Exits 1 on a violation, 2 when undecidable. [:cwd <dir>]"

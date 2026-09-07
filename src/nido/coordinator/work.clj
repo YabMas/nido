@@ -857,7 +857,13 @@
            ;; to, and latest-report is where the intake-text fallback lives).
            latest-r (if (seq entries)
                       (hydrate (entry->report base-dir (last entries)))
-                      (latest-report project ws-id))]
+                      (latest-report project ws-id))
+           ;; Read ONCE and used twice — by the heading and by the arc beneath
+           ;; it. Asking pipeline/of a second time for the arc would be a second
+           ;; moment, and a heading clamped back to the approval above an arc
+           ;; that still called implementation done is exactly the disagreement
+           ;; the clamp exists to remove.
+           position (pipeline/of project ws-id)]
        {:ws-id        ws-id
         :project      project
         :origin       (classify-origin w)
@@ -873,16 +879,19 @@
         ;; What the pane LEADS with: where this is and what currently holds. The
         ;; entry index below stays exactly as it was — it is the log underneath,
         ;; not the answer.
-        :position     (pipeline/of project ws-id)
+        :position     position
         ;; The trail, at the granularity work actually moves in. Folded from the
         ;; snapshot `entries` already holds rather than re-read, for the reason
         ;; :report is: a second read is a second moment, and an arc built from a
         ;; later ledger than the index below it would disagree with the rows a
         ;; reader is looking at.
-        ;; :closed? is passed rather than re-derived: it is the same fact
-        ;; pipeline/place reads to answer :shipped, from the same record, so the
-        ;; heading and the arc under it cannot disagree about whether this is over.
-        :arc          (pipeline/arc entries {:closed? (some? (:closed w))})
+        ;; :closed? and :re-entry are passed rather than re-derived: both are
+        ;; facts pipeline/place already read, from the same records, so the
+        ;; heading and the arc under it cannot disagree about whether this is over
+        ;; or about which stages the ledger no longer stands behind.
+        :arc          (pipeline/arc entries
+                                    {:closed?  (some? (:closed w))
+                                     :re-entry (:stage (:re-entry position))})
         :holds        (holds project ws-id)
         :entries      index
         :selected-seq sel

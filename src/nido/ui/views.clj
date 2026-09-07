@@ -191,6 +191,9 @@
         .arc-row.done .arc-n { color:#cdcde0; }
         .arc-row.current .arc-g { color:#7a9ad0; }
         .arc-row.current .arc-n { color:#e6e6f5; font-weight:600; }
+        .arc-row.stale .arc-g { color:#c9a227; }
+        .arc-row.stale .arc-n { color:#c9a227; }
+        .arc-row.stale .arc-m { color:#8a7a50; }
         .arc-row.skipped .arc-n { color:#7a6f55; }
         .arc-row.skipped .arc-m { color:#7a6f55; }
         .arc-row.ahead .arc-n { color:#5f5f78; }
@@ -1598,6 +1601,8 @@
    :findings-open     "Findings open"
    :blocked           "Blocked"
    :premise-retracted "Premise retracted"
+   :design-retracted  "Design retracted"
+   :design-invalidated "Design invalidated"
    :unplaceable       "Cannot place"})
 
 (def ^:private stage-label
@@ -1612,7 +1617,8 @@
    :publish-draft-pr      "open the draft PR"
    :rebaseline            "re-do the baseline"
    :address-findings      "address findings"
-   :answer-blocker        "your answer"})
+   :answer-blocker        "your answer"
+   :acknowledge-invalidation "your call on the verdict"})
 
 (defn- position-chip
   "Where the pipeline says this row is, and what would move it — the one thing a
@@ -1918,10 +1924,12 @@
    :shipping       "Shipping"})
 
 (def ^:private arc-glyph
-  "Stage state -> its mark. Four marks because there are four states, and the two
-   empty ones are not the same: `⊘` is a stage the work went past without writing
-   one, `·` is one it has not reached."
-  {:done "✓" :current "●" :skipped "⊘" :ahead "·"})
+  "Stage state -> its mark. Five marks because there are five states, and no two
+   of them mean the same thing: `⊘` is a stage the work went past without writing
+   one, `·` is one it has not reached, and `↺` is one it wrote records for that
+   the ledger no longer stands behind — owed again rather than behind you, which
+   is the distinction a ✓ there would destroy."
+  {:done "✓" :current "●" :stale "↺" :skipped "⊘" :ahead "·"})
 
 (defn- arc-meta
   "The one line of detail a stage row carries, or nil when it holds nothing worth
@@ -1929,6 +1937,11 @@
    label is the arc line that was removed for exactly that."
   [{:keys [entries state]}]
   (cond
+    ;; The count is what a live stage says; a stale one has to say what
+    ;; happened to it instead, because the records are still there and counting
+    ;; them is exactly the reading that misleads.
+    (= :stale state) (str entries " record" (when (not= 1 entries) "s")
+                          " · superseded")
     (pos? entries) (str entries " record" (when (not= 1 entries) "s"))
     (= :skipped state) "not written"
     :else nil))

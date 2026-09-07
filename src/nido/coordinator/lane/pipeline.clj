@@ -27,6 +27,7 @@
    ask them, so there is one answer to that question in the system and not two."
   (:require
    [clojure.string :as str]
+   [nido.coordinator.lane.reentry :as reentry]
    [nido.coordinator.record.session :as csession]
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.tickets :as tickets]
@@ -53,7 +54,9 @@
   [:shipped
    :findings-open
    :blocked
+   :design-retracted
    :premise-retracted
+   :design-invalidated
    :phase-landed
    :published
    :reviewed
@@ -238,8 +241,16 @@
 
      :done     it holds records and is not where the trail ends
      :current  the newest record carrying any stage belongs to it
+     :stale    it holds records the ledger no longer stands behind
      :skipped  it holds no record and the trail is already past it
      :ahead    it holds no record and the trail has not reached it
+
+   :stale is the one a forward-only vocabulary could not say, and it is not
+   :skipped nor a variety of :done. The stage HAPPENED — it holds records, and
+   they are still in the ledger — but the thing they were made against has moved
+   under them, so a reader who sees ✓ against it is being told the work is behind
+   them when it is owed again. `re-entry` decides where that line falls; every
+   spine stage from there upward that holds records is stale.
 
    :skipped is neither a defect nor an error — a workstream can reach a draft PR
    having never written an implementation-plan record — but it is a fact a reader
@@ -257,7 +268,7 @@
    reads to answer :shipped, taken from the same place, so the two cannot come
    apart."
   ([entries] (arc entries {}))
-  ([entries {:keys [closed?]}]
+  ([entries {:keys [closed? re-entry]}]
   (let [staged  (keep (fn [e]
                         (when-let [st (stage-of (:kind e))]
                           (assoc e :stage st)))
@@ -265,6 +276,11 @@
         spine   (remove #(off-arc (:stage %)) staged)
         current (:stage (last staged))
         idx     (zipmap arc-stages (range))
+        ;; Everything from the re-entry stage upward is behind what the ledger
+        ;; now stands on. nil re-entry — the ordinary case — makes this false
+        ;; everywhere and the four original states are exactly what they were.
+        stale?  (fn [st] (boolean (when-let [r (idx re-entry)]
+                                    (>= (idx st) r))))
         ;; nil — never false — when the trail ends off the arc, so `past?` cannot
         ;; report a stage as skipped on the strength of an excursion.
         past?   (fn [st] (when-let [c (idx current)]
@@ -282,11 +298,16 @@
                               ;; A closed workstream has no current stage and
                               ;; nothing still ahead of it: it is over, whatever
                               ;; the last record happened to be about.
-                              :state (cond (seq es)                     (if (and (= st current)
-                                                                                 (not closed?))
-                                                                          :current :done)
-                                           (or closed? (past? st))      :skipped
-                                           :else                        :ahead))))
+                              :state (cond
+                                       ;; A closed workstream is over, and
+                                       ;; staleness is a claim about work still
+                                       ;; owed — so closure wins, as it does for
+                                       ;; :current.
+                                       (and (seq es) (stale? st) (not closed?)) :stale
+                                       (seq es) (if (and (= st current) (not closed?))
+                                                  :current :done)
+                                       (or closed? (past? st))      :skipped
+                                       :else                        :ahead))))
                    arc-stages)
      :excursions (->> (filter #(off-arc (:stage %)) staged)
                       (group-by :stage)
@@ -343,7 +364,11 @@
           (:seq latest))))))
 
 (defn- live-retraction
-  "The :seq of a retraction whose subject still stands unrepaired, or nil.
+  "A retraction whose subject still stands unrepaired, as {:seq :kind}, or nil.
+   `:kind` is the kind of the entry it RETRACTED, which is what decides where the
+   work goes back to — a retracted design wants a new design and a retracted
+   baseline wants a new survey, and reporting both as :premise-retracted sent an
+   author off to re-survey an area nobody had questioned.
 
    A retraction is repaired by a later record superseding what it retracted —
    which is exactly the walk `standing` already does for a design's premise. So
@@ -361,7 +386,11 @@
                  (not (some #(= retracted (:seq (:supersedes %)))
                             (concat (ws/entries-of project ws-id :baseline)
                                     (ws/entries-of project ws-id :design)))))
-        (:seq latest)))))
+        ;; The kind comes off the INDEX rather than by parsing the retracted
+        ;; entry: the index already carries it, and standing fails closed on an
+        ;; unparseable one anyway.
+        {:seq  (:seq latest)
+         :kind (some #(when (= retracted (:seq %)) (:kind %)) (:entries w))}))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :boolean]}
   baseline-verified?
@@ -418,9 +447,24 @@
    record trail underneath them; then implementation backwards from published;
    then the record arc. Each clause names a fact that is true of the ledger, so
    a position is always answerable by pointing at an entry."
-  [{:keys [closed? findings-open? blocker-seq retraction-seq ks decided? approved?
-           verified?]}]
-  (cond
+  [{:keys [closed? findings-open? blocker-seq retraction ks decided? approved?
+           verified? re-entry]}]
+  ;; THE CLAMP. The four trail clauses below place a stage by whether a kind is
+  ;; present in the index, and an index is append-only — so each of them, once
+  ;; true, is true for ever. `re-entry` is the reading that says how far up the
+  ;; ledger is still good for, and swapping the set those four consult is what
+  ;; stops the position outliving the records under it. Everything ABOVE them is
+  ;; already a statement about now and is deliberately left alone: a closed
+  ;; workstream is closed and a blocked one is blocked, whatever the design
+  ;; underneath did.
+  ;;
+  ;; A SET rather than a flag, because a stage is passed when it holds a record
+  ;; of the design being built now — not when every record it holds is current.
+  ;; A flag makes the first stale entry permanent: a workstream that redesigned,
+  ;; re-approved and re-implemented would still be held at the implementation by
+  ;; the record it had just superseded, and could never reach the review again.
+  (let [trail-ks (if re-entry (:trail re-entry) ks)]
+    (cond
     ;; :closed is the authority on `done`, and a :merged entry is NOT. They come
     ;; apart on exactly the case a phase plan creates: reopen! clears :closed for
     ;; the next landing while every :merged entry stays in the ledger forever, so
@@ -429,15 +473,31 @@
     closed?                        :shipped
     findings-open?                 :findings-open
     blocker-seq                    :blocked
-    retraction-seq                 :premise-retracted
+
+    ;; What was retracted decides where the work goes back to. Both answered
+    ;; :premise-retracted before, whose next action is :rebaseline — so a
+    ;; retracted DESIGN sent its author off to re-survey an area nobody had said
+    ;; anything about. The retraction names its target and the index knows that
+    ;; entry's kind, so the routing is read rather than assumed.
+    (= :design (:kind retraction))   :design-retracted
+    (:seq retraction)                :premise-retracted
+
+    ;; A round judged the design itself wrong and nobody has answered it. A halt
+    ;; rather than a clamp, because it is a question put to a person: the two
+    ;; answers are a retraction or a grant, and neither is derivable from the
+    ;; ledger as it stands. Below :blocked on purpose — an agent asleep at a
+    ;; blocker is waiting on an answer right now, where this has been waiting
+    ;; since whenever the round ran.
+    (= :design-invalidated (:reason (:because re-entry))) :design-invalidated
+
     ;; Merged and open again: a landing completed and somebody reopened it. That
     ;; is the phase plan working, and the next act is the next phase — which is
     ;; why this outranks :published, whose :pr-opened entry belongs to the
     ;; landing that just finished.
-    (contains? ks :merged)         :phase-landed
-    (contains? ks :pr-opened)      :published
-    (contains? ks :review)         :reviewed
-    (contains? ks :implementation-completed) :implemented
+    (contains? trail-ks :merged)         :phase-landed
+    (contains? trail-ks :pr-opened)      :published
+    (contains? trail-ks :review)         :reviewed
+    (contains? trail-ks :implementation-completed) :implemented
     approved?                      :design-approved
     decided?                       :design-decided
     (contains? ks :design)         :designed
@@ -465,7 +525,7 @@
     (and (seq ks) (empty? (filter legible-kinds ks)))
     :unplaceable
 
-    :else                          :intake))
+    :else                          :intake)))
 
 (def ^:private next-by-position
   "What each position hands to next: the stage, and the mode that stage runs in.
@@ -490,6 +550,12 @@
    :implemented       {:stage :review-implementation :mode :mechanical}
    :reviewed          {:stage :publish-draft-pr      :mode :working-copy}
    :premise-retracted {:stage :rebaseline              :mode :authoring}
+   ;; A retracted DESIGN wants a new design, not a new survey. The premise was
+   ;; never in question — somebody found the commitment untrue.
+   :design-retracted  {:stage :design                 :mode :authoring}
+   ;; Nobody but a person can answer it: the round has already said what it
+   ;; found, and what happens next is a judgement about whether it is right.
+   :design-invalidated {:stage :acknowledge-invalidation :mode :human}
    :findings-open     {:stage :address-findings      :mode :working-copy}
    ;; The next phase is an implementation, and which one is read off the design's
    ;; :phases against how many :merged entries the ledger holds — a count, not a
@@ -678,10 +744,16 @@
           br     (some #(when (= :notion (:adapter %)) (:id %)) (:external-refs w))
           design (ws/latest-entry project ws-id :design)
           st     (when design (standing/of-design project ws-id design))
+          ;; The pure arity, given what has already been read. `of*` would
+          ;; otherwise re-read the workstream and re-run the standing closure —
+          ;; the two most expensive things on this path, and the board runs this
+          ;; once per rendered row.
+          re     (reentry/of* w design st)
           pos    (place {:closed?        (some? (:closed w))
                          :findings-open? (open-findings? w)
                          :blocker-seq    (unanswered-blocker project ws-id w)
-                         :retraction-seq (live-retraction project ws-id w)
+                         :retraction     (live-retraction project ws-id w)
+                         :re-entry       re
                          :ks             ks
                          ;; Approval is standing's answer, never re-derived
                          ;; here: it is a statement about NOW, joining the
@@ -695,6 +767,11 @@
        {:at     pos
         :next   (next-action pos kind)
         :intake kind
+        ;; The re-entry point rides on the answer rather than only shaping it.
+        ;; A reader shown a workstream clamped back to :design-approved has no
+        ;; way to tell that from one that simply got there, and the surfaces and
+        ;; the fallback report both need to say WHY — building either on a second
+        ;; derivation would be the two-answers defect this change exists to close.
         :read   {:ledger        (count (:entries w))
                 :kinds         ks
                 :board-stage   (:stage w)
@@ -702,6 +779,8 @@
                  :sessions      (mapv (juxt :name #(get-in % [:autonomy :phase]))
                                       (csession/list-sessions project ws-id))
                  :standing      (when st (select-keys st [:live? :decidable? :decided?]))}}
+
+        re (assoc :re-entry re)
 
         (= :unplaceable pos)
         (assoc :why (str "this ledger's " (count (:entries w)) " entr"

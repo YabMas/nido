@@ -525,3 +525,157 @@
                                    :letter "A" :label "do a" :summary "took A"})
           (is (= :intent-stated (:at (p/of :brian id)))
               "answered explicitly, with no other work since"))))))
+
+;; ── The clamp ───────────────────────────────────────────────────────────────
+
+(defn- approved-and-implemented!
+  "A workstream with a verified baseline, an approved design and an
+   implementation done under it. Returns [id add! baseline-seq design-seq]."
+  [add!]
+  (intent! add!)
+  (let [b (add! :baseline a-baseline)]
+    (add! :baseline-review {:format :baseline-review :verdict :sufficient
+                            :baseline-seq b :reason "holds"})
+    (let [d (add! :design (a-design b))]
+      (add! :design-decision (a-decision d :proceed))
+      (add! :design-approved {:format :design-approved :design {:seq d} :at-seq d})
+      (add! :implementation-completed {:format :implementation-completed
+                                       :summary "done" :artifacts []})
+      [b d])))
+
+(deftest an-implementation-under-a-superseded-design-no-longer-reads-as-implemented
+  ;; THE defect. fukan/ws-20260831-1ba009 held exactly this: approved at 83,
+  ;; implemented at 84, then six more designs — and it reported :implemented with
+  ;; :review-implementation as the next stage, while bb nido:land:check refused
+  ;; the same ledger.
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)
+            [b d1] (approved-and-implemented! add!)]
+        (is (= :implemented (:at (p/of :brian id))) "before the design moves")
+        (let [d2 (add! :design (assoc (a-design b) :supersedes {:seq d1 :why "recut"}))]
+          (add! :design-decision (a-decision d2 :proceed))
+          (add! :design-approved {:format :design-approved :design {:seq d2} :at-seq d2})
+          (let [r (p/of :brian id)]
+            (is (= :design-approved (:at r))
+                "the new design is approved, so it is back at the implementation")
+            (is (= {:stage :implement :mode :working-copy} (:next r)))
+            (is (= :implementation (:stage (:re-entry r))))
+            (is (= :trail-superseded (:reason (:because (:re-entry r)))))))))))
+
+(deftest a-design-nobody-approved-cannot-be-reported-past-the-approval
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)]
+        (intent! add!)
+        (let [b (add! :baseline a-baseline)]
+          (add! :baseline-review {:format :baseline-review :verdict :sufficient
+                                  :baseline-seq b :reason "holds"})
+          (let [d (add! :design (a-design b))]
+            (add! :design-decision (a-decision d :proceed))
+            (add! :implementation-completed {:format :implementation-completed
+                                             :summary "done" :artifacts []})
+            (add! :pr-opened {:format :pr-opened :url "u" :title "t"})
+            (let [r (p/of :brian id)]
+              (is (= :design-decided (:at r))
+                  "a draft PR does not stand in for the grant nobody gave")
+              (is (= :approve-design (:stage (:next r))))
+              (is (= :human (:mode (:next r)))))))))))
+
+(deftest the-halts-and-terminals-above-the-trail-are-never-clamped
+  ;; The clamp reaches the four record-trail clauses and stops. A closed
+  ;; workstream is closed and a blocked one is blocked, whatever the design
+  ;; underneath did — reopening finished work on a ledger nobody is acting on is
+  ;; the one thing this must not do.
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)
+            [_ _] (approved-and-implemented! add!)]
+        (add! :design (a-design 2))            ; unapproved: the clamp bites
+        (is (= :designed (:at (p/of :brian id))) "clamped while open")
+        (ws/close! :brian id :done)
+        (is (= :shipped (:at (p/of :brian id)))
+            "and closure still outranks it")))))
+
+(deftest an-invalidated-design-halts-the-workstream-and-waits-for-a-person
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)
+            [_ d] (approved-and-implemented! add!)]
+        (add! :design-verdict {:format :design-verdict :verdict :invalidated
+                               :round 1 :design-seq d :reason "a second path sums"
+                               :invariants-broken [{:invariant "one summing path"
+                                                    :finding "the renderer sums"}]
+                               :needs "redesign the totalling seam"})
+        (let [r (p/of :brian id)]
+          (is (= :design-invalidated (:at r)))
+          (is (= {:stage :acknowledge-invalidation :mode :human} (:next r))
+              "and nobody but a person can answer it"))))))
+
+(deftest a-retracted-design-goes-back-to-the-design-and-a-retracted-baseline-to-the-survey
+  ;; Both answered :premise-retracted before, whose next action is :rebaseline —
+  ;; so a retracted DESIGN sent its author off to re-survey an area nobody had
+  ;; questioned.
+  (with-tmp
+    (fn [_]
+      (testing "a retracted design"
+        (let [[id add!] (ledger)
+              [_ d] (approved-and-implemented! add!)]
+          (add! :retraction {:format :retraction :retracts {:seq d}
+                             :because "the cut does not hold"
+                             :evidence ["src/a.clj:1"] :found-during :review})
+          (let [r (p/of :brian id)]
+            (is (= :design-retracted (:at r)))
+            (is (= {:stage :design :mode :authoring} (:next r))))))
+      (testing "a retracted baseline"
+        (let [[id add!] (ledger)
+              [b _] (approved-and-implemented! add!)]
+          (add! :retraction {:format :retraction :retracts {:seq b}
+                             :because "the survey was wrong"
+                             :evidence ["src/a.clj:1"] :found-during :review})
+          (let [r (p/of :brian id)]
+            (is (= :premise-retracted (:at r)))
+            (is (= {:stage :rebaseline :mode :authoring} (:next r)))))))))
+
+(deftest the-arc-marks-every-stage-from-the-re-entry-point-upward-stale
+  (let [es [{:kind :intent :seq 1} {:kind :baseline :seq 2} {:kind :design :seq 3}
+            {:kind :design-approved :seq 4} {:kind :implementation-completed :seq 5}
+            {:kind :review :seq 6}]
+        by  (fn [arc] (into {} (map (juxt :stage :state)) (:stages arc)))]
+    (testing "with nothing owed the four original states are what they were"
+      (let [s (by (p/arc es))]
+        (is (= :done (:implementation s)))
+        (is (= :current (:review s)))
+        (is (= :ahead (:publication s)))))
+    (testing "and from the re-entry point upward they are stale"
+      (let [s (by (p/arc es {:re-entry :implementation}))]
+        (is (= :done (:approval s)) "below the line, untouched")
+        (is (= :stale (:implementation s)))
+        (is (= :stale (:review s)))
+        (is (= :ahead (:publication s)) "a stage holding nothing is not stale")))
+    (testing "closure wins — a finished workstream owes nothing"
+      (let [s (by (p/arc es {:re-entry :implementation :closed? true}))]
+        (is (= :done (:implementation s)))))))
+
+(deftest redoing-the-work-lets-the-position-climb-again
+  ;; The clamp must not be a one-way door. Reported by walking the arc: a
+  ;; workstream that redesigned, re-approved and re-implemented stayed pinned at
+  ;; :design-approved, because the rule asked that every trail record be current
+  ;; rather than that the stage hold one.
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)
+            [b d1] (approved-and-implemented! add!)]
+        (add! :pr-opened {:format :pr-opened :url "u" :title "t"})
+        (is (= :published (:at (p/of :brian id))))
+        (let [d2 (add! :design (assoc (a-design b) :supersedes {:seq d1 :why "recut"}))]
+          (add! :design-decision (a-decision d2 :proceed))
+          (add! :design-approved {:format :design-approved :design {:seq d2} :at-seq d2})
+          (is (= :design-approved (:at (p/of :brian id))) "back to the implementation")
+          (add! :implementation-completed {:format :implementation-completed
+                                           :summary "redone" :artifacts []})
+          (let [r (p/of :brian id)]
+            (is (= :implemented (:at r))
+                "and the redone work counts — the superseded entry beside it is
+                 history, not a debt that can never be paid")
+            (is (= :review-implementation (:stage (:next r))))))))))
