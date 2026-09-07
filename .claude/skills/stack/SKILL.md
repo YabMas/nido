@@ -53,6 +53,15 @@ asks it — including a design round's `decomposable` — ratchets one way and n
 back. **Make the merge case against yourself before you make the split one**, and
 if you cannot say what a boundary buys a reader, it does not buy anything.
 
+**And a cut is deleted at land time**, which bounds what getting it wrong can
+cost: §3's collapse means no layer survives in the merged history, so a bad cut
+costs the attention of the reviewers currently reading it and nothing after
+that. By the time anyone can report the cut is wrong, that attention is spent —
+which is why re-cutting has to save more than it spends, and why a concern about
+the cut alone never blocks a design round or a review. The shipping doctrine's
+*The words, and which boundaries survive a landing* is where that rule and the
+four boundary words are stated; this section is it applied to the vertical cut.
+
 **The shape to aim at is a story.** Read bottom to top, the layers should
 narrate how the change was made: each a coherent, self-contained move a reader
 could stop at and still know where they are. Not "could this be separated" —

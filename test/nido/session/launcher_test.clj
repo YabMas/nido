@@ -83,6 +83,34 @@
         (is (< doctrine-idx lifecycle-idx)
             "doctrine must precede lifecycle")))))
 
+(deftest render-context-separates-boundaries-that-survive-a-landing
+  ;; Four things were all called a seam — a module boundary, a change's declared
+  ;; incompleteness, a layer division and a landing — and two of them die at
+  ;; /land while two survive it. A reviewer holding the wrong sense reads a
+  ;; question about packaging as a question about the architecture, which is how
+  ;; a note about where a module belongs became a park nobody could act on.
+  (let [doc (@#'launcher/render-context base-ctx)]
+    (testing "each boundary has its own word"
+      (is (str/includes? doc "**boundary**"))
+      (is (str/includes? doc "**seam**"))
+      (is (str/includes? doc "**cut**"))
+      (is (str/includes? doc "**phase**")))
+    (testing "the rule that generates the table is stated, not just the table"
+      (is (str/includes? doc "may never be the")
+          "a word for something that dies at land time cannot name one that survives"))
+    (testing "the fact the rule rests on is stated"
+      (is (str/includes? doc "no layer boundary is ever a")
+          "the collapse is why a cut costs only the review it is read in"))
+    (testing "the injection-seam sense is named, not ignored"
+      ;; The commonest use of the word in this codebase, and not the same thing
+      ;; as a design record's :seams. Both survive a landing, so the rule above
+      ;; permits the overlap — but a reader who is not told finds two meanings
+      ;; and no notice that they are two.
+      (is (str/includes? doc "**injection seam**")))
+    (testing "and what follows for both review stages"
+      (is (str/includes? doc "never blocks")
+          "a concern about the cut alone must not gate a design round or a review"))))
+
 (deftest render-context-includes-comment-doctrine
   (let [doc (@#'launcher/render-context base-ctx)]
     (testing "the summary states what a comment must CARRY, not only what it must not say"

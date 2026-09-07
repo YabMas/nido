@@ -25,9 +25,13 @@ That is the whole difference, and it is worth stating before anything else:
 > **A layer boundary is dissolved by the merge. A phase boundary *is* the
 > deploy.**
 
-A stack lands in one `gh stack merge`, so no intermediate layer state is ever
-observed by a running system. A phase, by construction, is observed — by
-production, by users, for as long as the phase lasts.
+A stack lands as ONE pull request, because `/land` §8 collapses the reviewed
+stack into its top PR before merging it — so no intermediate layer state is ever
+observed by a running system. (Not `gh stack merge`, which `/land` and `/stack`
+both forbid on a queue-protected repo: a merge queue takes its entries one at a
+time, and that is exactly what turns every layer boundary into a deploy
+boundary.) A phase, by construction, IS observed — by production, by users, for
+as long as the phase lasts.
 
 **Invoke this at planning time.** A phase plan authored at ship time is a
 description of what you got away with. And **invoke `/design` before it**: a
