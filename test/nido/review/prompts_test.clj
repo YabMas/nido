@@ -420,6 +420,39 @@ layers, it is not yours"))
     (is (str/includes? out "NAMED in your final message")
         "a sibling out of this fixer's reach reaches the next round only if it is said")))
 
+(deftest a-sweep-whose-class-already-came-back-asks-for-a-different-remedy
+  ;; Enumerating the instances is the remedy the class has already survived. Of
+  ;; six sweeps ordered in one run three classes returned the next round, and
+  ;; both that held did so because the fixer changed what the instances were
+  ;; derived from rather than by finding more of them.
+  (let [out (prompts/fix-prompt
+             {:findings [{:priority 1 :title "t" :body "b" :sweep true
+                          :swept-before [2 3]}]})]
+    (is (str/includes? out "already swept in rounds 2, 3")
+        "the fixer starts cold every round and cannot tell a repeat from a first sweep")
+    (is (str/includes? out "are DERIVED from, so the class cannot have another")
+        "the remedy a returning class needs is at the source, not at the sites")
+    (is (not (str/includes? out "find its siblings and fix those too"))
+        "asking again for the enumeration that just failed buys another round of it")
+    (is (str/includes? out "say THAT in your final")
+        "a class with no common source is answered by saying so, not by a third sweep")))
+
+(deftest one-earlier-sweep-is-named-in-the-singular
+  ;; The count is the whole force of the sentence, so a plural over one round
+  ;; reads as sloppiness and undercuts it.
+  (let [out (prompts/fix-prompt
+             {:findings [{:priority 1 :title "t" :body "b" :sweep true
+                          :swept-before [2]}]})]
+    (is (str/includes? out "already swept in round 2,"))
+    (is (not (str/includes? out "swept in rounds")))))
+
+(deftest a-first-sweep-is-still-asked-to-enumerate
+  ;; Finding the siblings IS the remedy until it has been tried and failed.
+  (let [out (prompts/fix-prompt
+             {:findings [{:priority 1 :title "t" :body "b" :sweep true}]})]
+    (is (str/includes? out "find its siblings and fix those too"))
+    (is (not (str/includes? out "SWEEP AGAIN")))))
+
 (deftest minimal-does-not-license-leaving-an-artifact-contradicting-itself
   ;; For a declarative artifact the smallest edit that resolves a finding is
   ;; often the one that breaks it: one round declared a field required on a

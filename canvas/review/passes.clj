@@ -301,6 +301,11 @@
      that would is shown a diff and no history, so a swept defect comes back at the lines the
      fix was made on."
     {:signature [:=> [:catn [:targets :any] [:history :any]] :any]})
+  (Operation with-sweep-memory
+    "Each finding told which earlier rounds already swept its class. A class that comes back
+     has disproved the enumerate-the-instances remedy, and the fixer is the reader who could
+     act on that and the only one the run's history never reaches."
+    {:signature [:=> [:catn [:findings :any] [:history :any]] :any]})
   (Operation carried-parks
     "The open parks this run is holding, each with the round it was first parked in and the
      layer it names. A park is never raised again, so it vanishes from the findings the moment

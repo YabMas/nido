@@ -539,7 +539,18 @@
    declarative artifact — a spec, a schema, a policy table — the smallest edit
    that resolves a finding is often exactly the edit that makes the artifact
    contradict itself: a type declared required that no rule in the file produces
-   is a defect the next round reports as new."
+   is a defect the next round reports as new.
+
+   `:swept-before` is the run's own history rather than the warden's judgement —
+   `nido.review.stages/with-sweep-memory` reads it off the rounds that landed a
+   fix — and it changes what the sweep asks for. Enumeration is what a class
+   coming back has already disproved: of six sweeps ordered in one run three
+   classes returned the next round, and both sweeps that held did so because the
+   fixer changed what the instances were derived from, one of them by making
+   every caller of a single function read the same shape. The way out the block
+   insists on is an ANSWER too, not a failure to sweep: a class whose members are
+   one requirement written out three times has no common source to change, and
+   saying so is what lets the loop stop instead of spending a third round on it."
   [{:keys [findings layer]}]
   (str
    "Fix the following code-review findings in this working directory. Make the\n"
@@ -574,18 +585,35 @@
                     (when-let [b (:because f)]
                       (str "  the reviewer of the whole stack says: " b "\n"))
                     (when (:sweep f)
-                      (str "  SWEEP: this is one instance of a recurring defect.\n"
-                           "  Fix it, then find its siblings and fix those too.\n"
-                           "  The search is over the defect CLASS, not over this\n"
-                           "  change's diff: read every file this change touched\n"
-                           "  WHOLE, because the sibling that survives a sweep is\n"
-                           "  usually the pre-existing line beside the one you just\n"
-                           "  edited. Finding them one per round is what this is\n"
-                           "  here to stop — the minimal change rule does not apply\n"
-                           "  to the search, only to each edit. A sibling you may\n"
-                           "  not touch here — another layer's, or outside this\n"
-                           "  change — is to be NAMED in your final message, never\n"
-                           "  silently left.\n"))
+                      (if-let [rounds (seq (:swept-before f))]
+                        (str "  SWEEP AGAIN: this class was already swept in round"
+                             (when (next rounds) "s") " "
+                             (str/join ", " rounds) ",\n"
+                             "  and came back. Enumerating its instances is therefore\n"
+                             "  the one remedy already known not to hold here; do not\n"
+                             "  spend this round on it again. Change what the instances\n"
+                             "  are DERIVED from, so the class cannot have another\n"
+                             "  member: the function they all call, the value the\n"
+                             "  condition reads, the schema they are all checked\n"
+                             "  against — one edit at what they have in common, not\n"
+                             "  another N edits at the sites. If there is no such\n"
+                             "  common source — they are one requirement written out\n"
+                             "  several times, or what they derive from is somewhere\n"
+                             "  you may not touch — say THAT in your final message,\n"
+                             "  and name what you looked at. That is an answer and it\n"
+                             "  ends the class; a third enumeration is not.\n")
+                        (str "  SWEEP: this is one instance of a recurring defect.\n"
+                             "  Fix it, then find its siblings and fix those too.\n"
+                             "  The search is over the defect CLASS, not over this\n"
+                             "  change's diff: read every file this change touched\n"
+                             "  WHOLE, because the sibling that survives a sweep is\n"
+                             "  usually the pre-existing line beside the one you just\n"
+                             "  edited. Finding them one per round is what this is\n"
+                             "  here to stop — the minimal change rule does not apply\n"
+                             "  to the search, only to each edit. A sibling you may\n"
+                             "  not touch here — another layer's, or outside this\n"
+                             "  change — is to be NAMED in your final message, never\n"
+                             "  silently left.\n")))
                     "  " (:body f))))
         (str/join "\n\n"))))
 

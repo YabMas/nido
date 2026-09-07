@@ -1629,6 +1629,54 @@
     (is (= "fixed the enum check; V243 is untouched" (:account prior)))
     (is (nil? (:prior-fixes wiring)) "a layer no fixer touched is told nothing")))
 
+(deftest a-class-already-swept-is-marked-with-the-rounds-that-swept-it
+  ;; A sweep that comes back has disproved its own remedy, and only the run's
+  ;; history says so. The fixer starts cold every round, so without this the
+  ;; third sweep of one class is asked for in exactly the words of the first.
+  (let [history [{:iter 2 :findings [{:handle "h1" :id "aa11" :sweep true}
+                                     ;; Two instances of one class in a single
+                                     ;; round: same-as folds both onto h1, and
+                                     ;; naming round 2 twice would read as two
+                                     ;; failed sweeps.
+                                     {:handle "h1" :id "aa12" :sweep true}
+                                     {:handle "h2" :id "bb22"}]}
+                 {:iter 3 :findings [{:handle "h1" :id "cc33" :sweep true}]}]
+        [repeat-of-h1 h2 fresh]
+        (stages/with-sweep-memory
+          [{:handle "h1" :id "dd44" :sweep true}
+           {:handle "h2" :id "bb22" :sweep true}
+           {:id "ee55" :sweep true}]
+          history)]
+    (is (= [2 3] (:swept-before repeat-of-h1))
+        "the handle is what survives a rewording, so the class is what is matched, not the id")
+    (is (nil? (:swept-before h2))
+        "a class raised in an earlier round but never swept has had no remedy fail")
+    (is (nil? (:swept-before fresh)))))
+
+(deftest a-run-that-has-swept-nothing-marks-nothing
+  (let [findings [{:handle "h1" :sweep true}]]
+    (is (= findings (stages/with-sweep-memory findings [])))
+    (is (= findings (stages/with-sweep-memory
+                      findings [{:iter 1 :findings [{:handle "h1"}]}])))))
+
+(deftest the-fixer-is-told-when-its-sweep-is-a-repeat
+  ;; :history is in scope at the fix-prompt call site and was rendered only to
+  ;; the reviewer, so the one reader that could change the remedy was the one
+  ;; never shown that the last remedy had failed.
+  (let [seen (atom nil)]
+    (with-redefs [agent/launch! (fn [opts]
+                                  (reset! seen (:first-message opts))
+                                  {:num-turns 3 :result-error? false :result-text "no"})
+                  stages/working-copy-dirty? (fn [_] false)
+                  jj/jj! (fn [& _] {:exit 0 :out "" :err ""})]
+      ((:run stages/fix-stage)
+       {:config {:cwd "/w" :run-id "r1"} :iter 3
+        :history [{:iter 2 :findings [{:handle "h1" :id "aa11" :sweep true}]}]
+        :findings [{:id "bb22" :handle "h1" :title "x" :body "y"
+                    :sweep true :disposition :fix}]})
+      (is (str/includes? @seen "already swept in round 2")
+          "the memory has to reach the prompt, not merely be derivable beside it"))))
+
 (deftest a-flat-branchs-fix-reaches-the-target-that-reviews-it
   ;; fix-plan groups an unlayered branch under nil and review-targets labels its
   ;; one target "stack". The two vocabularies meet only here, and matching on

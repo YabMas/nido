@@ -1735,6 +1735,41 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
   (first (filter #(= label (:label %)) toc)))
 
 (defn ^{:malli/schema [:=> [:cat :any :any] :any]}
+  with-sweep-memory
+  "Mark each finding whose class a fixer has ALREADY swept in this run, with the
+   rounds it was swept in.
+
+   A sweep that comes back is evidence about the REMEDY rather than about the
+   search. Enumerating a class one instance at a time is what a returning class
+   has already disproved, and the fixer is the one reader who could act on that
+   and the only one never told: `:history` reaches the reviewer through
+   `with-fix-memory` and stops there.
+
+   Keyed on the handle, so this is a claim about the CLASS and not about a
+   wording — every instance is filed under the handle the class was first raised
+   with, and a return under fresh words keeps it.
+
+   Only a round that LANDED a fix is in `:history` at all, so a round named here
+   is one whose sweep was carried out and survived. A fixer that declined leaves
+   no entry, and nothing here mistakes its refusal for a sweep that failed."
+  [findings history]
+  (let [swept (reduce (fn [acc round]
+                        (reduce (fn [a f]
+                                  (if (:sweep f)
+                                    (update a (or (:handle f) (:id f))
+                                            (fnil conj []) (:iter round))
+                                    a))
+                                acc
+                                (:findings round)))
+                      {}
+                      history)]
+    (mapv (fn [f]
+            (if-let [rounds (seq (get swept (or (:handle f) (:id f))))]
+              (assoc f :swept-before (vec (distinct rounds)))
+              f))
+          findings)))
+
+(defn ^{:malli/schema [:=> [:cat :any :any] :any]}
   fix-plan
   "Findings the warden dispositioned :fix, grouped by the layer that OWNS them,
    ordered bottom→top.
@@ -1843,7 +1878,7 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
     (assoc ctx :control :stop :status :dry-run)
     (let [{:keys [cwd base run-id budget impl-session-id]} (:config ctx)
           stack (session-stack cwd base)
-          plan  (fix-plan stack (:findings ctx))]
+          plan  (fix-plan stack (with-sweep-memory (:findings ctx) (:history ctx)))]
       (cond
         ;; The tree moved between the review and the repair. Every finding this
         ;; round holds was found in a state that is no longer what `@` means, so
