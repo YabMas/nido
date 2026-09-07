@@ -212,10 +212,10 @@
   ;; the cut is — and those ask very different things of them.
   (let [s (render/final
            (report-of [{:id "bb22" :priority 2 :title "t" :file "a.clj"
-                        :line-start 1 :line-end 2 :kind :misplaced-seam
+                        :line-start 1 :line-end 2 :kind :misplaced-cut
                         :layers ["series" "banner"] :from-layer "stack"}]
                       [{:id "bb22" :disposition :park :owner-layer "banner"}]))]
-    (is (str/includes? s "misplaced-seam across series + banner"))
+    (is (str/includes? s "misplaced-cut across series + banner"))
     (is (str/includes? s "→ park"))))
 
 (deftest final-tallies-what-became-of-the-findings

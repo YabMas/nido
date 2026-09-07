@@ -209,7 +209,7 @@
    "  OUTCOME. Populate invariants_held with the ones this round actually\n"
    "  confirmed — that is the point of the verdict, not a formality.\n"
    "- strained: the design holds, but a boundary is visibly under pressure —\n"
-   "  findings clustering on one seam, the same argument recurring. Ship it, but\n"
+   "  findings clustering on one cut, the same argument recurring. Ship it, but\n"
    "  say where the pressure is.\n"
    "- invalidated: the findings contradict a named invariant; the design itself\n"
    "  is wrong. REQUIRES invariants_broken and needs.\n"
@@ -315,7 +315,7 @@
    record two. What a park IS, is a thing no round will raise again — so the
    last round is exactly where it cannot be found.
 
-   Per identity, the LATEST ruling wins: a seam parked in round 3 and closed in
+   Per identity, the LATEST ruling wins: a cut parked in round 3 and closed in
    round 7 is closed, and only its final disposition is asked about.
 
    A `:fix` is dropped from every round but the last. It was actioned, and the

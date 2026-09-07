@@ -29,7 +29,7 @@ and finish it rather than inventing a cut here.
 ## 0. Should this be a stack at all?
 
 **No stack** when the change is under ~200 lines total, or has no real
-dependency seam. One plain PR, today's flow. GitHub's own docs: stacking *"is
+dependency cut. One plain PR, today's flow. GitHub's own docs: stacking *"is
 not a reason to split one small change into five PRs."*
 
 **Stack** when there are genuine dependency boundaries — schema beneath the code
@@ -38,7 +38,7 @@ that reads it, a mechanical rename apart from the judgment call it enables.
 **The layer count is not the test — one story is.** State what the whole stack
 claims, in one sentence, with no "and". If you cannot, it is two tickets, and
 that is as true of four layers as of nine. A change with many genuine dependency
-seams is not mis-scoped for having them.
+cuts is not mis-scoped for having them.
 
 **But the cut itself gets reviewed, and every layer adds to that review.** A
 reviewer holds two questions at once: does this layer's claim stand, and is this
@@ -907,7 +907,7 @@ cleaning up a merged stack's branches.
   only option left is post-hoc restacking. Invoke at planning time.
 - **Mixing review modes in one layer** — a "mechanical" layer with three
   special-cased sites is not mechanical.
-- **Stacking a small change** — under ~200 lines with no dependency seam, ship
+- **Stacking a small change** — under ~200 lines with no dependency cut, ship
   one plain PR.
 - **Using a layer boundary where a phase boundary is needed** — if the system
   has to run in that state, green tests are not the obligation; habitability is

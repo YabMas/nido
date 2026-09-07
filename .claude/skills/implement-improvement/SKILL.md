@@ -47,7 +47,7 @@ Say which one you found in `_run-status.edn` before you go on.
 
 ## 3. Decide the shape before you write anything
 
-Read `~/Code/nido/CLAUDE.md`'s shipping doctrine, and `/design` if the change is more than a single seam. Two questions decide how much ceremony this needs:
+Read `~/Code/nido/CLAUDE.md`'s shipping doctrine, and `/design` if the change is more than a single boundary. Two questions decide how much ceremony this needs:
 
 **Is the proposal's remedy already named?** Most are — an analysis proposal says "call `layers/conflicted` after each `land-fix!`", which is a change, not a design question. Implement it.
 

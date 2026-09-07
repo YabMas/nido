@@ -94,7 +94,7 @@ system, and each earns its place by materialising one part of it:
   it is a *design decision hidden* from everything else, and the decisions worth
   hiding are the ones most likely to change.
 - ***A Philosophy of Software Design*** (Ousterhout) — **what a boundary has to
-  be worth.** Deep modules are the restriction of power applied at the seam.
+  be worth.** Deep modules are the restriction of power applied at the boundary.
 - ***How to Design Programs*** (Felleisen et al.) — how a single function is
   written once its data is defined. Derivation from the shape of the data, at the
   leaf.
@@ -107,9 +107,9 @@ is a treatment of how to hold them together as one method, and how to resolve th
 calls they individually leave open.
 
 **Parnas and Ousterhout are one idea at two stages, and reading them as
-interchangeable loses the useful half.** Parnas answers *where the seam goes* —
+interchangeable loses the useful half.** Parnas answers *where the boundary goes* —
 find the decisions that will change, and put one on each side. Ousterhout answers
-*whether that seam pays* — an interface that costs about what it hides bought
+*whether that boundary pays* — an interface that costs about what it hides bought
 nothing, however principled its placement. Parnas first: a deep module around the
 wrong secret is still the wrong module.
 
@@ -180,7 +180,7 @@ shape **is** the state-containment strategy, not a stylistic layer on top of it.
 decomposition into many small units; *How to Design Programs* builds everything
 out of them. They govern different altitudes. Take HtDP at the leaf — the recipe
 is how a single function gets written once its data is defined — and Ousterhout
-at the seam: interfaces are few, deep, and expensive to add. A design that
+at the boundary: interfaces are few, deep, and expensive to add. A design that
 followed the recipe *upward*, into a wide shallow surface of small modules, has
 gone wrong however clean each function reads — it added code volume and bought
 nothing.

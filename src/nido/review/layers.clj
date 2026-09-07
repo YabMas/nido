@@ -319,7 +319,7 @@
    A conflict propagates to every descendant and `restore-top!` parks an empty
    `@` on the stack top, so including it leads the answer with a change id that
    is new every round and names no layer — burying the stable ids that identify
-   the seam behind noise a reader has to read past. A NON-empty `@` stays in:
+   the cut behind noise a reader has to read past. A NON-empty `@` stays in:
    on an unstacked branch the session bookmark sits on the working copy, so `@`
    is itself the top layer and its conflict is the one worth knowing about.
    That is what `~ (@ & empty())` buys over `<base>..@-`, which drops the
@@ -446,10 +446,10 @@
   move!
   "Move `layer`'s changes to ONE file down into `into-layer`. Both layers stay.
 
-   The remedy for a seam whose two ends are not adjacent. A fold there is
+   The remedy for a cut whose two ends are not adjacent. A fold there is
    refused, and correctly — it would absorb every unnamed layer in between,
    landing changes no reviewer implicated under a claim that never covered them
-   — but a refusal was the ONLY answer the stage had, so a seam the warden had
+   — but a refusal was the ONLY answer the stage had, so a cut the warden had
    already described a move for got none. The case it comes from: layer 9
    rewrote a migration whose checksum layer 1's deploy had already recorded, and
    both the reviewer and the warden named the same repair — put that file's

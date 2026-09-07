@@ -343,7 +343,7 @@ holds it. Two things make that survivable, and both are cheap:
    seam naming its closure. The append validates and rejects a malformed record
    with an explain dump; it also refuses a seam naming a phase that is not in
    the plan.
-3. Build phase 1 — as a stack if it has dependency seams (`/stack`), as one plain
+3. Build phase 1 — as a stack if it has dependency cuts (`/stack`), as one plain
    PR if it does not.
 4. Ship it. The workstream closes on merge.
 

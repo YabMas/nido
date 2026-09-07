@@ -410,7 +410,7 @@
                  "vocabulary is below and the record is in a shape that carries readings.\n"
                  "A decomposition recorded with no reading of it is structure without\n"
                  "analysis: it says what the parts are and never says whether the problem\n"
-                 "required them, whether an ordering was imposed, or whether a seam pays.\n"
+                 "required them, whether an ordering was imposed, or whether a boundary pays.\n"
                  "Report that as UNDERSCOPED, and name the claims most worth reading and\n"
                  "through which lens.\n"))
           (lens-block)))

@@ -1139,7 +1139,7 @@
                               {:kind :order-dependence :layers ["lower" "upper"]}))))
 
 (deftest a-seam-or-a-duplication-plans-a-fold
-  (doseq [k [:misplaced-seam :duplicated-across-layers]]
+  (doseq [k [:misplaced-cut :duplicated-across-layers]]
     (is (= :fold (:remedy (stages/reshape-plan two-layer-stack
                                                {:kind k :layers ["lower" "upper"]})))
         (str (name k) " has no order to correct — the boundary is the defect"))))
@@ -1149,11 +1149,11 @@
   ;; absorbed with them. Attempted across a nine-layer stack it is a squash jj
   ;; can only answer with a conflict, and the round's one attempt is gone.
   (let [p (stages/reshape-plan gapped-stack
-                               {:kind :misplaced-seam :layers ["a" "c" "d"]})]
+                               {:kind :misplaced-cut :layers ["a" "c" "d"]})]
     (is (= :span-has-holes (:refused p)))
     (is (re-find #"absorb b" (:because p)) "and it names what would have been absorbed"))
   (is (= :fold (:remedy (stages/reshape-plan gapped-stack
-                                             {:kind :misplaced-seam :layers ["b" "c"]})))
+                                             {:kind :misplaced-cut :layers ["b" "c"]})))
       "adjacent layers still fold — the boundary between them is the only one lost"))
 
 (deftest a-seam-across-a-gapped-span-is-moved-rather-than-refused
@@ -1162,7 +1162,7 @@
   ;; the reviewer nor the warden named; moving that one file down absorbs
   ;; nothing, and is the repair both of them actually described.
   (let [p (stages/reshape-plan gapped-stack
-                               {:kind :misplaced-seam :layers ["a" "d"]
+                               {:kind :misplaced-cut :layers ["a" "d"]
                                 :file "/w/resources/db/V20260825__diary.sql"})]
     (is (= :move (:remedy p)))
     (is (= "/w/resources/db/V20260825__diary.sql" (:file p)))
@@ -1171,7 +1171,7 @@
 
 (deftest a-seam-with-no-file-to-move-is-still-a-judgement
   (let [p (stages/reshape-plan gapped-stack
-                               {:kind :misplaced-seam :layers ["a" "d"] :file "  "})]
+                               {:kind :misplaced-cut :layers ["a" "d"] :file "  "})]
     (is (= :span-has-holes (:refused p)))))
 
 (deftest a-duplication-across-a-gapped-span-is-not-moved
@@ -1256,7 +1256,7 @@
   (let [ctx {:config {:cwd "/w" :base "main"}
              :findings [{:handle "h-1" :disposition :recut :kind :claim-falsified
                          :layers ["a" "d"] :title "t1"}
-                        {:handle "h-2" :disposition :recut :kind :misplaced-seam
+                        {:handle "h-2" :disposition :recut :kind :misplaced-cut
                          :layers ["a" "d"] :title "t2"}
                         {:handle "h-3" :disposition :fix :title "not a recut"}]}]
     (with-redefs [stages/session-stack (fn [_ _] gapped-stack)]
@@ -1271,7 +1271,7 @@
   (let [ctx {:config {:cwd "/w" :base "main"} :iter 2
              :findings [{:handle "h-1" :disposition :recut :kind :claim-falsified
                          :layers ["a" "d"] :title "the layer's claim is not true"}
-                        {:handle "h-2" :disposition :recut :kind :misplaced-seam
+                        {:handle "h-2" :disposition :recut :kind :misplaced-cut
                          :layers ["a" "d"] :title "the seam runs through the migration"}]}]
     (with-redefs [stages/session-stack (fn [_ _] gapped-stack)]
       (let [parks (get-in ((:run stages/reshape-stage) ctx) [:carry :parks])]
@@ -1425,7 +1425,7 @@
   ;; Only findings the composition pass itself made — a layer's own finding is
   ;; already answered where it was raised, and repeating it here would tell the
   ;; pass it reported something it never did.
-  (let [history [{:iter 1 :findings [{:from-layer "stack" :title "the seam" :kind "misplaced-seam"}
+  (let [history [{:iter 1 :findings [{:from-layer "stack" :title "the seam" :kind "misplaced-cut"}
                                      {:from-layer "core" :title "a typo"}]}
                  {:iter 2 :findings [{:from-layer "stack" :title "the seam again"}]}]
         [layer stack] (stages/with-composition-memory

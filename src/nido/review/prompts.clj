@@ -196,7 +196,7 @@
                 "  listed under RECUT below, and its `across` names the layers it\n"
                 "  spans. The loop will move or merge them and let the next round\n"
                 "  judge the result. Do NOT send one of these to a fixer: a patch\n"
-                "  on one side of a bad seam makes the bad seam permanent and lets\n"
+                "  on one side of a bad cut makes that cut permanent and lets\n"
                 "  the round converge reporting success.")}
    {:disposition :park
     :means (str "no fix, and nothing above fits: this is a decision rather than\n"
@@ -239,7 +239,7 @@
    names a defect whose repair is a decision about where a boundary belongs, and
    there is no mechanical move for that. Hardcoding two kind names here sent
    those to fixers instead, and a fixer's minimal edit on one side of a
-   misplaced seam makes the seam permanent while the round reports success."
+   misplaced cut makes that cut permanent while the round reports success."
   []
   (let [recut  (filter :remedy composition-kinds)
         no-fix (remove :remedy (kinds-asking :cut))]
@@ -252,7 +252,7 @@
          "no move the loop can make. These are decisions: `park` them, or\n"
          "`deviation` them against the claim they contradict. Handing one to a\n"
          "fixer asks for a minimal edit to a question about shape, and what comes\n"
-         "back makes the seam harder to see, not gone:\n"
+         "back makes the cut harder to see, not gone:\n"
          (->> no-fix (map #(str "- " (:kind %) "\n")) (apply str))
          "\n")))
 
@@ -338,10 +338,10 @@
                "  are the only one that reads all the exclusions at once.")
     :how  (str "read the `out of scope` lines above as one set, and ask what in\n"
                "  the branch falls through all of them.")}
-   {:kind "misplaced-seam" :asks :cut :remedy :fold
+   {:kind "misplaced-cut" :asks :cut :remedy :fold
     :what (str "the cut itself is wrong: one idea split so neither side is\n"
                "  coherent alone, or a layer boundary running through the middle\n"
-               "  of a thing. **Report the seam, not a patch.** Saying where the\n"
+               "  of a thing. **Report the cut, not a patch.** Saying where the\n"
                "  cut should have been is worth more than repairing either side,\n"
                "  and a fix applied to one side makes the wrong cut permanent.")
     :how  (str "you have usually already found this when a defect has no good\n"
@@ -435,8 +435,8 @@
      "Nobody else in this loop is asked either question. A layer reviewer was\n"
      "handed a piece and asked whether the piece is correct; it cannot see the\n"
      "cut it was handed, let alone judge it. And a reviewer of the finished\n"
-     "branch sees only where the stack ENDS UP — one tree, with the seams gone.\n"
-     "Your range spans the whole branch so that you can see the seams, not so\n"
+     "branch sees only where the stack ENDS UP — one tree, with the cuts gone.\n"
+     "Your range spans the whole branch so that you can see the cuts, not so\n"
      "that you can review it flat.\n\n"
      "THE STACK, BOTTOM TO TOP:\n\n"
      (composition-layer-rows layers)
@@ -466,7 +466,7 @@
      (when (seq already-reported)
        ;; The pass runs fresh every round and is the only reader that can see
        ;; across layers. Told nothing about its own earlier output, it has no way
-       ;; to notice it is returning the same seam a third time rather than
+       ;; to notice it is returning the same cut a third time rather than
        ;; looking further — so a round costs a full pass and produces a repeat.
        (str "WHAT YOU ALREADY REPORTED IN THIS RUN\n\n"
             "These came from THIS pass in earlier rounds. They are on the record\n"
@@ -497,7 +497,7 @@
      "  written above, in stack order. Two or more, always. Filling it with one\n"
      "  is the test above telling you this finding belongs to that layer.\n"
      "- `code_location` points at the most representative site. For a\n"
-     "  misplaced-seam finding that is where the cut runs through — not a line\n"
+     "  misplaced-cut finding that is where the cut runs through — not a line\n"
      "  to patch.\n"
      "- `body` must say what EACH named layer contributes to the defect. A body\n"
      "  that describes only the symptom cannot be acted on: the reader cannot\n"
@@ -517,7 +517,7 @@
 
    The owning layer's brief — what it claims, what it declared out of scope —
    bounds the edit. Without it \"make the MINIMAL change\" is the only guidance
-   there is, and for a defect that spans a seam the minimal change is a patch on
+   there is, and for a defect that spans a cut the minimal change is a patch on
    whichever side the finding happened to be reported from.
 
    `:sweep` widens one finding into its family. The warden recognises a recurring
@@ -916,7 +916,7 @@
    (when (seq parked)
      ;; A park is never raised again — that is what a park IS — so it leaves the
      ;; findings the moment the reviewer stops mentioning it and the next warden
-     ;; has no idea it exists. Fifteen rounds re-adjudicated one seam from
+     ;; has no idea it exists. Fifteen rounds re-adjudicated one cut from
      ;; scratch, with prose minutes as the only memory.
      ;;
      ;; "Parked" rather than "you parked": a recut the reshape stage refused

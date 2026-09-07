@@ -376,7 +376,7 @@ The `:postgresql` service is a flat config map; the same fields apply to every s
 
 ### local.edn keys (brian)
 
-Mirror of keys in brian's `config/defaults.edn`. These are the seams nido writes through:
+Mirror of keys in brian's `config/defaults.edn`. These are the keys nido writes through:
 
 - `:org.httpkit.server/config` — HTTP bind port (per-session app port)
 - `:postgres/config` — legacy HikariCP pool (`:jdbcUrl`, `:username`, `:password`)

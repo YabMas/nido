@@ -427,7 +427,7 @@
 
    Deliberately small to begin with. A lens nobody uses is noise in every prompt,
    and the four here are the ones with the sharpest verdicts: two for what the
-   parts hold and do, one for the quality of a seam, one for the arrangement —
+   parts hold and do, one for the quality of a boundary, one for the arrangement —
    because state, control and depth are all properties of a PART, and a baseline
    that never judges the arrangement has described a list."
   {:tarpit/state
@@ -454,7 +454,7 @@
                      "make public. A var published and called by nobody outside is "
                      "not interface; it is a visibility choice.")
     :verdicts   {:deep    "a small interface over substantial functionality"
-                 :shallow "the interface costs about what it hides — the seam buys nothing"}}
+                 :shallow "the interface costs about what it hides — the boundary buys nothing"}}
 
    :parnas/dependency
    {:source     "On the Criteria To Be Used in Decomposing Systems into Modules (Parnas)"
@@ -490,7 +490,7 @@
    :hides is the design decision nothing outside may depend on — a storage
    choice, a wire format, an ordering, an algorithm. :interface is what the rest
    of the system is allowed to know. A module that hides nothing is a file; two
-   modules that hide the same decision are one module with a seam drawn through
+   modules that hide the same decision are one module with a boundary drawn through
    it, and both are findings.
 
    Named separately from :load-bearing because the decomposition is structure

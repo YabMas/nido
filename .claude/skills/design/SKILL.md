@@ -192,8 +192,9 @@ A claim, a test, and the failure mode it prevents.
 6. **The design must be smaller than the change.** *Test:* can a reader hold it
    whole while weighing a review finding? If it is as long as the diff, it is a
    plan.
-7. **Boundaries before mechanisms.** Say where the seams are and what crosses
-   them; do not name libraries or data shapes unless the seam is *about* them.
+7. **Boundaries before mechanisms.** Say where the boundaries are and what
+   crosses them; do not name libraries or data shapes unless the boundary is
+   *about* them.
    *Failure:* an implementation sketch that cannot survive the first surprise in
    the code, so it is abandoned rather than amended.
 8. **The layering is part of the design.** If the layers cannot be stated from
@@ -340,7 +341,7 @@ what it **hides**, not what it contains?
   nothing outside may depend on — a storage choice, a wire format, an ordering,
   an algorithm) and its `:interface` (what the rest is allowed to know). A module
   that hides nothing is a file. Two modules hiding the same decision are one
-  module with a seam drawn through it.
+  module with a boundary drawn through it.
 - **`:composition`** — how those produce the required behaviour. This is where
   the area's actual design lives: *only the aggregate can see the lines, so only
   it can sum them*. If you cannot write this sentence, you have a file list.

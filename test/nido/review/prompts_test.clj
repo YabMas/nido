@@ -60,7 +60,7 @@
   ;; the workstreams with the least written down about their shape.
   (let [out (prompts/warden-prompt {:findings findings :history [] :design nil})]
     (is (str/includes? out "The RECUT kinds above are still `recut`"))
-    (is (str/includes? out "misplaced-seam \u2192 fold")
+    (is (str/includes? out "misplaced-cut \u2192 fold")
         "which kinds those are is derived from the taxonomy, not written out here")
     (is (str/includes? out "neither case turns on the"))))
 
@@ -284,16 +284,16 @@ layers, it is not yours"))
   (let [out (prompts/warden-prompt
              {:findings [{:id "aa11" :priority 2 :title "t" :body "b"
                           :reach :structural :from-layer "stack"
-                          :kind :misplaced-seam :layers ["series" "banner"]}]
+                          :kind :misplaced-cut :layers ["series" "banner"]}]
               :history [] :design design})]
-    (is (str/includes? out "reported-by stack · misplaced-seam · across series + banner"))))
+    (is (str/includes? out "reported-by stack · misplaced-cut · across series + banner"))))
 
 (deftest warden-prompt-recuts-a-bad-cut-instead-of-handing-it-to-a-fixer
   ;; A fixer can only patch one side of a seam, and a patched seam converges —
   ;; so the round reports success and the wrong cut ships.
   (let [out (prompts/warden-prompt {:findings findings :history [] :design design})]
     (is (str/includes? out "the remedy is the SHAPE of the stack"))
-    (is (str/includes? out "makes the bad seam permanent"))
+    (is (str/includes? out "makes that cut permanent"))
     (is (str/includes? out "will move or merge them"))))
 
 (deftest warden-prompt-attributes-a-composition-finding-by-what-it-spans
@@ -369,10 +369,10 @@ layers, it is not yours"))
   (let [out (prompts/fix-prompt
              {:findings [{:priority 1 :title "t" :body "b" :file "a.clj"
                           :line-start 1 :line-end 2
-                          :kind "misplaced-seam" :across ["core" "wiring"]
+                          :kind "misplaced-cut" :across ["core" "wiring"]
                           :because "moved down: core is where the guarantee is dropped"}]})]
     (is (str/includes? out "moved down: core is where the guarantee is dropped"))
-    (is (str/includes? out "misplaced-seam"))
+    (is (str/includes? out "misplaced-cut"))
     (is (str/includes? out "spans core, wiring"))))
 
 (deftest the-fixer-is-bounded-by-the-layer-it-is-working-on
@@ -474,7 +474,7 @@ layers, it is not yours"))
         warm (prompts/composition-block
               {:layers layers
                :already-reported [{:round 1 :title "the migration and its reader split"
-                                   :kind "misplaced-seam"}]})]
+                                   :kind "misplaced-cut"}]})]
     (is (not (str/includes? cold "WHAT YOU ALREADY REPORTED")))
     (is (str/includes? warm "WHAT YOU ALREADY REPORTED IN THIS RUN"))
     (is (str/includes? warm "the migration and its reader split"))

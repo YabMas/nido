@@ -249,12 +249,12 @@
 (deftest parse-output-carries-a-composition-findings-kind-and-span
   (let [out (str "{\"findings\":[{\"title\":\"t\",\"body\":\"b\","
                  "\"confidence_score\":0.5,\"priority\":2,\"reach\":\"structural\","
-                 "\"kind\":\"misplaced-seam\",\"layers\":[\"series\",\"banner\"],"
+                 "\"kind\":\"misplaced-cut\",\"layers\":[\"series\",\"banner\"],"
                  "\"code_location\":{\"absolute_file_path\":\"/w/a.clj\","
                  "\"line_range\":{\"start\":1,\"end\":2}}}],"
                  "\"overall_correctness\":\"correct\"}")
         f   (first (:findings (codex/parse-output out)))]
-    (is (= :misplaced-seam (:kind f)))
+    (is (= :misplaced-cut (:kind f)))
     (is (= ["series" "banner"] (:layers f)))))
 
 (deftest parse-output-leaves-a-layer-finding-without-the-composition-keys
@@ -284,8 +284,8 @@
                       :label "stack" :composition stack-of-two})
       (is (re-find #"COMPOSITION PASS" @captured))
       (is (re-find #"--from cA --to cB" @captured) "the intermediate revisions")
-      (is (re-find #"misplaced-seam" @captured) "the taxonomy")
-      (is (re-find #"misplaced-seam" @schema)
+      (is (re-find #"misplaced-cut" @captured) "the taxonomy")
+      (is (re-find #"misplaced-cut" @schema)
           "the schema follows the primer: a reviewer taught the taxonomy is
            asked for it"))))
 
@@ -309,7 +309,7 @@
                               :out-of-scope "the export"}})
       (is (re-find #"BOUNDED TO ONE LAYER" @captured))
       (is (nil? (re-find #"COMPOSITION PASS" @captured)))
-      (is (nil? (re-find #"misplaced-seam" @schema))))))
+      (is (nil? (re-find #"misplaced-cut" @schema))))))
 
 ;; ── When the reviewer could not be run at all ───────────────────────────────
 

@@ -316,7 +316,7 @@
 
    It is the only reader that can see across layers, and it starts cold every
    round: nothing tells it what it reported last time. So a pass that finds one
-   seam reports it, sees the same stack next round, and reports it again — three
+   cut reports it, sees the same stack next round, and reports it again — three
    rounds of a full fan-out to say one thing once. Its own prior findings cost
    nothing to recognise and are the cheapest possible way to make it look
    somewhere else.
@@ -1280,7 +1280,7 @@
   "How many rounds an unresolved park may survive before the run stops for it.
 
    Matched to `loop/unfixable-after`, and for the same reason: three rounds is
-   long enough that the seam is not going to resolve itself and short enough
+   long enough that the cut is not going to resolve itself and short enough
    that the human hears about it while the branch is still warm."
   4)
 
@@ -1291,7 +1291,7 @@
 
    A park is by construction never fixed, so no later round raises it again and
    it vanishes from the findings the moment the reviewer stops mentioning it.
-   That is why it needs carrying: the warden re-adjudicated the same seam from
+   That is why it needs carrying: the warden re-adjudicated the same cut from
    scratch fifteen times in one run, with its own accumulating prose as the only
    memory, and the run still reported nothing remaining.
 
@@ -1483,24 +1483,24 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
    layer and `upper` the top-most whatever the reviewer wrote. For an
    order-dependence that pair is the whole instruction: the upper layer
    establishes what the lower one reaches for, so it belongs below it. For a
-   seam or a duplication there is no order to correct — the boundary itself is
+   cut or a duplication there is no order to correct — the division itself is
    the defect — so the two are folded into one.
 
    A FOLD additionally requires the named layers to be contiguous. A fold does
    not remove one boundary, it removes every boundary between the layers it
    spans, and each unnamed layer in between is absorbed with them — landing
-   changes no reviewer implicated under a claim that never covered them. A seam
+   changes no reviewer implicated under a claim that never covered them. A cut
    reported across layers 2 and 9 of a nine-layer stack is not a request to
    collapse the stack; jj answers it with a conflict on everything in between,
    and the round has spent its one attempt on an operation that could not have
    applied.
 
-   Where a SEAM's span has holes there is a smaller move than the fold: put the
-   file the seam runs through in the lower layer, and absorb nothing. That was
+   Where a CUT's span has holes there is a smaller move than the fold: put the
+   file the cut runs through in the lower layer, and absorb nothing. That was
    the repair both the reviewer and the warden named on the case this comes from
    — layer 9 rewriting a migration whose checksum layer 1's deploy had already
    recorded — while the stage had only the fold, and so only a refusal. Scoped
-   to the seam kind: for a duplication, moving one copy down puts both in one
+   to the misplaced-cut kind: for a duplication, moving one copy down puts both in one
    layer without removing either, which is not what the finding asked for.
 
    Where the span has holes and there is no file to move, the right cut is a
@@ -1536,7 +1536,7 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
           (not (and (= :fold remedy) (seq gap)))
           {:remedy remedy :lower lower :upper upper :fold-legal? (empty? gap)}
 
-          (and (= :misplaced-seam (:kind finding)) (not (str/blank? (str (:file finding)))))
+          (and (= :misplaced-cut (:kind finding)) (not (str/blank? (str (:file finding)))))
           {:remedy :move :lower lower :upper upper :fold-legal? false
            :file (:file finding)}
 
@@ -1618,7 +1618,7 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
    reshape's own words.
 
    A recut is withheld from the fixers on purpose — the warden rules it `recut`
-   BECAUSE a patch on one side of a bad seam makes the seam permanent — so when
+   BECAUSE a patch on one side of a bad cut makes that cut permanent — so when
    the reshape stage then refuses it, the finding has no path at all. It went to
    the round's `:reshapes` array and to nothing the next warden or the
    termination check could see: `fix-plan` filters on `:disposition :fix`, and

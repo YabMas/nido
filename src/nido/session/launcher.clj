@@ -378,7 +378,7 @@
        "- **One-sentence PR titles, no \"and\".** Needing \"and\" means it is\n"
        "  two layers.\n"
        "- **Don't stack what carries no claim.** Under ~200 lines with no\n"
-       "  dependency seam, ship one plain PR. And a layer whose diff a reviewer\n"
+       "  dependency cut, ship one plain PR. And a layer whose diff a reviewer\n"
        "  would not stop at — one that only forwards what the layer below already\n"
        "  accepts, or renames on the way through — is not a layer: fold it into\n"
        "  the layer whose claim it serves. Cut against the CODE, never against\n"

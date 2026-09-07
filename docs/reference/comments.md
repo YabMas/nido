@@ -81,7 +81,7 @@ These are design defects wearing a comment's clothes:
 | describes the caller's situation rather than this thing's contract | the boundary is drawn in the wrong place |
 | has to explain what the arguments mean *together* | the arguments want a name — a record, not a list |
 | needs "and" more than once to say what it does | the unit does more than one thing |
-| runs longer than the body it introduces | the interface costs about what it hides; the seam buys nothing |
+| runs longer than the body it introduces | the interface costs about what it hides; the boundary buys nothing |
 
 **Report the abstraction, not the sentence.** Rewriting an awkward comment into
 a fluent one is how a design defect gets sealed under good prose, and the next
