@@ -37,6 +37,23 @@
     (is (contains? r :machinery)
         "present-and-nil, like :base-rev and :reason — a reader asks one question rather than two")))
 
+(deftest what-the-caller-seeded-survives-the-whole-fold
+  (let [machinery {:root "/Users/x/Code/nido/src" :rev "cafe1234"}
+        context   {:has ["workstream ledger" "convergence cache"]
+                   :missing ["design record" "project stance"]}
+        final (reduce (fn [r e] (report/apply-event r e clock))
+                      (report/init {:run-id "r" :cwd "/w" :base "main" :started-at "t0"
+                                    :context context :machinery machinery})
+                      [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+                       {:event :phase-started :iter 1 :phase :review :at "t1"}
+                       {:event :phase-finished :iter 1 :phase :review :at "t2"
+                        :ctx {:findings [] :overall-correctness "correct"}}
+                       {:event :run-finalized :status :clean :at "t3"}])]
+    (is (= machinery (:machinery final))
+        "the loop cannot know which copy of itself is running, so a fold that overwrites the caller's answer leaves nothing able to tell a live defect from a stale invocation")
+    (is (= context (get-in final [:target :context]))
+        "whether the run reached the ledger, the cache, a design record and a stance is what says the report is worth trusting, and only the caller can answer it")))
+
 (deftest review-round-records-findings-and-target
   (let [r (drive
            [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
