@@ -77,13 +77,29 @@
   (or (:handle f) [(:file f) (:line-start f) (:title f)]))
 
 (defn- no-progress?
-  "The same findings again, by whatever identity this pipeline keys on.
+  "The same findings again, by whatever identity this pipeline keys on, on a
+   round that also moved nothing.
 
-   This is the ONLY thing that ends an uncapped run that is getting nowhere, so
-   the identity fn is load-bearing: one that never collides turns `:max-iters`
-   from a cap into the sole terminator."
-  [finding-key prev-findings curr-findings]
+   A repeated finding set is not on its own a stall. A defect CLASS narrows
+   across rounds — a fixer closes two of its instances and the reviewers report
+   what is left — and every instance is filed under the handle the class was
+   first given, so the round that repaired the most looks identical to the round
+   before it. Watched: a run ended here holding a ruling that named two untried
+   remedies, on the round after one that had landed two repairs and moved every
+   layer's patch hash.
+
+   `changed?` is the pipeline's own evidence that something moved, and it VETOES
+   the stall rather than establishing it: a pipeline that cannot tell says
+   nothing, and the set equality stands alone as it always did.
+
+   Ending an uncapped run that is getting nowhere rests on this AND on
+   `unfixable`, which is what bounds a veto: a finding set that repeats is one
+   whose every member is being raised again, which is what that counter reads.
+   The identity fn is load-bearing to both — one that never collides turns
+   `:max-iters` from a cap into the sole terminator."
+  [finding-key prev-findings curr-findings changed?]
   (and (seq prev-findings)
+       (not changed?)
        (= (set (map finding-key curr-findings))
           (set (map finding-key prev-findings)))))
 
@@ -156,7 +172,7 @@
    `prior` is every round before this one. Split out of `run-loop` because it is
    now asked at two moments — after the stage that produces the judgement, and
    after the whole pipeline — and the two disagree about what history holds."
-  [{:keys [finding-key attempt-key prev-findings iter max-iters]} ctx prior]
+  [{:keys [finding-key attempt-key prev-findings iter max-iters changed?]} ctx prior]
   (cond
     ;; BEFORE no-progress?, because both are true of a run that ends holding the
     ;; same findings and only this one says which. :no-progress sends a reader
@@ -169,7 +185,7 @@
     ;; Reached when the round changed nothing AND no single finding has yet
     ;; survived long enough to be called stuck — an amender that stopped working
     ;; rather than one that ran out of things it could fix.
-    (no-progress? finding-key prev-findings (:findings ctx))
+    (no-progress? finding-key prev-findings (:findings ctx) (changed? ctx prior))
     ;; Naming what is still open, like :unfixable does. A run that stops holding
     ;; findings should say which; the two statuses differ in how long they
     ;; persisted, not in whether a reader is told what they were.
@@ -244,7 +260,11 @@
    default-finding-key. :attempt-key decides what \"we already tried this\"
    means, which is a different question — a finding re-routed to another layer
    is the same finding and a fresh attempt — and it defaults to :finding-key,
-   the reading a pipeline that routes nothing wants. :open? decides whether a finding is still owed, and so
+   the reading a pipeline that routes nothing wants. :changed? decides whether
+   a round moved anything, and so whether a repeated finding set is a stall or
+   a defect class the loop is still narrowing; it defaults to \"not known to
+   have changed anything\", which leaves the set equality standing alone.
+   :open? decides whether a finding is still owed, and so
    whether a pipeline saying stop has CONVERGED or merely stopped: a run that
    ends holding something reports :unresolved instead. It defaults to
    \"nothing is open\", which is the reading a pipeline with no notion of an
@@ -254,10 +274,11 @@
    has to reach the next round, and it survives onto the terminal ctx too — see
    the comment on ctx0."
   [{:keys [run-id max-iters pipeline emit clock finding-key attempt-key
-           judged-after open?] :as config
+           judged-after open? changed?] :as config
     :or   {emit (fn [_]) clock #(Instant/now)
            finding-key default-finding-key
-           open? (constantly false)}}]
+           open? (constantly false)
+           changed? (constantly false)}}]
   (let [pipeline (or pipeline default-pipeline)
         ;; Defaults to the identity itself, which is what a pipeline with no
         ;; notion of routing wants: every appearance is an attempt.
@@ -284,7 +305,7 @@
                   ;; there was no seam to put it through.
                   :carry carry}
             cfg  {:finding-key finding-key :attempt-key attempt-key
-                  :prev-findings prev-findings
+                  :prev-findings prev-findings :changed? changed?
                   :iter iter :max-iters max-iters}
             end? (fn [c prior] (terminal cfg c prior))
             ctx  (try

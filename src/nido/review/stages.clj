@@ -458,6 +458,27 @@
                                       :patch-hash (composition-key (:patch-hash t) cut))))
           hashed)))
 
+(defn ^{:malli/schema [:=> [:cat :any] :any]}
+  content-hashes
+  "What the branch holds this round, as a set — every target's patch hash,
+   skipped ones included.
+
+   Compared across rounds it answers one question: did the code move? Which is
+   what tells a stalled loop from one still narrowing a defect class, so it
+   covers the targets the round SKIPPED as well as those it read — a layer left
+   alone because it converged is still part of what the branch contains.
+
+   A target whose hash could not be computed contributes nothing rather than a
+   nil, so a round jj could not diff produces an empty set: unknown content is
+   not evidence of change, and the callers that read this treat it as none.
+
+   Two rounds can only collide by contributing the same patches under the same
+   cut — the composition target's hash folds in the layer/hash pairs, so a
+   re-cut that moves code between layers lands here even though the set of
+   layer hashes it is built from could not."
+  [targets]
+  (into #{} (keep :patch-hash) targets))
+
 (defn ^{:malli/schema [:=> [:cat :map :any] :map]}
   to-review
   "Split targets into those this round must review and those already converged
@@ -769,7 +790,7 @@
             first-quiet-round? (and flat? (not nothing?)
                                     (not (:quiet-once (:carry ctx))))
             ctx'     (cond-> (assoc ctx :findings [] :reviews results :skipped skipped
-                                    :reviewed-at at
+                                    :reviewed-at at :patch-hashes (content-hashes all)
                                     :control (if first-quiet-round? :continue :stop)
                                     :status (cond
                                               nothing?           :nothing-to-review
@@ -792,6 +813,10 @@
              :reviews results
              :skipped skipped
              :reviewed-at at
+             ;; What the branch held when these findings were read. The next
+             ;; round compares its own against it to tell a stall from a class
+             ;; still being narrowed; see `round-changed?`.
+             :patch-hashes (content-hashes all)
              :cache cached
              :toc (build-toc results)
              :overall-correctness (round-correctness results)
@@ -1329,7 +1354,10 @@
         prompt (prompts/warden-prompt
                 {:findings (:findings ctx)
                  :seen     (seen-findings (:history ctx))
-                 :history  (mapv #(dissoc % :findings) (:history ctx))
+                 ;; Findings are shown separately, and the patch hashes are for
+                 ;; the termination check rather than for a reader — a page of
+                 ;; sha256 the warden can do nothing with.
+                 :history  (mapv #(dissoc % :findings :patch-hashes) (:history ctx))
                  :design   (discover-design-record cwd)
                  :stance   (read-stance (first (project+ws-from-cwd cwd)))
                  :toc      (:toc ctx)
@@ -1985,6 +2013,12 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                               :fixes (:fixes ctx')
                               :fixed-count (reduce + 0 (map :fixed-count (:fixes ctx')))
                               :findings (:findings ctx')
+                              ;; What the reviewers of THIS round read, so the
+                              ;; next round can ask whether these fixes reached
+                              ;; the code. `:history` is the only channel that
+                              ;; carries a round's account to the termination
+                              ;; check; see `round-changed?`.
+                              :patch-hashes (:patch-hashes ctx')
                               :warden (:warden ctx')})
                      ctx')]
           (cond
@@ -2021,3 +2055,33 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
    rather than riding up into the one above."
   {:name :fix
    :run  run-fix-stage})
+
+(defn ^{:malli/schema [:=> [:cat :map :any] :boolean]}
+  round-changed?
+  "Whether the round before this one moved the code, read off the two records it
+   left: its fix rows, and the branch content each round's reviewers saw.
+
+   `nido.review.loop/no-progress?` asks this before calling a repeated finding
+   set a stall. The set alone cannot tell one apart from a defect class being
+   narrowed — every instance of a class is filed under the handle the class was
+   first given, so a round that closed two of them reports the same handles as
+   the round before, which is the shape a run stopped on with an adjudicated fix
+   in hand.
+
+   Both halves are asked, because either alone answers a different question.
+   Fix rows say the round attempted repairs at all; patch hashes say those
+   repairs reached the branch — a fixer can land a commit that changes nothing,
+   and a round whose reviewers read identical content has made no progress
+   however many commits it wrote. A round absent from the history landed nothing
+   and is no evidence of anything.
+
+   Both sets must be non-empty to be compared: an empty one is a round jj could
+   not diff, and the honest answer there is that nothing is known to have
+   changed — which leaves the stall check exactly as strict as it was."
+  [ctx prior]
+  (let [prev  (last (filter #(= (dec (:iter ctx)) (:iter %)) prior))
+        was   (:patch-hashes prev)
+        holds (:patch-hashes ctx)]
+    (boolean (and (pos? (long (or (:fixed-count prev) 0)))
+                  (seq was) (seq holds)
+                  (not= was holds)))))

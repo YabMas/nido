@@ -206,6 +206,12 @@
     {:signature [:=> [:catn [:cwd Path] [:targets :any]] :any]})
   (Operation to-review "Targets split into those to review and those already converged."
     {:signature [:=> [:catn [:cache :map] [:targets :any]] :map]})
+  (Operation content-hashes
+    "What the branch holds this round, as a set of patch hashes — the SKIPPED targets included,
+     since a layer left alone because it converged is still part of what the branch contains.
+     A target nothing could hash contributes nothing, so a round jj could not diff produces the
+     empty set rather than a false reading."
+    {:signature [:=> [:catn [:targets :any]] :any]})
   (Operation announce-targets! "Publish what this round is reviewing and what it skipped."
     {:signature [:=> [:catn [:ctx :map] [:split :map]] :any]})
   (Operation round-correctness
@@ -310,4 +316,10 @@
   (Operation park-refused-recuts
     "A park for every recut the reshape stage could not act on, carrying its own refusal. The
      warden withholds a recut from the fixers on purpose, so a refusal leaves it with no path."
-    {:signature [:=> [:catn [:parks :any] [:outcomes :any] [:iter :int]] :any]}))
+    {:signature [:=> [:catn [:parks :any] [:outcomes :any] [:iter :int]] :any]})
+  (Operation round-changed?
+    "Whether the round before this one moved the code: it landed repairs, AND the content this
+     round's reviewers read differs from what the last round's did. What the engine's stall
+     check cannot ask for itself — a repeated finding set is a stall only if nothing moved,
+     and a defect CLASS being narrowed repeats its handles by construction."
+    {:signature [:=> [:catn [:ctx :map] [:prior :any]] :boolean]}))

@@ -410,3 +410,41 @@
     (is (= 4 (:iter stuck)))
     (is (< 4 (:iter moved))
         "the fourth round re-routed it, so that round is a first attempt")))
+
+;; ── A stall, or a class still being narrowed ────────────────────────────────
+
+(defn- narrowing-run
+  "A pipeline that reports the SAME finding set every round while `changed?`
+   says the code is still moving — the shape of a defect class being swept, in
+   which every instance keeps the handle the class was first given.
+
+   Judged after the review stage, as the diff pipeline is, so the check runs
+   before the round's repairs rather than after them."
+  [& {:as extra}]
+  (let [[_ emit] (capturing)
+        pipe [(stage :review (fn [c] (assoc c :findings [{:handle "class"}])))
+              (stage :fix (fn [c] (update c :history (fnil conj [])
+                                          {:iter (:iter c) :findings (:findings c)})))]]
+    (rloop/run-loop (merge {:run-id "r" :max-iters 6 :pipeline pipe :emit emit
+                            :finding-key :handle :judged-after :review}
+                           extra))))
+
+(deftest a-round-that-moved-the-code-is-not-a-stall
+  ;; Watched: a run ended :no-progress on the round after one that landed two
+  ;; repairs and moved every layer's patch hash, discarding a ruling that named
+  ;; two untried remedies. Set equality over handles cannot see the difference,
+  ;; because a narrowing class keeps its handle the whole way down.
+  (let [out (narrowing-run :changed? (constantly true))]
+    (is (not= :no-progress (:status out))
+        "the loop is still repairing; the identical handle is the class, not a wall")
+    (is (= :unfixable (:status out))
+        "and the veto is bounded — the finding that never moves is named at four
+         rounds by the counter that exists for it")))
+
+(deftest a-round-that-moved-nothing-is-still-a-stall
+  (is (= :no-progress (:status (narrowing-run :changed? (constantly false))))))
+
+(deftest a-pipeline-that-cannot-tell-keeps-the-old-reading
+  ;; The record loops answer no such question: they have no patch to hash and no
+  ;; fixes to count, so the default must leave the set equality standing alone.
+  (is (= :no-progress (:status (narrowing-run)))))

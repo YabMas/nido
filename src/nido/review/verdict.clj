@@ -482,7 +482,7 @@
                        :baseline (stages/discover-baseline cwd design)
                        :stance (stages/read-stance (first (stages/project+ws-from-cwd cwd)))
                        :findings (still-open (:findings final))
-                       :history (mapv #(dissoc % :findings) (:history final))
+                       :history (mapv #(dissoc % :findings :patch-hashes) (:history final))
                        :rounds rounds
                        :prior prior})
               {:keys [num-turns result-error? result-text]}

@@ -1801,3 +1801,65 @@
     (is (nil? (stages/discover-prior-verdict "/w" {:seq 4})))
     (is (nil? (stages/discover-prior-verdict "/w" {}))
         "a design record with no seq is not a record any verdict could be about")))
+
+;; ── Evidence that a round moved the code ───────────────────────────────────
+
+(deftest content-hashes-cover-the-targets-the-round-skipped
+  ;; A layer left alone because it converged is still part of what the branch
+  ;; holds. Read only over what was REVIEWED, the set would shrink the round a
+  ;; layer starts hitting the cache and read as a change nobody made.
+  (is (= #{"a" "b"}
+         (stages/content-hashes [{:label "core" :patch-hash "a"}
+                                 {:label "wiring" :patch-hash "b"}]))))
+
+(deftest a-target-whose-patch-could-not-be-hashed-is-not-evidence
+  (is (= #{} (stages/content-hashes [{:label "core" :patch-hash nil}]))
+      "a round jj could not diff knows nothing, and nothing is not a change"))
+
+(deftest a-round-whose-fixes-moved-the-branch-is-a-round-that-changed
+  (is (stages/round-changed?
+       {:iter 2 :patch-hashes #{"a992b884"}}
+       [{:iter 1 :fixed-count 2 :patch-hashes #{"ad285eea"}}])
+      "two repairs landed and the reviewers of this round read different code —
+       the one case a repeated finding set must not be called a stall"))
+
+(deftest a-round-whose-fixes-did-not-reach-the-branch-changed-nothing
+  ;; The fixers ran and committed; the content they left is what the last round
+  ;; already read. Commits are not progress.
+  (is (not (stages/round-changed?
+            {:iter 2 :patch-hashes #{"ad285eea"}}
+            [{:iter 1 :fixed-count 2 :patch-hashes #{"ad285eea"}}]))))
+
+(deftest a-round-that-landed-no-repair-changed-nothing
+  (is (not (stages/round-changed?
+            {:iter 2 :patch-hashes #{"a992b884"}}
+            [{:iter 1 :fixed-count 0 :patch-hashes #{"ad285eea"}}]))
+      "content that moved with no repair behind it is not the loop making
+       progress — it is the worktree moving under the run"))
+
+(deftest the-round-before-this-one-is-found-by-its-iter
+  ;; `last` would answer with round 1 for a round-3 question whenever round 2
+  ;; left no entry, comparing across two rounds of repairs and calling a stall
+  ;; progress.
+  (is (not (stages/round-changed?
+            {:iter 3 :patch-hashes #{"b"}}
+            [{:iter 1 :fixed-count 2 :patch-hashes #{"a"}}]))))
+
+(deftest content-nobody-could-hash-leaves-the-stall-check-as-strict-as-it-was
+  (is (not (stages/round-changed?
+            {:iter 2 :patch-hashes #{}}
+            [{:iter 1 :fixed-count 2 :patch-hashes #{"ad285eea"}}])))
+  (is (not (stages/round-changed?
+            {:iter 2 :patch-hashes #{"a992b884"}}
+            [{:iter 1 :fixed-count 2 :patch-hashes #{}}]))))
+
+(deftest a-round-stamps-what-its-reviewers-read-onto-the-ctx
+  ;; What the next round compares against. Without it on the ctx there is no
+  ;; second reading to take, and the fix stage has nothing to put in history.
+  (with-redefs [layers/patch-hash (fn [_ _ to] (str "hash-" to))
+                codex/merge-base (fn [& _] "BASEREV")
+                codex/review! (fn [_] {:status :ok :findings [{:title "x" :file "a.clj"}]})]
+    (let [out ((:run stages/review-stage)
+               {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 1})]
+      (is (seq (:patch-hashes out)))
+      (is (every? string? (:patch-hashes out))))))

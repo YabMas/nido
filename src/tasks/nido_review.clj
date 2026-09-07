@@ -836,6 +836,14 @@
                     ;; disposition means is the one that says whether anything
                     ;; is still owed.
                     :open?     (complement stages/settled?)
+                    ;; Also what the engine cannot ask for itself: whether the
+                    ;; round moved the code. Without it a repeated finding set
+                    ;; is read as a stall, and a defect class the fixers are
+                    ;; still narrowing repeats its handles by construction — one
+                    ;; run ended that way on the round after it landed two
+                    ;; repairs, throwing away a ruling that named two untried
+                    ;; remedies.
+                    :changed?  stages/round-changed?
                     ;; A repair is aimed at a layer, so a finding the warden
                     ;; re-attributes has not been attempted where it now points.
                     ;; Without this the give-up counter reads three attempts at
