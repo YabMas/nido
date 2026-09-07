@@ -269,7 +269,7 @@
   decision?
   "True when the verdict is one a human has to answer rather than read."
   [v]
-  (boolean (#{:invalidated :standing-challenged} (:verdict v))))
+  (boolean (report/verdict-invalidates (:verdict v))))
 
 (defn ^{:malli/schema [:=> [:cat :any] :any]}
   still-open

@@ -2494,6 +2494,22 @@
    copy of the same set."
   #{:sufficient :accurate})
 
+(def verdict-invalidates
+  "The design verdicts that put the design itself in question rather than its
+   execution — the two a human has to answer rather than read.
+
+   Named here for the same reason `verdict-holds` is, and it had gone the same
+   way: `review.verdict/decision?` carried the set as a literal, and standing
+   needed the identical reading to decide whether a design still stands. A second
+   copy is a second answer to `did the round invalidate this`, and the two would
+   part company the first time a fifth verdict was added.
+
+   Here rather than beside the loop that writes them, because the readers are in
+   different bands: Record may not reach Review, and both may reach Report. The
+   schema for these verdicts already lives here, which is the same argument one
+   level down — what a verdict MEANS belongs with what a verdict IS."
+  #{:invalidated :standing-challenged})
+
 (defn ^{:malli/schema [:=> [:cat :keyword] :string]}
   findings-heading
   "What the findings under a verdict ARE. :insufficient does not report claims

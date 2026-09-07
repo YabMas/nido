@@ -49,6 +49,35 @@
          "  3. supersede the design so it cites the corrected baseline\n"
          "  4. bb nido:review:design, then Approve it in the gate inbox")
 
+    :design-invalidated
+    (str "  The review round read the code against this design and found the\n"
+         "  DESIGN wrong, not its execution — entry " seq " says which invariants\n"
+         "  it broke and what it needs. That is a decision, so it does not clear\n"
+         "  itself; one of two things has to happen.\n"
+         "  1. Redesign — the ordinary answer. Retract the design (the gate's\n"
+         "     Redesign button writes it), then write a superseding :design,\n"
+         "     bb nido:review:design, and approve it.\n"
+         "  2. Accept it — if the round is wrong and you can say why. The gate's\n"
+         "     Accept button records a second approval against entry " seq ",\n"
+         "     which is the ledger saying a person read the invalidation and\n"
+         "     granted the design anyway.\n"
+         "  Do neither by hand: an approval that does not name the verdict looks\n"
+         "  exactly like one made before it.")
+
+    :premise-superseded
+    (str "  The baseline this design cites was re-surveyed AFTER the design was\n"
+         "  written, so the design stands on a reading nobody holds any more.\n"
+         "  Nobody said it was false — this is not a retraction — the ground\n"
+         "  simply moved under it.\n"
+         (when replaced-by
+           (str "  1. bb nido:review:baseline :seq " replaced-by
+                " — until it answers `sufficient`\n"))
+         "  2. supersede the design so it cites the re-survey:\n"
+         "     a new :design entry with :baseline {:seq "
+         (or replaced-by "<the new one>") " …}\n"
+         "     and :supersedes {:seq <this design> :why \"…\"}\n"
+         "  3. bb nido:review:design, then Approve it in the gate inbox")
+
     :design-retracted
     (str "  Somebody found this design untrue — read entry " seq " first.\n"
          "  Write a superseding :design, run bb nido:review:design, and have it\n"

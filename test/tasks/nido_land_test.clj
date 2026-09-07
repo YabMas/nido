@@ -85,6 +85,7 @@
   ;; guess or stop. A reason with no route is a wall.
   (let [way-out #'land/way-out]
     (doseq [reason [:premise-unverified :premise-retracted :design-retracted
+                    :design-invalidated :premise-superseded
                     :no-premise :not-approved :unreadable-ledger]]
       (let [txt (way-out {:reason reason :seq 3})]
         (is (not (str/includes? txt "No route recorded"))

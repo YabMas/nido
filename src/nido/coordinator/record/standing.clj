@@ -8,14 +8,33 @@
    in step with the graph, and that index drifting is the failure this project
    has paid for more than once. A closure computed on every read cannot drift.
 
-   Two things can make a design undecidable and they are not the same. A
-   RETRACTION says a record is untrue, and only an explicit one counts —
-   supersession, correction, age and a changed working copy all mean nothing
-   here, because a review round appends three to six superseding baselines in a
-   normal run and a rule that fired on those would be switched off within a
-   week. An UNVERIFIED PREMISE says nobody has checked the baseline this design
-   names, which is the question the design round already asked; it moved here so
-   that every surface asks it the same way.
+   Four things can make a design undecidable and they are not the same.
+
+   A RETRACTION says a record is untrue, and only an explicit one counts. An
+   UNVERIFIED PREMISE says nobody has checked the baseline this design names,
+   which is the question the design round already asked; it moved here so that
+   every surface asks it the same way. An INVALIDATING VERDICT is the review
+   round saying the design itself is wrong rather than its execution — the two
+   verdicts `report/verdict-invalidates` names, which the round already requires
+   a `:needs` and a non-empty `:invariants-broken` on, and which until now
+   reached a person only if they were watching the terminal it printed to. A
+   SUPERSEDED PREMISE says the baseline this design cites has been re-surveyed
+   SINCE the design was written.
+
+   That last one is the narrow reading of a rule this module used to refuse
+   outright, and the refusal was right for the reason it gave: a review round
+   appends three to six superseding baselines in a normal run, so a rule firing
+   on supersession as such would be switched off within a week. Measured across
+   the live ledgers, 175 of 275 baselines carry a `:supersedes` and almost all of
+   them sit inside an authoring stretch — BEFORE the design that cites them. So
+   the rule carries a sequence guard: a replacement only counts when it was
+   appended AFTER the design it would unseat. Correction, age and a changed
+   working copy still mean nothing here.
+
+   Both new causes are answerable, and by records this vocabulary already has: a
+   superseding design cites the corrected baseline, and an approval appended
+   after an invalidating verdict is a person having read it and granted the
+   design anyway.
 
    Lives beside the ledger rather than inside it. The store must not know which
    review verdicts count as verification — that is this module's secret, and the
@@ -66,6 +85,29 @@
           found
           (recur nxt (conj seen nxt) nxt (dec budget)))))))
 
+(defn- invalidating-verdict
+  "The :seq of a verdict that put `design-seq` itself in question and that nobody
+   has answered, or nil.
+
+   ANSWERED means an approval naming this design appended after the verdict —
+   a person shown the invalidation who granted the design regardless. Compared by
+   :seq rather than by presence, because a design approved BEFORE the round ran is
+   exactly the case this exists to catch: that grant was made against a reading
+   the verdict has since contradicted.
+
+   Keyed on :design-seq, so a verdict about a design that has since been
+   superseded says nothing about the one standing now — the same rule
+   `review.stages/discover-prior-verdict` already applies for the same reason."
+  [verdicts approvals design-seq]
+  (->> verdicts
+       (filter #(and (= design-seq (:design-seq %))
+                     (report/verdict-invalidates (:verdict %))))
+       (remove (fn [v] (some #(and (= design-seq (get-in % [:design :seq]))
+                                   (> (:seq %) (:seq v)))
+                             approvals)))
+       last
+       :seq))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :Standing]}
   of-design
   "Whether `design` — a stamped :design record — stands, and what stops it.
@@ -87,8 +129,9 @@
       (let [rs   (readable project ws-id w :retraction)
             revs (readable project ws-id w :baseline-review)
             oks  (readable project ws-id w :design-approved)
-            bls  (readable project ws-id w :baseline)]
-        (if (some #{::unreadable} [rs revs oks bls])
+            bls  (readable project ws-id w :baseline)
+            vs   (readable project ws-id w :design-verdict)]
+        (if (some #{::unreadable} [rs revs oks bls vs])
           {:indeterminate? true
            :blocked {:reason :unreadable-ledger
                      :detail (str "an entry standing depends on could not be read on "
@@ -104,15 +147,36 @@
                              (some #(and (= premise-seq (:baseline-seq %))
                                          (report/verdict-holds (:verdict %)))
                                    revs))
+                replaced-by (replacement bls premise-seq)
                 premise {:seq premise-seq
                          :retracted-by (retracted premise-seq)
                          :sufficient?  sufficient?
-                         :replaced-by  (replacement bls premise-seq)}
+                         :replaced-by  replaced-by
+                         ;; The replacement only unseats the design when it was
+                         ;; appended after it. `replacement` walks the citation
+                         ;; chain forward and each step is a later entry, so the
+                         ;; seq it returns is the newest — one comparison decides
+                         ;; whether any replacement postdates the design.
+                         :superseded-after (when (and replaced-by
+                                                     (> replaced-by design-seq))
+                                             replaced-by)}
+                invalidated (invalidating-verdict vs oks design-seq)
                 blocked (cond
                           (retracted design-seq)
                           {:reason :design-retracted :seq (retracted design-seq)
                            :detail (str "the design at entry " design-seq
                                         " was retracted by entry " (retracted design-seq))}
+
+                          ;; Above the premise clauses on purpose. A round that
+                          ;; judged THIS design wrong has read the code against
+                          ;; it; a question about the baseline underneath is the
+                          ;; less specific answer and would bury the one somebody
+                          ;; actually derived.
+                          invalidated
+                          {:reason :design-invalidated :seq invalidated
+                           :detail (str "the review round at entry " invalidated
+                                        " found this design invalid rather than its"
+                                        " execution, and no approval since answers it")}
 
                           (nil? premise-seq)
                           {:reason :no-premise
@@ -133,7 +197,23 @@
                                         ", and no round has found that baseline sufficient"
                                         (when-let [r (:replaced-by premise)]
                                           (str "; entry " r " corrects it and is what a "
-                                               "superseding design would cite")))})]
+                                               "superseding design would cite")))}
+
+                          ;; BELOW :premise-unverified, and the order is a claim.
+                          ;; A premise nobody ever checked is the more basic fact
+                          ;; and the more actionable answer — its own :replaced-by
+                          ;; already names what to cite instead — so reporting a
+                          ;; re-survey there would tell an author their footing
+                          ;; moved when they never had one. This fires only on a
+                          ;; design that DID stand on a verified baseline.
+                          (:superseded-after premise)
+                          {:reason :premise-superseded :seq premise-seq
+                           :replaced-by (:superseded-after premise)
+                           :detail (str "the baseline at entry " premise-seq
+                                        " was found sufficient and then re-surveyed"
+                                        " at entry " (:superseded-after premise)
+                                        ", after this design was written — the design"
+                                        " stands on a reading nobody holds any more")})]
             ;; :blocked answers ONE question — what stops this design being
             ;; DECIDABLE — and the absence of an approval is deliberately not in
             ;; it. The premise gate reads this before a human has had anything

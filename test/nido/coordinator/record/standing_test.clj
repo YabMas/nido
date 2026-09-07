@@ -205,3 +205,166 @@
             d (add :design (a-design b))
             st (standing/of-design :brian id (ws/entry-at-seq :brian id d))]
         (is (true? (:decidable? st)))))))
+
+;; ── An invalidating verdict, and a premise re-surveyed under a live design ────
+
+(defn- a-verdict
+  "A verdict of `v` against `design-seq`. :invariants-broken and :needs are what
+   the write schema demands of a decision, which is the bar this reads as
+   evidence somebody could check."
+  [design-seq v]
+  {:format :design-verdict :verdict v :round 1 :design-seq design-seq
+   :reason "a second path sums lines"
+   :invariants-broken [{:invariant "one summing path"
+                        :finding "the invoice renderer sums independently"}]
+   :needs "redesign the totalling seam"})
+
+(deftest an-invalidating-verdict-unseats-a-design-that-was-already-approved
+  ;; The case this change exists for: the round that reviewed the implementation
+  ;; judged the DESIGN wrong, and until now nothing read that back.
+  (with-tmp
+    (fn [_]
+      (let [[id add] (ledger)
+            b (add :baseline a-baseline)
+            _ (add :baseline-review {:format :baseline-review :verdict :sufficient
+                                     :baseline-seq b :reason "ok"})
+            d (add :design (a-design b))
+            _ (add :design-approved {:format :design-approved :design {:seq d} :at-seq d})
+            st0 (standing/of-design :brian id (ws/entry-at-seq :brian id d))
+            v (add :design-verdict (a-verdict d :invalidated))
+            st (standing/of-design :brian id (ws/entry-at-seq :brian id d))]
+        (is (true? (:decided? st0)) "decided before the round ran")
+        (is (false? (:decidable? st)) "and undecidable after it")
+        (is (= :design-invalidated (:reason (:blocked st))))
+        (is (= v (:seq (:blocked st))) "the refusal names the round responsible")))))
+
+(deftest a-standing-challenged-verdict-counts-and-a-strained-one-does-not
+  ;; :strained exists so the gap between fine and wrong is not rounded to fine.
+  ;; It is a reading, not a decision, and rounding it UP would stop a branch on
+  ;; the expected outcome of a healthy round — ten of the eleven verdicts ever
+  ;; written are :strained.
+  (with-tmp
+    (fn [_]
+      (let [[id add] (ledger)
+            b (add :baseline a-baseline)
+            _ (add :baseline-review {:format :baseline-review :verdict :sufficient
+                                     :baseline-seq b :reason "ok"})
+            d (add :design (a-design b))
+            _ (add :design-verdict (dissoc (a-verdict d :strained) :needs))
+            st1 (standing/of-design :brian id (ws/entry-at-seq :brian id d))
+            _ (add :design-verdict (a-verdict d :standing-challenged))
+            st2 (standing/of-design :brian id (ws/entry-at-seq :brian id d))]
+        (is (true? (:decidable? st1)) ":strained is a reading, not a decision")
+        (is (false? (:decidable? st2)) ":standing-challenged is a decision")
+        (is (= :design-invalidated (:reason (:blocked st2))))))))
+
+(deftest an-approval-after-the-verdict-answers-it-and-one-before-does-not
+  ;; The Accept half of the gate, as the ledger sees it. Ordering is the whole
+  ;; content: a grant made before the round ran was made against a reading the
+  ;; round has since contradicted, so presence alone cannot be the test.
+  (with-tmp
+    (fn [_]
+      (let [[id add] (ledger)
+            b (add :baseline a-baseline)
+            _ (add :baseline-review {:format :baseline-review :verdict :sufficient
+                                     :baseline-seq b :reason "ok"})
+            d (add :design (a-design b))
+            _ (add :design-approved {:format :design-approved :design {:seq d} :at-seq d})
+            v (add :design-verdict (a-verdict d :invalidated))
+            st0 (standing/of-design :brian id (ws/entry-at-seq :brian id d))
+            a2 (add :design-approved {:format :design-approved :design {:seq d}
+                                      :at-seq v :note "the round misread the renderer"})
+            st (standing/of-design :brian id (ws/entry-at-seq :brian id d))]
+        (is (false? (:decidable? st0)) "the earlier grant does not answer it")
+        (is (true? (:decidable? st)) "a grant made after it does")
+        (is (true? (:decided? st)))
+        (is (= a2 (:approved-by st)) "and it is the later grant that decides it")))))
+
+(deftest a-verdict-against-a-superseded-design-says-nothing-about-this-one
+  (with-tmp
+    (fn [_]
+      (let [[id add] (ledger)
+            b  (add :baseline a-baseline)
+            _  (add :baseline-review {:format :baseline-review :verdict :sufficient
+                                      :baseline-seq b :reason "ok"})
+            d1 (add :design (a-design b))
+            _  (add :design-verdict (a-verdict d1 :invalidated))
+            d2 (add :design (assoc (a-design b) :supersedes {:seq d1 :why "recut"}))
+            st (standing/of-design :brian id (ws/entry-at-seq :brian id d2))]
+        (is (true? (:decidable? st))
+            "the redesign is the answer to the verdict, not another thing it blocks")))))
+
+(deftest a-premise-re-surveyed-after-the-design-unseats-it
+  (with-tmp
+    (fn [_]
+      (let [[id add] (ledger)
+            b1 (add :baseline a-baseline)
+            _  (add :baseline-review {:format :baseline-review :verdict :sufficient
+                                      :baseline-seq b1 :reason "ok"})
+            d  (add :design (a-design b1))
+            _  (add :design-approved {:format :design-approved :design {:seq d} :at-seq d})
+            st0 (standing/of-design :brian id (ws/entry-at-seq :brian id d))
+            b2 (add :baseline (assoc a-baseline :area "re-surveyed"
+                                     :supersedes {:seq b1 :why "the seam moved"}))
+            st (standing/of-design :brian id (ws/entry-at-seq :brian id d))]
+        (is (true? (:decided? st0)))
+        (is (false? (:decidable? st)))
+        (is (= :premise-superseded (:reason (:blocked st))))
+        (is (= b2 (:replaced-by (:blocked st))) "and it names what to cite instead")))))
+
+(deftest a-premise-superseded-BEFORE-the-design-is-the-ordinary-authoring-round
+  ;; The guard that makes the rule survivable. A design round appends three to six
+  ;; superseding baselines in a normal run and the design is written last, so
+  ;; every one of them predates it. Firing on those would switch the rule off.
+  (with-tmp
+    (fn [_]
+      (let [[id add] (ledger)
+            b1 (add :baseline a-baseline)
+            b2 (add :baseline (assoc a-baseline :area "round 2"
+                                     :supersedes {:seq b1 :why "falsified"}))
+            b3 (add :baseline (assoc a-baseline :area "round 3"
+                                     :supersedes {:seq b2 :why "falsified"}))
+            _  (add :baseline-review {:format :baseline-review :verdict :sufficient
+                                      :baseline-seq b3 :reason "holds"})
+            d  (add :design (a-design b3))
+            _  (add :design-approved {:format :design-approved :design {:seq d} :at-seq d})
+            st (standing/of-design :brian id (ws/entry-at-seq :brian id d))]
+        (is (true? (:decided? st))
+            "three supersessions, all before the design — nothing is unseated")
+        (is (nil? (:superseded-after (:premise st))))))))
+
+(deftest an-unrelated-later-baseline-supersedes-nothing-and-unseats-nothing
+  ;; Measured on a live ledger: a second, narrower survey of a different area
+  ;; written beside the first carries no :supersedes at all. Recency is exactly
+  ;; what the citations exist to refuse.
+  (with-tmp
+    (fn [_]
+      (let [[id add] (ledger)
+            b1 (add :baseline a-baseline)
+            _  (add :baseline-review {:format :baseline-review :verdict :sufficient
+                                      :baseline-seq b1 :reason "ok"})
+            d  (add :design (a-design b1))
+            _  (add :design-approved {:format :design-approved :design {:seq d} :at-seq d})
+            _  (add :baseline (assoc a-baseline :area "a different area entirely"))
+            st (standing/of-design :brian id (ws/entry-at-seq :brian id d))]
+        (is (true? (:decided? st)))
+        (is (nil? (:superseded-after (:premise st))))))))
+
+(deftest an-unreadable-verdict-makes-standing-indeterminate
+  ;; :design-verdict joins the kinds standing depends on, so it joins the ones it
+  ;; fails closed on. A verdict that silently does not invalidate is the same
+  ;; formality an unreadable retraction would be.
+  (with-tmp
+    (fn [_]
+      (let [[id add] (ledger)
+            b (add :baseline a-baseline)
+            _ (add :baseline-review {:format :baseline-review :verdict :sufficient
+                                     :baseline-seq b :reason "ok"})
+            d (add :design (a-design b))
+            v (add :design-verdict (a-verdict d :invalidated))]
+        (io/write-text! (str (fs/path (cstate/workstream-dir :brian id)
+                                      (format "entries/%04d-design-verdict.edn" v)))
+                        "{:format :design-verdict :truncated")
+        (let [st (standing/of-design :brian id (ws/entry-at-seq :brian id d))]
+          (is (true? (:indeterminate? st)))
+          (is (= :unreadable-ledger (:reason (:blocked st)))))))))
