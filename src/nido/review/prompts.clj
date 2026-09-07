@@ -229,21 +229,41 @@
 
 (defn- kinds-asking [asks] (filter #(= asks (:asks %)) composition-kinds))
 
-(defn- cut-routing-block
-  "Which composition kinds the loop can act on, and which it cannot — derived
-   from the taxonomy rather than written out beside it.
+(defn- kinds-costing [c] (filter #(= c (:costs %)) composition-kinds))
 
-   The distinction is `:remedy`. A kind that has one names a move the reshape
-   stage can actually perform, so `recut` is a real destination for it. A kind
-   that asks about the CUT and has no remedy — `claim-falsified` is the case —
-   names a defect whose repair is a decision about where a boundary belongs, and
-   there is no mechanical move for that. Hardcoding two kind names here sent
-   those to fixers instead, and a fixer's minimal edit on one side of a
-   misplaced cut makes that cut permanent while the round reports success."
+(defn- cut-routing-block
+  "What may be done about a composition finding, derived from the taxonomy rather
+   than written out beside it.
+
+   Three destinations, and `:costs` is what picks them. A `:packaging` kind is
+   ADVISORY: the collapse erases its defect and the only remedy is rearranging
+   layers, so a fixer, a reshape and a park all spend a round on something that
+   will not exist by the time the branch lands. It is reported and ruled
+   `declined`, which settles it, keeps it, and puts it in front of a human.
+
+   `:remedy` still selects what the reshape stage can perform, but it no longer
+   selects on its own: a kind with a remedy AND `:packaging` is advisory, because
+   being able to make a move is not a reason to make one. That leaves one kind
+   the loop still recuts.
+
+   Hardcoding kind names here is what an earlier version did, and it sent
+   `claim-falsified` to fixers whose minimal edit on one side of a cut made the
+   cut permanent while the round reported success."
   []
-  (let [recut  (filter :remedy composition-kinds)
-        no-fix (remove :remedy (kinds-asking :cut))]
-    (str "RECUT — kinds the loop can act on mechanically. Use `recut` for these:\n"
+  (let [advisory (kinds-costing :packaging)
+        recut    (filter #(and (:remedy %) (not= :packaging (:costs %))) composition-kinds)
+        no-fix   (remove :remedy (remove #(= :packaging (:costs %)) (kinds-asking :cut)))]
+    (str "ADVISORY — kinds whose defect the collapse erases and whose only remedy\n"
+         "is rearranging layers. Report them; rule them `declined` with your\n"
+         "reason. NEVER `fix`, `recut` or `park` one. The stack is collapsed into\n"
+         "one commit before it lands, so no layer boundary is ever a merge\n"
+         "boundary and no layer survives — re-cutting to improve one buys nothing\n"
+         "that outlives this review, and by the time you can report it the\n"
+         "attention it would have saved is already spent:\n"
+         (->> advisory (map #(str "- " (:kind %) "\n")) (apply str))
+         "\n"
+         "RECUT — a defect that reaches the merged tree and that the loop can act\n"
+         "on mechanically. Use `recut` for these:\n"
          (->> recut
               (map #(str "- " (:kind %) " → " (name (:remedy %)) "\n"))
               (apply str))
@@ -296,13 +316,28 @@
    thing a reviewer has to settle about a defect it has found and the two lead
    somewhere different: a cut defect is usually not fixable in place at all.
 
+:costs is what the defect costs if nobody acts, and it is the field two rules
+   read. `:merged-tree` — the defect is in what lands, so it outlives everything
+   here. `:false-premise` — the collapse erases the defect itself, but a reviewer
+   accepted something on a claim that was untrue, and the repair is a change to
+   the code. `:packaging` — the collapse erases it AND the only remedy is
+   rearranging layers, so acting on it buys nothing that survives the landing.
+
+   The two rules stay separate because they ask different things. ROUTING asks
+   what could be done: a `:packaging` kind is advisory and may not be handed to a
+   fixer or a reshape. The stale-park halt asks whether the branch is really
+   waiting on the answer, and only `:merged-tree` still stops a run. Read as one
+   field-test they are wrong in both directions — `broken-intermediate` is erased
+   by the collapse and is still ruled `fix` 8 times in 30, because completing a
+   layer is a code change.
+
    A closed set, deliberately. This pass's whole difficulty is that its findings
    are easy to confuse with ordinary ones, and a kind a reviewer has to name is a
    kind it cannot drift into: there is no bucket here for a vague unease about
    the stack. `nido.review.codex/composition-schema` builds its `kind` enum from
    this same list — a taxonomy the prompt teaches but the schema will not accept
    is not a soft mismatch, it is a 400 on every round."
-  [{:kind "broken-intermediate" :asks :wiring
+  [{:kind "broken-intermediate" :asks :wiring :costs :false-premise
     :what (str "the stack does not hold at some layer's own tip. A layer leaves\n"
                "  the tree referring to something only a LATER layer supplies, or\n"
                "  breaks a contract a later layer restores. Every layer is\n"
@@ -312,33 +347,33 @@
                "  and search the tree AT THAT LAYER'S OWN REV for anything still\n"
                "  referring to it. This is the wiring question at its most\n"
                "  concrete, and the layer tips are the only place to answer it.")}
-   {:kind "claim-falsified" :asks :cut
+   {:kind "claim-falsified" :asks :cut :costs :false-premise
     :what (str "a layer's stated claim is contradicted by a layer above it. The\n"
                "  common form: a layer claims `mechanical`, or no behaviour\n"
                "  change, and a layer above quietly compensates for behaviour\n"
                "  that did change.")
     :how  (str "read each layer's claims, then read the layers above it for code\n"
                "  that only makes sense if that claim is false. Name the claim.")}
-   {:kind "duplicated-across-layers" :asks :cut :remedy :fold
+   {:kind "duplicated-across-layers" :asks :cut :remedy :fold :costs :merged-tree
     :what (str "two layers independently introduce the same thing — a helper, a\n"
                "  guard, a migration step — because bounded review guaranteed\n"
                "  neither could see the other.")
     :how  (str "for each thing a layer ADDS, look through the other layers for a\n"
                "  near-twin. The names will differ; the shape will not.")}
-   {:kind "order-dependence" :asks :wiring :remedy :reorder
+   {:kind "order-dependence" :asks :wiring :remedy :reorder :costs :packaging
     :what (str "a layer depends on something a layer ABOVE it establishes, so the\n"
                "  stack is in the wrong order. Distinct from broken-intermediate:\n"
                "  there the repair is to complete a layer, here it is to move one.")
     :how  (str "when a layer reaches for something it did not bring, find which\n"
                "  layer supplies it and check whether that layer sits above.")}
-   {:kind "orphaned-by-scope" :asks :cut
+   {:kind "orphaned-by-scope" :asks :cut :costs :merged-tree
     :what (str "something in this branch that EVERY layer's `out of scope` pushed\n"
                "  away, so no reviewer ever held it and nothing ever ruled on\n"
                "  it. You are the only pass that can see this hole, because you\n"
                "  are the only one that reads all the exclusions at once.")
     :how  (str "read the `out of scope` lines above as one set, and ask what in\n"
                "  the branch falls through all of them.")}
-   {:kind "misplaced-cut" :asks :cut :remedy :fold
+   {:kind "misplaced-cut" :asks :cut :remedy :fold :costs :packaging
     :what (str "the cut itself is wrong: one idea split so neither side is\n"
                "  coherent alone, or a layer boundary running through the middle\n"
                "  of a thing. **Report the cut, not a patch.** Saying where the\n"
@@ -347,7 +382,7 @@
     :how  (str "you have usually already found this when a defect has no good\n"
                "  owner. When placing it on either layer feels arbitrary, that is\n"
                "  the cut telling you about itself — say so instead of choosing.")}
-   {:kind "aggregate" :asks :wiring
+   {:kind "aggregate" :asks :wiring :costs :merged-tree
     :what (str "each layer's contribution is defensible alone and their sum is\n"
                "  not: a cost, a lock, a query, an allocation added once per\n"
                "  layer.")
@@ -685,10 +720,14 @@
        "Invariants:\n" (bullets invariants) "\n"
        (when (seq layers)
          (str "CLAIMED DECOMPOSITION — one claim per layer, bottom to top. The stack\n"
-              "you are judging should correspond to these. If it does not — a layer\n"
-              "the design never named, two claims folded into one, an order that\n"
-              "does not match — that is a finding about the CUT, and you are the\n"
-              "only reader positioned to make it:\n"
+              "you are judging should correspond to these, and a mismatch splits\n"
+              "in two. A layer the design NEVER NAMED is a finding: work is\n"
+              "carrying a decision nobody stated, and that survives the collapse.\n"
+              "Two claims folded into one, or an order that does not match, is\n"
+              "ADVISORY — the layers are collapsed into one commit before this\n"
+              "lands, so rearranging them now buys nothing that outlives the\n"
+              "review. Say it and rule it `declined`; do not hand it to a fixer\n"
+              "and do not park it:\n"
               (bullets (map #(str (:claim %)
                                   (when-let [m (:mode %)] (str " (" (name m) ")")))
                             layers))

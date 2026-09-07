@@ -1198,6 +1198,44 @@
   [handles {:keys [id same-as]}]
   (or (get handles same-as) id))
 
+(def ^:private packaging-kinds
+  "The composition kinds whose defect the collapse erases and whose only remedy
+   is rearranging layers — read off the taxonomy the reviewer was taught, so the
+   prompt and this enforcement cannot disagree about which they are."
+  (into #{} (comp (filter #(= :packaging (:costs %)))
+                  (map (comp keyword :kind)))
+        prompts/composition-kinds))
+
+(def ^:private advisory-dispositions
+  "What a packaging finding may be ruled. `declined` settles it, keeps it, and
+   carries the warden's own sentence to the human; the other settling
+   dispositions are still legal because a packaging finding can genuinely be a
+   duplicate or be answered by the design."
+  #{:declined :closed :deviation})
+
+(defn- advisory-ruling
+  "Coerce a packaging finding away from any disposition that spends a round on
+   it — `fix` hands it to a fixer, `recut` to the reshape stage, `park` stops the
+   run for it — and leave every other ruling alone.
+
+   Enforced here rather than trusted to the prompt for the reason the whole
+   change exists: composition findings were ruled `fix` 26 times in 133 while
+   ordinary findings were ruled `fix` 388 in 424, and the two packaging kinds
+   accounted for 2 fixes in 49 against 42 of the run corpus's 46 parks. A rule
+   this consequential that only lives in prose is a fourth soft bar.
+
+   The warden's `because` is kept whatever it said, so the human still reads why
+   the reviewer thought the cut was wrong. What changes is only where it goes."
+  [f]
+  (if (and (contains? packaging-kinds (:kind f))
+           (not (contains? advisory-dispositions (:disposition f))))
+    (assoc f :disposition :declined
+           :advisory-of (:disposition f)
+           :because (str (or (:because f) "the reviewer reported a defect in the cut")
+                         " — advisory: the layers are collapsed before this lands,"
+                         " so rearranging them now buys nothing that survives it."))
+    f))
+
 (defn ^{:malli/schema [:=> [:cat :any :any :any] :any]}
   apply-rulings
   "Merge the warden's per-finding rulings onto the findings, and file each under
@@ -1221,7 +1259,8 @@
                                  :sweep       (boolean (:sweep r))
                                  :because     (or (:because r)
                                                   (when-not r "the warden did not rule on this finding"))})]
-              (assoc merged :handle (resolve-handle handles merged))))
+              (advisory-ruling
+               (assoc merged :handle (resolve-handle handles merged)))))
           findings)))
 
 (defn ^{:malli/schema [:=> [:cat :any] :any]}

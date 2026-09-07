@@ -508,6 +508,50 @@
   (is (= :closed (:disposition (sole-ruling {:disposition "closed" :authority "spun-out"})))
       "a named authority still closes — this refuses the shrug, not the close"))
 
+(deftest a-packaging-finding-cannot-be-handed-work-that-outlives-the-review
+  ;; The two packaging kinds were ruled `fix` 2 times in 49 and accounted for 42
+  ;; of the corpus's 46 parks — and a park standing four rounds stops the whole
+  ;; run while other findings are still fixable. Their defect is erased when the
+  ;; stack is collapsed, and their only remedy is rearranging layers, so every
+  ;; disposition that spends a round on one spends it on nothing.
+  (doseq [k [:misplaced-cut :order-dependence]
+          d [:fix :recut :park]]
+    (let [[out] (stages/apply-rulings
+                 [{:id "aa11" :title "t" :kind k}]
+                 [{:id "aa11" :disposition d :because "the cut is wrong"}]
+                 {})]
+      (is (= :declined (:disposition out)) (str k " ruled " d))
+      (is (= d (:advisory-of out)) "what it would have been is kept")
+      (is (str/includes? (:because out) "the cut is wrong")
+          "the reviewer's own reason survives")))
+
+  (testing "a settling ruling is left exactly as the warden gave it"
+    (doseq [d [:declined :closed :deviation]]
+      (let [[out] (stages/apply-rulings
+                   [{:id "aa11" :title "t" :kind :misplaced-cut}]
+                   [{:id "aa11" :disposition d :because "b"}]
+                   {})]
+        (is (= d (:disposition out)))
+        (is (nil? (:advisory-of out)))
+        (is (= "b" (:because out))))))
+
+  (testing "a kind whose defect reaches the merged tree is untouched"
+    ;; aggregate is the plain case: a cost added once per layer is a sum that
+    ;; lands whole, so a fixer has something to do about it.
+    (doseq [k [:aggregate :duplicated-across-layers :claim-falsified
+               :broken-intermediate :orphaned-by-scope]]
+      (let [[out] (stages/apply-rulings
+                   [{:id "aa11" :title "t" :kind k}]
+                   [{:id "aa11" :disposition :fix :because "b"}]
+                   {})]
+        (is (= :fix (:disposition out)) (str k " keeps its fix")))))
+
+  (testing "and an ordinary finding with no kind is untouched"
+    (let [[out] (stages/apply-rulings
+                 [{:id "aa11" :title "t"}]
+                 [{:id "aa11" :disposition :fix :because "b"}] {})]
+      (is (= :fix (:disposition out))))))
+
 (deftest apply-rulings-defaults-an-unruled-finding-to-fix
   ;; "Nothing is dropped" has to survive a malformed answer: a finding the
   ;; warden forgot is worked on, not silently discarded.

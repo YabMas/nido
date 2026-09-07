@@ -56,11 +56,11 @@
   ;; The two destinations are independent. Park turns on a named invariant and
   ;; is unavailable with no design record; recut says the remedy is the stack's
   ;; shape, which is true whether or not anyone wrote a design
-  ;; down. Collapsing them would send every seam finding to a fixer on exactly
+  ;; down. Collapsing them would send every cut finding to a fixer on exactly
   ;; the workstreams with the least written down about their shape.
   (let [out (prompts/warden-prompt {:findings findings :history [] :design nil})]
     (is (str/includes? out "The RECUT kinds above are still `recut`"))
-    (is (str/includes? out "misplaced-cut \u2192 fold")
+    (is (str/includes? out "duplicated-across-layers \u2192 fold")
         "which kinds those are is derived from the taxonomy, not written out here")
     (is (str/includes? out "neither case turns on the"))))
 
@@ -347,9 +347,20 @@ layers, it is not yours"))
     (doseq [k (remove :remedy cut-kinds)]
       (is (str/includes? out (str "- " (:kind k)))
           (str (:kind k) " is listed as something no fixer should get")))
-    (doseq [k (filter :remedy prompts/composition-kinds)]
-      (is (str/includes? out (str "- " (:kind k) " \u2192 " (name (:remedy k))))
-          (str (:kind k) " is listed as a recut with its move")))))
+    (doseq [k (filter #(and (:remedy %) (not= :packaging (:costs %)))
+                      prompts/composition-kinds)]
+      (is (str/includes? out (str "- " (:kind k) " → " (name (:remedy k))))
+          (str (:kind k) " is listed as a recut with its move")))
+    ;; A remedy is no longer reason enough to perform one. A packaging kind has
+    ;; a fold or a reorder available and is still advisory, because the layers
+    ;; are collapsed before the branch lands.
+    (doseq [k (filter #(= :packaging (:costs %)) prompts/composition-kinds)]
+      (is (str/includes? out (str "- " (:kind k) "\n"))
+          (str (:kind k) " is listed"))
+      (is (not (str/includes? out (str "- " (:kind k) " → ")))
+          (str (:kind k) " must not be offered as a recut")))
+    (is (str/includes? out "ADVISORY")
+        "the advisory destination is named")))
 
 (deftest the-warden-sees-the-designs-claimed-decomposition
   ;; Without it the warden cannot tell that the stack has three layers where the
@@ -360,7 +371,7 @@ layers, it is not yours"))
                                               :mode :structural}])})]
     (is (str/includes? out "CLAIMED DECOMPOSITION"))
     (is (str/includes? out "the ledger holds a decision"))
-    (is (str/includes? out "that is a finding about the CUT"))))
+    (is (str/includes? out "A layer the design NEVER NAMED is a finding"))))
 
 (deftest the-fixer-is-told-what-the-warden-wrote-for-it
   ;; :because is addressed to this reader — why the finding is real, or which
