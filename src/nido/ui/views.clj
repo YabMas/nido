@@ -777,6 +777,14 @@
         :drop    "✓ Dropped — not pursued."
         :done    "✓ Marked done."
         :reply   "Resuming… re-hydrating the session if needed, then resuming the conversation."
+        ;; Both say what is being WRITTEN, because that is the whole of what
+        ;; happens: neither answer resumes anything, and the next round reads the
+        ;; ledger. Naming the record is also what makes the two distinguishable
+        ;; afterwards — one retracts, one grants, and they leave different marks.
+        :redesign    (str "✓ Retracting the design — the verdict's broken invariants go on "
+                          "the record as the evidence. Write the superseding design next.")
+        :hold-design (str "✓ Held — recording a grant against the verdict, which is the "
+                          "ledger saying you read it and stand by the design.")
         "Done."))
     project ws-id pane-id)))
 

@@ -324,6 +324,14 @@
     ;; of what a reader can act on, and `because` carries it up from standing.
     :approval-refused       (str "Not approved — the design no longer stands"
                                  (when-let [d (:detail because)] (str ": " d)))
+    ;; The two answers to an invalidation, refused for the two reasons an
+    ;; :approve is: the page moved, or the question is no longer being asked.
+    :acknowledge-stale      (str "Not recorded — the ledger moved on since this page "
+                                 "rendered, so this would have answered a verdict you "
+                                 "were not looking at. Re-read the gate.")
+    :nothing-to-acknowledge (str "Nothing to answer — this design is not sitting on an "
+                                 "unanswered verdict any more. Somebody may have "
+                                 "answered it in another tab.")
     :unresolved             (str "Couldn't resolve the ticket in Notion"
                                  (when error (str ": " (name error))))
     (:notion-failed :error) (str "Apply failed"

@@ -9,7 +9,9 @@
    [nido.coordinator.lane.facets]
    [nido.coordinator.lane.pickup]
    [nido.coordinator.lane.promote]
+   [nido.coordinator.lane.pipeline :as pipeline]
    [nido.coordinator.lane.resume :as resume]
+   [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.runs :as runs]
    [nido.coordinator.record.session :as session]
    [nido.coordinator.source.state]
@@ -2726,3 +2728,117 @@
                                        :awaiting :approve-design
                                        :grantable? true})))
       "and a round that did recommend proceeding is still grantable"))
+
+;; ── Answering an invalidated design ─────────────────────────────────────────
+
+(defn- invalidated
+  "A workstream whose approved design a review round has just called invalid.
+   Returns [ws-id design-seq verdict-seq]."
+  []
+  (let [[id _ d dd] (approvable)
+        add (fn [kind r] (workstream/append-entry! :brian id {:kind kind} (pr-str r))
+              (count (:entries (workstream/read-ws :brian id))))]
+    (add :design-approved {:format :design-approved :design {:seq d} :at-seq dd})
+    (let [v (add :design-verdict
+                 {:format :design-verdict :verdict :invalidated :round 2
+                  :design-seq d :reason "a second path sums lines"
+                  :invariants-broken [{:invariant "one summing path"
+                                       :finding "the invoice renderer sums independently"}]
+                  :needs "redesign the totalling seam"})]
+      [id d v])))
+
+(deftest an-invalidated-design-offers-redesign-and-accept-and-nothing-else
+  (with-tmp
+    (fn [_]
+      (let [[id _ v] (invalidated)
+            pos (pipeline/of :brian id)
+            acts (work/gate-actions :in-progress false nil
+                                    {:awaiting (work/awaiting-human pos) :seq v})]
+        (is (= :design-invalidated (:at pos)))
+        (is (= [:redesign :hold-design] (mapv :id acts)))
+        (is (every? #(= v (:seq %)) acts)
+            "and both carry the position they were rendered at")
+        (is (not (work/grantable? :brian id))
+            "while the ordinary Approve is refused — the design does not stand")))))
+
+(deftest redesign-retracts-the-design-and-carries-the-verdict-as-its-evidence
+  ;; This is what gives :retraction a writer. One exists across the whole ledger
+  ;; history because the only path was writing it by hand.
+  (with-tmp
+    (fn [_]
+      (let [[id d v] (invalidated)]
+        (is (= :retracted (:decision (work/resolve-gate! :brian id :redesign v))))
+        (let [r (workstream/latest-entry :brian id :retraction)]
+          (is (= d (get-in r [:retracts :seq])) "it names the design")
+          (is (= :review (:found-during r)))
+          (is (str/includes? (:because r) "second path"))
+          (is (= ["one summing path — broken by: the invoice renderer sums independently"]
+                 (:evidence r))
+              "the broken invariants ARE the counterexample, copied not summarised"))
+        (let [pos (pipeline/of :brian id)]
+          (is (= :design-retracted (:at pos)))
+          (is (= :design (:stage (:next pos)))
+              "and it routes to a new design, not to a re-survey"))))))
+
+(deftest accept-grants-the-design-against-the-verdict-and-clears-the-halt
+  (with-tmp
+    (fn [_]
+      (let [[id d v] (invalidated)]
+        (is (= :held (:decision (work/resolve-gate! :brian id :hold-design v))))
+        (let [a (workstream/latest-entry :brian id :design-approved)]
+          (is (= d (get-in a [:design :seq])))
+          (is (str/includes? (:note a) (str "entry " v))
+              "and says which verdict it was answering"))
+        (is (not= :design-invalidated (:at (pipeline/of :brian id)))
+            "the halt is cleared by the grant, with no new ledger kind")
+        (is (:decided? (standing/of-design
+                        :brian id (workstream/latest-entry :brian id :design)))
+            "and the design stands again")))))
+
+(deftest a-standing-challenged-verdict-with-no-broken-invariants-still-retracts
+  ;; :standing-challenged requires no :invariants-broken, so a verdict can arrive
+  ;; with none — and a retraction that failed to validate would leave the gate
+  ;; refusing a click a person is entitled to make.
+  (with-tmp
+    (fn [_]
+      (let [[id _ d dd] (approvable)
+            add (fn [kind r] (workstream/append-entry! :brian id {:kind kind} (pr-str r))
+                  (count (:entries (workstream/read-ws :brian id))))]
+        (add :design-approved {:format :design-approved :design {:seq d} :at-seq dd})
+        (let [v (add :design-verdict {:format :design-verdict :verdict :standing-challenged
+                                      :round 1 :design-seq d
+                                      :reason "it challenges the stance without saying so"
+                                      :needs "declare :challenges or step back"})]
+          (is (= :retracted (:decision (work/resolve-gate! :brian id :redesign v))))
+          (is (= [(str "the design verdict at entry " v)]
+                 (:evidence (workstream/latest-entry :brian id :retraction)))
+              "the entry is named instead — honest, and one read away"))))))
+
+(deftest answering-against-a-page-the-ledger-has-moved-past-is-refused
+  (with-tmp
+    (fn [_]
+      (let [[id _ v] (invalidated)]
+        (is (= :acknowledge-stale
+               (:decision (work/resolve-gate! :brian id :redesign nil)))
+            "a click carrying no position fails closed")
+        (is (= :acknowledge-stale
+               (:decision (work/resolve-gate! :brian id :hold-design (dec v)))))
+        (is (= :held (:decision (work/resolve-gate! :brian id :hold-design v))))
+        (is (= :acknowledge-stale
+               (:decision (work/resolve-gate! :brian id :hold-design v)))
+            "and the double click refuses on the same check")))))
+
+(deftest a-verdict-answered-in-another-tab-cannot-be-answered-again
+  ;; The position is re-read at the moment of the click, so an answer that landed
+  ;; between render and click takes the question off the table rather than
+  ;; letting a second one be recorded against it.
+  (with-tmp
+    (fn [_]
+      (let [[id d v] (invalidated)
+            add (fn [kind r] (workstream/append-entry! :brian id {:kind kind} (pr-str r))
+                  (count (:entries (workstream/read-ws :brian id))))
+            a (add :design-approved {:format :design-approved :design {:seq d} :at-seq v
+                                     :note "answered elsewhere"})]
+        (is (= :nothing-to-acknowledge
+               (:decision (work/resolve-gate! :brian id :redesign a)))
+            "the click is current, and the question is gone")))))

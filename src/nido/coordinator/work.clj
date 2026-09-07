@@ -150,7 +150,7 @@
    its descriptor, and a resolver that compares it before acting."
   [action-id]
   (or (option-action? action-id)
-      (= :approve action-id)))
+      (contains? #{:approve :redesign :hold-design} action-id)))
 
 (defn- option-actions
   "One button per branch of a blocker's :options, lettered by position. `:kind
@@ -271,12 +271,36 @@
          approving? (and (= :design-decision report-format)
                          grantable?
                          (or parked? (= :approve-design awaiting)))
+         ;; The other question only a person can answer, and it is asked off the
+         ;; POSITION alone rather than off the report the pane happens to be
+         ;; showing. `approving?` also reads a report format because a grant is
+         ;; offered beside the decision it grants; an invalidation is a halt, so
+         ;; the workstream sits there whatever was appended after the verdict, and
+         ;; gating on the format would hide the only two buttons that clear it the
+         ;; moment anything landed on top.
+         ;;
+         ;; Both carry the position they were rendered at, exactly as :approve
+         ;; does: retracting a design or granting one against a stale page is not
+         ;; a decision about what is there now.
+         acknowledging? (= :acknowledge-invalidation awaiting)
          actions
-         (if approving?
+         (cond
+           acknowledging?
+           (cond-> [(cond-> {:id :redesign :label "Redesign"
+                             :kind :mutation :style :primary}
+                      entry-seq (assoc :seq entry-seq))
+                    (cond-> {:id :hold-design :label "Accept"
+                             :kind :mutation :style :default}
+                      entry-seq (assoc :seq entry-seq))]
+             parked? (conj {:id :reply :label "Reply" :kind :resume :style :default}))
+
+           approving?
            (cond-> [(cond-> {:id :approve :label "Approve"
                              :kind :mutation :style :primary}
                       entry-seq (assoc :seq entry-seq))]
              parked? (conj {:id :reply :label "Reply" :kind :resume :style :default}))
+
+           :else
            (case stage
            :incoming    [{:id :promote :label "Promote" :kind :mutation :style :primary}
                          {:id :drop    :label "Dismiss" :kind :mutation :style :danger}]
@@ -1547,6 +1571,112 @@
               ;; it — see ui.server/resolve-failure-msg.
               {:decision :approved-unresumed})))))))
 
+(defn- invalidation-at
+  "The design and the unanswered invalidating verdict against it, or nil.
+
+   Re-asked at the moment of the click rather than trusted from the button, for
+   the reason `approve!` re-asks the premise: the gate was rendered at one ledger
+   position and is being acted on at another, and a verdict answered in another
+   tab must not be answerable again here. Reads the position rather than the
+   ledger directly, so the button and the resolver cannot come to disagree about
+   what an unanswered verdict is."
+  [project ws-id]
+  (let [pos (pipeline/of project ws-id)]
+    (when (= :design-invalidated (:at pos))
+      (when-let [d (cws/latest-entry project ws-id :design)]
+        {:design d
+         :verdict (cws/latest-entry project ws-id :design-verdict)
+         :seq (get-in pos [:re-entry :because :seq])}))))
+
+(defn- retraction-evidence
+  "What a retraction written from `verdict` carries as its evidence.
+
+   :evidence is required and non-empty, and it is the whole guard against a
+   retraction becoming noise — a judgement that stops a branch must carry the
+   counterexample that earned it. The verdict's broken invariants ARE that, so
+   they are copied rather than summarised.
+
+   The fallback is not decoration. :standing-challenged requires no
+   :invariants-broken, so a verdict can legitimately arrive with none, and a
+   retraction that failed to validate would leave the gate refusing a click a
+   person is entitled to make. Naming the entry is honest and checkable: the
+   reasoning is one read away."
+  [verdict verdict-seq]
+  ;; A VECTOR either way — the schema demands one, and `seq` over a vector hands
+  ;; back a seq that fails at the ledger boundary rather than here.
+  (let [broken (into [] (keep (fn [{:keys [invariant finding]}]
+                                (when invariant
+                                  (str invariant
+                                       (when finding (str " — broken by: " finding))))))
+                     (:invariants-broken verdict))]
+    (if (seq broken)
+      broken
+      [(str "the design verdict at entry " verdict-seq)])))
+
+(defn- redesign!
+  "Confirm an invalidating verdict: RETRACT the design it names.
+
+   This is what gives `:retraction` a writer. The kind has had a schema, a
+   citation check, a position that outranks the record trail and a way-out in the
+   landing gate since it was introduced, and nothing in nido ever appended one —
+   the only path was `bb nido:workstream:entry:add :kind retraction` by hand, and
+   one exists across the whole ledger history.
+
+   The review loop deliberately does NOT write it. A retraction cascades, so a
+   machine judgement that stopped a branch with nobody in the loop would be an
+   assertion rather than a finding. The verdict is the evidence; a person
+   confirming it is what earns the retraction, and that person is this click."
+  [project ws-id entry-seq]
+  (cond
+    (or (nil? entry-seq)
+        (not= entry-seq (:seq (latest-report project ws-id))))
+    {:decision :acknowledge-stale}
+
+    :else
+    (if-let [{:keys [design verdict seq]} (invalidation-at project ws-id)]
+      (do (cws/append-entry!
+           project ws-id {:kind :retraction}
+           (pr-str {:format :retraction
+                    :retracts {:seq (:seq design)}
+                    :because (or (not-empty (:reason verdict))
+                                 (str "the review round at entry " seq
+                                      " found this design invalid rather than its execution"))
+                    :evidence (retraction-evidence verdict seq)
+                    :found-during :review}))
+          {:decision :retracted :design (:seq design)})
+      {:decision :nothing-to-acknowledge})))
+
+(defn- hold-design!
+  "Answer an invalidating verdict by granting the design anyway.
+
+   A second :design-approved naming the same design, and NOT a new ledger kind.
+   The act is the same one the approval gate performs — a person granting this
+   design — and what distinguishes it is when: standing counts an approval as
+   answering a verdict exactly when it was appended after it, so ordering carries
+   the whole meaning and a :design-held kind would be a second record for one
+   question.
+
+   Deliberately not routed through `approve!`. That resolver refuses anything
+   `grantable?` refuses, and an invalidated design is precisely not grantable —
+   the two would deadlock, with the button offered and the write refused. The
+   position is what licenses this one, and it is re-read here."
+  [project ws-id entry-seq]
+  (cond
+    (or (nil? entry-seq)
+        (not= entry-seq (:seq (latest-report project ws-id))))
+    {:decision :acknowledge-stale}
+
+    :else
+    (if-let [{:keys [design seq]} (invalidation-at project ws-id)]
+      (do (cws/append-entry!
+           project ws-id {:kind :design-approved}
+           (pr-str {:format :design-approved
+                    :design {:seq (:seq design)}
+                    :at-seq entry-seq
+                    :note (str "held against the design verdict at entry " seq)}))
+          {:decision :held :design (:seq design)})
+      {:decision :nothing-to-acknowledge})))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :any [:? :any]] :map]}
   resolve-gate!
   "Apply a gate follow-action, dispatching on `action-id`. A workstream-less ws-id
@@ -1558,6 +1688,8 @@
      :apply   -> apply! (ticket:complete)   :reply   -> resume! the parked agent with `payload`
      :approve -> record the grant (:design-approved) and resume, iff `payload`
                  still names the latest report AND the design still stands
+     :redesign    -> confirm an invalidating verdict by retracting the design
+     :hold-design -> answer one by granting the design anyway
      :option-a … :option-f -> resume! with the blocker branch that letter names,
                               iff `payload` still names the latest report
      :restore -> restore! (clear ticket status + reopen at :triaging)
@@ -1593,6 +1725,8 @@
        :apply   (apply! project ws-id)
        :reply   (resume/resume! project ws-id payload)
        :approve (approve! project ws-id payload)
+       :redesign     (redesign! project ws-id payload)
+       :hold-design  (hold-design! project ws-id payload)
        (throw (ex-info "Unknown gate action" {:action-id action-id :ws-id ws-id}))))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :SessionName] :any]}
