@@ -968,6 +968,39 @@
         (:reviews ctx)))
 
 
+(def ^:private halting-kinds
+  "The composition kinds a standing park may still stop a run for: the ones whose
+   defect is in what LANDS. Read off the taxonomy, so this and the routing
+   cannot disagree about which they are."
+  (into #{} (comp (filter #(= :merged-tree (:costs %)))
+                  (map (comp keyword :kind)))
+        prompts/composition-kinds))
+
+(defn- park-blocks?
+  "Whether a standing park is something the branch is really waiting on.
+
+   A park with no kind is an ordinary finding the warden put to a human — it
+   contradicts a named invariant, or it is a defect two fixes did not settle —
+   and it blocks, as it always has. A park on a composition finding blocks only
+   when the defect reaches the merged tree.
+
+   The rest ask about a boundary that will not exist: the stack is collapsed into
+   one commit before it lands, so the question is about this review's packaging
+   and about nothing downstream. Two things read this, and both had to move for
+   either to help. `park-persists-for` ends the run outright — 42 of the corpus's
+   46 parks were layering findings, and a park standing four rounds stopped the
+   whole run `:unfixable` while other findings were still fixable. And
+   `converged-targets` counts every standing park as OWED, so a park that stopped
+   halting and kept blocking convergence would only trade a stop for a run to
+   `max-iters`, which is the same time lost under a worse name.
+
+   It stops blocking; it does not stop existing. The park is still carried, still
+   shown back to the next warden instead of being re-adjudicated, and still in
+   the run's remainder for a human to read."
+  [p]
+  (let [k (:kind p)]
+    (boolean (or (nil? k) (contains? halting-kinds (keyword k))))))
+
 (defn ^{:malli/schema [:=> [:cat :any :any :any] :any]}
   converged-targets
   "Pure: the targets this round left with nothing OWED, paired with the patch
@@ -1009,7 +1042,7 @@
    case: it moves code between layers without changing `base-rev..@` by a byte,
    which is why that key folds in the cut as well; see `with-patch-hashes`."
   [reviews findings parks]
-  (let [owed   (concat (remove settled? findings) parks)
+  (let [owed   (concat (remove settled? findings) (filter park-blocks? parks))
         owners (into #{} (map :owner-layer) owed)]
     (into []
           (comp (map :target)
@@ -1350,6 +1383,7 @@
                   acc
                   (assoc acc k {:since iter
                                 :owner-layer (:owner-layer f)
+                                :kind (:kind f)
                                 :title (:title f)
                                 :because (:because f)}))))
             prior'
@@ -1426,8 +1460,9 @@
             ;; returned :continue, because there was no state between "keep
             ;; fixing" and "escalate".
             stale (seq (for [[k p] parks
-                             :when (>= (inc (- (:iter ctx) (:since p)))
-                                       park-persists-for)]
+                             :when (and (park-blocks? p)
+                                        (>= (inc (- (:iter ctx) (:since p)))
+                                            park-persists-for))]
                          k))
             ctx' (assoc ctx
                         :warden  decision

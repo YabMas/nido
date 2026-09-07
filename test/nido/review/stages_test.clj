@@ -552,6 +552,41 @@
                  [{:id "aa11" :disposition :fix :because "b"}] {})]
       (is (= :fix (:disposition out))))))
 
+(deftest a-park-about-the-cut-stops-blocking-but-keeps-standing
+  ;; 42 of the corpus's 46 parks were layering findings, and a park standing
+  ;; four rounds ended the whole run :unfixable while other findings were still
+  ;; fixable. The boundary it asks about is collapsed before the branch lands.
+  (testing "which parks the branch is really waiting on"
+    (is (true?  (@#'stages/park-blocks? {:kind :aggregate})))
+    (is (true?  (@#'stages/park-blocks? {:kind :orphaned-by-scope})))
+    (is (true?  (@#'stages/park-blocks? {:kind :duplicated-across-layers})))
+    (is (false? (@#'stages/park-blocks? {:kind :claim-falsified})))
+    (is (false? (@#'stages/park-blocks? {:kind :broken-intermediate})))
+    (is (false? (@#'stages/park-blocks? {:kind :misplaced-cut}))))
+  (testing "an ordinary park still blocks — it names a decision, not a boundary"
+    ;; A finding contradicting a design invariant, or one two fixes did not
+    ;; settle, carries no kind and is exactly what a park is for.
+    (is (true? (@#'stages/park-blocks? {})))
+    (is (true? (@#'stages/park-blocks? {:kind nil}))))
+  (testing "a string kind reads the same as a keyword one"
+    ;; report.json round-trips a kind as a string, so a park rebuilt from a
+    ;; carry must not silently start blocking.
+    (is (true?  (@#'stages/park-blocks? {:kind "aggregate"})))
+    (is (false? (@#'stages/park-blocks? {:kind "claim-falsified"}))))
+  (testing "and it does not hold a target out of convergence either"
+    ;; Both reads had to move together: converged-targets counts a standing park
+    ;; as owed, so a park that stopped halting and kept blocking convergence
+    ;; would trade an :unfixable stop for a run to max-iters.
+    (let [reviews [{:target {:label "a" :patch-hash "ha"}}
+                   {:target {:label "stack" :stack? true :patch-hash "hs"}}]]
+      (is (= ["a" "stack"]
+             (mapv :label (stages/converged-targets
+                           reviews [] [{:owner-layer "a" :kind :misplaced-cut}])))
+          "a cut park blocks neither its layer nor the composition")
+      (is (= [] (mapv :label (stages/converged-targets
+                              reviews [] [{:owner-layer "a" :kind :aggregate}])))
+          "a park whose defect lands still holds both"))))
+
 (deftest apply-rulings-defaults-an-unruled-finding-to-fix
   ;; "Nothing is dropped" has to survive a malformed answer: a finding the
   ;; warden forgot is worked on, not silently discarded.
