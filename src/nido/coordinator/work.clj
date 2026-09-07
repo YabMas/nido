@@ -638,13 +638,25 @@
    deadline has passed and the landing will happen anyway. Without this the board
    would render such a decline exactly like one that stopped something, which is
    the honest reading of silence being the wrong one — a reader would believe
-   they had vetoed a change that lands minutes later."
+   they had vetoed a change that lands minutes later.
+
+   `:disposition` is here for the same reason and answers the mirror question.
+   The sweep reads a plan to know what it may still claim; the board needs it to
+   know what it may stop showing. A proposal a plan disposed `:file` or `:no-op`
+   is finished — nothing landed and nothing is going to — and it records no
+   landing precisely because nothing landed, so the board had no way to tell it
+   from a row nobody had got to and kept it in the backlog forever."
   [project]
   (let [pk       (keyword (name project))
         reserved (into #{}
                        (comp (filter :open?) (mapcat :addresses))
-                       (proposal/claim-attempts pk))]
-    (mapv (fn [p] (cond-> p (reserved (proposal/address p)) (assoc :reserved? true)))
+                       (proposal/claim-attempts pk))
+        disposed (proposal/dispositions-by-address (proposal/plans-of pk))]
+    (mapv (fn [p]
+            (let [addr (proposal/address p)]
+              (cond-> p
+                (reserved addr)  (assoc :reserved? true)
+                (disposed addr)  (assoc :disposition (disposed addr)))))
           (proposal/of-project pk))))
 
 (defn- review-detail

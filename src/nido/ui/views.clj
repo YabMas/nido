@@ -335,6 +335,9 @@
            it is not a quiet footnote, it is the queue of things this board has
            agreed to and not done. */
         .prop-waiting { background:#3a2e14; color:#fbbf24; }
+        /* Finished, but by a plan rather than by anything landing. Grey because
+           it asks nothing of anyone — unlike the amber above it. */
+        .prop-disposed { background:#26262b; color:#9aa3ad; }
         .prop-note { font-size:12px; color:#a8b4c0; margin:8px 0 0; }
         .prop-note b { color:#cfd8e3; font-weight:600; }
         .ops-empty { color:#777; padding:20px 0; }
@@ -2406,13 +2409,18 @@
    the board is holding, and nothing in nido carries it out — so it sat under
    the same green `approved` chip as one that had shipped, and a reader could
    not tell the two apart from the surface that was asking them to decide."
-  [{:keys [verdict]} landed]
+  [{:keys [verdict]} landed disposition]
   (cond
     ;; Without a rev for a landing recorded before there was anything to record
     ;; it in. Saying "landed" and nothing more is the whole of what is known;
     ;; the note beneath carries the account that era did write.
     landed              [:span.prop-verdict.prop-landed
                          (str "landed" (when-let [r (:rev landed)] (str " · " r)))]
+    ;; A plan settled it, and settling it meant deciding nothing would be
+    ;; written. There is no landing to point at and there never will be, so
+    ;; unless the chip says so the row reads as one still owed.
+    (= :file disposition)  [:span.prop-verdict.prop-disposed "filed as follow-up"]
+    (= :no-op disposition) [:span.prop-verdict.prop-disposed "no change needed"]
     (= :approved verdict) [:span.prop-verdict.prop-waiting "not yet implemented"]
     :else nil))
 
@@ -2432,7 +2440,8 @@
    separates an observation from an opinion — and a surface that hides it asks
    for a decision about a claim while showing only the claim."
   [{:keys [project ws-id analysis-seq observation at-seq kind where summary evidence
-           proposal run-id reviewed rounds status at decision landed reserved?] :as _p}]
+           proposal run-id reviewed rounds status at decision landed disposition
+           reserved?] :as _p}]
   (let [addr (str analysis-seq "." observation)
         base (str "/operations/" project "/" ws-id "/" analysis-seq "/" observation
                   "?entry=" at-seq)
@@ -2444,13 +2453,19 @@
         ;; and rendering it as settled would tell a reader they stopped something
         ;; they did not. It settles when the landing lands.
         late?    (and (= :declined (:verdict decision)) reserved?)
-        settled? (or landed (and (= :declined (:verdict decision)) (not late?)))]
+        settled? (or landed
+                     (#{:file :no-op} disposition)
+                     (and (= :declined (:verdict decision)) (not late?)))]
     [:div {:class (str "prop" (when settled? " settled"))}
      [:div.prop-head
       [:span {:class (str "chip c-" (name kind))} (name kind)]
       [:span.prop-where where]
       (when decision (prop-decision-chip decision))
-      (when decision (prop-outcome-chip decision landed))]
+      ;; NOT gated on a decision. Most of what has landed was never decided —
+      ;; the sweep carries an undecided proposal exactly as it carries an
+      ;; approved one — and gating the outcome chip on the verdict is what left
+      ;; the landed majority rendering as though nothing had happened to them.
+      (prop-outcome-chip decision landed disposition)]
      [:p.prop-sum summary]
      (when-not (str/blank? (str evidence)) [:p.prop-ev evidence])
      [:p.prop-fix proposal]
@@ -2487,13 +2502,26 @@
    one that is nobody's turn. An open proposal is waiting on a reader and a
    settled one is waiting on no one; an approved-and-unlanded proposal is
    waiting on work that no part of nido will start by itself (FU-32), so it
-   disappears unless something keeps saying it is there."
-  [{:keys [decision landed]}]
+   disappears unless something keeps saying it is there.
+
+   WHAT BECAME OF A ROW IS ASKED BEFORE WHO DECIDED IT, and that order is the
+   whole correctness of this. Under the veto model an approval is no longer what
+   lets the sweep carry a proposal — a decline is what stops it — so the sweep
+   lands proposals nobody ever decided, and asking `(nil? decision)` first put
+   every one of them in the band marked as the reader's to answer. It read 82
+   awaiting a human when 34 were open and none of them needed anyone.
+
+   A plan settles a row too, and settles it by writing nothing: `:file` and
+   `:no-op` mean nothing landed and nothing is going to, so they record no
+   landing, so the row stays in the backlog for as long as the ledger stands
+   unless the disposition is read here."
+  [{:keys [decision landed disposition]}]
   (cond
-    (nil? decision)                 :open
-    (or landed
-        (= :declined (:verdict decision))) :settled
-    :else                           :waiting))
+    landed                            :settled
+    (= :declined (:verdict decision)) :settled
+    (#{:file :no-op} disposition)     :settled
+    (nil? decision)                   :open
+    :else                             :waiting))
 
 (defn ^{:malli/schema [:=> [:cat :any] :any]}
   operations-fragment

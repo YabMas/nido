@@ -286,13 +286,21 @@
   [ws-id plan-seq claim-index]
   (str ws-id "/" plan-seq "#" claim-index))
 
-(defn- dispositions-by-address
+(defn ^{:malli/schema [:=> [:cat [:vector :map]] :map]}
+  dispositions-by-address
   "{address -> disposition} across `plans`, latest plan wins.
 
    Latest for the same reason a decision is: a plan is an append and the ledger
    has no delete, so a later plan reconsidering an address is the one that
    counts. Re-planning is ordinary — a claim refused at reservation returns its
-   survivors to the owed set, and tomorrow groups them differently."
+   survivors to the owed set, and tomorrow groups them differently.
+
+   Public because two readers ask different questions of the same join. `owed`
+   reads it to drop what a plan has settled; the operations surface reads it to
+   say WHY a row is settled, which is the half a proposal's own record cannot
+   carry — `:file` and `:no-op` write no landing precisely because nothing
+   landed, so a disposed row is indistinguishable from an untouched one unless
+   the plan is read beside it."
   [plans]
   (reduce (fn [m plan]
             (reduce (fn [m {:keys [disposition addresses]}]

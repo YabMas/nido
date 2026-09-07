@@ -179,3 +179,37 @@
           (is (str/includes? body "declined too late"))
           (is (str/includes? body "return to the backlog")
               "and what happens to the proposals it was grouped with"))))))
+
+(deftest a-landing-nobody-decided-is-settled-not-awaiting-a-reader
+  ;; The headline defect this replaces: the band asked `(nil? decision)` before
+  ;; it asked what became of the row, and under the veto model most of what
+  ;; lands is never decided — an approval is no longer what lets the sweep carry
+  ;; a proposal. So the board counted every landing of its own as a question for
+  ;; a human, and read 82 awaiting when 34 were open.
+  (with-one-proposal
+    (fn [id]
+      (work/record-landing! :nido id {:analysis-seq 1 :observation 0 :rev "abc"})
+      (let [body (board)]
+        (is (str/includes? body "0 awaiting you"))
+        (is (str/includes? body "landed · abc")
+            "and it says so — the outcome chip used to be gated on a decision, so
+             the landed majority rendered as though nothing had happened to them")))))
+
+(deftest a-proposal-a-plan-disposed-leaves-the-backlog-and-says-why
+  ;; :file and :no-op settle a proposal by deciding nothing will be written, so
+  ;; they record no landing — correctly, since nothing landed. Without reading
+  ;; the plan the board cannot tell such a row from one nobody has got to, and
+  ;; it sits in the backlog for as long as the ledger stands.
+  (with-one-proposal
+    (fn [id]
+      (ws/append-entry! :nido id {:kind :improvement-plan}
+                        (pr-str {:format   :improvement-plan
+                                 :date     "2026-09-07"
+                                 :frontier {:proposals [] :attempts []}
+                                 :claims   [{:disposition :no-op
+                                             :statement   "the record already says this"
+                                             :addresses   [(str id "/1.0")]}]}))
+      (let [body (board)]
+        (is (str/includes? body "0 awaiting you"))
+        (is (str/includes? body "no change needed")
+            "settled by a plan rather than by anything landing, and the chip says which")))))
