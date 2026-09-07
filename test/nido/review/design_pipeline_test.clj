@@ -147,6 +147,51 @@
       (is (= :escalate (:control out)))
       (is (= :proceed (:status out))))))
 
+(deftest a-layering-complaint-alone-does-not-hold-a-design-round
+  ;; Layers do not survive: the stack is collapsed into one commit before it
+  ;; lands, so a bad cut costs the attention of the reviewers reading it now and
+  ;; nothing afterwards. `decomposable` was 143 of 357 findings and the sole
+  ;; complaint in 41 of 193 finding-bearing rounds before this guard existed.
+  (testing "whatever the judge recommended, a decomposable-only break proceeds"
+    (doseq [r [:amend :recut]]
+      (with-redefs [record/design-decision!
+                    (fn [_] (decision r :checks [(check :decomposable :broken)
+                                                 (check :goal-served :held)]))
+                    record/append! (fn [_ _] nil)]
+        (let [out (run record/design-judge-stage (ctx))]
+          (is (= :proceed (:status out)) (str "recommended " r))
+          (is (= :escalate (:control out)))
+          (is (empty? (:findings out))
+              "nothing is handed to an amender")))))
+  (testing "and the complaint still reaches the human on the record"
+    (with-redefs [record/design-decision!
+                  (fn [_] (decision :amend :checks [(check :decomposable :broken)]))
+                  record/append! (fn [_ _] nil)]
+      (let [out (run record/design-judge-stage (ctx))]
+        (is (= [:broken] (mapv :status (filter #(= :decomposable (:check %))
+                                               (:checks (:record out)))))
+            "the broken check is not quietly flipped to :held")))))
+
+(deftest a-commitment-complaint-still-blocks-even-beside-a-layering-one
+  ;; The guard is for the ONE check about packaging. As soon as a check about
+  ;; what the change commits to breaks, the round routes to the amender as
+  ;; before and the layering rides along with it.
+  (with-redefs [record/design-decision!
+                (fn [_] (decision :amend :checks [(check :decomposable :broken)
+                                                  (check :goal-served :broken)]))
+                record/append! (fn [_ _] nil)]
+    (let [out (run record/design-judge-stage (ctx))]
+      (is (not= :proceed (:status out)))
+      (is (= [:decomposable :goal-served] (sort (mapv :check (:findings out))))))))
+
+(deftest a-clean-round-is-not-the-advisory-case
+  ;; `every?` over an empty sequence is true, so a round with nothing broken
+  ;; would otherwise take the guard's branch rather than its own recommendation.
+  (is (false? (@#'record/advisory-only? [])))
+  (is (true?  (@#'record/advisory-only? [(check :decomposable :broken)])))
+  (is (false? (@#'record/advisory-only? [(check :decomposable :broken)
+                                      (check :goal-served :broken)]))))
+
 (deftest only-broken-checks-become-findings
   (with-redefs [record/design-decision!
                 (fn [_] (decision :amend :checks [(check :relation-honest :broken)

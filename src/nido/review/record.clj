@@ -674,6 +674,21 @@
    "                      know where they are. If the count rose while the\n"
    "                      commitment did not, say so — that is the ratchet, not\n"
    "                      convergence.\n"
+   "                      AND IT NEVER BLOCKS. Layers are a development-time\n"
+   "                      device: the stack is collapsed into one commit before\n"
+   "                      it lands, so a bad cut costs the attention of the\n"
+   "                      reviewers reading it now and nothing after that, and\n"
+   "                      by the time you can report it that attention is spent.\n"
+   "                      So whatever you conclude here, it does not change your\n"
+   "                      recommendation: say it in `asks`, mark the check, and\n"
+   "                      recommend on the other three. `amend` and `recut` are\n"
+   "                      for a defect in the COMMITMENT. There is no exception\n"
+   "                      for a cut you cannot state at all — `:layers` is an\n"
+   "                      optional field, a record without it is valid, and what\n"
+   "                      you are approving is the commitment, not the\n"
+   "                      packaging. Two soft bars against over-splitting have\n"
+   "                      already failed here; this one is not a matter of\n"
+   "                      degree.\n"
    "  routing-coherent  — do the routed health observations keep this ONE story?\n"
    "                      Observations routed to fix-here that belong to a\n"
    "                      different story make this two changes.\n\n"
@@ -1503,6 +1518,33 @@
   [record]
   (vec (filter #(= :broken (:status %)) (:checks record))))
 
+(def ^:private advisory-check
+  "The one derived check that may not block, and the reason it is the only one.
+
+   `relation-honest`, `goal-served` and `routing-coherent` judge what the change
+   COMMITS TO. `decomposable` judges how the work will be sliced for review — and
+   layers do not survive: the stack is collapsed into one commit before it lands,
+   so a bad cut costs the attention of the reviewers reading it now and nothing
+   afterwards. By the time a round can report the cut is wrong, that attention is
+   already spent, and another round of re-cutting spends more than it saves.
+
+   Measured before this existed: `decomposable` was 143 of the 357 findings the
+   design round had produced, it was the sole complaint in 41 of 193
+   finding-bearing rounds, and it was the only check still open at the terminal
+   round of 16 of the 61 runs that ended badly. Two prompt-level bars against
+   over-splitting were already in place through all of that, which is why the
+   rule is enforced here and not only asked for."
+  :decomposable)
+
+(defn- advisory-only?
+  "Whether everything the round found broken is the advisory check.
+
+   False when nothing broke — a clean round is not this case, and reads as
+   :proceed on its own recommendation. False as soon as one other check breaks,
+   because then the commitment is in question and the layering rides along."
+  [broken]
+  (boolean (and (seq broken) (every? #(= advisory-check (:check %)) broken))))
+
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   underivable-checks
   "The derivations the round could not make at all.
@@ -1641,7 +1683,14 @@
       (do (append! cwd record)
           (assoc ctx :record record :status (:outcome record)))
 
-      (= :proceed (:recommend record))
+      ;; The judge's own recommendation, or — whatever it recommended — a round
+      ;; whose only broken check is the advisory one. The second is a guard and
+      ;; not a courtesy: the routing lives in the prompt, so without it the rule
+      ;; is a third soft bar beside the two that have already failed here. The
+      ;; broken check stays on the record, so the human still reads the
+      ;; complaint; what it stops doing is spending a round on an amender.
+      (or (= :proceed (:recommend record))
+          (advisory-only? (broken-checks record)))
       (final! (assoc ctx :record record :findings []
                      :underivable (underivable-checks record)
                      :control :escalate :status :proceed))
