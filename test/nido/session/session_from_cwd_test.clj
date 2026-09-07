@@ -1,5 +1,6 @@
 (ns nido.session.session-from-cwd-test
   (:require
+   [babashka.fs :as fs]
    [clojure.test :refer [deftest is]]
    [nido.platform.config :as config]
    [nido.session.engine :as engine]
@@ -73,6 +74,74 @@
                 lifecycle/canonical (fn [p] (str p))]
     (is (nil? (lifecycle/session-from-cwd "/Codex/worktrees/6aa4/brian-next/src")))
     (is (nil? (lifecycle/session-from-cwd "/Code/ghost/.worktrees/x/src")))))
+
+;; ---------------------------------------------------------------------------
+;; A `:lite` worktree is a symlink to the project checkout, so it canonicalizes
+;; to the checkout ROOT. That root prefixes cwds the entry names nothing about,
+;; and is identical for every lite session running at once — so a match on one
+;; is a session picked arbitrarily from the ones that tied, whose name
+;; relativizes outside worktrees-dir (`..`, `../nido`) and therefore keys no
+;; workstream, no state dir and no session home. Containment refuses it.
+;; ---------------------------------------------------------------------------
+
+(deftest lite-worktrees-do-not-answer-for-the-bare-checkout
+  ;; Nested layout (brian: worktrees-dir INSIDE the checkout), on real symlinks
+  ;; so canonicalize does the resolving rather than a stub.
+  (let [tmp  (fs/create-temp-dir)
+        pdir (str (fs/path tmp "brian"))
+        base (str (fs/path pdir ".worktrees"))]
+    (try
+      (fs/create-dirs base)
+      (fs/create-sym-link (fs/path base "run-triage-a") pdir)
+      (fs/create-sym-link (fs/path base "run-triage-b") pdir)
+      (with-redefs [state/read-registry
+                    (fn [] {(str (fs/path base "run-triage-a"))
+                            {:project-name "brian" :instance-id "brian--a"}
+                            (str (fs/path base "run-triage-b"))
+                            {:project-name "brian" :instance-id "brian--b"}})
+                    config/read-projects    (fn [] {"brian" {:directory pdir}})
+                    lifecycle/worktrees-dir (fn [_p _d] base)]
+        (is (nil? (lifecycle/session-from-cwd pdir))
+            "the bare checkout is where no session lives, and the two lite entries tie on it — an answer here names a worktree the caller is not standing in")
+        (is (nil? (lifecycle/session-from-cwd (str (fs/path pdir "src"))))
+            "a subdirectory of the checkout inherits the same tie"))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest lite-worktree-in-a-sibling-worktrees-dir-is-refused-too
+  ;; Sibling layout (nido: ~/Code/nido-worktrees alongside ~/Code/nido), which
+  ;; yields the "../nido" name rather than "..". Synthetic, with canonical
+  ;; standing in for the symlink resolution.
+  (with-redefs [state/read-registry
+                (fn [] {"/Code/nido-worktrees/run-analysis-a"
+                        {:project-name "nido" :instance-id "nido--a"}})
+                config/read-projects    (fn [] {"nido" {:directory "/Code/nido"}})
+                lifecycle/worktrees-dir (fn [_p _d] "/Code/nido-worktrees")
+                lifecycle/canonical
+                (fn [p] (if (= (str p) "/Code/nido-worktrees/run-analysis-a")
+                          "/Code/nido"
+                          (str p)))]
+    (is (nil? (lifecycle/session-from-cwd "/Code/nido"))
+        "an escaping name is refused wherever worktrees-dir sits relative to the checkout, not only when it is nested inside it")))
+
+(deftest a-lite-entry-does-not-suppress-the-real-worktree-the-caller-is-in
+  ;; Containment has to be asked of each candidate, not of the winner: an agent
+  ;; standing in a real worktree must keep resolving while lite sessions — whose
+  ;; canonical root prefixes that worktree — are registered alongside it.
+  (with-redefs [state/read-registry
+                (fn [] {"/Code/brian/.worktrees/run-triage-a"
+                        {:project-name "brian" :instance-id "brian--a"}
+                        "/Code/brian/.worktrees/fix/ordering"
+                        {:project-name "brian" :instance-id "brian--ordering"}})
+                config/read-projects    (fn [] {"brian" {:directory "/Code/brian"}})
+                lifecycle/worktrees-dir (fn [_p _d] "/Code/brian/.worktrees")
+                lifecycle/canonical
+                (fn [p] (if (= (str p) "/Code/brian/.worktrees/run-triage-a")
+                          "/Code/brian"
+                          (str p)))]
+    (is (= "fix/ordering"
+           (:session (lifecycle/session-from-cwd
+                      "/Code/brian/.worktrees/fix/ordering/src")))
+        "a lite entry is skipped as a candidate rather than answered with, so the session the caller is actually in still wins")))
 
 ;; resolve-link-coords now consults session-from-cwd as a resolution source.
 ;; It recomputes worktree/instance-id from the resolved project+session

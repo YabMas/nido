@@ -122,30 +122,55 @@
   "Resolve which session a cwd belongs to via the worktree-keyed registry
    (longest-prefix wins), deriving the session name by relativizing the
    matched worktree path against the project's worktrees-dir. Home-independent.
-   Returns {:project :session :worktree :instance-id} or nil."
+   Returns {:project :session :worktree :instance-id} or nil.
+
+   Nil whenever the registry cannot NAME the session the caller is standing in.
+   Callers guard on nil and fall back to what they were given; none can guard
+   against a confident wrong answer, which is what a session name escaping its
+   worktrees-dir — `..`, `../nido` — used to be. Such a name reaches no
+   workstream, no state dir and no session home, so every write keyed on it
+   lands nowhere and reports success."
   ([] (session-from-cwd (System/getProperty "user.dir")))
   ([cwd]
    (let [cwd*     (str (canonical cwd) "/")
          projects (config/read-projects)
+         ;; One session.edn read per project rather than per registry entry —
+         ;; a project's lite sessions all canonicalize to the same root, so the
+         ;; same base is asked for repeatedly within one resolution.
+         base-of  (memoize
+                   (fn [project]
+                     (canonical (worktrees-dir project
+                                               (:directory (get projects project))))))
          match    (->> (state/read-registry)
-                       ;; Only entries for a registered project are resolvable
-                       ;; nido sessions; skip foreign/legacy entries (e.g. a
-                       ;; codex worktree with :project-name nil) so cwd inside
-                       ;; one resolves to nil rather than crashing in
-                       ;; worktrees-dir / load-session-edn.
-                       (filter (fn [[wt entry]]
-                                 (and (get projects (:project-name entry))
-                                      (str/starts-with? cwd* (str (canonical wt) "/")))))
+                       (filter
+                        (fn [[wt entry]]
+                          (let [project (:project-name entry)
+                                wt*     (canonical wt)]
+                            (and
+                             ;; Only entries for a registered project are
+                             ;; resolvable nido sessions; skip foreign/legacy
+                             ;; entries (e.g. a codex worktree with
+                             ;; :project-name nil) so cwd inside one resolves to
+                             ;; nil rather than crashing in worktrees-dir /
+                             ;; load-session-edn.
+                             (get projects project)
+                             (str/starts-with? cwd* (str wt* "/"))
+                             ;; A `:lite` worktree is a symlink to the project
+                             ;; checkout, so it canonicalizes to the checkout
+                             ;; ROOT — which prefixes every worktree the project
+                             ;; owns, and is the identical path for every lite
+                             ;; session running at once. Such an entry answers
+                             ;; the bare checkout, and every worktree under it,
+                             ;; with a session picked arbitrarily from the ones
+                             ;; that tied. Containment is what refuses it.
+                             (str/starts-with? wt* (str (base-of project) "/"))))))
                        (sort-by (fn [[wt _]] (count (canonical wt))))
                        last)]
      (when match
        (let [[wt entry] match
-             project (:project-name entry)
-             pdir    (:directory (get projects project))
-             base    (worktrees-dir project pdir)
-             session (str (fs/relativize (canonical base) (canonical wt)))]
+             project (:project-name entry)]
          {:project     project
-          :session     session
+          :session     (str (fs/relativize (base-of project) (canonical wt)))
           :worktree    wt
           :instance-id (:instance-id entry)})))))
 

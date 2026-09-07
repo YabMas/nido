@@ -1,39 +1,46 @@
-Say what a terminal review status asks of the reader
+Refuse a registry match outside the project's worktrees-dir
 
-A finished diff-review run printed `review-loop: <status> · report <path>`
-and stopped. The status names a condition; what it asks of the reader was
-written in words nowhere. :fix-conflicted is the worst-off of the eighteen —
-it hands the branch back holding conflict markers, and the change ids saying
-where reached report.json and the workstream ledger only, on a conflict that
-`jj resolve --list` calls clean because it sits mid-stack. A round the
-coordinator drives says it again through the lane's disposition and a gate
-entry; a round a person ran themselves said it here or nowhere.
+A `:lite` session's worktree is a symlink to the project checkout, so
+it canonicalizes to the checkout root — a path that prefixes every
+worktree the project owns and is identical for every lite session
+running at once. session-from-cwd matched such an entry on prefix
+alone, so the bare ~/Code/brian and ~/Code/nido checkouts, and
+everything under them, each resolved to a session picked arbitrarily
+from the ones that tied, under a name that escaped the worktrees-dir
+it was relativized against: 10 of the 19 live registry entries answer
+to ".." or "../nido".
 
-`diff-remedies` is the counterpart of the record loops' `shared-remedies`
-over the diff loop's own vocabulary, and `outcome-lines` composes the status,
-the particulars only this run holds, and the remedy. Returned rather than
-printed because these sentences are the surface, not a by-product of one.
+Such a name keys no workstream, no state dir and no session home, so
+every write made under it lands nowhere and reports success — each
+caller's when-let sees a truthy map and passes. It cost one review run
+all four of its ledger writes, the parked finding that was its only
+handover to a human among them. worktree-from-cwd inherits the answer
+and review:loop uses it to CHOOSE the tree to review, so a loop
+started at a checkout root reviews a worktree somewhere else.
 
-Both conflicted statuses print their ids, not only :fix-conflicted: they
-share the key and the reader's next move. :workspace-drifted's two revisions
-stay in the report, where forensics belong — its remedy is `re-run`. The map
-is total over the vocabulary and holds nothing outside it, both asserted,
-because those statuses are declared two bands down in namespaces that cannot
-read it and a status with no line is silent rather than broken.
+Containment is asked of each candidate rather than of the winner: an
+entry whose canonical path is not under its project's worktrees-dir is
+not a match at all, so a lite entry steps aside instead of outranking
+the real worktree an agent stands in. Rejected: rejecting the derived
+NAME after the match. It answers one step too late — a lite entry that
+won would null the whole resolution rather than yield — and it treats
+".." as a spelling rather than as what it means.
 
 Layer: behavioral
 
-Claims: every terminal status of the diff loop arrives as a sentence about
-  what it asks of the reader, and the two conflicted ones name the changes a
-  human has to resolve.
-Verify: bb nido:test — four new tests in tasks.nido-review-test cover the
-  map's totality, the :fix-conflicted lines, the two-line shape of a run with
-  no particulars, and an unavailable reviewer's own message surviving ahead
-  of the remedy. bb nido:land:check for the canvas Operation.
-Lane: judgment.
-Out of scope: naming the conflicted layers beside their ids — report.json
-  carries the :change join, the terminal does not read it — and the drift
-  revisions on :workspace-drifted.
+Claims: a registry entry canonicalizing outside its project's
+  worktrees-dir never resolves a cwd, so session-from-cwd is nil
+  rather than wrong wherever it cannot name the session the caller
+  stands in.
+Verify: bb nido:test — the two lite-worktree cases fail on the parent
+  revision, naming ".." and "../nido"; the third holds a real worktree
+  resolving while a lite entry is registered beside it.
+Lane: none
+Out of scope: reaching a lite run's own workstream at all. Its cwd
+  canonicalizes to the shared checkout, so the identity is gone before
+  nido sees it and no derivation can recover it — FU-93 carries the
+  alternative, which is to carry the coordinates rather than derive
+  them.
 
-Closes ws-20260903-d00ae6/1.3, claim 8 of the plan at ws-20260905-50125a
-entry 1.
+Covers: ws-20260907-a78539/1.0 (miss · session-from-cwd / the four
+  ledger writes in tasks.nido-review)
