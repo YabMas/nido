@@ -109,8 +109,8 @@
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   cache/read-cache (fn [& _] {})
                   conformance/findings (fn [& _] [])]
-      ;; Second round: this branch is flat, and a flat branch earns clean by
-      ;; being quiet twice — see a-flat-branch-earns-clean-by-being-quiet-twice.
+      ;; Second round: a quiet round is a sample, so clean is earned by being
+      ;; quiet twice — see a-flat-branch-earns-clean-by-being-quiet-twice.
       (let [ctx ((:run stages/review-stage)
                  {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 2
                   :carry {:quiet-once true}})]
@@ -174,7 +174,7 @@
   (with-redefs [layers/patch-hash (fn [& _] nil)
                 codex/merge-base (fn [& _] "BASEREV")
                 codex/review! (fn [_] {:status :clean :findings []})]
-    ;; Flat branch, second quiet round — one pass over a whole diff is a sample.
+    ;; Second quiet round: one pass over a range is a sample, not a verdict.
     (let [ctx ((:run stages/review-stage)
                {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 2
                 :carry {:quiet-once true}})]
@@ -867,8 +867,12 @@
                                 codex/review!        (fn [{:keys [label]}]
                                                        {:status nil :findings []
                                                         :overall-correctness (by-label label)})]
+                    ;; The SECOND quiet round, since that is where a round with
+                    ;; no findings becomes terminal — see
+                    ;; a-layered-stack-earns-clean-the-same-way.
                     ((:run stages/review-stage)
-                     {:config {:cwd "/w" :base "main" :run-id "r"} :iter 1})))]
+                     {:config {:cwd "/w" :base "main" :run-id "r"} :iter 2
+                      :carry {:quiet-once true}})))]
     (let [ctx (answers {"a" "correct" "b" "incorrect" "stack" "correct"})]
       (is (= :clean (:status ctx)) "no findings, so the round is still terminal")
       (is (= "incorrect" (:overall-correctness ctx))
@@ -943,9 +947,7 @@
 (deftest a-flat-branch-earns-clean-by-being-quiet-twice
   ;; One whole-diff pass over an unlayered branch is a sample, not a verdict:
   ;; the round that missed a change's only P1 found one of three pre-existing
-  ;; defects and reported clean. A layered stack has several independent
-  ;; reviewers over the same code and needs no second look; a 0-layer target has
-  ;; nothing to cross-check it.
+  ;; defects and reported clean.
   (with-redefs [layers/patch-hash (fn [& _] nil)
                 codex/merge-base     (fn [& _] "FORK")
                 stages/session-stack (fn [& _] [])
@@ -960,8 +962,12 @@
       (is (= :clean (:status second-pass)))
       (is (= :stop (:control second-pass))))))
 
-(deftest a-layered-stack-is-clean-on-one-quiet-round
-  ;; The second look is bought by the layer reviewers, not by a second round.
+(deftest a-layered-stack-earns-clean-the-same-way
+  ;; Layers do not cross-check each other: a layer's code is read by its own
+  ;; reviewer and by nobody else, since the composition pass is asked about the
+  ;; cut and told not to report what the layer reviews hold. A stack that stops
+  ;; on one quiet round therefore closes on a single reading of every layer —
+  ;; the sample a second quiet round exists to refuse.
   (with-redefs [layers/patch-hash (fn [& _] nil)
                 codex/merge-base     (fn [& _] "FORK")
                 stages/session-stack (fn [& _] [{:bookmark "s--a" :slug "a" :tip "cA"}
@@ -969,10 +975,16 @@
                 layers/brief         (fn [& _] nil)
                 codex/changed-files  (fn [& _] [])
                 codex/review!        (fn [_] {:status :clean :findings []})]
-    (let [ctx ((:run stages/review-stage)
-               {:config {:cwd "/w" :base "main" :run-id "r"} :iter 1})]
-      (is (= :clean (:status ctx)))
-      (is (= :stop (:control ctx))))))
+    (let [first-pass  ((:run stages/review-stage)
+                       {:config {:cwd "/w" :base "main" :run-id "r"} :iter 1})
+          second-pass ((:run stages/review-stage)
+                       {:config {:cwd "/w" :base "main" :run-id "r"} :iter 2
+                        :carry (:carry first-pass)})]
+      (is (nil? (:status first-pass)))
+      (is (= :continue (:control first-pass))
+          "a layer read once has been sampled, not verified")
+      (is (= :clean (:status second-pass)))
+      (is (= :stop (:control second-pass))))))
 
 ;; ---- convergence ---------------------------------------------------------
 

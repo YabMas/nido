@@ -893,20 +893,20 @@
       ;; otherwise written — never runs for a round that starts clean.
       (let [nothing? (and (seq results)
                           (every? #(= :nothing-to-review (:status %)) results))
-            ;; A flat branch is reviewed by ONE pass over the whole diff, and
-            ;; one pass is a sample rather than a verdict: the round that missed
-            ;; a change's only P1 reported one of three pre-existing defects and
-            ;; called it clean. A layered stack gets several independent
-            ;; reviewers over the same code and does not need this; a 0-layer
-            ;; target has nothing to cross-check it, so it earns `clean` by
-            ;; producing nothing twice in a row rather than once.
-            ;; From this round's own results, and deliberately not from the toc
-            ;; even though the toc now answers "is this branch layered". The
-            ;; question here is narrower — how many independent readers passed
-            ;; over this code THIS round — and a layer that converged and was
-            ;; skipped is in the stack while contributing no reviewer to it.
-            flat?    (every? #(:stack? (:target %)) results)
-            first-quiet-round? (and flat? (not nothing?)
+            ;; ONE pass over a range is a sample rather than a verdict: the
+            ;; round that missed a change's only P1 reported one of three
+            ;; pre-existing defects and called it clean. So `clean` is earned by
+            ;; producing nothing TWICE, and the two are independent readings —
+            ;; a first quiet round records no convergence (below), so the second
+            ;; re-reads every target the first one read.
+            ;;
+            ;; A LAYERED stack is no exception. Each layer's code is read by
+            ;; exactly one layer reviewer, and the only other pass over that
+            ;; range is the composition reviewer — asked whether the cut holds
+            ;; and told not to report what the layer reviews already hold (see
+            ;; `round-correctness` and `nido.review.prompts`). There is no
+            ;; cross-check between layers to stand in for the second round.
+            first-quiet-round? (and (not nothing?)
                                     (not (:quiet-once (:carry ctx))))
             ctx'     (cond-> (assoc ctx :findings [] :reviews results :skipped skipped
                                     :reviewed-at at :patch-hashes (content-hashes all)
