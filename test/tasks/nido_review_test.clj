@@ -259,6 +259,7 @@
   ;; conflict this shape, so there is no second way to find them.
   (let [lines (t/outcome-lines {:status :fix-conflicted
                                 :conflicted ["nnpkqnmnkznn" "xlortuwzrtlu"]}
+                               {:rounds []}
                                "/runs/r/report.json")
         out   (str/join "\n" lines)]
     (is (str/includes? out "nnpkqnmnkznn"))
@@ -272,7 +273,7 @@
   ;; Two lines, and the second is the whole of what most runs ask of a reader.
   (is (= ["review-loop: clean · report /runs/r/report.json"
           "  → a reviewer read the diff and reported nothing"]
-         (t/outcome-lines {:status :clean} "/runs/r/report.json"))))
+         (t/outcome-lines {:status :clean} {:rounds []} "/runs/r/report.json"))))
 
 (deftest an-unavailable-reviewer-says-what-it-wants-before-what-it-asks
   ;; The reviewer's own sentence carries the reset hour, which is the one fact
@@ -280,6 +281,7 @@
   (let [lines (t/outcome-lines {:status :reviewer-unavailable
                                 :unavailable {:signal :usage-limit
                                               :message "You've hit your usage limit. … try again at Sep 7th, 2026 9:42 AM."}}
+                               {:rounds []}
                                "/runs/r/report.json")]
     (is (str/includes? (second lines) "Sep 7th, 2026 9:42 AM"))
     (is (str/includes? (last lines) "the branch is unjudged"))))
@@ -967,3 +969,116 @@
       (is (= "strained" (get-in report [:design-verdict :verdict :verdict]))
           "report.json is where the rest of the run's evidence lives, and now the verdict too")
       (is (= "no-workstream" (get-in report [:design-verdict :ledger]))))))
+
+;; ── An abort's own account ──────────────────────────────────────────────────
+;;
+;; The stop that most needs a human to act is the one that computed the facts
+;; making it actionable and then dropped every one of them. Three destinations,
+;; because a run dir is routinely reclaimed before anyone reads the workstream
+;; and the terminal is the only reader for a round somebody ran themselves.
+
+(defn- drifted-report
+  "A folded report for a run that reshaped in an early round and drifted later —
+   the shape the terminal line and the ledger entry both read."
+  []
+  {:target  {:base "main" :base-rev "deadbee"}
+   :summary {:rounds 4 :findings-fixed 2}
+   :rounds  [{:round 2
+              :phases [{:phase "reshape"
+                        :reshapes [{:handle "a65960a8" :title "the doc-ordering seam"
+                                    :outcome "fold" :applied? true
+                                    :lower "plan-stability-bench"
+                                    :upper "plan-stability-doc"}
+                                   {:handle "71b62ca9" :title "unreachable span"
+                                    :outcome "span-has-holes"
+                                    :because "the span skips two layers"}]}]}
+             {:round 4 :phases [{:phase "reshape" :reshapes []}]}]})
+
+(deftest a-drifted-run-names-both-revisions-on-the-terminal
+  ;; The refusal is ABOUT a difference between two revisions, and the operator
+  ;; was told only that there was one. Which revision moved is what separates a
+  ;; rebase they did themselves from another session moving the tree, and it
+  ;; decides whether re-running is the whole answer.
+  (let [out (str/join "\n"
+                      (t/outcome-lines {:status :workspace-drifted
+                                        :drift {:reviewed-at "8f1c0a3d"
+                                                :now "2b7e49c1"}}
+                                       {:rounds []}
+                                       "/runs/r/report.json"))]
+    (is (str/includes? out "8f1c0a3d"))
+    (is (str/includes? out "2b7e49c1"))))
+
+(deftest an-unaskable-workspace-still-says-which-revision-was-reviewed
+  ;; `resolve-rev` answers nil when jj cannot be run, and half the pair is worth
+  ;; more than a line that omits both — the pinned revision is the one a reader
+  ;; can go and look at.
+  (let [out (str/join "\n"
+                      (t/outcome-lines {:status :workspace-drifted
+                                        :drift {:reviewed-at "8f1c0a3d" :now nil}}
+                                       {:rounds []}
+                                       "/runs/r/report.json"))]
+    (is (str/includes? out "8f1c0a3d"))
+    (is (str/includes? out "a revision jj would not name"))))
+
+(deftest the-terminal-says-the-loop-reshaped-the-branch
+  ;; A fold is the loop rewriting the code the operator is standing in, and it
+  ;; reached report.json alone — a JSON file in a run dir nobody was told to
+  ;; open. It is read off the REPORT because a context is rebuilt each round:
+  ;; this fold happened in round 2 and the run ended in round 4.
+  (let [out (str/join "\n"
+                      (t/outcome-lines {:status :workspace-drifted}
+                                       (drifted-report)
+                                       "/runs/r/report.json"))]
+    (is (str/includes? out "fold"))
+    (is (str/includes? out "plan-stability-bench…plan-stability-doc"))
+    (is (str/includes? out "round 2"))
+    (is (not (str/includes? out "span-has-holes"))
+        "a refused recut is a park and travels with the open findings; what is
+         reported here is the branch having moved")))
+
+(deftest a-drifted-run-names-the-layers-no-fixer-was-launched-for
+  ;; Without them an abort's fix phase is indistinguishable from a round with no
+  ;; work in it — same empty fix list, same silence — and this one was holding a
+  ;; full plan when it stopped.
+  (let [out (str/join "\n"
+                      (t/outcome-lines {:status :workspace-drifted
+                                        :drift {:reviewed-at "8f1c0a3d" :now "2b7e49c1"}
+                                        :unattempted [{:layer "audio-start" :handed ["07f8a5ee"]}
+                                                      {:layer "speech-contract" :handed ["1a476c0b"]}]}
+                                       {:rounds []}
+                                       "/runs/r/report.json"))]
+    (is (str/includes? out "audio-start"))
+    (is (str/includes? out "speech-contract"))))
+
+(deftest a-drifted-run-reaches-the-ledger-with-both-revisions
+  ;; The durable copy. report.json lives in a run dir that is routinely gone by
+  ;; the time anyone opens the workstream, so an entry that carries only the
+  ;; status leaves the two numbers nowhere at all.
+  (let [ev (t/review-event {:status :workspace-drifted :history [] :findings []
+                            :drift {:reviewed-at "8f1c0a3d" :now "2b7e49c1"}}
+                           {:summary {:rounds 4 :findings-fixed 2}
+                            :target {:base "main" :base-rev "deadbee"}}
+                           "/runs/r/report.json")]
+    (is (= {:reviewed-at "8f1c0a3d" :now "2b7e49c1"} (:drift ev)))
+    (is (= ev (report/validate-event :review ev))
+        "the ledger schema is closed and a refused append is swallowed to
+         stderr, so an entry it will not take is an entry that never exists")
+    (let [md (report/report->markdown (assoc ev :format :review-report))]
+      (is (str/includes? md "8f1c0a3d"))
+      (is (str/includes? md "2b7e49c1")))))
+
+(deftest the-ledger-entry-says-the-loop-reshaped-the-stack
+  ;; A run that squashed two layers together reported `0 fixed` and said nothing
+  ;; about the rewrite. Whoever picks the branch up next is reading a stack the
+  ;; loop reshaped, which no count on the entry can tell them.
+  (let [ev (t/review-event {:status :workspace-drifted :history [] :findings []}
+                           (drifted-report)
+                           "/runs/r/report.json")
+        [r] (:reshaped ev)]
+    (is (= 1 (count (:reshaped ev))) "the refused recut is a park, not a rewrite")
+    (is (= "fold" (:outcome r)))
+    (is (= 2 (:round r)) "which round rewrote the stack, since the ids below moved with it")
+    (is (= "plan-stability-bench" (:lower r)))
+    (is (= ev (report/validate-event :review ev)))
+    (is (str/includes? (report/report->markdown (assoc ev :format :review-report))
+                       "plan-stability-doc"))))

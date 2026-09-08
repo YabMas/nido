@@ -1341,6 +1341,39 @@
    ;; is broken and leaves finding it as an exercise, on a nine-layer branch
    ;; whose conflict is mid-stack and which `jj resolve --list` reports as clean.
    [:conflicted {:optional true} [:sequential string?]]
+   ;; The two revisions on the one status that ends because they differ:
+   ;; `:reviewed-at` is what the round pinned before it fanned out, `:now` is
+   ;; what the fix stage found. The status says the tree moved and the pair says
+   ;; WHICH move, which is the difference between an entry a reader can act on
+   ;; and one that sends them to read the stage source. `:now` is maybe-string
+   ;; because a workspace that cannot be asked answers nothing, and a guard is
+   ;; not allowed to fail on its own inability to run.
+   [:drift {:optional true}
+    [:map {:closed true}
+     [:reviewed-at string?]
+     [:now [:maybe string?]]]]
+   ;; What the loop did to the BRANCH, as against what it found in it. A recut
+   ;; the reshape stage carried out rewrote the layers the reader is about to
+   ;; look at, and it reached report.json and stopped — so the entry said `0
+   ;; fixed` about a run that had squashed two layers together. Refused recuts
+   ;; are not here: those become parks and travel in `:open`.
+   [:reshaped {:optional true}
+    [:sequential
+     [:map {:closed true}
+      [:round int?]
+      ;; Which move, in the reshape stage's own vocabulary — fold, move,
+      ;; reorder. Not an enum: it is produced two bands up in a `case` this band
+      ;; may not read, and a word a closed enum refused would lose the whole
+      ;; entry over a label.
+      [:outcome string?]
+      [:title string?]
+      ;; The layers the move was between, named as the stack names them. A fold
+      ;; leaves only one of them standing, so this is the only record of what
+      ;; the other one was.
+      [:lower {:optional true} string?]
+      [:upper {:optional true} string?]
+      ;; The one file a `move` carried down, absent on the other two remedies.
+      [:file {:optional true} string?]]]]
    ;; Why no reviewer ran, on the one status that ends that way. `:message` is
    ;; the line the reviewer printed, kept verbatim because it is the only place
    ;; the remedy and the reset hour exist — a quota exhaustion recorded as
@@ -2413,7 +2446,7 @@
 (defn- review->markdown [{:keys [status base base-rev rounds findings-fixed
                                  findings-remaining findings-kept remaining-handed
                                  remaining-parked report-path
-                                 summary open kept conflicted]}]
+                                 summary open kept conflicted drift reshaped]}]
   (str/join "\n"
     (remove nil?
       [(str "# Review: " (name status))
@@ -2441,6 +2474,24 @@
               (str "  ·  " findings-kept " kept"))
             "  ·  " rounds " rounds")
        (str "base " base (when base-rev (str "@" base-rev)))
+       ;; Directly under the header, because on this status it IS the header's
+       ;; content: `workspace-drifted` names a difference between two revisions
+       ;; and the entry used to carry neither of them.
+       (when drift
+         (str "reviewed at " (:reviewed-at drift)
+              " · the tree was at " (or (:now drift) "a revision jj would not name")
+              " when the repairs were due"))
+       ;; Above the findings, because it is a fact about the branch rather than
+       ;; about the review: whoever reads this next is looking at a stack the
+       ;; loop reshaped, and the counts below say nothing about that.
+       (when (seq reshaped)
+         (str "\n## The loop reshaped the stack\n"
+              (str/join "\n"
+                        (for [{:keys [round outcome title lower upper file]} reshaped]
+                          (str "- **" outcome "** round " round
+                               (when (and lower upper) (str "  `" lower "` … `" upper "`"))
+                               (when file (str "  `" file "`"))
+                               "\n  - " title)))))
        ;; What is still owed, in the entry itself. The counts above say a run
        ;; stopped with something left; only this says what, and recovering it
        ;; otherwise means opening a report.json that the run dir may no longer

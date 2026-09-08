@@ -1703,6 +1703,28 @@
       (is (= {:reviewed-at "THENREV" :now "NOWREV"} (:drift ctx))
           "both revisions named — that is what makes it actionable"))))
 
+(deftest a-drift-refusal-records-the-fix-plan-it-never-reached
+  ;; The stop happens before any fixer is positioned, so every layer the plan
+  ;; held is a layer nobody was launched for. Without the list the phase reports
+  ;; an empty fix list and nothing else — the same shape a round with no work in
+  ;; it produces — and the run that discarded a full plan is the one whose
+  ;; repairs a reader most needs named.
+  (with-redefs [stages/session-stack (fn [& _] two-layer-stack)
+                layers/descends-from? (fn [_ _] false)
+                layers/resolve-rev (fn [_ _] "NOWREV")
+                agent/launch! (fn [_] (throw (ex-info "no fixer should launch" {})))]
+    (let [ctx ((:run stages/fix-stage)
+               {:config {:cwd "/w" :run-id "r1"} :iter 2
+                :reviewed-at "THENREV"
+                :findings [{:id "aa11" :handle "h-1" :title "x" :disposition :fix
+                            :owner-layer "lower"}
+                           {:id "bb22" :handle "h-2" :title "y" :disposition :fix
+                            :owner-layer "upper"}]})]
+      (is (= [{:layer "lower" :handed ["h-1"]}
+              {:layer "upper" :handed ["h-2"]}]
+             (:unattempted ctx))
+          "both layers, named — the whole plan, because none of it was reached"))))
+
 (deftest a-round-whose-tree-did-not-move-fixes-normally
   (with-redefs [stages/session-stack (fn [& _] [])
                 layers/descends-from? (fn [_ _] true)

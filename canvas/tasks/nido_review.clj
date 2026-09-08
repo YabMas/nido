@@ -66,8 +66,12 @@
     "What a finished diff run says on the terminal: the status, the particulars only that run
      holds, and the sentence saying what the status asks of the reader. Pure, so the sentences
      can be asserted on — for a round somebody ran themselves these lines are the whole of what
-     they get, the report they point at being a JSON file in a run dir."
-    {:signature [:=> [:catn [:final :map] [:report-path :string]] [:sequential :string]]})
+     they get, the report they point at being a JSON file in a run dir.
+
+     It takes the terminal context AND the whole report, because a context is rebuilt every
+     round: what a middle round did to the branch is remembered by the report alone."
+    {:signature [:=> [:catn [:final :map] [:report :map] [:report-path :string]]
+                 [:sequential :string]]})
   (Operation loop-cmd*
     "The `loop-cmd*` entry point."
     {:signature [:=> [:catn [:opts [:* :any]]] :any]})

@@ -814,3 +814,49 @@
       (is (= ["a total is rounded exactly once"]
              (get-in parsed [:design-verdict :verdict :invariants-held]))
           "report.json is what a reader of the run opens, so the verdict has to be legible there"))))
+
+;; ── What an abort leaves in the report ──────────────────────────────────────
+
+(deftest a-drift-refusal-reaches-the-reports-reason
+  ;; The fix stage computes the revision the reviewers read and the one it
+  ;; found, refuses on the difference, and until this key existed neither number
+  ;; left the ctx: `report.json` held "reason": null on the one status whose
+  ;; whole content is a pair of revisions.
+  (let [r (drive [{:event :run-started :run-id "review-1" :cwd "/w" :base "main"
+                   :at "2026-06-30T14:00:00Z"}
+                  {:event :run-finalized :status :workspace-drifted
+                   :ctx {:drift {:reviewed-at "8f1c0a3d" :now "2b7e49c1"}}
+                   :at "2026-06-30T14:04:00Z"}])]
+    (is (= {:reviewed-at "8f1c0a3d" :now "2b7e49c1"} (get-in r [:reason :drift])))))
+
+(deftest a-fix-phase-that-never-ran-names-the-layers-it-was-owed
+  ;; Otherwise it is a phase with an empty fix list and nothing beside it, which
+  ;; is exactly what a round with no work at all produces. The only other record
+  ;; of a fixer that never ran is the ABSENCE of its log from the run dir.
+  (let [r  (drive [{:event :run-started :run-id "review-1" :cwd "/w" :base "main"
+                    :at "2026-06-30T14:00:00Z"}
+                   {:event :phase-started :iter 1 :phase :fix :at "2026-06-30T14:03:00Z"}
+                   {:event :phase-finished :iter 1 :phase :fix
+                    :ctx {:iter 1 :history []
+                          :unattempted [{:layer "audio-start" :handed ["07f8a5ee"]}]}
+                    :at "2026-06-30T14:03:01Z"}])
+        ph (first (get-in r [:rounds 0 :phases]))]
+    (is (= [{:layer "audio-start" :handed ["07f8a5ee"]}] (:unattempted ph)))))
+
+(deftest applied-reshapes-remembers-what-the-context-forgot
+  ;; A context is rebuilt every round, so a fold made in round 2 is gone from
+  ;; the terminal value by the time a round 4 ends. The report is the only value
+  ;; that holds the whole run — which is why this reads it rather than the ctx.
+  (let [r {:rounds [{:round 2
+                     :phases [{:phase "warden"}
+                              {:phase "reshape"
+                               :reshapes [{:title "the doc-ordering seam"
+                                           :outcome "fold" :applied? true}
+                                          {:title "unreachable span"
+                                           :outcome "span-has-holes"}]}]}
+                    {:round 4 :phases [{:phase "reshape" :reshapes []}]}]}
+        [a :as all] (report/applied-reshapes r)]
+    (is (= 1 (count all)) "a refused recut moved nothing and is a park, not a rewrite")
+    (is (= "fold" (:outcome a)))
+    (is (= 2 (:round a))
+        "which round rewrote the stack — the revisions a reader holds moved with it")))

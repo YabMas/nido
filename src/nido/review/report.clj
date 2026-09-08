@@ -54,7 +54,13 @@
 
    A park's identity is its handle, so it is the key of the carried map and is
    folded back into each entry — a list of anonymous questions is not a
-   handover."
+   handover.
+
+   `:drift` is the same failure caught earlier: the fix stage computes the
+   revision the reviewers read and the one it found, refuses on the difference,
+   and until this key existed neither number left the ctx. Which revision moved
+   is the whole of what a reader can act on, and reconstructing it meant reading
+   the stage source."
   [ctx]
   (let [parks (get-in ctx [:carry :parks])]
     (not-empty
@@ -62,11 +68,38 @@
        (seq (:unfixable ctx))
        (assoc :unfixable (vec (:unfixable ctx)))
 
+       (:drift ctx)
+       (assoc :drift (:drift ctx))
+
        (seq parks)
        (assoc :parked (->> parks
                            (map (fn [[handle p]] (assoc p :handle (str handle))))
                            (sort-by (juxt #(or (:since %) 0) :handle))
                            vec))))))
+
+(defn ^{:malli/schema [:=> [:cat :ReviewReport] [:sequential :map]]}
+  applied-reshapes
+  "Every recut this run actually carried out, in round order, each carrying the
+   round it happened in.
+
+   Read off the folded report rather than off the terminal ctx, because a ctx is
+   rebuilt every round: a run that folded two layers in round 2 and ended in
+   round 5 holds nothing about the fold by the time it stops. The report is the
+   only value that remembers the whole run.
+
+   Applied ones alone. A reshape the stage refused becomes a park and travels
+   with the other open findings, so what is missing everywhere outside
+   report.json is the one that succeeded — the loop rewriting the branch under
+   the person who asked it to review one."
+  [report]
+  (into []
+        (comp (mapcat (fn [r] (map (fn [ph] [(:round r) ph]) (:phases r))))
+              (filter (fn [[_ ph]] (= "reshape" (:phase ph))))
+              (mapcat (fn [[round ph]]
+                        (->> (:reshapes ph)
+                             (filter :applied?)
+                             (map #(assoc % :round round))))))
+        (:rounds report)))
 
 ;; ---- round/phase helpers -------------------------------------------------
 

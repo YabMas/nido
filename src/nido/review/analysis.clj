@@ -67,10 +67,15 @@
    `:unfixable` and `:parked` are what the run stopped ON, and they are here for
    the same reason the counts are: a status names the KIND of ending, and an
    analysis asked to say whether the loop stopped for the right reason needs the
-   findings themselves. Both omitted when the run had nothing to hand over."
+   findings themselves. Both omitted when the run had nothing to hand over.
+
+   `:drift` is the third of them, and the analysis is the reader it costs most:
+   establishing why one drifted run stopped meant reading the fix stage's source
+   against the reshape phase, because the two revisions the refusal is about
+   were computed and dropped."
   [{:keys [run-id report-path status rounds findings-fixed findings-remaining
            findings-kept remaining-handed remaining-parked unfixable parked
-           base reviewed-project reviewed-session reviewed-ws-id]}]
+           drift base reviewed-project reviewed-session reviewed-ws-id]}]
   (cond-> {:adapter            :review-run
            :id                 (str run-id)
            :title              (str "review-loop " (name (or status :unknown))
@@ -91,6 +96,7 @@
     (pos? (or remaining-parked 0)) (assoc :remaining-parked remaining-parked)
     (seq unfixable)  (assoc :unfixable (mapv str unfixable))
     (seq parked)     (assoc :parked (vec parked))
+    drift            (assoc :drift drift)
     base             (assoc :base base)
     reviewed-project (assoc :reviewed-project (name reviewed-project))
     reviewed-session (assoc :reviewed-session reviewed-session)

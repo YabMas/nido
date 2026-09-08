@@ -103,6 +103,13 @@
      :run-finalized, and the analysis payload carries it because a run dir is reclaimed
      long before an analysis of it is read."
     {:signature [:=> [:catn [:ctx :map]] [:maybe :map]]})
+  (Operation applied-reshapes
+    "Every recut the run actually carried out, in round order.
+
+     Over the report rather than over the terminal context, and that is the whole reason it
+     exists: a context is rebuilt each round, so a fold made in round 2 is forgotten by the
+     time a round 5 ends. The report is the only value that remembers the run."
+    {:signature [:=> [:catn [:report ReviewReport]] [:sequential :map]]})
   (Operation apply-event "The report with one event folded in. Pure."
     {:signature [:=> [:catn [:report ReviewReport] [:event :map]] ReviewReport]})
   (Operation with-verdict

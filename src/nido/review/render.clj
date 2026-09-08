@@ -72,6 +72,12 @@
                                                                (subs (str (:commit %)) 0
                                                                      (min 8 (count (str (:commit %))))))
                                                          (:fixes ph)))
+               ;; Before "no changes", which reads as the stage having run and
+               ;; found nothing to do. These are the layers it was still going
+               ;; to reach when it stopped, and a phase that aborted before its
+               ;; first fixer holds nothing else to tell them apart by.
+               (seq (:unattempted ph))
+               (str (count (:unattempted ph)) " layers never attempted")
                (= "ok" (:status ph)) "no changes")
     ;; Counted by outcome rather than summed, because "1 recut" says nothing a
     ;; reader can act on and "1 span-has-holes" says the whole of it.

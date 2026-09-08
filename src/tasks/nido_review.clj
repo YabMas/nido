@@ -94,13 +94,24 @@
    declined defect and a deviated claim were DECIDED, so nobody owes anything
    and `:findings-remaining` does not count them. They still have to be written
    down — a decision to ship a known defect is the kind a record exists to hold
-   — so they go in their own list, under their own count."
+   — so they go in their own list, under their own count.
+
+   `:drift` and `:reshaped` are what the run did and had done to it, and the
+   entry is where they have to be durable: report.json lives in a run dir that
+   is routinely reclaimed, and both facts were reachable only inside it. A
+   `workspace-drifted` entry named neither revision, and a run that folded two
+   layers said `0 fixed` about a branch it had rewritten."
   [final report report-path]
   (let [handed   (verdict/handed-to-a-fixer final)
         open     (ledger-findings handed (verdict/open-across-run final))
         kept     (ledger-findings #{} (verdict/kept-across-run final))
         repaired (count (filter :handed open))
-        parked   (count (filter #(= :park (:disposition %)) open))]
+        parked   (count (filter #(= :park (:disposition %)) open))
+        ;; Narrowed to what the ledger's closed schema admits. The phase entry
+        ;; also carries the warden's handle and the finding's kind, which are
+        ;; the report's business — this list exists to say the stack moved.
+        reshaped (mapv #(select-keys % [:round :outcome :title :lower :upper :file])
+                       (report/applied-reshapes report))]
     (cond-> {:format             :review-report
              :status             (:status final)
              :base               (get-in report [:target :base])
@@ -122,7 +133,9 @@
       ;; run whose status a reader cannot act on without them: the conflict is
       ;; mid-stack, so `jj resolve --list` reports the branch clean and the ids
       ;; are the only pointer at what to open.
-      (seq (:conflicted final)) (assoc :conflicted (vec (:conflicted final))))))
+      (seq (:conflicted final)) (assoc :conflicted (vec (:conflicted final)))
+      (:drift final)  (assoc :drift (:drift final))
+      (seq reshaped)  (assoc :reshaped reshaped))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   append-review-entry!
@@ -776,17 +789,22 @@
    :warden-indeterminate "the warden returned no decision, so nothing was attributed and no repair was attempted — re-run"
    :workspace-drifted "the working copy moved after the reviewers read it, so no repair could land on the tree they judged — re-run"})
 
-(defn ^{:malli/schema [:=> [:cat :map :string] [:sequential :string]]}
+(defn ^{:malli/schema [:=> [:cat :map :map :string] [:sequential :string]]}
   outcome-lines
   "What a finished run says on the terminal: the status, the particulars only
    this run holds, and the sentence saying what the status asks of you.
 
    Returned rather than printed so the sentences can be asserted on — this is
    the whole of what an operator gets when the run is over, and the report it
-   points at is a JSON file in a run dir."
-  [final report-path]
+   points at is a JSON file in a run dir.
+
+   `final` is the terminal ctx and `report` is the whole run; both are needed
+   because a ctx is rebuilt every round, so anything a middle round did is
+   remembered by the report alone."
+  [final report report-path]
   (let [status (:status final)
-        {:keys [unavailable conflicted]} final]
+        {:keys [unavailable conflicted drift]} final
+        reshaped (report/applied-reshapes report)]
     (cond-> [(str "review-loop: " (name status) " · report " report-path)]
       ;; A reviewer that refused said what it wants — credits, a login, an hour
       ;; to come back at — and a reader standing here has nowhere else to have
@@ -799,6 +817,36 @@
       ;; only pointer at what to open.
       (seq conflicted)
       (conj (str "  conflicted: " (str/join ", " conflicted)))
+
+      ;; The two revisions the refusal is ABOUT. The remedy line below says the
+      ;; tree moved; without these the operator cannot tell a rebase they did
+      ;; themselves from one another session made, which decides whether a
+      ;; re-run is the whole answer.
+      drift
+      (conj (str "  reviewed at " (:reviewed-at drift)
+                 ", tree now at " (or (:now drift) "a revision jj would not name")))
+
+      ;; The loop rewrote the branch. Said here because the status is about the
+      ;; REVIEW and this is about the code the operator is standing in — a run
+      ;; that folded two layers otherwise ends on a line about findings, with
+      ;; the fold recorded in a JSON file nobody was told to open.
+      (seq reshaped)
+      (conj (str "  reshaped: "
+                 (str/join ", "
+                           (for [{:keys [outcome lower upper round]} reshaped]
+                             (str outcome
+                                  (when (and lower upper) (str " " lower "…" upper))
+                                  " (round " round ")")))))
+
+      ;; The layers a fixer was owed and never launched for. On an abort the
+      ;; fix phase is otherwise indistinguishable from a round with no work in
+      ;; it — same empty fix list, same silence.
+      ;; `nil` is the plan's own name for a branch with no layers, which is most
+      ;; sessions — printed bare it is an empty gap where a name should be.
+      (seq (:unattempted final))
+      (conj (str "  never attempted: "
+                 (str/join ", " (map #(or (:layer %) "the branch")
+                                     (:unattempted final)))))
 
       :always
       (conj (str "  → " (or (diff-remedies status)
@@ -883,7 +931,7 @@
          ;; of whoever ran this. A coordinator-driven round says it a second
          ;; time, through the lane's disposition and a gate entry; a round a
          ;; person ran themselves says it here or nowhere.
-         (run! println (outcome-lines final report-path))
+         (run! println (outcome-lines final @report-atom report-path))
          ;; A side record that fails invisibly is how a whole class of run came
          ;; to leave no ledger entry at all: the ledger's status enum did not
          ;; admit :unfixable, every append on that status was refused, and the

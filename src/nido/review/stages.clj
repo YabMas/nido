@@ -1759,7 +1759,13 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                                 (cond
                                   (= i pick)
                                   (if (:ok? done)
-                                    {:outcome (name (:did done))}
+                                    ;; `:applied?` rather than leaving readers to
+                                    ;; recognise fold/move/reorder: this is the
+                                    ;; only outcome after which the stack is not
+                                    ;; what it was, and the reshape vocabulary
+                                    ;; that says so is declared in `reshape!`
+                                    ;; where nothing downstream can reach it.
+                                    {:outcome (name (:did done)) :applied? true}
                                     {:outcome "refused" :because (:reason done)})
 
                                   (:refused p)
@@ -1986,7 +1992,14 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
         (and (:reviewed-at ctx) (not (layers/descends-from? cwd (:reviewed-at ctx))))
         (assoc ctx :control :stop :status :workspace-drifted
                :drift {:reviewed-at (:reviewed-at ctx)
-                       :now (layers/resolve-rev cwd "@")})
+                       :now (layers/resolve-rev cwd "@")}
+               ;; The whole plan, from the first entry: this stops before any
+               ;; fixer is positioned, so every layer it was owed is a layer
+               ;; nobody was launched for. Without it the phase reports `fixes
+               ;; []` with nothing beside it, which is the same shape a round
+               ;; with no work at all produces — and the round that stopped here
+               ;; is the one whose repairs a reader most needs named.
+               :unattempted (unattempted-tail plan 0))
 
         :else
         (if (empty? plan)
