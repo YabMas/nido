@@ -150,7 +150,7 @@
    its descriptor, and a resolver that compares it before acting."
   [action-id]
   (or (option-action? action-id)
-      (contains? #{:approve :redesign :hold-design} action-id)))
+      (contains? #{:approve :redesign :hold-design :apply} action-id)))
 
 (defn- option-actions
   "One button per branch of a blocker's :options, lettered by position. `:kind
@@ -213,7 +213,8 @@
    grant is due.
 
    `{:bare? true}` marks a row with no workstream behind it (wsv/bare-row). On
-   :triage that swaps Apply/Reply — which need an agent — for :start-triage. Then,
+   :triage that swaps Apply/Reply — which need a ledger and an agent
+   respectively — for :start-triage. Then,
    for EVERY stage, a bare row's action set is filtered down to
    workstream-less-actions — the ids resolve-gate! can actually act on without a
    workstream. A bare row reaches :triage, :ready, :in-progress or :done
@@ -229,9 +230,9 @@
    (let [;; The branches of the CURRENT blocker, or [] — offered whether or not a
          ;; session is parked, because answering no longer depends on one being
          ;; alive to hear it (choose-option! records the answer on the ledger and
-         ;; resumes only if there is someone to resume). Reply, Apply and Done
-         ;; stay gated on parked?: each one resumes an agent, and offering it
-         ;; with none is a button that can only fail.
+         ;; resumes only if there is someone to resume). Reply and Done stay gated
+         ;; on parked?: each one resumes an agent, and offering it with none is a
+         ;; button that can only fail.
          answers (option-actions entry-seq options)
          ;; Approve is not one of those, which is what `awaiting` is for. It asks
          ;; the PIPELINE whether a person owes this workstream a decision, and
@@ -304,21 +305,30 @@
            (case stage
            :incoming    [{:id :promote :label "Promote" :kind :mutation :style :primary}
                          {:id :drop    :label "Dismiss" :kind :mutation :style :danger}]
-           :triage      (let [dismiss {:id :dismiss :label "Dismiss" :kind :mutation :style :danger}]
-                          ;; Apply executes the routed verdict to Notion nido-side (Ball Holder +
-                          ;; App Domain, deep properties/callout — apply-routed!, no conversation),
-                          ;; falling back to nido-only ticket:complete for legacy/Slack reports;
+           :triage      (let [dismiss {:id :dismiss :label "Dismiss" :kind :mutation :style :danger}
+                              ;; Apply executes the routed verdict to Notion nido-side (Ball Holder +
+                              ;; App Domain, deep properties/callout — apply-routed!, no conversation),
+                              ;; falling back to nido-only ticket:complete for legacy/Slack reports,
+                              ;; and appends the acceptance to the ledger.
+                              ;;
+                              ;; It carries the ledger position it was rendered at, exactly as an
+                              ;; option button does: it now WRITES a record of what was accepted, so
+                              ;; a click made against a page the ledger has moved past would accept a
+                              ;; verdict the human never read.
+                              apply-btn (cond-> {:id :apply :label "Apply"
+                                                 :kind :mutation :style :primary}
+                                          entry-seq (assoc :seq entry-seq))]
                           ;; Reply (free-text overrides/redo) resumes the agent; Dismiss takes it
                           ;; off the radar nido-side, writing nothing to Notion.
                           (cond
-                            ;; A bare row has no workstream and therefore no agent to Apply or
-                            ;; Reply to — the only forward move is to start the triage that
-                            ;; never ran.
+                            ;; A bare row has no workstream and therefore no ledger to accept a
+                            ;; verdict from and no agent to Reply to — the only forward move is to
+                            ;; start the triage that never ran.
                             bare?   [{:id :start-triage :label "Start triage"
                                       :kind :mutation :style :primary}
                                      dismiss]
                             parked? (into answers
-                                          [{:id :apply :label "Apply" :kind :mutation :style :primary}
+                                          [apply-btn
                                            dismiss
                                            {:id :reply :label "Reply" :kind :resume :style :default}])
                             :else   (into answers [dismiss])))
@@ -1341,9 +1351,8 @@
                 (cond-> {:decision :applied}
                   (= :warn callout) (assoc :callout :warn))))))))))
 
-(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :any]}
-  apply!
-  "Accept a parked triage verdict WITHOUT resuming the review conversation. Three paths:
+(defn- execute-report!
+  "Write `report` out and finalize the ticket. Three paths:
 
    • Slack proposal (`:proposed-ticket`, no :notion ref yet) → create the Notion page
      (apply-proposed!). Returns {:decision :created …} | {:decision :error …}.
@@ -1352,27 +1361,83 @@
      deep properties, deep callout. Returns {:decision :applied [:callout :warn]} or
      {:decision :notion-failed :error <kw>} (ticket left parked to retry).
    • Legacy / Slack-triage (any other report, or a ref-less ws) → finalize the ticket
-     :triaged/:applied nido-side only. Returns {:decision :applied}.
+     :triaged/:applied nido-side only. Returns {:decision :applied}."
+  [project ws-id report w]
+  (cond
+    (and (= :proposed-ticket (:format report)) (nil? (wsv/notion-ref w)))
+    (apply-proposed! project ws-id report w)
 
-   The daemon's sweep settles the now-resolved parked session."
-  [project ws-id]
+    (and (= :triage-report (:format report)) (:routing report) (wsv/notion-ref w))
+    (apply-routed! project ws-id report w)
+
+    :else
+    (do
+      (when-let [br (:id (wsv/ledger-ref w))]
+        (tickets/complete! project br :triaged :applied)
+        (try (facets/refresh-for-ticket! project br)
+             (catch Throwable _ nil)))
+      {:decision :applied})))
+
+(defn- accept!
+  "Execute the workstream's latest report and record that a human accepted it.
+
+   `at-seq` is the ledger position the click was rendered at, checked against the
+   ledger's latest entry when `checked?`.
+
+   Shared by both of apply!'s arities, which differ only in `checked?` — see there
+   for why the two writes happen in the order they do."
+  [project ws-id at-seq checked?]
   (if-let [w (cws/read-ws project ws-id)]
     (let [report (latest-report project ws-id)]
       (cond
-        (and (= :proposed-ticket (:format report)) (nil? (wsv/notion-ref w)))
-        (apply-proposed! project ws-id report w)
-
-        (and (= :triage-report (:format report)) (:routing report) (wsv/notion-ref w))
-        (apply-routed! project ws-id report w)
+        ;; Equality, not presence: a click that carried NO position is stale
+        ;; against a ledger that holds a positioned report, and is not stale
+        ;; against one that holds none — an intake-text fallback has no :seq, and
+        ;; a ledger with nothing in it cannot have moved past what was on screen.
+        (and checked? (not= at-seq (:seq report))) {:decision :triage-stale}
 
         :else
-        (do
-          (when-let [br (:id (wsv/ledger-ref w))]
-            (tickets/complete! project br :triaged :applied)
-            (try (facets/refresh-for-ticket! project br)
-                 (catch Throwable _ nil)))
-          {:decision :applied})))
+        (let [outcome (execute-report! project ws-id report w)]
+          ;; Only what landed is recorded. :notion-failed and :error leave the
+          ;; gate exactly as they found it, which is what keeps the click
+          ;; repeatable. The :seq guard is the empty-ledger case: an acceptance
+          ;; is a citation, and there is nothing to cite when the workstream's
+          ;; only content is its intake text (latest-report's fallback).
+          (when (and (int? (:seq report))
+                     (contains? #{:applied :created} (:decision outcome)))
+            (cws/append-entry!
+             project ws-id {:kind :triage-accepted}
+             (pr-str {:format :triage-accepted :triage-seq (:seq report)})))
+          outcome)))
     {:decision :applied}))
+
+(defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId [:? :map]] :any]}
+  apply!
+  "ACCEPT a triage verdict — execute it, then record that a human accepted it.
+   Resumes nobody: the verdict is already written and nido is what carries it out.
+
+   `opts` is what a GATE click carries and a CLI apply does not:
+
+     :at-seq    — the ledger position the button was rendered at. This arity
+                  CHECKS it: anything but the ledger's latest — a stale position,
+                  or none where the ledger holds one — is refused
+                  ({:decision :triage-stale}) and nothing is written. The
+                  two-argument arity is the CLI path and checks nothing: the agent
+                  executing its own verdict inside its own turn has no
+                  render-and-click gap for a position to guard.
+
+   The acceptance is appended AFTER the write, which is the opposite order to
+   choose-option!. The difference is what the second write IS. A resume is a
+   notification the decision stands without, so the record goes first there. The
+   Notion write is the decision being CARRIED OUT, it can fail, and a failed apply
+   leaves the ticket parked to retry — so appending first would make the
+   acceptance the ledger's latest entry and the position check above would then
+   refuse the very retry that contract promises.
+
+   The daemon's sweep settles the now-resolved parked session."
+  ([project ws-id] (accept! project ws-id nil false))
+  ([project ws-id {:keys [at-seq]}]
+   (accept! project ws-id at-seq true)))
 
 (defn- triage-trigger
   "The project's triage trigger: the first in triggers.edn whose :skill is
@@ -1697,7 +1762,9 @@
    legitimately offers (see workstream-less-actions).
      :promote -> set-stage! :in-progress   :dismiss -> off-radar (ticket + ws :dismissed)
      :drop    -> close! :dropped            :done    -> set-stage! :done
-     :apply   -> apply! (ticket:complete)   :reply   -> resume! the parked agent with `payload`
+     :apply   -> apply! the verdict and record the acceptance, iff `payload` still
+                 names the latest report
+     :reply   -> resume! the parked agent with `payload`
      :approve -> record the grant (:design-approved) and resume, iff `payload`
                  still names the latest report AND the design still stands
      :redesign    -> confirm an invalidating verdict by retracting the design
@@ -1708,9 +1775,9 @@
      :start-triage -> start-triage-page! (force-spawn the triage trigger)
 
    `payload` is whatever the click carried besides its id, and what that is
-   depends on the action: the reply text for :reply, the :seq of the report the
-   button was rendered from for :option-* and :approve. Every other action
-   resolves entirely nido-side and ignores it.
+   depends on the action: the reply text for :reply, and the :seq of the report
+   the button was rendered from for every id position-carrying-action? names.
+   Every other action resolves entirely nido-side and ignores it.
    Returns the resolver's result map."
   ([project ws-id action-id] (resolve-gate! project ws-id action-id nil))
   ([project ws-id action-id payload]
@@ -1734,7 +1801,7 @@
        :promote (set-stage! project ws-id :in-progress)
        :done    (set-stage! project ws-id :done)
        :drop    (do (cws/close! project ws-id :dropped) {:decision :dropped})
-       :apply   (apply! project ws-id)
+       :apply   (apply! project ws-id {:at-seq payload})
        :reply   (resume/resume! project ws-id payload)
        :approve (approve! project ws-id payload)
        :redesign     (redesign! project ws-id payload)

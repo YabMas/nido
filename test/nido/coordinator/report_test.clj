@@ -420,6 +420,16 @@
            (assoc-in [:directions 0 :effort] :squirrel)
            (assoc-in [:notion-writes :effort] :squirrel)))))
 
+(deftest an-acceptance-cites-the-report-it-accepted
+  (is (report/validate-event :triage-accepted {:format :triage-accepted :triage-seq 4}))
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event :triage-accepted {:format :triage-accepted}))
+      "an acceptance that names no report is not a citation")
+  (is (str/includes? (report/report-title {:format :triage-accepted :triage-seq 4}) "entry 4")
+      "the index row says which report was accepted")
+  (is (str/includes? (report/report->markdown {:format :triage-accepted :triage-seq 4})
+                     "Accepted")))
+
 (deftest report->markdown-implementation-plan-has-headings
   (let [md (report/report->markdown valid-plan)]
     (is (str/includes? md "Implementation plan"))

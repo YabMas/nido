@@ -773,7 +773,11 @@
       "Recording your answer… resuming the agent if one is still listening."
       (case action-id
         :promote "Promoting…"
-        :apply   "Applying… resuming the agent to write the verdict."
+        ;; Says what actually happens. It used to promise the agent was resumed
+        ;; to write the verdict, and apply! is defined as accepting the verdict
+        ;; WITHOUT resuming anybody — so the one sentence a reader got about this
+        ;; button described a different button.
+        :apply   "Applying the routing and recording your acceptance on the ledger."
         :dismiss "✓ Dismissed — off your radar. Nothing written to Notion; restore it from the Dismissed band."
         :restore "✓ Restored — back in the triage queue."
         :start-triage "Starting triage… spawning the agent to investigate."
@@ -1129,6 +1133,16 @@
       (list " · resumed " [:code resumed])
       " · no session was live to resume — the next one reads it here")]])
 
+(defn- triage-accepted-card
+  "A human's acceptance of a triage verdict, as it reads back on the timeline. It
+   is what the ledger of a triaged ticket never held: every other answer at a gate
+   left an entry naming what was decided, and accepting a verdict left none, so a
+   later session could not tell an accepted verdict from an unanswered one."
+  [{:keys [triage-seq]}]
+  [:div.md
+   [:h2 "Accepted"]
+   [:p.meta "accepts the triage report at entry " triage-seq]])
+
 (defn- pr-opened-card [{:keys [url title summary]}]
   [:div.md
    [:h2 "PR opened"]
@@ -1475,6 +1489,7 @@
      :implementation-completed (completed-card report)
      :blocker                  (blocker-card report)
      :blocker-answered         (blocker-answered-card report)
+     :triage-accepted          (triage-accepted-card report)
      :pr-opened                (pr-opened-card report)
      :merged                   (merged-card report)
      :ship-submitted           (ship-submitted-card report)
@@ -2067,6 +2082,7 @@
                                    {:report-format (:format report)
                                     :grantable?    (work/grantable? project ws-id)
                                     :options       (:options report)
+                                    :directions    (:directions report)
                                     ;; The pane draws the same button the inbox
                                     ;; does, off the same reading of the same
                                     ;; position — a design decision is owed a

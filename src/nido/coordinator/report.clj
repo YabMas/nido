@@ -13,6 +13,22 @@
    [:level  [:enum :high :medium :low]]
    [:reason string?]])
 
+(def option-letters
+  "The letters a blocker's options are answered BY. Derived from position and
+   never stored: a letter written into the record is a second source of truth for
+   ordering, and the two disagree the moment an option is inserted or dropped.
+
+   The length is also the cap Blocker's :options enforces. Six is not a technical
+   limit — a halt with seven branches is a conversation, not a question with an
+   answer, and offering it as seven buttons pretends otherwise."
+  ["A" "B" "C" "D" "E" "F"])
+
+(defn ^{:malli/schema [:=> [:cat :int] [:maybe :string]]}
+  option-letter
+  "The letter for the option at position `i`, or nil past the cap."
+  [i]
+  (get option-letters i))
+
 (def Effort
   "Concrete T-shirt size."
   [:enum :XS :S :M :L :XL])
@@ -1092,22 +1108,6 @@
    [:design-delta {:optional true} DesignDelta]
    [:open         {:optional true} [:vector string?]]])
 
-(def option-letters
-  "The letters a blocker's options are answered BY. Derived from position and
-   never stored: a letter written into the record is a second source of truth for
-   ordering, and the two disagree the moment an option is inserted or dropped.
-
-   The length is also the cap Blocker's :options enforces. Six is not a technical
-   limit — a halt with seven branches is a conversation, not a question with an
-   answer, and offering it as seven buttons pretends otherwise."
-  ["A" "B" "C" "D" "E" "F"])
-
-(defn ^{:malli/schema [:=> [:cat :int] [:maybe :string]]}
-  option-letter
-  "The letter for the option at position `i`, or nil past the cap."
-  [i]
-  (get option-letters i))
-
 (def Attempt
   "One thing the machinery already did about this halt, before it gave up.
 
@@ -1193,6 +1193,23 @@
    ;; The session told about it, or nil when there was none to tell — the honest
    ;; record of whether this answer reached an agent or is waiting to be read.
    [:resumed     {:optional true} [:maybe string?]]])
+
+(def TriageAccepted
+  "The human's acceptance of a triage verdict at the gate — written by nido at the
+   moment the button is clicked, never by an agent.
+
+   It is what the ledger of a triaged ticket never held. Every other answer at a
+   gate appends an entry naming what was decided; accepting a triage verdict wrote
+   only to Notion and to the ticket status record, so a later session reading the
+   ledger could not tell an accepted verdict from an unanswered one, or say when a
+   person looked at it.
+
+   `:triage-seq` is the report accepted, by position: what was on screen, not what
+   is latest. The two are the same at the moment of a click that was allowed
+   through, and naming it is what lets a reader pair the two entries afterwards."
+  [:map {:closed true}
+   [:format     [:= :triage-accepted]]
+   [:triage-seq int?]])
 
 (def PrOpened
   [:map {:closed true}
@@ -2004,6 +2021,7 @@
    :implementation-completed ImplementationCompleted
    :blocker                  Blocker
    :blocker-answered         BlockerAnswered
+   :triage-accepted          TriageAccepted
    :pr-opened                PrOpened
    :merged                   Merged
    :ship-submitted           ShipSubmitted
@@ -2436,6 +2454,11 @@
             "_")
        "" summary])))
 
+(defn- triage-accepted->markdown [{:keys [triage-seq]}]
+  (str/join "\n"
+    ["# Accepted"
+     (str "_accepts the triage report at entry " triage-seq "_")]))
+
 (defn- pr-opened->markdown [{:keys [url title summary]}]
   (str/join "\n"
     (remove nil? ["# PR opened" (str "**" title "** — " url) (when summary (str "\n" summary))])))
@@ -2819,6 +2842,7 @@
     :implementation-completed (completed->markdown report)
     :blocker                  (blocker->markdown report)
     :blocker-answered         (blocker-answered->markdown report)
+    :triage-accepted          (triage-accepted->markdown report)
     :pr-opened                (pr-opened->markdown report)
     :merged                   (merged->markdown report)
     :ship-submitted           (ship-submitted->markdown report)
@@ -2871,6 +2895,8 @@
     :implementation-completed (first-line (:summary report))
     :blocker                  (or (:needs report) (first-line (:summary report)))
     :blocker-answered         (str "Answered " (:letter report) " — " (:label report))
+    :triage-accepted          (str "Accepted the triage report at entry "
+                                   (:triage-seq report))
     :review-report            (str "Review: " (name (:status report)))
     :baseline-review          (str "Baseline review: " (name (:verdict report)))
     :design-decision          (str "Design decision: " (name (:recommend report)))

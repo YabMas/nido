@@ -316,6 +316,12 @@
     :already-in-flight      "Skipped — a session for this ticket is already in flight."
     :option-stale           (str "That option is no longer on the table — the report "
                                  "moved on since this page rendered. Re-read the gate.")
+    ;; Nothing was written — not to Notion, not to the ticket, not to the ledger —
+    ;; so the sentence has to say so: a reader who left it there would believe a
+    ;; ticket had been routed.
+    :triage-stale           (str "Nothing was applied — the ledger moved on since this "
+                                 "page rendered, so this would have accepted a verdict "
+                                 "you were not looking at. Re-read the gate.")
     :no-design              "Nothing to approve — this workstream holds no design."
     :approval-stale         (str "Not approved — the ledger moved on since this page "
                                  "rendered, so this would have granted a design you "

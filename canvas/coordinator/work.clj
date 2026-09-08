@@ -104,8 +104,11 @@
   (Operation restore! "Undo a dismissal, making the ticket re-triable."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :any]
      :delegates [workstream/reopen!]})
-  (Operation apply! "Accept a parked triage verdict without resuming the agent."
-    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :any]})
+  (Operation apply!
+    "Accept a triage verdict — execute it, then record the acceptance on the ledger. Resumes
+     nobody. `opts` is what a gate click carries and a CLI apply does not: the ledger position
+     the button was rendered at, which a stale click is refused against."
+    {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:opts [:? :map]]] :any]})
   (Operation start-triage-page! "Force a triage for a watched row that has no workstream yet."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :any]})
   (Operation option-input "What choosing one of a blocker's options resumes the agent with."
