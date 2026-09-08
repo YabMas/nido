@@ -1099,6 +1099,13 @@
                     ;; the wrong layer as three failures and stops the run on
                     ;; the round that first aimed it correctly.
                     :attempt-key (rloop/default-attempt-key rloop/default-finding-key)
+                    ;; And a park aims no repair anywhere, so the round it was
+                    ;; ruled in is not an attempt at all. Without this the
+                    ;; counter gives up on a defect the loop tried once and then
+                    ;; put to a human, ahead of the rule that governs a standing
+                    ;; park and outside the one that decides which parks stop a
+                    ;; run.
+                    :attempted?  stages/repair-attempted?
                     ;; The warden is the stage that judges; everything after it
                     ;; repairs. A run whose terminal condition is already
                     ;; decided must not go on to spend fixer launches and land

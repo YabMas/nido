@@ -411,6 +411,45 @@
     (is (< 4 (:iter moved))
         "the fourth round re-routed it, so that round is a first attempt")))
 
+(deftest a-round-that-attempted-nothing-is-not-a-failed-repair
+  ;; Watched: a defect was repaired in round 1 and parked in the three rounds
+  ;; after it. The counter read three decisions to try nothing as three failed
+  ;; repairs and ended the run at round 4 — a round ahead of the rule that
+  ;; governs a standing park, and discarding on the way out a first-appearance
+  ;; P1 that same round had ordered fixed.
+  ;;
+  ;; Each round also carries a finding unique to it, so the whole-set stall
+  ;; check cannot fire and the per-finding counter is what decides.
+  (let [attempted? #(not= :park (:disposition %))
+        run (fn [rulings & {:as extra}]
+              (let [[_ emit] (capturing)
+                    pipe [(stage :judge
+                                 (fn [c]
+                                   (assoc c :findings
+                                          [{:handle "sticky"
+                                            :disposition (nth rulings (dec (:iter c)) :park)}
+                                           {:handle (str "moves-" (:iter c))}])))
+                          (stage :amend
+                                 (fn [c] (cond-> (update c :history (fnil conj [])
+                                                         {:iter (:iter c)
+                                                          :findings (:findings c)})
+                                           (>= (:iter c) 8) (assoc :control :stop))))]]
+                (rloop/run-loop (merge {:run-id "r" :pipeline pipe :emit emit
+                                        :finding-key :handle}
+                                       extra))))
+        tried  (run [:fix :fix :fix :fix] :attempted? attempted?)
+        parked (run [:fix :park :park :park] :attempted? attempted?)
+        silent (run [:fix :park :park :park])]
+    (is (= :unfixable (:status tried))
+        "four rounds of repair is still three attempts, and all of them failed")
+    (is (= 4 (:iter tried)))
+    (is (not= :unfixable (:status parked))
+        "one repair was attempted; the rounds after it tried nothing")
+    (is (< 4 (:iter parked)))
+    (is (= :unfixable (:status silent))
+        "a pipeline that answers no such question keeps the old reading — every
+         appearance is an attempt")))
+
 ;; ── A stall, or a class still being narrowed ────────────────────────────────
 
 (defn- narrowing-run

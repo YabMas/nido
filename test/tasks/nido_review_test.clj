@@ -57,7 +57,13 @@
       (is (= "/w" (:cwd @seen)))
       (is (string? (:run-id @seen)))
       (is (fn? (:emit @seen)) "engine is given an emit fn")
-      (is (fn? (:clock @seen)) "engine is given a clock"))))
+      (is (fn? (:clock @seen)) "engine is given a clock")
+      ;; The engine never looks inside a finding, so this half of the give-up
+      ;; counter only works if the diff loop hands it over. Dropped from the
+      ;; config, a parked round silently counts as a failed repair again.
+      (is (false? ((:attempted? @seen) {:disposition :park}))
+          "the diff loop tells the engine a parked round attempted nothing")
+      (is (true? ((:attempted? @seen) {:disposition :fix}))))))
 
 (defn- run-loop-writing-a-report
   "A stubbed engine that leaves a report where the real one would, so the

@@ -146,8 +146,16 @@
 
    Counted per finding rather than per round, and by the pipeline's own identity
    — the same handle the stall check uses, so a finding that cannot be told apart
-   from round to round cannot silently accumulate here either."
-  [finding-key attempt-key prior curr-findings]
+   from round to round cannot silently accumulate here either.
+
+   And counted on ATTEMPTS rather than appearances. A round that ruled a finding
+   and aimed no repair at it has not tried and failed; it decided to try nothing,
+   and whatever governs that decision is what should end the run over it.
+   Watched: a defect repaired once and then parked in three consecutive rounds
+   was read as three failed repairs, which stopped the run a round ahead of the
+   rule that governs a standing park — and discarded, on the way out, a
+   first-appearance P1 the same round had ordered fixed."
+  [finding-key attempt-key attempted? prior curr-findings]
   ;; `prior` is the history NOT counting this round, and the caller says what
   ;; that is: after a judgement the round has appended nothing yet, after a
   ;; whole pipeline it has. Computing it here — with a `butlast` that is right
@@ -158,11 +166,19 @@
   ;; about how many repairs were tried and failed, so a re-attribution restarts
   ;; it; what a reader is handed is the defect, which did not become a different
   ;; defect by being routed somewhere else.
-  (let [runs  (map #(set (map attempt-key (:findings %)))
+  ;;
+  ;; `attempted?` is the pipeline's own reading of whether a round aimed a repair
+  ;; at a finding — the engine must not look inside one, which is what keeps it
+  ;; shared with the record loops — and it is applied to the current round as
+  ;; well as the prior ones: a round that attempts nothing must not be the round
+  ;; the run gives up on either.
+  (let [runs  (map #(into #{} (comp (filter attempted?) (map attempt-key))
+                          (:findings %))
                    (take-last (dec unfixable-after) prior))]
     (when (= (count runs) (dec unfixable-after))
       (seq (distinct (keep (fn [f]
-                             (when (every? #(contains? % (attempt-key f)) runs)
+                             (when (and (attempted? f)
+                                        (every? #(contains? % (attempt-key f)) runs))
                                (finding-key f)))
                            curr-findings))))))
 
@@ -172,15 +188,17 @@
    `prior` is every round before this one. Split out of `run-loop` because it is
    now asked at two moments — after the stage that produces the judgement, and
    after the whole pipeline — and the two disagree about what history holds."
-  [{:keys [finding-key attempt-key prev-findings iter max-iters changed?]} ctx prior]
+  [{:keys [finding-key attempt-key attempted? prev-findings iter max-iters
+           changed?]} ctx prior]
   (cond
     ;; BEFORE no-progress?, because both are true of a run that ends holding the
     ;; same findings and only this one says which. :no-progress sends a reader
     ;; to look at everything; :unfixable names the two or three that did not
     ;; move, which on a converged baseline is the whole of what is left.
-    (seq (unfixable finding-key attempt-key prior (:findings ctx)))
+    (seq (unfixable finding-key attempt-key attempted? prior (:findings ctx)))
     (assoc ctx :status :unfixable
-           :unfixable (vec (unfixable finding-key attempt-key prior (:findings ctx))))
+           :unfixable (vec (unfixable finding-key attempt-key attempted?
+                                      prior (:findings ctx))))
 
     ;; Reached when the round changed nothing AND no single finding has yet
     ;; survived long enough to be called stuck — an amender that stopped working
@@ -253,18 +271,23 @@
    terminates on its own merits (converged / escalated / clean / no-progress /
    error). A round that changes nothing still ends the run via `no-progress?`,
    so unbounded does not mean non-terminating. Pass :max-iters only to cap it.
-   :pipeline / :emit / :clock / :finding-key / :attempt-key / :open? are
-   injection seams.
+   :pipeline / :emit / :clock / :finding-key / :attempt-key / :attempted? /
+   :open? are injection seams.
    :finding-key decides what \"the same finding again\" means and so what
    no-progress? can detect; it defaults to the diff review's
    default-finding-key. :attempt-key decides what \"we already tried this\"
    means, which is a different question — a finding re-routed to another layer
    is the same finding and a fresh attempt — and it defaults to :finding-key,
-   the reading a pipeline that routes nothing wants. :changed? decides whether
-   a round moved anything, and so whether a repeated finding set is a stall or
-   a defect class the loop is still narrowing; it defaults to \"not known to
-   have changed anything\", which leaves the set equality standing alone.
-   :open? decides whether a finding is still owed, and so
+   the reading a pipeline that routes nothing wants. :attempted? decides
+   whether a round aimed a repair at a finding at all, and so whether that
+   round counts against the give-up counter — a ruling that dispatches nothing
+   is a decision to try nothing rather than a repair that failed. It defaults
+   to \"every appearance is an attempt\", which is what a pipeline with no way
+   to rule on a finding wants. :changed? decides whether a round moved anything,
+   and so whether a repeated finding set is a stall or a defect class the loop
+   is still narrowing; it defaults to \"not known to have changed anything\",
+   which leaves the set equality standing alone. :open? decides whether a
+   finding is still owed, and so
    whether a pipeline saying stop has CONVERGED or merely stopped: a run that
    ends holding something reports :unresolved instead. It defaults to
    \"nothing is open\", which is the reading a pipeline with no notion of an
@@ -274,9 +297,10 @@
    has to reach the next round, and it survives onto the terminal ctx too — see
    the comment on ctx0."
   [{:keys [run-id max-iters pipeline emit clock finding-key attempt-key
-           judged-after open? changed?] :as config
+           attempted? judged-after open? changed?] :as config
     :or   {emit (fn [_]) clock #(Instant/now)
            finding-key default-finding-key
+           attempted? (constantly true)
            open? (constantly false)
            changed? (constantly false)}}]
   (let [pipeline (or pipeline default-pipeline)
@@ -305,6 +329,7 @@
                   ;; there was no seam to put it through.
                   :carry carry}
             cfg  {:finding-key finding-key :attempt-key attempt-key
+                  :attempted? attempted?
                   :prev-findings prev-findings :changed? changed?
                   :iter iter :max-iters max-iters}
             end? (fn [c prior] (terminal cfg c prior))

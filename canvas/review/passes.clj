@@ -202,6 +202,13 @@
     "Whether a decided finding is still TRUE of the branch — a decline or a deviation, as
      against a close, which was a duplicate or out of scope and leaves nothing to carry."
     {:signature [:=> [:catn [:f Finding]] :boolean]})
+  (Operation repair-attempted?
+    "Whether the round that ruled a finding aimed a repair at it — false for a `park`, which
+     answers the finding by putting it to a human and launches nothing.
+
+     The engine's give-up counter asks how many repairs were tried and failed, and it cannot
+     read a disposition itself, so this is what the diff loop hands it."
+    {:signature [:=> [:catn [:f Finding]] :boolean]})
   (Operation parse-warden-decision "The warden's ruling out of what it said."
     {:signature [:=> [:catn [:text :string]] :map]})
   (Operation warden-failure "Why a round has no ruling: no run, no answer, or no parse."

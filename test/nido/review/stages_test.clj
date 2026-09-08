@@ -554,6 +554,19 @@
                  [{:id "aa11" :disposition :fix :because "b"}] {})]
       (is (= :fix (:disposition out))))))
 
+(deftest a-parked-round-aimed-no-repair-anywhere
+  ;; What the give-up counter in `nido.review.loop` asks: how many repairs were
+  ;; tried and failed. A park launches no fixer and orders no reshape, so the
+  ;; round it was ruled in is not one of the defect's attempts — counted as one,
+  ;; it stopped a run at four rounds on a defect the loop had tried exactly once.
+  (is (false? (stages/repair-attempted? {:disposition :park})))
+  (is (true?  (stages/repair-attempted? {:disposition :fix})))
+  (is (true?  (stages/repair-attempted? {:disposition :recut}))
+      "a recut is work the loop performs itself, and the next round judges it")
+  (is (true?  (stages/repair-attempted? {:disposition :declined})))
+  (is (true?  (stages/repair-attempted? {}))
+      "an unruled finding is worked on, so nothing about it stops counting"))
+
 (deftest a-park-about-the-cut-stops-blocking-but-keeps-standing
   ;; 42 of the corpus's 46 parks were layering findings, and a park standing
   ;; four rounds ended the whole run :unfixable while other findings were still

@@ -83,6 +83,24 @@
   [f]
   (contains? kept-dispositions (:disposition f)))
 
+(defn ^{:malli/schema [:=> [:cat :Finding] :boolean]}
+  repair-attempted?
+  "Did the round that ruled this finding aim a repair at it?
+
+   `park` is the one ruling that answers a finding by putting it to a human, so
+   it launches no fixer and orders no reshape: nothing was tried, and the round
+   is no evidence that the loop cannot move the defect. Every other ruling
+   either dispatches work or ends the finding.
+
+   Read by `nido.review.loop/run-loop`'s give-up counter, which asks how many
+   repairs were tried and failed. It counted a parked round as a failure, so a
+   defect repaired once and parked in the three rounds after it hit the counter
+   at four — a round ahead of `park-persists-for`, and through a door
+   `park-blocks?` does not gate, which is where the question of whether a
+   standing park should stop a run was decided."
+  [f]
+  (not= :park (:disposition f)))
+
 (def ^:private requirements
   "Per disposition, the field it is not a decision without and the values that
    field may take — read off the same list the warden is told.
