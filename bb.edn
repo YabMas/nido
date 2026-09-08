@@ -593,6 +593,11 @@
    :doc "Loop the decision round over the latest design record: derive, amend, re-survey if the premise is wrong, escalate only the ask. [:cwd <dir>] [:code-cwd <dir>] [:max-iters <n>] [:budget 30m] [:dry-run? true]"
    :task (apply nido-review/design-cmd *command-line-args*)}
 
+  nido:boundary
+  {:requires ([tasks.nido-boundary :as nido-boundary])
+   :doc "What nido asks for at a session's turn boundary — a Claude Code Stop hook. Exit 2 asks the turn to continue; 0 asks for nothing. [:cwd <dir>]"
+   :task (apply nido-boundary/boundary-cmd *command-line-args*)}
+
   nido:owed
   {:requires ([tasks.nido-owed :as nido-owed])
    :doc "What this worktree's workstream owes, and whether a person owes it. A reading: exits 0 whatever it finds. [:cwd <dir>]"

@@ -924,6 +924,73 @@
                        {"skills" (nido-native-entries "skills" fs/directory?)
                         "agents" (nido-native-entries "agents" agent-definition?)}))
 
+(def ^:private boundary-hook-timeout-s
+  "The host's own bound on the Stop hook, in seconds.
+
+   Above `tasks.nido-boundary/default-wait-ms` on purpose, so a boundary held
+   for a person ends on ITS terms rather than by being killed. A killed hook has
+   its output discarded, which reaches the same answer — nido asking for
+   nothing — far less legibly, and leaves a dead process in the log to explain."
+  320)
+
+(defn- boundary-settings
+  "The settings a guided session composes: one Stop hook, running nido's
+   boundary verb from the session home.
+
+   From the HOME rather than the worktree because that is where the bb.edn
+   symlink is, and `bb nido:boundary` has to resolve nido's tasks. Which
+   workstream it asks about is not decided here at all — the hook is handed the
+   session's cwd on stdin and folds from there, which is what keeps this
+   function free of any knowledge of a workstream and keeps
+   `Session :may-depend Platform, Integration, Design` intact."
+  [home]
+  {:hooks {:Stop [{:hooks [{:type    "command"
+                            :command (str "cd '" home "' && bb nido:boundary")
+                            :timeout boundary-hook-timeout-s}]}]}})
+
+(def ^:private guided-marker
+  "The file whose presence in a session home asks for the turn-boundary hook.
+
+   PER SESSION, and a marker rather than configuration because opting in has to
+   be one line and opting out the same line removed. A project-wide switch would
+   turn it on for every session at once, which is the opposite of what a
+   mechanism still proving itself wants; a key in the session's state edn would
+   be rewritten by the service manager on the next up.
+
+   It lives beside the composed `.claude` rather than inside it: that directory
+   is deleted and rebuilt on every launch, so a marker in it would be asking to
+   be forgotten."
+  ".guided")
+
+(defn- ensure-boundary-hook!
+  "Write nido's Stop hook into the composed session home, for a session that
+   asked for one by carrying `guided-marker`.
+
+   `settings.local.json` IS THE FREE SLOT, and it is free by measurement rather
+   than by hope. `compose-claude-dir!` symlinks every top-level entry of the
+   worktree's `.claude`, so any name a project has checked in is already taken —
+   brian commits `.claude/settings.json` and every one of its worktrees carries
+   it. `settings.local.json` is gitignored in all three registered repos that
+   have one, so it is untracked, so a fresh worktree never holds it and nothing
+   composes a symlink of that name. Nido writes its own file beside the
+   project's and clobbers nothing.
+
+   The project's own hooks still fire: the host MERGES hook entries across
+   settings levels rather than letting one replace another, so a project's
+   `settings.json` Stop hook and this one both answer the same boundary. That is
+   what lets nido install a boundary without ever owning a project's settings.
+
+   Removed when the marker is gone, so opting out is one line and the next
+   launch — never a file left behind quietly doing what nobody asked for."
+  [project-name session-name]
+  (let [home (state/session-home-dir project-name session-name)
+        path (str (fs/path home ".claude" "settings.local.json"))]
+    (if (fs/exists? (fs/path home guided-marker))
+      (do (io/write-json! path (boundary-settings (str home)))
+          (core/log-step (str "Wrote " path
+                              " — this session answers to its ledger at a turn boundary")))
+      (when (fs/exists? path) (fs/delete path)))))
+
 (defn- ensure-bb-edn-symlink!
   "Create or refresh a `bb.edn` symlink inside the session-home pointing
    at nido's own bb.edn. Lets the agent run nido bb tasks (e.g.
@@ -1021,6 +1088,7 @@
           (core/log-step (str "warning: worktree symlink: " (ex-message e)))))
       (try
         (ensure-claude-dir! project-name session-name)
+        (ensure-boundary-hook! project-name session-name)
         (catch Exception e
           (core/log-step (str "warning: .claude symlink: " (ex-message e)))))
       (try
