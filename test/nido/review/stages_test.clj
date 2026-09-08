@@ -1088,9 +1088,9 @@
     (is (= ["bb22"] (map :id settled))
         "and one a later round decided is, however it was ruled before")))
 
-(deftest answered-by-layer-reads-each-layers-answers-under-its-own-patch-hash
-  ;; They hang off the layer's patch, so a layer whose content changed has no
-  ;; hit and contributes nothing — the answers were about THAT content.
+(deftest answered-by-layer-reads-an-earlier-runs-answers-under-the-patch-hash
+  ;; A previous run's answers were about the content it read, so they hang off
+  ;; the patch: a layer that has since moved has no answer from it.
   (let [ctx {:cache   {"h-a" {:answered [{:id "aa11" :title "t" :authority "design"}]}
                        "h-b" {:answered []}}
              :reviews [{:target {:label "a" :patch-hash "h-a"}}
@@ -1099,6 +1099,44 @@
     (is (= [{:label "a" :answered [{:id "aa11" :title "t" :authority "design"}]}]
            (stages/answered-by-layer ctx))
         "a layer with nothing answered is dropped, not carried as an empty row")))
+
+(deftest this-runs-answers-survive-the-fix-that-moved-the-layers-patch
+  ;; The case the hash cannot key. Round 1 declines a finding on `a` and lands a
+  ;; repair on it; round 2 therefore reads different content, so nothing in the
+  ;; cache is about the patch under review — one run wrote the same declined
+  ;; deviation under three successive hashes and read it back none of the times,
+  ;; and the reviewer re-raised it every round at full cost.
+  (let [ctx {:cache   {"h-a-round-1" {:answered [{:id "aa11" :disposition :declined}]}}
+             :history [{:iter 1
+                        :findings [{:id "aa11" :from-layer "a" :disposition :declined
+                                    :because "true, and this branch is leaving it"}
+                                   {:id "bb22" :from-layer "a" :disposition :fix}]}]
+             :reviews [{:target {:label "a" :patch-hash "h-a-round-2"}}]}]
+    (is (= [{:label "a"
+             :answered [{:id "aa11" :disposition :declined
+                         :because "true, and this branch is leaving it"}]}]
+           (stages/answered-by-layer ctx))
+        "the label is the identity a repair cannot move; the patch hash is not")))
+
+(deftest the-two-sources-of-an-answer-are-joined-on-the-finding-not-appended
+  ;; Finding ids are a hash of file, line and title, so the same defect at the
+  ;; same site carries one id whichever run raised it. Showing a warden the same
+  ;; finding twice — once as an earlier run's decline and once as this run's —
+  ;; is a prompt block that argues with itself.
+  (let [ctx {:cache   {"h-a" {:answered [{:id "aa11" :disposition :declined
+                                          :because "the run before said no"}
+                                         {:id "cc33" :disposition :closed}]}}
+             :history [{:iter 1 :findings [{:id "aa11" :from-layer "a"
+                                            :disposition :closed
+                                            :authority "design"}
+                                           {:id "bb22" :from-layer "a"
+                                            :disposition :declined}]}]
+             :reviews [{:target {:label "a" :patch-hash "h-a"}}]}
+        answered (:answered (first (stages/answered-by-layer ctx)))]
+    (is (= ["aa11" "cc33" "bb22"] (mapv :id answered))
+        "one row per finding, the stored ones first so the list reads oldest-first")
+    (is (= {:id "aa11" :disposition :closed :authority "design"} (first answered))
+        "and where both ruled on it, this run's is the later decision")))
 
 (deftest what-is-written-to-the-cache-is-what-the-next-round-can-read
   ;; The two ends of the answered channel, composed the way a run composes them:
@@ -1661,13 +1699,27 @@
       (is (not= (:range-hash t) (:patch-hash t))
           "the key folds in the cut as well; the range hash is the patch alone"))))
 
-(deftest a-skipped-target-carries-the-round-it-converged-in
+(deftest a-skipped-target-carries-when-it-converged-not-a-foreign-runs-round
+  ;; The cache outlives the run, so the round on an entry belongs to whichever
+  ;; run wrote it: a one-round report carried three rows reading `converged-at
+  ;; 2`. A timestamp is a fact the reader can place — this entry is six hours
+  ;; old, so it is not this run's.
   (let [{:keys [review skipped]}
-        (stages/to-review {"h1" {:status :converged :round 4}}
+        (stages/to-review {"h1" {:status :converged :round 4
+                                 :at "2026-09-07T10:44:41Z"}}
                           [{:label "core" :patch-hash "h1"}
                            {:label "wiring" :patch-hash "h2"}])]
     (is (= ["wiring"] (mapv :label review)))
-    (is (= [4] (mapv :converged-at skipped)))))
+    (is (= ["2026-09-07T10:44:41Z"] (mapv :converged-at skipped)))))
+
+(deftest an-entry-with-no-timestamp-stamps-nothing-rather-than-nil
+  ;; The store is append-only, so it holds entries written before it recorded
+  ;; one. A row that says nothing is honest; a row reading `converged-at nil`
+  ;; asserts the field and answers it with a hole.
+  (let [{:keys [skipped]}
+        (stages/to-review {"h1" {:status :converged :round 4}}
+                          [{:label "core" :patch-hash "h1"}])]
+    (is (= [false] (mapv #(contains? % :converged-at) skipped)))))
 
 (deftest the-composition-target-carries-this-runs-earlier-composition-findings
   ;; Only findings the composition pass itself made — a layer's own finding is

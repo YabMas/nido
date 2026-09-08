@@ -531,19 +531,29 @@
    at exactly this patch. A target with no hash is always reviewed: unknown
    content is reviewed content.
 
-   A skipped target is stamped with the round its convergence was recorded in.
-   A skip is the loop declining to look at something, and the report could not
-   say on what authority: the row named the layer and nothing else, so `skipped`
-   was indistinguishable from a claim the reader had to take on trust. With the
-   round and the patch hash on the row, it can be checked against the cache."
+   A skipped target is stamped with WHEN its convergence was recorded. A skip is
+   the loop declining to look at something, and the report could not say on what
+   authority: the row named the layer and nothing else, so `skipped` was
+   indistinguishable from a claim the reader had to take on trust.
+
+   A timestamp rather than the round number the row used to carry. The cache
+   outlives any one run, so that round belonged to whichever run wrote the entry
+   — a one-round report carried three rows reading `converged-at 2`, from a run
+   six hours earlier, and nothing on the row said the number was foreign. A
+   round the reader cannot place is worse than none; a timestamp says at a
+   glance how old the convergence is, and the patch hash beside it is what makes
+   the row checkable against the cache.
+
+   An entry with no timestamp — one written before this was recorded — stamps
+   nothing rather than nil, so the row says what it can stand behind."
   [cache targets]
   (let [skip? (fn [t] (and (:patch-hash t) (cache/converged? cache (:patch-hash t))))]
     {:review  (into [] (remove skip?) targets)
      :skipped (into []
                     (comp (filter skip?)
                           (map (fn [t]
-                                 (assoc t :converged-at
-                                        (:round (get cache (:patch-hash t)))))))
+                                 (let [at (:at (get cache (:patch-hash t)))]
+                                   (cond-> t at (assoc :converged-at at))))))
                     targets)}))
 
 (defn- collect-findings
@@ -1001,34 +1011,6 @@
               s))))
       (catch Throwable _ nil))))
 
-(defn ^{:malli/schema [:=> [:cat :map] :any]}
-  answered-by-layer
-  "What earlier rounds already SETTLED, per layer, for the layers under review.
-
-   Written by `record-review!` and hung off each layer's patch hash, so an
-   answer evaporates the moment that layer's content changes. Reading it back
-   here closes the loop: the reviewer starts fresh every round and will report a
-   settled finding again, which is not new information — without this the same
-   finding is re-adjudicated for as long as the layer sits unchanged.
-
-   It reads the targets UNDER REVIEW, which is what makes what is written matter
-   as much as what is read. While convergence was the only thing recorded, the
-   entries in the cache were exactly the patches `to-review` skips, and this
-   looked up precisely their complement: every lookup missed, and the block it
-   feeds has never reached a warden. A target that owes something is recorded
-   too, and that is the entry a next round comes back to.
-
-   Layers with nothing answered are dropped rather than carried as empty rows:
-   the prompt block is evidence, and a layer named with nothing under it reads
-   as a layer that was asked and had no answer."
-  [ctx]
-  (into []
-        (keep (fn [{:keys [target]}]
-                (when-let [a (seq (cache/answered (:cache ctx) (:patch-hash target)))]
-                  {:label (:label target) :answered (vec a)})))
-        (:reviews ctx)))
-
-
 (def ^:private halting-kinds
   "The composition kinds a standing park may still stop a run for: the ones whose
    defect is in what LANDS. Read off the taxonomy, so this and the routing
@@ -1196,9 +1178,9 @@
 (defn ^{:malli/schema [:=> [:cat :any :any] :any]}
   answered-for
   "What this target reported and the warden SETTLED, over the WHOLE run —
-   `rounds` is each round's findings, oldest first. Carried forward under the
-   patch hash so next round's fresh reviewer, reporting the same thing, gets
-   answered rather than re-adjudicated.
+   `rounds` is each round's findings, oldest first. Two readers, and the same
+   answer serves both: `answered-by-layer` shows it to the next round's warden,
+   and `record-statuses!` writes it into the workstream cache for the next RUN.
 
    Every round rather than the converging one, because the converging round is
    the one least likely to hold anything: a run ends by finding nothing, and
@@ -1219,6 +1201,72 @@
         (comp (filter #(and (= label (:from-layer %)) (settled? %)))
               (map #(select-keys % [:id :title :disposition :authority :because])))
         (latest-rulings rounds)))
+
+(defn- merge-answered
+  "One row per finding, out of the two sources of answers about a target.
+
+   Deduped on the finding id, which `codex/finding-id` derives from the file,
+   the line and the title — so one defect at one site carries the same id
+   whichever run raised it, and the two sources can be joined on it. Where they
+   collide `in-run` wins, being the later decision.
+
+   Ordered `stored` first, so the row a reader meets first is the oldest."
+  [stored in-run]
+  (let [by-id (into {} (map (juxt :id identity)) in-run)
+        seen  (into #{} (map :id) stored)]
+    (into (mapv #(get by-id (:id %) %) stored)
+          (remove (comp seen :id))
+          in-run)))
+
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  answered-by-layer
+  "What has already been SETTLED about each layer under review, per layer. Fed
+   to the warden so a fresh reviewer reporting a decided finding gets answered
+   rather than re-adjudicated — the reviewer starts blank every round, so
+   without this a decline is re-argued at full cost for as long as the defect is
+   visible.
+
+   Two sources, because a layer has two kinds of history and only one of them
+   survives a fix landing on it.
+
+   THIS RUN's rulings arrive by LABEL, out of the round history. The label is
+   the only identity that holds across a repair: the moment a fix lands, the
+   layer is different content and everything hung off its patch hash is about a
+   patch that no longer exists. On the hash alone this block was inert for
+   precisely the layers a round had worked on — one run wrote a layer's declined
+   deviation three times, under three successive hashes, and read it back none
+   of the times.
+
+   EARLIER RUNS' rulings arrive by patch hash, out of the workstream cache,
+   where the hash is the right key: those answers were about the content that
+   run read, and a layer that has since moved has no answer from it. This is the
+   source that carries a decline across the gap between two runs on a branch
+   nothing landed on.
+
+   They cover each other exactly, which is why neither alone was enough. Only a
+   round that LANDED a fix is in `:history` at all — and a round that lands
+   nothing leaves the patch where it was, so what the label cannot reach the
+   hash still finds.
+
+   The cache is asked about the targets UNDER REVIEW, which is what makes what
+   is written there matter as much as what is read. While convergence was the
+   only thing recorded, its entries were exactly the patches `to-review` skips
+   and this looked up their complement; a target that owes something is recorded
+   too, and that is the entry a next run comes back to.
+
+   Layers with nothing answered are dropped rather than carried as empty rows:
+   the prompt block is evidence, and a layer named with nothing under it reads
+   as a layer that was asked and had no answer."
+  [ctx]
+  (let [rounds (mapv :findings (:history ctx))]
+    (into []
+          (keep (fn [{:keys [target]}]
+                  (let [a (merge-answered
+                           (cache/answered (:cache ctx) (:patch-hash target))
+                           (answered-for (:label target) rounds))]
+                    (when (seq a)
+                      {:label (:label target) :answered (vec a)}))))
+          (:reviews ctx))))
 
 (defn ^{:malli/schema [:=> [:cat :Path :map] :any]}
   record-review!

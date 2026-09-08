@@ -74,12 +74,20 @@
 (defn ^{:malli/schema [:=> [:cat :map :string] :any]}
   answered
   "Findings already SETTLED against this exact patch, as
-   [{:id … :because …}]. Fed back to the next round's warden so a fresh
-   reviewer reporting the same thing gets answered rather than re-adjudicated —
-   the same job `:rejected` does for the design one altitude up.
+   [{:id … :because …}]. Fed back to a later run's warden so a fresh reviewer
+   reporting the same thing gets answered rather than re-adjudicated — the same
+   job `:rejected` does for the design one altitude up.
 
    They hang off the patch hash, so they evaporate the moment the layer's
    content changes. That is deliberate: they were answers about THAT content.
+
+   Which is also the limit of what this can carry, and why it is half of the
+   channel rather than all of it. A run that repairs a layer moves that layer's
+   patch, so its own earlier rulings are unreachable here from the round after
+   the fix — WITHIN a run the answers travel by label instead, out of the round
+   history; see `nido.review.stages/answered-by-layer`. What this half is for is
+   the gap BETWEEN runs, where no history survives and the patch is the only
+   thing that does.
 
    Asked only of a patch that is under review, which is the complement of what
    `converged?` skips — so what this reads in practice is the entries that still

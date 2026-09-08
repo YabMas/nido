@@ -278,11 +278,13 @@
                    (row target {:status   "reviewed"
                                 :findings (get counts (:label target) 0)})))
                (:reviews ctx))
-         ;; On top of the patch every row carries, a skipped row names the round
-         ;; the convergence it is standing on was recorded in. Without it the
-         ;; report asserts a layer needed no review and offers nothing to check
-         ;; that against — and a wrongly cached convergence is precisely the
-         ;; failure that hides a finding for as long as the layer sits unchanged.
+         ;; On top of the patch every row carries, a skipped row says WHEN the
+         ;; convergence it is standing on was recorded — a timestamp, and often
+         ;; from a run hours before this one, since the cache outlives any single
+         ;; run. Without it the report asserts a layer needed no review and
+         ;; offers nothing to check that against, and a wrongly cached
+         ;; convergence is precisely the failure that hides a finding for as long
+         ;; as the layer sits unchanged.
          (into (mapv (fn [t] (row t (cond-> {:status "skipped"}
                                       (:converged-at t) (assoc :converged-at (:converged-at t)))))
                      (:skipped ctx)))

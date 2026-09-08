@@ -484,12 +484,12 @@
             {:event :phase-started :iter 1 :phase :review :at "t1"}
             {:event :phase-finished :iter 1 :phase :review :at "t2"
              :ctx {:findings [] :reviews []
-                   :skipped [{:label "core" :index 1
-                              :patch-hash "abc123" :converged-at 4}]}}])
+                   :skipped [{:label "core" :index 1 :patch-hash "abc123"
+                              :converged-at "2026-09-07T10:44:41Z"}]}}])
         row (-> r :rounds first :phases first :layers first)]
     (is (= "skipped" (:status row)))
     (is (= "abc123" (:patch-hash row)))
-    (is (= 4 (:converged-at row)))))
+    (is (= "2026-09-07T10:44:41Z" (:converged-at row)))))
 
 (deftest a-reviewed-row-carries-the-patch-it-was-reviewed-at
   ;; The skip was auditable and the re-review was not, which is the direction
