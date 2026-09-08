@@ -161,15 +161,31 @@
 (def mechanical-stages
   "The stages the driver may run itself, and the task each one is.
 
-   Only stages that need no agent turn of the driver's own — the record loops
-   are processes that drive their own agents internally, which is what makes
-   them safe to fire without a session to fire them into.
+   Only stages that need no agent turn of the driver's own. All three loops
+   drive their own agents internally, which is what makes them safe to fire
+   without a session to fire them into — the driver waits on one process and
+   reads one keyword back.
+
+   THE DIFF REVIEW IS NOT LIKE THE OTHER TWO, and the difference is the working
+   copy rather than the agents. A record loop judges a ledger entry and amends
+   a ledger entry; the diff loop's fixers commit to the tree. So firing it
+   unasked is a stronger thing to do than firing the other two, and what bounds
+   it is that `driven` is opt-in per workstream and the position is :implemented
+   — a workstream whose own record says the implementation turn is over. What it
+   does NOT bound is a person editing that worktree at the same time: the
+   activity claim excludes other claim-takers, not an editor.
 
    A stage absent here is not fired, whatever its mode says. The projection can
-   name a stage this phase cannot run — that is the normal case, and it parks
-   rather than pretending."
+   name a stage this phase cannot run, and `tick!` parks the workstream rather
+   than skipping it in silence."
   {:verify-baseline {:task 'tasks.nido-review/baseline-cmd* :label "baseline"}
-   :decide-design {:task 'tasks.nido-review/design-cmd*   :label "design"}})
+   :decide-design   {:task 'tasks.nido-review/design-cmd*   :label "design"}
+   ;; Reached through the same one-argument convention as the others: it takes
+   ;; a {:cwd …} and answers with a status `disposition` already classifies.
+   ;; `nido.review.loop/terminal-statuses` is a closed set of eight and every
+   ;; one of them is an explicit row in that table, so this needed no new
+   ;; vocabulary — only the wire.
+   :review-implementation {:task 'tasks.nido-review/loop-cmd* :label "diff review"}})
 
 (defn ^{:malli/schema [:=> [:cat :any] :map]}
   fireable

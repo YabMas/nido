@@ -434,3 +434,37 @@
           (is (= :waiting-on-a-human (:skipped out)))
           (is (empty? (blockers-of id))
               "nothing is wrong — a person simply owes an approval"))))))
+
+;; ── Which stages the driver can reach ───────────────────────────────────────
+
+(deftest every-mechanical-stage-the-projection-names-has-a-runner
+  ;; The invariant, derived from the two tables rather than restated beside
+  ;; them, so it cannot drift: `next-by-position` decides which stage is DUE and
+  ;; `mechanical-stages` decides how it is RUN, nothing else compares them, and
+  ;; a stage stamped :mechanical with no runner is a wall nobody wrote.
+  (is (empty? (->> pipeline/positions
+                   (keep #(pipeline/next-action % :pickup))
+                   (filter #(= :mechanical (:mode %)))
+                   (map :stage)
+                   (remove drive/mechanical-stages)
+                   set))))
+
+(deftest the-driver-fires-the-diff-review-from-implemented
+  (with-tmp
+    (fn []
+      (let [id (a-ws)
+            submitted (atom [])]
+        (session/create! :brian id {:name "auto" :weight :heavy
+                                    :autonomy a-running-agent})
+        (ws/append-entry! :brian id {:kind :intent}
+                          (pr-str {:format :intent :goal "g" :done-when ["d"]}))
+        (ws/append-entry! :brian id {:kind :implementation-completed}
+                          (pr-str {:format :implementation-completed :summary "done"
+                                   :artifacts []}))
+        (drive/drive! :brian id)
+        (let [out (first (drive/tick! #(swap! submitted conj %)))]
+          (is (= :review-implementation (:fired out))
+              "a finished implementation is at :implemented, whose next act is the diff review")
+          (is (= 1 (count @submitted)))
+          (is (empty? (blockers-of id))
+              "and it is fired rather than parked, which is what this layer changes"))))))
