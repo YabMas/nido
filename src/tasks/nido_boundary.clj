@@ -29,18 +29,21 @@
 (def ^:private default-wait-ms
   "How long a boundary held for a person keeps asking before it gives up.
 
-   Five minutes, and it is a FIRST VALUE rather than a derived one — the design
-   record says so and says why: it trades a session that carries itself across
-   an approval against a session sitting unusable until somebody interrupts it,
-   and nothing surveyed decides between them. Long enough to grant something
-   from the dashboard you are most likely already looking at; short enough that
-   a session waiting on somebody who went home frees itself before they are
-   back. Being wrong about it is a one-line change.
+   THIRTY MINUTES, and the number follows from what the wait is FOR. A session
+   whose ledger says a person owes the next move has nothing else to do, so
+   going quiet is the wanted behaviour rather than a cost to be minimised — and
+   the only thing a long wait takes away is the ability to talk to that session
+   about something else, which one interrupt gives back. What a SHORT wait takes
+   away is the whole feature: grant the approval after it lapsed and nothing
+   picks it up, so you are back to typing into the session, which is what this
+   exists to stop.
 
-   The settings entry carries a `timeout` slightly above this so that the wait
-   ends HERE, on its own terms, rather than by being killed — a killed hook has
-   its output discarded, which reaches the same answer far less legibly."
-  300000)
+   Well inside the host's own default of 600 seconds? It is not — the settings
+   entry raises the hook `timeout` above this deliberately, so the wait ends
+   HERE, on its own terms, rather than by being killed. A killed hook has its
+   output discarded, which reaches the same answer far less legibly. The host
+   documents no ceiling on that field."
+  1800000)
 
 (def ^:private default-poll-ms
   "How often the wait re-folds the ledger. Nothing is armed, scheduled or

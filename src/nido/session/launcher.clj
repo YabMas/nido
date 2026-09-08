@@ -931,7 +931,7 @@
    for a person ends on ITS terms rather than by being killed. A killed hook has
    its output discarded, which reaches the same answer — nido asking for
    nothing — far less legibly, and leaves a dead process in the log to explain."
-  320)
+  1860)
 
 (defn- boundary-settings
   "The settings a guided session composes: one Stop hook, running nido's
@@ -948,48 +948,28 @@
                             :command (str "cd '" home "' && bb nido:boundary")
                             :timeout boundary-hook-timeout-s}]}]}})
 
-(def ^:private guided-marker
-  "The file whose presence in a session home asks for the turn-boundary hook.
-
-   PER SESSION, and a marker rather than configuration because opting in has to
-   be one line and opting out the same line removed. A project-wide switch would
-   turn it on for every session at once, which is the opposite of what a
-   mechanism still proving itself wants; a key in the session's state edn would
-   be rewritten by the service manager on the next up.
-
-   It lives beside the composed `.claude` rather than inside it: that directory
-   is deleted and rebuilt on every launch, so a marker in it would be asking to
-   be forgotten."
-  ".guided")
-
 (defn- ensure-boundary-hook!
-  "Write nido's Stop hook into the composed session home, for a session that
-   asked for one by carrying `guided-marker`.
+  "Write nido's Stop hook into every composed session home.
 
    `settings.local.json` IS THE FREE SLOT, and it is free by measurement rather
    than by hope. `compose-claude-dir!` symlinks every top-level entry of the
-   worktree's `.claude`, so any name a project has checked in is already taken —
-   brian commits `.claude/settings.json` and every one of its worktrees carries
-   it. `settings.local.json` is gitignored in all three registered repos that
-   have one, so it is untracked, so a fresh worktree never holds it and nothing
+   worktree's `.claude`, so any name a project commits is already taken — brian
+   commits `.claude/settings.json` and every one of its worktrees carries it.
+   `settings.local.json` is gitignored in all three registered repos that have
+   one, so it is untracked, so a fresh worktree never holds it and nothing
    composes a symlink of that name. Nido writes its own file beside the
    project's and clobbers nothing.
 
-   The project's own hooks still fire: the host MERGES hook entries across
-   settings levels rather than letting one replace another, so a project's
-   `settings.json` Stop hook and this one both answer the same boundary. That is
-   what lets nido install a boundary without ever owning a project's settings.
-
-   Removed when the marker is gone, so opting out is one line and the next
-   launch — never a file left behind quietly doing what nobody asked for."
+   A project's own hooks still fire, and that is observed rather than assumed:
+   two Stop hooks defined across the two settings files both ran, in parallel,
+   and the turn continued because ONE of them asked while the other abstained.
+   Which is also why nido installing this can never keep a session going that
+   its project wants stopped, or stop one its project wants going — every hook
+   answers and any single request is granted."
   [project-name session-name]
   (let [home (state/session-home-dir project-name session-name)
         path (str (fs/path home ".claude" "settings.local.json"))]
-    (if (fs/exists? (fs/path home guided-marker))
-      (do (io/write-json! path (boundary-settings (str home)))
-          (core/log-step (str "Wrote " path
-                              " — this session answers to its ledger at a turn boundary")))
-      (when (fs/exists? path) (fs/delete path)))))
+    (io/write-json! path (boundary-settings (str home)))))
 
 (defn- ensure-bb-edn-symlink!
   "Create or refresh a `bb.edn` symlink inside the session-home pointing
