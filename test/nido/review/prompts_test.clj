@@ -392,8 +392,38 @@ layers, it is not yours"))
   ;; ruled fix a third time. The licence rests on the run's own history.
   (let [out (prompts/warden-prompt {:findings findings :history [] :design nil})]
     (is (str/includes? out "RECURRENCE"))
-    (is (str/includes? out "does NOT need a design record"))
+    (is (str/includes? out "do NOT need a design record"))
     (is (str/includes? out "Park on RECURRENCE still applies"))))
+
+(deftest a-composition-finding-the-loop-cannot-move-is-parkable-with-no-design
+  ;; Run review-74e50bd5 found an `aggregate` defect whose answer was a boundary
+  ;; decision, on a branch carrying no design record. `fix` the warden ruled out
+  ;; itself, `recut` wants a move the kind does not have, and park offered a
+  ;; design invariant or a recurrence — neither available. It fell through to
+  ;; `deviation`, which settles AND keeps, so the run reported 0 remaining and
+  ;; terminated clean on a question nobody had answered.
+  (let [park (some #(when (= :park (:disposition %)) (:means %))
+                   prompts/disposition-vocabulary)]
+    (is (str/includes? park "NO MOVE")
+        "the ground has a name the rest of the prompt can refer to")
+    (is (str/includes? park "do NOT need a design record")
+        "and it is reachable on a branch the reviewed work is free not to give one")
+    (doseq [{:keys [kind]} prompts/composition-kinds]
+      (is (not (str/includes? park kind))
+          (str "the ground is stated over the finding's own kind and the RECUT"
+               " list, never over an enumeration: naming " kind " here is how the"
+               " next kind added falls out of it in silence")))))
+
+(deftest the-no-design-branch-keeps-every-ground-that-is-not-the-record
+  ;; It removes ground (a), which is right, and used to leave RECURRENCE as the
+  ;; only park a design-less run could reach — three lines above telling the
+  ;; warden that the kinds no fixer should get are still not a fixer's. Both
+  ;; true, and together they name no destination at all.
+  (let [out (prompts/warden-prompt {:findings findings :history [] :design nil})]
+    (is (str/includes? out "So does park on NO MOVE")
+        "the ground that rests on the finding survives, as recurrence does")
+    (is (str/includes? out "not a `deviation`")
+        "and the settling door the warden went through instead is named")))
 
 (deftest the-composition-pass-is-forbidden-the-module-boundary-subject
   ;; Where a module boundary belongs is judged before code exists, by the design
