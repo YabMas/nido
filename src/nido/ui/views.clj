@@ -897,6 +897,17 @@
    (when (seq directions)
      [:div
       [:h3 "Solution directions"]
+      ;; Lettered only when every branch HAS a letter (report/answerable?). The
+      ;; alternative is a card that letters the first twenty-six and leaves the
+      ;; rest described with nothing to pick them by, which is the disagreement
+      ;; between card and action bar this whole shape exists to avoid — so past
+      ;; the alphabet it falls back to the plain list, and the action bar offers
+      ;; none, and the two still agree.
+      (if-not (report/answerable? directions)
+        (into [:ul]
+              (for [{:keys [label shape effort confidence]} directions]
+                [:li [:strong label] " · " (report/effort-label effort)
+                 " · " (name (:level confidence)) " — " shape]))
       ;; Lettered, and lettered from POSITION at both ends — the letter is what
       ;; the button below the report says, so a reader picks a direction by
       ;; matching a letter rather than by re-reading three shapes to work out
@@ -912,10 +923,14 @@
                [:div.option
                 [:div.option-head
                  [:span.option-letter (report/option-letter i)]
-                 [:strong label]
-                 [:span.meta (name effort) " · " (name (:level confidence)) " confidence"]]
+                 ;; A label that IS the letter is dropped rather than repeated —
+                 ;; reports written while the skill's template showed `:label "A"`
+                 ;; are full of them, and the head read "A A · S".
+                 (when-not (= label (report/option-letter i)) [:strong label])
+                 [:span.meta (report/effort-label effort)
+                  " · " (name (:level confidence)) " confidence"]]
                 [:p shape]])
-             directions))])
+             directions)))])
    (when notion-writes
      [:div
       [:h3 "On apply →"]
@@ -927,15 +942,18 @@
               ;; what lands (work/accepted-report). Asked of report/answerable?
               ;; rather than of the buttons, which this block cannot see — it is
               ;; the same predicate gate-actions offers them under.
+              ;;
+              ;; A branch may itself defer, so "the size of the direction you
+              ;; choose" is the honest phrasing either way: each branch's own size
+              ;; is on the card beside its letter, and this says which of them
+              ;; decides.
               [:li "Effort: "
-               (let [choosable? (and (seq directions) (report/answerable? directions))
-                     deferred?  (= :squirrel (:effort notion-writes))]
-                 (cond
-                   (and choosable? deferred?) "set by the direction you choose, or left open if you defer"
-                   choosable?                 (str (name (:effort notion-writes))
-                                                   ", or the size of the direction you choose")
-                   deferred?                  "deferred — the size follows from the design"
-                   :else                      (name (:effort notion-writes))))]]
+               (if (and (seq directions) (report/answerable? directions))
+                 (str "the size of the direction you choose, or "
+                      (if (= :squirrel (:effort notion-writes))
+                        "left open if you defer"
+                        (str (name (:effort notion-writes)) " if you defer")))
+                 (report/effort-label (:effort notion-writes)))]]
              (when-let [[from to] (:status-transition notion-writes)]
                [[:li "Status: " [:code from] " → " [:code to]]])
              [[:li "Title: " (:title notion-writes)]]))])

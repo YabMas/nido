@@ -421,41 +421,51 @@
       "the REPORT may defer its size — that is what :squirrel is for"))
 
 ;; ── What a branch a human may pick has to carry ────────────────────────────
-;; Deferral is a property of the report, not of a branch. A direction IS the
-;; decision the sizing was waiting on, so a branch nobody can size is not yet an
-;; answer, and a gate that lettered one would let a human click to settle the
-;; sizing and hand the ticket back on the size it already had.
+;; A letter to answer it by, and nothing else. A branch may defer its own size:
+;; the click settles the DIRECTION, and the size is downstream of that choice —
+;; a report that deferred its sizing is precisely the one whose direction is the
+;; live question, so refusing to offer it there answers nothing.
 
-(deftest a-direction-may-not-defer-its-own-size
-  (is (thrown? clojure.lang.ExceptionInfo
-               (report/validate (assoc-in valid-report [:directions 0 :effort] :squirrel)))))
+(deftest a-direction-may-defer-its-own-size
+  (is (report/validate (assoc-in valid-report [:directions 0 :effort] :squirrel)))
+  (is (report/answerable? (:directions (assoc-in valid-report [:directions 0 :effort] :squirrel)))
+      "and it stays pickable — the choice is recorded and /continue-ticket sizes
+       it when it writes the design record, which is what :squirrel has always meant"))
 
-(deftest a-report-may-not-enumerate-more-directions-than-there-are-letters
+(deftest a-report-may-not-be-written-with-more-branches-than-the-authoring-cap
   (let [dir (first (:directions valid-report))
-        n   (count report/option-letters)]
+        n   report/authoring-branch-cap]
     (is (report/validate (assoc valid-report :directions (vec (repeat n dir)))))
     (is (thrown? clojure.lang.ExceptionInfo
                  (report/validate (assoc valid-report :directions (vec (repeat (inc n) dir)))))
-        "the cap is on the report, not on the render: a seventh branch would be
-         described on the card with no button under it and nothing saying why")))
+        "a question with seven branches is a conversation, not a question with an
+         answer — and that is a judgement about what may be WRITTEN")))
 
-(deftest a-report-written-before-those-bounds-still-reads
-  ;; The read contract is what keeps history readable — see report/read-schemas.
-  ;; Both shapes are legacy in the same era, so both are checked here.
-  (let [dir (first (:directions valid-report))]
-    (is (report/parse-event :triage (assoc-in valid-report [:directions 0 :effort] :squirrel)))
-    (is (report/parse-event
-         :triage (assoc valid-report
-                        :directions (vec (repeat (inc (count report/option-letters)) dir)))))))
+(deftest the-authoring-cap-does-not-reach-back-into-stored-reports
+  ;; The conflation this pair was split to end. Holding one number for both meant
+  ;; a tightening of the authoring rule silently made already-written records
+  ;; unanswerable, with their branches still described on the card and no button
+  ;; under any of them — which is exactly the failure that shipped.
+  (let [dir   (first (:directions valid-report))
+        overs (vec (repeat (inc report/authoring-branch-cap) dir))]
+    (is (report/parse-event :triage (assoc valid-report :directions overs))
+        "a report written before the cap still reads")
+    (is (report/answerable? overs)
+        "and is still answerable — there are letters enough to reach every branch")))
 
-(deftest answerable?-is-the-write-shape-asked-of-a-stored-report
+(deftest answerable?-asks-only-whether-every-branch-has-a-letter
   (let [dir (first (:directions valid-report))]
     (is (report/answerable? [dir]))
     (is (report/answerable? []))
-    (is (not (report/answerable? [(assoc dir :effort :squirrel)]))
-        "a branch a click could not land a size for is not an answer")
+    (is (report/answerable? (vec (repeat (count report/option-letters) dir))))
     (is (not (report/answerable? (vec (repeat (inc (count report/option-letters)) dir))))
-        "and neither is one the letters cannot reach")))
+        "past the alphabet the card would letter some and leave the rest described
+         and unpickable, so it letters none of them")))
+
+(deftest effort-label-spells-out-the-joker
+  (is (= "M" (report/effort-label :M)))
+  (is (= "size deferred" (report/effort-label :squirrel))
+      ":squirrel is nido jargon, and a reader of a ticket has no reason to know it"))
 
 (deftest report->markdown-implementation-plan-has-headings
   (let [md (report/report->markdown valid-plan)]

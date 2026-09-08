@@ -19,11 +19,32 @@
    letter written into the record is a second source of truth for ordering, and
    the two disagree the moment a branch is inserted or dropped.
 
-   The length is also the cap both of those vectors enforce, which is why it is
-   defined above them. Six is not a technical limit — a question with seven
-   branches is a conversation, not a question with an answer, and offering it as
-   seven buttons pretends otherwise."
-  ["A" "B" "C" "D" "E" "F"])
+   It is the whole alphabet, and NOT the same number as `authoring-branch-cap`.
+   That conflation is what this pair was split to end: how many branches may be
+   WRITTEN is a judgement about questions, and how many a STORED record can be
+   answered by is a limit on this vocabulary. Holding them as one number meant an
+   authoring rule decided what an already-written record could be answered by —
+   so tightening the rule silently made existing records unanswerable, with their
+   branches still described on the card and no way to pick one."
+  (mapv str "ABCDEFGHIJKLMNOPQRSTUVWXYZ"))
+
+(def authoring-branch-cap
+  "How many branches an enumerated question may be WRITTEN with. Six is not a
+   technical limit — a question with seven branches is a conversation, not a
+   question with an answer, and offering it as seven buttons pretends otherwise.
+
+   It bounds appending and decides nothing about what an already-stored record may
+   be answered by; `option-letters` is what decides that, and it is far longer, so
+   lowering this cap can never strand a record that is already written."
+  6)
+
+(defn ^{:malli/schema [:=> [:cat :keyword] :string]}
+  effort-label
+  "A TriageEffort as a human surface should say it. Every size renders as itself;
+   `:squirrel` renders as what it MEANS, because the joker's name is nido jargon
+   and a reader of a ticket has no reason to know it."
+  [effort]
+  (if (= :squirrel effort) "size deferred" (name effort)))
 
 (defn ^{:malli/schema [:=> [:cat :int] [:maybe :string]]}
   option-letter
@@ -40,33 +61,22 @@
    :squirrel is the joker that defers sizing to the implementation-plan event."
   [:enum :XS :S :M :L :XL :squirrel])
 
-(defn- direction-schema
-  "A solution direction, over the `effort` its era allowed. Two eras exist and the
-   difference is the whole of it, so the shape is written once and the vocabulary
-   passed in."
-  [effort]
+(def Direction
+  "One candidate way to fix what triage found — a branch a human picks BETWEEN at
+   the gate.
+
+   Its `:effort` is a TriageEffort, `:squirrel` included, and that is deliberate.
+   A human clicks a branch to settle the DIRECTION; the size is downstream of that
+   choice, not the point of it. A report that deferred its sizing is precisely the
+   one where the direction is the live question, so a branch nobody can size yet is
+   still an answer — it is recorded, and the size follows from the design record the
+   impl session writes (`/continue-ticket`), which is what :squirrel has always
+   meant."
   [:map {:closed true}
    [:label      string?]
    [:shape      string?]
-   [:effort     effort]
+   [:effort     TriageEffort]
    [:confidence Confidence]])
-
-(def Direction
-  "One candidate way to fix what triage found — a branch a human picks BETWEEN,
-   which is why its :effort is a CONCRETE size rather than a TriageEffort.
-
-   Deferral is a property of the report, not of a branch. `:squirrel` says sizing
-   waits on a decision nobody has made yet, and a direction IS that decision:
-   named, shaped, and priced. A branch nobody can size is not yet an answer — it
-   belongs in the summary's prose, not under a letter — and offering it as one is
-   how a human clicks to settle the sizing and the ticket comes back on the size
-   it already had."
-  (direction-schema Effort))
-
-(def ^:private DirectionUnsized
-  "The pre-2026-09 Direction: `:effort` was a TriageEffort, so a branch could
-   defer its own size. Read-era only — see `read-schemas`."
-  (direction-schema TriageEffort))
 
 (def AppDomain
   "Notion App Domain multi_select value used for routing."
@@ -127,15 +137,14 @@
    [:note         {:optional true} string?]])
 
 (def AnswerableDirections
-  "The branches of a triage report a gate can offer as answers: no more of them
-   than there are letters, each carrying a concrete size.
+  "The `:directions` slot of the write shape: no more branches than a question may
+   be written with.
 
-   Named because it is read twice and must mean one thing both times — it is the
-   `:directions` slot of the write shape, AND the question `answerable?` asks of a
-   report already stored. A gate that decided for itself which branches it could
-   letter would be holding a second copy of this bound, free to disagree with the
-   one a report is written under."
-  [:vector {:max (count option-letters)} Direction])
+   This is an AUTHORING bound and nothing else. What an already-stored report may
+   be answered by is `answerable?`, which asks a different and looser question —
+   are there letters to reach them all — so tightening this can never reach back
+   and strand a record that is already written."
+  [:vector {:max authoring-branch-cap} Direction])
 
 (def ^:private triage-report-common
   "Everything a triage report holds except `:directions`, whose shape is what the
@@ -166,11 +175,11 @@
   (into [:map {:closed true}]
         (conj triage-report-common [:directions AnswerableDirections])))
 
-(def ^:private TriageReportUnbounded
-  "The pre-2026-09 TriageReport: `:directions` was uncapped and a direction could
-   defer its own size. Read-era only — see `read-schemas`."
+(def ^:private TriageReportUncapped
+  "The pre-2026-09 TriageReport: `:directions` was uncapped. Read-era only — see
+   `read-schemas`."
   (into [:map {:closed true}]
-        (conj triage-report-common [:directions [:vector DirectionUnsized]])))
+        (conj triage-report-common [:directions [:vector Direction]])))
 
 (def ^:private proposed-ticket-common
   "Fields shared by both proposed-ticket templates."
@@ -1215,7 +1224,7 @@
    ;; two apart without opening a run log.
    [:tried   {:optional true} [:vector Attempt]]
    [:options {:optional true}
-    [:vector {:min 2 :max (count option-letters)} BlockerOption]]])
+    [:vector {:min 2 :max authoring-branch-cap} BlockerOption]]])
 
 (def BlockerAnswered
   "The human's answer to a blocker that named its branches — written by nido at
@@ -2177,12 +2186,11 @@
    ;; stopped being writable. Rounds in that shape exist on every workstream a
    ;; loop has touched.
    :baseline-review BaselineReviewAny
-   ;; Directions became answerable, which put two bounds on them: no more than
-   ;; there are letters, and none deferring its own size. Every triage report
-   ;; written before that is under the looser shape, and reads under it — a
-   ;; report today's write shape would refuse simply offers no lettered answers
-   ;; (work/answerable-directions), rather than vanishing from the pane.
-   :triage TriageReportUnbounded
+   ;; Directions became answerable, which capped how many a report may be WRITTEN
+   ;; with. A report written before that could enumerate any number and reads
+   ;; under the uncapped shape — and stays fully answerable, because the letters
+   ;; that answer branches are a longer vocabulary than the cap on writing them.
+   :triage TriageReportUncapped
    ;; `:findings-fixed` became `:fix-attempts` — the count never was defects
    ;; removed — and `:defects-settled`, which is, joined it as required. Every
    ;; :review entry written before that rename is in the old shape, and they are
@@ -2271,7 +2279,7 @@
                  ":options — [{:label \"<the branch, a few words>\" "
                  ":summary \"<what taking it means>\" "
                  ":consequence \"<what it costs / forecloses>\" "
-                 ":recommended? true}] (2–" (count option-letters) " of them) — and "
+                 ":recommended? true}] (2–" authoring-branch-cap " of them) — and "
                  "leave :needs as the question itself. The gate renders them as "
                  "A/B/… and resumes you with the one the human picks; written as "
                  "prose, the only way to answer is a free-text essay.")
@@ -2290,23 +2298,24 @@
   (cond-> (validate-against (schema-for :write kind) kind report)
     (= :blocker kind) enforce-blocker-options))
 
-(def ^:private answerable-directions
-  "Compiled once — this is asked on every gate render. See compiled-schemas for
-   why a schema FORM handed to m/validate is not good enough here."
-  (delay (m/schema AnswerableDirections)))
-
 (defn ^{:malli/schema [:=> [:cat :any] :boolean]}
   answerable?
-  "True when `directions` are what a triage report may be WRITTEN with today, and
-   so can be offered as lettered answers.
+  "True when every one of `directions` has a letter to be answered by — asked of a
+   STORED report, whatever era wrote it.
 
-   The question is asked of the write shape rather than answered again here. A
-   report stored before those bounds existed still reads (read-schemas) and still
-   renders, and this is what keeps it from also offering a partial row of buttons:
-   a seventh branch with no letter, or a branch whose size a click would fail to
-   land."
+   Deliberately NOT the authoring bound. A rule about what may be appended must
+   not decide what an already-written record can be answered by; that conflation
+   is what made a tightening reach backwards and leave stored reports with their
+   branches described on the card and no button under any of them.
+
+   What it does guard is the one shape that cannot be rendered honestly: branches
+   the letters cannot reach at all, where the card would letter some and the
+   action bar would answer the same some, leaving the rest described and
+   unpickable. Since the alphabet is far longer than anything a question may be
+   written with, no report that can be written — and none that has been — falls
+   outside it."
   [directions]
-  (m/validate @answerable-directions directions))
+  (<= (count directions) (count option-letters)))
 
 (defn ^{:malli/schema [:=> [:cat :EntryKind :any] :LedgerEvent]}
   parse-event

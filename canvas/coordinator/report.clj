@@ -74,14 +74,18 @@
     "The one-line rendering of what closes a seam, or nil for a legacy seam that names none.
      nil is a real answer: the record predates the obligation."
     {:signature [:=> [:catn [:seam :map]] [:maybe :string]]})
+  (Operation effort-label
+    "A TriageEffort as a human surface should say it. :squirrel renders as what it MEANS — the
+     joker's name is nido jargon, and a reader of a ticket has no reason to know it."
+    {:signature [:=> [:catn [:effort :keyword]] :string]})
   (Operation option-letter
     "The letter answering the branch at position `i`, or nil past the cap. Derived from position
      and never stored — a stored letter is a second source of truth for ordering."
     {:signature [:=> [:catn [:i :int]] [:maybe :string]]})
   (Operation answerable?
     "Whether a triage report's directions are what one may be WRITTEN with today, and so can be
-     offered as lettered answers. The bounds are asked of the write shape and nowhere else: a
-     gate deciding for itself which branches it could letter would hold a second copy of them."
+     offered as lettered answers. The bound is asked of the write shape and nowhere else: a gate
+     deciding for itself which branches it could letter would hold a second copy of it."
     {:signature [:=> [:catn [:directions :any]] :boolean]})
   (Operation findings-heading
     "What the findings under a verdict ARE. `:insufficient` reports no refused claim, so heading

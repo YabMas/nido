@@ -187,8 +187,8 @@
    letters here and the letters on the card cannot disagree.
 
    `ids` is the action-id vector the letters resolve into and `title` builds a
-   branch's hover text: the two things that differ between the kinds of question
-   this shape answers. `:recommended?` is read off the branch, so a vocabulary
+   branch's hover text from its position and itself: the two things that differ
+   between the kinds of question this shape answers. `:recommended?` is read off the branch, so a vocabulary
    that has no such notion simply gets no primary button rather than a rule of
    its own.
 
@@ -215,7 +215,7 @@
                    ;; …but a button reading "A" says nothing on its own once the
                    ;; card scrolls away, so the branch rides along as the hover
                    ;; title, where it costs no layout.
-                   :title (title branch)
+                   :title (title i branch)
                    :kind  :mutation
                    :style (if (:recommended? branch) :primary :default)}
             entry-seq (assoc :seq entry-seq)))
@@ -224,7 +224,7 @@
 (defn- option-actions
   "One button per branch of a blocker's :options."
   [entry-seq options]
-  (lettered-actions option-action-ids entry-seq options :label))
+  (lettered-actions option-action-ids entry-seq options (fn [_ opt] (:label opt))))
 
 (defn- direction-actions
   "One button per solution direction of a triage report.
@@ -232,11 +232,16 @@
    The hover text carries the SIZE as well as the name, because that is what the
    choice is between: two directions with the same name and different prices are
    two different answers, and a row of letters with the prices only on the card
-   asks the reader to hold them while they move the mouse."
+   asks the reader to hold them while they move the mouse.
+
+   A label that IS the letter is dropped rather than repeated. Reports written
+   while the skill's template showed `:label \"A\"` are full of them, and a button
+   titled \"A · S — …\" spends its first word saying what the button already says."
   [entry-seq directions]
   (lettered-actions direction-action-ids entry-seq directions
-                    (fn [{:keys [label shape effort]}]
-                      (str label " · " (name effort) " — " shape))))
+                    (fn [i {:keys [label shape effort]}]
+                      (str (when-not (= label (report/option-letter i)) (str label " · "))
+                           (report/effort-label effort) " — " shape))))
 
 (defn ^{:malli/schema [:=> [:cat :keyword :boolean [:? :any] [:? :map]] :any]}
   gate-actions
@@ -1437,40 +1442,43 @@
                   (= :warn callout) (assoc :callout :warn))))))))))
 
 (def ^:private deferred-size-note
-  "The sentence a deferred acceptance leaves on the Notion page.
+  "The sentence an acceptance leaves on the Notion page when no size lands.
 
    It is what keeps the seam visible. `:squirrel` is not a value the Effort select
    holds, so triage-notion-props writes no Effort at all and the page keeps the
    size it already carried — which reads exactly like a size nobody got round to
-   setting. This says the size is open on purpose, and it names no branch, because
-   in this case none was taken."
-  "Implementation direction left open at triage — the size follows from the design.")
+   setting. This says the size is open on purpose.
+
+   It is about the SIZE and names no branch, because both ways of reaching it are
+   the same fact about the ticket: nobody deferred, and a chosen branch that defers
+   its own size, both leave the sizing to the design record."
+  "Effort left open at triage — the size follows from the design.")
 
 (defn- accepted-report
   "`report` as the acceptance makes it — the ONE route by which a human's choice
    reaches Notion.
 
-   With a `direction`, the branch's own size replaces the report's headline
-   effort. That is the whole of what a choice changes: a size is a consequence of
-   the decision and belongs on the ticket, but WHICH branch was taken is the
-   decision itself, and a decision lives in the acceptance entry. Writing the
-   label into the callout too would put it in a second durable place that nothing
-   afterwards can correct.
+   A chosen `direction` contributes its own size, and that is the whole of what a
+   choice changes here. WHICH branch was taken is the decision itself and lives in
+   the acceptance entry; writing the label into the callout too would put it in a
+   second durable place that nothing afterwards can correct.
 
-   Without one, the callout gains the sentence that says the size is open on
-   purpose. Only this case gets it: a branch a human may pick is a branch that
-   carries a concrete size (report/Direction), so a chosen direction always lands
-   an Effort and never needs the apology.
+   Whether the note goes on is decided by the size that will LAND, not by whether
+   a branch was picked. A direction may itself defer its size — that is a report
+   whose open question is the direction, which is exactly the report worth
+   answering — so choosing one of those leaves the sizing open just as deferring
+   does, and the page has to say so either way.
 
    A report with no `:notion-writes` is returned untouched — there is nothing for
    either half to land on."
   [report direction]
   (if-not (:notion-writes report)
     report
-    (if direction
-      (assoc-in report [:notion-writes :effort] (:effort direction))
-      (update-in report [:notion-writes :description-prepend]
-                 (fn [d] (str (when-not (str/blank? d) (str d "\n\n")) deferred-size-note))))))
+    (let [effort (or (:effort direction) (get-in report [:notion-writes :effort]))]
+      (if (= :squirrel effort)
+        (update-in report [:notion-writes :description-prepend]
+                   (fn [d] (str (when-not (str/blank? d) (str d "\n\n")) deferred-size-note)))
+        (assoc-in report [:notion-writes :effort] effort)))))
 
 (defn- execute-report!
   "Write `report` out and finalize the ticket. Three paths:

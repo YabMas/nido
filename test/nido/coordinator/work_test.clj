@@ -779,34 +779,63 @@
                                (filter #(= :apply (:id %))) first :label))
       "beside branches, accepting without picking one IS deferring the decision"))
 
-(deftest a-report-the-letters-cannot-reach-offers-no-branches-at-all
-  ;; Both bounds are on the WRITE shape, so this bites only on a report stored
-  ;; before they existed. Such a report still reads and still renders; what it
-  ;; must not do is offer a partial row — a seventh branch with no button, or a
-  ;; branch whose size a click could not land.
-  (let [unsized (assoc-in sample-directions [0 :effort] :squirrel)
-        seven   (vec (repeat 7 (first sample-directions)))]
-    (is (= [:apply :dismiss]
-           (map :id (work/gate-actions :triage false nil
-                                       {:report-format :triage-report :directions unsized})))
-        "a branch that defers its own size cannot settle one, so none are lettered")
-    (is (= [:apply :dismiss]
+(deftest a-stored-report-past-the-authoring-cap-is-still-fully-answerable
+  ;; The authoring cap bounds what may be APPENDED and decides nothing about what
+  ;; an already-written report may be answered by. Holding one number for both is
+  ;; what made a tightening reach backwards and strand stored reports.
+  (let [seven (vec (repeat 7 (first sample-directions)))]
+    (is (= [:direction-a :direction-b :direction-c :direction-d :direction-e
+            :direction-f :direction-g :apply :dismiss]
            (map :id (work/gate-actions :triage false nil
                                        {:report-format :triage-report :directions seven})))
-        "and a report past the letter set is answered by none of them rather than
-         by the first six")
+        "every branch it enumerates gets a letter and a button")))
+
+(deftest a-report-past-the-alphabet-is-lettered-by-nothing
+  ;; The one shape that cannot be rendered honestly: the card would letter the
+  ;; first twenty-six and leave the rest described with nothing to pick them by.
+  (let [past (vec (repeat 27 (first sample-directions)))]
+    (is (= [:apply :dismiss]
+           (map :id (work/gate-actions :triage false nil
+                                       {:report-format :triage-report :directions past})))
+        "so none are lettered, and the card falls back to the plain list")
     (is (= "Apply" (->> (work/gate-actions :triage true nil
-                                           {:report-format :triage-report :directions seven})
+                                           {:report-format :triage-report :directions past})
                         (filter #(= :apply (:id %))) first :label))
-        "with nothing lettered there is nothing to defer, so the accept says Apply")))
+        "with nothing lettered there is nothing to defer")))
+
+(deftest a-branch-that-defers-its-own-size-is-still-an-answer
+  ;; The case the first cut got wrong. A report whose sizing is deferred is
+  ;; precisely the one whose DIRECTION is the live question, and one unsized
+  ;; branch used to make the whole report unanswerable — the card lettered three
+  ;; branches and offered no buttons at all.
+  (let [unsized (assoc-in sample-directions [0 :effort] :squirrel)]
+    (is (= [:direction-a :direction-b :apply :dismiss]
+           (map :id (work/gate-actions :triage false nil
+                                       {:report-format :triage-report :directions unsized})))
+        "every branch is offered; the click settles the direction, and the size
+         follows from the design record the impl session writes")
+    (is (= "Round once on the total · size deferred — Move the rounding to the aggregate."
+           (->> (work/gate-actions :triage true nil
+                                   {:report-format :triage-report :directions unsized})
+                (filter #(= :direction-a (:id %))) first :title))
+        "and the hover says the size is open rather than naming the joker")))
+
+(deftest a-label-that-is-just-its-letter-is-not-repeated
+  ;; Reports written while the skill's template showed `:label "A"` are full of
+  ;; them, and a button titled "A · S — …" spends its first word saying what the
+  ;; button already says.
+  (let [lettered (assoc-in sample-directions [0 :label] "A")]
+    (is (= "S — Move the rounding to the aggregate."
+           (->> (work/gate-actions :triage true nil
+                                   {:report-format :triage-report :directions lettered})
+                (filter #(= :direction-a (:id %))) first :title)))))
 
 (deftest accepted-report-is-the-only-route-a-choice-takes-to-notion
   (let [report {:format :triage-report
                 :notion-writes {:effort :squirrel :description-prepend "why it broke"}}
         chosen (#'work/accepted-report report (second sample-directions))]
     (is (= :L (get-in chosen [:notion-writes :effort]))
-        "the branch's own size replaces the deferred one — that is what a human
-         clicks a direction to settle")
+        "the branch's own size replaces the deferred one")
     (is (= "why it broke" (get-in chosen [:notion-writes :description-prepend]))
         "and nothing else the branch carries lands: WHICH branch was taken is the
          decision itself, and a decision lives in the acceptance entry, not in a
@@ -814,19 +843,30 @@
     (is (not (str/includes? (get-in chosen [:notion-writes :description-prepend])
                             "Money type"))
         "the label in particular"))
-  (let [deferred (#'work/accepted-report {:format :triage-report
-                                          :notion-writes {:effort :squirrel
-                                                          :description-prepend "why it broke"}}
-                                         nil)]
-    (is (= :squirrel (get-in deferred [:notion-writes :effort]))
-        "nothing guesses a size to fill the hole")
-    (is (str/includes? (get-in deferred [:notion-writes :description-prepend])
-                       "direction left open")
-        "the page says the size is open on purpose — :squirrel reaches Notion as
-         no Effort at all, which otherwise reads exactly like a size nobody set"))
   (is (= {:format :proposed-ticket}
          (#'work/accepted-report {:format :proposed-ticket} nil))
       "a report with nothing to write to Notion is returned untouched"))
+
+(deftest the-note-follows-the-size-that-lands-not-the-branch-that-was-picked
+  ;; Both ways of reaching it are the same fact about the ticket: nobody deferred,
+  ;; and a chosen branch that defers its own size, both leave the sizing to the
+  ;; design record — and :squirrel reaches Notion as no Effort at all, which
+  ;; otherwise reads exactly like a size nobody set.
+  (let [note?  (fn [r] (str/includes? (get-in r [:notion-writes :description-prepend])
+                                      "Effort left open"))
+        effort (fn [r] (get-in r [:notion-writes :effort]))
+        sq     {:format :triage-report
+                :notion-writes {:effort :squirrel :description-prepend "why it broke"}}
+        sized  (assoc-in sq [:notion-writes :effort] :M)
+        of     (fn [r d] (#'work/accepted-report r d))]
+    (is (= [:S false] ((juxt effort note?) (of sq {:effort :S})))
+        "a sized branch settles it, so there is nothing to apologise for")
+    (is (= [:squirrel true] ((juxt effort note?) (of sq {:effort :squirrel})))
+        "a branch that defers its own size leaves the sizing open, chosen or not")
+    (is (= [:squirrel true] ((juxt effort note?) (of sq nil)))
+        "and so does deferring the decision entirely")
+    (is (= [:M false] ((juxt effort note?) (of sized nil)))
+        "a sized report deferred lands its own size — nothing is open")))
 
 (deftest option-actions-are-not-workstream-less
   (is (empty? (set/intersection @#'work/workstream-less-actions
@@ -1987,7 +2027,7 @@
                     "nothing guesses a size to fill the hole — :squirrel is not a
                      value the Effort select holds")
                 (is (str/includes? (get-in (first @prepended) [:callout :rich_text 0 :text :content])
-                                   "direction left open")
+                                   "Effort left open")
                     "so the page says the size is open on purpose, which is what
                      keeps the seam visible rather than reading as neglect")))
             (let [accepted (:report (work/workstream :brian (:id w) 2))]

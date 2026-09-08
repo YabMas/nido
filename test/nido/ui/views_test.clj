@@ -117,13 +117,20 @@
         deferred    (assoc-in (:report triage-gate) [:notion-writes :effort] :squirrel)]
     (is (str/includes? (effort-line deferred) "the direction you choose")
         "a deferred size beside choosable branches: the click is what sets it")
-    (is (str/includes? (effort-line (assoc deferred :directions [])) "deferred")
+    (is (str/includes? (effort-line (assoc deferred :directions [])) "size deferred")
         "and with no branches there is nothing to set it — the size follows from
          the design, which is what :squirrel means")
     (is (str/includes? (effort-line (assoc-in deferred [:directions 0 :effort] :squirrel))
-                       "deferred")
-        "a report whose branches predate the sized-direction bound offers none, so
-         nothing on the card may promise a click will settle the size")))
+                       "the direction you choose")
+        "a branch that defers its own size is still choosable, so the line still
+         says the choice is what decides — each branch's own size is on the card")))
+
+(deftest a-legacy-letter-label-is-not-rendered-twice
+  ;; Reports written while the skill's template showed `:label "A"` are full of
+  ;; them, and the head read "A A · S".
+  (let [html (views/gate-pane (assoc-in triage-gate [:report :directions 0 :label] "A"))]
+    (is (str/includes? html "<span class=\"option-letter\">A</span><span class=\"meta\">")
+        "the letter chip is followed straight by the meta line, with no <strong>A</strong>")))
 
 (deftest gate-pane-empty-is-calm
   (is (str/includes? (views/gate-pane nil) "Nothing needs you")))
