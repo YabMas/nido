@@ -6,6 +6,8 @@
    [malli.core :as m]
    [nido.platform.core :as core]
    [nido.coordinator.report :as report]
+   [nido.coordinator.record.state :as cstate]
+   [nido.platform.io :as pio]
    [nido.coordinator.record.workstream :as ws]
    [nido.coordinator.lane.pipeline :as p]))
 
@@ -63,6 +65,27 @@
     [id (fn [kind record]
           (ws/append-entry! :brian id {:kind kind} (pr-str record))
           (count (:entries (ws/read-ws :brian id))))]))
+
+(defn- add-past-the-refusal!
+  "Append an entry the ledger would now refuse, by writing what it writes and
+   asking none of its questions.
+
+   For one case, and it is a case this suite has to keep covering: an
+   implementation record on a design nobody granted. `append-entry!` refuses
+   that now — but four workstreams in the live ledgers carry one from before it
+   did, all four of them closed :done, which is what made the refusal worth
+   adding. The projection has to go on reading those correctly long after
+   nothing can write another, so the fixture is built the way history built it
+   rather than through a door that is now shut."
+  [id kind record]
+  (let [w     (ws/read-ws :brian id)
+        seq-n (inc (count (:entries w)))
+        rel   (format "entries/%04d-%s.edn" seq-n (name kind))]
+    (pio/write-text! (str (fs/path (cstate/workstream-dir :brian id) rel))
+                     (pr-str record))
+    (ws/write! (update w :entries conj
+                       {:kind kind :seq seq-n :at "2026-08-21T00:00:00Z" :file rel}))
+    seq-n))
 
 (defn- intent! [add!] (add! :intent {:format :intent :goal "g" :done-when ["d"]}))
 
@@ -573,8 +596,11 @@
                                   :baseline-seq b :reason "holds"})
           (let [d (add! :design (a-design b))]
             (add! :design-decision (a-decision d :proceed))
-            (add! :implementation-completed {:format :implementation-completed
-                                             :summary "done" :artifacts []})
+            ;; Through the back door on purpose: the grant this test is about
+            ;; is exactly what the ledger now demands before it will write one.
+            (add-past-the-refusal! id :implementation-completed
+                                   {:format :implementation-completed
+                                    :summary "done" :artifacts []})
             (add! :pr-opened {:format :pr-opened :url "u" :title "t"})
             (let [r (p/of :brian id)]
               (is (= :design-decided (:at r))

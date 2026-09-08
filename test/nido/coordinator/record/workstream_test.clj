@@ -911,3 +911,72 @@
           (is (nil? (ws/index-drift :brian id))
               "every entry file is named by an index row, so the listing hides nothing")))
       (finally (fs/delete-tree tmp)))))
+
+;; ── Implementing what nobody granted ────────────────────────────────────────
+
+(def ^:private an-implementation
+  {:format    :implementation-completed
+   :summary   "Rounded the total at the aggregate."
+   :artifacts [{:kind :commit :ref "abc1234"}]})
+
+(deftest a-workstream-that-never-designed-may-still-record-an-implementation
+  ;; The guard, and the reason the rule is usable at all. Seven of the eighteen
+  ;; implementation records in the live ledgers are on workstreams carrying no
+  ;; design — scratch work, where the arc was never in play. A rule refusing
+  ;; those enforces nothing and gets switched off.
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :scratch :external-refs []})]
+        (is (some? (ws/append-entry! :brian (:id w) {:kind :implementation-completed}
+                                     (pr-str an-implementation))))))))
+
+(deftest a-design-nobody-granted-refuses-the-implementation-record
+  (with-tmp
+    (fn [_]
+      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+            id (:id w)]
+        (ws/append-entry! :brian id {:kind :baseline} (pr-str a-baseline))   ; 1
+        (seed-intent! w)                                                     ; 2
+        (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 1))) ; 3
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"No approval names the live design \(entry 3\)"
+             (ws/append-entry! :brian id {:kind :implementation-completed}
+                               (pr-str an-implementation)))
+            "designed, never granted, and the refusal names the entry to grant")
+        (is (= 3 (count (:entries (ws/read-ws :brian id))))
+            "refused before anything is written")))))
+
+(deftest a-grant-naming-the-live-design-lets-the-implementation-through
+  (with-tmp
+    (fn [_]
+      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+            id (:id w)]
+        (ws/append-entry! :brian id {:kind :baseline} (pr-str a-baseline))
+        (seed-intent! w)
+        (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 1)))
+        (ws/append-entry! :brian id {:kind :design-approved}
+                          (pr-str {:format :design-approved :design {:seq 3} :at-seq 3}))
+        (is (some? (ws/append-entry! :brian id {:kind :implementation-completed}
+                                     (pr-str an-implementation))))))))
+
+(deftest a-design-superseded-after-its-grant-needs-granting-again
+  ;; The case worth catching rather than an awkward edge: redesigning is how a
+  ;; rejected commitment gets replaced, so an approval carrying over to whatever
+  ;; replaced it would grant the one thing nobody looked at.
+  (with-tmp
+    (fn [_]
+      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+            id (:id w)]
+        (ws/append-entry! :brian id {:kind :baseline} (pr-str a-baseline))
+        (seed-intent! w)
+        (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 1)))  ; 3
+        (ws/append-entry! :brian id {:kind :design-approved}
+                          (pr-str {:format :design-approved :design {:seq 3} :at-seq 3}))
+        (ws/append-entry! :brian id {:kind :design}                              ; 5
+                          (pr-str (assoc (design-citing 1)
+                                         :supersedes {:seq 3 :why "the shape could not hold"})))
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"No approval names the live design \(entry 5\)"
+             (ws/append-entry! :brian id {:kind :implementation-completed}
+                               (pr-str an-implementation)))
+            "the grant names entry 3, and entry 5 is what would be implemented")))))

@@ -380,6 +380,56 @@
                          :named        (mapv :phase orphan)
                          :phases       (vec claims)}))))))
 
+(defn- check-implementation-approved!
+  "Refuse an implementation record on a workstream whose live design nobody
+   granted.
+
+   ONLY when the workstream HAS a design, and that guard is the whole of the
+   rule's aim. Measured across the live ledgers: of the 18 implementation
+   records ever written, 7 are on workstreams carrying no design at all —
+   scratch work and quick fixes, where the design arc was never in play and
+   refusing enforces nothing. A rule without the guard would have refused 13 of
+   the 18 and been switched off in a week, which is the failure `standing`
+   documents for its own supersession rule. With it, the same rule refuses 6
+   records across 4 workstreams, and every one of them is the thing FU-65
+   names: a workstream that designed, never got the design granted, and
+   recorded an implementation anyway.
+
+   All four of those closed :done and three carry a :merged entry, which is
+   what makes this worth a refusal rather than a reading. The projection
+   already reports the gap — `lane.reentry` clamps such a workstream back to
+   :approve-design, and a test asserts it — but a clamp only decides what the
+   position SAYS. Nothing consults it before the next entry, so the arc ran on
+   past it four times and shipped.
+
+   The LIVE design is the latest one, so a design superseded after its approval
+   needs granting again — which is the case worth catching rather than an
+   awkward edge. Redesigning is how a rejected commitment gets replaced, and an
+   approval that carried over to whatever replaced it would grant the one thing
+   nobody looked at.
+
+   This is a NECESSARY condition and not `standing`, which can refuse for four
+   further reasons and which the pipeline already asks before it will say a
+   workstream is owed an implementation at all. It cannot be asked here:
+   `standing` reads this namespace, so asking it back would be a cycle. What
+   this adds is the floor underneath that — the pipeline governs what nido
+   TELLS a session to do, and a person who implements anyway can still be
+   refused the record that would carry the arc past the grant they never got."
+  [w kind]
+  (when (= :implementation-completed kind)
+    (when-let [design (->> (:entries w) (filter #(= :design (:kind %))) last)]
+      (let [granted (->> (:entries w)
+                         (filter #(= :design-approved (:kind %)))
+                         (keep #(get-in (read-entry-at w (:seq %)) [:design :seq]))
+                         set)]
+        (when-not (contains? granted (:seq design))
+          (throw (ex-info (str "No approval names the live design (entry "
+                               (:seq design) ") on " (:id w)
+                               " — grant it from the gate, or supersede it")
+                          {:design    (:seq design)
+                           :granted   (vec (sort granted))
+                           :ws-id     (:id w)})))))))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :Path]}
   append-lock-path
   "The lock that serialises appends to one workstream. Per workstream rather than
@@ -503,6 +553,7 @@
             _     (check-baseline-citation! w (:kind entry) payload)
             _     (check-standing-citations! w (:kind entry) payload)
             _     (check-seam-phase-ref! (:kind entry) payload)
+            _     (check-implementation-approved! w (:kind entry))
             fname (format "%04d-%s.%s" seq-n (name (:kind entry)) ext)
             rel   (str "entries/" fname)
             abs   (str (fs/path (cstate/workstream-dir project ws-id) rel))]
@@ -550,6 +601,7 @@
                 _     (check-baseline-citation! w (:kind entry) payload)
                 _     (check-standing-citations! w (:kind entry) payload)
                 _     (check-seam-phase-ref! (:kind entry) payload)
+            _     (check-implementation-approved! w (:kind entry))
                 fname (format "%04d-%s.%s" seq-n (name (:kind entry)) ext)
                 rel   (str "entries/" fname)
                 abs   (str (fs/path (cstate/workstream-dir project ws-id) rel))]
