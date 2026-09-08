@@ -295,12 +295,20 @@
     "The whole-stack target, told what it has already reported. Without it the composition pass
      re-derives the same seam every round from an empty memory."
     {:signature [:=> [:catn [:targets :any] [:history :any]] :any]})
+  (Operation fix-accounts
+    "Every repair this run landed, grouped by the layer it landed on: the round, the commit,
+     the findings that commit was handed, and what the fixer said. Two readers, which is why
+     it is a step of its own — the target's own layer's entries go to that layer's next
+     reviewer, and ALL of them go to the warden, because a sibling a fixer names in an account
+     is by construction somewhere its own layer's reviewer cannot go."
+    {:signature [:=> [:catn [:history :any]] :any]})
   (Operation with-fix-memory
     "Each target told what a fixer already landed on it in this run, and what the fixer said.
      Nothing else in the loop asks whether a repair closed what it was handed — the reviewer
      that would is shown a diff and no history, so a swept defect comes back at the lines the
      fix was made on."
-    {:signature [:=> [:catn [:targets :any] [:history :any]] :any]})
+    {:signature [:=> [:catn [:targets :any] [:history :any]] :any]
+     :delegates [fix-accounts]})
   (Operation with-sweep-memory
     "Each finding told which earlier rounds already swept its class. A class that comes back
      has disproved the enumerate-the-instances remedy, and the fixer is the reader who could

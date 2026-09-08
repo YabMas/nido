@@ -552,14 +552,75 @@ layers, it is not yours"))
   ;; nothing reads as a repair the reviewer failed to be shown.
   (is (nil? (prompts/prior-fixes-block []))))
 
-(deftest a-long-fixer-account-is-truncated-rather-than-inlined-whole
-  ;; The prompt is otherwise sized by how talkative one agent was. The whole
-  ;; text stays on the fix row in report.json.
+(deftest a-long-fixer-account-keeps-both-of-its-ends
+  ;; An account opens with what the fixer changed and closes with what it could
+  ;; not — the sibling in another layer it was ordered to name rather than
+  ;; touch. Cutting the tail is the one cut that costs a reader anything, and it
+  ;; is the cut a length cap makes by default: one account lost its whole sweep
+  ;; section, and both siblings named in it, to exactly this.
   (let [out (prompts/prior-fixes-block
              [{:round 1 :commit "c1" :findings [{:title "t"}]
-               :account (apply str (repeat 4000 "x"))}])]
-    (is (str/includes? out "…[truncated]"))
-    (is (< (count out) 2500))))
+               :account (str "landed the enum guard"
+                             (apply str (repeat 4000 "x"))
+                             "siblings I did not touch: deploy.yml:211")}])]
+    (is (str/includes? out "landed the enum guard")
+        "what the fixer changed is the head of every account")
+    (is (str/includes? out "siblings I did not touch: deploy.yml:211")
+        "and what it could not reach is the tail — the half a cap silently ate")
+    (is (str/includes? out "chars elided")
+        "a reader has to be able to tell a whole account from a cut one, and that
+         the two halves it is holding are not adjacent")
+    (is (< (count out) 2500)
+        "the prompt is otherwise sized by how talkative one agent was")))
+
+(deftest an-accounts-budget-is-bought-by-the-findings-it-covers
+  ;; An account's length is set by how much the fixer was asked to do. Held flat
+  ;; at one finding's worth, every account of one run — seven, 2001 to 3251
+  ;; chars — was over the cap, including the three-finding one.
+  (let [account (str "opening" (apply str (repeat 2400 "x")) "closing")
+        one (prompts/prior-fixes-block
+             [{:round 1 :commit "c1" :findings [{:title "t"}] :account account}])
+        three (prompts/prior-fixes-block
+               [{:round 1 :commit "c1" :account account
+                 :findings [{:title "a"} {:title "b"} {:title "c"}]}])]
+    (is (str/includes? one "chars elided")
+        "one finding buys one finding's worth")
+    (is (not (str/includes? three "chars elided"))
+        "three repairs to describe is three times the account to describe them in")
+    (is (str/includes? three account)
+        "and it arrives whole, which is what the next reviewer has to check")))
+
+(deftest the-warden-is-shown-every-fixers-account-and-the-layer-it-landed-on
+  ;; A fixer under a sweep is ordered to name any sibling it may not touch, and
+  ;; that text is rendered to the next reviewer OF ITS OWN LAYER — the one
+  ;; reader it is by construction not about. One run ended `clean` with two
+  ;; out-of-layer siblings named in an account, in a file another layer owned,
+  ;; read by nobody.
+  (let [out (prompts/warden-prompt
+             {:findings findings :history []
+              :fixer-accounts
+              [{:layer "github-outcomes" :round 1 :commit "44249c19"
+                :findings [{:title "the hotfix path skips the recorder" :sweep true}]
+                :account (str "closed all three call sites. Siblings I did not "
+                              "touch — outside this change: "
+                              ".github/workflows/deploy_hotfix.yml:211 and :565.")}]})]
+    (is (str/includes? out "WHAT THE FIXERS SAID ABOUT THE REPAIRS THEY LANDED"))
+    (is (str/includes? out "github-outcomes")
+        "the layer is a field the warden reads, because it is being asked to place
+         the account's contents against a DIFFERENT one")
+    (is (str/includes? out "deploy_hotfix.yml:211")
+        "the named sibling is the whole reason this reader gets the account")
+    (is (str/includes? out "[SWEEP]")
+        "a sweep is where an unreachable sibling is expected, not incidental")
+    (is (str/includes? out "name it\n"))
+    (is (str/includes? out "`reason`")
+        "the warden cannot raise a finding, so its reason is where a named and
+         unrepaired sibling reaches a human")))
+
+(deftest a-run-that-has-landed-no-fix-tells-the-warden-nothing-about-accounts
+  ;; An empty heading reads as repairs the warden failed to be shown.
+  (is (not (str/includes? (prompts/warden-prompt {:findings findings :history []})
+                          "WHAT THE FIXERS SAID"))))
 
 (deftest the-warden-is-told-which-findings-a-fixer-refused-and-why
   ;; A fixer that changes nothing leaves the finding at :fix, so without this

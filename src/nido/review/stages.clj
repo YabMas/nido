@@ -352,6 +352,40 @@
   [t]
   (if (and (:stack? t) (not (:composition t))) nil (:label t)))
 
+(defn ^{:malli/schema [:=> [:cat :any] :any]}
+  fix-accounts
+  "Every repair this run landed, grouped by the layer it landed on: the round,
+   the commit, the findings that commit was handed, and what the fixer said.
+
+   Titles come from the round the fix was in rather than from the round asking:
+   a finding is handed by handle-or-id and a later round rewords it, so the
+   words the fixer actually saw are the ones on that round's findings.
+
+   One derivation with two readers, which is the point of it being here rather
+   than inside either. `with-fix-memory` gives a target its own layer's entries;
+   `run-warden-stage` takes all of them, because a sibling a fixer names in an
+   account is by construction somewhere its own layer's reviewer cannot go and
+   the warden is the only reader holding the file lists to place it against."
+  [history]
+  (reduce
+   (fn [acc {:keys [iter fixes findings]}]
+     (let [by-id (into {} (map (juxt #(or (:handle %) (:id %)) identity))
+                       findings)]
+       (reduce (fn [a {:keys [layer commit handed account]}]
+                 (update a layer (fnil conj [])
+                         {:round iter
+                          :commit commit
+                          :account account
+                          :findings (mapv (fn [h]
+                                            (let [f (get by-id h)]
+                                              {:title (or (:title f) h)
+                                               :sweep (boolean (:sweep f))}))
+                                          handed)}))
+               acc
+               fixes)))
+   {}
+   history))
+
 (defn ^{:malli/schema [:=> [:cat :any :any] :any]}
   with-fix-memory
   "Hand each target the repairs a fixer already landed on it in this run.
@@ -368,32 +402,11 @@
    commit is recorded under — except on a branch with no layers, where the two
    sides spell the same thing differently; see `fix-label`.
 
-   Titles come from the round the fix was in rather than from this one: a
-   finding is handed by handle-or-id and a later round rewords it, so the words
-   the fixer actually saw are the ones on that round's findings.
-
    Like `with-composition-memory`, nothing it adds reaches the cache key —
    `with-patch-hashes` builds that from the range, so a value that changes every
    round cannot switch the cache off by living here."
   [targets history]
-  (let [by-label (reduce
-                  (fn [acc {:keys [iter fixes findings]}]
-                    (let [by-id (into {} (map (juxt #(or (:handle %) (:id %)) identity))
-                                      findings)]
-                      (reduce (fn [a {:keys [layer commit handed account]}]
-                                (update a layer (fnil conj [])
-                                        {:round iter
-                                         :commit commit
-                                         :account account
-                                         :findings (mapv (fn [h]
-                                                           (let [f (get by-id h)]
-                                                             {:title (or (:title f) h)
-                                                              :sweep (boolean (:sweep f))}))
-                                                         handed)}))
-                              acc
-                              fixes)))
-                  {}
-                  history)]
+  (let [by-label (fix-accounts history)]
     (if (empty? by-label)
       targets
       (mapv (fn [t]
@@ -1429,13 +1442,30 @@
                  :seen     (seen-findings (:history ctx))
                  ;; Findings are shown separately, and the patch hashes are for
                  ;; the termination check rather than for a reader — a page of
-                 ;; sha256 the warden can do nothing with.
-                 :history  (mapv #(dissoc % :findings :patch-hashes) (:history ctx))
+                 ;; sha256 the warden can do nothing with. The accounts come out
+                 ;; for the same reason and go back in below, rendered: whole and
+                 ;; unlabelled inside this pr-str they were bytes in the prompt
+                 ;; that nothing told the warden to read.
+                 :history  (mapv #(-> %
+                                      (dissoc :findings :patch-hashes)
+                                      (cond-> (:fixes %)
+                                        (update :fixes
+                                                (partial mapv (fn [f] (dissoc f :account))))))
+                                 (:history ctx))
                  :design   (discover-design-record cwd)
                  :stance   (read-stance (first (project+ws-from-cwd cwd)))
                  :toc      (:toc ctx)
                  :parked   (vals (get-in ctx [:carry :parks] {}))
                  :fixer-declines (vals (get-in ctx [:carry :fixer-declines] {}))
+                 ;; Chronological, and flat with the layer named on each row:
+                 ;; the warden is being asked to place an account's contents
+                 ;; against a layer OTHER than the one it is filed under, so the
+                 ;; label has to be a field it reads rather than the grouping it
+                 ;; reads under.
+                 :fixer-accounts (sort-by (juxt :round (comp str :layer))
+                                          (for [[label rows] (fix-accounts (:history ctx))
+                                                row rows]
+                                            (assoc row :layer label)))
                  :answered (answered-by-layer ctx)})
         {:keys [num-turns result-error? result-text] :as launch}
         (agent/launch! {:run-id run-id :cwd cwd

@@ -71,14 +71,46 @@
      "  `judgment` layer owns a decision: weigh it.\n\n")))
 
 (def ^:private fixer-account-chars
-  "How much of a fixer's own account the next round's reviewer is shown.
+  "How much of a fixer's own account a reader is shown, PER FINDING the fixer was
+   handed.
 
    Enough for the summary a fixer ends on — what it changed, and what it could
    not check — and short of the transcript some end on instead. The whole text
    is on the fix row in report.json either way, so the cap costs a reader
    nothing and bounds a prompt that is otherwise sized by however talkative one
-   agent was."
+   agent was.
+
+   Per handed finding rather than per account, because an account's length is
+   set by how much the fixer was asked to do: a batch of three findings is three
+   repairs to describe, and a flat budget spends the same characters on it as on
+   one. Held flat, every account of one run — seven of them, 2001 to 3251 chars
+   — was over the cap."
   1200)
+
+(defn- account-excerpt
+  "A fixer's account, cut to what its handed findings buy — from the MIDDLE, so
+   both ends survive.
+
+   The two ends are the two things worth reading and they say different things:
+   an account opens with what the fixer changed and closes with what it could
+   not — the verification it could not run, the sibling in another layer it was
+   ordered to name rather than touch. What sits between them is transcript.
+   Truncating the tail is therefore the one cut that costs a reader anything,
+   and it is the cut a length cap makes by default: one account lost its whole
+   sweep section, and with it the two out-of-layer siblings it had been told to
+   name there, to a cut at `only the chu|nk`.
+
+   The elision says how much it dropped, so a reader can tell a whole account
+   from a cut one and knows the two halves are not adjacent."
+  [account handed]
+  (let [a (str/trim (str account))
+        budget (* fixer-account-chars (max 1 handed))]
+    (if (<= (count a) budget)
+      a
+      (let [half (quot budget 2)]
+        (str (subs a 0 half)
+             "\n  …[" (- (count a) (* 2 half)) " chars elided]…\n  "
+             (subs a (- (count a) half)))))))
 
 (defn- handed-line
   [{:keys [title sweep]}]
@@ -119,10 +151,7 @@
                       (apply str (map handed-line findings))
                       (when-not (str/blank? (str account))
                         (str "  the fixer says: "
-                             (let [a (str/trim (str account))]
-                               (if (> (count a) fixer-account-chars)
-                                 (str (subs a 0 fixer-account-chars) " …[truncated]")
-                                 a))
+                             (account-excerpt account (count findings))
                              "\n")))))
           (str/join "\n"))
      "\n"
@@ -596,7 +625,10 @@
    survives a sweep is the pre-existing line beside the one just edited. Where a
    sibling is somewhere this fixer may not touch, naming it in the final message
    is what puts it in front of the next round: that text lands on the fix row as
-   `:account` and `prior-fixes-block` renders it to the reviewer.
+   `:account`, and it reaches two readers — `prior-fixes-block` renders it to the
+   next reviewer of this layer, and `fixer-accounts-block` to the warden, which
+   is the only one holding the file lists a sibling in ANOTHER layer can be
+   placed against.
 
    MINIMAL says how much to change, not what may be left broken. For a
    declarative artifact — a spec, a schema, a policy table — the smallest edit
@@ -867,6 +899,60 @@
               (apply str))
          "\n")))
 
+(defn- fixer-accounts-block
+  "Every repair this run landed and what the fixer said about it, addressed to
+   the one reader that can place a sibling in a layer other than the one that
+   landed the fix.
+
+   A fixer under a sweep is ordered to fix its instance, audit the class, and
+   NAME any sibling it may not touch — another layer's, or outside this change —
+   in its final message. That message becomes the fix row's `:account`, and
+   `prior-fixes-block` renders it to the next round's reviewer OF THE SAME
+   LAYER, keyed by the label the fix landed under. So the one sentence in the
+   account that is by construction about somewhere else is delivered to the only
+   reader that cannot act on it. One run ended `clean` with two out-of-layer
+   siblings named in a fix account, in a file another layer owned, read by
+   nobody.
+
+   The warden is the reader with the stack's file lists in front of it, so
+   attributing a named path to a layer is its job here exactly as it is for a
+   finding. It cannot raise a finding — every finding it rules on comes from a
+   reviewer — so what a named-and-unrepaired sibling is worth is a `reason` that
+   says so, and that is what the block asks for.
+
+   The accounts were already in the warden's prompt before this block, whole and
+   unlabelled, inside the `pr-str` of the round history: present in the bytes
+   and absent from anything that told the warden they existed or what a fixer is
+   ordered to put in them."
+  [accounts]
+  (when (seq accounts)
+    (str "WHAT THE FIXERS SAID ABOUT THE REPAIRS THEY LANDED\n"
+         "A fixer told to SWEEP is ordered to fix its instance, audit the class,\n"
+         "and NAME any sibling it may not touch — another layer's, or outside\n"
+         "this change — in its account. The reviewer that reads an account next\n"
+         "round is the one reviewing the layer the fix landed on, so a sibling\n"
+         "somewhere else reaches nobody who can go and look. You hold the file\n"
+         "lists; you are that reader:\n"
+         (->> accounts
+              (map (fn [{:keys [layer round commit findings account]}]
+                     (str "- " (or layer "the branch") ", round " round
+                          (when commit (str ", landed " commit))
+                          (when (seq findings) " — handed:") "\n"
+                          (apply str (map handed-line findings))
+                          (when-not (str/blank? (str account))
+                            (str "  the fixer says: "
+                                 (account-excerpt account (count findings))
+                                 "\n")))))
+              (str/join "\n"))
+         "\n"
+         "These are CLAIMS about code a fixer edited, not a record of the tree.\n"
+         "Two uses. When a finding below sits where an account says a repair did\n"
+         "not reach, that is the same open work and it belongs to the layer whose\n"
+         "files hold those lines — say so in `because`. And a sibling named here\n"
+         "and never repaired is open work with no finding behind it and no\n"
+         "reviewer that will raise it: if you `stop` with one standing, name it\n"
+         "in your `reason`, which is the only place it reaches a human.\n\n")))
+
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   warden-prompt
   "Build the warden prompt. The warden is the only thing in the loop with a
@@ -876,7 +962,8 @@
    Report-only (no tools): everything it reasons from is inlined here. That is
    deliberate and load-bearing. It is the component that decides to interrupt a
    human, so its inputs have to be reconstructable from the report afterwards."
-  [{:keys [findings history design stance toc answered seen parked fixer-declines]}]
+  [{:keys [findings history design stance toc answered seen parked fixer-declines
+           fixer-accounts]}]
   ;; A branch with no layers is reviewed flat, and there is then no layer label
   ;; for a finding to be attributed to. Asked for one anyway, the warden supplied
   ;; the only stack-shaped thing it had — a file path — on every ruling of the
@@ -1001,6 +1088,7 @@
                (apply str))
           "\n"))
    (fixer-declines-block fixer-declines)
+   (fixer-accounts-block fixer-accounts)
    (seen-block seen)
    "History of prior rounds (findings + what was fixed):\n"
    (pr-str history) "\n\n"

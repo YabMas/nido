@@ -1849,6 +1849,35 @@
     (is (= "fixed the enum check; V243 is untouched" (:account prior)))
     (is (nil? (:prior-fixes wiring)) "a layer no fixer touched is told nothing")))
 
+(deftest the-warden-is-shown-the-accounts-of-every-layer-not-just-one
+  ;; with-fix-memory keys accounts by the layer the fix landed on, so the
+  ;; sentence a fixer is ordered to write about somewhere ELSE reaches only the
+  ;; reviewer that cannot go there. The warden holds the file lists; it is the
+  ;; one reader that can place a named path in another layer.
+  (let [captured (atom nil)]
+    (with-redefs [agent/launch! (fn [{:keys [first-message]}]
+                                  (reset! captured first-message)
+                                  {:num-turns 1 :result-error? false
+                                   :result-text "```json\n{\"decision\":\"stop\",\"reason\":\"r\"}\n```"})
+                  stages/discover-design-record (fn [_] nil)
+                  stages/project+ws-from-cwd (fn [_] nil)]
+      ((:run stages/warden-stage)
+       {:config {:cwd "/w" :run-id "r1"} :iter 2 :findings [{:title "x"}]
+        :history [{:iter 1
+                   :fixes [{:layer "github-outcomes" :commit "44249c19" :handed ["h1"]
+                            :account "siblings outside this change: deploy_hotfix.yml:211"}
+                           {:layer "notion-lifecycle" :commit "11fcfa55" :handed ["h2"]
+                            :account "the reopening sweep is unchanged"}]
+                   :findings [{:handle "h1" :title "the recorder is skipped" :sweep true}
+                              {:handle "h2" :title "the window is wrong"}]}]})
+      (is (str/includes? @captured "deploy_hotfix.yml:211")
+          "the account naming a path is what the warden is here to attribute")
+      (is (str/includes? @captured "notion-lifecycle")
+          "every layer's account, not the one whose reviewer would have got it anyway")
+      (is (= 1 (count (re-seq #"deploy_hotfix\.yml:211" @captured)))
+          "and once — the accounts used to ride along whole inside the pr-str of
+           the round history, where nothing told the warden they were there"))))
+
 (deftest a-class-already-swept-is-marked-with-the-rounds-that-swept-it
   ;; A sweep that comes back has disproved its own remedy, and only the run's
   ;; history says so. The fixer starts cold every round, so without this the
