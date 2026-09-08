@@ -1395,6 +1395,125 @@
     (with-redefs [stages/session-stack (fn [_ _] two-layer-stack)]
       (is (nil? (:reshapes ((:run stages/reshape-stage) ctx)))))))
 
+(deftest a-round-that-reshaped-re-pins-the-revision-it-reviewed
+  ;; The reshape rewrites the very commit the round pinned, so a pin left alone
+  ;; makes the fix stage read the loop's own rewrite as an outside rebase and
+  ;; throw the round's repairs away. Two runs ended that way with a fix plan
+  ;; nobody attempted.
+  (let [ctx {:config {:cwd "/w" :base "main"} :iter 1
+             :reviewed-at "THENREV"
+             :findings [{:handle "h-1" :disposition :recut :kind :order-dependence
+                         :layers ["lower" "upper"] :title "t1"}]}]
+    (with-redefs [stages/session-stack (fn [_ _] two-layer-stack)
+                  layers/descends-from? (fn [_ _] true)
+                  layers/reorder! (fn [& _] {:ok? true})
+                  layers/restore-top! (fn [& _] nil)
+                  layers/resolve-rev (fn [_ _] "AFTERREV")]
+      (is (= "AFTERREV" (:reviewed-at ((:run stages/reshape-stage) ctx)))
+          "the reviews still stand — a reshape moves boundaries, not content"))))
+
+(deftest a-reshape-the-stack-refused-re-pins-too
+  ;; `restore-top!` parks a fresh @ whether the attempt was kept or rolled back,
+  ;; and jj drops the empty commit the round pinned either way. Keying the
+  ;; re-pin on the attempt having SUCCEEDED would leave a recut jj refused
+  ;; ending the run on a drift the loop caused.
+  (let [ctx {:config {:cwd "/w" :base "main"} :iter 1
+             :reviewed-at "THENREV"
+             :findings [{:handle "h-1" :disposition :recut :kind :order-dependence
+                         :layers ["lower" "upper"] :title "t1"}]}]
+    (with-redefs [stages/session-stack (fn [_ _] two-layer-stack)
+                  layers/descends-from? (fn [_ _] true)
+                  layers/reorder! (fn [& _] {:ok? false :reason "it conflicts"})
+                  layers/fold! (fn [& _] {:ok? false :reason "it conflicts"})
+                  layers/restore-top! (fn [& _] nil)
+                  layers/resolve-rev (fn [_ _] "AFTERREV")]
+      (let [out ((:run stages/reshape-stage) ctx)]
+        (is (= ["refused"] (mapv :outcome (:reshapes out))))
+        (is (= "AFTERREV" (:reviewed-at out)))))))
+
+(deftest a-tree-that-moved-under-the-round-keeps-its-pin
+  ;; The guard has to stay able to see the rebase it was built for. Re-pinning
+  ;; on the way out regardless would launder an outside rewrite into a tree the
+  ;; round believes its reviewers read, which is the failure the guard exists
+  ;; to prevent rather than the one this re-pin fixes.
+  (let [ctx {:config {:cwd "/w" :base "main"} :iter 1
+             :reviewed-at "THENREV"
+             :findings [{:handle "h-1" :disposition :recut :kind :order-dependence
+                         :layers ["lower" "upper"] :title "t1"}]}]
+    (with-redefs [stages/session-stack (fn [_ _] two-layer-stack)
+                  layers/descends-from? (fn [_ _] false)
+                  layers/reorder! (fn [& _] {:ok? true})
+                  layers/restore-top! (fn [& _] nil)
+                  layers/resolve-rev (fn [_ _] "AFTERREV")]
+      (is (= "THENREV" (:reviewed-at ((:run stages/reshape-stage) ctx)))))))
+
+(deftest a-round-that-reshaped-nothing-does-not-re-pin
+  ;; Nothing moved the working copy, so there is nothing for the pin to follow
+  ;; — and answering the drift guard with a revision no reviewer read is what
+  ;; the pin exists to stop.
+  (let [ctx {:config {:cwd "/w" :base "main"} :iter 1
+             :reviewed-at "THENREV"
+             :findings [{:handle "h-1" :disposition :recut :kind :claim-falsified
+                         :layers ["a" "d"] :title "t1"}]}]
+    (with-redefs [stages/session-stack (fn [_ _] gapped-stack)
+                  layers/descends-from? (fn [_ _] true)
+                  layers/resolve-rev (fn [_ _] "AFTERREV")]
+      (is (= "THENREV" (:reviewed-at ((:run stages/reshape-stage) ctx)))))))
+
+(defn- probe-stack!
+  "A real two-layer jj stack in a temp dir — `main` at the base, `sess--lower`
+   and `sess--upper` above it, and the working copy parked on an empty commit
+   on top, which is the shape the review stage pins `@` from.
+
+   Real jj because the defect is in jj's rules and not in this namespace's: the
+   empty commit `@` sits on is dropped as soon as the working copy moves off
+   it, and that is what takes the round's pin out of `<pinned>::@`."
+  []
+  (let [dir (fs/create-temp-dir {:prefix "nido-reshape-pipeline"})]
+    (jj/jj! dir "git" "init" ".")
+    (spit (str (fs/path dir "base.txt")) "base\n")
+    (jj/jj! dir "commit" "-m" "base")
+    (jj/jj! dir "bookmark" "create" "main" "-r" "@-")
+    (spit (str (fs/path dir "lower.txt")) "lower\n")
+    (jj/jj! dir "commit" "-m" "lower layer")
+    (jj/jj! dir "bookmark" "create" "sess--lower" "-r" "@-")
+    (spit (str (fs/path dir "upper.txt")) "upper\n")
+    (jj/jj! dir "commit" "-m" "upper layer")
+    (jj/jj! dir "bookmark" "create" "sess--upper" "-r" "@-")
+    dir))
+
+(deftest a-round-that-folded-two-layers-still-reaches-its-fixers
+  ;; The interaction no unit test could see: every drift test stubs
+  ;; `descends-from?` and every reshape test drives its stage alone, so the loop
+  ;; folding two layers and then refusing to repair either of them stayed
+  ;; invisible until a run did it — twice, and deterministically, since the
+  ;; reshape stage shipped.
+  (let [dir      (probe-stack!)
+        launched (atom [])
+        ctx      {:config {:cwd dir :base "main" :run-id "r1"} :iter 1
+                  :reviewed-at (layers/resolve-rev dir "@")
+                  :toc []
+                  :findings [{:handle "h-1" :id "h-1" :disposition :recut
+                              :kind :duplicated-across-layers
+                              :layers ["lower" "upper"]
+                              :title "both layers carry the same change"}
+                             {:handle "h-2" :id "h-2" :disposition :fix
+                              :owner-layer "lower" :priority "P2"
+                              :file "lower.txt" :line 1
+                              :title "[P2] the lower layer reads an undefined name"}]}]
+    (try
+      (with-redefs [stages/session-stack (fn [cwd base] (layers/stack cwd "sess" base))
+                    agent/launch! (fn [m] (swap! launched conj m) {:num-turns 0})]
+        (let [reshaped ((:run stages/reshape-stage) ctx)
+              out      ((:run stages/fix-stage) reshaped)]
+          (is (= ["fold"] (mapv :outcome (:reshapes reshaped)))
+              "the fold is the precondition — without it the round never drifts")
+          (is (not= :workspace-drifted (:status out))
+              "the loop's own fold is not somebody else moving the tree")
+          (is (= 1 (count @launched))
+              "the round's one repair was handed to a fixer rather than discarded")))
+      (finally (fs/delete-tree dir)))))
+
 (deftest stance-path-falls-back-to-the-common-stance
   ;; Every project reaches a stance. Before the fallback, a project with no file
   ;; of its own left the relation-honest derivation :underivable — a verdict

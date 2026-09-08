@@ -1743,6 +1743,13 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                           (fn [i [f p]]
                             (when (and (:remedy p) (not (contains? tried (:handle f)))) i))
                           plans))
+            ;; Asked BEFORE anything is attempted, because afterwards it is no
+            ;; whatever happened — see the re-pin below. Only a round that still
+            ;; held the tree its reviewers read may re-pin; one that had already
+            ;; lost it keeps the stale pin, so the fix stage still refuses and
+            ;; still names the revision an outside rebase left.
+            ours? (and pick (:reviewed-at ctx)
+                       (layers/descends-from? cwd (:reviewed-at ctx)))
             done  (when pick (reshape! cwd base (second (nth plans pick))))]
         (when pick (layers/restore-top! cwd (session-stack cwd base)))
         (let [outcomes (vec (map-indexed
@@ -1774,6 +1781,19 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
             ;; carries both and the termination check cannot see one kind and
             ;; not the other.
             true (update-in [:carry :parks] park-refused-recuts outcomes (:iter ctx))
+            ;; The round's pin follows the rewrite this stage just made, or the
+            ;; fix stage reads it as somebody else moving the tree and throws the
+            ;; round's repairs away. `restore-top!` parks a fresh `@` on the
+            ;; stack top and jj drops the empty commit the round pinned, so the
+            ;; pinned revision stops being an ancestor of `@` — which is the one
+            ;; thing the drift guard tests. True of a REFUSED attempt too: the
+            ;; rollback puts that commit back, and moving off it again is what
+            ;; loses it.
+            ;;
+            ;; Re-pinning is honest rather than a way round the guard because a
+            ;; reshape moves boundaries and not content: what `@` holds now is
+            ;; what the reviewers read.
+            ours? (assoc :reviewed-at (layers/resolve-rev cwd "@"))
             pick (update-in [:carry :reshaped] (fnil conj #{})
                             (:handle (first (nth plans pick))))))))))
 
@@ -1954,11 +1974,15 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
           stack (session-stack cwd base)
           plan  (fix-plan stack (with-sweep-memory (:findings ctx) (:history ctx)))]
       (cond
-        ;; The tree moved between the review and the repair. Every finding this
-        ;; round holds was found in a state that is no longer what `@` means, so
-        ;; landing fixes now writes them onto code nobody reviewed. Refusing
-        ;; names both revisions, which is what makes it actionable instead of
-        ;; the `fix-noop` this used to end as.
+        ;; SOMEBODY ELSE moved the tree between the review and the repair. Every
+        ;; finding this round holds was found in a state that is no longer what
+        ;; `@` means, so landing fixes now writes them onto code nobody reviewed.
+        ;; Refusing names both revisions, which is what makes it actionable
+        ;; instead of the `fix-noop` this used to end as.
+        ;;
+        ;; Somebody else, because the loop's own rewrites move the pin with them
+        ;; — `run-reshape-stage` re-pins after it reshapes, and without that this
+        ;; guard fires on every round the reshape stage acted in.
         (and (:reviewed-at ctx) (not (layers/descends-from? cwd (:reviewed-at ctx))))
         (assoc ctx :control :stop :status :workspace-drifted
                :drift {:reviewed-at (:reviewed-at ctx)
