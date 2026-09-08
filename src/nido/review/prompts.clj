@@ -459,6 +459,19 @@
        (str/join "\n")
        (str (asks-heading asks) "\n\n")))
 
+(defn- file-list
+  "A layer's files on one line, capped at twelve with a count of the rest.
+
+   Every block that names a layer's files is a MAP: the reader has to recognise
+   a path it is already holding, not inventory the layer. One sweeping layer
+   with two hundred files would otherwise push every other layer's row, and the
+   instructions under them, out of the reader's reach."
+  [files]
+  (let [shown 12]
+    (str (str/join ", " (take shown files))
+         (when (> (count files) shown)
+           (str " … +" (- (count files) shown) " more")))))
+
 (defn- composition-layer-rows
   "The stack rendered for the composition pass: each layer with the range it
    contributes, the rev of the tree it leaves behind, and what it declared.
@@ -480,10 +493,7 @@
                (when-not (str/blank? (str out-of-scope))
                  (str "   out of scope:  " out-of-scope "\n"))
                (when (seq files)
-                 (str "   touches:       " (str/join ", " (take 12 files))
-                      (when (> (count files) 12)
-                        (str " … +" (- (count files) 12) " more"))
-                      "\n")))))
+                 (str "   touches:       " (file-list files) "\n")))))
        (str/join "\n")))
 
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
@@ -613,6 +623,76 @@
      "  tell which layer to change, and being able to tell is the entire value\n"
      "  of this pass.\n\n")))
 
+(defn- stacked-change-block
+  "Where this fixer is standing in the stack, and which files are not its own.
+
+   Gated on the branch being LAYERED — `stack` is the table of contents, which
+   is empty exactly when there are no layers — and not on the layer having
+   declared anything. Those came apart on a four-layer stack whose layers
+   carried no brief: the fix prompt opened straight at the findings list, so a
+   fixer was addressed as though the branch were flat, and it edited a file the
+   layer above it owns. A layer that claims nothing is still a layer.
+
+   ABOVE and not below, because above is the direction that costs something. A
+   fix lands by rewriting its own layer, so jj rebases every layer above onto
+   the result, and a file two of them touch conflicts there — `run-fix-stage`
+   answers that by restoring the operation, which takes the commit, the edits
+   and everything else the fixer did this round with it. A layer BELOW is
+   already in the tree this fixer stands on; editing what it touched costs
+   nothing.
+
+   The files are what make it actionable. A label alone cannot answer the
+   question the fixer has in front of an edit — is this file somebody else's —
+   which is the same judgement `toc-block` exists to let the warden make.
+
+   A label the toc does not name gets the heading and nothing positional: the
+   reshape stage can rewrite the layers between the review and the repair, and a
+   stale row is worse than no row when the whole point of the row is which files
+   belong to whom."
+  [stack layer]
+  (when (seq stack)
+    (let [pos   (first (keep-indexed #(when (= (:label layer) (:label %2)) %1) stack))
+          above (when pos (drop (inc pos) stack))]
+      (str "YOU ARE FIXING ONE LAYER OF A STACKED CHANGE"
+           (when (:label layer) (str " — " (:label layer)))
+           ".\n"
+           (when pos
+             (str "It is layer " (inc pos) " of " (count stack) ", bottom to top.\n"))
+           (when (seq (:files layer))
+             (str "It touches: " (file-list (:files layer)) "\n"))
+           (when-let [c (:claim layer)]
+             (str "It claims: " c "\n"))
+           (when-let [o (:out-of-scope layer)]
+             (str "It declared OUT OF SCOPE: " o "\n"
+                  "That is a prohibition. Do not fix those things here; another\n"
+                  "layer owns them, and someone has already decided which.\n"))
+           "\n"
+           (cond
+             (nil? pos) nil
+
+             (empty? above)
+             (str "Nothing sits above yours — you are the top layer, so no other\n"
+                  "layer is rebased onto what you land.\n\n")
+
+             :else
+             (str "THE LAYERS ABOVE YOURS, and what each of them touches:\n"
+                  (->> above
+                       (map-indexed
+                        (fn [i {:keys [label files]}]
+                          (str "  " (+ pos i 2) ". " label
+                               (when (seq files) (str " — " (file-list files)))
+                               "\n")))
+                       (apply str))
+                  "\n"
+                  "Your fix lands on your own layer and every layer above is then\n"
+                  "rebased onto it, so a file listed there is NOT yours to edit:\n"
+                  "the rebase conflicts, and the whole attempt — every edit you\n"
+                  "made this round, not just that one — is rolled back and lost.\n"
+                  "If a finding cannot be resolved without touching one of those\n"
+                  "files, do everything else and NAME the file and what it needs\n"
+                  "in your final message. That is what reaches the layer that\n"
+                  "owns it; editing it here reaches nobody.\n\n"))))))
+
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   fix-prompt
   "Instruction to fix the given findings. Do NOT commit — the engine commits.
@@ -624,10 +704,14 @@
    was moved to and why. It was produced every round, stored on the ruling, and
    rendered to nobody.
 
-   The owning layer's brief — what it claims, what it declared out of scope —
-   bounds the edit. Without it \"make the MINIMAL change\" is the only guidance
-   there is, and for a defect that spans a cut the minimal change is a patch on
-   whichever side the finding happened to be reported from.
+   `:stack` is the table of contents — every layer of the branch, bottom→top —
+   and `:layer` is this fixer's own row within it. Together they are the map
+   `stacked-change-block` renders: what this layer claims, what it declared out
+   of scope, and which files belong to the layers above. Without the brief
+   \"make the MINIMAL change\" is the only guidance there is, and for a defect
+   that spans a cut the minimal change is a patch on whichever side the finding
+   happened to be reported from; without the files above, an edit that resolves
+   the finding perfectly can still be thrown away by the rebase.
 
    `:sweep` widens one finding into its family. The warden recognises a recurring
    class unprompted and had no channel to say so, so rounds surfaced its members
@@ -663,7 +747,7 @@
    insists on is an ANSWER too, not a failure to sweep: a class whose members are
    one requirement written out three times has no common source to change, and
    saying so is what lets the loop stop instead of spending a third round on it."
-  [{:keys [findings layer]}]
+  [{:keys [findings layer stack]}]
   (str
    "Fix the following code-review findings in this working directory. Make the\n"
    "MINIMAL change that resolves each. Do NOT commit — the orchestrator commits.\n\n"
@@ -675,16 +759,7 @@
    "longer covers — and the next round finds that as a fresh defect. If restoring\n"
    "consistency would go past what you were asked for, say so in your final\n"
    "message rather than landing the contradiction.\n\n"
-   (when (or (:claim layer) (:out-of-scope layer))
-     (str "YOU ARE FIXING ONE LAYER OF A STACKED CHANGE"
-          (when (:label layer) (str " — " (:label layer))) ".\n"
-          (when-let [c (:claim layer)]
-            (str "It claims: " c "\n"))
-          (when-let [o (:out-of-scope layer)]
-            (str "It declared OUT OF SCOPE: " o "\n"
-                 "That is a prohibition. Do not fix those things here; another\n"
-                 "layer owns them, and someone has already decided which.\n"))
-          "\n"))
+   (stacked-change-block stack layer)
    (->> findings
         (map (fn [f]
                (str "- [P" (:priority f) "] " (:title f) "\n"
@@ -759,9 +834,7 @@
                       (when out-of-scope
                         (str "   out of scope: " out-of-scope "\n"))
                       (when (seq files)
-                        (str "   touches: " (str/join ", " (take 12 files))
-                             (when (> (count files) 12)
-                               (str " … +" (- (count files) 12) " more")) "\n")))))
+                        (str "   touches: " (file-list files) "\n")))))
               (str/join ""))
          "\n")))
 

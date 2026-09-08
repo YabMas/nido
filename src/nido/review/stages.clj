@@ -568,25 +568,37 @@
        :out))
 
 (defn- build-toc
-  "The stack's table of contents — one entry per layer: what it claims, what it
-   declared out of scope, and which files it touches. This is what the warden
-   gets INSTEAD of the other layers' diffs, so it can attribute deliberately
-   without re-deriving them.
+  "The stack's table of contents — one entry per layer, bottom→top: what it
+   claims, what it declared out of scope, and which files it touches. This is
+   what the warden gets INSTEAD of the other layers' diffs, so it can attribute
+   deliberately without re-deriving them, and what a fixer gets so it can tell
+   its own files from the ones a layer above will be rebased over.
+
+   EVERY layer, from the round's targets rather than from its results. Built
+   from the results it named only the layers this round actually reviewed, so a
+   layer that converged and was skipped vanished from the map — a stack of four
+   rendered as two by the third round. That is a lie in the one direction that
+   hurts: a reader is told a layer does not exist exactly when it has gone
+   quiet, and a quiet layer is still in the stack and still owns its files.
 
    `:out-of-scope` is carried because the warden is told it may close a finding
    on the authority `out-of-scope` — \"a layer's Out of scope names it\". Without
    the field, that authority is one the warden can cite but never actually
-   read, which is how a close stops being evidence and becomes a guess."
-  [results]
+   read, which is how a close stops being evidence and becomes a guess.
+
+   The same table `composition-of` builds, minus the revisions. Both read the
+   files off the layer's own range, and the omission is deliberate: see
+   `prompts/composition-layer-rows` for why only one of the two readers is
+   given coordinates."
+  [cwd targets]
   (into []
-        (comp (remove #(:stack? (:target %)))
-              (map (fn [{:keys [target manifest]}]
-                     {:label        (:label target)
-                      :claim        (get-in target [:brief :claims])
-                      :out-of-scope (get-in target [:brief :out-of-scope])
-                      :files        (vec (remove str/blank?
-                                                 (str/split-lines (or manifest ""))))})))
-        results))
+        (comp (remove :stack?)
+              (map (fn [{:keys [label from to brief]}]
+                     {:label        label
+                      :claim        (:claims brief)
+                      :out-of-scope (:out-of-scope brief)
+                      :files        (codex/changed-files cwd from to)})))
+        targets))
 
 (def ^:private cleared-verdict
   "The only correctness answer that clears a target. `review_prompt.md` asks for
@@ -830,10 +842,12 @@
             ;; reviewers over the same code and does not need this; a 0-layer
             ;; target has nothing to cross-check it, so it earns `clean` by
             ;; producing nothing twice in a row rather than once.
-            ;; From this round's own targets, not from ctx: the toc is built
-            ;; below and this branch never reaches it. A round with no layer
-            ;; target reviewed the branch flat.
-            flat?    (empty? (build-toc results))
+            ;; From this round's own results, and deliberately not from the toc
+            ;; even though the toc now answers "is this branch layered". The
+            ;; question here is narrower — how many independent readers passed
+            ;; over this code THIS round — and a layer that converged and was
+            ;; skipped is in the stack while contributing no reviewer to it.
+            flat?    (every? #(:stack? (:target %)) results)
             first-quiet-round? (and flat? (not nothing?)
                                     (not (:quiet-once (:carry ctx))))
             ctx'     (cond-> (assoc ctx :findings [] :reviews results :skipped skipped
@@ -865,7 +879,7 @@
              ;; still being narrowed; see `round-changed?`.
              :patch-hashes (content-hashes all)
              :cache cached
-             :toc (build-toc results)
+             :toc (build-toc cwd all)
              :overall-correctness (round-correctness results)
              :base-rev (:base-rev whole)
              :manifest (:manifest whole)))))
@@ -2143,7 +2157,13 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                          :first-message (prompts/fix-prompt
                                          {:findings findings
                                           :layer (assoc (toc-row (:toc ctx) label)
-                                                        :label label)})
+                                                        :label label)
+                                          ;; The whole stack, not just this
+                                          ;; layer's row: what a fixer must not
+                                          ;; touch lives in the rows ABOVE its
+                                          ;; own, and the row alone cannot say
+                                          ;; where its own sits.
+                                          :stack (:toc ctx)})
                          :budget budget
                          :claude-session-id (layer-fixer-session impl-session-id label)
                          :resume? (worked-before? (:history ctx)

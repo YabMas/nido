@@ -428,6 +428,7 @@ layers, it is not yours"))
   ;; reported from.
   (let [out (prompts/fix-prompt
              {:findings [{:priority 1 :title "t" :body "b"}]
+              :stack a-toc
               :layer {:label "core" :claim "the ledger holds a decision"
                       :out-of-scope "the surface that reads it"}})]
     (is (str/includes? out "It claims: the ledger holds a decision"))
@@ -439,6 +440,64 @@ layers, it is not yours"))
   ;; under it reads as a bound that was checked and found empty.
   (let [out (prompts/fix-prompt {:findings [{:priority 1 :title "t" :body "b"}]})]
     (is (not (str/includes? out "ONE LAYER OF A STACKED CHANGE")))))
+
+(deftest a-layer-that-declared-nothing-is-still-told-it-is-in-a-stack
+  ;; The block used to be gated on the brief, so a stack whose layers carry no
+  ;; Claims and no Out of scope told its fixer nothing about being in a stack at
+  ;; all — which is how one edited a file the layer above it owns.
+  (let [out (prompts/fix-prompt
+             {:findings [{:priority 1 :title "t" :body "b"}]
+              :stack [{:label "bench" :files ["bench.clj" "doc.md"]}
+                      {:label "doc" :files ["doc.md"]}]
+              :layer {:label "bench" :files ["bench.clj" "doc.md"]}})]
+    (is (str/includes? out "ONE LAYER OF A STACKED CHANGE — bench")
+        "a layer that claims nothing is still a layer, and the fixer is standing in one")
+    (is (str/includes? out "It is layer 1 of 2, bottom to top")
+        "which layer it is decides which rows are above it")))
+
+(deftest the-fixer-is-given-the-files-of-the-layers-above-its-own
+  ;; The rollback this exists to stop: the fixer edited a file its own layer and
+  ;; the layer above both touch, the rebase conflicted, and the whole repair was
+  ;; restored away. Nothing in the prompt had named the overlap, though the run
+  ;; had built the map that shows it.
+  (let [out (prompts/fix-prompt
+             {:findings [{:priority 1 :title "t" :body "b"}]
+              :stack [{:label "bench" :files ["bench.clj" "doc.md"]}
+                      {:label "doc" :files ["doc.md"]}]
+              :layer {:label "bench" :files ["bench.clj" "doc.md"]}})]
+    (is (str/includes? out "THE LAYERS ABOVE YOURS"))
+    (is (str/includes? out "2. doc — doc.md")
+        "the file list is the whole point: a label cannot answer whose file this is")
+    (is (str/includes? out "rolled back and lost")
+        "what it costs to edit one is why the fixer should not")
+    (is (str/includes? out "NAME the file and what it needs")
+        "a file it may not touch reaches the layer that owns it only if it is said")))
+
+(deftest the-top-layer-is-told-nothing-is-above-it
+  ;; A block that lists layers above and then lists none reads as a lookup that
+  ;; failed. The top layer has a real answer and it is worth having: nothing is
+  ;; rebased onto its fix, so no file is out of reach.
+  (let [out (prompts/fix-prompt
+             {:findings [{:priority 1 :title "t" :body "b"}]
+              :stack [{:label "core" :files ["a.clj"]}
+                      {:label "wiring" :files ["b.clj"]}]
+              :layer {:label "wiring" :files ["b.clj"]}})]
+    (is (str/includes? out "you are the top layer"))
+    (is (not (str/includes? out "THE LAYERS ABOVE YOURS")))))
+
+(deftest a-layer-the-stack-no-longer-names-gets-no-positional-claim
+  ;; The reshape stage rewrites layers between the review that built this map and
+  ;; the repair that reads it. A row that no longer matches is worse than no row
+  ;; when what the row asserts is which files belong to whom.
+  (let [out (prompts/fix-prompt
+             {:findings [{:priority 1 :title "t" :body "b"}]
+              :stack [{:label "core" :files ["a.clj"]}
+                      {:label "wiring" :files ["b.clj"]}]
+              :layer {:label "folded"}})]
+    (is (str/includes? out "ONE LAYER OF A STACKED CHANGE — folded")
+        "it is still in a stack, and that much is known")
+    (is (not (str/includes? out "bottom to top")))
+    (is (not (str/includes? out "THE LAYERS ABOVE YOURS")))))
 
 (deftest sweep-widens-one-finding-into-its-family
   ;; The warden sees the class and had no field to name it in, so rounds

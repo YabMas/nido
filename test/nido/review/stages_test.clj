@@ -857,6 +857,54 @@
       "a target that read nothing reached no verdict, and a round of them has none
        to publish rather than a clearance nobody gave"))
 
+(deftest the-table-of-contents-names-every-layer-including-the-quiet-ones
+  ;; Built from the round's results, the map shrank as the run proceeded: one
+  ;; four-layer stack rendered as two layers by round three, because the other
+  ;; two had converged and no reviewer ran on them. A reader is then told a
+  ;; layer does not exist exactly when it has gone quiet, and a quiet layer is
+  ;; still in the stack and still owns its files.
+  (with-redefs [layers/patch-hash    (fn [_ _ to] (str "h-" to))
+                codex/merge-base     (fn [& _] "FORK")
+                codex/changed-files  (fn [_ _ to] [(str to ".clj")])
+                stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                cache/read-cache     (fn [& _] {"h-cA" {:status :converged :round 1}})
+                stages/session-stack (fn [& _] [{:bookmark "s--a" :slug "a" :tip "cA"}
+                                                {:bookmark "s--b" :slug "b" :tip "cB"}])
+                layers/brief         (fn [& _] nil)
+                codex/review!        (fn [{:keys [label]}]
+                                       {:status nil
+                                        :findings [{:title (str "f-" label) :file "x.clj"
+                                                    :line-start 1}]})]
+    (let [ctx ((:run stages/review-stage)
+               {:config {:cwd "/w" :base "main" :run-id "r"} :iter 2})]
+      (is (= ["a"] (mapv :label (:skipped ctx)))
+          "the precondition: layer a converged, so this round has no result for it")
+      (is (= ["a" "b"] (mapv :label (:toc ctx)))
+          "the map is of the stack, not of the round that happened to read it")
+      (is (= ["cA.clj"] (:files (first (:toc ctx))))
+          "and a quiet layer's files are exactly what the map is consulted for"))))
+
+(deftest a-fixer-is-told-which-files-the-layer-above-it-owns
+  ;; The round that produced the rollback: the fix prompt carried no stack map,
+  ;; so a fixer edited a file its own layer and the layer above both touch, the
+  ;; rebase of the layer above conflicted, and the whole repair was restored
+  ;; away. The run had already built the map that names the overlap.
+  (let [captured (atom nil)]
+    (with-redefs [agent/launch! (fn [{:keys [first-message]}]
+                                  (reset! captured first-message)
+                                  {:num-turns 0 :result-error? false :result-text ""})
+                  stages/session-stack (fn [& _] [{:bookmark "s--bench" :slug "bench" :tip "cA"}
+                                                  {:bookmark "s--doc" :slug "doc" :tip "cB"}])
+                  jj/jj! (fn [& _] {:out "" :err "" :exit 0})]
+      ((:run stages/fix-stage)
+       {:config {:cwd "/w" :run-id "r1"} :iter 3
+        :toc [{:label "bench" :files ["bench.clj" "doc.md"]}
+              {:label "doc" :files ["doc.md"]}]
+        :findings [{:id "aa11" :title "x" :disposition :fix :owner-layer "bench"}]})
+      (is (str/includes? @captured "THE LAYERS ABOVE YOURS"))
+      (is (str/includes? @captured "2. doc — doc.md")
+          "the file the rollback turned on reaches the fixer as another layer's"))))
+
 (deftest a-flat-branch-earns-clean-by-being-quiet-twice
   ;; One whole-diff pass over an unlayered branch is a sample, not a verdict:
   ;; the round that missed a change's only P1 found one of three pre-existing
