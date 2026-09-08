@@ -104,11 +104,22 @@
    explicitly asking a human for a decision — recorded that request as the
    integer 1, with the request itself reachable only inside report.json.
 
-   `:remaining-handed` says how many of those remaining a fixer already landed a
-   repair for that no round checked. It overlaps `:findings-fixed`, which is a
-   count of work dispatched, and stating the overlap is the point: without it a
-   run reads as `1 fixed · 11 remaining` out of eleven findings, and the arithmetic
-   is only wrong until you know one finding is in both numbers.
+   `:fix-attempts` and `:defects-settled` are two different questions: how much
+   repair work the run dispatched, and how many defects came off the branch
+   because of it. A handle handed out in three rounds is three attempts and at
+   most one defect, so the first can be nearly double the second — and only the
+   second has a later reviewer's silence behind it.
+
+   `:remaining-handed` says how many of the remaining a fixer already landed a
+   repair for that no round checked. It overlaps `:fix-attempts`, and stating the
+   overlap is the point: without it a run reads as `1 dispatched · 11 remaining`
+   out of eleven findings, and the arithmetic is only wrong until you know one
+   finding is in both numbers.
+
+   `:targets-reviewed` and `:targets-skipped` say how much of the stack the
+   verdict above is a verdict ON. A skipped target was converged in an earlier
+   run and not re-opened, so a `clean` over three of eight targets and one over
+   all eight are the same status and very different evidence.
 
    `:remaining-parked` splits the rest of it. A remainder is one of three
    things and they ask opposite things of whoever picks it up: a park is a
@@ -127,7 +138,7 @@
    entry is where they have to be durable: report.json lives in a run dir that
    is routinely reclaimed, and both facts were reachable only inside it. A
    `workspace-drifted` entry named neither revision, and a run that folded two
-   layers said `0 fixed` about a branch it had rewritten."
+   layers reported no work at all about a branch it had rewritten."
   [final report report-path]
   (let [handed   (verdict/handed-to-a-fixer final)
         refused  (refused-repairs final)
@@ -135,6 +146,7 @@
         kept     (ledger-findings #{} (verdict/kept-across-run final))
         repaired (count (filter :handed open))
         parked   (count (filter #(= :park (:disposition %)) open))
+        cover    (report/coverage report)
         ;; Narrowed to what the ledger's closed schema admits. The phase entry
         ;; also carries the warden's handle and the finding's kind, which are
         ;; the report's business — this list exists to say the stack moved.
@@ -145,13 +157,21 @@
              :base               (get-in report [:target :base])
              :base-rev           (get-in report [:target :base-rev])
              :rounds             (or (get-in report [:summary :rounds]) 0)
-             :findings-fixed     (or (get-in report [:summary :findings-fixed]) 0)
+             :fix-attempts       (or (get-in report [:summary :fix-attempts]) 0)
+             :defects-settled    (count (verdict/settled-by-fixing final))
              :findings-remaining (count open)
              :report-path        report-path}
       (seq open)      (assoc :open open)
       (seq kept)      (assoc :kept kept :findings-kept (count kept))
       (pos? repaired) (assoc :remaining-handed repaired)
       (pos? parked)   (assoc :remaining-parked parked)
+      ;; Both or neither, and `0 skipped` is worth saying: it is the entry
+      ;; asserting the whole stack was read this run, which is exactly what a
+      ;; reader cannot otherwise tell from a clean verdict. Only a run that
+      ;; resolved no targets at all — it died before the first fan-out — has
+      ;; nothing to claim here.
+      (pos? (+ (:reviewed cover) (:skipped cover)))
+      (assoc :targets-reviewed (:reviewed cover) :targets-skipped (:skipped cover))
       ;; Why no reviewer ran, when that is how the run ended. The status names
       ;; the condition and this is the only durable copy of what to do about it:
       ;; the report lives in a run dir that is routinely gone by the time anyone
@@ -262,7 +282,8 @@
   [cwd final report report-path config ws-id]
   (let [{:keys [project session]} (or (lifecycle/session-from-cwd cwd) {})
         open   (verdict/open-across-run final)
-        handed (verdict/handed-to-a-fixer final)]
+        handed (verdict/handed-to-a-fixer final)
+        cover  (report/coverage report)]
     (analysis/enqueue!
      (merge
       {:run-id             (:run-id config)
@@ -271,11 +292,14 @@
        :dry-run?           (:dry-run? config)
        :base               (get-in report [:target :base])
        :rounds             (or (get-in report [:summary :rounds]) 0)
-       :findings-fixed     (or (get-in report [:summary :findings-fixed]) 0)
+       :fix-attempts       (or (get-in report [:summary :fix-attempts]) 0)
+       :defects-settled    (count (verdict/settled-by-fixing final))
        :findings-remaining (count open)
        :findings-kept      (count (verdict/kept-across-run final))
        :remaining-handed   (count (filter #(verdict/handed? handed %) open))
        :remaining-parked   (count (filter #(= :park (:disposition %)) open))
+       :targets-reviewed   (:reviewed cover)
+       :targets-skipped    (:skipped cover)
        :reviewed-project   project
        :reviewed-session   session
        :reviewed-ws-id     ws-id}

@@ -8,7 +8,8 @@
 
 (def a-run
   {:run-id "review-abc" :report-path "/r/report.json" :status :converged
-   :base "main" :rounds 3 :findings-fixed 5 :findings-remaining 1
+   :base "main" :rounds 3 :fix-attempts 5 :defects-settled 3 :findings-remaining 1
+   :targets-reviewed 3 :targets-skipped 5
    :reviewed-project :brian :reviewed-session "fix/thing" :reviewed-ws-id "ws-1"})
 
 (deftest the-external-ref-names-its-own-adapter
@@ -25,9 +26,24 @@
   (let [p (analysis/payload a-run)]
     (is (= "converged" (:status p)))
     (is (= 3 (:rounds p)))
-    (is (= 5 (:findings-fixed p)))
+    (is (= 5 (:fix-attempts p)))
+    (is (= 3 (:defects-settled p))
+        "what the run removed travels beside what it dispatched — the two are
+         different sizes, and an analysis grading the loop needs both")
     (is (= 1 (:findings-remaining p)))
     (is (= "/r/report.json" (:report-path p)))))
+
+(deftest the-payload-says-how-much-of-the-stack-was-read
+  ;; A status is a status of something. A `clean` over three targets out of
+  ;; eight and one over all eight reached the analysis identically, and the
+  ;; report that would have said which is in a run dir routinely reclaimed.
+  (let [p (analysis/payload a-run)]
+    (is (= 3 (:targets-reviewed p)))
+    (is (= 5 (:targets-skipped p))))
+  (let [p (analysis/payload (assoc a-run :targets-reviewed 8 :targets-skipped 0))]
+    (is (= 0 (:targets-skipped p))
+        "carried at zero: it is the payload asserting the whole stack was read,
+         which is the claim that cannot be made by saying nothing")))
 
 (deftest the-payload-names-what-the-run-stopped-on
   ;; The run dir is reclaimable and being reclaimed is its normal end state, so
@@ -68,8 +84,10 @@
   (let [p (analysis/payload (assoc a-run :findings-remaining 1 :findings-kept 2))]
     (is (= 1 (:findings-remaining p)))
     (is (= 2 (:findings-kept p))))
-  (is (not (contains? (analysis/payload a-run) :findings-kept))
-      "omitted at zero, like every other optional count on this payload"))
+  (is (= 0 (:findings-kept (analysis/payload a-run)))
+      "carried at zero, unlike the optional counts beside it: a trigger template
+       renders a missing value as the empty string, so an omitted key briefs the
+       analysis as ` · kept` rather than as `0 kept`"))
 
 (deftest the-title-carries-the-parks-and-nothing-else
   ;; The title is what a human reads off the board without opening anything, and

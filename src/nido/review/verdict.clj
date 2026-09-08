@@ -317,9 +317,13 @@
   [fixes]
   (into #{} (comp (mapcat :handed) (remove nil?)) fixes))
 
-(defn- final-rulings
+(defn- fold-rulings
   "Every finding the run raised, folded over all its rounds to one entry each
-   carrying the ruling that stuck, ordered by the round that ruling landed in.
+   carrying the ruling that stuck, ordered by the round that ruling landed in,
+   and split by whether a repair is what ended it:
+
+     :standing — the run's last word on the finding, whatever that word is
+     :repaired — a `:fix` a commit was aimed at and no later round raised again
 
    The final round is the round LEAST likely to hold the run's open items: a
    finding parked in round 1 and never resolved does not appear in round 9's
@@ -330,37 +334,69 @@
    Per identity, the LATEST ruling wins: a cut parked in round 3 and closed in
    round 7 is closed, and only its final disposition is asked about.
 
-   A `:fix` from an earlier round is dropped only where a repair for it actually
-   landed in that round. Then the round after it is the check — if the fix did
-   not take, the next round reports it again and that later report is the one
-   that survives the fold. Where no commit was ever aimed at it, the round after
-   read the same code its predecessor did and had nothing to re-report, so the
-   ruling is the last word on the finding and it is still owed. In the FINAL
-   round there is no round after it either way."
+   A `:fix` from an earlier round is `:repaired` only where a repair for it
+   actually landed in that round. Then the round after it is the check — if the
+   fix did not take, the next round reports it again and that later report is
+   the one that survives the fold. Where no commit was ever aimed at it, the
+   round after read the same code its predecessor did and had nothing to
+   re-report, so the ruling is the last word on the finding and it is still
+   owed. In the FINAL round there is no round after it either way, so nothing
+   raised there is ever `:repaired`.
+
+   That last condition is exactly the evidence a defect was removed, which is
+   why the two halves come out of one fold rather than two: `:standing` is what
+   the run is still holding and `:repaired` is what it settled, and a finding
+   double-counted or dropped between them would make the pair not add up."
   [{:keys [history findings]}]
-  (let [rounds   (conj (vec (map :findings history)) (vec findings))
-        repaired (mapv #(repairs-aimed-at (:fixes %)) history)
-        last-idx (dec (count rounds))
-        latest   (reduce (fn [acc [idx round-findings]]
-                           (reduce (fn [a f]
-                                     (assoc a (finding-identity f)
-                                            (assoc f ::round idx)))
-                                   acc round-findings))
-                         {}
-                         (map-indexed vector rounds))]
-    (->> (vals latest)
-         (remove #(and (= :fix (:disposition %))
-                       (< (::round %) last-idx)
-                       (contains? (get repaired (::round %) #{})
-                                  (or (:handle %) (:id %)))))
-         (sort-by (juxt ::round #(str (:id %))))
-         (mapv #(dissoc % ::round)))))
+  (let [rounds    (conj (vec (map :findings history)) (vec findings))
+        repaired  (mapv #(repairs-aimed-at (:fixes %)) history)
+        last-idx  (dec (count rounds))
+        latest    (reduce (fn [acc [idx round-findings]]
+                            (reduce (fn [a f]
+                                      (assoc a (finding-identity f)
+                                             (assoc f ::round idx)))
+                                    acc round-findings))
+                          {}
+                          (map-indexed vector rounds))
+        repaired? (fn [f] (and (= :fix (:disposition f))
+                               (< (::round f) last-idx)
+                               (contains? (get repaired (::round f) #{})
+                                          (or (:handle f) (:id f)))))
+        ordered   (fn [fs] (->> fs
+                                (sort-by (juxt ::round #(str (:id %))))
+                                (mapv #(dissoc % ::round))))
+        by-fate   (group-by (comp boolean repaired?) (vals latest))]
+    {:standing (ordered (get by-fate false))
+     :repaired (ordered (get by-fate true))}))
+
+(defn- final-rulings
+  "The run's last word on every finding it raised. See `fold-rulings`."
+  [final]
+  (:standing (fold-rulings final)))
+
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  settled-by-fixing
+  "The defects this run REMOVED: findings a fixer was handed a commit for and
+   that no later reviewer raised again. See `fold-rulings`.
+
+   The number a reader takes `N fixed` to mean, and the only one in the run that
+   has evidence behind it. `report/fix-attempts` counts dispatches — a handle
+   handed out in three rounds is three — so a run that repaired two defects and
+   parked two others published `7 fixed`. Here a finding is counted once, and
+   only where the round after it read the repaired code and had nothing to say.
+
+   A run's LAST round can contribute nothing: its repairs are exactly the ones
+   no reviewer has read, which is what `handed-to-a-fixer` is for. So a one-round
+   run settles nothing by fixing however many fixers it launched, and that is the
+   honest answer rather than a gap in the fold."
+  [final]
+  (:repaired (fold-rulings final)))
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   open-across-run
   "Everything the run is still OWED when it ends — a fixer's work nobody
    checked, a question put to a human, a finding no round ruled on. See
-   `final-rulings` for the fold.
+   `fold-rulings` for the fold.
 
    Owed is `stages/settled?`, not `is not closed`. The two differ for a decline
    and for a deviation, and reading the second counts a finding this run's own
@@ -383,7 +419,7 @@
    them not open, and it is also what makes them easy to lose.
 
    The other half of the remainder, and the reason `open-across-run` can afford
-   to be strict about what is owed. Counted together the two are one number that
+   to be strict about what is owed. Counted together they are one number that
    answers neither question a reader has: a park is somebody must decide and a
    decline is somebody already did, and the second is a decision to ship a
    defect, which is precisely the kind of thing a record exists to hold."
@@ -456,7 +492,7 @@
         (not (decision? prior))
         (empty? (open-across-run final))
         (empty? (kept-across-run final))
-        (zero? (or (get-in report [:summary :findings-fixed]) 0)))))
+        (zero? (or (get-in report [:summary :fix-attempts]) 0)))))
 
 (defn ^{:malli/schema [:=> [:cat :map :int] :map]}
   carried-forward

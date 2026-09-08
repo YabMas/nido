@@ -48,17 +48,32 @@
    story of the run if the run dir has been reclaimed by the time the analysis
    gets there — which is the normal end state of a run dir, not an edge case.
 
-   `:remaining-handed` and `:remaining-parked` are carried only when non-zero,
-   so a converged run says nothing rather than 0. They split the remainder into
-   the three things it can be: a repair already in the branch that no round
-   checked, a question put to a human that only a human can answer, and — what
-   is left over — findings no fixer was ever launched for.
+   `:fix-attempts` and `:defects-settled` are two different questions: how much
+   repair work the run sent out, and how many defects a later reviewer's silence
+   confirms came off the branch. A handle handed out in three rounds is three of
+   the first and at most one of the second, so one number for both overstates
+   what the loop achieved by roughly its own persistence.
 
-   `:findings-kept` is beside them rather than inside them. A declined defect
-   and a deviated claim were decided, so they are not owed and not part of the
-   remainder; an analysis still needs to know the run left some, because a run
-   that declines its way to `converged` and one that fixes its way there are the
-   same status and different behaviour.
+   `:targets-reviewed` and `:targets-skipped` say what the status is a status
+   OF. A skipped target was converged in an earlier run and not re-opened, so a
+   `clean` over three of eight targets is mostly a memory — and an analysis
+   grading the loop on a report it may not be able to open cannot recover that
+   from anything else here.
+
+   `:remaining-handed` and `:remaining-parked` are the only counts carried just
+   when non-zero, so a converged run says nothing rather than 0. They split the
+   remainder into the three things it can be: a repair already in the branch that
+   no round checked, a question put to a human that only a human can answer, and
+   — what is left over — findings no fixer was ever launched for.
+
+   `:findings-kept` is beside them rather than inside them, and unlike them it is
+   carried at zero. A declined defect and a deviated claim were decided, so they
+   are not owed and not part of the remainder; an analysis still needs to know
+   the run left some, because a run that declines its way to `converged` and one
+   that fixes its way there are the same status and different behaviour. Zero is
+   the sentence that says which — and a trigger template renders a missing value
+   as the empty string, so an omitted key reaches the analysis as ` · kept`
+   rather than as silence.
 
    The title carries the parks alone out of all of it. It is what a human reads
    off the board without opening anything, and a park is the one count that
@@ -73,8 +88,9 @@
    establishing why one drifted run stopped meant reading the fix stage's source
    against the reshape phase, because the two revisions the refusal is about
    were computed and dropped."
-  [{:keys [run-id report-path status rounds findings-fixed findings-remaining
-           findings-kept remaining-handed remaining-parked unfixable parked
+  [{:keys [run-id report-path status rounds fix-attempts defects-settled
+           findings-remaining findings-kept remaining-handed remaining-parked
+           targets-reviewed targets-skipped unfixable parked
            drift base reviewed-project reviewed-session reviewed-ws-id]}]
   (cond-> {:adapter            :review-run
            :id                 (str run-id)
@@ -89,9 +105,12 @@
            :report-path        report-path
            :status             (name (or status :unknown))
            :rounds             (or rounds 0)
-           :findings-fixed     (or findings-fixed 0)
-           :findings-remaining (or findings-remaining 0)}
-    (pos? (or findings-kept 0))    (assoc :findings-kept findings-kept)
+           :fix-attempts       (or fix-attempts 0)
+           :defects-settled    (or defects-settled 0)
+           :findings-remaining (or findings-remaining 0)
+           :findings-kept      (or findings-kept 0)
+           :targets-reviewed   (or targets-reviewed 0)
+           :targets-skipped    (or targets-skipped 0)}
     (pos? (or remaining-handed 0)) (assoc :remaining-handed remaining-handed)
     (pos? (or remaining-parked 0)) (assoc :remaining-parked remaining-parked)
     (seq unfixable)  (assoc :unfixable (mapv str unfixable))

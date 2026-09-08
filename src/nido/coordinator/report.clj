@@ -1388,14 +1388,25 @@
    [:base               string?]
    [:base-rev           [:maybe string?]]
    [:rounds             int?]
-   [:findings-fixed     int?]
+   ;; How many repairs the run DISPATCHED — one per finding per round it was
+   ;; handed to a fixer in. Not defects fixed, which is the one thing a name with
+   ;; `fixed` in it would be read as: a handle handed out in three rounds is
+   ;; three here and its defect may still be on the branch.
+   [:fix-attempts       int?]
+   ;; How many defects the run REMOVED: a repair was aimed at the finding and no
+   ;; later reviewer raised it again. The number a reader takes the one above to
+   ;; mean, and the only one with evidence behind it — a fixer's own success
+   ;; report is a claim about its work, and the round after it is the check.
+   ;; A run's last round can contribute nothing, so a one-round run settles
+   ;; nothing by fixing however many fixers it launched.
+   [:defects-settled    int?]
    [:findings-remaining int?]
    ;; How many of the remaining a fixer already landed a repair for that no round
-   ;; re-reviewed. It is the overlap between the two counts above, and naming it
-   ;; is what makes them add up: `1 fixed · 11 remaining` out of eleven findings
-   ;; is one finding counted twice, and a run that aborted its fix plan mid-way
-   ;; reported nine findings nobody touched as the same kind of thing.
-   ;; Optional, and omitted at zero: a converged run has no such overlap.
+   ;; re-reviewed. It is the overlap between `:fix-attempts` and the count above,
+   ;; and naming it is what makes them add up: `1 dispatched · 11 remaining` out
+   ;; of eleven findings is one finding counted twice, and a run that aborted its
+   ;; fix plan mid-way reported nine findings nobody touched as the same kind of
+   ;; thing. Optional, and omitted at zero: a converged run has no such overlap.
    [:remaining-handed {:optional true} int?]
    ;; How many of the remaining are questions put to a HUMAN — parked, because
    ;; the finding contradicts a named invariant and the loop has no standing to
@@ -1410,6 +1421,17 @@
    ;; declines its way to `converged` and one that fixes its way there are the
    ;; same status and different behaviour. Optional and omitted at zero.
    [:findings-kept {:optional true} int?]
+   ;; How many targets a reviewer opened this run, and how many the loop declined
+   ;; to re-open because an earlier run had already converged them at this exact
+   ;; patch. The pair is what the status is a status OF: `clean` over three of
+   ;; eight targets and `clean` over all eight were the same entry, and the
+   ;; difference is the whole of what the verdict is worth.
+   ;;
+   ;; Both or neither, and carried at zero — `0 skipped` is the entry asserting
+   ;; the whole stack was read, which is the claim a reader cannot otherwise
+   ;; make. Absent only on a run that resolved no targets at all.
+   [:targets-reviewed {:optional true} int?]
+   [:targets-skipped  {:optional true} int?]
    ;; The remaining findings themselves, not only how many. A count answers
    ;; "did this run finish clean"; it cannot answer "what is it waiting for",
    ;; which for a run that ended holding a park is the only question there is.
@@ -1507,6 +1529,28 @@
    ;; Dormant extension point: no caller populates :summary yet (review-event omits it).
    ;; Kept for a future emitter wanting a one-line human note on the timeline card.
    [:summary            {:optional true} string?]])
+
+(def ReviewReportPreSettled
+  "The shape :review was written in while the dispatch count was called
+   `:findings-fixed` and nothing counted the defects that came off the branch.
+   Every run up to that rename is in it.
+
+   Derived from the current schema rather than copied, because the other 40
+   entries are identical and a second copy of them rots: a status added to the
+   enum, or a field added to a finding, would silently stop applying to every
+   entry written before today. The two count keys ARE the era, and they are the
+   only thing stated here."
+  (-> (into [] (remove #(and (vector? %)
+                             (#{:fix-attempts :defects-settled} (first %))))
+            ReviewReport)
+      (conj [:findings-fixed int?])))
+
+(def ReviewReportAny
+  "The READ contract for :review — dispatched on the count key that was renamed,
+   which is what the era changed."
+  [:multi {:dispatch (fn [r] (if (contains? r :fix-attempts) :current :pre-settled))}
+   [:current     ReviewReport]
+   [:pre-settled ReviewReportPreSettled]])
 
 (def ClassifiedFinding
   "What KIND of thing a finding turned out to be. :baseline is the premise case —
@@ -2138,7 +2182,12 @@
    ;; written before that is under the looser shape, and reads under it — a
    ;; report today's write shape would refuse simply offers no lettered answers
    ;; (work/answerable-directions), rather than vanishing from the pane.
-   :triage TriageReportUnbounded})
+   :triage TriageReportUnbounded
+   ;; `:findings-fixed` became `:fix-attempts` — the count never was defects
+   ;; removed — and `:defects-settled`, which is, joined it as required. Every
+   ;; :review entry written before that rename is in the old shape, and they are
+   ;; the run history of every branch the loop has ever reviewed.
+   :review ReviewReportAny})
 
 (def ^:private compiled-schemas
   "[contract kind] → a delay of the compiled schema that pair validates under,
@@ -2589,24 +2638,37 @@
                         (when because (str "\n  - " because)))))))
 
 (defn- review->markdown [{:keys [status base base-rev rounds findings-fixed
+                                 fix-attempts defects-settled
                                  findings-remaining findings-kept remaining-handed
-                                 remaining-parked report-path
+                                 remaining-parked targets-reviewed targets-skipped
+                                 report-path
                                  summary open kept conflicted drift reshaped
                                  rolled-back]}]
   (str/join "\n"
     (remove nil?
       [(str "# Review: " (name status))
-       ;; The overlap between the two counts, said out loud when there is one.
-       ;; They are not disjoint — a repair landed in the final round is counted
-       ;; as dispatched AND as still owed, because nothing re-read the layer —
-       ;; and a reader given only the pair reads them as a partition.
+       ;; What the run REMOVED leads, and what it dispatched follows in
+       ;; parentheses, because they are different sizes and the first is the one
+       ;; a reader takes "fixed" to mean. An entry written before the rename has
+       ;; only the dispatch count, under the name that overstated it, and renders
+       ;; as that alone — inventing a settled count for it would be this renderer
+       ;; asserting something the record does not say.
+       ;;
+       ;; `:findings-remaining` overlaps the dispatch count — a repair landed in
+       ;; the final round is dispatched AND still owed, because nothing re-read
+       ;; the layer — and a reader given only the pair reads them as a partition.
        ;;
        ;; The remainder is then split by what it wants: a parked finding is
        ;; waiting on a decision only a human can make, a handed one is waiting
        ;; to be checked, and whatever is left is work the run was cut off
        ;; before it reached. One number for all three is what let a run report
        ;; the question it had stopped for as though it were unfinished work.
-       (str findings-fixed " fixed  ·  " findings-remaining " remaining"
+       (str (if fix-attempts
+              (str defects-settled " defect" (when (not= 1 defects-settled) "s")
+                   " settled (" fix-attempts " repair"
+                   (when (not= 1 fix-attempts) "s") " dispatched)")
+              (str findings-fixed " dispatched"))
+            "  ·  " findings-remaining " remaining"
             (let [split (remove nil?
                                 [(when (pos? (or remaining-parked 0))
                                    (str remaining-parked " waiting on you"))
@@ -2619,6 +2681,16 @@
             (when (pos? (or findings-kept 0))
               (str "  ·  " findings-kept " kept"))
             "  ·  " rounds " rounds")
+       ;; What the status above is a status OF. A run that re-read every target
+       ;; says so; one that skipped some names how many, because those carry an
+       ;; earlier run's verdict rather than this one's.
+       (when targets-reviewed
+         (str (if (pos? (or targets-skipped 0))
+                (str targets-reviewed " of " (+ targets-reviewed targets-skipped)
+                     " targets read this run · " targets-skipped
+                     " carried from an earlier run")
+                (str "all " targets-reviewed " target"
+                     (when (not= 1 targets-reviewed) "s") " read this run"))))
        (str "base " base (when base-rev (str "@" base-rev)))
        ;; Directly under the header, because on this status it IS the header's
        ;; content: `workspace-drifted` names a difference between two revisions

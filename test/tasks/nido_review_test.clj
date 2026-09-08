@@ -169,7 +169,7 @@
                                                :disposition :park
                                                :because "no fixer has standing here"}]}]
                 :findings []}
-        report {:summary {:rounds 2 :findings-fixed 3}
+        report {:summary {:rounds 2 :fix-attempts 3}
                 :target  {:base "main" :base-rev "deadbee"}}
         ev     (t/review-event final report "/runs/r/report.json")
         [o]    (:open ev)]
@@ -189,7 +189,7 @@
   ;; --list` reports clean.
   (let [ev (t/review-event {:status :fix-conflicted :history [] :findings []
                             :conflicted ["xuspsuww" "b4927669"]}
-                           {:summary {:rounds 2 :findings-fixed 3}
+                           {:summary {:rounds 2 :fix-attempts 3}
                             :target {:base "main" :base-rev "x"}}
                            "/runs/r/report.json")]
     (is (= ["xuspsuww" "b4927669"] (:conflicted ev)))
@@ -206,7 +206,7 @@
   ;; the conflict is would simply never appear.
   (let [ev (t/review-event {:status :stack-conflicted :history [] :findings []
                             :conflicted ["xlortuwzrtlu" "spxkmpurtnms"]}
-                           {:summary {:rounds 1 :findings-fixed 0}
+                           {:summary {:rounds 1 :fix-attempts 0}
                             :target {:base "main" :base-rev "x"}}
                            "/runs/r/report.json")]
     (is (= ["xlortuwzrtlu" "spxkmpurtnms"] (:conflicted ev)))
@@ -232,7 +232,7 @@
                               :findings [{:id "d74147c1"
                                           :title "the digest is not in the contracts"}]}}}}
         ev    (t/review-event final
-                              {:summary {:rounds 3 :findings-fixed 0}
+                              {:summary {:rounds 3 :fix-attempts 0}
                                :target {:base "main" :base-rev "x"}}
                               "/runs/r/report.json")]
     (is (= [{:layer "a1" :round 3 :commit "27b8d03a"
@@ -256,7 +256,7 @@
   ;; reader.
   (let [ev (t/review-event {:status :converged :history [] :findings []
                             :carry {:rolled-back {}}}
-                           {:summary {:rounds 2 :findings-fixed 1}
+                           {:summary {:rounds 2 :fix-attempts 1}
                             :target {:base "main" :base-rev "x"}}
                            "/runs/r/report.json")]
     (is (not (contains? ev :rolled-back)))))
@@ -361,7 +361,7 @@
                           {:handle "2e7041ab" :id "2e7041ab" :title "nobody reached it"
                            :disposition :fix}]}
         ev    (t/review-event final
-                              {:summary {:rounds 6 :findings-fixed 4}
+                              {:summary {:rounds 6 :fix-attempts 4}
                                :target {:base "main" :base-rev "x"}}
                               "/runs/r/report.json")]
     (is (= ev (report/validate-event :review ev))
@@ -379,7 +379,7 @@
   ;; The counts are omitted at zero rather than carried as 0, so `waiting on
   ;; you` never appears on a run that is waiting on no one.
   (let [ev (t/review-event {:status :converged :history [] :findings []}
-                           {:summary {:rounds 2 :findings-fixed 3}
+                           {:summary {:rounds 2 :fix-attempts 3}
                             :target {:base "main" :base-rev "x"}}
                            "/runs/r/report.json")]
     (is (nil? (:remaining-parked ev)))
@@ -387,11 +387,11 @@
                             "waiting on you")))))
 
 (deftest the-remaining-count-says-how-much-of-it-is-already-repaired
-  ;; `:findings-fixed` counts work dispatched and `:findings-remaining` counts
+  ;; `:fix-attempts` counts work dispatched and `:findings-remaining` counts
   ;; what is owed, and a repair landed in the final round is in BOTH — nothing
   ;; re-read the layer, so it stays open. Given only the pair a reader takes them
-  ;; for a partition: `1 fixed · 11 remaining` out of eleven findings, with the
-  ;; nine no fixer touched reading exactly like the one that was.
+  ;; for a partition: `1 dispatched · 11 remaining` out of eleven findings, with
+  ;; the nine no fixer touched reading exactly like the one that was.
   (let [final {:status  :fix-conflicted
                :history [{:iter 1 :fixed-count 1 :findings []
                           :fixes [{:layer "diary-paging" :commit "d92edf80"
@@ -405,7 +405,7 @@
                           {:handle "4a9816d2" :id "4a9816d2" :title "nobody reached it"
                            :disposition :fix}]}
         ev    (t/review-event final
-                              {:summary {:rounds 1 :findings-fixed 1}
+                              {:summary {:rounds 1 :fix-attempts 1}
                                :target {:base "main" :base-rev "x"}}
                               "/runs/r/report.json")]
     (is (= 2 (:findings-remaining ev)))
@@ -423,7 +423,7 @@
   ;; Zero overlap is the normal case, and a `0 already repaired` on every clean
   ;; run is noise that trains a reader to skip the line where it matters.
   (let [ev (t/review-event {:status :converged :history [] :findings []}
-                           {:summary {:rounds 2 :findings-fixed 3}
+                           {:summary {:rounds 2 :fix-attempts 3}
                             :target {:base "main" :base-rev "x"}}
                            "/runs/r/report.json")]
     (is (not (contains? ev :remaining-handed)))
@@ -447,7 +447,7 @@
                                               :disposition :park}]}]
                :findings []}
         ev    (t/review-event final
-                              {:summary {:rounds 2 :findings-fixed 2}
+                              {:summary {:rounds 2 :fix-attempts 2}
                                :target {:base "main" :base-rev "x"}}
                               "/runs/r/report.json")]
     (is (= 1 (:findings-remaining ev))
@@ -471,7 +471,7 @@
   ;; `0 kept` on every clean run trains a reader to skip the line where it says
   ;; something.
   (let [ev (t/review-event {:status :clean :history [] :findings []}
-                           {:summary {:rounds 1 :findings-fixed 0}
+                           {:summary {:rounds 1 :fix-attempts 0}
                             :target {:base "main" :base-rev "x"}}
                            "/runs/r/report.json")]
     (is (not (contains? ev :kept)))
@@ -481,7 +481,7 @@
 
 (deftest review-event-omits-open-when-nothing-is-owed
   (let [ev (t/review-event {:status :clean :history [] :findings []}
-                           {:summary {:rounds 1 :findings-fixed 0}
+                           {:summary {:rounds 1 :fix-attempts 0}
                             :target {:base "main" :base-rev "x"}}
                            "/runs/r/report.json")]
     (is (= 0 (:findings-remaining ev)))
@@ -490,7 +490,7 @@
 (deftest review-event-derives-verdict-and-counts
   (let [final  {:status :escalated :findings [{:file "a" :line-start 1 :title "x"}
                                               {:file "b" :line-start 2 :title "y"}]}
-        report {:summary {:rounds 3 :findings-fixed 4}
+        report {:summary {:rounds 3 :fix-attempts 4}
                 :target  {:base "main" :base-rev "deadbee"}}
         ev     (t/review-event final report "/runs/r/report.json")]
     (is (= :review-report (:format ev)))
@@ -498,7 +498,7 @@
     (is (= "main" (:base ev)))
     (is (= "deadbee" (:base-rev ev)))
     (is (= 3 (:rounds ev)))
-    (is (= 4 (:findings-fixed ev)))
+    (is (= 4 (:fix-attempts ev)))
     (is (= 2 (:findings-remaining ev)))
     (is (= "/runs/r/report.json" (:report-path ev)))))
 
@@ -507,9 +507,94 @@
                            {:target {:base "main" :base-rev nil}}
                            nil)]
     (is (= 0 (:rounds ev)))
-    (is (= 0 (:findings-fixed ev)))
+    (is (= 0 (:fix-attempts ev)))
+    (is (= 0 (:defects-settled ev)))
     (is (= 0 (:findings-remaining ev)))
     (is (nil? (:base-rev ev)))))
+
+(deftest the-entry-counts-defects-removed-apart-from-repairs-dispatched
+  ;; The two are different sizes and the entry published only the larger, under
+  ;; the name that means the smaller: `:findings-fixed` was the sum of every
+  ;; round's dispatch count, so a handle handed out twice was two "fixed" and
+  ;; its defect could still be on the branch. Here the same handle is dispatched
+  ;; in rounds 1 and 2, repaired in 2, and one other is dispatched once and
+  ;; still reported in the final round.
+  (let [final {:status  :escalated
+               :history [{:iter 1 :fixed-count 1
+                          :findings [{:handle "h1" :id "h1" :title "the stubborn one"
+                                      :disposition :fix}]
+                          :fixes [{:layer "l" :commit "c1" :handed ["h1"]}]}
+                         {:iter 2 :fixed-count 2
+                          :findings [{:handle "h1" :id "h1" :title "the stubborn one"
+                                      :disposition :fix}
+                                     {:handle "h2" :id "h2" :title "raised late"
+                                      :disposition :fix}]
+                          :fixes [{:layer "l" :commit "c2" :handed ["h1" "h2"]}]}]
+               ;; Round 3 re-reports h2 and says nothing about h1: the repair
+               ;; aimed at h1 in round 2 held.
+               :findings [{:handle "h2" :id "h2" :title "raised late"
+                           :disposition :fix}]}
+        ev    (t/review-event final
+                              {:summary {:rounds 3 :fix-attempts 3}
+                               :target {:base "main" :base-rev "x"}}
+                              "/runs/r/report.json")]
+    (is (= 3 (:fix-attempts ev)) "three dispatches over three rounds")
+    (is (= 1 (:defects-settled ev))
+        "one defect actually came off the branch — h1, whose repair the next
+         round read and had nothing to say about")
+    (is (= 1 (:findings-remaining ev))
+        "h2's repair is in the final round, so no reviewer has read it")
+    (is (= ev (report/validate-event :review ev))
+        "the ledger schema is closed; a rejected append is swallowed to stderr")))
+
+(deftest the-entry-says-how-much-of-the-stack-was-read
+  ;; A `clean` over three targets out of eight and one over all eight were the
+  ;; same entry. The difference is whether the verdict was reached this run or
+  ;; remembered from an earlier one, and report.json — which could say — lives
+  ;; in a run dir that is routinely gone before anyone opens the workstream.
+  (let [rpt {:summary {:rounds 1 :fix-attempts 0}
+             :target  {:base "main" :base-rev "x"}
+             :rounds  [{:round 1
+                        :phases [{:phase "review" :status "ok"
+                                  :layers [{:label "one" :status "reviewed"}
+                                           {:label "two" :status "skipped"}
+                                           {:label "three" :status "skipped"}
+                                           {:label "stack" :stack? true
+                                            :status "reviewed"}]}]}]}
+        ev  (t/review-event {:status :clean :history [] :findings []} rpt
+                            "/runs/r/report.json")]
+    (is (= 2 (:targets-reviewed ev)))
+    (is (= 2 (:targets-skipped ev)))
+    (is (= ev (report/validate-event :review ev)))
+    (is (str/includes? (report/report->markdown (assoc ev :format :review-report))
+                       "2 of 4 targets read this run")))
+  ;; A run that never resolved a target claims nothing rather than claiming zero
+  ;; coverage — the second reads as a review that skipped everything.
+  (let [ev (t/review-event {:status :review-failed :history [] :findings []}
+                           {:summary {:rounds 1 :fix-attempts 0}
+                            :target {:base "main" :base-rev "x"}}
+                           "/runs/r/report.json")]
+    (is (not (contains? ev :targets-reviewed)))
+    (is (not (contains? ev :targets-skipped)))))
+
+(deftest a-layer-read-once-is-read-even-if-later-rounds-skip-it
+  ;; Skipped in the round it converged in is how convergence LOOKS; a layer the
+  ;; loop opened at any point this run carries this run's verdict.
+  (let [rpt {:summary {:rounds 2 :fix-attempts 1}
+             :target  {:base "main" :base-rev "x"}
+             :rounds  [{:round 1
+                        :phases [{:phase "review" :status "ok"
+                                  :layers [{:label "one" :status "reviewed"}
+                                           {:label "two" :status "skipped"}]}]}
+                       {:round 2
+                        :phases [{:phase "review" :status "ok"
+                                  :layers [{:label "one" :status "skipped"}
+                                           {:label "two" :status "skipped"}]}]}]}
+        ev  (t/review-event {:status :clean :history [] :findings []} rpt
+                            "/runs/r/report.json")]
+    (is (= 1 (:targets-reviewed ev)))
+    (is (= 1 (:targets-skipped ev))
+        "only the layer no round ever opened is carried from an earlier run")))
 
 (deftest append-review-entry-writes-when-workstream-resolves
   (let [appended (atom nil)]
@@ -520,7 +605,7 @@
                                      "/path")]
       (let [ret (t/append-review-entry! "/w"
                                         {:status :converged :findings []}
-                                        {:summary {:rounds 1 :findings-fixed 0}
+                                        {:summary {:rounds 1 :fix-attempts 0}
                                          :target {:base "main" :base-rev "abc"}}
                                         "/runs/r/report.json")]
         (is (= "ws-1" ret))
@@ -541,7 +626,7 @@
                 csession/workstream-id-for (fn [_ _] "ws-1")
                 ws/append-entry! (fn [& _] (throw (ex-info "disk boom" {})))]
     (is (nil? (t/append-review-entry! "/w" {:status :converged :findings []}
-                                      {:summary {:rounds 1 :findings-fixed 0}
+                                      {:summary {:rounds 1 :fix-attempts 0}
                                        :target {:base "main" :base-rev "abc"}}
                                       "/runs/r/report.json"))
         "a ledger-write failure is swallowed — returns nil, does not throw")))
@@ -1050,7 +1135,7 @@
    the shape the terminal line and the ledger entry both read."
   []
   {:target  {:base "main" :base-rev "deadbee"}
-   :summary {:rounds 4 :findings-fixed 2}
+   :summary {:rounds 4 :fix-attempts 2}
    :rounds  [{:round 2
               :phases [{:phase "reshape"
                         :reshapes [{:handle "a65960a8" :title "the doc-ordering seam"
@@ -1124,7 +1209,7 @@
   ;; status leaves the two numbers nowhere at all.
   (let [ev (t/review-event {:status :workspace-drifted :history [] :findings []
                             :drift {:reviewed-at "8f1c0a3d" :now "2b7e49c1"}}
-                           {:summary {:rounds 4 :findings-fixed 2}
+                           {:summary {:rounds 4 :fix-attempts 2}
                             :target {:base "main" :base-rev "deadbee"}}
                            "/runs/r/report.json")]
     (is (= {:reviewed-at "8f1c0a3d" :now "2b7e49c1"} (:drift ev)))

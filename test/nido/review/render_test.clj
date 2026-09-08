@@ -43,11 +43,15 @@
 (deftest final-lists-findings-and-status
   (let [r (-> running-report
               (assoc :status "converged"
-                     :summary {:rounds 1 :findings-fixed 1 :final-status "converged"}))
+                     :summary {:rounds 1 :fix-attempts 1 :final-status "converged"}))
         s (render/final r)]
     (is (str/includes? s "converged"))
     (is (str/includes? s "src/a.clj:5"))
     (is (str/includes? s "bug"))
+    (is (str/includes? s "1 repair dispatched")
+        "the count is work sent out, not defects removed, and the terminal line
+         is where a human reads it while nothing else has said otherwise yet")
+    (is (not (str/includes? s "1 fixed")))
     (is (str/includes? s "report.json"))))
 
 (deftest plain-line-narrates-transitions

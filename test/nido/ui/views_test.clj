@@ -748,8 +748,9 @@
   "A :review ledger event as work/hydrate hands it to the view: the verdict + counts
    the event carries, plus the :detail read back from the report.json it points at."
   {:format :review-report :at "2026-08-10T12:00:00Z" :status :converged
-   :base "main" :base-rev "be771a41f567abcdef" :rounds 2 :findings-fixed 1
-   :findings-remaining 0 :report-path "/runs/review-1/report.json"
+   :base "main" :base-rev "be771a41f567abcdef" :rounds 2 :fix-attempts 1
+   :defects-settled 1 :findings-remaining 0 :targets-reviewed 2 :targets-skipped 0
+   :report-path "/runs/review-1/report.json"
    :detail {:target {:cwd "/w" :base "main" :files ["src/a.clj" "src/b.clj"]}
             :rounds [{:round 1 :status "continued"
                       :phases [{:phase "review" :status "ok"
@@ -778,9 +779,12 @@
 (deftest workstream-pane-renders-review-rounds-folded
   (let [html (review-pane nil)]
     (is (str/includes? html "converged") "the verdict chip")
-    (is (str/includes? html "2 rounds · 1 fixed · 0 remaining"))
+    (is (str/includes? html "2 rounds · 1 settled (1 dispatched) · 0 remaining"))
     (is (str/includes? html "be771a41f567") "base-rev, abbreviated")
     (is (str/includes? html "2 files changed") "target file count from the report")
+    (is (str/includes? html "all 2 targets read this run")
+        "the chip says `converged`; only this says how much of the stack it is
+         a verdict on, and a card without it reads the same either way")
     (is (str/includes? html "Round 1"))
     (is (str/includes? html "Round 2"))
     ;; a folded round is its shape: what it found, and how it came out
@@ -823,7 +827,7 @@
   (let [html (views/workstream-pane
               (assoc sample-ws :report (dissoc review-report :detail)) {})]
     (is (str/includes? html "converged"))
-    (is (str/includes? html "2 rounds · 1 fixed · 0 remaining"))
+    (is (str/includes? html "2 rounds · 1 settled (1 dispatched) · 0 remaining"))
     (is (str/includes? html "no longer on disk"))
     (is (not (str/includes? html "Round 1")))))
 

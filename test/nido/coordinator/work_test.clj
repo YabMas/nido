@@ -1576,7 +1576,8 @@
   "A :review ledger event pointing at `path` (the review-loop's report.json)."
   [path]
   (pr-str {:format :review-report :status :converged :base "main" :base-rev "abc123"
-           :rounds 2 :findings-fixed 1 :findings-remaining 0 :report-path path}))
+           :rounds 2 :fix-attempts 1 :defects-settled 1 :findings-remaining 0
+           :targets-reviewed 1 :targets-skipped 0 :report-path path}))
 
 (def ^:private review-report-json
   {:schema 1 :run-id "review-1" :status "converged"

@@ -81,6 +81,20 @@
      and what makes them easy to lose: a decision to ship a known defect is precisely what a
      record is for."
     {:signature [:=> [:catn [:final :map]] :any]})
+  (Operation settled-by-fixing
+    "The defects the run REMOVED: findings a repair was aimed at and that no later reviewer
+     raised again.
+
+     The third reading of the one fold, beside `open-across-run` and `kept-across-run`, and
+     the only count of the run's output with evidence under it — a fixer's success report is a
+     claim about its own work, and the round after it is the check. What the loop DISPATCHED
+     is a different and larger number: a handle handed out in three rounds is three repairs
+     and at most one defect, and publishing the first as the second overstates every run by
+     roughly its own persistence.
+
+     A run's last round contributes nothing here by construction: its repairs are exactly the
+     ones nobody has read, which is what `handed-to-a-fixer` is for."
+    {:signature [:=> [:catn [:final :map]] :any]})
   (Operation handed-to-a-fixer
     "The findings a landed fix commit named as its own, across every round.
 

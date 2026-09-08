@@ -249,7 +249,41 @@
                  :history [{:iter 1 :findings []}]
                  :findings [{:handle "h" :title "t" :disposition :fix}]}]
     (is (empty? (verdict/open-across-run earlier)))
-    (is (= ["t"] (mapv :title (verdict/open-across-run latest))))))
+    (is (= ["t"] (mapv :title (verdict/open-across-run latest))))
+    ;; The same rule read the other way round: what leaves the owed list because
+    ;; a repair held is exactly what the run removed.
+    (is (= ["t"] (mapv :title (verdict/settled-by-fixing earlier)))
+        "the round after read the repaired code and had nothing to say, which is
+         the only evidence a defect came off the branch")
+    (is (empty? (verdict/settled-by-fixing latest))
+        "a repair in the final round settles nothing — no reviewer has read it,
+         and counting it is how a run publishes fixes nobody checked")))
+
+(deftest a-repair-that-did-not-take-settles-nothing
+  ;; The fixer reported success and the next round raised the finding again. The
+  ;; later report is the one that survives the fold, so the finding is owed and
+  ;; the dispatch that produced it bought nothing.
+  (let [final {:status :escalated
+               :history [{:iter 1 :fixed-count 1
+                          :fixes [{:layer "core" :commit "c1" :handed ["h"]}]
+                          :findings [{:handle "h" :title "t" :disposition :fix}]}]
+               :findings [{:handle "h" :title "t" :disposition :fix}]}]
+    (is (empty? (verdict/settled-by-fixing final)))
+    (is (= ["t"] (mapv :title (verdict/open-across-run final))))))
+
+(deftest a-finding-nobody-repaired-settles-nothing-however-it-was-ruled
+  ;; Only a repair settles a defect here. A close, a decline and a park are
+  ;; decisions — real outcomes, counted elsewhere — and rolling them into
+  ;; "defects removed" is the same overstatement under a different name.
+  (let [final {:status :converged
+               :history [{:iter 1
+                          :findings [{:handle "a" :title "closed" :disposition :closed
+                                      :authority "duplicate"}
+                                     {:handle "b" :title "declined" :disposition :declined
+                                      :because "the shape is wrong"}]}
+                         {:iter 2 :findings []}]
+               :findings []}]
+    (is (empty? (verdict/settled-by-fixing final)))))
 
 (deftest unruled-findings-do-not-collapse-onto-each-other
   ;; No handle and no id: identity falls back to file/line/title. Keyed on nil
@@ -416,13 +450,13 @@
 
 (deftest a-standing-verdict-answers-a-run-that-moved-nothing
   (let [quiet {:status :clean :findings [] :history []}]
-    (is (verdict/still-answers? standing quiet {:summary {:findings-fixed 0}}))
-    (is (not (verdict/still-answers? nil quiet {:summary {:findings-fixed 0}}))
+    (is (verdict/still-answers? standing quiet {:summary {:fix-attempts 0}}))
+    (is (not (verdict/still-answers? nil quiet {:summary {:fix-attempts 0}}))
         "no prior verdict is nothing to carry, not a licence to skip the pass")))
 
 (deftest a-run-holding-anything-re-derives-the-verdict
   ;; Each of these is evidence the standing verdict was never shown.
-  (let [rpt {:summary {:findings-fixed 0}}]
+  (let [rpt {:summary {:fix-attempts 0}}]
     (is (not (verdict/still-answers?
               standing
               ;; A park raised in round 1 is never raised again, so the final
@@ -441,7 +475,7 @@
         "a defect the branch decided to ship is a real defect the last verdict never saw")
     (is (not (verdict/still-answers?
               standing {:status :converged :findings [] :history []}
-              {:summary {:findings-fixed 2}}))
+              {:summary {:fix-attempts 2}}))
         "a fixer edits code, and a repair that moves a boundary is what this pass exists to catch")))
 
 (deftest a-decision-is-re-asked-rather-than-re-asserted
@@ -449,7 +483,7 @@
   ;; Carrying one unlooked-at would escalate every run over a design that may
   ;; since have been repaired in the code.
   (let [quiet {:status :clean :findings [] :history []}
-        rpt   {:summary {:findings-fixed 0}}]
+        rpt   {:summary {:fix-attempts 0}}]
     (is (not (verdict/still-answers?
               (assoc standing :verdict :invalidated
                      :invariants-broken [{:invariant "i" :finding "f"}])
@@ -481,7 +515,7 @@
                   agent/launch! (fn [_] (reset! launched true) {:num-turns 1 :result-text ""})]
       (let [v (verdict/run! {:cwd "/w" :run-id "r" :budget "30m"
                              :final {:status :clean :findings [] :history []}
-                             :report {:summary {:rounds 2 :findings-fixed 0}}})]
+                             :report {:summary {:rounds 2 :fix-attempts 0}}})]
         (is (false? @launched) "the minutes an agent costs are the whole point of the carry")
         (is (= 12 (:carried-from v)))
         (is (= 2 (:round v)))))))
@@ -501,7 +535,7 @@
                              :final {:status :escalated
                                      :findings [{:title "t" :body "b" :disposition :park}]
                                      :history []}
-                             :report {:summary {:rounds 3 :findings-fixed 0}}})]
+                             :report {:summary {:rounds 3 :fix-attempts 0}}})]
         (is (str/includes? @seen "reconcile the indicator with the header badge")
             "the judge that does run is still shown what it already concluded")
         (is (= :strained (:verdict v)))

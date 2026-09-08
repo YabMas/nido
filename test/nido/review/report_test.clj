@@ -222,7 +222,7 @@
             {:event :run-finalized :status :clean :ctx {} :at "t3"}])]
     (is (= "clean" (:status (first (:rounds r)))))
     (is (= "clean" (:status r)))
-    (is (= {:rounds 1 :findings-fixed 0 :final-status "clean"} (:summary r)))))
+    (is (= {:rounds 1 :fix-attempts 0 :final-status "clean"} (:summary r)))))
 
 (deftest a-round-that-read-nothing-is-not-clean
   ;; Both rounds end with an empty finding list; only one of them had a reviewer
@@ -275,7 +275,7 @@
         r2-fix (->> (:rounds r) second :phases (some #(when (= "fix" (:phase %)) %)))]
     (is (nil? (:commit r2-fix)) "round-2 noop fix must not inherit round-1's commit")
     (is (nil? (:fixed-count r2-fix)) "round-2 noop fix has no fixed-count")
-    (is (= 2 (:findings-fixed (:summary r))) "summary counts only the one real fix")))
+    (is (= 2 (:fix-attempts (:summary r))) "summary counts only the one real fix")))
 
 (deftest persist!-writes-atomic-valid-json
   (let [dir (str (fs/create-temp-dir))

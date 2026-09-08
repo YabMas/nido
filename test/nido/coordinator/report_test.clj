@@ -551,9 +551,20 @@
    :base "main"
    :base-rev "a1b2c3d"
    :rounds 2
-   :findings-fixed 3
+   :fix-attempts 3
+   :defects-settled 2
    :findings-remaining 0
+   :targets-reviewed 3
+   :targets-skipped 5
    :report-path "/Users/x/.nido/runs/review-abc/report.json"})
+
+;; A :review entry as it was written while the dispatch count was called
+;; `:findings-fixed` — the shape of every review the loop recorded before the
+;; rename.
+(def ^:private pre-settled-review
+  (-> valid-review
+      (dissoc :fix-attempts :defects-settled :targets-reviewed :targets-skipped)
+      (assoc :findings-fixed 3)))
 
 (deftest validate-event-accepts-review
   (is (= valid-review (report/validate-event :review valid-review))))
@@ -569,12 +580,42 @@
 (deftest review-allows-nil-base-rev-and-report-path
   (is (report/validate-event :review (assoc valid-review :base-rev nil :report-path nil))))
 
+(deftest a-review-written-before-the-rename-still-reads
+  (is (= pre-settled-review (report/parse-event :review pre-settled-review))
+      "every review the loop has ever recorded is in this shape; a read contract
+       that refuses it deletes the run history of every branch from the panes")
+  (is (thrown? clojure.lang.ExceptionInfo
+               (report/validate-event :review pre-settled-review))
+      "readable is not writable — a new entry must carry the count that says
+       what the run removed"))
+
 (deftest report->markdown-review-has-verdict-and-counts
   (let [md (report/report->markdown valid-review)]
     (is (str/includes? md "Review"))
     (is (str/includes? md "converged"))
-    (is (str/includes? md "3 fixed"))
+    (is (str/includes? md "2 defects settled")
+        "what the run removed leads; it is what a reader takes the headline to mean")
+    (is (str/includes? md "3 repairs dispatched")
+        "the work dispatched is kept, in parentheses, because it is what the
+         remainder count overlaps")
+    (is (str/includes? md "3 of 8 targets read this run")
+        "a clean verdict over three of eight targets is mostly a memory, and the
+         entry is where that has to survive the run dir being reclaimed")
     (is (str/includes? md "report.json"))))
+
+(deftest report->markdown-review-says-when-the-whole-stack-was-read
+  (is (str/includes? (report/report->markdown
+                      (assoc valid-review :targets-reviewed 4 :targets-skipped 0))
+                     "all 4 targets read this run")
+      "0 skipped is a claim worth making, not a number worth hiding"))
+
+(deftest report->markdown-review-from-before-the-rename-invents-nothing
+  (let [md (report/report->markdown pre-settled-review)]
+    (is (str/includes? md "3 dispatched")
+        "the old entry holds a dispatch count and nothing else; rendering it as
+         defects settled would be the reader asserting what the record does not say")
+    (is (not (str/includes? md "settled")))
+    (is (not (str/includes? md "targets read this run")))))
 
 (deftest report-title-review
   (is (= "Review: converged" (report/report-title valid-review))))

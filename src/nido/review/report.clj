@@ -454,21 +454,56 @@
                          row))
                      (vec rows)))))))
 
-(defn- total-handed-to-fixers
-  "How many findings were HANDED to a fixer across the run — not how many were
-   verified fixed, which is a fact no stage in the loop produces.
+(defn- fix-attempts
+  "How many repairs the run DISPATCHED — one per finding per round it was handed
+   to a fixer in, so a finding handed out in three rounds counts three times.
 
-   A fixer reporting success is a fixer's claim about its own work. What turns
-   that into evidence is the next round re-reviewing the layer and not raising
-   the finding again, and a run's LAST fix round has no such round after it. The
-   number is honest as a count of work dispatched and dishonest as a count of
-   defects removed, so it is named for the first."
+   Not how many defects were removed, which is a fact no stage in the loop
+   produces. A fixer reporting success is a fixer's claim about its own work;
+   what turns that into evidence is the next round re-reviewing the layer and
+   not raising the finding again, and a run's LAST fix round has no such round
+   after it. `verdict/settled-by-fixing` is the count with that evidence behind
+   it.
+
+   The name is load-bearing, and the obvious one is a lie: anything with `fixed`
+   in it reads as defects removed, and this is nearly double that on any run
+   whose findings took more than one round to settle. Publish it under such a
+   name and every reader downstream — a ledger entry, a dashboard card, an
+   analysis — states it as work the run finished."
   [report]
   (->> (:rounds report)
        (mapcat :phases)
        (filter #(= "fix" (:phase %)))
        (keep :fixed-count)
        (reduce + 0)))
+
+(defn ^{:malli/schema [:=> [:cat :ReviewReport] :map]}
+  coverage
+  "How much of the stack this run READ, as `{:reviewed n :skipped n}` over
+   distinct target labels — the composition pass included, since it is a target
+   like any other.
+
+   A skipped target is one the convergence cache already held at this exact
+   patch, so the loop declined to re-open it: the verdict on it is remembered
+   from an earlier run rather than reached in this one. Skipped in EVERY round
+   is what counts as skipped, because a layer re-read once and converged after
+   was read here.
+
+   The pair is what separates a branch reviewed clean from one mostly remembered
+   clean. Without it a `clean` verdict over three targets out of eight is
+   recorded identically to one over all eight, and the difference is the whole of
+   what the verdict is worth. It is derived from the report rather than from the
+   terminal ctx for the same reason `applied-reshapes` is — a ctx holds the round
+   it is in, and this is a question about the run."
+  [report]
+  (let [by-label (->> (:rounds report)
+                      (mapcat :phases)
+                      (filter #(= "review" (:phase %)))
+                      (mapcat :layers)
+                      (group-by :label))
+        read?    (fn [[_ rows]] (boolean (some #(not= "skipped" (:status %)) rows)))]
+    {:reviewed (count (filter read? by-label))
+     :skipped  (count (remove read? by-label))}))
 
 (defn- finalize
   [report status ctx at]
@@ -477,9 +512,9 @@
            :status   s
            :ended-at at
            :reason   (stopped-on ctx)
-           :summary  {:rounds         (count (:rounds report))
-                      :findings-fixed (total-handed-to-fixers report)
-                      :final-status   s})))
+           :summary  {:rounds       (count (:rounds report))
+                      :fix-attempts (fix-attempts report)
+                      :final-status s})))
 
 ;; ---- fold ----------------------------------------------------------------
 

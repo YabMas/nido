@@ -110,6 +110,17 @@
      exists: a context is rebuilt each round, so a fold made in round 2 is forgotten by the
      time a round 5 ends. The report is the only value that remembers the run."
     {:signature [:=> [:catn [:report ReviewReport]] [:sequential :map]]})
+  (Operation coverage
+    "How much of the stack the run READ — targets a reviewer opened, against targets
+     carried from an earlier run's convergence.
+
+     What a status is a status OF. `clean` over three targets out of eight and `clean` over
+     all eight are the same word and different evidence, and every reader downstream of the
+     run dir — a ledger entry, an analysis briefing — had no way to tell them apart.
+
+     Over the report for the same reason `applied-reshapes` is: a skip is decided per round
+     and the question is about the run."
+    {:signature [:=> [:catn [:report ReviewReport]] :map]})
   (Operation apply-event "The report with one event folded in. Pure."
     {:signature [:=> [:catn [:report ReviewReport] [:event :map]] ReviewReport]})
   (Operation with-verdict

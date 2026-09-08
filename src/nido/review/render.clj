@@ -364,8 +364,13 @@
            (str/join "\n" (map finding-line findings))
            "    (none)")
          "\n\n  Status: " (:status report)
+         ;; "repair(s) dispatched", not "fixed": the count is one per finding
+         ;; per round it was handed out in, and nothing in the run verified any
+         ;; of them. `fate-tally` on the next line is what says how they ended.
          (when-let [s (:summary report)]
-           (str "  ·  " (:rounds s) " round(s), " (:findings-fixed s) " fixed"))
+           (let [n (or (:fix-attempts s) 0)]
+             (str "  ·  " (:rounds s) " round(s), "
+                  n " repair" (when (not= 1 n) "s") " dispatched")))
          (fate-tally findings)
          "\n  Full report: <run-dir>/report.json")))
 

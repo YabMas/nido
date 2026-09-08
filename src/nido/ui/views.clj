@@ -1355,8 +1355,9 @@
    reading position, so the 3s poll re-renders them exactly as the reader left
    them. A nil `pos` (the gate pane, which has no such position) renders every
    round unfolded: with nothing to click, the detail has to be on the page."
-  [{:keys [status base base-rev rounds findings-fixed findings-remaining
-           findings-kept remaining-handed report-path summary detail]} pos]
+  [{:keys [status base base-rev rounds findings-fixed fix-attempts defects-settled
+           findings-remaining findings-kept remaining-handed
+           targets-reviewed targets-skipped report-path summary detail]} pos]
   (let [cwd    (get-in detail [:target :cwd])
         files  (get-in detail [:target :files])
         rounds* (:rounds detail)
@@ -1365,17 +1366,25 @@
      [:h2 "Review"]
      [:div.report-meta
       (review-chip (get review-status-tone status :warn) (name status))
-      ;; The two counts overlap, and the third says by how much: a repair landed
-      ;; in the final round counts as dispatched and as still owed, since nothing
-      ;; re-read the layer. Shown only when there is an overlap to state.
+      ;; Defects removed leads and repairs dispatched follows, because they are
+      ;; different sizes and only the first has a later reviewer's silence
+      ;; behind it. An entry from before the rename carries only the dispatch
+      ;; count and shows that alone.
       ;;
-      ;; `kept` is a fourth number rather than part of `remaining`: a declined
+      ;; `remaining` overlaps the dispatch count, and the parenthesis says by
+      ;; how much: a repair landed in the final round is dispatched and still
+      ;; owed, since nothing re-read the layer.
+      ;;
+      ;; `kept` is its own number rather than part of `remaining`: a declined
       ;; defect was decided, so the branch owes nothing on it and nobody should
       ;; be sent to look. It is shown at all because deciding to ship a defect
       ;; is a fact about the branch, and a card that omits it reads identically
       ;; to one where the reviewers found nothing.
       [:span.meta rounds " round" (when (not= 1 rounds) "s")
-       " · " findings-fixed " fixed · " findings-remaining " remaining"
+       " · " (if fix-attempts
+               (str defects-settled " settled (" fix-attempts " dispatched)")
+               (str findings-fixed " dispatched"))
+       " · " findings-remaining " remaining"
        (when (pos? (or remaining-handed 0))
          (str " (" remaining-handed " already repaired, unverified)"))
        (when (pos? (or findings-kept 0))
@@ -1383,7 +1392,17 @@
      [:p.meta "base " base
       (when base-rev (str " @ " (subs base-rev 0 (min 12 (count base-rev)))))
       (when (seq files) (str " · " (count files) " file"
-                             (when (not= 1 (count files)) "s") " changed"))]
+                             (when (not= 1 (count files)) "s") " changed"))
+      ;; What the verdict is a verdict on. A skipped target carries an earlier
+      ;; run's answer, so a chip reading `clean` over three of eight targets and
+      ;; one over all eight are the same chip and different evidence.
+      (when targets-reviewed
+        (str " · " (if (pos? (or targets-skipped 0))
+                     (str targets-reviewed " of "
+                          (+ targets-reviewed targets-skipped)
+                          " targets read this run")
+                     (str "all " targets-reviewed " target"
+                          (when (not= 1 targets-reviewed) "s") " read this run"))))]
      (when summary (md/render summary))
      (if (seq rounds*)
        (into [:div.rv-rounds]
