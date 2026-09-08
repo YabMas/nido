@@ -132,6 +132,39 @@
   (let [out (prompts/warden-prompt {:findings findings :history [] :design design})]
     (is (str/includes? out "is read as `fix`"))))
 
+(deftest the-sweep-criterion-is-on-the-field-the-warden-writes-it-in
+  ;; `sweep` is the one field a warden can answer without deciding — an omitted
+  ;; boolean is false — so a criterion thirty-five lines below the field is a
+  ;; criterion the default never meets. One run's warden wrote a `because`
+  ;; granting a sweep and emitted the field false; the fixer was told nothing
+  ;; and the class stayed open.
+  (let [out    (prompts/warden-prompt {:findings findings :history [] :design design})
+        schema (subs out 0 (str/index-of out "Every finding below"))]
+    (is (str/includes? schema "could fail this same")
+        "the question is asked where the value is written, not in a later section")
+    (is (str/includes? schema "Unsure is true")
+        "the tie-break too — a warden that never reads the section never reads it")))
+
+(deftest a-sweep-asks-about-the-class-not-about-a-sibling-already-named
+  ;; A warden withheld a sweep because the finding's own prose said the
+  ;; neighbouring window was already covered, so it asked whether a sibling was
+  ;; KNOWN. Round 2 then found a different hole in the same claim clause, in the
+  ;; same job of the same file, and cost 18 minutes of fan-out to do it.
+  (let [out (prompts/warden-prompt {:findings findings :history [] :design design})]
+    (is (str/includes? out "not about whether a sibling is")
+        "an unenumerated class is exactly the one worth sweeping")
+    (is (not (str/includes? out "one INSTANCE of a defect"))
+        "asking whether this IS an instance invites counting the ones already visible")))
+
+(deftest a-because-cannot-grant-a-sweep-the-field-denies
+  ;; The fixer's SWEEP block renders on the field alone, so the prose is not a
+  ;; second channel — a ruling whose sentence orders an audit over a field that
+  ;; says false leaves an account claiming a class was closed that nothing swept.
+  (let [out (prompts/warden-prompt {:findings findings :history [] :design design})]
+    (is (str/includes? out "`sweep` and `because` are one ruling"))
+    (is (str/includes? out "your sentence is not read for it")
+        "the warden cannot otherwise know its prose is decorative here")))
+
 (deftest warden-prompt-assigns-a-composition-finding-to-the-highest-layer
   (let [out (prompts/warden-prompt {:findings findings :history [] :design design
                                     :toc a-toc})]

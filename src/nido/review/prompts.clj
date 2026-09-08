@@ -1083,7 +1083,18 @@
    (clojure.string/join "|" (values-for :authority))
    "\",\n"
    "               \"of\": \"<the claim a deviation departs from>\",\n"
-   "               \"sweep\": <true if this is one instance of a recurring class>,\n"
+   ;; The criterion rides on the field rather than in the SWEEP section below,
+   ;; because `sweep` is the one field a warden can answer without deciding: an
+   ;; omitted boolean is `false`, so the default is a ruling nobody made. Two
+   ;; runs paid for that — one warden wrote a `because` granting a sweep and
+   ;; emitted the field false, another withheld a sweep on the ground that no
+   ;; sibling was named yet and spent a whole round on the sibling.
+   "               \"sweep\": <true when the layer's claim could fail this same\n"
+   "                         way at another site — a question about the\n"
+   "                         defect's CLASS, not about whether a sibling is\n"
+   "                         already named. Unsure is true: a needless sweep\n"
+   "                         costs one fixer some reading, a missed one costs\n"
+   "                         a round>,\n"
    "               \"because\": \"<one sentence>\"}]}\n"
    "Every finding below must appear exactly once.\n\n"
    "DECISION:\n"
@@ -1119,14 +1130,16 @@
       "the observation itself: `deviation` against the claim it departs from, or\n"
       "`park` when it contradicts a named invariant. Either leaves a human\n"
       "something to read.\n\n"))
-   "SWEEP — is this one of many?\n"
-   "Set `sweep` true on a `fix` when the finding is one INSTANCE of a defect\n"
-   "class rather than a one-off: the same mistake made at several call sites,\n"
-   "the same guard missing in several places. The fixer is otherwise told to make\n"
-   "the minimal change, so it repairs the one line it was handed and the next\n"
-   "round finds the next instance — ten rounds for ten instances of one defect.\n"
-   "With `sweep` it is told to fix this one and then audit its layer for the\n"
-   "siblings. You are the reader that sees the class; nothing else can.\n\n"
+   "SWEEP — what it buys, and what your sentence has to match\n"
+   "The criterion is on the field above; this is what turns on it. The fixer is\n"
+   "otherwise told to make the minimal change, so it repairs the one line it was\n"
+   "handed and the next round finds the next instance — ten rounds for ten\n"
+   "instances of one defect. With `sweep` it fixes this one and then audits for\n"
+   "the rest. You are the reader that sees the class; nothing else can.\n"
+   "`sweep` and `because` are one ruling. The fixer is told to sweep by the\n"
+   "FIELD — your sentence is not read for it — so a `because` that says the\n"
+   "fixer should audit for siblings, over a field that says false, orders\n"
+   "nothing and leaves the class open with an account claiming it was closed.\n\n"
    "SAME_AS — is this a defect we have already seen?\n"
    "A reviewer starts fresh every round and writes its own words, so one defect\n"
    "comes back under a new title, at a line the last round's fixes moved. You are\n"
