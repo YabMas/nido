@@ -593,6 +593,11 @@
    :doc "Loop the decision round over the latest design record: derive, amend, re-survey if the premise is wrong, escalate only the ask. [:cwd <dir>] [:code-cwd <dir>] [:max-iters <n>] [:budget 30m] [:dry-run? true]"
    :task (apply nido-review/design-cmd *command-line-args*)}
 
+  nido:attach
+  {:requires ([tasks.nido-attach :as nido-attach])
+   :doc "Attach to this worktree's workstream and let its ledger pick the stage: follow whatever is running, else run what is due, else say what is owed. Takes no stage. [:cwd <dir>]"
+   :task (apply nido-attach/attach-cmd *command-line-args*)}
+
   nido:work
   {:requires ([tasks.nido-work :as nido-work])
    :doc "Boot an interactive agent in the current worktree with nido context injected. Default :agent claude; supports :agent codex."

@@ -76,7 +76,15 @@
   (Operation undrive! "Take a workstream off the allow-list."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :any]
      :delegates [cstate/driving-path io/update-edn!]})
-  (Operation fireable "What the driver should fire for a workstream, or why it should not."
+  (Operation fireable
+    "What should be fired for a workstream, or why nothing will be — the ONE mapping from a
+     position to an action, read by every caller that acts on one.
+
+     Two callers, differing in what they do with the answer rather than in what the answer is.
+     The driver acts on `:fire` and discards the rest into a log line. `tasks.nido-attach` acts
+     on `:fire` too, and renders each `:skip` as what a person is owed and the command that would
+     supply it. A second table tuned to what a PERSON may do would be a third participant in the
+     disagreement `mechanical-stages` can already have with the projection."
     {:signature [:=> [:catn [:position :any]] :map]})
   (Operation run-stage! "Run one mechanical stage to a settled outcome, then act on it."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:stage :keyword]
