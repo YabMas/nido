@@ -511,9 +511,13 @@
           {:id :reply   :label "Reply"   :kind :resume                :style :default}]
          (work/gate-actions :triage true))
       "a parked triage offers one-click Apply (nido mutation), Dismiss, and free-text Reply")
-  (is (= [{:id :dismiss :label "Dismiss" :kind :mutation :style :danger}]
+  (is (= [{:id :apply   :label "Apply"   :kind :mutation :style :primary}
+          {:id :dismiss :label "Dismiss" :kind :mutation :style :danger}]
          (work/gate-actions :triage false))
-      "an unparked triage can still be dismissed off the radar")
+      "an unparked triage can still be applied AND dismissed: apply! writes the
+       verdict nido-side and resumes nobody, so gating it on a live session left
+       the ticket unappliable in exactly the case it was already stuck in — a
+       triage whose run failed after writing its report. Only Reply is gone")
   (is (= [{:id :promote :label "Promote" :kind :mutation :style :primary}
           {:id :drop    :label "Drop"    :kind :mutation :style :danger}]
          (work/gate-actions :ready false)))
@@ -536,6 +540,12 @@
        'should we build this', and offering it beside Approve invites it to be
        read as one"))
 
+(def ^:private sample-directions
+  [{:label "Round once on the total" :shape "Move the rounding to the aggregate."
+    :effort :S :confidence {:level :high :reason "one call site"}}
+   {:label "Introduce a Money type" :shape "Make per-line rounding unrepresentable."
+    :effort :L :confidence {:level :medium :reason "touches every total"}}])
+
 ;; The oracle for the bug where a button was rendered with its reading position
 ;; and read back without one: :approve reached approve! as nil, took the stale
 ;; branch, and no design was ever approved from the web. Derived from
@@ -547,7 +557,9 @@
                                         {:report-format :design-decision :grantable? true :seq 7})
                      (work/gate-actions :in-progress true nil
                                         {:options [{:label "A"} {:label "B"}] :seq 7})
-                     (work/gate-actions :triage true nil {:seq 7}))
+                     (work/gate-actions :triage true nil
+                                        {:report-format :triage-report
+                                         :directions sample-directions :seq 7}))
         carries-seq (into #{} (comp (filter :seq) (map :id)) descriptors)]
     (is (seq carries-seq) "the fixture must actually produce position-carrying buttons")
     (is (contains? carries-seq :approve)
@@ -609,10 +621,12 @@
       "the branches stand with NOBODY parked — the question outlives the session
        that asked it, and four of five blockers on this box outlived theirs. Reply
        and Done are absent there: both reach for an agent that is gone")
-  (is (= [:option-a :option-b :dismiss]
+  (is (= [:option-a :option-b :apply :dismiss]
          (map :id (work/gate-actions :triage false nil
                                      {:report-format :blocker :options sample-options :seq 3})))
-      "same at :triage, where a crashed triage run leaves its question behind")
+      "same at :triage, where a crashed triage run leaves its question behind —
+       beside the accept, which is unparked-safe for the same reason the branches
+       are: neither reaches for an agent")
   (is (= [] (work/gate-actions :in-progress false))
       "and a gate with no branches to offer is unchanged: still nothing"))
 
@@ -717,6 +731,102 @@
                  (work/resolve-gate! :brian (:id w) :option-a 2))
               "the same letter on the CURRENT report still answers"))))))
 
+
+;; ── The answerable triage report: A/B/… rather than a bulleted list ────────
+;; The report already enumerated the branches and already priced them. Until now
+;; the only forward button accepted all of it and decided none of it, so a
+;; direction was chosen by typing prose at an agent that may no longer be alive,
+;; or not at all.
+
+(deftest a-triage-report-with-directions-offers-one-button-per-branch
+  (is (= [{:id :direction-a :label "A"
+           :title "Round once on the total · S — Move the rounding to the aggregate."
+           :kind :mutation :style :default}
+          {:id :direction-b :label "B"
+           :title "Introduce a Money type · L — Make per-line rounding unrepresentable."
+           :kind :mutation :style :default}
+          {:id :apply :label "Defer decision" :kind :mutation :style :default}
+          {:id :dismiss :label "Dismiss" :kind :mutation :style :danger}
+          {:id :reply :label "Reply" :kind :resume :style :default}]
+         (work/gate-actions :triage true nil
+                            {:report-format :triage-report :directions sample-directions}))
+      "the letter is the whole button and the branch rides in the hover title,
+       priced — two directions with the same name and different sizes are two
+       different answers. Nothing is primary: the report recommends none of them")
+  (is (= [:direction-a :direction-b :apply :dismiss]
+         (map :id (work/gate-actions :triage false nil
+                                     {:report-format :triage-report
+                                      :directions sample-directions})))
+      "and they stand with NOBODY parked, for the reason the accept does: a
+       direction is applied nido-side and resumes no agent, so a triage whose run
+       died after writing its report is answerable rather than stuck")
+  (is (= [7 7] (->> (work/gate-actions :triage true nil
+                                       {:report-format :triage-report
+                                        :directions sample-directions :seq 7})
+                    (filter (comp work/direction-action? :id))
+                    (map :seq)))
+      "each names the ledger position it was rendered from"))
+
+(deftest the-accept-says-defer-only-when-there-is-something-to-defer
+  (is (= "Apply" (->> (work/gate-actions :triage true nil
+                                         {:report-format :triage-report :directions []})
+                      (filter #(= :apply (:id %))) first :label))
+      "a shallow route enumerates no directions, so there is no decision to
+       defer and the word would be a question nobody asked")
+  (is (= "Defer decision" (->> (work/gate-actions :triage true nil
+                                                  {:report-format :triage-report
+                                                   :directions sample-directions})
+                               (filter #(= :apply (:id %))) first :label))
+      "beside branches, accepting without picking one IS deferring the decision"))
+
+(deftest a-report-the-letters-cannot-reach-offers-no-branches-at-all
+  ;; Both bounds are on the WRITE shape, so this bites only on a report stored
+  ;; before they existed. Such a report still reads and still renders; what it
+  ;; must not do is offer a partial row — a seventh branch with no button, or a
+  ;; branch whose size a click could not land.
+  (let [unsized (assoc-in sample-directions [0 :effort] :squirrel)
+        seven   (vec (repeat 7 (first sample-directions)))]
+    (is (= [:apply :dismiss]
+           (map :id (work/gate-actions :triage false nil
+                                       {:report-format :triage-report :directions unsized})))
+        "a branch that defers its own size cannot settle one, so none are lettered")
+    (is (= [:apply :dismiss]
+           (map :id (work/gate-actions :triage false nil
+                                       {:report-format :triage-report :directions seven})))
+        "and a report past the letter set is answered by none of them rather than
+         by the first six")
+    (is (= "Apply" (->> (work/gate-actions :triage true nil
+                                           {:report-format :triage-report :directions seven})
+                        (filter #(= :apply (:id %))) first :label))
+        "with nothing lettered there is nothing to defer, so the accept says Apply")))
+
+(deftest accepted-report-is-the-only-route-a-choice-takes-to-notion
+  (let [report {:format :triage-report
+                :notion-writes {:effort :squirrel :description-prepend "why it broke"}}
+        chosen (#'work/accepted-report report (second sample-directions))]
+    (is (= :L (get-in chosen [:notion-writes :effort]))
+        "the branch's own size replaces the deferred one — that is what a human
+         clicks a direction to settle")
+    (is (= "why it broke" (get-in chosen [:notion-writes :description-prepend]))
+        "and nothing else the branch carries lands: WHICH branch was taken is the
+         decision itself, and a decision lives in the acceptance entry, not in a
+         second durable copy on the page")
+    (is (not (str/includes? (get-in chosen [:notion-writes :description-prepend])
+                            "Money type"))
+        "the label in particular"))
+  (let [deferred (#'work/accepted-report {:format :triage-report
+                                          :notion-writes {:effort :squirrel
+                                                          :description-prepend "why it broke"}}
+                                         nil)]
+    (is (= :squirrel (get-in deferred [:notion-writes :effort]))
+        "nothing guesses a size to fill the hole")
+    (is (str/includes? (get-in deferred [:notion-writes :description-prepend])
+                       "direction left open")
+        "the page says the size is open on purpose — :squirrel reaches Notion as
+         no Effort at all, which otherwise reads exactly like a size nobody set"))
+  (is (= {:format :proposed-ticket}
+         (#'work/accepted-report {:format :proposed-ticket} nil))
+      "a report with nothing to write to Notion is returned untouched"))
 
 (deftest option-actions-are-not-workstream-less
   (is (empty? (set/intersection @#'work/workstream-less-actions
@@ -1614,9 +1724,9 @@
       "Notion parked triage: Dismiss offered")
   (is (some #{:dismiss} (map :id (work/gate-actions :triage true :slack)))
       "Slack parked triage: Dismiss offered")
-  (is (= [:dismiss] (map :id (work/gate-actions :triage false :notion)))
-      "Notion unparked triage: Dismiss is the only action")
-  (is (= [:dismiss] (map :id (work/gate-actions :triage false :slack)))
+  (is (= [:apply :dismiss] (map :id (work/gate-actions :triage false :notion)))
+      "Notion unparked triage: Dismiss, beside the accept that needs no agent")
+  (is (= [:apply :dismiss] (map :id (work/gate-actions :triage false :slack)))
       "Slack unparked triage: same")
   (is (= (work/gate-actions :triage true :notion) (work/gate-actions :triage true))
       "origin no longer changes the result"))
@@ -1817,7 +1927,7 @@
                   (is (= :triaged (tickets/status :brian "BR-77"))))))))))))
 
 
-;; ── Accepting a verdict leaves a trace ────────────────────────────────────
+;; ── Accepting a verdict, and choosing a branch while you do it ─────────────
 ;; Every other answer at a gate appends an entry naming what was decided. Apply
 ;; wrote to Notion and to the ticket record and left the ledger silent, so a
 ;; later session could not tell an accepted verdict from an unanswered one.
@@ -1836,32 +1946,67 @@
                                              (reset! prepended children) {:ok true})
    #'nido.coordinator.lane.facets/refresh-for-ticket! (fn [& _] nil)})
 
-(deftest accepting-a-verdict-records-what-was-accepted
+(deftest choosing-a-direction-lands-its-size-and-records-the-choice
   (with-tmp
     (fn [_]
       (with-routed-ws :deep :jaap "Teacher"
+        {:directions sample-directions :effort :squirrel}
         (fn [w]
           (let [props (atom nil) prepended (atom nil)]
             (with-redefs-fn (notion-write-redefs props prepended)
               (fn []
-                (is (= :applied (:decision (work/resolve-gate! :brian (:id w) :apply 1))))))
+                (is (= :applied (:decision (work/resolve-gate! :brian (:id w) :direction-b 1))))
+                (is (= {:name "L"} (:select (get @props "Effort")))
+                    "the branch's own size lands, in place of the deferred one the
+                     report carried — which is the whole reason to click a branch")))
             (let [accepted (:report (work/workstream :brian (:id w) 2))]
               (is (= :triage-accepted (:format accepted)))
-              (is (= 1 (:triage-seq accepted))
-                  "it cites the report it accepted, so the two read together and a
-                   later session can tell an accepted verdict from an unanswered one"))))))))
+              (is (= 1 (:triage-seq accepted)) "it cites the report it accepted")
+              (is (= {:letter "B" :label "Introduce a Money type"
+                      :shape "Make per-line rounding unrepresentable." :effort :L}
+                     (:direction accepted))
+                  "and carries the branch in full — a reader of the timeline should
+                   not have to open the entry this points at to learn what was decided"))
+            (is (not (str/includes? (get-in (first @prepended) [:callout :rich_text 0 :text :content])
+                                    "Money type"))
+                "the label reaches Notion nowhere: which branch was taken is the
+                 decision itself, and it lives in the acceptance entry alone")))))))
+
+(deftest deferring-the-decision-applies-the-routing-and-says-so
+  (with-tmp
+    (fn [_]
+      (with-routed-ws :deep :jaap "Teacher"
+        {:directions sample-directions :effort :squirrel}
+        (fn [w]
+          (let [props (atom nil) prepended (atom nil)]
+            (with-redefs-fn (notion-write-redefs props prepended)
+              (fn []
+                (is (= :applied (:decision (work/resolve-gate! :brian (:id w) :apply 1))))
+                (is (nil? (get @props "Effort"))
+                    "nothing guesses a size to fill the hole — :squirrel is not a
+                     value the Effort select holds")
+                (is (str/includes? (get-in (first @prepended) [:callout :rich_text 0 :text :content])
+                                   "direction left open")
+                    "so the page says the size is open on purpose, which is what
+                     keeps the seam visible rather than reading as neglect")))
+            (let [accepted (:report (work/workstream :brian (:id w) 2))]
+              (is (= :triage-accepted (:format accepted)))
+              (is (nil? (:direction accepted))
+                  "absence IS the second answer — the routing stands and the
+                   implementation direction was deliberately left open"))))))))
 
 (deftest accepting-a-report-the-ledger-has-moved-past-writes-nothing
   (with-tmp
     (fn [_]
-      (with-routed-ws :deep :jaap "Teacher"
+      (with-routed-ws :deep :jaap "Teacher" {:directions sample-directions}
         (fn [w]
-          ;; Another tab accepted; the ledger's latest entry is that acceptance.
+          ;; Another tab answered; the ledger's latest entry is the acceptance.
           (workstream/append-to-ref! :brian "BR-77" {:kind :triage-accepted}
                                      (pr-str {:format :triage-accepted :triage-seq 1}))
           (with-redefs [notion-client/keychain-token
                         (fn [] (throw (ex-info "Notion must not be touched" {})))]
-            (is (= {:decision :triage-stale} (work/resolve-gate! :brian (:id w) :apply 1))
+            (is (= {:decision :triage-stale} (work/resolve-gate! :brian (:id w) :apply 1)))
+            (is (= {:decision :triage-stale} (work/resolve-gate! :brian (:id w) :direction-a 1))
                 "a click against a page the ledger has moved past accepts a verdict
                  the human was not looking at"))
           (is (= 2 (count (:entries (workstream/read-ws :brian (:id w)))))
@@ -1870,27 +2015,62 @@
 (deftest accepting-twice-is-refused-by-the-same-position-check
   (with-tmp
     (fn [_]
-      (with-routed-ws :deep :jaap "Teacher"
+      (with-routed-ws :deep :jaap "Teacher" {:directions sample-directions}
         (fn [w]
           (let [props (atom nil) prepended (atom nil)]
             (with-redefs-fn (notion-write-redefs props prepended)
               (fn []
-                (is (= :applied (:decision (work/resolve-gate! :brian (:id w) :apply 1))))
-                (is (= {:decision :triage-stale} (work/resolve-gate! :brian (:id w) :apply 1))
+                (is (= :applied (:decision (work/resolve-gate! :brian (:id w) :direction-a 1))))
+                (is (= {:decision :triage-stale}
+                       (work/resolve-gate! :brian (:id w) :direction-b 1))
                     "after accepting, the acceptance IS the latest entry — so the
                      second click of the same rendered page refuses on the same
                      check that stops a stale one")))))))))
+
+(deftest a-letter-no-direction-answers-is-refused
+  (with-tmp
+    (fn [_]
+      (with-routed-ws :deep :jaap "Teacher" {:directions sample-directions}
+        (fn [w]
+          (with-redefs [notion-client/keychain-token
+                        (fn [] (throw (ex-info "Notion must not be touched" {})))]
+            (is (= {:decision :triage-stale} (work/resolve-gate! :brian (:id w) :direction-c 1))
+                "the click carries a letter; the CURRENT ledger decides what it meant")))))))
+
+(deftest a-failed-notion-write-records-nothing-and-stays-retryable
+  ;; The order is the point, and it is the OPPOSITE of choose-option!'s. A resume
+  ;; is a notification the decision stands without, so that record goes first. The
+  ;; Notion write is the decision being carried out — it can fail, and the gate's
+  ;; contract is that a failed apply is retried — so recording first would make the
+  ;; acceptance the latest entry and the position check would refuse the retry.
+  (with-tmp
+    (fn [_]
+      (with-routed-ws :deep :jaap "Teacher" {:directions sample-directions}
+        (fn [w]
+          (with-redefs [notion-client/keychain-token (fn [] "tok")
+                        notion-client/retrieve-page (fn [_ _] {:error :http})]
+            (is (= {:decision :notion-failed :error :http}
+                   (work/resolve-gate! :brian (:id w) :direction-a 1))))
+          (is (= 1 (count (:entries (workstream/read-ws :brian (:id w)))))
+              "nothing was appended, so the gate is exactly as it was")
+          (is (= :awaiting-input (tickets/status :brian "BR-77"))
+              "and the ticket is still parked")
+          (let [props (atom nil) prepended (atom nil)]
+            (with-redefs-fn (notion-write-redefs props prepended)
+              (fn []
+                (is (= :applied (:decision (work/resolve-gate! :brian (:id w) :direction-a 1)))
+                    "so the same click, from the same page, works on the retry")))))))))
 
 (deftest the-position-check-is-equality-not-presence
   ;; A click that carried NO position is stale against a ledger holding a
   ;; positioned report — that is the fail-closed. It is NOT stale against a ledger
   ;; holding none: the intake-text fallback has no :seq, and a ledger with nothing
   ;; in it cannot have moved past what was on screen. Reading the rule as
-  ;; "a position is required" instead would take the legacy nido-side apply away
-  ;; from exactly the rows it exists for.
+  ;; "a position is required" instead took the legacy nido-side apply away from
+  ;; exactly the rows it exists for.
   (with-tmp
     (fn [_]
-      (with-routed-ws :deep :jaap "Teacher"
+      (with-routed-ws :deep :jaap "Teacher" {:directions sample-directions}
         (fn [w]
           (with-redefs [notion-client/keychain-token
                         (fn [] (throw (ex-info "Notion must not be touched" {})))]
@@ -1909,43 +2089,22 @@
           (is (empty? (:entries (workstream/read-ws :brian (:id w))))
               "and no acceptance is appended — there is no report to cite one against"))))))
 
-(deftest a-failed-notion-write-records-nothing-and-stays-retryable
-  ;; The order is the point, and it is the OPPOSITE of choose-option!'s. A resume
-  ;; is a notification the decision stands without, so that record goes first. The
-  ;; Notion write is the decision being carried out — it can fail, and the gate's
-  ;; contract is that a failed apply is retried — so recording first would make the
-  ;; acceptance the latest entry and the position check would refuse the retry.
-  (with-tmp
-    (fn [_]
-      (with-routed-ws :deep :jaap "Teacher"
-        (fn [w]
-          (with-redefs [notion-client/keychain-token (fn [] "tok")
-                        notion-client/retrieve-page (fn [_ _] {:error :http})]
-            (is (= {:decision :notion-failed :error :http}
-                   (work/resolve-gate! :brian (:id w) :apply 1))))
-          (is (= 1 (count (:entries (workstream/read-ws :brian (:id w)))))
-              "nothing was appended, so the gate is exactly as it was")
-          (is (= :awaiting-input (tickets/status :brian "BR-77"))
-              "and the ticket is still parked")
-          (let [props (atom nil) prepended (atom nil)]
-            (with-redefs-fn (notion-write-redefs props prepended)
-              (fn []
-                (is (= :applied (:decision (work/resolve-gate! :brian (:id w) :apply 1)))
-                    "so the same click, from the same page, works on the retry")))))))))
-
 (deftest the-cli-apply-carries-no-position-and-still-records
   ;; `bb nido:ticket:apply` is the agent executing its own verdict inside its own
   ;; turn: there is no render-and-click gap for a position to guard. It still
   ;; leaves the trace, because a human confirmed it in chat.
   (with-tmp
     (fn [_]
-      (with-routed-ws :deep :jaap "Teacher"
+      (with-routed-ws :deep :jaap "Teacher" {:directions sample-directions}
         (fn [w]
           (let [props (atom nil) prepended (atom nil)]
             (with-redefs-fn (notion-write-redefs props prepended)
               (fn [] (is (= :applied (:decision (work/apply! :brian (:id w)))))))
-            (is (= :triage-accepted (:format (:report (work/workstream :brian (:id w) 2))))
-                "the acceptance is the record, whichever door the apply came through")))))))
+            (let [accepted (:report (work/workstream :brian (:id w) 2))]
+              (is (= :triage-accepted (:format accepted)))
+              (is (= 1 (:triage-seq accepted)))
+              (is (nil? (:direction accepted))
+                  "the CLI path chooses no branch — it applies the report as written"))))))))
 
 (deftest enriched-callout-splits-a-long-body-into-capped-runs
   ;; The callout is best-effort, so an over-2000-char run only ever showed up as
@@ -2351,10 +2510,12 @@
   (is (= [:start-triage :dismiss]
          (mapv :id (work/gate-actions :triage false nil {:bare? true})))
       "bare :triage → force-start plus the off-radar veto")
-  (is (= [:dismiss] (mapv :id (work/gate-actions :triage false nil {:bare? false})))
-      "a real unparked triage row is unchanged")
-  (is (= [:dismiss] (mapv :id (work/gate-actions :triage false nil)))
-      "3-arity call sites keep their old behaviour")
+  (is (= [:apply :dismiss] (mapv :id (work/gate-actions :triage false nil {:bare? false})))
+      "a real unparked triage row can be accepted; only the bare one cannot, and
+       the filter is why — :apply is not workstream-less, so there is no ledger
+       behind it to cite an acceptance against")
+  (is (= [:apply :dismiss] (mapv :id (work/gate-actions :triage false nil)))
+      "3-arity call sites see the same set")
   (is (= [] (mapv :id (work/gate-actions :in-progress false nil {:bare? true})))
       "a bare :in-progress row gets no Start triage — it is not a triage"))
 

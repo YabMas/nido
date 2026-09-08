@@ -75,9 +75,14 @@
      nil is a real answer: the record predates the obligation."
     {:signature [:=> [:catn [:seam :map]] [:maybe :string]]})
   (Operation option-letter
-    "The letter answering the option at position `i`, or nil past the cap. Derived from position
+    "The letter answering the branch at position `i`, or nil past the cap. Derived from position
      and never stored — a stored letter is a second source of truth for ordering."
     {:signature [:=> [:catn [:i :int]] [:maybe :string]]})
+  (Operation answerable?
+    "Whether a triage report's directions are what one may be WRITTEN with today, and so can be
+     offered as lettered answers. The bounds are asked of the write shape and nowhere else: a
+     gate deciding for itself which branches it could letter would hold a second copy of them."
+    {:signature [:=> [:catn [:directions :any]] :boolean]})
   (Operation findings-heading
     "What the findings under a verdict ARE. `:insufficient` reports no refused claim, so heading
      it that way would tell a reader the opposite of what the round found."

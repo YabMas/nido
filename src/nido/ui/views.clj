@@ -765,12 +765,21 @@
   ([action-id project ws-id] (gate-action-confirm-fragment action-id project ws-id "gate-pane"))
   ([action-id project ws-id pane-id]
    (gate-action-fragment
-    (if (work/option-action? action-id)
+    (cond
+      (work/option-action? action-id)
       ;; Honest for both outcomes: the answer is always recorded on the ledger,
       ;; and the resume happens only if a session is still parked to hear it.
       ;; Which letter it was is on the card the reader is looking at; repeating it
       ;; here would be the one copy free to be wrong.
       "Recording your answer… resuming the agent if one is still listening."
+
+      (work/direction-action? action-id)
+      ;; Same silence about which letter, and for the same reason. What it does
+      ;; name is the size, because that is the part of the choice that leaves the
+      ;; ledger and lands on the ticket.
+      "Applying the verdict with the direction you chose — its size becomes the ticket's."
+
+      :else
       (case action-id
         :promote "Promoting…"
         ;; Says what actually happens. It used to promise the agent was resumed
@@ -885,18 +894,48 @@
           (into [:ul]
                 (for [{:keys [rule source evidence]} violated]
                   [:li rule " " [:span.meta "(" source ")"] " — " [:code evidence]])))]))
-   [:h3 "Solution directions"]
-   (into [:ul]
-         (for [{:keys [label shape effort confidence]} directions]
-           [:li [:strong label] " · " (name effort) " · " (name (:level confidence))
-            " — " shape]))
+   (when (seq directions)
+     [:div
+      [:h3 "Solution directions"]
+      ;; Lettered, and lettered from POSITION at both ends — the letter is what
+      ;; the button below the report says, so a reader picks a direction by
+      ;; matching a letter rather than by re-reading three shapes to work out
+      ;; which button is which. Same idiom as option-card, and the same reason.
+      ;;
+      ;; The letters render whether or not the buttons do. A report stored before
+      ;; directions were answerable is offered none (work/gate-actions), and a
+      ;; card that lettered only what could be clicked would be describing a
+      ;; different set of branches from the one the report enumerated.
+      (into [:div.options]
+            (map-indexed
+             (fn [i {:keys [label shape effort confidence]}]
+               [:div.option
+                [:div.option-head
+                 [:span.option-letter (report/option-letter i)]
+                 [:strong label]
+                 [:span.meta (name effort) " · " (name (:level confidence)) " confidence"]]
+                [:p shape]])
+             directions))])
    (when notion-writes
      [:div
       [:h3 "On apply →"]
       (into [:ul]
             (concat
              [[:li "Type: " (or (:type notion-writes) "unchanged")]
-              [:li "Effort: " (name (:effort notion-writes))]]
+              ;; What the ticket's size will be, which is not simply the report's
+              ;; once a direction can be clicked: a chosen branch's own size is
+              ;; what lands (work/accepted-report). Asked of report/answerable?
+              ;; rather than of the buttons, which this block cannot see — it is
+              ;; the same predicate gate-actions offers them under.
+              [:li "Effort: "
+               (let [choosable? (and (seq directions) (report/answerable? directions))
+                     deferred?  (= :squirrel (:effort notion-writes))]
+                 (cond
+                   (and choosable? deferred?) "set by the direction you choose, or left open if you defer"
+                   choosable?                 (str (name (:effort notion-writes))
+                                                   ", or the size of the direction you choose")
+                   deferred?                  "deferred — the size follows from the design"
+                   :else                      (name (:effort notion-writes))))]]
              (when-let [[from to] (:status-transition notion-writes)]
                [[:li "Status: " [:code from] " → " [:code to]]])
              [[:li "Title: " (:title notion-writes)]]))])
@@ -1134,13 +1173,23 @@
       " · no session was live to resume — the next one reads it here")]])
 
 (defn- triage-accepted-card
-  "A human's acceptance of a triage verdict, as it reads back on the timeline. It
-   is what the ledger of a triaged ticket never held: every other answer at a gate
-   left an entry naming what was decided, and accepting a verdict left none, so a
-   later session could not tell an accepted verdict from an unanswered one."
-  [{:keys [triage-seq]}]
+  "A human's acceptance of a triage verdict, as it reads back on the timeline.
+   Both outcomes are stated in the same shape, because they are the same act: the
+   routing was accepted, and either a direction was taken or one deliberately was
+   not. Absence is the second answer, so it is written out rather than left as a
+   blank the reader has to interpret."
+  [{:keys [triage-seq direction]}]
   [:div.md
    [:h2 "Accepted"]
+   (if direction
+     [:div.option
+      [:div.option-head
+       [:span.option-letter (:letter direction)]
+       [:strong (:label direction)]
+       [:span.meta (name (:effort direction)) " — the ticket's size follows the branch"]]
+      [:p (:shape direction)]]
+     [:p "No direction chosen — the routing stands and the implementation "
+      "direction is left open."])
    [:p.meta "accepts the triage report at entry " triage-seq]])
 
 (defn- pr-opened-card [{:keys [url title summary]}]

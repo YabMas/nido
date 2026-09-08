@@ -115,23 +115,50 @@
    workstream-less branch and :no-workstream refusal before it is added."
   #{:restore :dismiss :start-triage})
 
+(defn- lettered-ids
+  "One action id per letter, `prefix`-<letter>. The vector IS the letter->position
+   mapping both ways, so a letter is never stored anywhere."
+  [prefix]
+  (mapv #(keyword (str prefix "-" (str/lower-case %))) report/option-letters))
+
 (def option-action-ids
   "Gate action id per blocker-option position — :option-a … :option-f. Fixed ids
    rather than an encoded payload: a click POSTs an id and nothing else, so the
    text the agent is resumed with is built HERE, from the ledger, at click time
    (choose-option! → option-input). Same reasoning as approval-input — an answer
    the browser could compose is an answer that can arrive saying anything."
-  (mapv #(keyword (str "option-" (str/lower-case %))) report/option-letters))
+  (lettered-ids "option"))
+
+(def direction-action-ids
+  "Gate action id per triage-direction position — :direction-a … :direction-f.
+
+   A SEPARATE id space from a blocker's, though both are lettered branches of the
+   latest entry, because the two answers do different things: a blocker letter
+   resumes an agent with the branch spelled back to it, a direction letter writes
+   the verdict to Notion and resumes nobody. One id behind a test on the report's
+   format would put two resolvers under one name and stop the URL saying what it
+   answers."
+  (lettered-ids "direction"))
 
 (def ^:private option-index
-  "Action id → the position it selects."
+  "Action id → the blocker-option position it selects."
   (into {} (map-indexed (fn [i id] [id i])) option-action-ids))
+
+(def ^:private direction-index
+  "Action id → the triage-direction position it selects."
+  (into {} (map-indexed (fn [i id] [id i])) direction-action-ids))
 
 (defn ^{:malli/schema [:=> [:cat :any] :boolean]}
   option-action?
   "True for an :option-<letter> gate action id."
   [action-id]
   (contains? option-index action-id))
+
+(defn ^{:malli/schema [:=> [:cat :any] :boolean]}
+  direction-action?
+  "True for a :direction-<letter> gate action id."
+  [action-id]
+  (contains? direction-index action-id))
 
 (defn ^{:malli/schema [:=> [:cat :any] :boolean]}
   position-carrying-action?
@@ -150,26 +177,37 @@
    its descriptor, and a resolver that compares it before acting."
   [action-id]
   (or (option-action? action-id)
+      (direction-action? action-id)
       (contains? #{:approve :redesign :hold-design :apply} action-id)))
 
-(defn- option-actions
-  "One button per branch of a blocker's :options, lettered by position. `:kind
-   :mutation` because it is resolved nido-side, like :approve — the descriptor
+(defn- lettered-actions
+  "One button per branch of an enumerated question, lettered by position. `:kind
+   :mutation` because these are resolved nido-side, like :approve — the descriptor
    carries no input for the browser to send. Order is the record's order, so the
    letters here and the letters on the card cannot disagree.
+
+   `ids` is the action-id vector the letters resolve into and `title` builds a
+   branch's hover text: the two things that differ between the kinds of question
+   this shape answers. `:recommended?` is read off the branch, so a vocabulary
+   that has no such notion simply gets no primary button rather than a rule of
+   its own.
 
    `entry-seq` is the ledger position of the report these were built from. It
    rides on every button and comes back with the click, because a LETTER ALONE
    IS NOT AN ANSWER: it only means something relative to the question that was on
    screen, and by click time the ledger may hold a different one (the agent
-   appended, another tab answered). choose-option! refuses on the mismatch.
-   Omitted when unknown, which fails closed there rather than resolving blind."
-  [entry-seq options]
+   appended, another tab answered). The resolver refuses on the mismatch. Omitted
+   when unknown, which fails closed there rather than resolving blind.
+
+   Branches past the letter set get no button. Both writers are capped at it, so
+   this bites only on a record written before the cap — see answerable-directions,
+   which is what stops such a report offering a partial row of buttons at all."
+  [ids entry-seq branches title]
   (vec (map-indexed
-        (fn [i {:keys [label recommended?]}]
-          (cond-> {:id    (nth option-action-ids i)
+        (fn [i branch]
+          (cond-> {:id    (nth ids i)
                    ;; The LETTER alone. The branch is spelled out on the card
-                   ;; directly above, which is the whole reason the options are
+                   ;; directly above, which is the whole reason the branches are
                    ;; lettered: the reader picks by matching a letter, not by
                    ;; re-reading the branch on a button. Putting the label here
                    ;; too made a row of buttons as wide as three sentences.
@@ -177,11 +215,28 @@
                    ;; …but a button reading "A" says nothing on its own once the
                    ;; card scrolls away, so the branch rides along as the hover
                    ;; title, where it costs no layout.
-                   :title label
+                   :title (title branch)
                    :kind  :mutation
-                   :style (if recommended? :primary :default)}
+                   :style (if (:recommended? branch) :primary :default)}
             entry-seq (assoc :seq entry-seq)))
-        options)))
+        (take (count ids) branches))))
+
+(defn- option-actions
+  "One button per branch of a blocker's :options."
+  [entry-seq options]
+  (lettered-actions option-action-ids entry-seq options :label))
+
+(defn- direction-actions
+  "One button per solution direction of a triage report.
+
+   The hover text carries the SIZE as well as the name, because that is what the
+   choice is between: two directions with the same name and different prices are
+   two different answers, and a row of letters with the prices only on the card
+   asks the reader to hold them while they move the mouse."
+  [entry-seq directions]
+  (lettered-actions direction-action-ids entry-seq directions
+                    (fn [{:keys [label shape effort]}]
+                      (str label " · " (name effort) " — " shape))))
 
 (defn ^{:malli/schema [:=> [:cat :keyword :boolean [:? :any] [:? :map]] :any]}
   gate-actions
@@ -202,9 +257,17 @@
    `{:options [...]}` is the CURRENT report's blocker options, when it has any:
    a parked gate whose latest entry named its branches offers one button per
    branch (option-actions) instead of only a textarea. The call sites read
-   :report-format, :options AND :seq off the SAME report the reader is looking at,
-   so the buttons and the card can never disagree about the question — and :seq
-   is what lets the resolver notice that the question itself has since changed.
+   :report-format, :options, :directions AND :seq off the SAME report the reader
+   is looking at, so the buttons and the card can never disagree about the
+   question — and :seq is what lets the resolver notice that the question itself
+   has since changed.
+
+   `{:directions [...]}` is the same for a triage report's solution directions.
+   They are the branches of a different question — which fix, rather than which
+   way out of a halt — so they letter into their own ids and their answer writes
+   the verdict rather than resuming anybody (direction-actions, apply!). Offered
+   only when the report is one a gate may letter (report/answerable?): a report
+   stored before that bound gets the directionless action set, not a partial row.
 
    `{:awaiting <stage>}` is the stage the pipeline says a PERSON owes this
    workstream, or nil — `(:stage (:next position))` when that position's mode is
@@ -213,7 +276,7 @@
    grant is due.
 
    `{:bare? true}` marks a row with no workstream behind it (wsv/bare-row). On
-   :triage that swaps Apply/Reply — which need a ledger and an agent
+   :triage that swaps the accept and Reply — which need a ledger and an agent
    respectively — for :start-triage. Then,
    for EVERY stage, a bare row's action set is filtered down to
    workstream-less-actions — the ids resolve-gate! can actually act on without a
@@ -226,7 +289,8 @@
    correct automatically if the action sets change."
   ([stage parked?] (gate-actions stage parked? nil nil))
   ([stage parked? origin] (gate-actions stage parked? origin nil))
-  ([stage parked? _origin {:keys [bare? report-format options awaiting grantable?] entry-seq :seq}]
+  ([stage parked? _origin {:keys [bare? report-format options directions awaiting grantable?]
+                           entry-seq :seq}]
    (let [;; The branches of the CURRENT blocker, or [] — offered whether or not a
          ;; session is parked, because answering no longer depends on one being
          ;; alive to hear it (choose-option! records the answer on the ledger and
@@ -234,6 +298,12 @@
          ;; on parked?: each one resumes an agent, and offering it with none is a
          ;; button that can only fail.
          answers (option-actions entry-seq options)
+         ;; The branches of the CURRENT triage report, or [] — and gated on
+         ;; nothing but the report, for the reason the accept below is: apply!
+         ;; writes the verdict itself and resumes nobody, so a triage whose run
+         ;; died is exactly the one that most needs answering.
+         dirs    (when (and (= :triage-report report-format) (report/answerable? directions))
+                   (direction-actions entry-seq directions))
          ;; Approve is not one of those, which is what `awaiting` is for. It asks
          ;; the PIPELINE whether a person owes this workstream a decision, and
          ;; the board stage cannot answer that: the round that produces a design
@@ -306,18 +376,26 @@
            :incoming    [{:id :promote :label "Promote" :kind :mutation :style :primary}
                          {:id :drop    :label "Dismiss" :kind :mutation :style :danger}]
            :triage      (let [dismiss {:id :dismiss :label "Dismiss" :kind :mutation :style :danger}
-                              ;; Apply executes the routed verdict to Notion nido-side (Ball Holder +
-                              ;; App Domain, deep properties/callout — apply-routed!, no conversation),
-                              ;; falling back to nido-only ticket:complete for legacy/Slack reports,
-                              ;; and appends the acceptance to the ledger.
+                              ;; The forward action: accept the verdict. It executes the routed
+                              ;; report to Notion nido-side (Ball Holder + App Domain, deep
+                              ;; properties/callout — apply-routed!, no conversation), falling back
+                              ;; to nido-only ticket:complete for legacy/Slack reports, and appends
+                              ;; the acceptance to the ledger.
                               ;;
-                              ;; It carries the ledger position it was rendered at, exactly as an
-                              ;; option button does: it now WRITES a record of what was accepted, so
-                              ;; a click made against a page the ledger has moved past would accept a
-                              ;; verdict the human never read.
-                              apply-btn (cond-> {:id :apply :label "Apply"
-                                                 :kind :mutation :style :primary}
-                                          entry-seq (assoc :seq entry-seq))]
+                              ;; It says "Defer decision" exactly when there are directions beside
+                              ;; it, because that is what accepting without picking one MEANS
+                              ;; there: the routing lands and the implementation direction is left
+                              ;; open. With nothing on offer there is nothing to defer, so the word
+                              ;; would be a question nobody asked — it stays "Apply".
+                              ;;
+                              ;; One id either way. The two differ in the word on the button and
+                              ;; nothing else — same resolver, same effect, same entry — and
+                              ;; whether a direction was on offer is already readable from the
+                              ;; report the entry cites.
+                              accept  (cond-> {:id :apply :kind :mutation
+                                               :label (if (seq dirs) "Defer decision" "Apply")
+                                               :style (if (seq dirs) :default :primary)}
+                                        entry-seq (assoc :seq entry-seq))]
                           ;; Reply (free-text overrides/redo) resumes the agent; Dismiss takes it
                           ;; off the radar nido-side, writing nothing to Notion.
                           (cond
@@ -327,11 +405,17 @@
                             bare?   [{:id :start-triage :label "Start triage"
                                       :kind :mutation :style :primary}
                                      dismiss]
-                            parked? (into answers
-                                          [apply-btn
-                                           dismiss
-                                           {:id :reply :label "Reply" :kind :resume :style :default}])
-                            :else   (into answers [dismiss])))
+                            ;; The accept is NOT gated on parked?, and neither are the directions.
+                            ;; apply! writes the verdict itself and resumes nobody, so tying them
+                            ;; to a live session ordered two things nothing orders — and left the
+                            ;; ticket unappliable in exactly the case it was stuck in already, a
+                            ;; triage whose run failed or was budget-killed after writing its
+                            ;; report. Reply is gated, because it is the one that reaches for an
+                            ;; agent.
+                            :else   (cond-> (into (vec dirs) answers)
+                                      true    (conj accept dismiss)
+                                      parked? (conj {:id :reply :label "Reply"
+                                                     :kind :resume :style :default}))))
            ;; The nido-side veto, reversible: Restore clears the ticket status so the row
            ;; rejoins the triage queue and the auto-triage gate can pick it up again.
            :dismissed   [{:id :restore :label "Restore" :kind :mutation :style :default}]
@@ -1035,6 +1119,7 @@
                                  {:report-format (:format report)
                                   :grantable?    (grantable? project (:ws-id row))
                                   :options       (:options report)
+                                  :directions    (:directions report)
                                   ;; From the row, not re-derived: the spine used
                                   ;; this same reading to decide the workstream is
                                   ;; a gate at all, and a second read is a second
@@ -1351,6 +1436,42 @@
                 (cond-> {:decision :applied}
                   (= :warn callout) (assoc :callout :warn))))))))))
 
+(def ^:private deferred-size-note
+  "The sentence a deferred acceptance leaves on the Notion page.
+
+   It is what keeps the seam visible. `:squirrel` is not a value the Effort select
+   holds, so triage-notion-props writes no Effort at all and the page keeps the
+   size it already carried — which reads exactly like a size nobody got round to
+   setting. This says the size is open on purpose, and it names no branch, because
+   in this case none was taken."
+  "Implementation direction left open at triage — the size follows from the design.")
+
+(defn- accepted-report
+  "`report` as the acceptance makes it — the ONE route by which a human's choice
+   reaches Notion.
+
+   With a `direction`, the branch's own size replaces the report's headline
+   effort. That is the whole of what a choice changes: a size is a consequence of
+   the decision and belongs on the ticket, but WHICH branch was taken is the
+   decision itself, and a decision lives in the acceptance entry. Writing the
+   label into the callout too would put it in a second durable place that nothing
+   afterwards can correct.
+
+   Without one, the callout gains the sentence that says the size is open on
+   purpose. Only this case gets it: a branch a human may pick is a branch that
+   carries a concrete size (report/Direction), so a chosen direction always lands
+   an Effort and never needs the apology.
+
+   A report with no `:notion-writes` is returned untouched — there is nothing for
+   either half to land on."
+  [report direction]
+  (if-not (:notion-writes report)
+    report
+    (if direction
+      (assoc-in report [:notion-writes :effort] (:effort direction))
+      (update-in report [:notion-writes :description-prepend]
+                 (fn [d] (str (when-not (str/blank? d) (str d "\n\n")) deferred-size-note))))))
+
 (defn- execute-report!
   "Write `report` out and finalize the ticket. Three paths:
 
@@ -1381,23 +1502,31 @@
 (defn- accept!
   "Execute the workstream's latest report and record that a human accepted it.
 
-   `at-seq` is the ledger position the click was rendered at, checked against the
-   ledger's latest entry when `checked?`.
+   `at-seq`, when given, is the ledger position the click was rendered at, and the
+   acceptance is refused unless that is still the ledger's latest entry.
+   `direction` is the index of the branch the human chose, or nil for an
+   acceptance that chose none.
 
    Shared by both of apply!'s arities, which differ only in `checked?` — see there
    for why the two writes happen in the order they do."
-  [project ws-id at-seq checked?]
+  [project ws-id at-seq direction checked?]
   (if-let [w (cws/read-ws project ws-id)]
-    (let [report (latest-report project ws-id)]
+    (let [report (latest-report project ws-id)
+          ;; Resolved against the CURRENT report, never against what the browser
+          ;; was showing — the same discipline choose-option! holds, and for the
+          ;; same reason: the ledger decides what the letter meant, and the
+          ;; position decides whether that question is still being asked.
+          branch (when direction (get (vec (:directions report)) direction))]
       (cond
         ;; Equality, not presence: a click that carried NO position is stale
         ;; against a ledger that holds a positioned report, and is not stale
         ;; against one that holds none — an intake-text fallback has no :seq, and
         ;; a ledger with nothing in it cannot have moved past what was on screen.
         (and checked? (not= at-seq (:seq report))) {:decision :triage-stale}
+        (and direction (nil? branch))              {:decision :triage-stale}
 
         :else
-        (let [outcome (execute-report! project ws-id report w)]
+        (let [outcome (execute-report! project ws-id (accepted-report report branch) w)]
           ;; Only what landed is recorded. :notion-failed and :error leave the
           ;; gate exactly as they found it, which is what keeps the click
           ;; repeatable. The :seq guard is the empty-ledger case: an acceptance
@@ -1407,7 +1536,13 @@
                      (contains? #{:applied :created} (:decision outcome)))
             (cws/append-entry!
              project ws-id {:kind :triage-accepted}
-             (pr-str {:format :triage-accepted :triage-seq (:seq report)})))
+             (pr-str (cond-> {:format     :triage-accepted
+                              :triage-seq (:seq report)}
+                       branch (assoc :direction
+                                     {:letter (report/option-letter direction)
+                                      :label  (:label branch)
+                                      :shape  (:shape branch)
+                                      :effort (:effort branch)})))))
           outcome)))
     {:decision :applied}))
 
@@ -1425,6 +1560,8 @@
                   two-argument arity is the CLI path and checks nothing: the agent
                   executing its own verdict inside its own turn has no
                   render-and-click gap for a position to guard.
+     :direction — the index of the solution direction the human chose, or absent
+                  for an acceptance that deliberately chose none.
 
    The acceptance is appended AFTER the write, which is the opposite order to
    choose-option!. The difference is what the second write IS. A resume is a
@@ -1435,9 +1572,9 @@
    refuse the very retry that contract promises.
 
    The daemon's sweep settles the now-resolved parked session."
-  ([project ws-id] (accept! project ws-id nil false))
-  ([project ws-id {:keys [at-seq]}]
-   (accept! project ws-id at-seq true)))
+  ([project ws-id] (accept! project ws-id nil nil false))
+  ([project ws-id {:keys [at-seq direction]}]
+   (accept! project ws-id at-seq direction true)))
 
 (defn- triage-trigger
   "The project's triage trigger: the first in triggers.edn whose :skill is
@@ -1771,6 +1908,8 @@
      :hold-design -> answer one by granting the design anyway
      :option-a … :option-f -> resume! with the blocker branch that letter names,
                               iff `payload` still names the latest report
+     :direction-a … :direction-f -> apply! the verdict with the triage direction
+                              that letter names, under the same position check
      :restore -> restore! (clear ticket status + reopen at :triaging)
      :start-triage -> start-triage-page! (force-spawn the triage trigger)
 
@@ -1791,10 +1930,13 @@
 
      (nil? (cws/read-ws project ws-id)) {:decision :no-workstream}
 
-     ;; Not a `case` branch: the option ids are derived from report/option-letters,
-     ;; and case needs literals — spelling six of them here is a second copy of
+     ;; Not `case` branches: both id sets are derived from report/option-letters,
+     ;; and case needs literals — spelling twelve of them here is a second copy of
      ;; that vector, free to drift from the one the buttons are built from.
      (option-action? action-id) (choose-option! project ws-id action-id payload)
+
+     (direction-action? action-id)
+     (apply! project ws-id {:at-seq payload :direction (direction-index action-id)})
 
      :else
      (case action-id

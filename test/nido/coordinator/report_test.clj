@@ -417,18 +417,45 @@
   (is (report/validate
        (-> valid-report
            (assoc :defer-note "Direction depends on whether we refactor the totals pipeline.")
-           (assoc-in [:directions 0 :effort] :squirrel)
-           (assoc-in [:notion-writes :effort] :squirrel)))))
+           (assoc-in [:notion-writes :effort] :squirrel)))
+      "the REPORT may defer its size — that is what :squirrel is for"))
 
-(deftest an-acceptance-cites-the-report-it-accepted
-  (is (report/validate-event :triage-accepted {:format :triage-accepted :triage-seq 4}))
+;; ── What a branch a human may pick has to carry ────────────────────────────
+;; Deferral is a property of the report, not of a branch. A direction IS the
+;; decision the sizing was waiting on, so a branch nobody can size is not yet an
+;; answer, and a gate that lettered one would let a human click to settle the
+;; sizing and hand the ticket back on the size it already had.
+
+(deftest a-direction-may-not-defer-its-own-size
   (is (thrown? clojure.lang.ExceptionInfo
-               (report/validate-event :triage-accepted {:format :triage-accepted}))
-      "an acceptance that names no report is not a citation")
-  (is (str/includes? (report/report-title {:format :triage-accepted :triage-seq 4}) "entry 4")
-      "the index row says which report was accepted")
-  (is (str/includes? (report/report->markdown {:format :triage-accepted :triage-seq 4})
-                     "Accepted")))
+               (report/validate (assoc-in valid-report [:directions 0 :effort] :squirrel)))))
+
+(deftest a-report-may-not-enumerate-more-directions-than-there-are-letters
+  (let [dir (first (:directions valid-report))
+        n   (count report/option-letters)]
+    (is (report/validate (assoc valid-report :directions (vec (repeat n dir)))))
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (report/validate (assoc valid-report :directions (vec (repeat (inc n) dir)))))
+        "the cap is on the report, not on the render: a seventh branch would be
+         described on the card with no button under it and nothing saying why")))
+
+(deftest a-report-written-before-those-bounds-still-reads
+  ;; The read contract is what keeps history readable — see report/read-schemas.
+  ;; Both shapes are legacy in the same era, so both are checked here.
+  (let [dir (first (:directions valid-report))]
+    (is (report/parse-event :triage (assoc-in valid-report [:directions 0 :effort] :squirrel)))
+    (is (report/parse-event
+         :triage (assoc valid-report
+                        :directions (vec (repeat (inc (count report/option-letters)) dir)))))))
+
+(deftest answerable?-is-the-write-shape-asked-of-a-stored-report
+  (let [dir (first (:directions valid-report))]
+    (is (report/answerable? [dir]))
+    (is (report/answerable? []))
+    (is (not (report/answerable? [(assoc dir :effort :squirrel)]))
+        "a branch a click could not land a size for is not an answer")
+    (is (not (report/answerable? (vec (repeat (inc (count report/option-letters)) dir))))
+        "and neither is one the letters cannot reach")))
 
 (deftest report->markdown-implementation-plan-has-headings
   (let [md (report/report->markdown valid-plan)]

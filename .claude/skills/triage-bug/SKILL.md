@@ -234,7 +234,7 @@ video.
    - Is this actually a bug? (vs feature request, vs duplicate, vs noise — `:determination`)
    - If a bug: what part of the system is affected? what's the likely root cause?
    - **Is the defect at the implementation layer or the design layer?** See "The design reading" above — this is `:design-frame`, and it is what tells the next session whether it is fixing something or deciding something.
-   - What are 1–3 candidate solution directions? T-shirt effort per direction.
+   - What are 1–3 candidate solution directions? A concrete T-shirt effort per direction — a branch you cannot size is prose for the summary, not a direction (see Step 2).
 6. Compose the report EDN (schema in Step 2 below) to a temp `.edn` file, then append it to the nido record as a `triage` entry:
 
    ```bash
@@ -270,9 +270,10 @@ report (non-zero exit + an explain dump) — fix and retry until it's accepted.
                                  :source "docs/reference/malli.md"   ; lane or reference doc
                                  :evidence "src/order/calc.clj:88"}]
                  :note         "why, or why you can't tell"}         ; optional
- :directions    [{:label "A" :shape "1 sentence"
-                  :effort :M    ; :XS :S :M :L :XL — or :squirrel to defer sizing
-                  :confidence {:level :medium :reason "one line"}}]
+ :directions    [{:label "short name for the branch, not a letter"
+                  :shape "1 sentence"
+                  :effort :M    ; :XS :S :M :L :XL — CONCRETE, never :squirrel
+                  :confidence {:level :medium :reason "one line"}}]  ; 0–6 of them
  :notion-writes {:type "bug"          ; nil for a Slack run (no Notion writes)
                  :effort :M     ; :XS :S :M :L :XL :squirrel ; nil for a Slack run
                  :status-transition ["Needs verification" "Not started"]  ; omit/nil if no transition
@@ -291,7 +292,9 @@ Notes:
 - `:notion-writes` is **nil for Slack runs** — there are no Notion writes.
 - There is **no dismiss-recommendation field**. If the report isn't worth pursuing, say so in chat and `dismiss` — don't encode it in the report (Slack runs only; a Notion report is always routed, never dismissed).
 - **`:design-frame` is optional but expected on a deep route.** A shallow route emits `{:defect-layer :unknown}`; omit the key entirely only when you did no investigation at all. Pre-spine reports have no frame, which is why the schema still accepts its absence.
-- **`:squirrel` is the joker** — use it for `:effort` when sizing genuinely depends on an unmade decision, which in practice means `:defect-layer :design`. When you use it, set `:defer-note` explaining why; `/continue-ticket` resolves it into a concrete effort when it authors the design record — sizing follows from the design, not the other way round.
+- **`:squirrel` is the joker, and it belongs to `:notion-writes` alone** — use it for the report's `:effort` when sizing genuinely depends on an unmade decision, which in practice means `:defect-layer :design`. When you use it, set `:defer-note` explaining why; `/continue-ticket` resolves it into a concrete effort when it authors the design record — sizing follows from the design, not the other way round.
+- **A direction's `:effort` is always concrete**, and the schema enforces it. Deferral is a property of the REPORT: `:squirrel` says the sizing waits on a decision nobody has made, and a direction IS that decision — named, shaped and priced. A human picks a direction at the gate to settle the size, so a branch you cannot size is not an answer yet; put it in `:summary` as prose rather than under a letter.
+- **At most 6 directions**, the same cap a blocker's `:options` carries, off the same letter set — they are answered by letter at the gate. In practice 1–3; seven branches is a conversation, not a question with an answer.
 - After appending, print the report into chat with `bb nido:ticket:report :project brian :br <key>` (renders the stored report as markdown) so the user sees it on `nido enter`.
 
 ## Step 3 — Confirmation (chat, liberal parsing)

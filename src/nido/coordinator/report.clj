@@ -14,18 +14,20 @@
    [:reason string?]])
 
 (def option-letters
-  "The letters a blocker's options are answered BY. Derived from position and
-   never stored: a letter written into the record is a second source of truth for
-   ordering, and the two disagree the moment an option is inserted or dropped.
+  "The letters an enumerated question is answered BY — a blocker's :options and a
+   triage report's :directions alike. Derived from position and never stored: a
+   letter written into the record is a second source of truth for ordering, and
+   the two disagree the moment a branch is inserted or dropped.
 
-   The length is also the cap Blocker's :options enforces. Six is not a technical
-   limit — a halt with seven branches is a conversation, not a question with an
-   answer, and offering it as seven buttons pretends otherwise."
+   The length is also the cap both of those vectors enforce, which is why it is
+   defined above them. Six is not a technical limit — a question with seven
+   branches is a conversation, not a question with an answer, and offering it as
+   seven buttons pretends otherwise."
   ["A" "B" "C" "D" "E" "F"])
 
 (defn ^{:malli/schema [:=> [:cat :int] [:maybe :string]]}
   option-letter
-  "The letter for the option at position `i`, or nil past the cap."
+  "The letter for the branch at position `i`, or nil past the cap."
   [i]
   (get option-letters i))
 
@@ -38,12 +40,33 @@
    :squirrel is the joker that defers sizing to the implementation-plan event."
   [:enum :XS :S :M :L :XL :squirrel])
 
-(def Direction
+(defn- direction-schema
+  "A solution direction, over the `effort` its era allowed. Two eras exist and the
+   difference is the whole of it, so the shape is written once and the vocabulary
+   passed in."
+  [effort]
   [:map {:closed true}
    [:label      string?]
    [:shape      string?]
-   [:effort     TriageEffort]
+   [:effort     effort]
    [:confidence Confidence]])
+
+(def Direction
+  "One candidate way to fix what triage found — a branch a human picks BETWEEN,
+   which is why its :effort is a CONCRETE size rather than a TriageEffort.
+
+   Deferral is a property of the report, not of a branch. `:squirrel` says sizing
+   waits on a decision nobody has made yet, and a direction IS that decision:
+   named, shaped, and priced. A branch nobody can size is not yet an answer — it
+   belongs in the summary's prose, not under a letter — and offering it as one is
+   how a human clicks to settle the sizing and the ticket comes back on the size
+   it already had."
+  (direction-schema Effort))
+
+(def ^:private DirectionUnsized
+  "The pre-2026-09 Direction: `:effort` was a TriageEffort, so a branch could
+   defer its own size. Read-era only — see `read-schemas`."
+  (direction-schema TriageEffort))
 
 (def AppDomain
   "Notion App Domain multi_select value used for routing."
@@ -103,11 +126,21 @@
    [:violated     {:optional true} [:vector Violation]]
    [:note         {:optional true} string?]])
 
-(def TriageReport
-  "The §1–3 + §5 report. No §4 field — the dismiss recommendation is dropped at the
-   schema level. `:at` is NOT here: the ledger stamps it at read time."
-  [:map {:closed true}
-   [:format        [:= :triage-report]]
+(def AnswerableDirections
+  "The branches of a triage report a gate can offer as answers: no more of them
+   than there are letters, each carrying a concrete size.
+
+   Named because it is read twice and must mean one thing both times — it is the
+   `:directions` slot of the write shape, AND the question `answerable?` asks of a
+   report already stored. A gate that decided for itself which branches it could
+   letter would be holding a second copy of this bound, free to disagree with the
+   one a report is written under."
+  [:vector {:max (count option-letters)} Direction])
+
+(def ^:private triage-report-common
+  "Everything a triage report holds except `:directions`, whose shape is what the
+   two eras differ in."
+  [[:format        [:= :triage-report]]
    [:ticket-key    string?]
    [:determination [:enum :bug :not-a-bug :needs-info]]
    [:title         string?]          ; §1 enriched title
@@ -115,12 +148,29 @@
    [:confidence    Confidence]       ; §1
    [:routing       {:optional true} [:maybe Routing]] ; §2 — absent on pre-routing reports, nil for Slack
    [:design-frame  {:optional true} DesignFrame] ; absent on pre-design-spine reports
-   [:directions    [:vector Direction]]   ; §2
    [:notion-writes [:maybe NotionWrites]] ; §3 — nil for slack
    [:defer-note    {:optional true} string?]   ; why the plan was deferred (paired with :squirrel)
    [:trail         [:vector [:map {:closed true}
                              [:ref  string?]
                              [:note string?]]]]]) ; §5 log-only
+
+(def TriageReport
+  "The §1–3 + §5 report. No §4 field — the dismiss recommendation is dropped at the
+   schema level. `:at` is NOT here: the ledger stamps it at read time.
+
+   `:directions` is capped at the letter set, off the same constant Blocker's
+   `:options` uses. The cap belongs on the report rather than on the render: a
+   seventh branch lettered nowhere would still be described on the card, so the
+   card and the buttons would disagree about the question with nothing on screen
+   saying why. Bounding it here is the one place that can say so once."
+  (into [:map {:closed true}]
+        (conj triage-report-common [:directions AnswerableDirections])))
+
+(def ^:private TriageReportUnbounded
+  "The pre-2026-09 TriageReport: `:directions` was uncapped and a direction could
+   defer its own size. Read-era only — see `read-schemas`."
+  (into [:map {:closed true}]
+        (conj triage-report-common [:directions [:vector DirectionUnsized]])))
 
 (def ^:private proposed-ticket-common
   "Fields shared by both proposed-ticket templates."
@@ -1204,12 +1254,29 @@
    ledger could not tell an accepted verdict from an unanswered one, or say when a
    person looked at it.
 
-   `:triage-seq` is the report accepted, by position: what was on screen, not what
-   is latest. The two are the same at the moment of a click that was allowed
-   through, and naming it is what lets a reader pair the two entries afterwards."
+   `:direction` is the branch the human picked, and its ABSENCE is the other
+   answer: the routing was accepted and the implementation direction deliberately
+   left open. Nothing separate marks the deferral, because whether one was on
+   offer is already readable from the report `:triage-seq` names — a report that
+   enumerated no directions asked no question to defer.
+
+   The branch is copied in rather than referenced, as a blocker's answer is, so a
+   reader of the timeline learns what was decided without opening the entry this
+   points at. It is the ONLY durable record of the choice: a direction's size
+   lands on the ticket because that is a consequence a ticket is about, but which
+   branch was taken is the decision itself and lives here alone."
   [:map {:closed true}
    [:format     [:= :triage-accepted]]
-   [:triage-seq int?]])
+   ;; The report accepted, by position. What was on screen, not what is latest —
+   ;; the two are the same at the moment of a click that was allowed through, and
+   ;; naming it is what lets a reader pair the two entries afterwards.
+   [:triage-seq int?]
+   [:direction  {:optional true}
+    [:map {:closed true}
+     [:letter string?]
+     [:label  string?]
+     [:shape  string?]
+     [:effort Effort]]]])
 
 (def PrOpened
   [:map {:closed true}
@@ -2065,7 +2132,13 @@
    ;; The terminal question became sufficiency, so :accurate and :underscoped
    ;; stopped being writable. Rounds in that shape exist on every workstream a
    ;; loop has touched.
-   :baseline-review BaselineReviewAny})
+   :baseline-review BaselineReviewAny
+   ;; Directions became answerable, which put two bounds on them: no more than
+   ;; there are letters, and none deferring its own size. Every triage report
+   ;; written before that is under the looser shape, and reads under it — a
+   ;; report today's write shape would refuse simply offers no lettered answers
+   ;; (work/answerable-directions), rather than vanishing from the pane.
+   :triage TriageReportUnbounded})
 
 (def ^:private compiled-schemas
   "[contract kind] → a delay of the compiled schema that pair validates under,
@@ -2167,6 +2240,24 @@
   [kind report]
   (cond-> (validate-against (schema-for :write kind) kind report)
     (= :blocker kind) enforce-blocker-options))
+
+(def ^:private answerable-directions
+  "Compiled once — this is asked on every gate render. See compiled-schemas for
+   why a schema FORM handed to m/validate is not good enough here."
+  (delay (m/schema AnswerableDirections)))
+
+(defn ^{:malli/schema [:=> [:cat :any] :boolean]}
+  answerable?
+  "True when `directions` are what a triage report may be WRITTEN with today, and
+   so can be offered as lettered answers.
+
+   The question is asked of the write shape rather than answered again here. A
+   report stored before those bounds existed still reads (read-schemas) and still
+   renders, and this is what keeps it from also offering a partial row of buttons:
+   a seventh branch with no letter, or a branch whose size a click would fail to
+   land."
+  [directions]
+  (m/validate @answerable-directions directions))
 
 (defn ^{:malli/schema [:=> [:cat :EntryKind :any] :LedgerEvent]}
   parse-event
@@ -2454,10 +2545,17 @@
             "_")
        "" summary])))
 
-(defn- triage-accepted->markdown [{:keys [triage-seq]}]
+(defn- triage-accepted->markdown [{:keys [triage-seq direction]}]
   (str/join "\n"
-    ["# Accepted"
-     (str "_accepts the triage report at entry " triage-seq "_")]))
+    (remove nil?
+      (if direction
+        [(str "# Accepted: direction " (:letter direction) " — " (:label direction))
+         (str "_accepts the triage report at entry " triage-seq
+              "; effort " (name (:effort direction)) "_")
+         "" (:shape direction)]
+        [(str "# Accepted: no direction chosen")
+         (str "_accepts the triage report at entry " triage-seq
+              "; the implementation direction is left open_")]))))
 
 (defn- pr-opened->markdown [{:keys [url title summary]}]
   (str/join "\n"
@@ -2895,8 +2993,9 @@
     :implementation-completed (first-line (:summary report))
     :blocker                  (or (:needs report) (first-line (:summary report)))
     :blocker-answered         (str "Answered " (:letter report) " — " (:label report))
-    :triage-accepted          (str "Accepted the triage report at entry "
-                                   (:triage-seq report))
+    :triage-accepted          (if-let [d (:direction report)]
+                                (str "Accepted: direction " (:letter d) " — " (:label d))
+                                "Accepted: no direction chosen")
     :review-report            (str "Review: " (name (:status report)))
     :baseline-review          (str "Baseline review: " (name (:verdict report)))
     :design-decision          (str "Design decision: " (name (:recommend report)))

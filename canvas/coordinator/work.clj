@@ -42,6 +42,11 @@
     {:signature [:=> [:catn [:tab :keyword] [:grouped :map]] :any]})
   (Operation option-action? "Whether an action id names one of a blocker's options."
     {:signature [:=> [:catn [:action-id :any]] :boolean]})
+  (Operation direction-action?
+    "Whether an action id names one of a triage report's solution directions. A SEPARATE id
+     space from a blocker's, though both are lettered branches of the latest entry, because a
+     blocker letter resumes an agent and a direction letter writes the verdict to Notion."
+    {:signature [:=> [:catn [:action-id :any]] :boolean]})
   (Operation position-carrying-action?
     "Whether an action must be rendered with the ledger position it was derived from — the
      optimistic lock that stops two people deciding the same thing twice."
@@ -107,7 +112,8 @@
   (Operation apply!
     "Accept a triage verdict — execute it, then record the acceptance on the ledger. Resumes
      nobody. `opts` is what a gate click carries and a CLI apply does not: the ledger position
-     the button was rendered at, which a stale click is refused against."
+     the button was rendered at, which a stale click is refused against, and the index of the
+     solution direction the human chose."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:opts [:? :map]]] :any]})
   (Operation start-triage-page! "Force a triage for a watched row that has no workstream yet."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :any]})

@@ -2,6 +2,7 @@
   (:require [clojure.test :refer [deftest is]]
             [clojure.string :as str]
             [hiccup2.core :as h]
+            [nido.coordinator.work :as work]
             [nido.ui.views :as views]))
 
 (def ^:private sample-gate
@@ -85,6 +86,44 @@
     (is (str/includes? html "src/order.clj:88"))
     (is (str/includes? html "/gate/brian/ws-1/apply"))
     (is (not (str/includes? html "dismiss instead")))))
+
+(deftest a-direction-is-lettered-on-the-card-and-under-the-button
+  ;; The letter is the whole affordance: the button says "A", so the card has to
+  ;; say "A" too or the reader has nothing to match it against. Both are derived
+  ;; from POSITION (report/option-letter), which is why they cannot drift.
+  (let [gate (assoc triage-gate
+                    :actions (work/gate-actions
+                              :triage true nil
+                              {:report-format :triage-report
+                               :directions (get-in triage-gate [:report :directions])
+                               :seq 4}))
+        html (views/gate-pane gate)]
+    (is (str/includes? html "class=\"option-letter\">A<"))
+    (is (str/includes? html "/gate/brian/ws-1/direction-a?entry=4")
+        "and the button carries the ledger position it was rendered at")
+    (is (str/includes? html "Defer decision")
+        "beside branches, the accept says what accepting without one means"))
+  (is (not (str/includes? (views/gate-pane triage-gate) "Defer decision"))
+      "a gate whose action set holds no directions says Apply, as it always did"))
+
+(deftest the-on-apply-block-says-what-the-effort-will-actually-be
+  ;; It lists what lands on the ticket, and once a direction can be clicked the
+  ;; report's own effort is no longer that: a chosen branch's size is what lands.
+  (let [effort-line (fn [report]
+                      (->> (str/split-lines
+                            (str/replace (views/gate-pane (assoc triage-gate :report report))
+                                         #"><" ">\n<"))
+                           (filter #(str/includes? % "Effort:")) first))
+        deferred    (assoc-in (:report triage-gate) [:notion-writes :effort] :squirrel)]
+    (is (str/includes? (effort-line deferred) "the direction you choose")
+        "a deferred size beside choosable branches: the click is what sets it")
+    (is (str/includes? (effort-line (assoc deferred :directions [])) "deferred")
+        "and with no branches there is nothing to set it — the size follows from
+         the design, which is what :squirrel means")
+    (is (str/includes? (effort-line (assoc-in deferred [:directions 0 :effort] :squirrel))
+                       "deferred")
+        "a report whose branches predate the sized-direction bound offers none, so
+         nothing on the card may promise a click will settle the size")))
 
 (deftest gate-pane-empty-is-calm
   (is (str/includes? (views/gate-pane nil) "Nothing needs you")))
@@ -958,23 +997,25 @@
     (is (str/includes? html "/workstreams/brian/ws-1/gate/drop"))
     (is (not (str/includes? html "/gate/apply")) ":ready offers no Apply")))
 
-(deftest workstream-pane-unparked-notion-triage-offers-only-dismiss
-  ;; :triage (origin :notion) with no parked session → just the off-radar Dismiss,
-  ;; same as any other origin — Notion no longer fences it off.
+(deftest workstream-pane-unparked-notion-triage-offers-no-reply
+  ;; :triage (origin :notion) with no parked session → the off-radar Dismiss and
+  ;; the accept, which needs no agent. Reply is the only one withheld: it is the
+  ;; one that reaches for a session that is not there.
   (let [html (views/workstream-pane
               (assoc sample-ws :stage :triage :sessions [] :on-latest? true) {})]
     (is (str/includes? html "/workstreams/brian/ws-1/gate/dismiss"))
-    (is (not (str/includes? html "/gate/apply")))
+    (is (str/includes? html "/workstreams/brian/ws-1/gate/apply"))
     (is (not (str/includes? html "Send &amp; resume")))))
 
-(deftest workstream-pane-unparked-slack-triage-offers-only-dismiss
-  ;; :triage (origin :slack) with no parked session → just the off-radar Dismiss,
-  ;; no Apply/Reply. Slack rows keep the local Dismiss (nothing else drives them off
-  ;; the board).
+(deftest workstream-pane-unparked-slack-triage-offers-no-reply
+  ;; :triage (origin :slack) with no parked session → the same set a Notion row
+  ;; gets, which is the point: the accept is gated on the report rather than on
+  ;; the origin or on a session. Slack rows keep the local Dismiss (nothing else
+  ;; drives them off the board).
   (let [html (views/workstream-pane
               (assoc sample-ws :origin :slack :stage :triage :sessions [] :on-latest? true) {})]
     (is (str/includes? html "/workstreams/brian/ws-1/gate/dismiss"))
-    (is (not (str/includes? html "/gate/apply")))
+    (is (str/includes? html "/workstreams/brian/ws-1/gate/apply"))
     (is (not (str/includes? html "Send &amp; resume")))))
 
 (deftest workstream-pane-renders-incoming-actions
