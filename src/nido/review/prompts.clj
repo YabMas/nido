@@ -322,6 +322,12 @@
          (->> recut
               (map #(str "- " (:kind %) " → " (name (:remedy %)) "\n"))
               (apply str))
+         "The loop performs the move shown, and only where the finding's own\n"
+         "`remedy` field is that same move. One asking for anything else — a\n"
+         "split, or a repair that is not a move of the layers at all — is\n"
+         "refused and becomes a park. Rule it `recut` all the same: that refusal\n"
+         "is where the finding gets its answer, and the alternative is the loop\n"
+         "performing a move the finding's own author ruled out.\n"
          "\n"
          "NOT A FIXER'S WORK — kinds that ask where a boundary belongs and name\n"
          "no move the loop can make. These are decisions: `park` them, or\n"
@@ -443,6 +449,40 @@
                "  layer.")
     :how  (str "count the added instances of anything that has to stay rare\n"
                "  ACROSS layers rather than within one.")}])
+
+(def remedy-vocabulary
+  "What a composition finding answers when asked which shape change it needs.
+
+   The reshape stage checks it against the move the finding's KIND routes to and
+   refuses where the two differ, because a kind names a class of defect and not
+   the move one instance of it wants. Two findings can both be
+   `duplicated-across-layers` and one of them be resolvable only by splitting a
+   layer — a move the loop does not have. With only the kind to read, that
+   finding is folded, and a fold is exactly what its own body ruled out; named
+   here, it is refused and put to a human instead.
+
+   `split` is a value of its own because it is the remedy a cut defect most
+   often has and the one the loop most conspicuously lacks: nothing here ADDS a
+   boundary. `other` takes everything else, including a defect whose repair is a
+   change to the code rather than to the layers — which most of
+   `composition-kinds` is.
+
+   `move` — squashing one file's changes down between two layers that both
+   survive — is deliberately not offered, and `nido.review.stages/reshape-plan`
+   is why. No kind routes to it: it is how that stage narrows a fold whose span
+   it cannot take whole, which is a decision about carrying out a remedy rather
+   than a remedy to ask for. Offered here it would split the honest answer on
+   such a finding in two, and the half that named the narrowing would be refused
+   as disagreeing with its kind."
+  [{:remedy "fold"
+    :means "collapse the layers this spans into one, losing every boundary between them"}
+   {:remedy "reorder"
+    :means "put the upper layer below the lower one; both survive"}
+   {:remedy "split"
+    :means "divide a layer in two — no move here adds a boundary"}
+   {:remedy "other"
+    :means (str "anything else, including a repair that changes the code rather "
+                "than the layers")}])
 
 (def ^:private asks-heading
   {:cut    "THE CUT — are these the right pieces?"
@@ -612,6 +652,15 @@
      "says so by coming back empty. Do not pad it with what the layer reviews\n"
      "already hold.\n\n"
      "- `kind` is one of the values above.\n"
+     "- `remedy` is the shape change THIS defect needs — answer for the defect\n"
+     "  in front of you, not for its kind:\n"
+     (->> remedy-vocabulary
+          (map #(str "    " (:remedy %) " — " (:means %) "\n"))
+          (apply str))
+     "  Where what you want is not a move the loop has, say so. A split or an\n"
+     "  other is refused and put to a human, and that is the right outcome for\n"
+     "  it. A fold named because it was the closest word available gets\n"
+     "  performed, on layers your own body may have argued against merging.\n"
      "- `layers` names every layer the defect spans, by the label exactly as\n"
      "  written above, in stack order. Two or more, always. Filling it with one\n"
      "  is the test above telling you this finding belongs to that layer.\n"

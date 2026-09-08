@@ -41,15 +41,27 @@
   (is (= [] (strict-mode-violations
              (json/parse-string (codex/schema-json true) true)))))
 
-(deftest composition-schema-demands-the-kind-and-the-span
+(deftest composition-schema-demands-the-kind-the-remedy-and-the-span
   (let [item (get-in (json/parse-string (codex/schema-json true) true)
                      [:properties :findings :items])]
     (is (= (mapv :kind prompts/composition-kinds)
            (get-in item [:properties :kind :enum]))
         "the enum is the taxonomy the primer teaches — a kind the prompt names
          but the schema refuses is a 400 on every round")
+    (is (= (mapv :remedy prompts/remedy-vocabulary)
+           (get-in item [:properties :remedy :enum]))
+        "and the remedies are the ones it is offered — a reviewer that cannot say
+         `split` has to answer with a move the loop will then perform")
     (is (= "array" (get-in item [:properties :layers :type])))
-    (is (every? (set (:required item)) ["kind" "layers"]))))
+    (is (every? (set (:required item)) ["kind" "remedy" "layers"]))))
+
+(deftest every-move-a-kind-is-reshaped-by-can-be-asked-for
+  ;; The reshape stage refuses a finding whose remedy is not its kind's, so a
+  ;; move the taxonomy routes to but the reviewer cannot name is a kind that can
+  ;; never be recut — silently, on every finding of it.
+  (doseq [r (keep :remedy prompts/composition-kinds)]
+    (is (some #(= (name r) (:remedy %)) prompts/remedy-vocabulary)
+        (str (name r) " is a remedy no composition finding can ask for"))))
 
 (deftest schema-json-without-a-composition-is-the-plain-findings-schema
   (is (= (json/parse-string (slurp (io/resource "review/findings_schema.json")) true)

@@ -320,6 +320,17 @@ layers, it is not yours"))
     (doseq [{:keys [kind]} prompts/composition-kinds]
       (is (str/includes? s kind) (str kind " is missing from the primer")))))
 
+(deftest composition-block-asks-for-the-remedy-and-says-what-refusing-buys
+  ;; The reviewer is the only reader that knows which move the defect in front
+  ;; of it actually needs. Offered the values without being told that a split is
+  ;; refused ON PURPOSE, it reaches for the nearest performable word and the
+  ;; loop performs it.
+  (let [s (prompts/composition-block {:layers two-layers})]
+    (doseq [{:keys [remedy]} prompts/remedy-vocabulary]
+      (is (str/includes? s remedy) (str remedy " is missing from the primer")))
+    (is (str/includes? s "not for its kind"))
+    (is (str/includes? s "refused and put to a human"))))
+
 (deftest composition-block-is-nil-below-two-layers
   ;; Not a degradation: with nothing to compose the whole-stack target IS the
   ;; branch review, and priming it as a composition pass would tell it to
@@ -430,6 +441,18 @@ layers, it is not yours"))
           (str (:kind k) " must not be offered as a recut")))
     (is (str/includes? out "ADVISORY")
         "the advisory destination is named")))
+
+(deftest the-warden-is-told-what-a-recut-actually-performs
+  ;; It rules `recut` and the loop decides what happens next. Told only which
+  ;; move each kind maps to, it reads the routing table as a promise, and a
+  ;; recut the reshape stage refuses for its remedy looks like the loop losing
+  ;; the finding rather than answering it.
+  (let [out (prompts/warden-prompt {:findings findings :history [] :design design
+                                    :toc a-toc})]
+    (is (str/includes? out "only where the finding's own"))
+    (is (str/includes? out "refused and becomes a park"))
+    (is (str/includes? out "Rule it `recut` all the same")
+        "or the warden routes around the one record the refusal leaves")))
 
 (deftest the-warden-sees-the-designs-claimed-decomposition
   ;; Without it the warden cannot tell that the stack has three layers where the

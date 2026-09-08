@@ -1699,10 +1699,28 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                    (when remedy [(keyword kind) remedy])))
         prompts/composition-kinds))
 
+(def ^:private routed-remedies
+  "The moves some composition kind is reshaped by, as a set.
+
+   What separates the two halves of a remedy refusal in the sentence a human
+   reads: a finding asking for a `reorder` where its kind is folded is asking
+   for the wrong move, and one asking for a `split` is asking for a move this
+   stage does not have at all."
+  (set (vals remedy-by-kind)))
+
 (defn ^{:malli/schema [:=> [:cat :any :Finding] :map]}
   reshape-plan
   "What to do about one finding whose remedy is the stack's shape — or, when
    nothing can be done about it here, which precondition failed.
+
+   The move comes from the finding's own `remedy` where it names one, and the
+   stage acts only where that is the move its kind is reshaped by. The two
+   disagreeing is a refusal rather than a tie broken toward the taxonomy: a
+   finding whose body argues that folding two layers cannot resolve the
+   dependency between them, and asks instead for one of them to be split, has
+   named the fold as the wrong answer — and the kind alone cannot tell that from
+   a finding the fold would have settled. A finding that names nothing still
+   plans from its kind; the refusal is about a remedy a finding NAMES.
 
    The layers a defect spans are read back in STACK order rather than in the
    order the finding happens to list them, so `lower` is the bottom-most named
@@ -1738,6 +1756,7 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
   [stack finding]
   (let [index  (into {} (map-indexed (fn [i l] [(layer-label l) i])) stack)
         named  (vec (sort (distinct (keep index (:layers finding)))))
+        asked  (:remedy finding)
         remedy (remedy-by-kind (:kind finding))]
     (cond
       (> 2 (count named))
@@ -1749,6 +1768,15 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
       {:refused :no-remedy
        :because (str (if-let [k (:kind finding)] (name k) "this kind")
                      " is repaired by completing a layer, not by moving a boundary")}
+
+      (and asked (not= asked remedy))
+      {:refused :remedy-mismatch
+       :because (str "it asks for a " (name asked) " and a " (name (:kind finding))
+                     " is reshaped by a " (name remedy) "; "
+                     (if (contains? routed-remedies asked)
+                       "the loop performs the move a finding names, never another one"
+                       (str "a " (name asked) " is not a move the loop has, and it "
+                            "does not answer with the nearest one it does")))}
 
       :else
       (let [lo    (long (first named))
@@ -1836,7 +1864,8 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
    the plan was refused, the attempt was made and failed, or the run's one
    attempt is already spent — and terminal with no path is exactly the state a
    park describes."
-  #{"refused" "unnamed-layers" "no-remedy" "span-has-holes" "already-attempted"})
+  #{"refused" "unnamed-layers" "no-remedy" "remedy-mismatch" "span-has-holes"
+    "already-attempted"})
 
 (defn ^{:malli/schema [:=> [:cat :any :any :int] :any]}
   park-refused-recuts

@@ -49,10 +49,10 @@
   normalize-finding
   "Codex native finding (keyword keys) -> normalized finding.
 
-   `kind` and `layers` are added only when the finding carries them, which is
-   only ever the composition pass: a layer review is not asked for them, and
-   stamping every finding with two nils would put the composition vocabulary on
-   findings that have no claim to it."
+   `kind`, `remedy` and `layers` are added only when the finding carries them,
+   which is only ever the composition pass: a layer review is not asked for
+   them, and stamping every finding with three nils would put the composition
+   vocabulary on findings that have no claim to it."
   [raw]
   (let [loc (:code_location raw)
         lr  (:line_range loc)]
@@ -65,6 +65,7 @@
              :line-start (:start lr)
              :line-end   (:end lr)}
       (:kind raw)         (assoc :kind (keyword (:kind raw)))
+      (:remedy raw)       (assoc :remedy (keyword (:remedy raw)))
       (seq (:layers raw)) (assoc :layers (vec (:layers raw))))))
 
 (defn- with-id [f] (assoc f :id (finding-id f)))
@@ -112,19 +113,19 @@
 
 (defn ^{:malli/schema [:=> [:cat :any] :any]}
   composition-schema
-  "The findings schema with the composition pass's two extra fields: the `kind`
-   it must classify the defect as, and the `layers` it must show the defect
-   spans.
+  "The findings schema with the composition pass's three extra fields: the
+   `kind` it must classify the defect as, the `remedy` it says the defect needs,
+   and the `layers` it must show the defect spans.
 
    Derived from the base schema rather than kept beside it as a second resource.
-   It IS the findings schema plus those two, and a copy would quietly stop being
-   that the first time the base gains a field — leaving the pass that most needs
-   a change to the review contract as the one place that never sees it.
+   It IS the findings schema plus those three, and a copy would quietly stop
+   being that the first time the base gains a field — leaving the pass that most
+   needs a change to the review contract as the one place that never sees it.
 
-   The `kind` enum comes from `prompts/composition-kinds`, the same list the
-   primer teaches. A taxonomy the prompt names but the schema will not accept is
-   not a soft mismatch: strict structured-output mode rejects the response, so
-   every round 400s before the review turn starts.
+   Both enums come from the lists the primer teaches, `prompts/composition-kinds`
+   and `prompts/remedy-vocabulary`. A value the prompt names but the schema will
+   not accept is not a soft mismatch: strict structured-output mode rejects the
+   response, so every round 400s before the review turn starts.
 
    Every added property is also added to `required`, for the same reason —
    strict mode demands it of every object node."
@@ -135,9 +136,12 @@
                    (assoc-in [:properties :kind]
                              {:type "string"
                               :enum (mapv :kind prompts/composition-kinds)})
+                   (assoc-in [:properties :remedy]
+                             {:type "string"
+                              :enum (mapv :remedy prompts/remedy-vocabulary)})
                    (assoc-in [:properties :layers]
                              {:type "array" :items {:type "string"}})
-                   (update :required #(into (vec %) ["kind" "layers"]))))))
+                   (update :required #(into (vec %) ["kind" "remedy" "layers"]))))))
 
 (defn ^{:malli/schema [:=> [:cat :boolean] :string]}
   schema-json

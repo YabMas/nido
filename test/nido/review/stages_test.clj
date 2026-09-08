@@ -1415,6 +1415,73 @@
                                         {:kind :broken-intermediate :layers ["lower" "upper"]})))
       "a kind whose remedy is to complete a layer is not a reshape"))
 
+(deftest a-recut-asking-for-a-move-the-loop-does-not-have-is-refused
+  ;; The case: a finding whose body said moving the whole document down could
+  ;; not resolve the dependency, because the section assumed both fixes already
+  ;; existed, and asked for a SPLIT. Its kind alone routes to a fold, and the
+  ;; fold is the one move its author had ruled out — so it ran.
+  (let [p (stages/reshape-plan two-layer-stack
+                               {:kind :duplicated-across-layers :remedy :split
+                                :layers ["lower" "upper"]})]
+    (is (= :remedy-mismatch (:refused p))
+        "a remedy the loop does not have is a decision for a human, not a fold")
+    (is (nil? (:remedy p)) "and no plan, so `run-reshape-stage` attempts nothing")
+    (is (str/includes? (:because p) "asks for a split")
+        "the human deciding it is told what was actually asked for")
+    (is (str/includes? (:because p) "not a move the loop has")
+        "and that the loop has nothing to offer it, rather than a preference")))
+
+(deftest a-recut-asking-for-another-kinds-move-is-refused-too
+  ;; Both halves of the refusal are the same rule — the loop performs the move
+  ;; the finding names — and a reorder cannot resolve a duplication any more
+  ;; than a split can, so substituting the fold here is the same substitution.
+  (let [p (stages/reshape-plan two-layer-stack
+                               {:kind :duplicated-across-layers :remedy :reorder
+                                :layers ["lower" "upper"]})]
+    (is (= :remedy-mismatch (:refused p)))
+    (is (str/includes? (:because p) "never another one")
+        "and it says the loop does not substitute, not that the move is unknown")))
+
+(deftest a-recut-naming-its-kinds-own-move-is-planned
+  (is (= :fold (:remedy (stages/reshape-plan two-layer-stack
+                                             {:kind :duplicated-across-layers
+                                              :remedy :fold
+                                              :layers ["lower" "upper"]})))
+      "agreement between the finding and its kind is the case the stage acts on"))
+
+(deftest a-recut-naming-no-remedy-at-all-still-plans-from-its-kind
+  ;; The refusal is about a remedy a finding NAMES. A finding carrying none —
+  ;; every one raised before the field existed, and every one a test writes —
+  ;; is not a finding that asked for something else.
+  (is (= :fold (:remedy (stages/reshape-plan two-layer-stack
+                                             {:kind :duplicated-across-layers
+                                              :layers ["lower" "upper"]})))))
+
+(deftest a-kind-with-no-move-answers-with-its-own-reason
+  ;; Not `remedy-mismatch`: that this kind is repaired by completing a layer is
+  ;; the more useful thing to tell whoever reads the park, and it is true
+  ;; whatever the finding asked for.
+  (is (= :no-remedy
+         (:refused (stages/reshape-plan two-layer-stack
+                                        {:kind :broken-intermediate :remedy :fold
+                                         :layers ["lower" "upper"]})))))
+
+(deftest a-recut-refused-for-its-remedy-becomes-a-park
+  ;; The whole point of refusing: a recut is withheld from the fixers on
+  ;; purpose, so a refusal that went only to the :reshapes array would leave the
+  ;; finding with no path at all.
+  (let [ctx {:config {:cwd "/w" :base "main"} :iter 3
+             :findings [{:handle "h-1" :disposition :recut
+                         :kind :duplicated-across-layers :remedy :split
+                         :layers ["lower" "upper"]
+                         :title "the fix-results section belongs above both fixes"}]}]
+    (with-redefs [stages/session-stack (fn [_ _] two-layer-stack)]
+      (let [out   ((:run stages/reshape-stage) ctx)
+            parks (get-in out [:carry :parks])]
+        (is (= ["remedy-mismatch"] (mapv :outcome (:reshapes out))))
+        (is (= 3 (:since (parks "h-1"))))
+        (is (str/includes? (:because (parks "h-1")) "asks for a split"))))))
+
 (deftest a-defect-is-reshaped-once-per-run
   ;; It comes back next round under new words if the reshape did not clear it,
   ;; and without the handle it would be reshaped again every round for as long
