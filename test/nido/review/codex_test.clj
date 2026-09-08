@@ -67,13 +67,38 @@
   (let [{:keys [findings overall-correctness]} (codex/parse-output sample-output)]
     (is (= "incorrect" overall-correctness))
     (is (= 1 (count findings)))
-    (is (= {:title "[P1] Remove the extra accumulation"
+    (is (= {:title "Remove the extra accumulation"
             :body "Overcharges every payment."
             :priority 1 :reach :structural :confidence 0.9
             :file "/w/pay.js" :line-start 4 :line-end 4
             :id (codex/finding-id {:file "/w/pay.js" :line-start 4
-                                   :title "[P1] Remove the extra accumulation"})}
+                                   :title "Remove the extra accumulation"})}
            (first findings)))))
+
+(deftest parse-output-drops-the-priority-the-title-repeats
+  ;; The reviewer states its priority twice — `[P1]` on the title and the
+  ;; `priority` field — and every reader renders the field. A title that keeps
+  ;; its tag reaches the fixer as `- [P1] [P1] Remove the extra accumulation`,
+  ;; which is the prompt telling it the loop cannot read its own findings.
+  (let [f (first (:findings (codex/parse-output sample-output)))]
+    (is (= "Remove the extra accumulation" (:title f))
+        "the title is the finding's sentence; the priority is the priority field")
+    (is (= 1 (:priority f))
+        "stripping the tag must not lose the priority — the field is what says it")
+    (is (= 1 (count (re-seq #"\[P\d\]" (prompts/fix-prompt {:findings [f]}))))
+        "the fixer sees the priority once")))
+
+(deftest parse-output-keeps-a-title-that-is-not-a-priority-tag
+  ;; The strip is anchored and shaped, so a title that legitimately opens with a
+  ;; bracket keeps it. A finding about `[Pn]` parsing would otherwise be renamed
+  ;; by the loop that reported it.
+  (let [out (str "{\"findings\":[{\"title\":\"[PATCH] guard the empty range\","
+                 "\"body\":\"b\",\"confidence_score\":0.5,\"priority\":2,"
+                 "\"reach\":\"local\",\"code_location\":{\"absolute_file_path\":\"/w/a.clj\","
+                 "\"line_range\":{\"start\":1,\"end\":2}}}],"
+                 "\"overall_correctness\":\"incorrect\"}")]
+    (is (= "[PATCH] guard the empty range"
+           (:title (first (:findings (codex/parse-output out))))))))
 
 (deftest finding-id-is-stable-and-position-independent
   ;; Indices into "this round's findings" cannot survive re-attribution across

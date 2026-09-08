@@ -23,6 +23,28 @@
   [{:keys [file line-start title]}]
   (digest/short-id (str file "|" line-start "|" title)))
 
+(def ^:private leading-priority-re
+  "The `[P2] ` a reviewer is asked to open its title with."
+  #"^\s*\[P\d\]\s*")
+
+(defn- untagged-title
+  "The title without the priority it opens with.
+
+   `review_prompt.md` asks for the priority TWICE — as a `[Pn]` on the front of
+   the title, which is what makes a reviewer commit to a number in prose, and in
+   the `priority` field, which is the one everything downstream renders from. A
+   title that keeps its tag therefore reaches every reader doubled; the fixer was
+   handed `- [P2] [P2] Restore the pool's configured statement timeout`.
+
+   Dropped at ingest rather than at each place that prepends the field, so a
+   later reader of a finding cannot reintroduce it. It also leaves the title as
+   the finding's own sentence, which is what `finding-id` here and the
+   cross-reviewer dedup in `nido.review.stages` hash: with the tag in, two
+   reviewers reporting one defect at different priorities were two findings, and
+   a reviewer that re-raised a finding at a new priority raised a new one."
+  [title]
+  (str/replace (str title) leading-priority-re ""))
+
 (defn ^{:malli/schema [:=> [:cat :map] :Finding]}
   normalize-finding
   "Codex native finding (keyword keys) -> normalized finding.
@@ -34,7 +56,7 @@
   [raw]
   (let [loc (:code_location raw)
         lr  (:line_range loc)]
-    (cond-> {:title      (:title raw)
+    (cond-> {:title      (untagged-title (:title raw))
              :body       (:body raw)
              :priority   (:priority raw)
              :reach      (some-> (:reach raw) keyword)

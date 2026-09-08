@@ -277,11 +277,11 @@
 (defn- strip-priority
   "The title without the priority it may already carry.
 
-   Priority is a FIELD, and this line renders it from that field — so a
-   reviewer that also writes it into the title gets `[P2] [P2] …`. Stripped
-   here rather than demanded of the reviewers: the prompt does not forbid it,
-   several of them do it, and a renderer that cannot survive a redundant prefix
-   is the wrong place to hold that rule."
+   Priority is a FIELD, and this line renders it from that field — so a title
+   that also carries it reads `[P2] [P2] …`. The rule is held at ingest, by
+   `nido.review.codex/normalize-finding`; this survives a tagged title anyway,
+   because a report.json is rendered long after the run that wrote it, by a
+   loop that need not be the one that parsed its findings."
   [title]
   (str/replace (str title) leading-priority-re ""))
 
