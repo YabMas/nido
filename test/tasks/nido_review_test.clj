@@ -960,14 +960,16 @@
   (is (nil? (t/parked-blocker
              [{:disposition :closed :title "t"}
               {:disposition :declined :title "u"}
-              {:disposition :recut :title "v"}]))))
+              {:disposition :recut :title "v"}]
+             nil))))
 
 (deftest a-parked-finding-becomes-an-answerable-halt
   ;; The ledger refuses a choice written as prose, and rightly — an essay can
   ;; only be answered by typing one back. The branches have to be options.
   (let [b (t/parked-blocker
            [{:disposition :park :title "the aggregate rounds twice"}
-            {:disposition :fix :title "not this one"}])]
+            {:disposition :fix :title "not this one"}]
+           nil)]
     (is (= :blocker (:format b)))
     (is (str/includes? (:summary b) "the aggregate rounds twice"))
     (is (str/includes? (:summary b) "1 finding") "counts only what is parked")
@@ -979,8 +981,52 @@
   ;; Written by an agent, so it goes through the same write boundary every other
   ;; typed event does — including the rule that rejects branches written as
   ;; prose, which is enforced after the schema and only on write.
-  (let [b (t/parked-blocker [{:disposition :park :title "t"}])]
+  (let [b (t/parked-blocker [{:disposition :park :title "t"}] nil)]
     (is (= b (report/validate-event :blocker b)))))
+
+(deftest with-no-verdict-the-gate-asks-and-recommends-nothing
+  ;; A run with no design record to judge against has derived no answer, and a
+  ;; flagged branch would be a recommendation nobody made.
+  (let [b (t/parked-blocker [{:disposition :park :title "t"}] nil)]
+    (is (not-any? :recommended? (:options b)))
+    (is (str/includes? (:needs b) "Does the design stand?"))))
+
+(deftest a-standing-verdict-that-names-a-repair-becomes-a-third-branch
+  ;; The two original branches both discard the remedy: one declines findings the
+  ;; verdict had already worked out how to fix, the other throws away a record it
+  ;; had just found sound. Neither is what the run concluded.
+  (let [b (t/parked-blocker [{:disposition :park :title "socket ownership"}]
+                            {:verdict :strained
+                             :needs "fork the scope before opening the socket"})
+        third (last (:options b))]
+    (is (= 3 (count (:options b))))
+    (is (= "fork the scope before opening the socket" (:summary third))
+        "the remedy travels verbatim — option-input replays a chosen branch's summary
+         to the agent, so this is how the repair survives the click")
+    (is (true? (:recommended? third)))
+    (is (not-any? :recommended? (butlast (:options b)))
+        "one branch carries the verdict's answer, not several")
+    (is (str/includes? (:needs b) "strained")
+        "the gate states the answer it holds instead of asking the question again")
+    (is (= b (report/validate-event :blocker b))
+        "a three-branch halt is still a halt the ledger will take")))
+
+(deftest a-verdict-that-invalidates-recommends-superseding-and-adds-no-branch
+  ;; :invalidated and :standing-challenged put the record itself in question, so
+  ;; a repair inside the existing design is not on offer however specific the
+  ;; verdict's :needs is — offering it would be the gate contradicting the
+  ;; judgment it is carrying.
+  (let [b (t/parked-blocker [{:disposition :park :title "t"}]
+                            {:verdict :invalidated :needs "the boundary has to move"})]
+    (is (= 2 (count (:options b))))
+    (is (true? (:recommended? (second (:options b)))))
+    (is (nil? (:recommended? (first (:options b)))))))
+
+(deftest a-standing-verdict-naming-no-repair-recommends-declining
+  (let [b (t/parked-blocker [{:disposition :park :title "t"}] {:verdict :sound})]
+    (is (= 2 (count (:options b)))
+        "there is no remedy to carry, so there is no third answer")
+    (is (true? (:recommended? (first (:options b)))))))
 
 (deftest a-run-outside-a-session-says-what-it-cannot-reach
   ;; It runs — and should — but without the cache, the ledger, the design record
@@ -1128,6 +1174,26 @@
       (is (= "strained" (get-in report [:design-verdict :verdict :verdict]))
           "report.json is where the rest of the run's evidence lives, and now the verdict too")
       (is (= "no-workstream" (get-in report [:design-verdict :ledger]))))))
+
+(deftest the-design-verdict-is-recorded-before-the-halt-it-answers
+  ;; Two failures ride on this order, and the ledger positions are the evidence
+  ;; for both. The gate asks whether the design stands; written first, it asks a
+  ;; question the run answers minutes later. And a :design-verdict places on the
+  ;; :design stage — appended AFTER a halt it reads to pipeline/unanswered-blocker
+  ;; as the work having moved on regardless, so the halt reached no gate at all.
+  (let [kinds (atom [])]
+    (with-redefs [rloop/run-loop (fn [cfg]
+                                   (assoc ((run-loop-writing-a-report :escalated) cfg)
+                                          :findings [{:disposition :park
+                                                      :title "socket ownership"}]))
+                  stages/discover-design-record (fn [_] a-design)
+                  layers/conflicted (fn [_ _] [])
+                  verdict/run! (fn [_] a-verdict)
+                  lifecycle/session-from-cwd (fn [_] {:project "nido" :session "s1"})
+                  csession/workstream-id-for (fn [_ _] "ws-1")
+                  ws/append-entry! (fn [_ _ {:keys [kind]} _] (swap! kinds conj kind))]
+      (t/loop-cmd ":cwd" "/w")
+      (is (= [:review :design-verdict :blocker] @kinds)))))
 
 ;; ── An abort's own account ──────────────────────────────────────────────────
 ;;

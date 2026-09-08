@@ -213,6 +213,29 @@
                       (ex-message e))))
       nil)))
 
+(defn- verdict-supports
+  "Which branch of the halt this run's design verdict already argues for, or nil
+   when there is no verdict to read.
+
+   A lookup rather than a judgment: the gate's question — does the design stand? —
+   is the verdict's own question, so the verdict's own vocabulary decides. One
+   that invalidates the record argues for superseding it; one that leaves it
+   standing argues for declining the findings; one that leaves it standing AND
+   names a repair argues for neither, and that third answer is the one the gate
+   could not express."
+  [v]
+  (when v
+    (cond (verdict/decision? v) :supersede
+          (:needs v)            :repair
+          :else                 :stands)))
+
+(defn- recommend
+  "Flag a branch as the one the run's own reading supports. Added rather than set
+   false on the rest, because `:recommended? false` on a branch reads as a
+   judgment against it, and a run with no verdict has made none."
+  [branch supported?]
+  (cond-> branch supported? (assoc :recommended? true)))
+
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   parked-blocker
   "Pure: the halt a run holding parked findings owes a human, or nil.
@@ -223,39 +246,70 @@
    and a report nobody was told to open; a run that takes hours and finishes
    while nobody is watching has told no one anything.
 
-   The branches are the two the warden could already see, and they are stated as
-   what taking each COSTS rather than as their names: a gate answered on a name
-   alone is how the wrong branch gets taken by a click. `:options` rather than
-   prose because the ledger refuses a choice written as an essay, and rightly —
-   an essay can only be answered by typing one back."
-  [findings]
+   The branches are stated as what taking each COSTS rather than as their names:
+   a gate answered on a name alone is how the wrong branch gets taken by a click.
+   `:options` rather than prose because the ledger refuses a choice written as an
+   essay, and rightly — an essay can only be answered by typing one back.
+
+   `verdict` is this run's design verdict, or nil when the pass found nothing to
+   judge against, was skipped, or produced no answer. It is the answer to the
+   question this gate asks, so the gate carries it rather than asking again: the
+   branch it argues for is flagged, and a verdict that leaves the design standing
+   while naming a repair adds a THIRD branch whose summary is that repair
+   verbatim — the answer neither of the other two can express, since one declines
+   the findings and the other throws the record away. `option-input` replays a
+   chosen branch to the agent in full, so the remedy travels with the click."
+  [findings verdict]
   (when-let [parked (seq (filter #(= :park (:disposition %)) findings))]
-    (let [titles (str/join "; " (map :title parked))]
+    (let [titles   (str/join "; " (map :title parked))
+          supports (verdict-supports verdict)]
       {:format  :blocker
        :summary (str "The review loop is holding " (count parked)
                      (if (= 1 (count parked)) " finding" " findings")
                      " it has no move for: " titles)
-       :needs   (str "Each of these says the design is in question rather than its "
-                     "execution, so the loop stopped rather than patching it away. "
-                     "Does the design stand?")
-       :options [{:label "The design stands"
-                  :summary "The findings are answered by the design as written."
-                  :consequence (str "They are declined on the record and stop being "
-                                    "re-raised. If that is wrong, the next round has "
-                                    "no way to tell.")}
-                 {:label "The design is wrong"
-                  :summary "Supersede the design record, then re-run the review."
-                  :consequence (str "Everything judged against the old record is "
-                                    "judged again, including work already fixed.")}]})))
+       :needs   (if-not supports
+                  (str "Each of these says the design is in question rather than its "
+                       "execution, so the loop stopped rather than patching it away. "
+                       "Does the design stand?")
+                  (str "Each of these says the design is in question rather than its "
+                       "execution. This run's design verdict answers that — "
+                       (name (:verdict verdict)) ". "
+                       (case supports
+                         :repair    (str "The design stands and the verdict names the "
+                                         "repair. Is that repair owed here?")
+                         :stands    (str "The design stands and the verdict names no "
+                                         "repair. Are these findings declined?")
+                         :supersede (str "The design does not stand. Is the record "
+                                         "superseded?"))))
+       :options (cond-> [(recommend
+                          {:label "The design stands"
+                           :summary "The findings are answered by the design as written."
+                           :consequence (str "They are declined on the record and stop being "
+                                             "re-raised. If that is wrong, the next round has "
+                                             "no way to tell.")}
+                          (= :stands supports))
+                         (recommend
+                          {:label "The design is wrong"
+                           :summary "Supersede the design record, then re-run the review."
+                           :consequence (str "Everything judged against the old record is "
+                                             "judged again, including work already fixed.")}
+                          (= :supersede supports))]
+                  (= :repair supports)
+                  (conj {:label "Take the repair the verdict names"
+                         :summary (:needs verdict)
+                         :consequence (str "The design record is untouched, so nothing already "
+                                           "fixed is judged again — but the findings stay open "
+                                           "until the repair lands.")
+                         :recommended? true}))})))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   append-blocker!
   "Append the halt, if there is one. Best-effort for the same reason
    `append-review-entry!` is: a finished review must not become a failure because
    a side record could not be written. Returns the blocker, or nil."
-  [cwd final]
+  [cwd final verdict]
   (try
-    (when-let [blocker (parked-blocker (:findings final))]
+    (when-let [blocker (parked-blocker (:findings final) verdict)]
       (when-let [{:keys [project session]} (lifecycle/session-from-cwd cwd)]
         (when-let [ws-id (csession/workstream-id-for (keyword project) session)]
           (ws/append-entry! (keyword project) ws-id {:kind :blocker}
@@ -1041,12 +1095,21 @@
     (when-not ws-id
       (println (str "review-loop: ⚠ no :review entry reached a ledger"
                     " — this run is recorded in " report-path " alone")))
-    (when-let [b (append-blocker! cwd final)]
-      (println (str "review-loop: ⚠ " (:summary b)))
-      (println "  → answer it at the workstream gate; the loop has no move for it"))
+    ;; The verdict BEFORE the halt, and the order is the whole point twice over.
+    ;; It is the answer to the question the halt asks, so a halt filed first is a
+    ;; gate offering to decline findings the run already knew how to repair. And
+    ;; a :design-verdict is a :design-stage entry: appended after the halt it is
+    ;; the work having moved on, which is exactly what pipeline/unanswered-blocker
+    ;; reads it as, so the halt reached no gate at all.
+    ;;
+    ;; The halt survives a verdict pass that fails, because that pass catches its
+    ;; own exceptions and answers nil — the only loss is the third branch.
     (let [outcome (append-design-verdict! cwd final @report-atom config)]
       (record-verdict! outcome report-atom report-path)
-      (print-verdict! (:verdict outcome)))
+      (print-verdict! (:verdict outcome))
+      (when-let [b (append-blocker! cwd final (:verdict outcome))]
+        (println (str "review-loop: ⚠ " (:summary b)))
+        (println "  → answer it at the workstream gate; the loop has no move for it")))
     ;; Last, so the analysis session finds everything this run wrote — the
     ;; report, the :review ledger entry and the design verdict are all on
     ;; disk by the time the envelope exists.
