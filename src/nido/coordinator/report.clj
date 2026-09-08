@@ -1341,6 +1341,30 @@
    ;; is broken and leaves finding it as an exercise, on a nine-layer branch
    ;; whose conflict is mid-stack and which `jj resolve --list` reports as clean.
    [:conflicted {:optional true} [:sequential string?]]
+   ;; The repairs a fixer wrote that the stack would not take. Nothing in the
+   ;; counts above says one was ever attempted — the rebase refused it and it
+   ;; was put back, so the branch is exactly what was reviewed and the findings
+   ;; it was aimed at come back looking like findings nobody touched. On
+   ;; :fix-rolled-back that is the whole of what the run did.
+   ;;
+   ;; `:commit` is what the repair was on before `jj op restore` undid it. The
+   ;; commit stays in the operation log, so the id is what recovers the edit
+   ;; itself, and it is here rather than the fixer's account for that reason:
+   ;; `jj show` is the record, the account is a claim about it and stays in
+   ;; report.json. `:conflicted` is what the rebase collided with, which is
+   ;; where the layer order is wrong.
+   [:rolled-back {:optional true}
+    [:sequential
+     [:map {:closed true}
+      ;; Absent on a branch with no layers, which is what the fix plan calls
+      ;; nil and most sessions are.
+      [:layer      {:optional true} string?]
+      [:round      {:optional true} int?]
+      [:commit     {:optional true} string?]
+      [:conflicted [:sequential string?]]
+      ;; The findings the refused repair was for, by the same handle-or-id
+      ;; `:open` names them under, so a reader can join the two lists.
+      [:handed     [:sequential string?]]]]]
    ;; The two revisions on the one status that ends because they differ:
    ;; `:reviewed-at` is what the round pinned before it fanned out, `:now` is
    ;; what the fix stage found. The status says the tree moved and the pair says
@@ -2446,7 +2470,8 @@
 (defn- review->markdown [{:keys [status base base-rev rounds findings-fixed
                                  findings-remaining findings-kept remaining-handed
                                  remaining-parked report-path
-                                 summary open kept conflicted drift reshaped]}]
+                                 summary open kept conflicted drift reshaped
+                                 rolled-back]}]
   (str/join "\n"
     (remove nil?
       [(str "# Review: " (name status))
@@ -2503,6 +2528,26 @@
        ;; agreed at all — and agreeing to ship a known defect is the thing here
        ;; most worth being able to point at later.
        (when (seq kept) (review-findings->markdown "Decided and kept" kept))
+       ;; Under the findings, because this is what explains one of them: a
+       ;; repair was written for it and the stack refused it, so the finding is
+       ;; open for a reason nothing else in the entry states. The counts read
+       ;; identically to a round in which no fixer was ever launched, and the
+       ;; layer order is what has to move rather than the code.
+       (when (seq rolled-back)
+         (str "\n## Repairs the stack refused\n"
+              "A fixer wrote each of these and the rebase would not take it, so"
+              " it was put back — the branch is exactly what was reviewed and"
+              " the findings below them are untouched.\n"
+              (str/join "\n"
+                        (for [{:keys [layer round commit conflicted handed]} rolled-back]
+                          (str "- **" (or layer "the branch") "**"
+                               (when round (str " round " round))
+                               (when commit (str "  `" commit "`"))
+                               (when (seq conflicted)
+                                 (str "\n  - conflicted "
+                                      (str/join ", " (map #(str "`" % "`") conflicted))))
+                               (when (seq handed)
+                                 (str "\n  - handed " (str/join ", " handed))))))))
        ;; Above the summary and above the report link, because it is the one
        ;; thing here that must be acted on before anything else is read: the
        ;; branch is holding conflict markers in committed text.

@@ -215,6 +215,70 @@
                        "xlortuwzrtlu")
         "and a reader of the workstream is told where to go")))
 
+(deftest a-refused-repair-reaches-the-ledger-entry-that-outlives-the-run-dir
+  ;; The status that most needs a human carried the least: the branch is
+  ;; unchanged, so the counts read exactly like a round no fixer was launched
+  ;; for, and the entry named neither the layer nor what it collided with.
+  ;; Recovering what the fixer had edited meant opening an agent transcript.
+  (let [final {:status :fix-rolled-back
+               :history []
+               :findings [{:handle "d74147c1" :id "d74147c1"
+                           :title "the digest is not in the contracts"
+                           :disposition :fix}]
+               :carry {:rolled-back
+                       {"a1" {:layer "a1" :since 3 :commit "27b8d03a"
+                              :conflicted ["uoorwwyp" "nzmrrztu"]
+                              :account "added the digest to all five contracts"
+                              :findings [{:id "d74147c1"
+                                          :title "the digest is not in the contracts"}]}}}}
+        ev    (t/review-event final
+                              {:summary {:rounds 3 :findings-fixed 0}
+                               :target {:base "main" :base-rev "x"}}
+                              "/runs/r/report.json")]
+    (is (= [{:layer "a1" :round 3 :commit "27b8d03a"
+             :conflicted ["uoorwwyp" "nzmrrztu"] :handed ["d74147c1"]}]
+           (:rolled-back ev))
+        "the layer, the repair's own commit and what it collided with — the
+         account stays on the report, because `jj show` on the commit is the
+         edit itself rather than a claim about it")
+    (is (= ev (report/validate-event :review ev))
+        "the ledger's schema is closed, so an unadmitted key is not a failure —
+         it silently erases the whole entry")
+    (let [md (report/report->markdown (assoc ev :format :review-report))]
+      (is (str/includes? md "Repairs the stack refused"))
+      (is (str/includes? md "27b8d03a") "the id that recovers the edit")
+      (is (str/includes? md "uoorwwyp") "and where the layer order is wrong"))))
+
+(deftest a-refusal-answered-by-a-later-round-is-not-carried-to-the-ledger
+  ;; The carry is pruned as findings settle, so what reaches the entry is the
+  ;; refusals still standing over findings still open. A run that refused a
+  ;; repair in round 1 and closed the finding in round 2 has nothing to hand a
+  ;; reader.
+  (let [ev (t/review-event {:status :converged :history [] :findings []
+                            :carry {:rolled-back {}}}
+                           {:summary {:rounds 2 :findings-fixed 1}
+                            :target {:base "main" :base-rev "x"}}
+                           "/runs/r/report.json")]
+    (is (not (contains? ev :rolled-back)))))
+
+(deftest a-rolled-back-run-names-the-collision-on-the-terminal
+  ;; The remedy line says the branch is unchanged and a re-run earns the same
+  ;; refusal — which leaves the operator holding a verdict and no target. Which
+  ;; layer collided with which is what a reorder would have to be aimed at.
+  (let [out (str/join "\n"
+                      (t/outcome-lines
+                       {:status :fix-rolled-back
+                        :carry {:rolled-back
+                                {"a1" {:layer "a1" :since 1
+                                       :conflicted ["lktsqrrn" "llqpmolo"]
+                                       :findings [{:id "d74147c1"}]}}}}
+                       {:rounds []}
+                       "/runs/r/report.json"))]
+    (is (str/includes? out "refused: a1"))
+    (is (str/includes? out "lktsqrrn"))
+    (is (str/includes? out "what is in question is the layer order")
+        "the remedy sentence and the ids it is about, on the same screen")))
+
 (defn- ledger-review-statuses
   "The statuses the ledger's :review entry will accept, read off the schema
    rather than restated here — a hand-kept copy is the thing that drifts."

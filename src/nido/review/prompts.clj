@@ -118,8 +118,8 @@
 
 (defn ^{:malli/schema [:=> [:cat :any] [:maybe :string]]}
   prior-fixes-block
-  "What a fixer already landed on the range under review, the findings it was
-   handed, and what it said about them.
+  "What a fixer already aimed at the range under review, the findings it was
+   handed, what it said about them, and whether the repair is in the code.
 
    The reviewer starts cold every round and is shown a diff, never a history, so
    nobody in the loop is ever asked the one question a repair raises: did that
@@ -135,22 +135,37 @@
    one: a reviewer that believes it has been talked out of the diff, which is
    worse than not being told. What it buys is something falsifiable — a fixer
    that says it covered the enum check but not the cross-field rule has named
-   where to look."
+   where to look.
+
+   A REFUSED entry is the same claim about an edit that is NOT in the range: the
+   rebase would not take the repair and it was put back, so the code is what the
+   round before it read and the finding is untouched. It is the one entry here
+   whose findings are still true by construction, and saying so is the whole
+   point of carrying it — the round that had none of this re-read a
+   byte-identical patch and returned `correct` on the P2 it was hiding."
   [prior-fixes]
   (when (seq prior-fixes)
     (str
      "A FIXER ALREADY WORKED ON WHAT YOU ARE REVIEWING, EARLIER IN THIS RUN.\n\n"
-     "Each entry is a repair that landed, what it was handed, and the fixer's\n"
+     "Each entry is a repair a fixer wrote, what it was handed, and the fixer's\n"
      "own words about it. Those words are a CLAIM about the code, not a record\n"
      "of it — check them against the range below rather than accepting them.\n\n"
+     "An entry marked REFUSED is NOT in the range below. The rebase would not\n"
+     "take that repair and it was put back, so the code you are reading is\n"
+     "unchanged and every finding under it is still true. Its account says\n"
+     "where the fixer looked, not what the code now does.\n\n"
      (->> prior-fixes
-          (map (fn [{:keys [round commit findings account]}]
+          (map (fn [{:keys [round commit findings account refused]}]
                  (str "- round " round
-                      (when commit (str ", landed " commit))
+                      (if (seq refused)
+                        (str ", REFUSED — it conflicted " (str/join ", " refused))
+                        (when commit (str ", landed " commit)))
                       (when (seq findings) " — handed:") "\n"
                       (apply str (map handed-line findings))
                       (when-not (str/blank? (str account))
-                        (str "  the fixer says: "
+                        (str (if (seq refused)
+                               "  the fixer said of the edit that was put back: "
+                               "  the fixer says: ")
                              (account-excerpt account (count findings))
                              "\n")))))
           (str/join "\n"))
@@ -158,7 +173,9 @@
      "A finding here that is STILL TRUE is the most valuable thing you can\n"
      "return: say which one, and what you saw that the repair did not reach. A\n"
      "SWEEP was told to fix its instance and then audit for the rest, so a\n"
-     "sibling it missed is at these same lines and is yours to find.\n\n")))
+     "sibling it missed is at these same lines and is yours to find. Under a\n"
+     "REFUSED repair they are all still true, and nothing else in this run\n"
+     "knows it.\n\n")))
 
 (def disposition-vocabulary
   "What may become of a finding. One entry per destination: the word the warden

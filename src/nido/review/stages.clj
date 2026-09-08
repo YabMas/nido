@@ -386,9 +386,35 @@
    {}
    history))
 
-(defn ^{:malli/schema [:=> [:cat :any :any] :any]}
+(defn- refused-accounts
+  "The repairs the stack REFUSED, grouped by layer in the shape `fix-accounts`
+   produces, so that both reach a reviewer as one list of what a fixer has
+   already tried on the code in front of it.
+
+   Off the carry rather than the history: a round appends a history entry only
+   when a fix landed, and the round this exists for landed one repair and had
+   another put back.
+
+   `:refused` is what tells the two apart, and it holds the change ids the
+   rebase collided with rather than a bare flag — a reviewer asking why the
+   repair is not in front of it gets the answer in the same row. The commit the
+   repair was on does NOT ride along: this reader cannot look at it, and a
+   change id beside a landed one would read as a claim that the edit is in the
+   range."
+  [carried]
+  (reduce-kv (fn [acc label {:keys [since account findings conflicted]}]
+               (assoc acc label
+                      [{:round since
+                        :account account
+                        :refused (vec conflicted)
+                        :findings (mapv #(select-keys % [:title :sweep]) findings)}]))
+             {}
+             carried))
+
+(defn ^{:malli/schema [:=> [:cat :any :any :any] :any]}
   with-fix-memory
-  "Hand each target the repairs a fixer already landed on it in this run.
+  "Hand each target the repairs a fixer already aimed at it in this run — the
+   ones that landed, and the ones the stack put back.
 
    Every reviewer starts cold and is shown a diff, so nothing in the loop ever
    asks whether a fix closed what it was handed. The fix stage has recorded the
@@ -398,6 +424,13 @@
    because the reviewer reading those lines had never been told a repair for
    them had already landed there.
 
+   A refused repair is here for the mirror-image reason. The code is exactly
+   what the round before read, so the finding is untouched and its reviewer has
+   no diff to notice — one round re-read a byte-identical patch and returned
+   `correct` on a P2 the round before had ruled `fix`. Both kinds are one list
+   in round order, because they answer one question: what has already been tried
+   here.
+
    Keyed on the layer label, which is what `fix-plan` groups by and what the
    commit is recorded under — except on a branch with no layers, where the two
    sides spell the same thing differently; see `fix-label`.
@@ -405,13 +438,13 @@
    Like `with-composition-memory`, nothing it adds reaches the cache key —
    `with-patch-hashes` builds that from the range, so a value that changes every
    round cannot switch the cache off by living here."
-  [targets history]
-  (let [by-label (fix-accounts history)]
+  [targets history refused]
+  (let [by-label (merge-with into (fix-accounts history) (refused-accounts refused))]
     (if (empty? by-label)
       targets
       (mapv (fn [t]
               (if-let [prior (seq (get by-label (fix-label t)))]
-                (assoc t :prior-fixes (vec prior))
+                (assoc t :prior-fixes (vec (sort-by #(or (:round %) 0) prior)))
                 t))
             targets))))
 
@@ -732,7 +765,8 @@
         all     (with-patch-hashes
                  cwd (-> (review-targets cwd base)
                          (with-composition-memory (:history ctx))
-                         (with-fix-memory (:history ctx))))
+                         (with-fix-memory (:history ctx)
+                                          (get-in ctx [:carry :rolled-back] {}))))
         {:keys [review skipped]} (to-review cached all)
         targets review
         _       (announce-targets! ctx {:review review :skipped skipped})
@@ -1403,25 +1437,27 @@
             (filter #(= :park (:disposition %)) ruled))))
 
 (defn ^{:malli/schema [:=> [:cat :any :any] :any]}
-  carried-declines
-  "The fixer declines this run is still holding — the previous round's carry,
-   with everything this round SETTLED taken out.
+  carried-while-open
+  "A per-layer carry, with every entry this round SETTLED taken out.
 
-   A fixer decline is not the warden's `:declined` disposition and the two are
-   kept apart everywhere they meet: that one is a decision that the defect is
-   real and the branch is shipping it, this one is a fixer refusing work it was
-   handed and deciding nothing at all.
+   Two channels are carried this way, and neither is a ruling: a fixer's
+   argument for refusing work it was handed, and a repair the stack would not
+   take. A fixer decline is not the warden's `:declined` disposition and the two
+   are kept apart everywhere they meet — that one is a decision that the defect
+   is real and the branch is shipping it, this one is a fixer deciding nothing
+   at all — and a rolled-back repair decides even less: an edit was written and
+   the rebase refused it.
 
-   A decline is an argument about a finding, so it lives exactly as long as the
-   finding is open: the round that accepts the argument and closes, declines or
-   deviates the finding has answered it, and carrying it past that point tells a
-   later warden a decided thing is still owed. Mirrors `carried-parks`, which
-   drops a park a later round settles for the same reason.
+   Both are ABOUT a finding, so both live exactly as long as that finding is
+   open. The round that accepts the argument and closes, declines or deviates
+   the finding has answered it, and carrying it past that point tells a later
+   reader a decided thing is still owed. Mirrors `carried-parks`, which drops a
+   park a later round settles for the same reason.
 
    A layer whose every finding was settled drops out entirely. A layer holding a
-   mix keeps its argument beside the findings still open — the fixer made one
-   case about the batch it was handed, and half of it being answered does not
-   make the other half unargued."
+   mix keeps its entry beside the findings still open — the fixer made one case
+   about the batch it was handed, and half of it being answered does not make
+   the other half unargued."
   [prior ruled]
   (let [settled (into #{} (comp (filter settled?) (map #(or (:handle %) (:id %)))) ruled)]
     (reduce-kv (fn [acc label entry]
@@ -1480,7 +1516,12 @@
              :status :warden-indeterminate)
       (let [ruled (apply-rulings (:findings ctx) (:rulings decision) handles)
             parks (carried-parks (get-in ctx [:carry :parks] {}) ruled (:iter ctx))
-            declines (carried-declines (get-in ctx [:carry :fixer-declines] {}) ruled)
+            declines (carried-while-open (get-in ctx [:carry :fixer-declines] {}) ruled)
+            ;; The same lifetime rule over the other channel a fixer leaves
+            ;; behind. A refusal the stack made is spent the moment the finding
+            ;; it was aimed at is settled, and holding it past that would tell
+            ;; the next reviewer to look for a defect this round just closed.
+            refused  (carried-while-open (get-in ctx [:carry :rolled-back] {}) ruled)
             ;; A park is a question put to a human, and a run that keeps fixing
             ;; around one is answering a different question. Once a park has
             ;; stood this long the loop has nothing further to offer it, and
@@ -1509,7 +1550,8 @@
                                                      (map (juxt :id :handle))
                                                      ruled)
                                       :parks parks
-                                      :fixer-declines declines)
+                                      :fixer-declines declines
+                                      :rolled-back refused)
                         :control  (:decision decision))
             ctx' (if stale
                    (assoc ctx' :control :stop :status :unfixable
@@ -2002,6 +2044,43 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
           {:layer label :handed (handed-ids findings)})
         (subvec plan from)))
 
+(defn- refused-repair
+  "The record of a repair the stack would not take, as it stood BEFORE
+   `layers/restore-op!` put it back.
+
+   `:commit` and `:account` are what a LANDED fix keeps and this row used to
+   throw away. The commit stays in the operation log after the restore, so its
+   id is what recovers the edit itself; the account is the only reading of that
+   edit anyone will get, and recovering one otherwise meant opening the agent's
+   transcript. `:conflicted` is what the rebase collided with, which is where
+   the layer order is wrong rather than the code."
+  [label handed cid account conflicted]
+  (cond-> {:layer label :handed handed :conflicted (vec conflicted)}
+    (not (str/blank? (str cid)))     (assoc :commit cid)
+    (not (str/blank? (str account))) (assoc :account (str account))))
+
+(defn- refused-carry
+  "What the NEXT round is handed about a refused repair: the row, the round it
+   happened in, and the findings it was for.
+
+   The channel a decline already had. A rolled-back repair leaves its finding at
+   `:fix` and the code byte-identical, so without this the round after re-reads
+   the same patch with nothing to say that a repair for it was written and
+   refused — one did exactly that and returned `correct` on a P2.
+
+   The findings are named by handle where the warden gave one, exactly as
+   `:handed` is, so the carry and the report row point at one finding rather
+   than at two spellings of it a round apart. `:handed` comes off for that
+   reason: the titles and the sweep flag are what the next round's reviewer is
+   shown, and the ids alone beside them would be the same list twice."
+  [row iter findings]
+  (assoc (dissoc row :handed)
+         :since iter
+         :findings (mapv (fn [f] {:id (or (:handle f) (:id f))
+                                  :title (:title f)
+                                  :sweep (boolean (:sweep f))})
+                         findings)))
+
 (defn- run-fix-stage
   [ctx]
   (if (:dry-run? (:config ctx))
@@ -2179,9 +2258,19 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                                             (assoc :conflicted (vec still))
                                             (assoc :unattempted
                                                    (unattempted-tail plan (inc i)))))
-                               (update acc :rolled-back (fnil conj [])
-                                       {:layer label :handed handed
-                                        :conflicted (vec bad)}))))))))
+                               ;; Both records of the same refusal, and both are
+                               ;; new: the row used to name the layer and the
+                               ;; conflict and drop everything the fixer had
+                               ;; done, and nothing was handed to the next round
+                               ;; at all — which is the round that reads this
+                               ;; unchanged code.
+                               (let [row (refused-repair
+                                          label handed cid result-text bad)]
+                                 (-> acc
+                                     (update :rolled-back (fnil conj []) row)
+                                     (assoc-in [:carry :rolled-back label]
+                                               (refused-carry row (:iter ctx)
+                                                              findings)))))))))))
                  ctx (map-indexed vector plan)))
               ctx' (if (seq (:fixes ctx'))
                      (update ctx' :history (fnil conj [])

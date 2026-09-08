@@ -16,9 +16,16 @@
   (Operation exit-code
     "CLI exit code for a terminal review status. review-failed is the only"
     {:signature [:=> [:catn [:opts [:* :any]]] :any]})
+  (Operation refused-repairs
+    "The repairs the stack refused that a run is still holding, one row per layer. Read off the
+     carry rather than the terminal context, because a context is rebuilt every round and a run
+     can refuse a repair in one round and converge in the next — which is the case the terminal
+     context has nothing to say about."
+    {:signature [:=> [:catn [:final :map]] :any]})
   (Operation review-event
     "Pure: build a :review ledger payload from the loop's terminal value `final`"
-    {:signature [:=> [:catn [:opts [:* :any]]] :any]})
+    {:signature [:=> [:catn [:opts [:* :any]]] :any]
+     :delegates [refused-repairs]})
   (Operation append-review-entry!
     "Resolve cwd → session → workstream (the tasks.nido-ship path) and append one :review"
     {:signature [:=> [:catn [:opts [:* :any]]] :any]})
@@ -71,7 +78,8 @@
      It takes the terminal context AND the whole report, because a context is rebuilt every
      round: what a middle round did to the branch is remembered by the report alone."
     {:signature [:=> [:catn [:final :map] [:report :map] [:report-path :string]]
-                 [:sequential :string]]})
+                 [:sequential :string]]
+     :delegates [refused-repairs]})
   (Operation loop-cmd*
     "The `loop-cmd*` entry point."
     {:signature [:=> [:catn [:opts [:* :any]]] :any]})

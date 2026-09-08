@@ -65,6 +65,33 @@
                  (verdict/handed? handed f) (assoc :handed true))))
         findings))
 
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  refused-repairs
+  "The repairs the stack refused that the run is still holding, one row per
+   layer, oldest first.
+
+   Off `:carry` rather than off the terminal ctx. A ctx is rebuilt every round,
+   so `:rolled-back` on it is the last round's alone — and the run this was
+   written for refused a repair in round 1 and converged in round 2, which is
+   precisely the shape where the terminal ctx holds nothing. The carry drops a
+   layer whose findings a later round settled, so what is left is the refusals
+   still standing over findings still open.
+
+   Trimmed to what the ledger's closed schema admits. The fixer's own account is
+   not among it and is on the report's fix phase instead: `:commit` is the
+   repair as it stood before `jj op restore` put it back, and `jj show` on it is
+   the edit rather than a claim about the edit."
+  [final]
+  (->> (vals (get-in final [:carry :rolled-back] {}))
+       (sort-by (juxt #(or (:since %) 0) #(str (:layer %))))
+       (mapv (fn [{:keys [layer since commit conflicted findings]}]
+               (cond-> {:conflicted (vec conflicted)
+                        :handed (into [] (comp (map :id) (remove nil?) (map str))
+                                      findings)}
+                 layer       (assoc :layer (str layer))
+                 (int? since) (assoc :round since)
+                 commit      (assoc :commit (str commit)))))))
+
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   review-event
   "Pure: build a :review ledger payload from the loop's terminal value `final`
@@ -103,6 +130,7 @@
    layers said `0 fixed` about a branch it had rewritten."
   [final report report-path]
   (let [handed   (verdict/handed-to-a-fixer final)
+        refused  (refused-repairs final)
         open     (ledger-findings handed (verdict/open-across-run final))
         kept     (ledger-findings #{} (verdict/kept-across-run final))
         repaired (count (filter :handed open))
@@ -134,6 +162,13 @@
       ;; mid-stack, so `jj resolve --list` reports the branch clean and the ids
       ;; are the only pointer at what to open.
       (seq (:conflicted final)) (assoc :conflicted (vec (:conflicted final)))
+      ;; A repair the stack refused is the reason one of the findings above is
+      ;; still open, and it is a reason nothing else in the entry states: the
+      ;; branch is unchanged, so the counts read exactly like a round no fixer
+      ;; was launched for. It has to be durable here for the reason `:drift` and
+      ;; `:reshaped` are — the run dir holding report.json is routinely gone by
+      ;; the time anyone reads the workstream.
+      (seq refused)   (assoc :rolled-back refused)
       (:drift final)  (assoc :drift (:drift final))
       (seq reshaped)  (assoc :reshaped reshaped))))
 
@@ -804,6 +839,7 @@
   [final report report-path]
   (let [status (:status final)
         {:keys [unavailable conflicted drift]} final
+        refused  (refused-repairs final)
         reshaped (report/applied-reshapes report)]
     (cond-> [(str "review-loop: " (name status) " · report " report-path)]
       ;; A reviewer that refused said what it wants — credits, a login, an hour
@@ -817,6 +853,19 @@
       ;; only pointer at what to open.
       (seq conflicted)
       (conj (str "  conflicted: " (str/join ", " conflicted)))
+
+      ;; The repairs that were written and put back. On :fix-rolled-back the
+      ;; remedy line below says the branch is unchanged and a re-run earns the
+      ;; same refusal — which layer collided with which is what turns that into
+      ;; something to do, and it is what a reorder would have to be aimed at.
+      (seq refused)
+      (conj (str "  refused: "
+                 (str/join ", "
+                           (for [{:keys [layer conflicted]} refused]
+                             (str (or layer "the branch")
+                                  (when (seq conflicted)
+                                    (str " (conflicted "
+                                         (str/join ", " conflicted) ")")))))))
 
       ;; The two revisions the refusal is ABOUT. The remedy line below says the
       ;; tree moved; without these the operator cannot tell a rebase they did

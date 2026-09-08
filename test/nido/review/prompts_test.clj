@@ -547,6 +547,30 @@ layers, it is not yours"))
     (is (str/includes? out "CLAIM about the code, not a record")
         "a reviewer that believes the account has been talked out of the diff")))
 
+(deftest a-repair-the-stack-refused-says-the-code-is-unchanged
+  ;; A rolled-back repair leaves the range byte-identical, so the reviewer that
+  ;; reads it next has no diff to notice and every finding under it is still
+  ;; true. One round-2 reviewer re-read exactly such a patch with nothing to
+  ;; show it and returned `correct` on a P2 the round before had ruled `fix`.
+  (let [out (prompts/prior-fixes-block
+             [{:round 1 :refused ["lktsqrrn" "llqpmolo"]
+               :findings [{:title "add the digest to the owning contracts"}]
+               :account "added the digest to all five contracts"}])]
+    (is (str/includes? out "REFUSED")
+        "the entry has to be readable as an attempt rather than as a repair")
+    (is (str/includes? out "lktsqrrn")
+        "what it conflicted with, because that is where the layer order is wrong")
+    (is (str/includes? out "NOT in the range below")
+        "a reviewer told a repair happened and not told it was undone believes
+         the finding is closed — the failure this block exists to stop")
+    (is (str/includes? out "added the digest to all five contracts")
+        "the fixer's reading of an edit nobody else can now see")
+    (is (str/includes? out "put back")
+        "stated in the past, about an edit that is gone: present tense would
+         make the account a claim about the code in front of the reviewer")
+    (is (not (str/includes? out ", landed "))
+        "nothing landed, and a change id beside a landed one reads as one")))
+
 (deftest a-target-no-fixer-touched-is-told-nothing
   ;; nil, not an empty heading: a block saying a fixer worked here and naming
   ;; nothing reads as a repair the reviewer failed to be shown.

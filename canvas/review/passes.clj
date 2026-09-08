@@ -303,11 +303,12 @@
      is by construction somewhere its own layer's reviewer cannot go."
     {:signature [:=> [:catn [:history :any]] :any]})
   (Operation with-fix-memory
-    "Each target told what a fixer already landed on it in this run, and what the fixer said.
-     Nothing else in the loop asks whether a repair closed what it was handed — the reviewer
-     that would is shown a diff and no history, so a swept defect comes back at the lines the
-     fix was made on."
-    {:signature [:=> [:catn [:targets :any] [:history :any]] :any]
+    "Each target told what a fixer already aimed at it in this run — the repairs that landed
+     and the ones the stack put back — and what the fixer said about each. Nothing else in the
+     loop asks whether a repair closed what it was handed: the reviewer that would is shown a
+     diff and no history, so a swept defect comes back at the lines the fix was made on, and a
+     REFUSED repair leaves the range byte-identical with nothing at all to notice."
+    {:signature [:=> [:catn [:targets :any] [:history :any] [:refused :any]] :any]
      :delegates [fix-accounts]})
   (Operation with-sweep-memory
     "Each finding told which earlier rounds already swept its class. A class that comes back
@@ -320,11 +321,12 @@
      the reviewer stops mentioning it — carrying it is what stops the warden re-adjudicating
      one from scratch and what keeps its layer out of the convergence cache."
     {:signature [:=> [:catn [:prior :any] [:ruled :any] [:iter :int]] :any]})
-  (Operation carried-declines
-    "The fixer declines this run still holds, dropped as this round settles what they argue
-     about. A fixer that changes nothing leaves its finding at :fix, so without the carry its
-     argument reaches the report and neither the warden that could settle it nor the session
-     that would have to make it again."
+  (Operation carried-while-open
+    "A per-layer carry, dropped as this round settles what each entry is about. Two channels
+     are carried this way and neither is a ruling: a fixer's argument for refusing work it was
+     handed, and a repair the stack would not take. Both leave their finding at :fix and the
+     code as it was, so without the carry each reaches the report and neither the warden that
+     could settle it nor the next reviewer that would have to find it again."
     {:signature [:=> [:catn [:prior :any] [:ruled :any]] :any]})
   (Operation park-refused-recuts
     "A park for every recut the reshape stage could not act on, carrying its own refusal. The
