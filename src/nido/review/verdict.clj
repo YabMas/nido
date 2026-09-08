@@ -305,6 +305,18 @@
   [f]
   (or (:handle f) (:id f) [(:file f) (:line-start f) (:title f)]))
 
+(defn- repairs-aimed-at
+  "The findings a round's fix commits named as their own — the handles under
+   `:handed` on each of its `:fixes` rows, written by `stages/handed-ids` as the
+   warden's handle where it assigned one and the reviewer's id otherwise.
+
+   `:fixes` holds only what the stack KEPT. A repair it refused was rolled back
+   and is recorded under `:rolled-back`, and a round that stopped before its
+   fixers ran has no rows at all — so a handle here means a commit aimed at that
+   finding is in the branch, which is the premise both readers below rest on."
+  [fixes]
+  (into #{} (comp (mapcat :handed) (remove nil?)) fixes))
+
 (defn- final-rulings
   "Every finding the run raised, folded over all its rounds to one entry each
    carrying the ruling that stuck, ordered by the round that ruling landed in.
@@ -318,13 +330,16 @@
    Per identity, the LATEST ruling wins: a cut parked in round 3 and closed in
    round 7 is closed, and only its final disposition is asked about.
 
-   A `:fix` is dropped from every round but the last. It was actioned, and the
-   round after it is the check — if the fix did not take, the next round reports
-   it again and that later report is the one that survives the fold. In the FINAL
-   round there is no such round, so a finding handed to a fixer with nothing left
-   to verify it is still owed."
+   A `:fix` from an earlier round is dropped only where a repair for it actually
+   landed in that round. Then the round after it is the check — if the fix did
+   not take, the next round reports it again and that later report is the one
+   that survives the fold. Where no commit was ever aimed at it, the round after
+   read the same code its predecessor did and had nothing to re-report, so the
+   ruling is the last word on the finding and it is still owed. In the FINAL
+   round there is no round after it either way."
   [{:keys [history findings]}]
   (let [rounds   (conj (vec (map :findings history)) (vec findings))
+        repaired (mapv #(repairs-aimed-at (:fixes %)) history)
         last-idx (dec (count rounds))
         latest   (reduce (fn [acc [idx round-findings]]
                            (reduce (fn [a f]
@@ -335,7 +350,9 @@
                          (map-indexed vector rounds))]
     (->> (vals latest)
          (remove #(and (= :fix (:disposition %))
-                       (< (::round %) last-idx)))
+                       (< (::round %) last-idx)
+                       (contains? (get repaired (::round %) #{})
+                                  (or (:handle %) (:id %)))))
          (sort-by (juxt ::round #(str (:id %))))
          (mapv #(dissoc % ::round)))))
 
@@ -375,21 +392,24 @@
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   handed-to-a-fixer
-  "The findings a landed fix commit named as its own, across every round.
+  "The findings a fix commit the FINAL round landed named as its own.
 
-   The other half of `open-across-run`. A `:fix` in the final round stays open
-   because no round after it re-read the layer — but so does a finding no fixer
-   was ever launched for, and one number for both is the whole of what a run
-   that aborted its fix plan reported: `1 fixed · 11 still open`, with one
-   repaired-but-unchecked finding counted alongside nine nobody touched. The
-   join is `fixes[].handed`, which the fix stage has written since it was added
-   and nothing read back.
+   The other half of `open-across-run`, and its question is narrow: is there a
+   repair in the branch that no reviewer has read. Only the final round can be
+   holding one. An earlier round's repairs were re-read by the round after it,
+   and a finding raised again on top of a fix has by construction been checked
+   — so counting one here sends a reader to verify a repair the run's own later
+   reviewers have already read.
 
-   A ROLLED-BACK repair is deliberately not here. It left no commit, so the code
-   is exactly what the reviewers read and the finding is as untouched as one no
-   fixer saw."
-  [{:keys [history]}]
-  (into #{} (comp (mapcat :fixes) (mapcat :handed) (remove nil?)) history))
+   One number for this and for a finding no fixer was ever launched for is the
+   whole of what a run that aborted its fix plan reported: `1 fixed · 11 still
+   open`, with one repaired-but-unchecked finding counted alongside nine nobody
+   touched. `repairs-aimed-at` is why the final round's own `:fixes` is the
+   whole record — a rolled-back repair and a plan the round never reached are
+   both absent from it, and in both cases the code is exactly what the reviewers
+   read."
+  [final]
+  (repairs-aimed-at (:fixes final)))
 
 (defn ^{:malli/schema [:=> [:cat :any :any] :boolean]}
   handed?

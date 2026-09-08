@@ -236,10 +236,13 @@
     (is (empty? (verdict/open-across-run final)))))
 
 (deftest a-fix-is-owed-only-in-the-final-round
-  ;; An earlier round's fix was checked by the round after it. The last round's
-  ;; was not — there is no round after it to re-report the failure.
+  ;; A repair that LANDED in an earlier round was checked by the round after it.
+  ;; The last round's was not — there is no round after it to re-report the
+  ;; failure.
   (let [earlier {:status :converged
-                 :history [{:iter 1 :findings [{:handle "h" :title "t" :disposition :fix}]}
+                 :history [{:iter 1
+                            :fixes [{:layer "core" :commit "c1" :handed ["h"]}]
+                            :findings [{:handle "h" :title "t" :disposition :fix}]}
                            {:iter 2 :findings []}]
                  :findings []}
         latest  {:status :converged
@@ -268,6 +271,10 @@
                           :fixes [{:layer "diary-paging" :commit "d92edf80"
                                    :handed ["dd463b20"]}]
                           :findings []}]
+               ;; The round's own fix rows, which is where a fix-conflicted ctx
+               ;; carries them as well as into the history entry above.
+               :fixes [{:layer "diary-paging" :commit "d92edf80"
+                        :handed ["dd463b20"]}]
                :findings [{:handle "dd463b20" :title "the repaired one" :disposition :fix}
                           {:handle "4a9816d2" :title "nobody reached it" :disposition :fix}]}
         handed (verdict/handed-to-a-fixer final)
@@ -276,6 +283,49 @@
     (is (= ["the repaired one"]
            (mapv :title (filter #(verdict/handed? handed %) open)))
         "the join fixes[].handed has offered since it was added and nothing read")))
+
+(deftest a-repair-the-stack-refused-leaves-its-ruling-standing
+  ;; The round after a `fix` is the check only where a repair actually landed.
+  ;; This one was rolled back, so round 2 re-read a byte-identical patch and had
+  ;; nothing to say — and the ruling dropped out of the fold, so a run with the
+  ;; defect still in the branch recorded `0 still open` and ended `clean`.
+  (let [final {:status  :clean
+               :history [{:iter 1
+                          :fixes [{:layer "a2" :commit "9c1f2ab0" :handed ["e5d2c118"]}]
+                          :rolled-back [{:layer "a1" :handed ["d74147c1"]
+                                         :conflicted ["lktsqrrnxszy"]}]
+                          :findings [{:handle "d74147c1" :title "the digest is not on the contract"
+                                      :disposition :fix}
+                                     {:handle "e5d2c118" :title "the or-default" :disposition :fix}]}]
+               :findings []}]
+    (is (= ["the digest is not on the contract"]
+           (mapv :title (verdict/open-across-run final)))
+        "a repair the stack put back left the code exactly as the reviewers read
+         it, so the ruling on it is still the last word — while the repair that
+         DID land in the same round was checked by the round after and is gone")))
+
+(deftest an-aborted-round-hands-nothing-however-many-earlier-rounds-did
+  ;; Round 4's fix stage aborted before it launched anything, and the finding it
+  ;; was still holding had been repaired in round 1 and re-raised twice since —
+  ;; three reviewers read that commit. Reported as a repair nobody had checked,
+  ;; it sends whoever picks the branch up to verify work the run itself found
+  ;; wanting.
+  (let [final {:status  :workspace-drifted
+               :history [{:iter 1
+                          :fixes [{:layer "conversation-recording" :commit "48bfcef7"
+                                   :handed ["0ea2065e"]}]
+                          :findings [{:handle "0ea2065e" :title "samples split across chunks"
+                                      :disposition :fix}]}]
+               :unattempted [{:layer "audio-start" :handed ["0ea2065e"]}]
+               :findings [{:handle "0ea2065e" :title "samples split across chunks"
+                           :disposition :fix}]}
+        handed (verdict/handed-to-a-fixer final)
+        open   (verdict/open-across-run final)]
+    (is (= ["samples split across chunks"] (mapv :title open))
+        "still owed: the round that was going to repair it never ran")
+    (is (empty? (filter #(verdict/handed? handed %) open))
+        "and owed as work to DO, not work to check — no fixer was launched in
+         the round that stopped, whatever an earlier round landed")))
 
 (deftest a-rolled-back-repair-leaves-a-finding-as-untouched-as-any-other
   ;; The commit is gone, so the code is exactly what the reviewers read. Counting

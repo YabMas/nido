@@ -332,6 +332,10 @@
                :history [{:iter 1 :fixed-count 1 :findings []
                           :fixes [{:layer "diary-paging" :commit "d92edf80"
                                    :handed ["dd463b20"]}]}]
+               ;; The round's own fix rows: a fix-conflicted ctx carries them
+               ;; here as well as into the history entry above.
+               :fixes [{:layer "diary-paging" :commit "d92edf80"
+                        :handed ["dd463b20"]}]
                :findings [{:handle "dd463b20" :id "dd463b20" :title "the repaired one"
                            :disposition :fix}
                           {:handle "4a9816d2" :id "4a9816d2" :title "nobody reached it"
