@@ -15,6 +15,7 @@
    [babashka.fs :as fs]
    [clojure.string :as str]
    [nido.coordinator.daemon.pid :as daemon-pid]
+   [nido.coordinator.lane.pipeline :as pipeline]
    [nido.coordinator.record.activity :as activity]
    [nido.coordinator.record.session :as csession]
    [nido.coordinator.record.state :as cstate]
@@ -617,6 +618,34 @@
   [report-path]
   (or (terminal-status report-path) :detached))
 
+(def ^:private verb-stages
+  "The pipeline stage each of these verbs runs, so a verb can be compared with
+   the position that would have chosen for it. Three entries because there are
+   three verbs; a fourth would be a fourth entry, and no verb has two stages."
+  {:diff-review    :review-implementation
+   :baseline-round :verify-baseline
+   :design-round   :decide-design})
+
+(defn ^{:malli/schema [:=> [:cat :any :keyword] [:maybe :string]]}
+  off-position-line
+  "One line when the stage a verb was told to run is not the stage the ledger
+   says is due, or nil when they agree or there is nothing to compare against.
+
+   NOT A REFUSAL, and that is the point of it being a line. Every legitimate use
+   of these verbs is a person who knows the position and means something else —
+   re-judging a superseded record with `:seq`, judging against another tree with
+   `:code-cwd`. Refusing would take the override away at the moment it is most
+   wanted; saying nothing leaves the caller unable to tell an override from a
+   mistake, which is what a verb naming its own stage has always done."
+  [cwd kind]
+  (when-let [stage (verb-stages kind)]
+    (when-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
+      (let [due (:stage (:next (pipeline/of project ws-id)))]
+        (when (and due (not= due stage))
+          (str "note: this workstream is owed " (name due) ", not " (name stage)
+               " — running it because you named it."
+               " `bb nido:attach` runs whatever the ledger chooses."))))))
+
 (defn ^{:malli/schema [:=> [:cat :map :any :ProjectName :WorkstreamId] :any]}
   join-or-refuse!
   "What a run does when the workstream is already claimed: JOIN the holder when
@@ -985,7 +1014,8 @@
             (println (str "review-loop: running WITHOUT "
                           (str/join ", " (:missing context))
                           " — this run cannot skip converged layers, judge"
-                          " against a design, or record what it found")))]
+                          " against a design, or record what it found")))
+        _ (some-> (off-position-line cwd :diff-review) println)]
     ;; Everything from here runs under the claim, which is what makes a second
     ;; invocation join this run instead of reviewing the same tree from
     ;; underneath it. A caller that could not take it never reaches the engine.
@@ -1226,6 +1256,7 @@
                                         :machinery (provenance/loaded-from)}))
         plain  (frontend/plain?)
         emit   (frontend/emit-fn report-atom report-path clock plain)]
+    (some-> (off-position-line cwd (record-loop-kinds kind)) println)
     ;; Under the claim from here, exactly as the diff loop is: two record rounds
     ;; amending one workstream's ledger at once would each judge a record the
     ;; other is rewriting.

@@ -7,6 +7,7 @@
    work plane and make it shallow."
   (:require [fukan.common.vocab.code.module :refer [Module]]
             [fukan.common.vocab.code.operation :refer [Operation]]
+            [canvas.coordinator.lane.drive :as pipeline]
             [canvas.coordinator.record.state :refer [Path WorkstreamId]]
             [canvas.platform.project :refer [ProjectName]]
             [fukan.common.typing.malli]))
@@ -47,6 +48,17 @@
   (Operation append-design-verdict!
     "Run the design verdict and append it as a ledger event. Best-effort throughout,"
     {:signature [:=> [:catn [:opts [:* :any]]] :any]})
+  (Operation off-position-line
+    "One line when the stage a verb was told to run is not the stage the ledger says is due, or
+     nil when they agree or there is nothing to compare against.
+
+     NOT A REFUSAL, and that is why it is a line. Every legitimate use of these verbs is a
+     person who knows the position and means something else — re-judging a superseded record
+     with `:seq`, judging against another tree with `:code-cwd`. Refusing would take the
+     override away at the moment it is most wanted; saying nothing leaves a caller unable to
+     tell an override from a mistake, which is what a verb naming its own stage always did."
+    {:signature [:=> [:catn [:cwd :any] [:kind :keyword]] [:maybe :string]]
+     :delegates [pipeline/of]})
   (Operation refusal-lines
     "What to tell someone whose workstream is already busy with something ELSE. Pure, and it
      says WHAT is running rather than that something is — a refusal with no subject is the

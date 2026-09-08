@@ -7,6 +7,7 @@
    [babashka.fs :as fs]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing use-fixtures]]
+   [nido.coordinator.lane.pipeline :as pipeline]
    [nido.coordinator.record.activity :as activity]
    [nido.platform.core :as core]
    [nido.review.frontend :as frontend]
@@ -294,3 +295,35 @@
       (is (= 2 (count @captured)))
       (is (apply = (map :code-cwd @captured))
           "identical work must publish an identical target"))))
+
+;; ── A verb that runs a stage the ledger did not choose ──────────────────────
+
+(deftest a-verb-that-agrees-with-the-position-says-nothing
+  (with-redefs [stages/project+ws-from-cwd (constantly [:brian "ws-1"])
+                pipeline/of (constantly {:at :baselined
+                                         :next {:stage :verify-baseline
+                                                :mode :mechanical}})]
+    (is (nil? (review/off-position-line "/w" :baseline-round)))))
+
+(deftest a-verb-that-disagrees-names-both-stages-and-runs-anyway
+  ;; A line, never a refusal: every legitimate use of these verbs is a person
+  ;; who knows the position and means something else — an older :seq, another
+  ;; :code-cwd. Refusing would take the override away where it is most wanted.
+  (with-redefs [stages/project+ws-from-cwd (constantly [:brian "ws-1"])
+                pipeline/of (constantly {:at :design-decided
+                                         :next {:stage :approve-design
+                                                :mode :human}})]
+    (let [line (review/off-position-line "/w" :baseline-round)]
+      (is (some? line))
+      (is (str/includes? line "approve-design") "what is owed")
+      (is (str/includes? line "verify-baseline") "and what was asked for")
+      (is (str/includes? line "bb nido:attach") "and the door that would not have guessed"))))
+
+(deftest a-run-outside-a-workstream-has-nothing-to-disagree-with
+  (with-redefs [stages/project+ws-from-cwd (constantly nil)]
+    (is (nil? (review/off-position-line "/w" :diff-review)))))
+
+(deftest a-terminal-position-owes-nothing-so-nothing-is-said
+  (with-redefs [stages/project+ws-from-cwd (constantly [:brian "ws-1"])
+                pipeline/of (constantly {:at :shipped :next nil})]
+    (is (nil? (review/off-position-line "/w" :diff-review)))))
