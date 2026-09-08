@@ -325,3 +325,112 @@
         (let [pos (pipeline/of :brian id)]
           (is (= :blocked (:at pos)))
           (is (= :waiting-on-a-human (:skip (drive/fireable pos)))))))))
+
+;; ── What the driver does when it cannot advance at all ──────────────────────
+
+(defn- blockers-of [id]
+  (ws/entries-of :brian id :blocker))
+
+(deftest a-driven-workstream-with-no-session-parks-rather-than-skipping-quietly
+  ;; The stage is fireable and there is nowhere to run it. Before, that was a
+  ;; log line re-emitted every tick and nothing on the ledger at all.
+  (with-tmp
+    (fn []
+      (let [id (a-ws)]
+        (ws/append-entry! :brian id {:kind :intent}
+                          (pr-str {:format :intent :goal "g" :done-when ["d"]}))
+        (ws/append-entry! :brian id {:kind :baseline} (pr-str a-baseline))
+        (drive/drive! :brian id)
+        (let [out (first (drive/tick! (fn [_])))
+              halt (first (blockers-of id))]
+          (is (= :no-session (:skipped out))
+              "the tick still says what it always said, so the log is unchanged")
+          (is (some? halt) "and now the ledger says it too")
+          (is (str/includes? (:summary halt) "verify-baseline")
+              "the halt names the stage that could not run")
+          (is (str/includes? (:needs halt) "bb nido:session:up"))
+          (is (str/includes? (:needs halt) "bb nido:drive:remove")
+              "and the one branch a person can take without deciding anything"))))))
+
+(deftest a-mechanical-stage-with-no-runner-parks
+  ;; The table is redefined rather than leaning on whichever stage happens to be
+  ;; unwired today: what is under test is the driver's answer to a stage it
+  ;; cannot run, and that answer must not change as stages acquire runners.
+  (with-tmp
+    (fn []
+      (let [id (a-ws)]
+        (session/create! :brian id {:name "auto" :weight :heavy
+                                    :autonomy a-running-agent})
+        (ws/append-entry! :brian id {:kind :intent}
+                          (pr-str {:format :intent :goal "g" :done-when ["d"]}))
+        (ws/append-entry! :brian id {:kind :baseline} (pr-str a-baseline))
+        (drive/drive! :brian id)
+        (is (= :mechanical (:mode (:next (pipeline/of :brian id))))
+            "the projection names a mechanical stage")
+        (with-redefs [drive/mechanical-stages {}]
+          (let [out (first (drive/tick! (fn [_])))
+                halt (first (blockers-of id))]
+            (is (= :no-runner (:skipped out)))
+            (is (str/includes? (:summary halt) "verify-baseline"))
+            (is (str/includes? (:needs halt) "mechanical-stages"))))))))
+
+(deftest the-halt-names-no-options-so-no-click-can-clear-it
+  ;; A lettered option resumes a parked agent with an answer, and a stage that
+  ;; never started parked nobody. It is also what makes the parking terminate:
+  ;; :blocker-answered is written only by an option click, so a halt with none
+  ;; cannot be answered from a surface.
+  (with-tmp
+    (fn []
+      (let [id (a-ws)]
+        (ws/append-entry! :brian id {:kind :intent}
+                          (pr-str {:format :intent :goal "g" :done-when ["d"]}))
+        (ws/append-entry! :brian id {:kind :baseline} (pr-str a-baseline))
+        (drive/drive! :brian id)
+        (drive/tick! (fn [_]))
+        (is (nil? (:options (first (blockers-of id)))))))))
+
+(deftest a-wall-parks-once-and-the-next-tick-is-quiet
+  (with-tmp
+    (fn []
+      (let [id (a-ws)]
+        (ws/append-entry! :brian id {:kind :intent}
+                          (pr-str {:format :intent :goal "g" :done-when ["d"]}))
+        (ws/append-entry! :brian id {:kind :baseline} (pr-str a-baseline))
+        (drive/drive! :brian id)
+        (drive/tick! (fn [_]))
+        (let [out (first (drive/tick! (fn [_])))]
+          (is (= 1 (count (blockers-of id)))
+              "the halt made the position :blocked, so the second tick found a rest")
+          (is (= :waiting-on-a-human (:skipped out))))))))
+
+(deftest a-resting-decline-is-not-a-wall
+  ;; Waiting on a person is why a driven workstream is usually doing nothing.
+  ;; Parking on it would turn the ordinary case into a halt.
+  (with-tmp
+    (fn []
+      (let [id (a-ws)]
+        (session/create! :brian id {:name "auto" :weight :heavy
+                                    :autonomy a-running-agent})
+        (ws/append-entry! :brian id {:kind :intent}
+                          (pr-str {:format :intent :goal "g" :done-when ["d"]}))
+        (ws/append-entry! :brian id {:kind :baseline} (pr-str a-baseline))
+        (ws/append-entry! :brian id {:kind :baseline-review}
+                          (pr-str {:format :baseline-review :baseline-seq 2
+                                   :verdict :sufficient :reason "r"}))
+        (ws/append-entry! :brian id {:kind :design}
+                          (pr-str {:format :design :summary "s" :shape "sh"
+                                   :invariants ["one summing path"]
+                                   :standing {:relation :conforms}
+                                   :baseline {:seq 2 :relation :within}
+                                   :intent {:seq 1} :effort :S}))
+        (ws/append-entry! :brian id {:kind :design-decision}
+                          (pr-str {:format :design-decision :design-seq 4
+                                   :recommend :proceed :reason "r"
+                                   :checks [{:check :decomposable :status :held
+                                             :note "n"}]
+                                   :asks "is it worth it?"}))
+        (drive/drive! :brian id)
+        (let [out (first (drive/tick! (fn [_])))]
+          (is (= :waiting-on-a-human (:skipped out)))
+          (is (empty? (blockers-of id))
+              "nothing is wrong — a person simply owes an approval"))))))

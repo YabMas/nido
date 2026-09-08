@@ -52,8 +52,10 @@
    At most one stage per tick, because a driver that ran an arc to completion in one pass would
    be an agent nobody could interrupt.
 
-   Parking is how it stops: a stage that escalates records what it tried and what it needs, and
-   the workstream waits for a person rather than retrying into the same wall."
+   Parking is how it stops, and it stops in BOTH directions: a stage that escalates records what
+   it tried and what it needs, and a position the driver cannot advance at all records the stage
+   that had no runner. A driver able to decline without saying so leaves a workstream sitting at
+   a mechanical stage with nothing on its ledger to explain the silence."
   (Operation attempt "One entry for a halt's record — what a stage did and what came of it."
     {:signature [:=> [:catn [:opts :map]] :map]})
   (Operation halt-for "The halt record for a stage that reached an outcome."
@@ -82,9 +84,21 @@
      :delegates [park-on-escalate!]})
   (Operation in-flight? "Whether a drive run already claims this workstream."
     {:signature [:=> [:catn [:ws-id WorkstreamId]] :boolean] :delegates [runs/list-run-ids runs/read-run]})
-  (Operation tick! "Advance every allow-listed workstream by at most one stage."
+  (Operation tick!
+    "Advance every allow-listed workstream by at most one stage, and PARK the ones it cannot.
+
+     A decline is not always a halt, and the five that mean nothing is wrong are left alone:
+     waiting on a person, a mode this phase does not run, a drive Run already in flight, the
+     claim held by somebody else, and a terminal position. Everything else — a :mechanical stage
+     with no runner, a driven workstream with no session — appends a :blocker naming the stage,
+     because a log line re-emitted every tick is not a record the next reader of that ledger will
+     ever see.
+
+     Parking is self-limiting rather than guarded. A parked workstream reads :blocked, whose next
+     action is a person's, so `fireable` skips it from the following tick onward and no second
+     halt is written."
     {:signature [:=> [:catn [:submit! [:? :any]]] :any]
-     :delegates [driven in-flight? fireable]}))
+     :delegates [driven in-flight? fireable park!]}))
 
 (Module lane-spawn
   "The live path: turn a routed fire into a workstream, a run and a session, then submit it.

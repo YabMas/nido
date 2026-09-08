@@ -188,6 +188,69 @@
       (nil? (mechanical-stages stage))   {:skip :no-runner :stage stage}
       :else                              {:fire stage})))
 
+(defn- undrive-line
+  "How to stop the driver reaching this workstream, spelled out. In the halt
+   because a person reading it is being asked to do one of three things and this
+   is the only one they can do without deciding anything first."
+  [project ws-id]
+  (str "take it off the driver with `bb nido:drive:remove :project "
+       (name project) " :ws-id " ws-id "`"))
+
+(defn- wall-halt
+  "The halt for a position the driver cannot attempt at all — no runner for the
+   stage it names, or no session to run one in.
+
+   NAMES NO OPTIONS, and that is a decision rather than an omission. A lettered
+   option resumes a parked agent with an answer, and a stage that never started
+   parked nobody; none of the three things that would actually clear this — wire
+   a runner, bring a session up, stop driving the workstream — is something a
+   click on a blocker performs. So the branches are prose in `:needs`, the field
+   that exists for a stage to say what it could not settle, and what a person may
+   click on the resulting row is left exactly as it was.
+
+   It is also what makes the parking terminate. `unanswered-blocker` is cleared
+   by a `:blocker-answered`, which only an option click writes, so a halt naming
+   no options cannot be answered from a surface at all: the position stays
+   :blocked, whose next action is a person's, `fireable` skips the workstream
+   from the following tick, and no second halt is written until a later stage
+   record moves the ledger on — which is a fresh report about a wall still
+   standing rather than a repetition of one nobody read."
+  [project ws-id stage needs]
+  (halt-for {:stage   stage
+             :summary (str "the driver cannot run the " (name stage)
+                           " stage on this workstream")
+             :needs   (str needs ", or " (undrive-line project ws-id))}))
+
+(def ^:private wall-needs
+  "The two ways `tick!` declines that mean something is WRONG rather than that
+   nothing is owed, and what each needs said about it.
+
+   Every other decline is a resting state: waiting on a person, a mode this
+   phase does not run, a Run already in flight, a terminal position. Those are
+   why a driven workstream is usually doing nothing, and parking on one would
+   turn the ordinary case into a halt."
+  {:no-runner  (fn [_project _ws-id stage]
+                 (str "a runner for the " (name stage) " stage — nothing in "
+                      "`mechanical-stages` can run it"))
+   :no-session (fn [_project ws-id _stage]
+                 (str "a session for " ws-id " — the stage needs a worktree to "
+                      "run in, and `bb nido:session:up` is what makes one"))})
+
+(defn- decide-wall!
+  "Park for a decline that means something is wrong, and answer with the same
+   decision map either way.
+
+   `:skipped` is kept on the answer even when this parks, so the tick log keeps
+   saying what it always said. It says it ONCE: the halt makes the position
+   :blocked, and :waiting-on-a-human is a quiet skip."
+  [project ws-id position skip stage]
+  (let [answer {:ws-id ws-id :at (:at position) :skipped skip}]
+    (if-let [needs-fn (wall-needs skip)]
+      (assoc answer :halt (park! project ws-id
+                                 (wall-halt project ws-id stage
+                                            (needs-fn project ws-id stage))))
+      answer)))
+
 ;; ── Firing one ──────────────────────────────────────────────────────────────
 
 (defn- session-cwd
@@ -394,7 +457,13 @@
    cannot see a stage that has not written its record yet.
 
    Returns what it decided, per workstream, so an operator can read why nothing
-   happened as easily as why something did."
+   happened as easily as why something did.
+
+   And it PARKS what it cannot advance. A :mechanical stage with no runner, and
+   a driven workstream with no session, are not resting states — they are walls,
+   and a wall reported only as a log line re-emitted every second is a wall the
+   next reader of that ledger never sees. Both append a halt naming the stage.
+   Every other decline is left alone; see `wall-needs`."
   ([] (tick! nil))
   ([submit!]
    (let [submit! (or submit! executor/submit!)]
@@ -404,7 +473,7 @@
                        decision (fireable position)]]
              (cond
                (:skip decision)
-               {:ws-id ws-id :at (:at position) :skipped (:skip decision)}
+               (decide-wall! project ws-id position (:skip decision) (:stage decision))
 
                (in-flight? ws-id)
                {:ws-id ws-id :at (:at position) :skipped :already-running}
@@ -418,4 +487,5 @@
                              :trigger :drive})
                    {:ws-id ws-id :at (:at position) :fired (:fire decision)
                     :run-id (:id run)})
-                 {:ws-id ws-id :at (:at position) :skipped :no-session})))))))
+                 (decide-wall! project ws-id position :no-session
+                               (:fire decision)))))))))
