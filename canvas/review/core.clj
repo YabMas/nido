@@ -121,6 +121,23 @@
      Over the report for the same reason `applied-reshapes` is: a skip is decided per round
      and the question is about the run."
     {:signature [:=> [:catn [:report ReviewReport]] :map]})
+  (Operation in-flight
+    "The round, and the phase within it, a report was still in when it was last written — nil
+     for one whose run closed its own rounds.
+
+     `some?` on it is `did this run end`, asked of the value rather than of :status. The phase
+     is the part a later claimant acts on: every phase but `fix` reads the tree, and `fix`
+     launches agents that rewrite it."
+    {:signature [:=> [:catn [:report ReviewReport]] [:maybe :map]]})
+  (Operation orphaned
+    "The report forced terminal, for a run that stopped without writing one.
+
+     The counterpart of finalizing where there is no terminal context to read: what the run
+     stopped ON is the phase it was in rather than a judgement it reached. Dated when the run
+     was last OBSERVED, never now — a dead run's ending is a fact about the run, and the
+     reconciler's clock would date every orphan to whenever somebody next reviewed the branch."
+    {:signature [:=> [:catn [:report ReviewReport] [:at :string]] ReviewReport]
+     :delegates [in-flight]})
   (Operation apply-event "The report with one event folded in. Pure."
     {:signature [:=> [:catn [:report ReviewReport] [:event :map]] ReviewReport]})
   (Operation with-verdict
@@ -132,6 +149,38 @@
     {:signature [:=> [:catn [:report ReviewReport] [:outcome :map]] ReviewReport]})
   (Operation persist! "Write the report atomically, so a reader never sees half of one."
     {:signature [:=> [:catn [:report ReviewReport] [:path Path]] :any]}))
+
+(Module review-reconcile
+  "Settling the review runs that died on a tree, so a new one can start.
+
+   The counterpart of the daemon's startup reconciliation, run at the moment that makes it
+   sound: a caller holding the workstream's claim is the one process that may conclude every
+   other `running` report on this tree belongs to something dead, exactly as the daemon may at
+   startup. Without it a dead run's report says `running` for the life of the run dir, and
+   `review-analysis` fires only on a terminated run — so the loops that die are the ones never
+   read.
+
+   WHAT THE CLAIM NEVER COVERED is the agents a run launched. A fixer outlives the loop that
+   spawned it, keeps writing to the run dir and keeps rewriting the branch, so the workstream
+   reads as free while the tree is still moving. An orphan that stopped in its fix phase
+   therefore refuses the next run rather than letting it read a stack mid-edit — and settling
+   that orphan is what clears the refusal, so it fires once. One still being written to is left
+   non-terminal on purpose, so its refusal repeats until the writing stops."
+  (Operation fixing?
+    "Whether an orphan stopped in the phase that rewrites the tree. The whole of what a
+     claimant decides on: every other phase only reads the branch."
+    {:signature [:=> [:catn [:orphan :map]] :boolean]})
+  (Operation orphans
+    "Every review run that was reading this tree and never wrote a terminal status, oldest
+     write first. Sound only under the claim, which is what makes a `running` report a dead
+     process; a record round is not one of these, judging a ledger entry rather than the tree."
+    {:signature [:=> [:catn [:cwd Path] [:own-run-id [:maybe :string]]] [:sequential :map]]})
+  (Operation settle!
+    "Force each of them terminal, queue its analysis, and say whether the caller may review the
+     tree. Settles nothing, and proceeds, where there is no workstream — the same condition
+     `claiming` takes no claim on, and a run that took none has excluded nobody."
+    {:signature [:=> [:catn [:opts :map]] :map]
+     :delegates [orphans fixing?]}))
 
 (Module review-retreat
   "What a superseding record gave up, and what it grew.

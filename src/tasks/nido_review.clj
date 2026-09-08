@@ -26,6 +26,7 @@
    [nido.review.record :as record]
    [nido.review.loop :as rloop]
    [nido.review.provenance :as provenance]
+   [nido.review.reconcile :as reconcile]
    [nido.review.render :as render]
    [nido.review.retreat :as retreat]
    [nido.review.stages :as stages]
@@ -586,6 +587,63 @@
                " it is driving, so wait for this one to finish.")
           (str "  end it with `kill " (:pid their) "`, or wait for it to finish.")))))
 
+(defn- orphan-line
+  "One dead run, named by where it stopped and by the report a reader opens next."
+  [{:keys [run-id in-flight report-path]}]
+  (str "  " run-id " stopped in round " (:round in-flight)
+       (if-let [ph (:phase in-flight)] (str "'s " ph " phase") ", between phases")
+       "\n    " report-path))
+
+(defn ^{:malli/schema [:=> [:cat :map] [:sequential :string]]}
+  orphans-settled-lines
+  "What this run closed on its way in. Nothing when nothing died, which is the
+   overwhelming majority of runs.
+
+   Said out loud rather than left in the run dirs because it is the only notice
+   the analyses get queued: several sessions can appear on nido's board from one
+   `review:loop` invocation, and a reader who was not told why reads them as the
+   coordinator having invented work."
+  [{:keys [settled]}]
+  (if (empty? settled)
+    []
+    (cons (str "review-loop: " (count settled) " earlier review run"
+               (when (not= 1 (count settled)) "s")
+               " died on this tree without a terminal status —"
+               " closed as `orphaned` and queued for analysis")
+          (map orphan-line settled))))
+
+(defn ^{:malli/schema [:=> [:cat :map] [:sequential :string]]}
+  orphans-refusal-lines
+  "Why nothing was reviewed, when a dead run stopped in its fix phase.
+
+   Two refusals, and the difference is whether the dead run's agents are still
+   going. One that has gone quiet is history and its report has just been closed
+   by `orphans-settled-lines`' own subject, so this fires once and the next
+   invocation reviews the branch as it now stands — the reader is being told what
+   the branch IS, not asked to do anything. One still writing is not history: its
+   fixers outlived the loop, nothing is supervising them, and reviewing now would
+   read a tree they are part-way through rewriting."
+  [{:keys [settled writing]}]
+  (cond
+    (seq writing)
+    (concat [(str "refused: " (count writing) " review run"
+                  (when (not= 1 (count writing)) "s")
+                  " died on this tree and the agents they launched are still"
+                  " running.")]
+            (map orphan-line writing)
+            [(str "  nothing supervises them and nothing holds the claim — they are"
+                  " still rewriting the branch, and reviewing it now reads it mid-edit.")
+             "  → wait for them to finish, or end them, then run this again."])
+
+    (seq (filter reconcile/fixing? settled))
+    ["refused: a review run died while repairing this branch."
+     (str "  its fixers outlived it and landed whatever they got to, which no round"
+          " ever reviewed — the branch is not what anybody signed off.")
+     (str "  → nothing was reviewed. Run this again to review the branch as it"
+          " now stands.")]
+
+    :else []))
+
 (defn- terminal-status
   "The status a run has ENDED on, read off its own report, or nil while it is
    still running — or when the report cannot be read at all, which is
@@ -954,6 +1012,47 @@
       (conj (str "  → " (or (diff-remedies status)
                             (str "unrecognised terminal status: " status)))))))
 
+(defn- review-branch!
+  "Drive the loop over the branch and record what it found, returning the
+   terminal status.
+
+   Split from `loop-cmd*` for the same reason `record-loop-body` is split from
+   its command: what happens once the claim is held is a story of its own, and
+   the command in front of it is now two decisions rather than one — take the
+   claim, and settle what died on this tree before anything reads it."
+  [{:keys [cwd config clock report-atom report-path]}]
+  (let [final  (frontend/with-live-display
+                 {:report-atom report-atom :report-path report-path :clock clock}
+                 (fn [emit] (rloop/run-loop (assoc config :emit emit))))
+        status (:status final)
+        ws-id  (append-review-entry! cwd final @report-atom report-path)]
+    ;; The status names the condition and `diff-remedies` says what it asks
+    ;; of whoever ran this. A coordinator-driven round says it a second
+    ;; time, through the lane's disposition and a gate entry; a round a
+    ;; person ran themselves says it here or nowhere.
+    (run! println (outcome-lines final @report-atom report-path))
+    ;; A side record that fails invisibly is how a whole class of run came
+    ;; to leave no ledger entry at all: the ledger's status enum did not
+    ;; admit :unfixable, every append on that status was refused, and the
+    ;; refusal went to a stderr stream nobody keeps. nil here means the
+    ;; workstream holds nothing about this run, whether because there is no
+    ;; workstream or because it would not take the entry — and either way
+    ;; the report is the only copy.
+    (when-not ws-id
+      (println (str "review-loop: ⚠ no :review entry reached a ledger"
+                    " — this run is recorded in " report-path " alone")))
+    (when-let [b (append-blocker! cwd final)]
+      (println (str "review-loop: ⚠ " (:summary b)))
+      (println "  → answer it at the workstream gate; the loop has no move for it"))
+    (let [outcome (append-design-verdict! cwd final @report-atom config)]
+      (record-verdict! outcome report-atom report-path)
+      (print-verdict! (:verdict outcome)))
+    ;; Last, so the analysis session finds everything this run wrote — the
+    ;; report, the :review ledger entry and the design verdict are all on
+    ;; disk by the time the envelope exists.
+    (queue-analysis! cwd final @report-atom report-path config ws-id)
+    status))
+
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   loop-cmd* [{:keys [cwd base max-iters dry-run? budget]}]
   (let [;; Through the home-aware resolution WHETHER OR NOT a cwd was named. A
@@ -1025,37 +1124,20 @@
       ;; refused rather than attached to a review of a different diff.
       :target {:base base}}
      (fn []
-       (let [final  (frontend/with-live-display
-                      {:report-atom report-atom :report-path report-path :clock clock}
-                      (fn [emit] (rloop/run-loop (assoc config :emit emit))))
-             status (:status final)
-             ws-id  (append-review-entry! cwd final @report-atom report-path)]
-         ;; The status names the condition and `diff-remedies` says what it asks
-         ;; of whoever ran this. A coordinator-driven round says it a second
-         ;; time, through the lane's disposition and a gate entry; a round a
-         ;; person ran themselves says it here or nowhere.
-         (run! println (outcome-lines final @report-atom report-path))
-         ;; A side record that fails invisibly is how a whole class of run came
-         ;; to leave no ledger entry at all: the ledger's status enum did not
-         ;; admit :unfixable, every append on that status was refused, and the
-         ;; refusal went to a stderr stream nobody keeps. nil here means the
-         ;; workstream holds nothing about this run, whether because there is no
-         ;; workstream or because it would not take the entry — and either way
-         ;; the report is the only copy.
-         (when-not ws-id
-           (println (str "review-loop: ⚠ no :review entry reached a ledger"
-                         " — this run is recorded in " report-path " alone")))
-         (when-let [b (append-blocker! cwd final)]
-           (println (str "review-loop: ⚠ " (:summary b)))
-           (println "  → answer it at the workstream gate; the loop has no move for it"))
-         (let [outcome (append-design-verdict! cwd final @report-atom config)]
-           (record-verdict! outcome report-atom report-path)
-           (print-verdict! (:verdict outcome)))
-         ;; Last, so the analysis session finds everything this run wrote — the
-         ;; report, the :review ledger entry and the design verdict are all on
-         ;; disk by the time the envelope exists.
-         (queue-analysis! cwd final @report-atom report-path config ws-id)
-         status)))))
+       ;; Under the claim and before a reviewer reads a line, which is the only
+       ;; moment either half of this is sound: holding the claim is what makes
+       ;; every other `running` report on this tree a dead process, and a
+       ;; refusal after the reviewers have run is one that already paid for
+       ;; itself. A review outside a nido session takes no claim, has excluded
+       ;; nothing, and settles nothing — see `reconcile/orphans`.
+       (let [orphaned (reconcile/settle! {:cwd cwd :run-id run-id})]
+         (run! println (orphans-settled-lines orphaned))
+         (if (:proceed? orphaned)
+           (review-branch! {:cwd cwd :config config :clock clock
+                            :report-atom report-atom :report-path report-path})
+           (do (binding [*out* *err*]
+                 (run! println (orphans-refusal-lines orphaned)))
+               :refused)))))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   loop-cmd [& args]

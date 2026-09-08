@@ -860,3 +860,62 @@
     (is (= "fold" (:outcome a)))
     (is (= 2 (:round a))
         "which round rewrote the stack — the revisions a reader holds moved with it")))
+
+;; ---- the report a run leaves when its process disappears ------------------
+
+(deftest a-run-that-ended-has-nothing-in-flight
+  ;; `in-flight` is what the reconciler asks instead of trusting `:status`, and
+  ;; the two must not be able to disagree: finalizing closes the round and
+  ;; stamps the status in one fold, so a report holding a verdict must answer
+  ;; nil here or that verdict is overwritable.
+  (let [r (drive [{:event :run-started :run-id "review-1" :cwd "/w" :base "main"
+                   :at "2026-06-30T14:00:00Z"}
+                  {:event :phase-started :iter 1 :phase :review :at "2026-06-30T14:00:01Z"}
+                  {:event :phase-finished :iter 1 :phase :review
+                   :ctx {:findings []} :at "2026-06-30T14:02:00Z"}
+                  {:event :run-finalized :status :clean :ctx {}
+                   :at "2026-06-30T14:02:01Z"}])]
+    (is (nil? (report/in-flight r)))))
+
+(deftest what-a-dead-run-stopped-in-is-the-phase-that-was-still-open
+  (let [r (drive [{:event :run-started :run-id "review-1" :cwd "/w" :base "main"
+                   :at "2026-06-30T14:00:00Z"}
+                  {:event :phase-started :iter 1 :phase :review :at "2026-06-30T14:00:01Z"}
+                  {:event :phase-finished :iter 1 :phase :review
+                   :ctx {:findings [{:id "1"}]} :at "2026-06-30T14:02:00Z"}
+                  {:event :phase-started :iter 1 :phase :fix :at "2026-06-30T14:02:01Z"}])]
+    (is (= {:round 1 :phase "fix"} (report/in-flight r))
+        "fix is the one phase whose agents rewrite the tree, so which phase it
+         was is what a later claimant decides on")))
+
+(deftest an-orphan-is-dated-when-it-was-last-seen-not-when-it-was-noticed
+  ;; A run's :ended-at is a fact about the run. Stamping the reconciler's clock
+  ;; would date every orphan to whenever somebody next reviewed the branch —
+  ;; which can be days later, and is the reading `:started-at` is compared to.
+  (let [r (drive [{:event :run-started :run-id "review-1" :cwd "/w" :base "main"
+                   :at "2026-06-30T14:00:00Z"}
+                  {:event :phase-started :iter 1 :phase :fix :at "2026-06-30T14:02:01Z"}])
+        o (report/orphaned r "2026-06-30T14:06:00Z")]
+    (is (= "orphaned" (:status o)))
+    (is (= "2026-06-30T14:06:00Z" (:ended-at o)))
+    (is (= {:round 1 :phase "fix"} (get-in o [:reason :orphaned]))
+        "where a finished run carries what it judged, an orphan carries where it
+         stopped — it reached no judgement to carry")
+    (is (= "orphaned" (get-in o [:rounds 0 :status])))
+    (is (= "orphaned" (get-in o [:rounds 0 :phases 0 :status]))
+        "a phase still saying `running` is what the renderer draws a spinner
+         for, so a terminal report would animate a stage that stopped hours ago")
+    (is (= "2026-06-30T14:06:00Z" (get-in o [:rounds 0 :phases 0 :ended-at])))))
+
+(deftest an-orphan-that-died-between-rounds-leaves-its-closed-rounds-alone
+  ;; Only what was still open is restamped. A round the run closed itself
+  ;; reached a status of its own, and overwriting it with `orphaned` would lose
+  ;; the one thing that round did report.
+  (let [r {:status "running"
+           :rounds [{:round 1 :status "continued" :ended-at "t9"
+                     :phases [{:phase "fix" :status "ok" :ended-at "t9"}]}]}
+        o (report/orphaned r "2026-06-30T14:06:00Z")]
+    (is (= "orphaned" (:status o)))
+    (is (= "continued" (get-in o [:rounds 0 :status])))
+    (is (nil? (:reason o))
+        "nothing was in flight, so there is no phase to name")))

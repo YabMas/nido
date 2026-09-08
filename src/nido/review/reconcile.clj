@@ -1,0 +1,220 @@
+;; src/nido/review/reconcile.clj
+(ns nido.review.reconcile
+  "Settle the review runs that died on this tree, and say whether a new one may
+   start.
+
+   THE CLAIM IS THE LOCK AND THE LOCK IS THE PROCESS, so a run whose process
+   dies drops the claim and leaves nothing behind saying it ever ended. Its
+   report is still `running`, and it stays that way for the life of the run dir:
+   `nido.review.analysis/enqueue!` fires on a terminated run, so a loop that
+   died is also a loop nobody ever reads. This is the counterpart of
+   `nido.coordinator.daemon.reconcile` for the review loop — force what did not
+   end to a terminal state from what its run dir shows — and the moment it runs
+   at is the analogue of daemon startup: the coordinator reconciles when it
+   knows nothing of its own is running, and a claimant reconciles when it holds
+   the claim, which is when nothing else on this tree can be alive AND
+   supervised.
+
+   THE SUBPROCESSES ARE WHAT THE LOCK NEVER COVERED. A fixer is a claude process
+   the loop spawned, and `nido.platform.process` deliberately reaps only what a
+   live JVM registered — kill the loop hard and its fixers keep running, keep
+   writing to the run dir, and keep rewriting the branch. That is what makes
+   `fix` the one phase a later claimant cannot ignore: the workstream reads as
+   free while the tree is still being rewritten, and the run that takes it reads
+   a stack mid-edit. Measured: a run that took the freed claim thirty seconds
+   after its predecessor's last write reported three layers over thirty-two
+   files where the branch had seven over eighty.
+
+   So a claimant that finds one REFUSES, and settling the orphan is what clears
+   the refusal — the next invocation finds a terminal report and proceeds. The
+   one exception is an orphan whose run dir is still being written to, which is
+   positive evidence of a live writer: that one is left non-terminal on purpose,
+   so the refusal repeats until the writing stops."
+  (:require
+   [babashka.fs :as fs]
+   [nido.coordinator.record.session :as csession]
+   [nido.coordinator.record.state :as cstate]
+   [nido.review.analysis :as analysis]
+   [nido.review.frontend :as frontend]
+   [nido.review.report :as report]
+   [nido.session.lifecycle :as lifecycle])
+  (:import
+   [java.time Instant]))
+
+(def ^:private writer-quiet-ms
+  "How recently a dead run's dir must have been written to for its agents to
+   count as still alive.
+
+   READ IN ONE DIRECTION ONLY, and that is what makes a minute enough. Nothing
+   but that run's own agents writes into its run dir, so a write inside the
+   window PROVES a writer; silence proves nothing, because a fixer is quiet for
+   as long as whatever tool it called takes. The inference this makes is `still
+   running`, never `finished` — an orphan that has gone quiet is still refused,
+   it is merely refused once instead of until it stops.
+
+   A minute rather than an hour because the cost of the window is friction on
+   the common case: Ctrl-C during a fix phase reaps the fixers and leaves the
+   dir quiet from that moment, and a person re-running inside the window gets a
+   refusal they then have to wait out."
+  60000)
+
+(defn- last-write-ms
+  "When anything in `run-dir` was last written, in epoch millis.
+
+   One level deep, which is where everything a live agent touches is: agent.log,
+   the per-target logs and answer files, and report.json itself. `artifacts/` is
+   the only subdirectory and the loop writes nothing into it."
+  [run-dir]
+  (->> (cons run-dir (fs/list-dir run-dir))
+       (map #(.toMillis (fs/last-modified-time %)))
+       (reduce max 0)))
+
+(defn ^{:malli/schema [:=> [:cat :map] :boolean]}
+  fixing?
+  "Whether this orphan stopped in the phase that rewrites the tree.
+
+   The whole of what a claimant decides on: every other phase reads the branch,
+   so a run that died in one left the tree exactly as its reviewers found it and
+   there is nothing for the next run to be told."
+  [orphan]
+  (= "fix" (:phase (:in-flight orphan))))
+
+(defn ^{:malli/schema [:=> [:cat :Path [:maybe :string]] [:sequential :map]]}
+  orphans
+  "Every review run that was reading `cwd` and never wrote a terminal status,
+   oldest write first. `own-run-id` is the caller's own run, excluded.
+
+   Sound only because the caller holds the claim: two live runs on one tree are
+   exactly what the claim excludes, so a report still saying `running` under a
+   held claim belongs to a process that is gone. A claimless review — one
+   outside a nido session — must not call this, having excluded nothing.
+
+   Diff reviews alone, told by their `:base`: a record round names none, judges
+   a ledger entry rather than the tree, and is analysed by nothing.
+
+   Every run dir under ~/.nido/runs is opened, because nothing indexes runs by
+   the tree they read: a report names its cwd and no path runs the other way.
+   Nothing prunes a review run dir either — `bb nido:runs:clean` plans off the
+   coordinator's own Run records, which a review run does not write — so this
+   grows with the machine's whole review history. Measured at ~0.1s over 500
+   reports, against a review run measured in minutes, and it happens once per
+   run rather than once per round."
+  [cwd own-run-id]
+  (let [d (cstate/runs-dir)]
+    (if-not (fs/exists? d)
+      []
+      (->> (fs/list-dir d)
+           (filter fs/directory?)
+           (keep (fn [dir]
+                   (let [report-path (str (fs/path dir "report.json"))
+                         r           (frontend/read-report report-path)]
+                     (when (and r
+                                (= "running" (:status r))
+                                (= cwd (get-in r [:target :cwd]))
+                                (some? (get-in r [:target :base]))
+                                (not= own-run-id (:run-id r)))
+                       {:run-id      (:run-id r)
+                        :run-dir     (str dir)
+                        :report-path report-path
+                        :report      r
+                        :in-flight   (report/in-flight r)
+                        :last-write  (last-write-ms dir)}))))
+           (sort-by :last-write)
+           vec))))
+
+(defn- reviewed-names
+  "Who the dead runs on `cwd` were reviewing for, in names — never a path into
+   the tree. See `nido.review.analysis`'s namespace docstring for why the
+   analysis is told names and nothing else.
+
+   Every orphan here shares the cwd by construction, so this is asked once for
+   the scan rather than once per run."
+  [cwd]
+  (try
+    (when-let [{:keys [project session]} (lifecycle/session-from-cwd cwd)]
+      {:reviewed-project project
+       :reviewed-session session
+       :reviewed-ws-id   (csession/workstream-id-for (keyword project) session)})
+    (catch Throwable _ nil)))
+
+(defn- analysis-run
+  "What an orphan can tell the analysis about itself.
+
+   Only what the report states. The counts a finished run supplies — what it
+   settled, what it was still holding, what it gave up on — are read off the
+   terminal ctx, and an orphan has none; they arrive as the zeros
+   `analysis/payload` defaults them to, which is the same shape a
+   `:review-failed` run already reaches the analysis in. `orphaned` in the
+   status and the title is what says the counts are not a verdict, and
+   report.json carries the round and phase it stopped in.
+
+   `:dry-run?` is not passed because the report does not record the flag. It
+   costs nothing: a dry run stops at the fix stage without launching anybody, so
+   the only orphaned dry run is one killed mid-review, and analysing it says
+   what any killed run's analysis says."
+  [{:keys [run-id report-path report]} reviewed]
+  (let [cover (report/coverage report)]
+    (merge {:run-id           run-id
+            :report-path      report-path
+            :status           (:status report)
+            :base             (get-in report [:target :base])
+            :rounds           (or (get-in report [:summary :rounds]) 0)
+            :fix-attempts     (or (get-in report [:summary :fix-attempts]) 0)
+            :targets-reviewed (:reviewed cover)
+            :targets-skipped  (:skipped cover)}
+           reviewed)))
+
+(defn- settle-one!
+  "Force one orphan terminal and hand it to the analysis.
+
+   Best-effort, and the failure direction is the safe one: a report that could
+   not be rewritten stays non-terminal, so the next claimant finds it again and
+   refuses again rather than walking past a tree nobody vouched for."
+  [orphan reviewed]
+  (try
+    (let [r (report/orphaned (:report orphan)
+                             (str (Instant/ofEpochMilli (:last-write orphan))))
+          o (assoc orphan :report r)]
+      (report/persist! r (:report-path orphan))
+      ;; A run that folded no round launched no reviewer, so there is no loop
+      ;; behaviour in it to read — the same ground `analysis/worth-analysing?`
+      ;; excludes an empty-diff review on, and the same cost: a worktree and an
+      ;; hour of budget to report that nothing happened.
+      (cond-> o
+        (seq (:rounds r)) (assoc :analysis (analysis/enqueue! (analysis-run o reviewed)))))
+    (catch Exception e
+      (assoc orphan :error (ex-message e)))))
+
+(defn ^{:malli/schema [:=> [:cat :map] :map]}
+  settle!
+  "Reconcile the dead runs on this tree and say whether the caller may review
+   it. Call it holding the claim and before anything reads the branch.
+
+   Returns `{:settled [..] :writing [..] :proceed? bool}`. `:settled` are the
+   runs forced terminal and queued for analysis; `:writing` are the ones left
+   alone because something is still writing into their run dir. `:proceed?` is
+   false when any orphan of either kind stopped in its fix phase — the tree was
+   left mid-repair, and that is the caller's to be told rather than to discover.
+
+   The asymmetry between the two lists is the whole mechanism. A settled orphan
+   is gone from the next scan, so its refusal fires once and the invocation
+   after it reviews the branch as it now stands. One still being written to is
+   not settled, so its refusal repeats for as long as its agents keep going.
+
+   Settles nothing, and proceeds, for a tree that resolves to no workstream —
+   the same condition `tasks.nido-review/claiming` takes no claim on. Such a run
+   has excluded nobody, so every other report saying `running` may belong to a
+   process that is very much alive.
+
+   `now` is an injection seam for the clock."
+  [{:keys [cwd run-id now] :or {now #(System/currentTimeMillis)}}]
+  (let [reviewed (reviewed-names cwd)
+        t        (now)
+        writing? (fn [o] (and (fixing? o)
+                              (< (- t (long (:last-write o))) writer-quiet-ms)))
+        found    (if (:reviewed-ws-id reviewed) (orphans cwd run-id) [])
+        {holding true settling false} (group-by (comp boolean writing?) found)
+        settled  (mapv #(settle-one! % reviewed) settling)]
+    {:settled  settled
+     :writing  (vec holding)
+     :proceed? (not (or (seq holding) (some fixing? settled)))}))

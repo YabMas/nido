@@ -1235,3 +1235,47 @@
     (is (= ev (report/validate-event :review ev)))
     (is (str/includes? (report/report->markdown (assoc ev :format :review-report))
                        "plan-stability-doc"))))
+
+;; ---- what a claimant is told about the runs that died on the tree ---------
+
+(def ^:private a-dead-fixer
+  {:run-id "review-3876f59b" :report-path "/runs/review-3876f59b/report.json"
+   :in-flight {:round 1 :phase "fix"}})
+
+(deftest a-run-that-died-reading-the-tree-is-reported-and-not-refused
+  ;; Its reviewers mutated nothing, so the branch is exactly what they found.
+  ;; It is still said out loud: the analysis it just queued appears on nido's
+  ;; board, and a reader who was not told reads it as invented work.
+  (let [o {:settled [{:run-id "review-f00636e7" :report-path "/runs/r/report.json"
+                      :in-flight {:round 1 :phase "review"}}]
+           :writing [] :proceed? true}
+        out (str/join "\n" (t/orphans-settled-lines o))]
+    (is (str/includes? out "review-f00636e7"))
+    (is (str/includes? out "orphaned"))
+    (is (str/includes? out "round 1's review phase"))
+    (is (empty? (t/orphans-refusal-lines o)))))
+
+(deftest nothing-is-said-when-nothing-died
+  (is (empty? (t/orphans-settled-lines {:settled [] :writing [] :proceed? true})))
+  (is (empty? (t/orphans-refusal-lines {:settled [] :writing []}))))
+
+(deftest a-run-that-died-repairing-the-branch-says-what-the-branch-now-is
+  (let [out (str/join "\n" (t/orphans-refusal-lines
+                            {:settled [a-dead-fixer] :writing []}))]
+    (is (str/includes? out "refused:"))
+    (is (str/includes? out "landed whatever they got to"))
+    (is (str/includes? out "Run this again")
+        "the refusal fires once — its report has just been closed, so the next
+         invocation reviews the branch as it now stands")))
+
+(deftest an-orphan-still-being-written-to-asks-for-something-different
+  ;; Not history: the fixers outlived the loop and nothing is supervising them.
+  ;; Telling this reader to run it again would hand them the tree mid-edit,
+  ;; which is the failure the whole check exists for.
+  (let [out (str/join "\n" (t/orphans-refusal-lines
+                            {:settled [] :writing [a-dead-fixer]}))]
+    (is (str/includes? out "still running"))
+    (is (str/includes? out "review-3876f59b"))
+    (is (str/includes? out "wait for them to finish, or end them"))
+    (is (not (str/includes? out "as it now stands"))
+        "the branch is not going to stand still")))

@@ -66,6 +66,21 @@
      owns: a round hosted by the coordinator daemon shares it with everything else that daemon
      drives."
     {:signature [:=> [:catn [:mine :any] [:their :any] [:coordinator-pid [:? :any]]] :string]})
+  (Operation orphans-settled-lines
+    "What this run closed on its way in: the review runs that died on this tree without a
+     terminal status, forced to `orphaned` and queued for analysis. Said out loud because it is
+     the only notice those analyses were queued — several sessions can appear on nido's board
+     from one invocation, and a reader who was not told reads them as invented work."
+    {:signature [:=> [:catn [:orphaned :map]] [:sequential :string]]})
+  (Operation orphans-refusal-lines
+    "Why nothing was reviewed, when a run that died on this tree stopped in its fix phase.
+
+     Two refusals, and the difference is whether the dead run's agents are still going. One
+     that has gone quiet is history and its report has just been closed, so the refusal fires
+     once and the next invocation reviews the branch as it now stands. One still writing is
+     not: its fixers outlived the loop, and reviewing now would read a tree they are part-way
+     through rewriting."
+    {:signature [:=> [:catn [:orphaned :map]] [:sequential :string]]})
   (Operation join-or-refuse!
     "The branch a second invocation takes: JOIN the holder when it is doing the same work,
      refuse when it is doing something else — same work being the same KIND of round on the same

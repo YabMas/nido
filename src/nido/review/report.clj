@@ -518,6 +518,87 @@
                       :fix-attempts (fix-attempts report)
                       :final-status s})))
 
+(def orphaned-status
+  "What a run whose process vanished is recorded as.
+
+   Not one of the loop's own terminal statuses — `nido.review.loop/engine-statuses`
+   and `nido.review.stages/stage-statuses` are what a run REACHES, and a run that
+   reaches nothing is what this names. It is assigned from outside, by whoever
+   next takes the workstream's claim, and so it is deliberately absent from the
+   ledger's ReviewReport enum: no `:review` entry is ever written on it."
+  "orphaned")
+
+(defn ^{:malli/schema [:=> [:cat :ReviewReport] [:maybe :map]]}
+  in-flight
+  "The round, and the phase within it, this report was still in when it was last
+   written — nil for a report whose run closed its own rounds.
+
+   `some?` on it is the question `did this run end`, asked of the value rather
+   than of `:status`: a run finalizes by closing its round and stamping a status
+   in one fold, so the two cannot disagree, and this is the half that also says
+   WHERE it stopped.
+
+   The phase is the part a later claimant acts on. Every phase but `fix` reads
+   the tree; `fix` launches agents that rewrite it, and those agents outlive the
+   process that launched them — so a report stopped there is the branch having
+   been left mid-repair by nobody.
+
+   A round between phases has no phase in flight, and a run that died before its
+   first phase-started has no round: both say `nothing was in progress`, which is
+   what a caller needs to hear."
+  [report]
+  (let [round (last (:rounds report))]
+    (when (= "running" (:status round))
+      (let [ph (last (:phases round))]
+        (cond-> {:round (:round round)}
+          (= "running" (:status ph)) (assoc :phase (:phase ph)))))))
+
+(defn- close-orphaned-round
+  "Close a round whose run never came back, and every phase still open in it.
+
+   The phases are restamped rather than left saying `running`, because `running`
+   is what the renderer draws a spinner for: left alone, the final frame of a
+   terminal report animates a stage that stopped hours ago."
+  [round at]
+  (-> round
+      (assoc :status orphaned-status :ended-at at)
+      (update :phases
+              (fn [phases]
+                (mapv #(if (= "running" (:status %))
+                         (assoc % :status orphaned-status :ended-at at)
+                         %)
+                      phases)))))
+
+(defn ^{:malli/schema [:=> [:cat :ReviewReport :string] :ReviewReport]}
+  orphaned
+  "`report` forced to a terminal state, for a run that stopped without writing
+   one.
+
+   The counterpart of `finalize` for a run there is no terminal ctx to read: what
+   the run stopped ON is not a judgement it reached but the phase it was in, so
+   `:reason` carries `in-flight` where a finished run carries `stopped-on`.
+   Everything else is derived from the rounds already folded, which is all the
+   evidence there is.
+
+   `at` is when the run was last OBSERVED — the newest write in its run dir, not
+   now. A dead run's `:ended-at` is a fact about the run rather than about the
+   process that noticed, and stamping the reconciler's clock would date every
+   orphan to whenever somebody next reviewed the branch.
+
+   Idempotent in the sense that matters: applied to a report that already ended,
+   it would overwrite a real verdict, so the caller asks `in-flight` first."
+  [report at]
+  (let [flight (in-flight report)]
+    (cond-> (assoc report
+                   :status   orphaned-status
+                   :ended-at at
+                   :reason   (when flight {:orphaned flight})
+                   :summary  {:rounds       (count (:rounds report))
+                              :fix-attempts (fix-attempts report)
+                              :final-status orphaned-status})
+      flight (update-in [:rounds (dec (count (:rounds report)))]
+                        close-orphaned-round at))))
+
 ;; ---- fold ----------------------------------------------------------------
 
 (defn ^{:malli/schema [:=> [:cat :ReviewReport :map] :ReviewReport]}
