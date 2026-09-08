@@ -348,6 +348,29 @@
       (is (nil? (re-find #"COMPOSITION PASS" @captured)))
       (is (nil? (re-find #"misplaced-cut" @schema))))))
 
+(deftest review!-carries-the-standing-verdicts-unanswered-item
+  ;; The one reader that can turn a verdict into work: it reads code against a
+  ;; range, and a finding is what a fixer can be handed. Nothing else between
+  ;; the verdict and the next run is able to.
+  (let [tmp      (str (fs/create-temp-dir))
+        captured (atom nil)]
+    (with-redefs [jj/jj!           (fn [& _] {:exit 0 :out "src/a.clj" :err ""})
+                  cstate/run-dir   (fn [_] tmp)
+                  codex/run-codex! (fn [opts]
+                                     (reset! captured (:prompt opts))
+                                     (spit (:out-path opts) sample-output)
+                                     {:exit 0})]
+      (codex/review! {:cwd "/w" :from "cA" :to "cB" :run-id "r" :iter 1
+                      :label "banner"
+                      :standing {:round 4 :verdict :strained
+                                 :needs "close-turn! still tests (empty? open)"}})
+      (is (re-find #"close-turn! still tests" @captured))
+
+      ;; And a run with no standing item carries none of the block.
+      (codex/review! {:cwd "/w" :from "cA" :to "cB" :run-id "r" :iter 1
+                      :label "banner"})
+      (is (nil? (re-find #"LEFT THIS OUTSTANDING" @captured))))))
+
 ;; ── When the reviewer could not be run at all ───────────────────────────────
 
 (def usage-limit-log

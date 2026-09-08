@@ -733,6 +733,28 @@
       (is (= "FORK-OF-main" (:from @seen)))
       (is (= "@" (:to @seen))))))
 
+(deftest review-stage-hands-the-reviewer-the-standing-verdicts-item
+  ;; The whole chain, because every link of it is a one-liner and the feature is
+  ;; dead if any one is missing: the ledger's last verdict, through the target,
+  ;; into the opts the reviewer is launched with.
+  (let [seen (atom nil)]
+    (with-redefs [layers/patch-hash (fn [& _] nil)
+                  codex/merge-base  (fn [& _] "FORK")
+                  cache/read-cache  (fn [& _] {})
+                  conformance/findings (fn [& _] [])
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry (fn [_ _ kind]
+                                    (case kind
+                                      :design         {:seq 3}
+                                      :design-verdict {:verdict :strained :design-seq 3
+                                                       :round 4 :reason "pressure"
+                                                       :needs "close-turn! still tests (empty? open)"}))
+                  codex/review! (fn [opts] (reset! seen opts)
+                                  {:status :clean :findings []})]
+      ((:run stages/review-stage) {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 1})
+      (is (= "close-turn! still tests (empty? open)"
+             (get-in @seen [:standing :needs]))))))
+
 ;; ---- fan-out: every layer plus the whole stack ---------------------------
 
 (deftest in-parallel-preserves-order
@@ -2377,6 +2399,84 @@
     (is (nil? (stages/discover-prior-verdict "/w" {:seq 4})))
     (is (nil? (stages/discover-prior-verdict "/w" {}))
         "a design record with no seq is not a record any verdict could be about")))
+
+;; ── The standing verdict's unanswered item, back into the loop ─────────────
+
+(defn- ledger-of
+  "A ledger holding one :design record at seq 3 and one verdict against it."
+  [verdict]
+  (fn [_ _ kind]
+    (case kind
+      :design         {:seq 3}
+      :design-verdict verdict)))
+
+(deftest a-standing-verdicts-unanswered-item-becomes-the-next-runs-question
+  ;; The verdict pass runs after the loop returns, so nothing in the run that
+  ;; produced one can act on it. Without this it is written, read back by
+  ;; discover-prior-verdict, and dropped — which is how one item was named by
+  ;; two consecutive verdicts of the same branch, both times as still unraised.
+  (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                ws/latest-entry (ledger-of {:verdict :strained :design-seq 3 :round 4
+                                            :reason "the seam is under pressure"
+                                            :needs "close-turn! still tests (empty? open)"})]
+    (is (= {:round 4 :verdict :strained
+            :needs "close-turn! still tests (empty? open)"}
+           (stages/standing-needs "/w"))))
+
+  (testing "a verdict that named nothing outstanding seeds nothing"
+    (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry (ledger-of {:verdict :sound :design-seq 3 :round 2
+                                              :reason "implementation details"})]
+      (is (nil? (stages/standing-needs "/w"))))))
+
+(deftest a-question-put-to-a-human-is-not-seeded-to-a-reviewer
+  ;; :invalidated and :standing-challenged put their :needs to a person — that
+  ;; is what makes them decisions, and parked-blocker already carries one to the
+  ;; gate. Seeding it here too would have a reviewer raise, and a fixer patch,
+  ;; the very question somebody was asked to answer.
+  (doseq [v [:invalidated :standing-challenged]]
+    (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry (ledger-of {:verdict v :design-seq 3 :round 1
+                                              :reason "the invariant cannot hold"
+                                              :needs "supersede the record"})]
+      (is (nil? (stages/standing-needs "/w"))
+          (str "a " (name v) " verdict is a decision, not a defect to review")))))
+
+(deftest the-standing-item-reaches-every-reviewer-that-reads-code
+  (let [[core wiring stack]
+        (stages/with-standing-needs
+          [{:label "core"} {:label "wiring"}
+           {:label "stack" :stack? true :composition {:layers [{:label "core"}]}}]
+          {:round 4 :verdict :strained :needs "the seam"})]
+    (is (= "the seam" (:needs (:standing core))))
+    (is (= "the seam" (:needs (:standing wiring))))
+    (is (nil? (:standing stack))
+        "the composition pass is asked whether the cut holds and is told not to
+         report what the layer reviews hold — a defect at a line is exactly what
+         it must not answer with"))
+
+  (testing "and on a flat branch the whole-stack target is the only one there is"
+    (let [[whole] (stages/with-standing-needs
+                    [{:label "stack" :stack? true}]
+                    {:round 4 :verdict :strained :needs "the seam"})]
+      (is (= "the seam" (:needs (:standing whole))))))
+
+  (testing "a run with no standing item changes nothing"
+    (let [targets [{:label "core"}]]
+      (is (= targets (stages/with-standing-needs targets nil))))))
+
+(deftest the-standing-item-does-not-move-the-cache-key
+  ;; It is the same string every round, so folding it into the key would switch
+  ;; the cache off for a whole run rather than making it correct.
+  (with-redefs [layers/patch-hash (fn [_ _ _] "SAMEPATCH")]
+    (let [cold (first (stages/with-patch-hashes "/w" [{:label "core" :from "a" :to "b"}]))
+          warm (first (stages/with-patch-hashes
+                        "/w" (stages/with-standing-needs
+                               [{:label "core" :from "a" :to "b"}]
+                               {:round 4 :verdict :strained :needs "the seam"})))]
+      (is (= (:patch-hash cold) (:patch-hash warm))
+          "a target skipped on a converged hash is one whose code nobody claims
+           changed, and the standing item says nothing about the code"))))
 
 ;; ── Evidence that a round moved the code ───────────────────────────────────
 

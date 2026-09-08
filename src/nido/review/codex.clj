@@ -312,6 +312,10 @@
    the run, and it is orthogonal to both: a layer and the composition alike can
    have been repaired, and neither reviewer is told so by anything else.
 
+   `standing` is what an earlier RUN's design verdict left outstanding, and it
+   reaches a layer or the flat branch but never the composition pass — see
+   `stages/with-standing-needs`.
+
    The schema follows the primer and not the target: the composition variant
    demands a `kind` and the `layers` a defect spans, and asking that of a
    reviewer that was never taught the taxonomy is a contract nothing can meet.
@@ -321,7 +325,7 @@
    Codex pulls each file's diff itself and reads file content AT `to` — never
    from the working copy, which for a layer review sits at a different revision
    than the one under review."
-  [{:keys [cwd from to run-id iter label brief composition prior-fixes]}]
+  [{:keys [cwd from to run-id iter label brief composition prior-fixes standing]}]
   (let [to       (or to "@")
         {:keys [exit out err]} (diff-name-only cwd from to)
         _        (when-not (zero? exit)
@@ -351,6 +355,7 @@
                              ;; is a fact about the range under review, not about
                              ;; how the range was bounded.
                              (prompts/prior-fixes-block prior-fixes)
+                             (prompts/standing-needs-block standing)
                              "\nBase revision (use this exact value as <base> in the"
                              " commands above): " from "\n"
                              "Head revision (use this exact value as <head>): " to "\n"

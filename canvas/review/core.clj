@@ -265,6 +265,11 @@
   (Operation prior-fixes-block
     "What a fixer already landed on this target, put to the reviewer as a claim to check."
     {:signature [:=> [:catn [:prior-fixes :any]] [:maybe :string]]})
+  (Operation standing-needs-block
+    "What an earlier run's design verdict left outstanding, put to the reviewer as a question
+     about the range in front of it. The verdict read a different tree, so reporting it back
+     unverified would launder an old claim into a fresh finding."
+    {:signature [:=> [:catn [:standing :any]] [:maybe :string]]})
   (Operation fix-prompt "The instruction to fix given findings."
     {:signature [:=> [:catn [:opts :map]] :string]})
   (Operation toc-block "The stack's table of contents."

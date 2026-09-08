@@ -11,6 +11,7 @@
    [nido.coordinator.record.session :as csession]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as ws]
+   [nido.coordinator.report :as report]
    [nido.platform.core :as core]
    [nido.review.cache :as cache]
    [nido.review.codex :as codex]
@@ -466,6 +467,33 @@
                 t))
             targets))))
 
+;; Defined below, with the other readings taken off the workstream's ledger.
+(declare standing-needs)
+
+(defn ^{:malli/schema [:=> [:cat :any :any] :any]}
+  with-standing-needs
+  "Hand each target what the last run's design verdict left outstanding, so a
+   reviewer can turn it into a finding — see `standing-needs`.
+
+   Never the composition pass. The verdict names located defects in code, and
+   that pass is asked whether the cut holds and is told in as many words not to
+   report what the layer reviews are already holding; a defect at a line is
+   exactly what it must not answer with. The flat whole-stack target has no
+   `:composition` and does get it — on a branch with no layers it is the only
+   reviewer there is.
+
+   Nothing it adds reaches the cache key, for the reason `with-fix-memory` gives:
+   `with-patch-hashes` builds that from the range, so a value that changes
+   between runs cannot switch the cache off by living here. That matters more
+   here than there — a standing item is the same string every round, and a
+   target skipped on a converged hash is a target whose code nobody is claiming
+   changed."
+  [targets standing]
+  (if-not standing
+    targets
+    (mapv #(cond-> % (nil? (:composition %)) (assoc :standing standing))
+          targets)))
+
 (defn- composition-key
   "The composition target's identity: the patch it spans, plus the cut that
    divides it — each layer's label paired with its own patch hash, in stack
@@ -780,7 +808,8 @@
                        :from (:from t) :to (:to t)
                        :label (:label t) :brief (:brief t)
                        :composition (:composition t)
-                       :prior-fixes (:prior-fixes t)})
+                       :prior-fixes (:prior-fixes t)
+                       :standing (:standing t)})
                      :target t)]
         (announce-target! ctx "reviewed" t {:findings (count (:findings r))})
         r)
@@ -806,7 +835,8 @@
                  cwd (-> (review-targets cwd base)
                          (with-composition-memory (:history ctx))
                          (with-fix-memory (:history ctx)
-                                          (get-in ctx [:carry :rolled-back] {}))))
+                                          (get-in ctx [:carry :rolled-back] {}))
+                         (with-standing-needs (standing-needs cwd))))
         {:keys [review skipped]} (to-review cached all)
         targets review
         _       (announce-targets! ctx {:review review :skipped skipped})
@@ -988,6 +1018,35 @@
     (when-let [[project ws-id] (project+ws-from-cwd cwd)]
       (let [v (ws/latest-entry project ws-id :design-verdict)]
         (when (= n (:design-seq v)) v)))))
+
+(defn ^{:malli/schema [:=> [:cat :Path] [:maybe :map]]}
+  standing-needs
+  "What the last verdict against this workstream's design record left
+   outstanding, as `{:round :verdict :needs}` — or nil.
+
+   The verdict pass names concrete, located defects, and it runs after the loop
+   has already returned, so no reviewer, warden or fixer in the run that
+   produced one can act on it. It reaches the ledger and the report and stops.
+   This is the way back in: what one run's judgment left open becomes what the
+   next run's reviewers are asked about, where a finding is the one currency a
+   fixer can be handed. Without it a verdict can name the same located defect
+   run after run and nothing in the loop is ever able to hear it.
+
+   :needs alone, out of everything a verdict carries. :invariants-broken and
+   :load-bearing-broken each name the finding that broke them, so they were
+   raised by construction; :needs is the field for what nobody raised.
+
+   Only from a verdict that leaves the design STANDING. :invalidated and
+   :standing-challenged put their :needs to a person — that is what makes them
+   decisions — and `tasks.nido-review/parked-blocker` already carries one to the
+   gate. Seeding it here as well would have a reviewer raise, and a fixer patch,
+   the very question a human was asked to answer."
+  [cwd]
+  (when-let [design (discover-design-record cwd)]
+    (when-let [v (discover-prior-verdict cwd design)]
+      (when (and (not (report/verdict-invalidates (:verdict v)))
+                 (not (str/blank? (str (:needs v)))))
+        {:round (:round v) :verdict (:verdict v) :needs (:needs v)}))))
 
 (def ^:private stance-char-cap 12000)
 

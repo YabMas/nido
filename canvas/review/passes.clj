@@ -255,6 +255,15 @@
      newest: a verdict against a superseded record answered a different question, and offering
      it as a standing answer would have the judge defend a yardstick nobody is using."
     {:signature [:=> [:catn [:cwd Path] [:design :map]] [:maybe :map]]})
+  (Operation standing-needs
+    "What the last verdict against this workstream's design record left outstanding, from a
+     verdict that leaves the design STANDING. The verdict pass runs after the loop returns, so
+     nothing in the run that produced one can act on it; this is what carries it to the next
+     run's reviewers, which are the only agents that can turn it into a finding. A verdict
+     that INVALIDATES puts its :needs to a person instead, and seeding that would have a fixer
+     patch the question somebody was asked to answer."
+    {:signature [:=> [:catn [:cwd Path]] [:maybe :map]]
+     :delegates [discover-design-record discover-prior-verdict]})
   (Operation stance-path "Where a project's stance text lives."
     {:signature [:=> [:catn [:project ProjectName]] Path]})
   (Operation read-stance "A project's stance text."
@@ -331,6 +340,11 @@
      REFUSED repair leaves the range byte-identical with nothing at all to notice."
     {:signature [:=> [:catn [:targets :any] [:history :any] [:refused :any]] :any]
      :delegates [fix-accounts]})
+  (Operation with-standing-needs
+    "Each code-reading reviewer told what the last run's verdict left outstanding — never the
+     composition pass, which is asked whether the cut holds and is told not to report what the
+     layer reviews are already holding."
+    {:signature [:=> [:catn [:targets :any] [:standing :any]] :any]})
   (Operation with-sweep-memory
     "Each finding told which earlier rounds already swept its class. A class that comes back
      has disproved the enumerate-the-instances remedy, and the fixer is the reader who could

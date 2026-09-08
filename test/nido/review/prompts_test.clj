@@ -822,3 +822,26 @@ layers, it is not yours"))
         "a prohibition that does not name the skill does not reach the one that gets opened")
     (is (str/includes? out "jj --ignore-working-copy diff")
         "calling a set complete is a lie the moment the prompt stops carrying it")))
+
+(deftest a-standing-verdicts-item-is-put-to-the-reviewer-as-a-question
+  ;; The verdict read a different tree than the one the reviewer is shown, so
+  ;; whether it is still true is what is being asked. A reviewer that reports it
+  ;; back on the strength of the text has laundered an old claim into a fresh
+  ;; finding, and the round after it inherits a defect nobody looked at.
+  (let [out (prompts/standing-needs-block
+             {:round 4 :verdict :strained
+              :needs "close-turn!'s when-open? still tests (empty? open)"})]
+    (is (str/includes? out "close-turn!'s when-open? still tests (empty? open)"))
+    (is (str/includes? out "round 4"))
+    (is (str/includes? out "strained")
+        "one round's judgment, not a standing truth — a reviewer told something
+         authoritative stops reading the diff")
+    (is (str/includes? out "report it as a finding")
+        "a finding is the only currency a fixer can be handed")
+    (is (str/includes? out "say nothing")
+        "out of range is the commonest answer and it is a silence, not a miss")))
+
+(deftest a-run-with-no-standing-item-tells-the-reviewer-nothing
+  (is (nil? (prompts/standing-needs-block nil)))
+  (is (nil? (prompts/standing-needs-block {:round 1 :verdict :sound}))
+      "saying \"nothing outstanding\" invites a reviewer to look for one"))

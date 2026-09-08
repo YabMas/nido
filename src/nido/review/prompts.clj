@@ -177,6 +177,46 @@
      "REFUSED repair they are all still true, and nothing else in this run\n"
      "knows it.\n\n")))
 
+(defn ^{:malli/schema [:=> [:cat :any] [:maybe :string]]}
+  standing-needs-block
+  "The item an earlier run's design verdict left outstanding, put to the one
+   reader that can turn it into work.
+
+   A verdict is written after the loop has returned, so it has no reader inside a
+   run at all: it names a defect at a file and a line, and the next run's
+   reviewers — the only agents that read code against a range — have never been
+   told it exists. One item was named by two consecutive verdicts of the same
+   branch, in the same words, each time as still unraised.
+
+   Put as a QUESTION about the range rather than as an item to report. The
+   verdict read a different tree than the one below, so whether it is still true
+   is exactly what this reviewer is being asked; a reviewer that reports it back
+   unverified has laundered an old claim into a fresh finding, and the round
+   after it inherits a defect nobody looked at. Out of range is the commonest
+   answer and it is a silence, not a miss — the item may live in code this layer
+   never touches.
+
+   Stated as one round's judgment with its verdict, not as a standing truth, for
+   the reason `prior-fixes-block` states an account as a claim: a reviewer told
+   something authoritative stops reading the diff."
+  [{:keys [round verdict needs]}]
+  (when needs
+    (str
+     "AN EARLIER RUN'S DESIGN VERDICT LEFT THIS OUTSTANDING, AND NO FINDING HAS\n"
+     "EVER RAISED IT.\n\n"
+     "After round " round " of an earlier run the design was judged "
+     (name verdict) ", and\n"
+     "this was left open:\n\n"
+     needs "\n\n"
+     "That judgment read a different tree than the one below, so whether it is\n"
+     "still true is a question, not a fact. Check it against the range:\n"
+     "- Still true, and inside what you are reviewing: report it as a finding\n"
+     "  like any other, at the lines you found it. That is the only way it\n"
+     "  becomes work — nothing downstream of a verdict can act on one.\n"
+     "- Already answered by the code, or outside this range: say nothing. Do\n"
+     "  NOT report it back on the strength of this text; a finding nobody\n"
+     "  verified costs the next round exactly what a real one does.\n\n")))
+
 (def disposition-vocabulary
   "What may become of a finding. One entry per destination: the word the warden
    answers with, what it means, and the extra field it may not omit.
