@@ -503,17 +503,21 @@
     (is (re-find #"session limit" out)
         "so a reader is not sent to agent.log to find out the agent never ran")))
 
-(deftest a-target-an-orphaned-run-never-read-is-not-drawn-as-one-reviewed-clean
+(deftest a-target-a-run-that-stopped-never-read-is-not-drawn-as-one-reviewed-clean
   ;; The default arm of the glyph table is "✓". A row the run never got an
   ;; answer for falls through to it unless the status is named, so a terminal
-  ;; report would show a tick against a target no reviewer opened.
-  (let [r {:target {:cwd "/x/feat/thing" :base "main" :layers 1 :files ["a"]}
-           :rounds [{:round 1 :status "orphaned"
-                     :phases [{:phase "review" :status "orphaned"
-                               :started-at "2026-01-01T00:00:00Z"
-                               :layers [{:label "stack" :stack? true :status "orphaned"}]}]}]}
-        s (render/frame r (java.time.Instant/parse "2026-01-01T00:00:10Z"))]
-    (is (not (str/includes? s "✓")))
-    (is (str/includes? s "not read")
-        "and it says which of the four quiet statuses it is: `queued` would
-         claim a run still going, `converged` a verdict from an earlier one")))
+  ;; report would show a tick against a target no reviewer opened. Both stamps
+  ;; a report can carry for such a row are named for that reason — they differ
+  ;; in what became of the RUN, which its own status carries, and say the same
+  ;; thing about the row.
+  (doseq [stamp ["orphaned" "interrupted"]]
+    (let [r {:target {:cwd "/x/feat/thing" :base "main" :layers 1 :files ["a"]}
+             :rounds [{:round 1 :status stamp
+                       :phases [{:phase "review" :status stamp
+                                 :started-at "2026-01-01T00:00:00Z"
+                                 :layers [{:label "stack" :stack? true :status stamp}]}]}]}
+          s (render/frame r (java.time.Instant/parse "2026-01-01T00:00:10Z"))]
+      (is (not (str/includes? s "✓")) stamp)
+      (is (str/includes? s "not read")
+          "and it says which of the quiet statuses it is: `queued` would claim a
+           run still going, `converged` a verdict from an earlier one"))))

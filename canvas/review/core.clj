@@ -157,8 +157,25 @@
      reconciler's clock would date every orphan to whenever somebody next reviewed the branch."
     {:signature [:=> [:catn [:report ReviewReport] [:at :string]] ReviewReport]
      :delegates [in-flight]})
-  (Operation apply-event "The report with one event folded in. Pure."
-    {:signature [:=> [:catn [:report ReviewReport] [:event :map]] ReviewReport]})
+  (Operation interrupted
+    "The report forced terminal BY THE RUN ITSELF, on being stopped — or nothing when it must be
+     left to the reconciler instead.
+
+     The other half of `orphaned`, and a different fact. An orphan is a run nobody can account
+     for; an interrupt is a run saying it was told to stop, written from the shutdown hook while
+     it still knows. Refused for a run that already ended, whose verdict this would discard, and
+     for one stopped mid-repair — that one left the tree rewritten and a report still saying
+     `running` is the only thing that tells the next claimant so."
+    {:signature [:=> [:catn [:report ReviewReport] [:at :string]] [:maybe ReviewReport]]
+     :delegates [in-flight]})
+  (Operation apply-event
+    "The report with one event folded in. Pure.
+
+     An interrupted report is FINAL and every later event is dropped: the shutdown hook stamps
+     it and then reaps the reviewers, which unblocks the engine's thread to spend the reap's
+     grace unwinding — and a finalize out of that would restate the interrupt as a verdict."
+    {:signature [:=> [:catn [:report ReviewReport] [:event :map]] ReviewReport]
+     :delegates [interrupted]})
   (Operation with-verdict
     "The report carrying what became of the design-verdict pass.
 
@@ -262,8 +279,16 @@
      joining a live run is a read rather than a channel. Writes nothing anywhere — a follower
      that touched the report, the ledger or the claim could damage the run it came to watch."
     {:signature [:=> [:catn [:opts :map]] :any] :delegates [read-report with-live-frame]})
+  (Operation recording-interruption
+    "Run a body with the run recorded as interrupted if the JVM is stopped while it is going.
+
+     A loop unwinds through a `finally` when it throws and through nothing at all when it is
+     stopped — which is what SIGINT does, and what a person pressing Ctrl-C does. The report is
+     the whole of what such a run leaves behind, so it is written from the shutdown hook."
+    {:signature [:=> [:catn [:emit :any] [:clock :any] [:f [:=> [:catn] :any]]] :any]})
   (Operation with-live-display "Run a body under the live display, or plainly."
-    {:signature [:=> [:catn [:opts :map]] :any] :delegates [plain? emit-fn with-live-frame]}))
+    {:signature [:=> [:catn [:opts :map]] :any]
+     :delegates [plain? emit-fn with-live-frame recording-interruption]}))
 
 (Module review-loop
   "The generic round loop: run the pipeline, judge, repeat until it converges or the cap is hit.

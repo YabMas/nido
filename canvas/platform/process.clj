@@ -15,6 +15,23 @@
   (Operation with-child-registered
     "Run `f` with `proc` registered for shutdown, deregistering however f ends."
     {:signature [:=> [:catn [:proc :any] [:f [:=> [:catn] :any]]] :any]})
+  (Operation run-exit-notes!
+    "Run every registered exit note, returning how many returned without throwing. A note that
+     throws is dropped: at shutdown an exception costs more than what it was reporting, because
+     the hook thread dies with the children still running."
+    {:signature [:=> [:catn] :int]})
+  (Operation with-exit-note
+    "Run `f` with `note!` registered to run at JVM shutdown, deregistering however f ends. What
+     lets a caller put something on the record at the moment a person stops the command — SIGINT
+     runs shutdown hooks, and until the hook returns this process's memory is the only account
+     of what was interrupted."
+    {:signature [:=> [:catn [:note! [:=> [:catn] :any]] [:f [:=> [:catn] :any]]] :any]})
+  (Operation at-exit!
+    "What the shutdown hook does: the notes, THEN the reap. The order is the point — destroying
+     a child unblocks the thread that was reading it, and everything that thread does while
+     unwinding would land on top of a note written afterwards."
+    {:signature [:=> [:catn] :any]
+     :delegates [run-exit-notes! stop-live-children!]})
   (Operation process-alive? "Is this pid alive?"
     {:signature [:=> [:catn [:pid :int]] :boolean]})
   (Operation stop-process! "Stop one pid, if it is alive."

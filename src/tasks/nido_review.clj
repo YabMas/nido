@@ -1473,22 +1473,29 @@
                  (frontend/with-live-frame
                    {:frame-fn #(render/record-frame @report-atom % {:title title})
                     :clock clock :plain? plain}
-                   #(rloop/run-loop (cond-> {:cwd cwd :code-cwd code-cwd
-                                             :run-id run-id
-                                             :max-iters max-iters
-                                             :dry-run? (boolean dry-run?)
-                                             :budget budget
-                                             :clock clock :emit emit
-                                             :pipeline pipeline
-                                             ;; Both record pipelines judge in
-                                             ;; their first stage. The diff loop
-                                             ;; passes none: its last stage does
-                                             ;; work rather than reporting, and
-                                             ;; nothing has shown the same cost
-                                             ;; there.
-                                             :judged-after :judge
-                                             :finding-key finding-key}
-                                      baseline (assoc :baseline baseline))))
+                   ;; A record round is stopped the same way a diff review is and
+                   ;; leaves the same `running` report behind. No reconciler ever
+                   ;; reads one — it names no base — so nothing else would ever
+                   ;; close it, and a joiner polls a report that says the round is
+                   ;; still going for as long as the run dir lasts.
+                   #(frontend/recording-interruption
+                     emit clock
+                     (fn []
+                       (rloop/run-loop
+                        (cond-> {:cwd cwd :code-cwd code-cwd
+                                 :run-id run-id
+                                 :max-iters max-iters
+                                 :dry-run? (boolean dry-run?)
+                                 :budget budget
+                                 :clock clock :emit emit
+                                 :pipeline pipeline
+                                 ;; Both record pipelines judge in their first
+                                 ;; stage. The diff loop passes none: its last
+                                 ;; stage does work rather than reporting, and
+                                 ;; nothing has shown the same cost there.
+                                 :judged-after :judge
+                                 :finding-key finding-key}
+                          baseline (assoc :baseline baseline))))))
                  (finally
                    (println (render/record-final @report-atom {:title title}))))
         status (:status final)]

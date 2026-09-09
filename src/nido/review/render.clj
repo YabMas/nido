@@ -161,10 +161,10 @@
 (defn- layer-glyph
   [status now]
   (case status
-    ;; `orphaned` is here and not in the default arm, which is "✓". The status
-    ;; is stamped onto a row the run never got an answer for, so falling through
-    ;; would draw a target nobody opened as one reviewed clean.
-    ("skipped" "pending" "nothing-to-review" "orphaned") "·"
+    ;; `orphaned` and `interrupted` are here and not in the default arm, which
+    ;; is "✓". Both are stamped onto a row the run never got an answer for, so
+    ;; falling through would draw a target nobody opened as one reviewed clean.
+    ("skipped" "pending" "nothing-to-review" "orphaned" "interrupted") "·"
     "running"             (spinner now)
     "error"               "✗"
     "✓"))
@@ -176,10 +176,12 @@
     "pending" "queued"
     "running" "reviewing …"
     "error"   "failed"
-    ;; `queued` from the other end: a pending row is a run still going, and this
-    ;; one is a run that is not. `not read` rather than a finding count for the
-    ;; same reason `nothing-to-review` has none — see below.
-    "orphaned" "not read"
+    ;; `queued` from the other end: a pending row is a run still going, and
+    ;; these are runs that are not. `not read` rather than a finding count for
+    ;; the same reason `nothing-to-review` has none — see below. The two say the
+    ;; same thing about the ROW and differ only in what became of the run, which
+    ;; the report's own status carries.
+    ("orphaned" "interrupted") "not read"
     ;; No count: there is no finding tally to report on a target nobody read,
     ;; and "0 findings" beside a ✓ is the reading this status exists to prevent.
     "nothing-to-review" "empty diff"
@@ -412,7 +414,7 @@
 (defn ^{:malli/schema [:=> [:cat :any :map] [:maybe :string]]}
   plain-line
   "One line per transition for non-TTY mode, or nil to stay silent."
-  [_report {:keys [event iter phase status label findings]}]
+  [report {:keys [event iter phase status label findings]}]
   (case event
     ;; Only completions narrate. A start line per target would double the log
     ;; for a fan-out that reports out of order anyway, and plain mode is read
@@ -424,6 +426,13 @@
     :phase-finished (str "round " iter " · " (name phase) " ✓")
     :phase-errored  (str "round " iter " · " (name phase) " ✗")
     :run-finalized  (str "done · " (name status))
+    ;; Read off the FOLDED report rather than announced from the event: the
+    ;; interrupt is refused for a run stopped mid-repair, and a log claiming a
+    ;; run recorded itself as stopped when it was deliberately left open sends
+    ;; its reader after a report that says no such thing. Worth a line at all
+    ;; because a log that simply stops mid-stream is what a crash and a SIGKILL
+    ;; look like too.
+    :run-interrupted (when (= "interrupted" (:status report)) "stopped · interrupted")
     nil))
 
 ;; ── A loop over a ledger record ─────────────────────────────────────────────

@@ -75,9 +75,11 @@
 
    The whole of what a claimant decides on: every other phase reads the branch,
    so a run that died in one left the tree exactly as its reviewers found it and
-   there is nothing for the next run to be told."
+   there is nothing for the next run to be told. `report/interrupted` refuses to
+   close a run stopped here for that reason — this refusal is what it is leaving
+   the report open for."
   [orphan]
-  (= "fix" (:phase (:in-flight orphan))))
+  (= report/rewriting-phase (:phase (:in-flight orphan))))
 
 (defn ^{:malli/schema [:=> [:cat :Path [:maybe :string]] [:sequential :map]]}
   orphans

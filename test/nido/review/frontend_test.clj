@@ -4,6 +4,7 @@
    [cheshire.core :as json]
    [clojure.string :as str]
    [babashka.fs :as fs]
+   [nido.platform.process :as nprocess]
    [nido.review.frontend :as frontend]
    [nido.review.report :as report]
    [nido.review.vterm :as vterm]))
@@ -330,3 +331,65 @@
          arrived in that window must wait rather than fail")
     (is (empty? @painted)
         "and it must not put an absent report through the renderer")))
+
+(deftest a-loop-stopped-mid-run-leaves-a-report-saying-so
+  ;; A run under `with-live-display` unwinds through a `finally` when it throws
+  ;; and through nothing at all when the JVM is stopped — which is what SIGINT
+  ;; does, and what a person pressing Ctrl-C does to a review loop. The report
+  ;; on disk is the whole of what such a run leaves behind, so it is written
+  ;; from the shutdown hook rather than from the run.
+  (let [dir  (str (fs/create-temp-dir))
+        path (str (fs/path dir "report.json"))
+        a    (atom nil)
+        out  (with-out-str
+               (frontend/with-live-display
+                 {:report-atom a :report-path path :clock clock :plain? true}
+                 (fn [emit]
+                   (emit {:event :run-started :run-id "r" :cwd "/w" :base "main"
+                          :at "2026-06-30T14:00:00Z"})
+                   (emit {:event :phase-started :iter 1 :phase :review
+                          :at "2026-06-30T14:00:01Z"})
+                   ;; Stands in for the JVM's own shutdown: the hook runs this
+                   ;; while the loop is still going, which is the only moment
+                   ;; the report can still be written from.
+                   (nprocess/run-exit-notes!))))]
+    (is (= "interrupted" (:status @a)))
+    (is (= "interrupted" (:status (json/parse-string (slurp path) true)))
+        "on disk, not just in memory — the process is about to be gone")
+    (is (str/includes? out "stopped · interrupted")
+        "a plain-mode log that simply stops mid-stream is what a crash looks
+         like too, so the run says which one this was")))
+
+(deftest a-loop-that-finished-is-not-restated-as-stopped
+  ;; The note stays registered for the whole bracket, so it can fire after the
+  ;; loop has already finalized — Ctrl-C during the ledger append or the design
+  ;; verdict. It must not overwrite the verdict the run reached.
+  (let [dir  (str (fs/create-temp-dir))
+        path (str (fs/path dir "report.json"))
+        a    (atom nil)]
+    (with-out-str
+      (frontend/with-live-display
+        {:report-atom a :report-path path :clock clock :plain? true}
+        (fn [emit]
+          (emit {:event :run-started :run-id "r" :cwd "/w" :base "main"
+                 :at "2026-06-30T14:00:00Z"})
+          (emit {:event :phase-started :iter 1 :phase :review
+                 :at "2026-06-30T14:00:01Z"})
+          (emit {:event :run-finalized :status :clean :ctx {}
+                 :at "2026-06-30T14:00:03Z"})
+          (nprocess/run-exit-notes!))))
+    (is (= "clean" (:status @a)))))
+
+(deftest the-note-goes-with-the-run-it-describes
+  ;; Left registered, it would fire on behalf of a run that has already said how
+  ;; it ended — and in a daemon that runs many, on behalf of the wrong one.
+  (let [dir  (str (fs/create-temp-dir))
+        path (str (fs/path dir "report.json"))
+        a    (atom nil)]
+    (with-out-str
+      (frontend/with-live-display
+        {:report-atom a :report-path path :clock clock :plain? true}
+        (fn [emit]
+          (emit {:event :run-started :run-id "r" :cwd "/w" :base "main"
+                 :at "2026-06-30T14:00:00Z"}))))
+    (is (zero? (nprocess/run-exit-notes!)))))

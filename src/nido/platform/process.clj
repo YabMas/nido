@@ -37,10 +37,66 @@
                  true)
                (catch Throwable _ nil))))))
 
-(defonce ^:private stop-children-at-exit
+(def ^:private exit-notes
+  "What this JVM must put on the record before it stops the children it started.
+
+   SIGINT runs shutdown hooks, so the commonest way a person stops a long
+   command is also the last moment nido's own code runs — and at that moment the
+   only account of what was interrupted is in this process's memory. Each note
+   is a nullary fn run for its effect.
+
+   A note that throws is dropped rather than propagated. Shutdown is the one
+   moment where an exception costs more than whatever it was reporting: the hook
+   thread would die with the children still registered and still running."
+  (atom #{}))
+
+(defn ^{:malli/schema [:=> [:cat] :int]}
+  run-exit-notes!
+  "Run every registered exit note. Returns how many returned without throwing.
+   Called from the shutdown hook, and directly by tests — for the reason
+   `stop-live-children!` gives."
+  []
+  (count
+   (filter true?
+           (for [f @exit-notes]
+             (try (f) true (catch Throwable _ nil))))))
+
+(defn ^{:malli/schema [:=> [:cat] :any]}
+  at-exit!
+  "What the shutdown hook does: put the notes on the record, then stop the
+   children.
+
+   THE ORDER IS THE WHOLE VALUE OF HAVING THE NOTES HERE. Destroying a child
+   unblocks the thread that was reading it, which then spends the reap's own
+   five-second grace unwinding — so a note written after the reap races
+   everything that unwinding does. Written before it, the note costs
+   milliseconds out of a budget the reap already holds.
+
+   Named rather than inlined into the hook so a test can call it: the ordering
+   above is the claim, and a claim only the JVM's own exit can exercise is one
+   nothing checks."
+  []
+  (run-exit-notes!)
+  (stop-live-children!))
+
+(defonce ^:private at-exit
   (delay
-    (.addShutdownHook (Runtime/getRuntime) (Thread. ^Runnable stop-live-children!))
+    (.addShutdownHook (Runtime/getRuntime) (Thread. ^Runnable at-exit!))
     true))
+
+(defn ^{:malli/schema [:=> [:cat [:=> [:cat] :any] [:=> [:cat] :any]] :any]}
+  with-exit-note
+  "Run `f` with `note!` registered to run at JVM shutdown, deregistering however
+   f ends.
+
+   Bracketed rather than registered once, because a note describes work that is
+   under way: left standing past `f` it would fire on behalf of something that
+   has already said how it ended."
+  [note! f]
+  @at-exit
+  (swap! exit-notes conj note!)
+  (try (f)
+       (finally (swap! exit-notes disj note!))))
 
 (defn ^{:malli/schema [:=> [:cat :any [:=> [:cat] :any]] :any]}
   with-child-registered
@@ -49,7 +105,7 @@
    Takes the java.lang.Process rather than babashka's map so both launchers can
    use it — one holds a process map, the other only ever had a shell call."
   [^Process proc f]
-  @stop-children-at-exit
+  @at-exit
   (swap! live-children conj proc)
   (try (f)
        (finally (swap! live-children disj proc))))

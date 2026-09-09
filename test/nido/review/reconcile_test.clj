@@ -99,6 +99,27 @@
      (write-run! (report-in "review-mine" tree reviewing) 0)
      (is (empty? (reconcile/orphans tree "review-mine"))))))
 
+(deftest a-run-that-recorded-being-stopped-is-not-an-orphan
+  (in-tmp-home
+   (fn []
+     ;; The whole payoff of writing the report from the shutdown hook. The run
+     ;; said how it ended, so there is nothing for a later claimant to settle:
+     ;; no restamp, no refusal, and no analysis session to read a run that
+     ;; already accounts for itself.
+     (write-run! (report/interrupted (report-in "review-stopped" tree reviewing) "t3") 0)
+     (is (empty? (reconcile/orphans tree "review-mine"))))))
+
+(deftest a-run-stopped-mid-repair-is-still-an-orphan
+  (in-tmp-home
+   (fn []
+     ;; `report/interrupted` refuses to close this one, and the refusal is for
+     ;; this: its fixers had rewritten the tree and nothing else tells the next
+     ;; claimant so. A person pressing Ctrl-C is still a branch left mid-repair.
+     (let [r (report-in "review-stopped-fixing" tree fixing)]
+       (is (nil? (report/interrupted r "t3")))
+       (write-run! r 0)
+       (is (= ["review-stopped-fixing"] (mapv :run-id (reconcile/orphans tree "review-mine"))))))))
+
 (deftest a-record-round-is-not-a-review-run
   (in-tmp-home
    (fn []

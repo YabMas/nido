@@ -463,13 +463,14 @@
    after reporting would be the display lying about work that is done.
 
    Rank 2 is `this row has stopped`, and it is four different endings — an
-   answer, a cache hit, a failure, an empty diff — plus `orphaned-status`, which
-   no event produces: it is stamped from outside by `close-orphaned-round` when
-   the run holding the row died. Which of the five mean the run ANSWERED for the
-   target is `read-statuses`, a narrower question this map deliberately does not
-   answer."
+   answer, a cache hit, a failure, an empty diff — plus the two stamps no event
+   produces: `close-unfinished-round` writes `orphaned-status` on a row whose run
+   died and `interrupted-status` on one whose run was stopped. Which of them mean
+   the run ANSWERED for the target is `read-statuses`, a narrower question this
+   map deliberately does not answer."
   {"pending" 0 "running" 1
-   "reviewed" 2 "skipped" 2 "error" 2 "nothing-to-review" 2 "orphaned" 2})
+   "reviewed" 2 "skipped" 2 "error" 2 "nothing-to-review" 2
+   "orphaned" 2 "interrupted" 2})
 
 (defn- terminal-row?
   "Whether a target row has stopped moving.
@@ -554,9 +555,9 @@
 
    Every other status is a target this run did not answer for, for one of two
    reasons. `skipped` is the convergence cache answering instead. `pending`,
-   `running` and `orphaned` are a run that stopped before it could — and reading
-   them as read is what `not= \"skipped\"` did, which held only for as long as
-   every row reaching `coverage` had finished."
+   `running`, `orphaned` and `interrupted` are a run that stopped before it
+   could — and reading them as read is what `not= \"skipped\"` did, which held
+   only for as long as every row reaching `coverage` had finished."
   #{"reviewed" "error" "nothing-to-review"})
 
 (defn ^{:malli/schema [:=> [:cat :ReviewReport] :map]}
@@ -572,11 +573,11 @@
    was read here.
 
    THE TWO DO NOT PARTITION THE TARGETS, and a run that stopped is where the gap
-   opens: a target left `pending`, `running` or `orphaned` was neither read here
-   nor remembered from before, so it is counted in neither number. `:reviewed`
-   is the load-bearing one — two gates spend an agent session on the strength of
-   it being positive — and inflating it with rows nobody ever opened is a claim
-   about work that did not happen.
+   opens: a target left `pending`, `running`, `orphaned` or `interrupted` was
+   neither read here nor remembered from before, so it is counted in neither
+   number. `:reviewed` is the load-bearing one — two gates spend an agent session
+   on the strength of it being positive — and inflating it with rows nobody ever
+   opened is a claim about work that did not happen.
 
    The pair is what separates a branch reviewed clean from one mostly remembered
    clean. Without it a `clean` verdict over three targets out of eight is
@@ -617,6 +618,29 @@
    ledger's ReviewReport enum: no `:review` entry is ever written on it."
   "orphaned")
 
+(def interrupted-status
+  "What a run a person stopped is recorded as.
+
+   Reaches no ledger entry either, for the same reason as `orphaned-status`, and
+   states a different fact. An orphan is a run nobody can account for, stamped
+   later by whoever next took the claim; an interrupt is the run itself saying it
+   was told to stop, written from the shutdown hook while it still knows. Kept
+   apart so a reader can tell a decision from an accident — a crash, a SIGKILL
+   and a closed lid all still arrive as `orphaned`, because none of them runs any
+   nido code on the way out."
+  "interrupted")
+
+(def rewriting-phase
+  "The one phase that REWRITES the tree rather than reading it.
+
+   Named rather than spelled twice because two readers turn on it and they are
+   one decision: `interrupted` refuses to close a run stopped here, and
+   `nido.review.reconcile/fixing?` is what then refuses the next claimant. A
+   repair in flight is the one thing a stopped run leaves behind that the next
+   run has to be told about, and a report still saying `running` is the only
+   channel that tells it."
+  "fix")
+
 (defn ^{:malli/schema [:=> [:cat :ReviewReport] [:maybe :map]]}
   in-flight
   "The round, and the phase within it, this report was still in when it was last
@@ -642,9 +666,9 @@
         (cond-> {:round (:round round)}
           (= "running" (:status ph)) (assoc :phase (:phase ph)))))))
 
-(defn- close-orphaned-round
+(defn- close-unfinished-round
   "Close a round whose run never came back — every phase still open in it, and
-   every target row still in flight inside those phases.
+   every target row still in flight inside those phases, stamped `status`.
 
    Nothing is left saying `running`, because `running` is what the renderer
    draws a spinner for: left alone, the final frame of a terminal report
@@ -656,30 +680,48 @@
 
    Restamped, not dropped. The round named every target before it reviewed any
    of them, so the rows are what say what this run set out to read — which is
-   the one thing an orphan can still tell anybody."
-  [round at]
+   the one thing a run that stopped can still tell anybody."
+  [round status at]
   (letfn [(close-row [row]
             (cond-> row
-              (not (terminal-row? row)) (assoc :status orphaned-status)))
+              (not (terminal-row? row)) (assoc :status status)))
           (close-phase [ph]
             (if (= "running" (:status ph))
-              (cond-> (assoc ph :status orphaned-status :ended-at at)
+              (cond-> (assoc ph :status status :ended-at at)
                 (seq (:layers ph)) (update :layers #(mapv close-row %)))
               ph))]
     (-> round
-        (assoc :status orphaned-status :ended-at at)
+        (assoc :status status :ended-at at)
         (update :phases #(mapv close-phase %)))))
+
+(defn- forced-terminal
+  "`report` stamped terminal as `status`, for a run there is no terminal ctx to
+   read.
+
+   The counterpart of `finalize` for such a run: what it stopped ON is not a
+   judgement it reached but the phase it was in, so `:reason` carries `in-flight`
+   under the status's own key where a finished run carries `stopped-on`.
+   Everything else is derived from the rounds already folded, which is all the
+   evidence there is.
+
+   Applied to a report that already ended it would overwrite a real verdict, so
+   every caller establishes first that the run never wrote one."
+  [report status at]
+  (let [flight (in-flight report)]
+    (cond-> (assoc report
+                   :status   status
+                   :ended-at at
+                   :reason   (when flight {(keyword status) flight})
+                   :summary  {:rounds       (count (:rounds report))
+                              :fix-attempts (fix-attempts report)
+                              :final-status status})
+      flight (update-in [:rounds (dec (count (:rounds report)))]
+                        close-unfinished-round status at))))
 
 (defn ^{:malli/schema [:=> [:cat :ReviewReport :string] :ReviewReport]}
   orphaned
   "`report` forced to a terminal state, for a run that stopped without writing
-   one.
-
-   The counterpart of `finalize` for a run there is no terminal ctx to read: what
-   the run stopped ON is not a judgement it reached but the phase it was in, so
-   `:reason` carries `in-flight` where a finished run carries `stopped-on`.
-   Everything else is derived from the rounds already folded, which is all the
-   evidence there is.
+   one and left nobody to say so.
 
    `at` is when the run was last OBSERVED — the newest write in its run dir, not
    now. A dead run's `:ended-at` is a fact about the run rather than about the
@@ -689,66 +731,96 @@
    Idempotent in the sense that matters: applied to a report that already ended,
    it would overwrite a real verdict, so the caller asks `in-flight` first."
   [report at]
-  (let [flight (in-flight report)]
-    (cond-> (assoc report
-                   :status   orphaned-status
-                   :ended-at at
-                   :reason   (when flight {:orphaned flight})
-                   :summary  {:rounds       (count (:rounds report))
-                              :fix-attempts (fix-attempts report)
-                              :final-status orphaned-status})
-      flight (update-in [:rounds (dec (count (:rounds report)))]
-                        close-orphaned-round at))))
+  (forced-terminal report orphaned-status at))
+
+(defn ^{:malli/schema [:=> [:cat :ReviewReport :string] [:maybe :ReviewReport]]}
+  interrupted
+  "`report` forced to a terminal state by the run itself, on being stopped — or
+   nil when it must be left to the reconciler instead.
+
+   `at` is now, and unlike `orphaned`'s that is the run's own clock: this is a
+   live process recording its own end, so there is no gap between when it
+   stopped and when anyone noticed.
+
+   nil in the two cases where writing would say something false. A report
+   already carrying a terminal status belongs to a run that finished and is
+   doing its post-processing, and stamping over it would discard the verdict it
+   reached. A run stopped in its `rewriting-phase` left the tree mid-repair, and
+   the report saying `running` is what tells the next claimant so — closing it
+   here would hand that claimant a branch nobody signed off, silently."
+  [report at]
+  (when (and (= "running" (:status report))
+             (not= rewriting-phase (:phase (in-flight report))))
+    (forced-terminal report interrupted-status at)))
 
 ;; ---- fold ----------------------------------------------------------------
 
 (defn ^{:malli/schema [:=> [:cat :ReviewReport :map] :ReviewReport]}
   apply-event
+  "Fold one engine event into the report.
+
+   AN INTERRUPTED REPORT IS FINAL and every later event is dropped. It is the
+   one status written from off the engine's own thread: the shutdown hook stamps
+   it and then destroys the reviewer children, which unblocks that thread to
+   spend the reap's five-second grace unwinding. Everything that unwinding emits
+   describes a run already stopped — and `:run-finalized` among it would restate
+   the interrupt as a verdict the loop reached, which is the one reading the
+   status exists to prevent."
   [report {:keys [event] :as ev} _clock]
-  (case event
-    :run-started
-    ;; Constructs the report when nothing seeded it — `report` is nil for a
-    ;; caller that folds from scratch — but must not discard what did. Only the
-    ;; caller can know `:context` and `:machinery`; the loop that emits this
-    ;; event knows neither, so both are read back off the report being replaced.
-    (init {:run-id     (:run-id ev)
-           :cwd        (:cwd ev)
-           :base       (:base ev)
-           :started-at (:at ev)
-           :context    (get-in report [:target :context])
-           :machinery  (:machinery report)})
+  (if (= interrupted-status (:status report))
+    report
+    (case event
+      :run-started
+      ;; Constructs the report when nothing seeded it — `report` is nil for a
+      ;; caller that folds from scratch — but must not discard what did. Only the
+      ;; caller can know `:context` and `:machinery`; the loop that emits this
+      ;; event knows neither, so both are read back off the report being replaced.
+      (init {:run-id     (:run-id ev)
+             :cwd        (:cwd ev)
+             :base       (:base ev)
+             :started-at (:at ev)
+             :context    (get-in report [:target :context])
+             :machinery  (:machinery report)})
 
-    :phase-started
-    (-> report
-        (open-round (:iter ev) (:at ev))
-        (append-phase {:phase (name (:phase ev)) :status "running"
-                       :started-at (:at ev) :ended-at nil}))
+      :phase-started
+      (-> report
+          (open-round (:iter ev) (:at ev))
+          (append-phase {:phase (name (:phase ev)) :status "running"
+                         :started-at (:at ev) :ended-at nil}))
 
-    :phase-finished
-    (let [ctx (assoc (:ctx ev) :iter (:iter ev))]
+      :phase-finished
+      (let [ctx (assoc (:ctx ev) :iter (:iter ev))]
+        (update-current-phase report (name (:phase ev))
+                              #(finish-phase % (:phase ev) ctx (:at ev))))
+
+      :stack-conflicts
+      (record-conflicts report ev)
+
+      :targets-resolved
+      (resolve-target report ev)
+
+      :target-moved
+      (move-target report ev)
+
+      :phase-errored
       (update-current-phase report (name (:phase ev))
-                            #(finish-phase % (:phase ev) ctx (:at ev))))
+                            #(assoc % :status "error" :error (:error ev)
+                                      :ended-at (:at ev)))
 
-    :stack-conflicts
-    (record-conflicts report ev)
+      :run-finalized
+      (-> report
+          (close-current-round (:at ev))
+          (finalize (:status ev) (:ctx ev) (:at ev)))
 
-    :targets-resolved
-    (resolve-target report ev)
+      ;; The one event no stage emits: it arrives from the shutdown hook, on the
+      ;; hook's own thread, and is folded here so that it is serialized with the
+      ;; engine's events and persisted by the same writer. `interrupted` answers
+      ;; nil for a run that must be left to the reconciler, and a no-op fold is
+      ;; how that refusal reaches the report — unsealed, still `running`.
+      :run-interrupted
+      (or (interrupted report (:at ev)) report)
 
-    :target-moved
-    (move-target report ev)
-
-    :phase-errored
-    (update-current-phase report (name (:phase ev))
-                          #(assoc % :status "error" :error (:error ev)
-                                    :ended-at (:at ev)))
-
-    :run-finalized
-    (-> report
-        (close-current-round (:at ev))
-        (finalize (:status ev) (:ctx ev) (:at ev)))
-
-    report))
+      report)))
 
 ;; ---- the design verdict --------------------------------------------------
 

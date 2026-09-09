@@ -1143,3 +1143,82 @@
         o (report/orphaned r "2026-06-30T14:06:00Z")]
     (is (= "reviewed" (get-in o [:rounds 0 :phases 0 :layers 0 :status])))
     (is (= "orphaned" (get-in o [:rounds 0 :phases 1 :status])))))
+
+;; ---- a run somebody stopped ----------------------------------------------
+
+(deftest a-stopped-run-records-that-it-was-stopped
+  ;; The commonest way a person ends a loop used to leave a report saying
+  ;; `running` for the life of the run dir — the shape a crash leaves — so the
+  ;; next claimant reconciled it as an orphan and bought an analysis session to
+  ;; read a run that had nothing to say.
+  (let [r (drive [{:event :run-started :run-id "review-1" :cwd "/w" :base "main"
+                   :at "2026-06-30T14:00:00Z"}
+                  {:event :phase-started :iter 1 :phase :review
+                   :at "2026-06-30T14:00:01Z"}
+                  {:event :targets-resolved :iter 1 :at "2026-06-30T14:00:02Z"
+                   :targets [{:label "stack" :stack? true} {:label "a" :index 1}]}
+                  {:event :run-interrupted :at "2026-06-30T14:00:03Z"}])]
+    (is (= "interrupted" (:status r))
+        "a decision, told apart from the accident `orphaned` names — a crash, a
+         SIGKILL and a closed lid run no nido code on the way out and still
+         reach the reconciler")
+    (is (= "2026-06-30T14:00:03Z" (:ended-at r)))
+    (is (= {:round 1 :phase "review"} (get-in r [:reason :interrupted]))
+        "where it stopped, since it reached no judgement to carry")
+    (is (= "interrupted" (get-in r [:rounds 0 :status])))
+    (is (= ["interrupted" "interrupted"]
+           (mapv :status (get-in r [:rounds 0 :phases 0 :layers])))
+        "a row left `running` animates in a terminal report, and one left
+         `pending` is a target claimed as covered by a run that never opened it")
+    (is (= {:reviewed 0 :skipped 0} (report/coverage r))
+        "and neither row counts as read: the run answered for nothing")))
+
+(deftest a-stopped-run-is-final-and-nothing-later-may-restate-it
+  ;; The reap comes after the note, and destroying a reviewer unblocks the
+  ;; thread that was reading it. That thread then spends the reap's five-second
+  ;; grace unwinding, and a :run-finalized out of it would republish the
+  ;; interrupt as a verdict the loop reached — which is analysed like any other.
+  (let [r (drive [{:event :run-started :run-id "review-1" :cwd "/w" :base "main"
+                   :at "2026-06-30T14:00:00Z"}
+                  {:event :phase-started :iter 1 :phase :review
+                   :at "2026-06-30T14:00:01Z"}
+                  {:event :run-interrupted :at "2026-06-30T14:00:03Z"}
+                  {:event :phase-errored :iter 1 :phase :review
+                   :error "stream closed" :at "2026-06-30T14:00:04Z"}
+                  {:event :run-finalized :status :review-failed :ctx {}
+                   :at "2026-06-30T14:00:05Z"}])]
+    (is (= "interrupted" (:status r)))
+    (is (= "2026-06-30T14:00:03Z" (:ended-at r))
+        "the run ended when it was stopped, not when its unwinding finished")
+    (is (nil? (get-in r [:rounds 0 :phases 0 :error]))
+        "the reap's own consequences are not findings about the branch")))
+
+(deftest a-run-stopped-mid-repair-is-left-for-the-reconciler
+  ;; The one thing a stopped run leaves behind that the next run has to be told
+  ;; about, and a report still saying `running` is the only channel that tells
+  ;; it. Closing it here would hand the next claimant a branch nobody signed
+  ;; off, silently.
+  (let [r (drive [{:event :run-started :run-id "review-1" :cwd "/w" :base "main"
+                   :at "2026-06-30T14:00:00Z"}
+                  {:event :phase-started :iter 1 :phase :fix
+                   :at "2026-06-30T14:02:01Z"}])]
+    (is (nil? (report/interrupted r "2026-06-30T14:03:00Z")))
+    (is (= r (report/apply-event r {:event :run-interrupted :at "2026-06-30T14:03:00Z"}
+                                 clock))
+        "the fold is a no-op, so the report stays `running` and reconcile finds
+         it exactly as it finds a crash")))
+
+(deftest a-run-that-already-ended-is-not-restamped-as-stopped
+  ;; A loop finalizes its report and then keeps going — the ledger entry, the
+  ;; design verdict, the analysis envelope. Ctrl-C anywhere in there must not
+  ;; discard the verdict it reached.
+  (let [r (drive [{:event :run-started :run-id "review-1" :cwd "/w" :base "main"
+                   :at "2026-06-30T14:00:00Z"}
+                  {:event :phase-started :iter 1 :phase :review
+                   :at "2026-06-30T14:00:01Z"}
+                  {:event :run-finalized :status :clean :ctx {}
+                   :at "2026-06-30T14:05:00Z"}])]
+    (is (nil? (report/interrupted r "2026-06-30T14:05:01Z")))
+    (is (= "clean" (:status (report/apply-event
+                             r {:event :run-interrupted :at "2026-06-30T14:05:01Z"}
+                             clock))))))

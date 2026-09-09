@@ -9,6 +9,7 @@
    [babashka.process :as process]
    [cheshire.core :as json]
    [clojure.string :as str]
+   [nido.platform.process :as nprocess]
    [nido.review.report :as report]
    [nido.review.render :as render])
   (:import
@@ -26,12 +27,13 @@
   "Build the emit fn: fold event → atom, persist, and in plain mode print a
    narration line.
 
-   Serialized, because emit is no longer called only from the engine's thread:
-   the review stage fans out and each target reports as it finishes. `swap!`
-   would survive that on its own, but `persist!` stages through one fixed
-   `<path>.tmp` before its atomic rename, so two threads writing at once can
-   interleave their bytes and rename a corrupt file over a good one. The lock
-   also keeps plain-mode narration from tearing across lines.
+   Serialized, because emit is not called only from the engine's thread: the
+   review stage fans out and each target reports as it finishes, and the
+   shutdown hook emits the interrupt from a thread of its own. `swap!` would
+   survive that on its own, but `persist!` stages through one fixed `<path>.tmp`
+   before its atomic rename, so two threads writing at once can interleave their
+   bytes and rename a corrupt file over a good one. The lock also keeps
+   plain-mode narration from tearing across lines.
 
    Folds the value `swap!` returned rather than re-dereferencing: the atom may
    already hold a newer report, and an event's own line should describe the
@@ -45,6 +47,30 @@
           (when plain?
             (when-let [line (render/plain-line r event)]
               (println line))))))))
+
+(defn ^{:malli/schema [:=> [:cat :any :any [:=> [:cat] :any]] :any]}
+  recording-interruption
+  "Run `f` with this run recorded as `interrupted` if the JVM is stopped while it
+   is still going.
+
+   SIGINT runs shutdown hooks and a review loop already installs one to reap the
+   agents it launched, so the commonest way a person stops a loop is a moment
+   nido's own code is running. That is the only moment the report can still be
+   written from, and writing it is what tells a stopped run apart from a crashed
+   one: a report left saying `running` is the shape a crash leaves, so the next
+   claimant settles it as an orphan and queues an analysis session to read a run
+   that has nothing to say.
+
+   Emitted rather than written directly, so the hook's write is serialized with
+   the engine's own events and lands through the same persister — see
+   `emit-fn`. The event is a no-op for a run that already ended and for one
+   stopped mid-repair, so the bracket does not have to be tight.
+
+   `emit` and `clock` are this run's; `f` is the run."
+  [emit clock f]
+  (nprocess/with-exit-note
+   #(emit {:event :run-interrupted :at (str (clock))})
+   f))
 
 ;; Terminal geometry -------------------------------------------------------
 ;;
@@ -345,7 +371,8 @@
 
    The summary prints from a `finally`, so a run that throws still leaves the
    report on screen: what a review found before it died is the most useful thing
-   there is at that moment.
+   there is at that moment. A run that is STOPPED unwinds through no `finally`
+   at all, so what it leaves behind is the report — see `recording-interruption`.
 
    `final` is printed WHOLE, never fitted. It is printed once over an erased
    screen and never repainted, so nothing depends on its height, and a review
@@ -364,6 +391,6 @@
                         ;; The review frame separates rounds with a blank line,
                         ;; so a dropped block is a dropped round.
                         :elided-unit "round"}
-        #(f emit))
+        #(recording-interruption emit clock (fn [] (f emit))))
       (finally
         (println (render/final @report-atom))))))
