@@ -715,6 +715,70 @@ layers, it is not yours"))
     (is (str/includes? out "find its siblings and fix those too"))
     (is (not (str/includes? out "SWEEP AGAIN")))))
 
+(deftest a-fixer-is-told-what-the-warden-settled-on-its-own-layer
+  ;; The prompt rendered the findings dispositioned :fix and nothing else, so a
+  ;; decision to LIVE with a defect reached the fixer as silence. One handed a
+  ;; single finding rewrote two of the three sites named by a deviation the same
+  ;; round had kept, and the run still reported the deviation as standing.
+  (let [out (prompts/fix-prompt
+             {:findings [{:priority 1 :title "t" :body "b"}]
+              :settled [{:id "0f2ea8d2" :title "changelog contradicts the branch"
+                         :disposition :deviation
+                         :of "recording.clj documents the pre-branch modes"
+                         :file "recording.clj" :line-start 1 :line-end 24}]})]
+    (is (str/includes? out "ALREADY DECIDED"))
+    (is (str/includes? out "0f2ea8d2 changelog contradicts the branch → deviation"))
+    (is (str/includes? out "recording.clj documents the pre-branch modes")
+        "a deviation without its claim is a title the fixer cannot weigh against the code")))
+
+(deftest a-settled-decision-is-located-in-the-tree
+  ;; The one thing this block carries that the warden's does not. The warden has
+  ;; the finding in front of it; the fixer has the repository, and a decision it
+  ;; cannot find is one it can only honour by accident.
+  (let [out (prompts/fix-prompt
+             {:findings [{:priority 1 :title "t" :body "b"}]
+              :settled [{:id "aa11" :title "no backoff on reconnect"
+                         :disposition :declined
+                         :because "the caller owns the retry budget"
+                         :file "transport.clj" :line-start 410 :line-end 418}]})]
+    (is (str/includes? out "transport.clj:410-418"))
+    (is (str/includes? out "the caller owns the retry budget")
+        "a decision a fixer is asked to honour has to come with its grounds")))
+
+(deftest a-fixer-that-disagrees-with-a-decision-is-sent-to-the-round-not-the-code
+  ;; Editing a settled finding does not retract the ruling, so the branch and the
+  ;; run's published account of it come apart with nothing to notice. The fixer
+  ;; in the incident DID recognise the edit as out of its brief and made it
+  ;; anyway, because the prompt offered it nowhere else to put the objection.
+  (let [out (prompts/fix-prompt
+             {:findings [{:priority 1 :title "t" :body "b"}]
+              :settled [{:id "aa11" :title "x" :disposition :declined
+                         :because "shipping it"}]})]
+    (is (str/includes? out "leave these exactly as they are"))
+    (is (str/includes? out "does not retract the ruling")
+        "why an edit is worse than useless here is the whole argument for not making one")
+    (is (str/includes? out "name the id")
+        "disagreement has to have a destination or it becomes an edit")))
+
+(deftest the-deviation-clause-appears-only-where-a-deviation-does
+  ;; A block that explains a word absent from its own list teaches the reader to
+  ;; skim the rest of it.
+  (let [with (prompts/fix-prompt
+              {:findings [{:priority 1 :title "t" :body "b"}]
+               :settled [{:id "a" :title "x" :disposition :deviation :of "the claim"}]})
+        without (prompts/fix-prompt
+                 {:findings [{:priority 1 :title "t" :body "b"}]
+                  :settled [{:id "a" :title "x" :disposition :declined
+                             :because "shipping it"}]})]
+    (is (str/includes? with "BOTH are being kept"))
+    (is (not (str/includes? without "BOTH are being kept")))))
+
+(deftest a-fixer-with-nothing-settled-against-its-layer-gets-no-empty-block
+  ;; A heading with nothing under it reads as a bound that was checked and found
+  ;; empty, which is a different claim from no bound at all.
+  (let [out (prompts/fix-prompt {:findings [{:priority 1 :title "t" :body "b"}]})]
+    (is (not (str/includes? out "ALREADY DECIDED")))))
+
 (deftest minimal-does-not-license-leaving-an-artifact-contradicting-itself
   ;; For a declarative artifact the smallest edit that resolves a finding is
   ;; often the one that breaks it: one round declared a field required on a

@@ -929,11 +929,72 @@
                   "in your final message. That is what reaches the layer that\n"
                   "owns it; editing it here reaches nobody.\n\n"))))))
 
+(defn- settled-block
+  "What has already been decided about the code this fixer is being sent into.
+
+   The findings list is what the warden dispositioned `:fix`, so a decision to
+   LIVE with a defect reaches the one reader most able to undo it as silence.
+   A fixer handed a single finding rewrote two of the three sites named by a
+   deviation the same round had KEPT, recognised the edit as a different defect
+   class from the one it was assigned, and landed it anyway; the run went on to
+   report `2 kept · 0 still open` over a branch where two thirds of one of those
+   two no longer stood.
+
+   The reach is why the findings list cannot carry this. A sweep searches the
+   defect CLASS over whole files, and the self-consistency rule sends a fixer
+   back through every artifact it edits — both of them arrive at lines nobody
+   handed it, and a settled finding is such a line with a decision already on
+   it.
+
+   Every SETTLING disposition, which is the set `nido.review.stages/settled?`
+   reads off `disposition-vocabulary`. One list, so what a fixer is told is
+   decided and what the loop counts as decided cannot come apart.
+
+   The file and line range are here and are not in `answered-block`, and that is
+   the whole difference between the two readers. The warden has the finding in
+   front of it; the fixer has the repository, and a decision it cannot locate is
+   one it can only honour by accident."
+  [settled]
+  (when (seq settled)
+    (str "ALREADY DECIDED — leave these exactly as they are.\n"
+         "The reviewer of the whole stack ruled on each one and settled it: the\n"
+         "defect is real and this branch is shipping it, or it is not this\n"
+         "change's to fix.\n"
+         "They are here because your reach is wider than the findings below — a\n"
+         "sweep reads whole files, and leaving an artifact self-consistent sends\n"
+         "you back through everything you edit — so a line you are about to\n"
+         "change may already carry a decision.\n"
+         (when (some #(= :deviation (:disposition %)) settled)
+           (str "A `deviation` is the sharpest of these: a layer's stated CLAIM\n"
+                "and the code contradict each other and BOTH are being kept.\n"
+                "Making them agree is a change nobody asked for.\n"))
+         "Editing one does not retract the ruling. It stands, so the branch and\n"
+         "the account the run publishes of it disagree, and nothing downstream\n"
+         "notices. If a decision looks wrong, say so in your final message and\n"
+         "name the id: that reaches the round that can reverse it, and the edit\n"
+         "reaches nobody.\n"
+         (->> settled
+              (map (fn [{:keys [id title disposition authority file
+                                line-start line-end of because]}]
+                     (str "\u00b7 " id " " title
+                          " \u2192 " (name (or disposition :closed))
+                          (when authority (str " (" authority ")")) "\n"
+                          (when file
+                            (str "  " file
+                                 (when line-start
+                                   (str ":" line-start
+                                        (when line-end (str "-" line-end))))
+                                 "\n"))
+                          (when of (str "  the claim it deviates from: " of "\n"))
+                          (when because (str "  the decision: " because "\n")))))
+              (apply str))
+         "\n")))
+
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   fix-prompt
   "Instruction to fix the given findings. Do NOT commit — the engine commits.
 
-   Carries three things the warden had already written and the fixer never saw.
+   Carries four things the warden had already written and the fixer never saw.
 
    `:because` is the warden's own sentence about this finding, and it is
    addressed to this reader: it says why the finding is real, or which layer it
@@ -953,6 +1014,11 @@
    class unprompted and had no channel to say so, so rounds surfaced its members
    one per round: a call site fixed, the next one found, ten rounds for ten
    instances of one defect.
+
+   `:settled` is what the warden decided about this same layer and did NOT hand
+   over — see `settled-block`. It is the one of the four that constrains rather
+   than directs: the other three say what to change, and this says which lines
+   somebody has already decided not to.
 
    Two clauses then bound the reach the prompt would otherwise narrow itself,
    against one reading of it: that the fixer's subject is the patch.
@@ -983,7 +1049,7 @@
    insists on is an ANSWER too, not a failure to sweep: a class whose members are
    one requirement written out three times has no common source to change, and
    saying so is what lets the loop stop instead of spending a third round on it."
-  [{:keys [findings layer stack]}]
+  [{:keys [findings layer stack settled]}]
   (str
    "Fix the following code-review findings in this working directory. Make the\n"
    "MINIMAL change that resolves each. Do NOT commit — the orchestrator commits.\n\n"
@@ -996,6 +1062,7 @@
    "consistency would go past what you were asked for, say so in your final\n"
    "message rather than landing the contradiction.\n\n"
    (stacked-change-block stack layer)
+   (settled-block settled)
    (->> findings
         (map (fn [f]
                (str "- [P" (:priority f) "] " (:title f) "\n"

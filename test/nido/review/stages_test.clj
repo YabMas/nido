@@ -1031,6 +1031,70 @@
         plan  (stages/fix-plan stack [{:id "1" :disposition :fix :owner-layer "nope"}])]
     (is (= ["b"] (map :label plan)))))
 
+(deftest settled-by-layer-reaches-the-fixer-of-the-layer-the-decision-is-about
+  ;; The deviation that got trampled was reported by the whole-stack pass and
+  ;; attributed by the warden to one layer. Keyed on who REPORTED it, as the
+  ;; warden's own block is, it would reach that layer's fixer never.
+  (let [stack [{:bookmark "s--a" :slug "a"} {:bookmark "s--b" :slug "b"}]
+        by    (stages/settled-by-layer
+               stack
+               [[{:id "0f2" :title "changelog contradicts the branch"
+                  :disposition :deviation :of "the claim" :from-layer "stack"
+                  :owner-layer "a" :file "recording.clj"}]])]
+    (is (= ["0f2"] (map :id (get by "a"))))
+    (is (nil? (get by "b")))))
+
+(deftest settled-by-layer-carries-the-round-the-fixer-is-standing-in
+  ;; The warden rules and the fixers run inside one round, so the decision a
+  ;; fixer is about to walk into is usually one taken minutes earlier. Read off
+  ;; :history alone it would not exist yet — the fix stage appends the round
+  ;; only once the fixes have landed.
+  (let [stack [{:bookmark "s--a" :slug "a"}]
+        by    (stages/settled-by-layer
+               stack
+               [[{:id "old" :disposition :declined :owner-layer "a"}]
+                [{:id "new" :disposition :deviation :owner-layer "a"}]])]
+    (is (= #{"old" "new"} (set (map :id (get by "a")))))))
+
+(deftest settled-by-layer-holds-only-decisions-not-work
+  ;; A finding at :fix is what the fixer was handed. Rendering it as settled too
+  ;; would tell it to leave alone the very thing it was sent to repair.
+  (let [stack [{:bookmark "s--a" :slug "a"}]
+        by    (stages/settled-by-layer
+               stack
+               [[{:id "work" :disposition :fix :owner-layer "a"}
+                 {:id "park" :disposition :park :owner-layer "a"}
+                 {:id "kept" :disposition :declined :owner-layer "a"}]])]
+    (is (= ["kept"] (map :id (get by "a"))))))
+
+(deftest settled-by-layer-attributes-like-the-plan-it-is-read-beside
+  ;; `fix-plan` sends an owner naming no layer of this stack to the top one.
+  ;; A second rule here would put the decision on a layer whose fixer never runs
+  ;; while the code it is about is handed to one that is never told.
+  (let [stack [{:bookmark "s--a" :slug "a"} {:bookmark "s--b" :slug "b"}]
+        by    (stages/settled-by-layer
+               stack [[{:id "x" :disposition :closed :authority "design"
+                        :owner-layer "gone"}]])]
+    (is (= ["x"] (map :id (get by "b"))))))
+
+(deftest settled-by-layer-keys-an-unlayered-branch-under-nil
+  ;; Where `fix-plan`'s single flat entry looks for it — a branch with no layers
+  ;; has one place a defect can live, and the fixer of it is told about all of
+  ;; them.
+  (let [by (stages/settled-by-layer
+            [] [[{:id "x" :disposition :declined :because "shipping it"}]])]
+    (is (= ["x"] (map :id (get by nil))))))
+
+(deftest settled-by-layer-takes-the-latest-ruling-on-a-finding
+  ;; A round that reverses an earlier decision has decided. A fixer told to
+  ;; honour the ruling that was reversed would be honouring nothing.
+  (let [by (stages/settled-by-layer
+            [{:bookmark "s--a" :slug "a"}]
+            [[{:id "x" :handle "x" :disposition :declined :owner-layer "a"}]
+             [{:id "x" :handle "x" :disposition :fix :owner-layer "a"}]])]
+    (is (nil? (get by "a"))
+        "reopened in a later round, so it is work again and not a decision")))
+
 (deftest layer-fixer-sessions-differ-per-layer-and-are-stable
   ;; One session per layer, never one across layers: a resumed fixer would carry
   ;; one layer's context into another.
@@ -2514,6 +2578,33 @@
                     :sweep true :disposition :fix}]})
       (is (str/includes? @seen "already swept in round 2")
           "the memory has to reach the prompt, not merely be derivable beside it"))))
+
+(deftest the-fixer-is-told-what-its-own-round-settled
+  ;; The rulings are in scope at the fix-prompt call site and reached only the
+  ;; reviewer and the warden, so the one reader able to undo a decision was the
+  ;; one never shown it. This round's own rulings are the case that matters: the
+  ;; warden rules and the fixers run inside one round, and :history does not
+  ;; hold the round until the fixes have landed.
+  (let [seen (atom nil)]
+    (with-redefs [agent/launch! (fn [opts]
+                                  (reset! seen (:first-message opts))
+                                  {:num-turns 3 :result-error? false :result-text "no"})
+                  stages/working-copy-dirty? (fn [_] false)
+                  jj/jj! (fn [& _] {:exit 0 :out "" :err ""})]
+      ((:run stages/fix-stage)
+       {:config {:cwd "/w" :run-id "r1"} :iter 1
+        :findings [{:id "aa11" :title "the cue is read twice" :body "y"
+                    :disposition :fix}
+                   {:id "0f2ea8d2" :title "changelog contradicts the branch"
+                    :disposition :deviation :of "the pre-branch turn-detection modes"
+                    :file "recording.clj" :line-start 1 :line-end 24}]})
+      (is (str/includes? @seen "ALREADY DECIDED")
+          "a decision has to reach the prompt, not merely be derivable beside it")
+      (is (str/includes? @seen "recording.clj:1-24")
+          "a decision the fixer cannot locate is one it can only honour by accident")
+      (is (str/includes? @seen "the pre-branch turn-detection modes"))
+      (is (not (str/includes? @seen "[P1] changelog contradicts the branch"))
+          "settled is not work: the same finding handed as both is a contradiction"))))
 
 (deftest a-flat-branchs-fix-reaches-the-target-that-reviews-it
   ;; fix-plan groups an unlayered branch under nil and review-targets labels its

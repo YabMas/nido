@@ -374,6 +374,15 @@
     {:signature [:=> [:catn [:stack :any] [:finding Finding]] :map]})
   (Operation fix-plan "The findings the warden disposed of into fixes, by layer."
     {:signature [:=> [:catn [:stack :any] [:findings :any]] :any] :delegates [layer-label]})
+  (Operation settled-by-layer
+    "What the run has already SETTLED, by the layer whose fixer would meet it — this round's
+     own rulings included, because the warden rules inside the round the fixers then run in.
+     The companion to `fix-plan` over the same map of the stack: that one routes the work and
+     this one routes the decisions the work must not undo. A fixer shown only the first honours
+     a kept deviation by accident or not at all, and editing one retracts nothing — the ruling
+     stands, so the branch and the run's published account of it come apart unwatched."
+    {:signature [:=> [:catn [:stack :any] [:rounds :any]] :any]
+     :delegates [layer-label settled?]})
   (Operation layer-fixer-session
     "A stable session id per layer, so a fixer resumed twice continues rather than restarts."
     {:signature [:=> [:catn [:impl-session-id :any] [:label :any]] :string]})

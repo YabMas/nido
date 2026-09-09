@@ -2471,6 +2471,20 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
               f))
           findings)))
 
+(defn- owned-by
+  "The label of the layer a finding is worked under: its `owner-layer` where
+   that names a layer of this stack, and the top layer otherwise — the same
+   assign-to-highest rule the warden is told to use for a composition defect,
+   applied to an answer that named nothing usable. Every label is nil on an
+   unlayered branch, which is the one place a defect can live there.
+
+   One rule for the work and for the decisions, because both are read by the
+   same fixer. Two would put a settled finding in front of a layer whose fixer
+   never runs while the code it is about is handed to one that is never told."
+  [known top f]
+  (let [o (:owner-layer f)]
+    (if (contains? known o) o top)))
+
 (defn ^{:malli/schema [:=> [:cat :any :any] :any]}
   fix-plan
   "Findings the warden dispositioned :fix, grouped by the layer that OWNS them,
@@ -2494,14 +2508,45 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
       (let [labels (mapv layer-label stack)
             known  (set labels)
             top    (last labels)
-            by     (group-by #(let [o (:owner-layer %)]
-                                (if (contains? known o) o top))
-                             to-fix)]
+            by     (group-by #(owned-by known top %) to-fix)]
         (into []
               (keep (fn [layer]
                       (when-let [fs (seq (get by (layer-label layer)))]
                         {:label (layer-label layer) :layer layer :findings (vec fs)})))
               stack)))))
+
+(defn ^{:malli/schema [:=> [:cat :any :any] :any]}
+  settled-by-layer
+  "What the run has already SETTLED, keyed by the layer whose fixer would meet
+   it — `rounds` is each round's findings, oldest first, THIS round's included.
+
+   The fixer of a layer is the reader that can undo a decision without knowing
+   there was one, so it is shown what the warden settled about the same code and
+   held back from the plan; `prompts/settled-block` renders it and argues why.
+
+   This round's rulings are the point, not a bonus. The warden rules and the
+   fixers run inside one round, so the deviation a fixer is about to walk into
+   is most often one decided minutes earlier — `:history` gains the round only
+   after the fixes land, which is why the caller conjoins the live findings on
+   exactly as `record-statuses!` does.
+
+   Attributed by `owned-by`, the rule `fix-plan` routes work with, so what a
+   fixer is handed and what it is told to leave come off one map of the stack.
+   Every finding lands under nil on an unlayered branch, which is where the flat
+   plan's single entry looks for it.
+
+   Latest ruling per finding, via `latest-rulings`: a round that reverses an
+   earlier decision has decided, and a fixer told to honour the decision that
+   was reversed would be honouring nothing."
+  [stack rounds]
+  (let [known (set (mapv layer-label stack))
+        top   (last (mapv layer-label stack))]
+    (->> (latest-rulings rounds)
+         (filter settled?)
+         (map #(-> (select-keys % [:title :disposition :authority :of :because
+                                   :file :line-start :line-end :owner-layer])
+                   (assoc :id (or (:handle %) (:id %)))))
+         (group-by #(owned-by known top %)))))
 
 (defn ^{:malli/schema [:=> [:cat :any :any] :string]}
   layer-fixer-session
@@ -2676,7 +2721,14 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
     (assoc ctx :control :stop :status :dry-run)
     (let [{:keys [cwd base run-id budget impl-session-id]} (:config ctx)
           stack (session-stack cwd base)
-          plan  (fix-plan stack (with-sweep-memory (:findings ctx) (:history ctx)))]
+          plan  (fix-plan stack (with-sweep-memory (:findings ctx) (:history ctx)))
+          ;; The round's own rulings are conjoined on because the warden runs
+          ;; inside it: the decision a fixer is about to walk into is usually
+          ;; one taken minutes ago, and `:history` does not hold this round
+          ;; until the fixes have landed.
+          decided (settled-by-layer stack
+                                    (conj (mapv :findings (:history ctx))
+                                          (vec (:findings ctx))))]
       (cond
         ;; SOMEBODY ELSE moved the tree between the review and the repair. Every
         ;; finding this round holds was found in a state that is no longer what
@@ -2744,7 +2796,8 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                                           ;; touch lives in the rows ABOVE its
                                           ;; own, and the row alone cannot say
                                           ;; where its own sits.
-                                          :stack (:toc ctx)})
+                                          :stack (:toc ctx)
+                                          :settled (get decided label)})
                          :budget wall
                          :claude-session-id (layer-fixer-session impl-session-id label)
                          :resume? (worked-before? (:history ctx)
