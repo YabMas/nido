@@ -1477,7 +1477,7 @@
             (for [{:keys [finding as]} findings-classified]
               [:li [:span.meta "[" (name as) "] "] finding]))])
    (when needs
-     [:div [:h3 "Needs a decision"] [:p needs]])])
+     [:div [:h3 (report/verdict-needs-heading verdict)] [:p needs]])])
 
 (defn- record-findings-list
   "Findings from a round over a record. What each cites leads, because that is

@@ -2878,6 +2878,26 @@
     :underscoped  "What the bound leaves out"
     "Claims the code does not support"))
 
+(defn ^{:malli/schema [:=> [:cat :any] :string]}
+  verdict-needs-heading
+  "What a design verdict's `:needs` IS, which the verdict carrying it decides.
+
+   Under :invalidated or :standing-challenged it is a question only a person can
+   close, and the gate offers them the branches. Under :sound or :strained the
+   judge named a located defect the rounds did not raise and nobody is being
+   asked to rule on it: it is remainder, counted with the run's other kept
+   findings and re-offered to the next run's reviewers by
+   `nido.review.stages/standing-needs`. Headed as a decision it told a reader
+   the opposite of what the entry three lines above it said, and told them to
+   wait for a ruling that was never going to be asked for.
+
+   Shape-agnostic, because both callers render an entry that may have been
+   through EDN or JSON."
+  [verdict]
+  (if (some-> verdict name keyword verdict-invalidates)
+    "Needs a decision"
+    "What no reviewer raised"))
+
 (defn- baseline-review->markdown
   [{:keys [verdict baseline-seq reason confirmed findings]}]
   (str/join
@@ -2960,7 +2980,7 @@
         (cons "\n## Findings by layer"
               (for [{:keys [finding as]} findings-classified]
                 (str "- [" (name as) "] " finding))))
-      (when needs ["\n## Needs a decision" needs])))))
+      (when needs [(str "\n## " (verdict-needs-heading verdict)) needs])))))
 
 (defn- findings->markdown [{:keys [round staging-ref note items]}]
   (str/join "\n"

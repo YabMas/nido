@@ -411,6 +411,63 @@
     (is (= ["t"] (mapv :title (verdict/open-across-run final))))
     (is (empty? (verdict/kept-across-run final)))))
 
+(defn- report-holding [v]
+  {:summary {:rounds 3} :design-verdict {:outcome "answered" :verdict v}})
+
+(deftest a-sound-verdicts-needs-is-part-of-what-the-run-kept
+  ;; The run this comes from ended `clean · 0 still open` over a `sound` verdict
+  ;; naming three located defects in a layer three rounds of reviewers had read.
+  ;; Nobody was owed them — which is what makes them kept — but nothing counted
+  ;; them either, so the headline was false in the one direction a reader has no
+  ;; way to check.
+  (is (= "drive.clj:185 cites a var that does not exist"
+         (verdict/kept-by-the-verdict
+          (report-holding {:verdict :sound :round 3
+                           :needs "drive.clj:185 cites a var that does not exist"})))
+      "a judge that needs no decision can still be holding a defect the branch
+       is about to ship")
+  (is (= "the boundary is under pressure at the third call site"
+         (verdict/kept-by-the-verdict
+          (report-holding {:verdict :strained :round 1
+                           :needs "the boundary is under pressure at the third call site"})))))
+
+(deftest a-decisions-needs-is-not-kept-it-is-asked
+  ;; :invalidated and :standing-challenged put their :needs to a person, and
+  ;; `parked-blocker` carries it to the gate. Counted here as well it would read
+  ;; as something the branch decided to live with, on the one verdict where
+  ;; nobody has decided anything yet.
+  (is (nil? (verdict/kept-by-the-verdict
+             (report-holding {:verdict :invalidated :round 2
+                              :needs "supersede the record or undo the boundary move"}))))
+  (is (nil? (verdict/kept-by-the-verdict
+             (report-holding {:verdict :standing-challenged :round 2
+                              :needs "the project stance is what has to move"})))))
+
+(deftest a-verdict-holding-nothing-is-no-remainder-at-all
+  (is (nil? (verdict/kept-by-the-verdict
+             (report-holding {:verdict :sound :round 1 :reason "the findings were details"}))))
+  (is (nil? (verdict/kept-by-the-verdict
+             (report-holding {:verdict :sound :round 1 :needs "   "})))
+      "a blank :needs is what the parser already refuses to store; reading it as
+       a remainder would invent one")
+  (is (nil? (verdict/kept-by-the-verdict {:summary {:rounds 1}}))
+      "a run whose pass never answered kept nothing by way of it")
+  (is (nil? (verdict/kept-by-the-verdict
+             {:design-verdict {:outcome "no-answer" :because "no verdict in the answer"}}))))
+
+(deftest the-remainder-is-read-the-same-out-of-a-persisted-report
+  ;; report.json holds the verdict as strings. A reader that only knew keywords
+  ;; would count an :invalidated needs as kept exactly where the report has
+  ;; outlived the process that wrote it — the one case where being wrong is
+  ;; silent.
+  (is (nil? (verdict/kept-by-the-verdict
+             (report-holding {:verdict "invalidated" :round 2 :needs "supersede it"}))))
+  (is (= "the comment is stale"
+         (verdict/kept-by-the-verdict
+          (report-holding {:verdict "sound" :round 2 :needs "the comment is stale"}))))
+  (is (verdict/decision? {:verdict "standing-challenged"})
+      "and the same reading answers the question every other reader asks of it"))
+
 ;; ── The standing verdict ───────────────────────────────────────────────────
 
 (def ^:private standing

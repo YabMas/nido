@@ -267,9 +267,16 @@
 
 (defn ^{:malli/schema [:=> [:cat :any] :boolean]}
   decision?
-  "True when the verdict is one a human has to answer rather than read."
+  "True when the verdict is one a human has to answer rather than read.
+
+   Shape-agnostic on the verdict, because one of its readers is a verdict read
+   back OUT of the report: the same value is a keyword in the process that
+   folded it and a string once report.json has been through JSON, and a reader
+   that only knew the first would call a decision readable exactly where the
+   report has outlived its run. `report/verdict-summary` is careful for the same
+   reason."
   [v]
-  (boolean (report/verdict-invalidates (:verdict v))))
+  (boolean (some-> (:verdict v) name keyword report/verdict-invalidates)))
 
 (defn ^{:malli/schema [:=> [:cat :any] :any]}
   still-open
@@ -422,9 +429,39 @@
    to be strict about what is owed. Counted together they are one number that
    answers neither question a reader has: a park is somebody must decide and a
    decline is somebody already did, and the second is a decision to ship a
-   defect, which is precisely the kind of thing a record exists to hold."
+   defect, which is precisely the kind of thing a record exists to hold.
+
+   The rounds are not the whole remainder — see `kept-by-the-verdict` for the
+   half of it the judge contributes after they end."
   [final]
   (into [] (filter stages/kept?) (final-rulings final)))
+
+(defn ^{:malli/schema [:=> [:cat :map] [:maybe :string]]}
+  kept-by-the-verdict
+  "The design judge's own remainder, out of `report`: the `:needs` of a verdict
+   that asks nobody to decide anything — or nil.
+
+   Same shape as a decline. The judge names a located defect, no round raised
+   it, no fixer was handed it, and the run ships it anyway; nobody is owed
+   anything, which is what makes it kept rather than open and what makes it easy
+   to lose. Uncounted, a `sound` verdict naming three defects in a layer three
+   rounds of reviewers had read published `clean · 0 still open` with no
+   remainder beside it — a headline the judge's own entry contradicts.
+
+   Only from a verdict that leaves the design STANDING, on
+   `stages/standing-needs`' argument: :invalidated and :standing-challenged put
+   their :needs to a person, `tasks.nido-review/parked-blocker` carries that to
+   the gate, and a question somebody must answer is the definition of not kept.
+
+   Off the REPORT rather than the loop's `final`, because the pass judges the
+   whole run and so answers after it: `final` predates the verdict, and the
+   report is where `report/with-verdict` has put it."
+  [report]
+  (let [v (get-in report [:design-verdict :verdict])]
+    (when (and (:verdict v)
+               (not (decision? v))
+               (not (str/blank? (str (:needs v)))))
+      (str (:needs v)))))
 
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   handed-to-a-fixer

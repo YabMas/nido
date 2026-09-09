@@ -91,6 +91,12 @@
     "What the findings under a verdict ARE. `:insufficient` reports no refused claim, so heading
      it that way would tell a reader the opposite of what the round found."
     {:signature [:=> [:catn [:verdict :keyword]] :string]})
+  (Operation verdict-needs-heading
+    "What a design verdict's `:needs` IS, which the verdict carrying it decides. A decision puts
+     it to a person; a verdict that leaves the design standing left remainder, counted with the
+     run's other kept findings and re-offered to the next run's reviewers. One heading for both
+     told a reader to wait for a ruling nobody was going to be asked for."
+    {:signature [:=> [:catn [:verdict :any]] :string]})
   (Operation report-title
     "Index title for the typed events carrying no top-level `:title`. nil otherwise, where the
      caller falls back to the event's own."

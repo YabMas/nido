@@ -75,6 +75,13 @@
    as the empty string, so an omitted key reaches the analysis as ` · kept`
    rather than as silence.
 
+   It counts the design judge's own remainder too, and this is the one number in
+   the payload that spans the loop AND the pass that judges it: a verdict
+   needing no decision can still name a located defect no round raised, and that
+   is a defect the branch ships on somebody's say-so like any other kept one.
+   `verdict/kept-by-the-verdict` is the reading; the `:review` ledger entry
+   cannot make it, because it is written before the pass runs.
+
    The title carries three of these out of all of it, and each one changes what
    the rest of them MEAN. It is what a human reads off the board without opening
    anything. A park is the one count that asks them for something. `died in fix`

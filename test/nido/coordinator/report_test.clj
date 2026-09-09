@@ -1645,3 +1645,29 @@
   (is (= a-reservation (report/parse-event :improvement-claim-reserved a-reservation)))
   (is (str/includes? (report/report->markdown a-reservation) "ws-b/1.2"))
   (is (= "Claim 1 of plan 12 reserved" (report/report-title a-reservation))))
+
+(defn- verdict-md [verdict]
+  (report/report->markdown
+   {:format :design-verdict :verdict verdict :round 3
+    :reason "the findings were details"
+    :needs "nido_attach.clj:139 has an unreachable :claimed branch"}))
+
+(deftest a-verdicts-needs-is-headed-by-what-it-asks-of-the-reader
+  ;; The heading was fixed at "Needs a decision", so a `sound` verdict rendered
+  ;; a block telling a reader to rule on something under an entry saying nothing
+  ;; needs ruling on — and, since the run counts that same :needs as KEPT, under
+  ;; a number saying it is already decided.
+  (is (str/includes? (verdict-md :invalidated) "## Needs a decision"))
+  (is (str/includes? (verdict-md :standing-challenged) "## Needs a decision"))
+  (is (str/includes? (verdict-md :sound) "## What no reviewer raised")
+      "on a standing design the block is remainder: the judge saw a defect the
+       rounds did not, and it goes to the next run's reviewers rather than to a
+       human")
+  (is (str/includes? (verdict-md :strained) "## What no reviewer raised"))
+  (is (not (str/includes? (verdict-md :sound) "Needs a decision"))))
+
+(deftest a-verdict-holding-nothing-outstanding-renders-no-block-at-all
+  (is (not (str/includes?
+            (report/report->markdown {:format :design-verdict :verdict :sound
+                                      :round 1 :reason "clean"})
+            "no reviewer raised"))))

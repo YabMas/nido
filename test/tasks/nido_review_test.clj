@@ -86,6 +86,64 @@
           "aimed nido-side, never at the reviewed project")
       (is (= "converged" (get-in (first envs) [:payload :status]))))))
 
+(defn- analysis-payload-for
+  "Queue one analysis for a hand-built run and give back the payload it carried.
+   `queue-analysis!` is where the loop's remainder and the judge's are summed, so
+   it is the only place the whole count can be read."
+  [final report]
+  (let [run-id (str "review-" (random-uuid))
+        rp     (str (fs/path (cstate/run-dir run-id) "report.json"))]
+    (fs/create-dirs (fs/parent rp))
+    (spit rp "{}")
+    (t/queue-analysis! "/w" final report rp
+                       {:run-id run-id :dry-run? false} "ws-x")
+    (:payload (first (queued-envelopes)))))
+
+(deftest the-kept-count-includes-what-the-design-judge-is-holding
+  ;; The run that prompted this ended `clean · 0 still open` with nothing kept,
+  ;; over a `sound` verdict naming three located defects in a layer three rounds
+  ;; of reviewers had read. This payload is the only record that sees both — the
+  ;; :review ledger entry is written before the pass runs — so a remainder
+  ;; uncounted here is uncounted anywhere.
+  (let [final  {:status :clean :history [] :findings []}
+        report {:summary {:rounds 3 :fix-attempts 0}
+                :target {:base "main"}
+                :design-verdict {:outcome "answered"
+                                 :verdict {:verdict :sound :round 3
+                                           :needs "nido_attach.clj:139 has an unreachable :claimed branch"}}}]
+    (is (= 1 (:findings-kept (analysis-payload-for final report)))
+        "a defect the branch ships on the judge's say-so is kept, exactly as a
+         declined finding is")
+    (is (= 0 (:findings-remaining (analysis-payload-for final report)))
+        "and it is not OWED — routing it into the remainder would ask the next
+         run to repair something nobody ruled on")))
+
+(deftest a-judged-remainder-adds-to-the-rounds-own-rather-than-replacing-it
+  (let [final  {:status :converged
+                :history [{:iter 1 :findings [{:handle "h1" :title "the shipped defect"
+                                               :disposition :declined
+                                               :because "the shape is wrong, not this line"}]}]
+                :findings []}
+        report {:summary {:rounds 2 :fix-attempts 1}
+                :target {:base "main"}
+                :design-verdict {:outcome "answered"
+                                 :verdict {:verdict :strained :round 2
+                                           :needs "the third call site is where the cut is failing"}}}]
+    (is (= 2 (:findings-kept (analysis-payload-for final report)))
+        "the two halves of the remainder are counted together or one of them
+         hides the other")))
+
+(deftest a-decision-the-gate-is-holding-is-not-counted-as-kept
+  ;; It reaches a human through the blocker instead. Counted here it would read
+  ;; as settled on the one verdict where nothing is settled.
+  (let [final  {:status :clean :history [] :findings []}
+        report {:summary {:rounds 1 :fix-attempts 0}
+                :target {:base "main"}
+                :design-verdict {:outcome "answered"
+                                 :verdict {:verdict :invalidated :round 1
+                                           :needs "supersede the record or undo the boundary move"}}}]
+    (is (= 0 (:findings-kept (analysis-payload-for final report))))))
+
 (deftest loop-cmd-queues-no-analysis-for-a-dry-run
   (with-redefs [rloop/run-loop (run-loop-writing-a-report :converged)]
     (t/loop-cmd ":cwd" "/w" ":dry-run?" "true")

@@ -480,11 +480,18 @@
    run, so it answers after the status is fixed. Read back off the report rather
    than passed down from `append-design-verdict!`, because the report is where
    `record-verdict!` has already put it and is the copy that survives a ledger
-   that would not take it."
+   that would not take it.
+
+   `:findings-kept` is the run's whole remainder and so spans both, which is why
+   the sum is made HERE and nowhere else: the `:review` ledger entry is written
+   before the verdict pass runs and can only ever count the rounds. This payload
+   is the one record that sees the loop and the judge together — see
+   `verdict/kept-by-the-verdict` for why a non-decision `:needs` belongs in it."
   [cwd final report report-path config ws-id]
   (let [{:keys [project session]} (or (lifecycle/session-from-cwd cwd) {})
         open   (verdict/open-across-run final)
         handed (verdict/handed-to-a-fixer final)
+        judged (verdict/kept-by-the-verdict report)
         cover  (report/coverage report)]
     (analysis/enqueue!
      (merge
@@ -497,7 +504,8 @@
        :fix-attempts       (or (get-in report [:summary :fix-attempts]) 0)
        :defects-settled    (count (verdict/settled-by-fixing final))
        :findings-remaining (count open)
-       :findings-kept      (count (verdict/kept-across-run final))
+       :findings-kept      (cond-> (count (verdict/kept-across-run final))
+                             judged inc)
        :remaining-handed   (count (filter #(verdict/handed? handed %) open))
        :remaining-parked   (count (filter #(= :park (:disposition %)) open))
        :targets-reviewed   (:reviewed cover)
