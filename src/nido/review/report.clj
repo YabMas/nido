@@ -780,6 +780,33 @@
            because (assoc :because because)
            verdict (assoc :verdict verdict))))
 
+(defn ^{:malli/schema [:=> [:cat :ReviewReport] [:maybe :map]]}
+  verdict-summary
+  "What the design verdict DECIDED, in the two facts that fit somewhere a reader
+   who cannot open the report will look: `{:design-verdict \"strained\"
+   :verdict-implementation 2}`. nil when the pass produced no verdict at all.
+
+   `with-verdict` beside it records what became of the PASS, which is a different
+   question and a longer answer — the verdict travels whole so a ledger refusal
+   can be diagnosed from the report alone. This is the headline.
+
+   The count is of findings the judge laid at the IMPLEMENTATION's door: real
+   defects on the branch that the design does not explain away. `:design` and
+   `:stance` name work on the record rather than on the code, and `:baseline`
+   says the survey was wrong — none of them is repair the loop failed to
+   dispatch, which is what this number is asked about.
+
+   Shape-agnostic on the classification and the verdict alike, because the same
+   value is a keyword in the process that folded it and a string once the report
+   has been through JSON, and a reader that silently answered 0 for the second
+   would be wrong exactly where the report outlived its process."
+  [report]
+  (let [v (get-in report [:design-verdict :verdict])]
+    (when-let [k (:verdict v)]
+      {:design-verdict         (name k)
+       :verdict-implementation (count (filter #(= "implementation" (some-> (:as %) name))
+                                              (:findings-classified v)))})))
+
 ;; ---- persistence ---------------------------------------------------------
 
 (defn ^{:malli/schema [:=> [:cat :ReviewReport :Path] :any]}

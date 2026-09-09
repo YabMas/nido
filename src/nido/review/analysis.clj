@@ -75,9 +75,16 @@
    as the empty string, so an omitted key reaches the analysis as ` · kept`
    rather than as silence.
 
-   The title carries the parks alone out of all of it. It is what a human reads
-   off the board without opening anything, and a park is the one count that
-   asks them for something.
+   The title carries three of these out of all of it, and each one changes what
+   the rest of them MEAN. It is what a human reads off the board without opening
+   anything. A park is the one count that asks them for something. `died in fix`
+   says the branch may have been left mid-rewrite, which nothing else in an
+   orphan's title tells apart from a run that died reading. And a design verdict
+   other than `sound` says the status is not the last word on the run —
+   `converged · 0 still open · design strained` is a run whose own headline the
+   judge went on to contradict. A `sound` verdict is left off because it agrees
+   with the status, and this line is read by someone scanning for the ones that
+   do not.
 
    `:unfixable` and `:parked` are what the run stopped ON, and they are here for
    the same reason the counts are: a status names the KIND of ending, and an
@@ -93,40 +100,70 @@
    last warden knew was open and raised as nothing, so a run reports `0 still
    open` over a list of it. An analysis asked whether the loop stopped for the
    right reason is the reader that most needs it, and the reader least able to
-   go and look."
+   go and look.
+
+   `:design-verdict` and `:verdict-implementation` are the design judge's answer,
+   and they are here on the counts' own argument carried further. The pass judges
+   the whole run, so it answers AFTER the status is fixed and nothing the loop
+   published knows what it said: one run reached the analysis as `converged · 0
+   still open` over a verdict of `strained` with three contradicted invariants and
+   two findings classified as implementation defects — repair the loop dispatched
+   nobody for and named nowhere. The count is of `:implementation` alone because
+   those are the ones that are work on the BRANCH. Both or neither, the count at
+   zero, because a `sound` verdict over no implementation findings is the
+   sentence that says the run is genuinely done.
+
+   `:died-in` is the phase an ORPHAN stopped in, and it is the whole of what
+   separates a harmless one from a dangerous one: a run killed while its fixers
+   were rewriting the branch left a tree nobody vouched for, and one killed while
+   a reviewer was reading left the tree exactly as it found it. `reconcile/settle!`
+   has always computed it — it refuses the next claimant on it — and until it
+   reached here both were filed under the same title."
   [{:keys [run-id report-path status rounds fix-attempts defects-settled
            findings-remaining findings-kept remaining-handed remaining-parked
            targets-reviewed targets-skipped unfixable parked standing
-           drift base reviewed-project reviewed-session reviewed-ws-id]}]
-  (cond-> {:adapter            :review-run
-           :id                 (str run-id)
-           :title              (str "review-loop " (name (or status :unknown))
-                                    (when reviewed-session (str " · " reviewed-session))
-                                    " · " (or rounds 0)
-                                    " round" (when (not= 1 rounds) "s")
-                                    (when (pos? (or remaining-parked 0))
-                                      (str " · " remaining-parked " parked")))
-           :run-id             (str run-id)
-           :run-dir            (cstate/run-dir (str run-id))
-           :report-path        report-path
-           :status             (name (or status :unknown))
-           :rounds             (or rounds 0)
-           :fix-attempts       (or fix-attempts 0)
-           :defects-settled    (or defects-settled 0)
-           :findings-remaining (or findings-remaining 0)
-           :findings-kept      (or findings-kept 0)
-           :targets-reviewed   (or targets-reviewed 0)
-           :targets-skipped    (or targets-skipped 0)}
-    (pos? (or remaining-handed 0)) (assoc :remaining-handed remaining-handed)
-    (pos? (or remaining-parked 0)) (assoc :remaining-parked remaining-parked)
-    (seq unfixable)  (assoc :unfixable (mapv str unfixable))
-    (seq parked)     (assoc :parked (vec parked))
-    (seq standing)   (assoc :standing (vec standing))
-    drift            (assoc :drift drift)
-    base             (assoc :base base)
-    reviewed-project (assoc :reviewed-project (name reviewed-project))
-    reviewed-session (assoc :reviewed-session reviewed-session)
-    reviewed-ws-id   (assoc :reviewed-ws-id reviewed-ws-id)))
+           drift base in-flight design-verdict verdict-implementation
+           reviewed-project reviewed-session reviewed-ws-id]}]
+  ;; `:in-flight` is the reconciler's reading of an orphan's report and is the
+  ;; same value `worth-analysing?` gates on; the phase is the half of it that
+  ;; means something to a reader, so it is published and the round is not.
+  (let [died-in (:phase in-flight)
+        verdict (some-> design-verdict name)]
+    (cond-> {:adapter            :review-run
+             :id                 (str run-id)
+             :title              (str "review-loop " (name (or status :unknown))
+                                      (when reviewed-session (str " · " reviewed-session))
+                                      " · " (or rounds 0)
+                                      " round" (when (not= 1 rounds) "s")
+                                      (when died-in (str " · died in " died-in))
+                                      (when (and verdict (not= "sound" verdict))
+                                        (str " · design " verdict))
+                                      (when (pos? (or remaining-parked 0))
+                                        (str " · " remaining-parked " parked")))
+             :run-id             (str run-id)
+             :run-dir            (cstate/run-dir (str run-id))
+             :report-path        report-path
+             :status             (name (or status :unknown))
+             :rounds             (or rounds 0)
+             :fix-attempts       (or fix-attempts 0)
+             :defects-settled    (or defects-settled 0)
+             :findings-remaining (or findings-remaining 0)
+             :findings-kept      (or findings-kept 0)
+             :targets-reviewed   (or targets-reviewed 0)
+             :targets-skipped    (or targets-skipped 0)}
+      (pos? (or remaining-handed 0)) (assoc :remaining-handed remaining-handed)
+      (pos? (or remaining-parked 0)) (assoc :remaining-parked remaining-parked)
+      (seq unfixable)  (assoc :unfixable (mapv str unfixable))
+      (seq parked)     (assoc :parked (vec parked))
+      (seq standing)   (assoc :standing (vec standing))
+      drift            (assoc :drift drift)
+      base             (assoc :base base)
+      died-in          (assoc :died-in died-in)
+      verdict          (assoc :design-verdict verdict
+                              :verdict-implementation (or verdict-implementation 0))
+      reviewed-project (assoc :reviewed-project (name reviewed-project))
+      reviewed-session (assoc :reviewed-session reviewed-session)
+      reviewed-ws-id   (assoc :reviewed-ws-id reviewed-ws-id))))
 
 (defn- orphan-worth-reading?
   "Whether a run whose process vanished left anything an analysis could read.

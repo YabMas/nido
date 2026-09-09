@@ -166,6 +166,15 @@
      into a report that is still being built. It is the one thing the report
      learns after :run-finalized."
     {:signature [:=> [:catn [:report ReviewReport] [:outcome :map]] ReviewReport]})
+  (Operation verdict-summary
+    "What the verdict DECIDED, in the two facts small enough to travel: the verdict itself, and
+     how many findings it laid at the implementation's door rather than the design's.
+
+     A reader of the report has `with-verdict`'s whole value and needs none of this. This is for
+     the readers who will not have the report — the analysis payload, and a title on a board —
+     for whom a run that published `converged · 0 still open` over a `strained` verdict naming
+     two unrepaired implementation defects was indistinguishable from one that was finished."
+    {:signature [:=> [:catn [:report ReviewReport]] [:maybe :map]]})
   (Operation persist! "Write the report atomically, so a reader never sees half of one."
     {:signature [:=> [:catn [:report ReviewReport] [:path Path]] :any]}))
 

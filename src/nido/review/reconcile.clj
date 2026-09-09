@@ -153,11 +153,12 @@
    the only orphaned dry run is one killed mid-review, and analysing it says
    what any killed run's analysis says.
 
-   `:in-flight` is passed for the GATE and nowhere else — `analysis/payload`
-   whitelists what it publishes and does not carry it. It is what tells
-   `worth-analysing?` the one orphan it must never refuse: the one that died in
-   `fix`, whose fixers outlived it and whose count of targets read says nothing
-   about the state it left the branch in."
+   `:in-flight` answers two questions with one value. It tells `worth-analysing?`
+   the one orphan it must never refuse — the one that died in `fix`, whose fixers
+   outlived it and whose count of targets read says nothing about the state it
+   left the branch in — and `payload` publishes its phase, so the analysis is told
+   which kind of orphan it holds rather than left to infer it from a run dir that
+   is normally gone by then."
   [{:keys [run-id report-path report in-flight]} reviewed]
   (let [cover (report/coverage report)]
     (merge {:run-id           run-id

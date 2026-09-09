@@ -116,6 +116,52 @@
     (is (str/includes? (:title p) "fix/thing"))
     (is (str/includes? (:title p) "3 rounds"))))
 
+(deftest the-payload-carries-what-the-design-judge-decided
+  ;; The pass judges the whole run, so it answers after the status is fixed and
+  ;; nothing the loop published knows what it said. One run reached the analysis
+  ;; as `converged · 0 still open` over a verdict of `strained` naming two
+  ;; implementation defects nobody had been dispatched at.
+  (let [p (analysis/payload (assoc a-run :design-verdict "strained"
+                                   :verdict-implementation 2))]
+    (is (= "strained" (:design-verdict p)))
+    (is (= 2 (:verdict-implementation p))))
+  (let [p (analysis/payload (assoc a-run :design-verdict "sound"))]
+    (is (= 0 (:verdict-implementation p))
+        "the count travels with the verdict or not at all: a `sound` verdict over
+         no implementation findings is the sentence that says the run is done, and
+         it cannot be said by leaving the number out"))
+  (let [p (analysis/payload a-run)]
+    (is (not (contains? p :design-verdict)))
+    (is (not (contains? p :verdict-implementation))
+        "a run whose ledger holds no design record got no verdict, and must not
+         reach the analysis carrying a zero that reads like one")))
+
+(deftest the-title-says-when-the-judge-disagreed-with-the-status
+  (is (str/includes? (:title (analysis/payload (assoc a-run :design-verdict "strained")))
+                     "design strained"))
+  (is (not (str/includes? (:title (analysis/payload (assoc a-run :design-verdict "sound")))
+                          "design"))
+      "a `sound` verdict agrees with the status, and the title is read by someone
+       scanning for the runs where the two came apart"))
+
+(deftest the-payload-says-which-phase-an-orphan-died-in
+  ;; The one fact separating a harmless orphan from a dangerous one. A run killed
+  ;; while its fixers were rewriting the branch left a tree nobody vouched for; a
+  ;; run killed while a reviewer was reading left it exactly as it found it.
+  (let [p (analysis/payload (assoc a-run :status :orphaned :rounds 1
+                                   :in-flight {:round 1 :phase "fix"}))]
+    (is (= "fix" (:died-in p)))
+    (is (str/includes? (:title p) "died in fix")
+        "the title is where the two are told apart, and until it said so both
+         were filed under the identical one"))
+  (let [p (analysis/payload (assoc a-run :status :orphaned :rounds 1
+                                   :in-flight {:round 1 :phase "review"}))]
+    (is (str/includes? (:title p) "died in review")))
+  (let [p (analysis/payload a-run)]
+    (is (not (contains? p :died-in))
+        "a run that closed its own rounds stopped in no phase — `:in-flight` is
+         the reconciler's reading of a report that never ended")))
+
 (deftest a-run-with-no-session-still-builds-a-payload
   ;; The loop runs anywhere `jj` does, including a checkout nido never
   ;; provisioned. It has a run to analyse either way.

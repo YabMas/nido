@@ -374,7 +374,14 @@
    What the run STOPPED ON is merged in whole, from the same reading the report
    gets. The run dir being gone by the time an analysis opens it is the normal
    end state, so an analysis of an unfixable run had a status, three counts, and
-   no way to name the findings the loop had given up on."
+   no way to name the findings the loop had given up on.
+
+   The design verdict is merged the same way and on the same argument, and it is
+   the one fact here the run's own status cannot carry: the pass judges the whole
+   run, so it answers after the status is fixed. Read back off the report rather
+   than passed down from `append-design-verdict!`, because the report is where
+   `record-verdict!` has already put it and is the copy that survives a ledger
+   that would not take it."
   [cwd final report report-path config ws-id]
   (let [{:keys [project session]} (or (lifecycle/session-from-cwd cwd) {})
         open   (verdict/open-across-run final)
@@ -399,7 +406,8 @@
        :reviewed-project   project
        :reviewed-session   session
        :reviewed-ws-id     ws-id}
-      (report/stopped-on final)))))
+      (report/stopped-on final)
+      (report/verdict-summary report)))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   verdict-worth-running?
@@ -1160,7 +1168,10 @@
         (println "  → answer it at the workstream gate; the loop has no move for it")))
     ;; Last, so the analysis session finds everything this run wrote — the
     ;; report, the :review ledger entry and the design verdict are all on
-    ;; disk by the time the envelope exists.
+    ;; disk by the time the envelope exists. The verdict is also IN the
+    ;; envelope, read back off the report `record-verdict!` just folded it
+    ;; into, so moving this line above that one would publish a headline
+    ;; that silently drops it.
     (queue-analysis! cwd final @report-atom report-path config ws-id)
     status))
 

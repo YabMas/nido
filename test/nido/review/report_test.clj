@@ -923,6 +923,46 @@
              (get-in parsed [:design-verdict :verdict :invariants-held]))
           "report.json is what a reader of the run opens, so the verdict has to be legible there"))))
 
+(deftest the-verdict-summary-is-the-headline-a-reader-gets-without-the-report
+  ;; The analysis payload has to state it, because the run dir it would
+  ;; otherwise be read out of is normally gone by then.
+  (let [r (report/with-verdict
+            (report/init {:run-id "r" :cwd "/w" :base "main" :started-at "t0"})
+            {:outcome :answered :ledger :appended
+             :verdict (assoc a-verdict :findings-classified
+                             [{:finding "f1" :as :implementation}
+                              {:finding "f2" :as :implementation}
+                              {:finding "f3" :as :baseline}])})]
+    (is (= "strained" (:design-verdict (report/verdict-summary r))))
+    (is (= 2 (:verdict-implementation (report/verdict-summary r)))
+        "only the findings the judge laid at the implementation's door: those are
+         repair on the BRANCH the run dispatched nobody for, and the number the
+         status `0 still open` is contradicted by")))
+
+(deftest a-pass-that-decided-nothing-summarises-to-nothing
+  ;; Absence rather than a zero. A run whose ledger has no design record and one
+  ;; whose judge came back `sound` are different, and a summary that flattened
+  ;; them would put the first in the payload as a verdict it never got.
+  (is (nil? (report/verdict-summary
+             (report/with-verdict (report/init {:run-id "r" :cwd "/w" :base "main" :started-at "t0"})
+                                  {:outcome :no-answer :because "its answer carried no verdict"}))))
+  (is (nil? (report/verdict-summary (report/init {:run-id "r" :cwd "/w" :base "main" :started-at "t0"})))))
+
+(deftest the-verdict-summary-reads-a-report-that-has-been-through-json
+  ;; The same value is keywords in the process that folded it and strings once
+  ;; persisted. A reader that only knew the first would answer 0 implementation
+  ;; findings exactly where the report has outlived its run.
+  (let [dir  (str (fs/create-temp-dir))
+        path (str (fs/path dir "report.json"))]
+    (report/persist! (report/with-verdict
+                       (report/init {:run-id "r" :cwd "/w" :base "main" :started-at "t0"})
+                       {:outcome :answered :ledger :appended
+                        :verdict (assoc a-verdict :findings-classified
+                                        [{:finding "f1" :as :implementation}])})
+                     path)
+    (is (= {:design-verdict "strained" :verdict-implementation 1}
+           (report/verdict-summary (json/parse-string (slurp path) true))))))
+
 ;; ── What an abort leaves in the report ──────────────────────────────────────
 
 (deftest a-drift-refusal-reaches-the-reports-reason
