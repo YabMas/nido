@@ -92,30 +92,116 @@
    — was over the cap."
   1200)
 
+(def ^:private min-section-chars
+  "The smallest budget worth cutting a section into, and so the cap on how many
+   sections one account is cut into.
+
+   A cut section is a head, an elision marker and a tail. Below about this much
+   there is no room for a sentence at either end, and the marker — which is not
+   account text and is not paid for out of the budget — costs more than the
+   fragments it separates. So a budget serves at most `budget` /
+   `min-section-chars` sections, and adjacent sections past that are grouped and
+   cut as one: a shorter account read in whole treatments beats a longer one
+   read in fragments."
+  300)
+
+(defn- cut-middle
+  "`s` reduced to `budget` characters by removing its MIDDLE.
+
+   The elision says how much it dropped, so a reader can tell a whole text from
+   a cut one and knows the two halves it is holding are not adjacent."
+  [s budget]
+  (if (<= (count s) budget)
+    s
+    (let [half (quot budget 2)]
+      (str (subs s 0 half)
+           "\n  …[" (- (count s) (* 2 half)) " chars elided]…\n  "
+           (subs s (- (count s) half))))))
+
+(def ^:private section-opener
+  "A line that opens a new section of an account: a markdown heading, a numbered
+   item, or a bold lead-in — the three ways a fixer marks off one repair's
+   treatment from the next.
+
+   A BULLET is deliberately not one. A list under a heading is a single
+   treatment, and splitting at every bullet hands each item a share too small to
+   hold a sentence."
+  #"^\s{0,3}(?:#{1,6}\s|\d{1,2}[.)]\s|\*\*\S)")
+
+(defn- account-sections
+  "`account` split at each `section-opener` line. Text before the first one is a
+   section too — the summary an account opens with."
+  [account]
+  (->> (str/split-lines account)
+       (reduce (fn [secs line]
+                 (if (or (empty? secs) (re-find section-opener line))
+                   (conj secs [line])
+                   (update secs (dec (count secs)) conj line)))
+               [])
+       (mapv #(str/join "\n" %))))
+
+(defn- merge-adjacent
+  "`secs` merged into at most `k` groups of adjacent sections, near-equal in
+   count. The identity when there are already `k` or fewer."
+  [secs k]
+  (if (<= (count secs) k)
+    secs
+    (->> secs
+         (map-indexed (fn [i s] [(quot (* i k) (count secs)) s]))
+         (partition-by first)
+         (mapv #(str/join "\n" (map second %))))))
+
+(defn- section-budgets
+  "`budget` split across sections of lengths `lens`, so that no section is cut
+   while another keeps more than its equal share: one that already fits its
+   share is kept whole and returns the difference to the sections that do not.
+
+   Equal shares rather than proportional ones, because the long section of an
+   account is the transcript and the short ones are the conclusions. Sizing a
+   share by the text it is cutting spends the budget on exactly the part this
+   cut exists to drop."
+  [lens budget]
+  (loop [budgets (vec lens)
+         open    (set (range (count lens)))
+         budget  budget]
+    (let [share (quot budget (max 1 (count open)))
+          whole (filter #(<= (nth lens %) share) open)]
+      (if (seq whole)
+        (recur budgets
+               (reduce disj open whole)
+               (- budget (reduce + (map #(nth lens %) whole))))
+        (reduce #(assoc %1 %2 share) budgets open)))))
+
 (defn- account-excerpt
-  "A fixer's account, cut to what its handed findings buy — from the MIDDLE, so
-   both ends survive.
+  "A fixer's account, cut to what its handed findings buy — from the middle of
+   each SECTION, so both ends of every one of them survive.
 
-   The two ends are the two things worth reading and they say different things:
-   an account opens with what the fixer changed and closes with what it could
-   not — the verification it could not run, the sibling in another layer it was
-   ordered to name rather than touch. What sits between them is transcript.
-   Truncating the tail is therefore the one cut that costs a reader anything,
-   and it is the cut a length cap makes by default: one account lost its whole
-   sweep section, and with it the two out-of-layer siblings it had been told to
-   name there, to a cut at `only the chu|nk`.
+   The two ends of a treatment are the two things worth reading and they say
+   different things: it opens with what the fixer changed and closes with what
+   it could not — the verification it could not run, the sibling in another
+   layer it was ordered to name rather than touch. What sits between them is
+   transcript.
 
-   The elision says how much it dropped, so a reader can tell a whole account
-   from a cut one and knows the two halves are not adjacent."
+   That premise is about one repair, not about the message that carries them
+   all. An account of two findings closes the first one in the MIDDLE of its
+   text, so a single cut through the whole account is aimed straight at it: on a
+   4058-char account at budget 2400, one contiguous 1658-char elision removed
+   the entire treatment of the second finding — including the residual its
+   repair had deliberately left, which the post-loop verdict then found breaks a
+   design invariant no reviewer had been shown it. Cutting each section against
+   its own share keeps the closing sentence of every repair, which is the one
+   the next round needs.
+
+   The budget buys account text; the elision markers are extra, and
+   `min-section-chars` is what bounds how many of them there can be."
   [account handed]
   (let [a (str/trim (str account))
         budget (* fixer-account-chars (max 1 handed))]
     (if (<= (count a) budget)
       a
-      (let [half (quot budget 2)]
-        (str (subs a 0 half)
-             "\n  …[" (- (count a) (* 2 half)) " chars elided]…\n  "
-             (subs a (- (count a) half)))))))
+      (let [secs (merge-adjacent (account-sections a)
+                                 (max 1 (quot budget min-section-chars)))]
+        (str/join "\n" (map cut-middle secs (section-budgets (map count secs) budget)))))))
 
 (defn- handed-line
   [{:keys [title sweep]}]

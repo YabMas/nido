@@ -829,6 +829,61 @@ layers, it is not yours"))
     (is (str/includes? three account)
         "and it arrives whole, which is what the next reviewer has to check")))
 
+(deftest a-multi-finding-account-keeps-the-close-of-every-repair
+  ;; An account closes each repair where that repair's treatment ends, so on a
+  ;; two-finding account the FIRST close sits in the middle of the text — which
+  ;; is exactly where a single cut through the whole account lands. One
+  ;; 4058-char account at budget 2400 lost the entire treatment of its second
+  ;; finding to one 1658-char elision, including the residual the repair had
+  ;; deliberately left; the post-loop verdict then found that residual breaks a
+  ;; design invariant no reviewer had ever been shown it.
+  (let [section (fn [head body close]
+                  (str head "\n" body " " (apply str (repeat 1500 "x"))
+                       "\n" close))
+        account (str "two repairs landed.\n\n"
+                     (section "## 1. Marker-bounded repair"
+                              "took the marker boundary;"
+                              "Residual: the alias map is still read once.")
+                     "\n\n"
+                     (section "## 2. Nested defmethods"
+                              "walked every container;"
+                              (str "Residual: a sibling form written after a "
+                                   "nested method is captured as its body."))
+                     "\n\nkondo: clean.")
+        out (prompts/prior-fixes-block
+             [{:round 1 :commit "c1" :account account
+               :findings [{:title "a"} {:title "b"}]}])]
+    (is (str/includes? out "the alias map is still read once")
+        "the first repair's residual closes its section, not the account, so a
+         cut through the whole text is aimed straight at it")
+    (is (str/includes? out "a sibling form written after a nested method")
+        "and the second repair's residual is what the next round needs — the one
+         that went unraised for a round and came back as a broken invariant")
+    (is (and (str/includes? out "took the marker boundary")
+             (str/includes? out "walked every container"))
+        "each repair still opens with what the fixer changed there")
+    (is (str/includes? out "kondo: clean.")
+        "the account's own tail survives as it did before")
+    (is (< (count out) 3600)
+        "cutting per section spends the same budget, not a budget per section")))
+
+(deftest an-account-of-many-sections-is-cut-into-readable-ones
+  ;; A section is shown as a head, an elision marker and a tail. Split far
+  ;; enough and every share is too small to hold a sentence while the markers
+  ;; themselves — which are not account text — outgrow what they separate.
+  (let [account (str/join "\n\n"
+                          (for [i (range 100)]
+                            (str i ". item " i " " (apply str (repeat 90 "z")))))
+        out (prompts/prior-fixes-block
+             [{:round 1 :commit "c1" :findings [{:title "t"}] :account account}])]
+    (is (< (count out) 2500)
+        "a hundred sections at one finding's budget is still one finding's worth
+         of prompt, or the cap has stopped bounding anything")
+    (is (<= (count (re-seq #"chars elided" out)) 4)
+        "adjacent sections past what the budget can serve are grouped and cut as
+         one: a shorter account read in whole treatments beats a longer one read
+         in fragments")))
+
 (deftest the-warden-is-shown-every-fixers-account-and-the-layer-it-landed-on
   ;; A fixer under a sweep is ordered to name any sibling it may not touch, and
   ;; that text is rendered to the next reviewer OF ITS OWN LAYER — the one
