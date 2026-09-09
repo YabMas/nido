@@ -912,8 +912,24 @@ layers, it is not yours"))
     (is (str/includes? out "\"promote\"")
         "and the field it goes in is offered, because there is an account to
          promote out of")
-    (is (str/includes? out "What you cannot place, name in your `reason`")
-        "what stays prose is what no layer could be found for")))
+    (is (str/includes? out "What you cannot place goes in `standing`")
+        "what no layer could be found for is still reported — in the slot that
+         reaches the ledger, rather than in a reason that reaches the run dir")))
+
+(deftest the-warden-is-asked-what-it-is-leaving-standing-on-every-answer
+  ;; Unconditional, unlike `promote` beside it: a promotion needs an account to
+  ;; promote out of, and what the branch has open is something a round with no
+  ;; fixes and no accounts holds just as well. Which round turns out to be the
+  ;; last one is not knowable while it is running, so asking only on a `stop`
+  ;; would mean asking the one warden that has already decided to say nothing.
+  (let [out (prompts/warden-prompt {:findings findings :history []})]
+    (is (str/includes? out "\"standing\""))
+    (is (str/includes? out "STANDING — what you know is open and are handing to nobody"))
+    (is (str/includes? out "carried onto the\nworkstream's ledger")
+        "the reason it is not the `reason` is the reason it exists")
+    (is (not (str/includes? out "\"promote\""))
+        "and this run had no account to promote out of, which is what makes
+         the pair's difference visible")))
 
 (deftest a-run-that-has-landed-no-fix-tells-the-warden-nothing-about-accounts
   ;; An empty heading reads as repairs the warden failed to be shown.

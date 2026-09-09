@@ -189,6 +189,47 @@
     ;; fails here fails invisibly in production.
     (is (= ev (report/validate-event :review ev)))))
 
+(deftest the-ledger-entry-carries-what-the-warden-left-standing
+  ;; The remainder no count reaches. Nothing raised these, so they are in no
+  ;; finding list and in no number — and the warden was told its `reason` was
+  ;; the only place they reach a human, which is true and is a run dir. One run
+  ;; grew that reason to ten numbered items and filed an entry ending
+  ;; `:findings-remaining 0`.
+  (let [ev (t/review-event
+            {:status :converged :history [] :findings []}
+            {:summary {:rounds 2 :fix-attempts 0}
+             :target  {:base "main" :base-rev "x"}
+             :reason  {:standing [{:what "babel is pinned to an unmerged branch tip"
+                                   :why-no-finding "outside this change"}
+                                  {:what "no deftest or JS test anywhere on the work"}]}}
+            "/runs/r/report.json")]
+    (is (= 0 (:findings-remaining ev))
+        "and it stays 0 — nothing was raised, ruled or dispatched, so counting
+         these would claim the loop had an answer it declined to give")
+    (is (= ["babel is pinned to an unmerged branch tip"
+            "no deftest or JS test anywhere on the work"]
+           (mapv :what (:standing ev))))
+    (is (= ev (report/validate-event :review ev))
+        "the ledger schema is closed; a rejected append is swallowed to stderr")
+    (let [md (report/report->markdown (assoc ev :format :review-report))]
+      (is (str/includes? md "Left standing"))
+      (is (str/includes? md "unmerged branch tip"))
+      (is (str/includes? md "outside this change")
+          "with the ground, which is what a reader decides on")
+      (is (str/includes? md "no deftest or JS test anywhere on the work")
+          "and an item stated without a ground still reaches them"))))
+
+(deftest a-run-whose-warden-left-nothing-standing-carries-no-such-list
+  ;; Omitted rather than empty, like every other optional key on the entry: a
+  ;; heading over nothing reads as the loop asserting it left nothing behind.
+  (let [ev (t/review-event {:status :clean :history [] :findings []}
+                           {:summary {:rounds 1 :fix-attempts 0}
+                            :target {:base "main" :base-rev "x"}}
+                           "/runs/r/report.json")]
+    (is (not (contains? ev :standing)))
+    (is (not (str/includes? (report/report->markdown (assoc ev :format :review-report))
+                            "Left standing")))))
+
 (deftest a-conflicted-run-names-the-changes-in-the-ledger-entry
   ;; The status alone says the stack is broken and leaves finding it as an
   ;; exercise — on a branch whose conflict is mid-stack, where `jj resolve

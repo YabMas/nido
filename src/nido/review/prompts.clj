@@ -1277,8 +1277,8 @@
    the code, made the repair the sibling survived, and diagnosed the sibling in
    its own account. What the warden adds is the one thing the fixer could not —
    which layer the path belongs to. A defect no account named is not promotable,
-   and neither is one no layer can be found for; those reach a human through
-   `reason` and nowhere else.
+   and neither is one no layer can be found for; those go in `standing`, the
+   slot that says what is open and is not being handed to anyone.
 
    The accounts were already in the warden's prompt before this block, whole and
    unlabelled, inside the `pr-str` of the round history: present in the bytes
@@ -1323,8 +1323,8 @@
          "Do not promote what a finding below already reports: rule that one.\n"
          "Promoting is deciding there IS work, so it overrides `stop` in the same\n"
          "answer — say `continue`.\n"
-         "What you cannot place, name in your `reason`. That is still the only\n"
-         "place it reaches a human.\n\n")))
+         "What you cannot place goes in `standing`. A promotion is work; that\n"
+         "list is what is open and being handed to nobody.\n\n")))
 
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   warden-prompt
@@ -1334,7 +1334,12 @@
 
    Report-only (no tools): everything it reasons from is inlined here. That is
    deliberate and load-bearing. It is the component that decides to interrupt a
-   human, so its inputs have to be reconstructable from the report afterwards."
+   human, so its inputs have to be reconstructable from the report afterwards.
+
+   `standing` is the other thing only this reader can answer, and it is a report
+   rather than a dispatch: what it knows to be open that this round is handing
+   to nobody. It is asked for on every answer, not only on a `stop`, because the
+   round that turns out to be the last one is not knowable while it is running."
   [{:keys [findings history design stance toc answered seen parked fixer-declines
            fixer-accounts]}]
   ;; A branch with no layers is reviewed flat, and there is then no layer label
@@ -1353,6 +1358,9 @@
    "Return EXACTLY one fenced ```json block, nothing after it, matching:\n"
    "{\"decision\": \"continue|stop|escalate\",\n"
    " \"reason\": \"...\",\n"
+   " \"standing\": [{\"what\": \"<one open item, in a sentence>\",\n"
+   "               \"why_no_finding\": \"<why this round is handing it to\n"
+   "                                     nobody>\"}],\n"
    " \"findings\": [{\"id\": \"<finding id>\",\n"
    "               \"same_as\": \"<id of the earlier-round finding this is the\n"
    "                             same defect as, or null>\",\n"
@@ -1403,6 +1411,19 @@
    "- escalate: a finding CONTRADICTS A NAMED INVARIANT of the design below —\n"
    "  the design is in question, not its execution. Name the invariant in your\n"
    "  reason. Do not escalate because a finding merely feels fundamental.\n\n"
+   "STANDING — what you know is open and are handing to nobody\n"
+   "One entry for each: a sibling an account named that you could not place, a\n"
+   "defect a round's history shows and no reviewer raised, anything about the\n"
+   "branch you would want a person to see before it lands. `why_no_finding` is\n"
+   "why this round is not acting on it — outside the change, no layer owns it,\n"
+   "not a fixer's work.\n"
+   "Put it HERE, not in your `reason`. This list is carried onto the\n"
+   "workstream's ledger, which outlives this run's directory; the reason is not,\n"
+   "and one run's ten items reached nobody because they were prose.\n"
+   "State it whole every round, not the difference since the last one: the round\n"
+   "that ends the run is the one that is read, and nothing else in the loop can\n"
+   "retract an item you named earlier or restate one you dropped.\n"
+   "Empty is an answer, and it is the answer for most rounds.\n\n"
    (if-not layered?
      (str "PER FINDING — there is no owner_layer to give and the field is not in\n"
           "the shape above. Do not invent one, and do not put a file path where a\n"

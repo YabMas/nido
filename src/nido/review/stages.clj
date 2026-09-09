@@ -188,17 +188,43 @@
                                  (when (and (string? b) (not (str/blank? b)))
                                    (str " — it said: " b)))))))))
 
+(defn- standing-items
+  "The warden's `standing` entries, normalised — what it says is open and is
+   handing to nobody this round.
+
+   Settled here rather than downstream, unlike `:promote`: a promotion becomes a
+   finding and so has to be weighed against the ids and layers the round holds,
+   while a standing item is a report about the branch and is answerable from its
+   own two fields. Nothing in the loop acts on one, which is what it is saying.
+
+   An entry with an empty `what` names nothing and is dropped; two entries
+   naming the same thing are one. Both are what a warden restating its list
+   whole every round will produce, and neither is worth a round-trip to ask
+   about."
+  [xs]
+  (into []
+        (comp (map (fn [s]
+                     (cond-> {:what (str/trim (str (:what s)))}
+                       (not (str/blank? (str (:why_no_finding s))))
+                       (assoc :why-no-finding (str/trim (str (:why_no_finding s)))))))
+              (remove #(str/blank? (:what %)))
+              (distinct))
+        xs))
+
 (defn ^{:malli/schema [:=> [:cat :string] :map]}
   parse-warden-decision
-  "Last fenced ```json block in `text` -> {:decision :reason :rulings :promote}.
-   Unparseable -> indeterminate.
+  "Last fenced ```json block in `text` -> {:decision :reason :rulings :promote
+   :standing}. Unparseable -> indeterminate.
 
    `:promote` is carried raw, exactly as the warden wrote it. A ruling names a
    finding this round already holds, so the parser can decide on its own whether
    it is a decision; a promotion names a defect that is not a finding yet, and
    whether it can become one turns on what else the round holds — the ids
    already raised, the layers in the stack. `promoted-findings` asks that, where
-   both are in scope."
+   both are in scope.
+
+   `:standing` is neither, and `standing-items` settles it here: it is what the
+   round is NOT acting on, so no other part of the round can contradict it."
   [text]
   (let [block (when (string? text) (last (re-seq fenced-json-re text)))]
     (if-let [body (second block)]
@@ -209,7 +235,8 @@
             {:decision d
              :reason   (:reason m)
              :rulings  (into [] (comp (filter :id) (map ruling)) (:findings m))
-             :promote  (vec (:promote m))}
+             :promote  (vec (:promote m))
+             :standing (standing-items (:standing m))}
             {:decision :indeterminate :reason (str "unknown decision: " (:decision m))}))
         (catch Exception e
           {:decision :indeterminate :reason (str "unparseable: " (ex-message e))}))

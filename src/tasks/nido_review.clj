@@ -151,6 +151,13 @@
    `workspace-drifted` entry named neither revision, and a run that folded two
    layers reported no work at all about a branch it had rewritten.
 
+   `:standing` is what the terminal warden knew was open and was handing to
+   nobody — no finding covers it, so it appears in no other list here, and until
+   the warden had a slot for it the only copy was a sentence in a run dir that
+   is routinely reclaimed. It is not part of `:findings-remaining`: nothing was
+   raised, ruled or dispatched, and counting it would claim the loop had an
+   answer it declined to give.
+
    `:open` also carries what the LAST run left owed that this one never answered,
    each row marked `:inherited`. Without it a run whose reviewers were handed a
    prior obligation and said nothing about it writes an entry holding nothing —
@@ -180,7 +187,12 @@
         ;; also carries the warden's handle and the finding's kind, which are
         ;; the report's business — this list exists to say the stack moved.
         reshaped (mapv #(select-keys % [:round :outcome :title :lower :upper :file])
-                       (report/applied-reshapes report))]
+                       (report/applied-reshapes report))
+        ;; Through the report's `:reason` rather than off the terminal ctx, so
+        ;; the entry, the artifact and the analysis payload are three readings
+        ;; of one value — `report/stopped-on` — and cannot disagree about what
+        ;; the run left behind.
+        standing (get-in report [:reason :standing])]
     (cond-> {:format             :review-report
              :status             (:status final)
              :base               (get-in report [:target :base])
@@ -219,6 +231,7 @@
       ;; the time anyone reads the workstream.
       (seq refused)   (assoc :rolled-back refused)
       (:drift final)  (assoc :drift (:drift final))
+      (seq standing)  (assoc :standing (vec standing))
       (seq reshaped)  (assoc :reshaped reshaped))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}

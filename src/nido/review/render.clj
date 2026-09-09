@@ -385,6 +385,19 @@
          (if (seq findings)
            (str/join "\n" (map finding-line findings))
            "    (none)")
+         ;; Beneath the findings, because it is the same kind of thing and the
+         ;; complement of it: they are what the run acted on, this is what the
+         ;; last warden knew was open and acted on with nothing. Omitted when
+         ;; empty rather than shown as "(none)", unlike the findings above — the
+         ;; findings section answers a question asked of every run, and this one
+         ;; is a list a warden either wrote or did not.
+         (when-let [st (seq (get-in report [:reason :standing]))]
+           (str "\n\n  Left standing:\n"
+                (str/join "\n"
+                          (for [{:keys [what why-no-finding]} st]
+                            (str "    · " what
+                                 (when why-no-finding
+                                   (str "\n        " why-no-finding)))))))
          "\n\n  Status: " (:status report)
          ;; "repair(s) dispatched", not "fixed": the count is one per finding
          ;; per round it was handed out in, and nothing in the run verified any

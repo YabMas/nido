@@ -46,7 +46,7 @@
    which is what it stopped AS. nil when the status says everything.
 
    `:unfixable` is what the loop gave up on, by the identity the pipeline tells
-   findings apart with; `:parked` is every question still standing when it
+   findings apart with; `:parked` is every question still unanswered when it
    ended, oldest first, each with the round it was raised in. Both were on the
    ctx and reached nothing durable: the artifact for a run whose entire point
    was that it had something specific to hand over said `unfixable` and left the
@@ -60,9 +60,19 @@
    revision the reviewers read and the one it found, refuses on the difference,
    and until this key existed neither number left the ctx. Which revision moved
    is the whole of what a reader can act on, and reconstructing it meant reading
-   the stage source."
+   the stage source.
+
+   `:standing` is the last warden's own list of what it knows is open and handed
+   to nobody — no finding covers it, no fixer was launched at it, so nothing
+   else in the run mentions it. The terminal ROUND's list rather than the union
+   over the run, and that is the accurate reading: a standing item carries no id
+   and no handle, so nothing in the loop can settle one and a union could only
+   grow. Which is why the warden is asked for the whole list every round, and
+   why a later round dropping an item is that warden's answer rather than a
+   loss."
   [ctx]
-  (let [parks (get-in ctx [:carry :parks])]
+  (let [parks    (get-in ctx [:carry :parks])
+        standing (get-in ctx [:warden :standing])]
     (not-empty
      (cond-> {}
        (seq (:unfixable ctx))
@@ -70,6 +80,9 @@
 
        (:drift ctx)
        (assoc :drift (:drift ctx))
+
+       (seq standing)
+       (assoc :standing (vec standing))
 
        (seq parks)
        (assoc :parked (->> parks
@@ -377,6 +390,11 @@
                                 :reason (:reason a)
                                 :rulings (rulings (:findings ctx)))
                    (seq (:promoted ctx)) (assoc :promoted (vec (:promoted ctx)))
+                   ;; Per round, because it is a judgement that round made and a
+                   ;; later one may not repeat: only the terminal round's list is
+                   ;; what the run leaves behind, and a reader asking why an item
+                   ;; stopped being named needs the round it was last named in.
+                   (seq (:standing a)) (assoc :standing (vec (:standing a)))
                    (seq (:unfixable ctx)) (assoc :unfixable (vec (:unfixable ctx)))))
       ;; The finding ids a fixer was handed, not only how many. It is the join
       ;; every cross-round question needs — did this fix stop that finding coming

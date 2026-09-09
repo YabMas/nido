@@ -61,12 +61,22 @@
         "one of the two remaining is a question for a human; the counts alone
          make it look like unfinished work")))
 
+(deftest the-payload-names-what-the-warden-left-standing
+  ;; The reader that needs it most and can least get it. An analysis grading
+  ;; whether the loop stopped for the right reason is asked exactly about the
+  ;; items no count mentions — and it is the reader whose run dir is gone.
+  (let [p (analysis/payload
+           (assoc a-run :standing [{:what "bb format is red on seven blocks"
+                                    :why-no-finding "not a fixer's work"}]))]
+    (is (= ["bb format is red on seven blocks"] (mapv :what (:standing p))))))
+
 (deftest a-run-that-stopped-on-nothing-says-nothing
   ;; Carried only when there is something to carry, like :remaining-handed —
   ;; a converged run's payload should not assert an empty handover.
   (let [p (analysis/payload a-run)]
     (is (not (contains? p :unfixable)))
     (is (not (contains? p :parked)))
+    (is (not (contains? p :standing)))
     (is (not (contains? p :remaining-parked)))))
 
 (deftest the-reviewed-branch-is-named-never-located

@@ -87,10 +87,16 @@
    `:drift` is the third of them, and the analysis is the reader it costs most:
    establishing why one drifted run stopped meant reading the fix stage's source
    against the reshape phase, because the two revisions the refusal is about
-   were computed and dropped."
+   were computed and dropped.
+
+   `:standing` is the fourth and the one no count above touches at all: what the
+   last warden knew was open and raised as nothing, so a run reports `0 still
+   open` over a list of it. An analysis asked whether the loop stopped for the
+   right reason is the reader that most needs it, and the reader least able to
+   go and look."
   [{:keys [run-id report-path status rounds fix-attempts defects-settled
            findings-remaining findings-kept remaining-handed remaining-parked
-           targets-reviewed targets-skipped unfixable parked
+           targets-reviewed targets-skipped unfixable parked standing
            drift base reviewed-project reviewed-session reviewed-ws-id]}]
   (cond-> {:adapter            :review-run
            :id                 (str run-id)
@@ -115,6 +121,7 @@
     (pos? (or remaining-parked 0)) (assoc :remaining-parked remaining-parked)
     (seq unfixable)  (assoc :unfixable (mapv str unfixable))
     (seq parked)     (assoc :parked (vec parked))
+    (seq standing)   (assoc :standing (vec standing))
     drift            (assoc :drift drift)
     base             (assoc :base base)
     reviewed-project (assoc :reviewed-project (name reviewed-project))

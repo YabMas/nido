@@ -780,6 +780,45 @@
         "a list of anonymous questions is not a handover — the park's own words
          are the whole of what the human is being asked to answer")))
 
+(deftest a-run-that-raised-nothing-still-records-what-the-warden-left-open
+  ;; The case the counts cannot state: a warden that stops with `0 still open`
+  ;; and knows about three things no reviewer raised. Until it had this slot the
+  ;; list went into its `reason`, which the report keeps and the ledger does not
+  ;; — so a ten-item handover ended in a run dir that is routinely reclaimed.
+  (let [r (drive
+           [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+            {:event :phase-started :iter 1 :phase :warden :at "t1"}
+            {:event :phase-finished :iter 1 :phase :warden :at "t2"
+             :ctx {:warden {:decision :stop :reason "nothing worth fixing"
+                            :standing [{:what "bb format is red on seven blocks"
+                                        :why-no-finding "not a fixer's work"}]}
+                   :findings []}}
+            {:event :run-finalized :status :converged :at "t3"
+             :ctx {:warden {:decision :stop :reason "nothing worth fixing"
+                            :standing [{:what "bb format is red on seven blocks"
+                                        :why-no-finding "not a fixer's work"}]}}}])
+        ph (first (:phases (first (:rounds r))))]
+    (is (= [{:what "bb format is red on seven blocks"
+             :why-no-finding "not a fixer's work"}]
+           (get-in r [:reason :standing]))
+        "what the run stopped ON includes what it knew was open and raised as
+         nothing — the one remainder none of the counts reaches")
+    (is (= [{:what "bb format is red on seven blocks"
+             :why-no-finding "not a fixer's work"}]
+           (:standing ph))
+        "and per round, because a later warden may drop an item and a reader
+         asking why needs the round it was last named in")))
+
+(deftest a-warden-that-leaves-nothing-standing-adds-no-key
+  ;; Present-or-absent is the signal, as it is for every other key here: an
+  ;; empty list on every clean run trains a reader to skip the section where it
+  ;; says something.
+  (let [r (drive
+           [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+            {:event :run-finalized :status :clean :at "t3"
+             :ctx {:warden {:decision :stop :reason "clean" :standing []}}}])]
+    (is (nil? (:reason r)))))
+
 (deftest a-run-with-nothing-to-hand-over-hands-over-nothing
   ;; :reason is absent rather than an empty map, so its presence is itself the
   ;; signal that the run stopped ON something.

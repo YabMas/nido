@@ -460,6 +460,35 @@
     (is (re-find #"\[P1\] Freeze the thread" out)
         "and a title without one is untouched")))
 
+(deftest what-the-run-left-standing-is-printed-under-the-findings
+  ;; The screen a person actually watches. The findings say what the run acted
+  ;; on; without this, what it knew was open and raised as nothing appeared
+  ;; nowhere at all — the warden's reason is printed only for an indeterminate
+  ;; decision, and a stop is not one.
+  (let [out (render/final
+             {:status "converged" :started-at "2026-08-31T09:00:00Z"
+              :ended-at "2026-08-31T09:10:00Z"
+              :target {:cwd "/w/x" :base "main" :files [] :layers 1}
+              :reason {:standing [{:what "babel is pinned to an unmerged branch tip"
+                                   :why-no-finding "outside this change"}]}
+              :rounds [{:round 1 :status "ended"
+                        :phases [{:phase "warden" :status "ok" :decision "stop"
+                                  :reason "nothing worth fixing" :rulings []}]}]})]
+    (is (re-find #"Left standing" out))
+    (is (re-find #"unmerged branch tip" out))
+    (is (re-find #"outside this change" out)
+        "with the ground, which is what makes it decidable rather than a worry")))
+
+(deftest a-run-that-left-nothing-standing-prints-no-heading-for-it
+  ;; A heading over an empty list reads as the loop asserting it left nothing
+  ;; behind, which is a claim only a warden that was asked can make.
+  (let [out (render/final
+             {:status "clean" :started-at "2026-08-31T09:00:00Z"
+              :ended-at "2026-08-31T09:10:00Z"
+              :target {:cwd "/w/x" :base "main" :files [] :layers 1}
+              :rounds [{:round 1 :status "ended" :phases []}]})]
+    (is (not (re-find #"Left standing" out)))))
+
 (deftest an-indeterminate-ruling-says-what-stopped-it
   (let [out (render/final
              {:status "warden-indeterminate" :started-at "2026-08-31T09:00:00Z"

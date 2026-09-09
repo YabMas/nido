@@ -1472,6 +1472,23 @@
    ;; A decline is the entry here a later reader is most likely to want to argue
    ;; with, so it travels with the `:because` the warden gave it.
    [:kept {:optional true} [:sequential ReviewFinding]]
+   ;; What the run's last warden knew was open and was handing to nobody: no
+   ;; finding covers it, no fixer was launched at it, so it appears in none of
+   ;; the lists above and in none of the counts. It is here because it is here
+   ;; or nowhere — a warden told its prose was the only channel wrote a
+   ;; ten-item list into a `reason` that reached the run's report.json and
+   ;; stopped, and that directory is routinely reclaimed before anyone reads
+   ;; the workstream.
+   ;;
+   ;; `:why-no-finding` is what makes an item decidable rather than a worry:
+   ;; outside the change, no layer owns it, not a fixer's work. Optional,
+   ;; because an item stated without one is still worth more than the silence
+   ;; this replaces.
+   [:standing {:optional true}
+    [:sequential
+     [:map {:closed true}
+      [:what           string?]
+      [:why-no-finding {:optional true} [:maybe string?]]]]]
    ;; The change ids jj left conflicted, on the two statuses that end holding
    ;; them and nowhere else. Where to go, named: the status alone says the stack
    ;; is broken and leaves finding it as an exercise, on a nine-layer branch
@@ -2680,7 +2697,7 @@
                                  remaining-parked targets-reviewed targets-skipped
                                  report-path
                                  summary open kept conflicted drift reshaped
-                                 rolled-back]}]
+                                 rolled-back standing]}]
   (str/join "\n"
     (remove nil?
       [(str "# Review: " (name status))
@@ -2758,6 +2775,20 @@
        ;; agreed at all — and agreeing to ship a known defect is the thing here
        ;; most worth being able to point at later.
        (when (seq kept) (review-findings->markdown "Decided and kept" kept))
+       ;; Under the findings and before the machinery, because it is the same
+       ;; kind of thing as "Still open" and reaches the reader through no other
+       ;; route: nothing raised it, so it is in none of the counts above and in
+       ;; none of the lists. The heading says handed to nobody rather than
+       ;; open, so a reader does not go looking for the finding behind it.
+       (when (seq standing)
+         (str "\n## Left standing — open, and handed to nobody\n"
+              "The run's last warden knew about these and raised none of them,"
+              " so no finding covers them and no count above includes them.\n"
+              (str/join "\n"
+                        (for [{:keys [what why-no-finding]} standing]
+                          (str "- " what
+                               (when why-no-finding
+                                 (str "\n  - " why-no-finding)))))))
        ;; Under the findings, because this is what explains one of them: a
        ;; repair was written for it and the stack refused it, so the finding is
        ;; open for a reason nothing else in the entry states. The counts read

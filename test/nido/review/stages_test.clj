@@ -37,9 +37,37 @@
 
 (deftest parse-warden-decision-stop-without-rulings
   (let [txt "```json\n{\"decision\":\"stop\",\"reason\":\"clean\"}\n```"]
-    (is (= {:decision :stop :reason "clean" :rulings [] :promote []}
+    (is (= {:decision :stop :reason "clean" :rulings [] :promote [] :standing []}
            (stages/parse-warden-decision txt))
-        "an answer that promotes nothing promotes nothing, rather than nil")))
+        "an answer that promotes nothing and leaves nothing standing says so
+         with empty lists, rather than with nil — the absence of a key and a
+         warden's claim that there is nothing are different answers")))
+
+(deftest a-standing-item-naming-nothing-is-not-carried-and-neither-is-a-repeat
+  ;; The warden is asked to state its whole list every round rather than the
+  ;; difference, because nothing in the loop can retract an item — so a repeat
+  ;; within one answer is what that instruction produces, and it costs a reader
+  ;; a line that says what the line above it said.
+  (let [txt (str "```json\n{\"decision\":\"stop\",\"reason\":\"done\","
+                 "\"standing\":["
+                 "{\"what\":\"   \",\"why_no_finding\":\"nothing\"},"
+                 "{\"what\":\"babel is pinned to an unmerged branch tip\","
+                 "\"why_no_finding\":\"outside this change\"},"
+                 "{\"what\":\"babel is pinned to an unmerged branch tip\","
+                 "\"why_no_finding\":\"outside this change\"}]}\n```")]
+    (is (= [{:what "babel is pinned to an unmerged branch tip"
+             :why-no-finding "outside this change"}]
+           (:standing (stages/parse-warden-decision txt))))))
+
+(deftest a-standing-item-with-no-ground-is-still-carried
+  ;; `why_no_finding` is what makes an item decidable rather than a worry, but
+  ;; an item stated without one still reaches a human who had nothing before —
+  ;; so the missing field is dropped, never the item.
+  (let [txt (str "```json\n{\"decision\":\"stop\","
+                 "\"standing\":[{\"what\":\"bb format is red on seven blocks\"}]}"
+                 "\n```")]
+    (is (= [{:what "bb format is red on seven blocks"}]
+           (:standing (stages/parse-warden-decision txt))))))
 
 (deftest parse-warden-decision-malformed-is-indeterminate
   (is (= :indeterminate (:decision (stages/parse-warden-decision "no json here"))))
