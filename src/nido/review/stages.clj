@@ -39,7 +39,7 @@
    layer nobody answered for."
   #{:stack-conflicted :nothing-to-review :clean :warden-indeterminate :unfixable
     :dry-run :workspace-drifted :fix-unrouted :fix-conflicted :fix-rolled-back
-    :fix-declined :unresolved})
+    :fix-declined :fix-timed-out :unresolved})
 
 (def ^:private fenced-json-re #"(?s)```json\s*(\{.*?\})\s*```")
 
@@ -1671,18 +1671,29 @@
   warden-failure
   "Why there is no ruling, when the round cannot use the answer.
 
-   THREE DIFFERENT THINGS END A ROUND HERE and they ask different things of
-   whoever reads the report: the agent never ran (a 429, a crash, a budget
-   spent), it ran and produced nothing, or it answered and the answer would not
-   parse. Only the third is a claim about JSON.
+   FOUR DIFFERENT THINGS END A ROUND HERE and they ask different things of
+   whoever reads the report: the agent exited on an error it stated, it was
+   killed on its budget mid-answer, it ran and produced nothing, or it answered
+   and the answer would not parse. Only the last is a claim about JSON.
 
    Collapsing them onto the parser's verdict is how a session limit came to be
    reported as `no json decision block` — a complaint about a block that was
    never going to exist, with the 429 in agent.log and nowhere a reader looks.
    `result-error?` was already computed and already right; it was the
-   explanation that was thrown away."
-  [{:keys [num-turns result-error? result-text]} decision]
+   explanation that was thrown away.
+
+   A kill is asked about FIRST and asked about at all because it is the one
+   ending that leaves no evidence of itself in the launch result: the budget
+   timer destroys the process before claude emits its `result` event, so
+   `num-turns` is nil exactly as it is for an agent that never started, and
+   `:timed-out?` is the only field that tells a warden that spent thirty minutes
+   from one that was rejected at the door."
+  [{:keys [num-turns result-error? result-text timed-out?]} decision]
   (cond
+    timed-out?
+    {:cause  :budget-spent
+     :reason "the agent was killed on its budget mid-answer — whatever it had settled went with the process"}
+
     result-error?
     {:cause  :launch-failed
      :reason (or (some-> result-text str/trim not-empty)
@@ -2466,7 +2477,7 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                        ;; finding coming back — because it holds one end of the
                        ;; join and discards the other.
                        handed (handed-ids findings)
-                       {:keys [num-turns result-text]}
+                       {:keys [num-turns result-text timed-out?]}
                        (agent/launch!
                         {:run-id run-id :cwd cwd
                          :first-message (prompts/fix-prompt
@@ -2488,49 +2499,27 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                                                  (format "fix-%s-round-%d.err.log"
                                                          (codex/safe-label label)
                                                          (or (:iter ctx) 1))))})]
-                   (if (or (zero? (or num-turns 0)) (not (working-copy-dirty? cwd)))
-                     ;; The fixer left the tree unchanged. That is a decision it
-                     ;; made and explained, and the explanation was the only
-                     ;; account of why a round did nothing — discarded here, so
-                     ;; a run could end on "no changes" with the reason it
-                     ;; declined stated nowhere. It is kept per layer, and
-                     ;; distinguishes a fixer that never ran from one that read
-                     ;; the finding and refused it.
-                     (let [ran?   (pos? (or num-turns 0))
-                           ;; An argument, as against a no-show. A fixer that
-                           ;; ran no turns refused nothing and said nothing, and
-                           ;; carrying it would tell the next warden a fixer had
-                           ;; made a case nobody ever made.
-                           argued? (and ran? (not (str/blank? (str result-text))))]
-                       (layers/restore-top! cwd stack)
-                       (cond-> (update acc :declined (fnil conj [])
-                                       ;; :handed for the same reason it is on a
-                                       ;; landed fix and on an unattempted layer:
-                                       ;; the four lists are one account of every
-                                       ;; :fix ruling the round held, and they add
-                                       ;; up only if the finding ids are under one
-                                       ;; key. This was the row that named a layer
-                                       ;; and nothing else.
-                                       (cond-> {:layer label :ran? ran? :handed handed}
-                                         result-text (assoc :reason (str result-text))))
-                         ;; Into :carry, the only thing a round hands the next
-                         ;; one. A refusal leaves its finding at :fix, so without
-                         ;; this the argument reaches report.json and no reader —
-                         ;; not the warden that could settle it, not the session
-                         ;; that would otherwise have to build it again.
-                         argued?
-                         (assoc-in [:carry :fixer-declines label]
-                                   {:layer label
-                                    :since (:iter ctx)
-                                    :reason (str result-text)
-                                    ;; Named by handle where the warden gave one,
-                                    ;; exactly as :handed is, so the carry and the
-                                    ;; report row point at one finding rather than
-                                    ;; at two spellings of it a round apart.
-                                    :findings (mapv (fn [f]
-                                                      {:id (or (:handle f) (:id f))
-                                                       :title (:title f)})
-                                                    findings)})))
+                   ;; A KILL COUNTS AS HAVING RUN, and everything below turns on
+                   ;; it. The budget timer destroys the process before claude
+                   ;; emits its `result` event, so `num-turns` comes back nil for
+                   ;; a fixer that made 32 edits and for one claude rejected at
+                   ;; the door alike, and `:timed-out?` is the only field that
+                   ;; separates them. Read only the count, and the tree is never
+                   ;; even asked: one killed fixer's completed repair was filed
+                   ;; as a fixer that never started and left on the working copy,
+                   ;; where `restore-top!` stranded it mid-stack as an
+                   ;; undescribed, unbookmarked commit inside the range of the
+                   ;; layer above.
+                   ;;
+                   ;; The count still vetoes a landing when the launch produced a
+                   ;; `result` event saying zero turns, and that is not the same
+                   ;; concession. There the agent demonstrably did nothing, so
+                   ;; anything the tree holds was already there — on an unstacked
+                   ;; branch `position-for-fix!` is a no-op and a session
+                   ;; worktree routinely carries a human's uncommitted work,
+                   ;; which landing would commit under a fixer's name.
+                   (if (and (or (pos? (or num-turns 0)) timed-out?)
+                            (working-copy-dirty? cwd))
                      (let [cid (layers/land-fix!
                                 cwd layer
                                 (str "review-loop: iter " (:iter ctx) " fixes"
@@ -2545,11 +2534,20 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                            ;; told to run had actually run — and keeping the text
                            ;; on the decline branch alone deleted the second half
                            ;; of every such message.
+                           ;;
+                           ;; A killed fixer has none, and `:timed-out?` is what
+                           ;; says the account is missing because the process was
+                           ;; destroyed rather than because the fixer landed its
+                           ;; work in silence. It also says the repair may be
+                           ;; part-done: the kill lands whatever the tree held at
+                           ;; the moment it arrived, which is the only reading of
+                           ;; that commit anyone gets.
                            fix (cond-> {:layer label :commit cid
                                         :handed handed
                                         :fixed-count (count findings)}
                                  (not (str/blank? (str result-text)))
-                                 (assoc :account (str result-text)))
+                                 (assoc :account (str result-text))
+                                 timed-out? (assoc :timed-out? true))
                            ;; A fix lands by REWRITING its layer, so jj rebases
                            ;; every layer above it, and a rebase can conflict.
                            ;; Nothing asked. The markers rode up the stack in the
@@ -2605,7 +2603,61 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                                      (update :rolled-back (fnil conj []) row)
                                      (assoc-in [:carry :rolled-back label]
                                                (refused-carry row (:iter ctx)
-                                                              findings)))))))))))
+                                                              findings))))))))
+                     ;; The fixer left the tree unchanged. That is a decision it
+                     ;; made and explained, and the explanation was the only
+                     ;; account of why a round did nothing — discarded here, so
+                     ;; a run could end on "no changes" with the reason it
+                     ;; declined stated nowhere. It is kept per layer, and
+                     ;; distinguishes a fixer that never ran from one that read
+                     ;; the finding and refused it.
+                     (let [ran?   (boolean (or (pos? (or num-turns 0)) timed-out?))
+                           ;; An argument, as against a no-show. A fixer that
+                           ;; ran no turns refused nothing and said nothing, and
+                           ;; carrying it would tell the next warden a fixer had
+                           ;; made a case nobody ever made. A killed one is the
+                           ;; same shape from the other direction: it ran, and
+                           ;; the argument it might have made was never emitted.
+                           argued? (and ran? (not (str/blank? (str result-text))))]
+                       (layers/restore-top! cwd stack)
+                       (cond-> (update acc :declined (fnil conj [])
+                                       ;; :handed for the same reason it is on a
+                                       ;; landed fix and on an unattempted layer:
+                                       ;; the four lists are one account of every
+                                       ;; :fix ruling the round held, and they add
+                                       ;; up only if the finding ids are under one
+                                       ;; key. This was the row that named a layer
+                                       ;; and nothing else.
+                                       ;;
+                                       ;; :timed-out? is what makes `:ran? true`
+                                       ;; with no `:reason` legible. Every other
+                                       ;; row of that shape is a fixer that ran
+                                       ;; and said nothing; this one is a fixer
+                                       ;; whose account was still in the process
+                                       ;; when the budget destroyed it, and the
+                                       ;; findings it was handed stand for want
+                                       ;; of time rather than on an argument.
+                                       (cond-> {:layer label :ran? ran? :handed handed}
+                                         result-text (assoc :reason (str result-text))
+                                         timed-out?  (assoc :timed-out? true)))
+                         ;; Into :carry, the only thing a round hands the next
+                         ;; one. A refusal leaves its finding at :fix, so without
+                         ;; this the argument reaches report.json and no reader —
+                         ;; not the warden that could settle it, not the session
+                         ;; that would otherwise have to build it again.
+                         argued?
+                         (assoc-in [:carry :fixer-declines label]
+                                   {:layer label
+                                    :since (:iter ctx)
+                                    :reason (str result-text)
+                                    ;; Named by handle where the warden gave one,
+                                    ;; exactly as :handed is, so the carry and the
+                                    ;; report row point at one finding rather than
+                                    ;; at two spellings of it a round apart.
+                                    :findings (mapv (fn [f]
+                                                      {:id (or (:handle f) (:id f))
+                                                       :title (:title f)})
+                                                    findings)}))))))
                  ctx (map-indexed vector plan)))
               ctx' (if (seq (:fixes ctx'))
                      (update ctx' :history (fnil conj [])
@@ -2640,8 +2692,24 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
             (and (empty? (:fixes ctx')) (seq (:rolled-back ctx')))
             (assoc ctx' :control :stop :status :fix-rolled-back)
 
+            ;; Nothing landed, and which of the two happened is the difference
+            ;; between an answer and an interruption. :fix-declined is fixers
+            ;; reading the findings and saying no, which is a decision a human
+            ;; reads the reasons of; a kill decided nothing, and the run wants
+            ;; more room rather than a different answer. Collapsed onto the
+            ;; decline, a fixer that spent thirty minutes on two findings
+            ;; arrives as `fix-declined · 2 open` — the report asserting a
+            ;; refusal nobody made, in the words of the status just above.
+            ;;
+            ;; After :fix-rolled-back, which is a stronger statement about the
+            ;; same round: a rollback is a completed event with a commit id
+            ;; behind it and a layer order to question, where a kill on a clean
+            ;; tree left nothing to look at.
             (empty? (:fixes ctx'))
-            (assoc ctx' :control :stop :status :fix-declined)
+            (assoc ctx' :control :stop
+                   :status (if (some :timed-out? (:declined ctx'))
+                             :fix-timed-out
+                             :fix-declined))
 
             :else ctx')))))))
 

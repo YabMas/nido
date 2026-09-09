@@ -998,6 +998,7 @@
    :unfixable "raised round after round and never moved, or a park that has stood too long — the loop has nothing further to offer them"
    :no-progress "the round changed nothing the reviewers can see — the findings it left are what you get"
    :fix-declined "every fixer read what it was handed and said no — the findings stand, with their reasons beside them in the report"
+   :fix-timed-out "a fixer was killed on its budget with the tree untouched — nothing was decided, so the findings stand for want of time and the run wants more room rather than a re-run"
    :fix-unrouted "no finding reached a layer a fixer can touch — what is in question is the routing, not any repair"
    :fix-rolled-back "every repair was refused by the rebase and put back, so the branch is exactly what was reviewed — a re-run earns the same refusal; what is in question is the layer order"
    :max-iters "the cap you passed was reached — this is not convergence, and the findings were still open"

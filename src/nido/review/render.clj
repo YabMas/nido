@@ -78,6 +78,13 @@
                ;; first fixer holds nothing else to tell them apart by.
                (seq (:unattempted ph))
                (str (count (:unattempted ph)) " layers never attempted")
+               ;; Also before "no changes", and for the same reason: the fixer
+               ;; was working when its budget destroyed it, so the tree standing
+               ;; where the reviewers left it is a fact about the clock rather
+               ;; than about the findings.
+               (seq (filter :timed-out? (:declined ph)))
+               (str (count (filter :timed-out? (:declined ph)))
+                    " killed on budget")
                (= "ok" (:status ph)) "no changes")
     ;; Counted by outcome rather than summed, because "1 recut" says nothing a
     ;; reader can act on and "1 span-has-holes" says the whole of it.

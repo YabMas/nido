@@ -61,6 +61,20 @@
        "review"))
   (is (nil? (render/plain-line running-report {:event :run-started}))))
 
+(deftest a-fix-phase-whose-fixer-was-killed-does-not-report-no-changes
+  ;; "no changes" reads as the stage having run and found nothing to do. A
+  ;; budget kill left the tree where the reviewers found it for want of time,
+  ;; which is a fact about the clock rather than about the findings — and the
+  ;; operator standing at the terminal is the reader with no report.json to open.
+  (let [r (assoc-in running-report [:rounds 0 :phases 1]
+                    {:phase "fix" :status "ok" :started-at "2026-06-30T14:00:30Z"
+                     :ended-at "2026-06-30T14:30:31Z"
+                     :declined [{:layer "resume-on-drop" :ran? true
+                                 :handed ["aa11" "bb22"] :timed-out? true}]})
+        s (render/frame r now)]
+    (is (str/includes? s "1 killed on budget"))
+    (is (not (str/includes? s "no changes")))))
+
 (deftest frame-lists-every-layer-including-the-ones-it-skipped
   ;; A reader who cannot see that a layer was passed over has to take on trust
   ;; that passing over it was safe. Silent truncation reads as coverage.

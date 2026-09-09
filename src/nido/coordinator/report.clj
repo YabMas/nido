@@ -1371,6 +1371,15 @@
                                ;; offer them and is handing them over.
                                :unfixable
                                :fix-noop :fix-unrouted :fix-declined
+                               ;; A fixer was killed on its per-launch budget
+                               ;; with the tree still where the reviewers left
+                               ;; it. Distinct from :fix-declined, which is a
+                               ;; fixer reading the findings and arguing back:
+                               ;; nothing was decided here, and what the run
+                               ;; wants is more room rather than a different
+                               ;; answer. A kill that HAD written to the tree is
+                               ;; not this — its work lands and the round goes on.
+                               :fix-timed-out
                                :workspace-drifted
                                ;; The fix stage rewrote a lower layer and jj's
                                ;; rebase of the layers above it conflicted. The

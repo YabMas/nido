@@ -263,19 +263,52 @@
              :ctx {:findings [{:title "b"}] :base-rev "B" :manifest "a"}}
             {:event :phase-started :iter 1 :phase :fix :at "t3"}
             {:event :phase-finished :iter 1 :phase :fix :at "t4"
-             :ctx {:history [{:iter 1 :commit "c1" :fixed-count 2}]}}
+             :ctx {:history [{:iter 1 :commit "c1" :fixed-count 2
+                              :fixes [{:layer nil :commit "c1" :handed ["aa11" "bb22"]
+                                       :fixed-count 2}]}]}}
             {:event :phase-started :iter 2 :phase :review :at "t5"}
             {:event :phase-finished :iter 2 :phase :review :at "t6"
              :ctx {:findings [{:title "b"}] :base-rev "B" :manifest "a"}}
             {:event :phase-started :iter 2 :phase :fix :at "t7"}
             ;; round-2 fix is a NOOP: history STILL has only the iter-1 entry
             {:event :phase-finished :iter 2 :phase :fix :at "t8"
-             :ctx {:history [{:iter 1 :commit "c1" :fixed-count 2}]}}
+             :ctx {:history [{:iter 1 :commit "c1" :fixed-count 2
+                              :fixes [{:layer nil :commit "c1" :handed ["aa11" "bb22"]
+                                       :fixed-count 2}]}]}}
             {:event :run-finalized :status :fix-noop :at "t9"}])
         r2-fix (->> (:rounds r) second :phases (some #(when (= "fix" (:phase %)) %)))]
     (is (nil? (:commit r2-fix)) "round-2 noop fix must not inherit round-1's commit")
     (is (nil? (:fixed-count r2-fix)) "round-2 noop fix has no fixed-count")
     (is (= 2 (:fix-attempts (:summary r))) "summary counts only the one real fix")))
+
+(deftest repairs-dispatched-counts-every-launched-fixer-not-only-the-landed-ones
+  ;; `:fixed-count` is written only by a LANDED fix, so a round whose fixer
+  ;; wrote nothing summed to zero: two findings handed to a fixer that ran for
+  ;; thirty minutes were published as "0 repairs dispatched", under a name and a
+  ;; docstring that both promise dispatched. Every row naming a fixer the stage
+  ;; launched carries `:handed`, and that is the list the fixer's own prompt was
+  ;; built from.
+  (let [r (drive
+           [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+            {:event :phase-started :iter 1 :phase :review :at "t1"}
+            {:event :phase-finished :iter 1 :phase :review :at "t2"
+             :ctx {:findings [{:title "b"}] :base-rev "B" :manifest "a"}}
+            {:event :phase-started :iter 1 :phase :fix :at "t3"}
+            {:event :phase-finished :iter 1 :phase :fix :at "t4"
+             :ctx {:history [{:iter 1 :fixed-count 1
+                              :fixes [{:layer "lower" :commit "c1" :handed ["aa11"]
+                                       :fixed-count 1}]}]
+                   :rolled-back [{:layer "middle" :handed ["bb22"] :conflicted ["x"]}]
+                   :declined [{:layer "upper" :ran? true :handed ["cc33" "dd44"]
+                               :timed-out? true}
+                              {:layer "top" :ran? false :handed ["ee55"]}]
+                   :unattempted [{:layer "highest" :handed ["ff66"]}]}}
+            {:event :run-finalized :status :fix-conflicted :ctx {} :at "t5"}])]
+    (is (= 4 (:fix-attempts (:summary r)))
+        "one landed, one the stack rolled back and two handed to the fixer its
+         budget killed — every one of them was a repair this run asked for. The
+         layer the abort never reached and the fixer that took no turn are not:
+         nothing was handed to a fixer that never ran")))
 
 (deftest persist!-writes-atomic-valid-json
   (let [dir (str (fs/create-temp-dir))

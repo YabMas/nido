@@ -660,6 +660,12 @@
    :fix-noop             :escalate
    :fix-unrouted         :escalate
    :fix-declined         :escalate
+   ;; A fixer was killed on its budget having written nothing. Not :retry with
+   ;; the machinery failures above, and the split is the same one
+   ;; :reviewer-unavailable draws: re-running unchanged spends another thirty
+   ;; minutes reaching the same wall, and the one thing that changes the outcome
+   ;; is a person deciding whether this repair is worth more room.
+   :fix-timed-out        :escalate
    ;; The fix stage's own rebase left the stack conflicted. A human has to
    ;; resolve it — nothing here can, and a retry would land more fixes onto a
    ;; branch that already does not parse.

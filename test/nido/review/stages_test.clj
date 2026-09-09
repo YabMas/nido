@@ -62,6 +62,24 @@
            (stages/warden-failure {:num-turns 3 :result-error? false} parsed))
         "only an answer that came back and would not parse blames the json")))
 
+(deftest a-warden-killed-on-its-budget-is-not-a-warden-that-said-nothing
+  ;; The kill destroys the process before claude emits its `result` event, so
+  ;; `num-turns` is nil for a warden that spent its whole budget adjudicating
+  ;; and for one that never started. Read off the count alone, a run that spent
+  ;; thirty minutes on the findings was reported as one where "the agent ran no
+  ;; turns — nothing was asked of the findings", which is the same false
+  ;; statement this function's own docstring warns about for the 429.
+  (let [parsed (stages/parse-warden-decision nil)]
+    (is (= :budget-spent
+           (:cause (stages/warden-failure
+                    {:num-turns nil :result-error? false :timed-out? true}
+                    parsed))))
+    (is (= :no-answer
+           (:cause (stages/warden-failure
+                    {:num-turns nil :result-error? false :timed-out? false}
+                    parsed)))
+        "and a launch that produced nothing at all still says so")))
+
 (deftest review-stage-sets-findings
   (with-redefs [layers/patch-hash (fn [& _] nil)
                 codex/merge-base (fn [& _] "BASEREV")
@@ -428,6 +446,75 @@
           [d] (:declined ctx)]
       (is (= :fix-declined (:status ctx)))
       (is (false? (:ran? d)) "it never ran"))))
+
+(deftest a-fixer-killed-on-its-budget-lands-what-it-wrote
+  ;; The budget timer destroys the process before claude emits its `result`
+  ;; event, so a fixer that made 32 edits comes back with `num-turns` nil — the
+  ;; same value one claude rejected at the door comes back with. Asked the count
+  ;; first, the stage never looked at the tree: one completed repair, green on
+  ;; the fixer's own last lap, was recorded as a fixer that never started and
+  ;; left on the working copy, where `restore-top!` stranded it mid-stack as an
+  ;; undescribed, unbookmarked commit inside the layer above's range.
+  (let [commits (atom [])]
+    (with-redefs [agent/launch! (fn [_] {:num-turns nil :result-error? false
+                                         :result-text nil :timed-out? true})
+                  stages/working-copy-dirty? (fn [_] true)
+                  layers/conflicted (fn [& _] [])
+                  jj/jj! (fn [_dir & args] (swap! commits conj (vec args))
+                           {:exit 0 :out "" :err ""})]
+      (let [ctx ((:run stages/fix-stage)
+                 {:config {:cwd "/w" :run-id "r1" :base "main"} :iter 2
+                  :findings [{:id "aa11" :title "x" :disposition :fix}]})
+            [f] (:fixes ctx)]
+        (is (some #(= ["commit" "-m" "review-loop: iter 2 fixes"] %) @commits)
+            "the repair is on the branch under a description, which is the whole
+             difference between a fix and an orphan commit")
+        (is (= ["aa11"] (:handed f)))
+        (is (true? (:timed-out? f))
+            "and the row says the account is missing because the process was
+             destroyed, not because the fixer landed its work in silence")
+        (is (nil? (:control ctx)) "the round goes on — a repair landed")))))
+
+(deftest a-fixer-killed-with-nothing-written-is-not-a-fixer-that-refused
+  ;; Same empty tree as a decline and a different fact about the run: a decline
+  ;; is an argument a human reads, a kill decided nothing. Recorded as a
+  ;; decline, one 30-minute fixer was published as `fix-declined`, whose own
+  ;; comment glosses the status as fixers reading the findings and saying no.
+  (with-redefs [agent/launch! (fn [_] {:num-turns nil :result-error? false
+                                       :result-text nil :timed-out? true})
+                stages/working-copy-dirty? (fn [_] false)
+                jj/jj! (fn [& _] {:exit 0 :out "" :err ""})]
+    (let [ctx ((:run stages/fix-stage)
+               {:config {:cwd "/w" :run-id "r1"} :iter 2
+                :findings [{:id "aa11" :title "x" :disposition :fix}]})
+          [d] (:declined ctx)]
+      (is (= :fix-timed-out (:status ctx)))
+      (is (true? (:ran? d)) "it ran — for the whole of its budget")
+      (is (true? (:timed-out? d)))
+      (is (nil? (:reason d))
+          "and it argued nothing: the account was still in the process when the
+           budget destroyed it, and inventing one would put words in its mouth"))))
+
+(deftest a-fixer-that-never-started-does-not-land-a-tree-it-never-touched
+  ;; The concession the kill buys is bounded by evidence that a fixer ran. A
+  ;; launch claude rejected reports zero turns in a `result` event it did emit,
+  ;; so whatever the working copy holds was already there — and on an unstacked
+  ;; branch `position-for-fix!` is a no-op, which makes that a human's own
+  ;; uncommitted work about to be committed under a fixer's name.
+  (with-redefs [agent/launch! (fn [_] {:num-turns 0 :result-error? false
+                                       :result-text "" :timed-out? false})
+                stages/working-copy-dirty? (fn [_] true)
+                jj/jj! (fn [_dir & args]
+                         (when (= "commit" (first args))
+                           (throw (ex-info "nothing may be committed here" {})))
+                         {:exit 0 :out "" :err ""})]
+    (let [ctx ((:run stages/fix-stage)
+               {:config {:cwd "/w" :run-id "r1"} :iter 2
+                :findings [{:id "aa11" :title "x" :disposition :fix}]})
+          [d] (:declined ctx)]
+      (is (= :fix-declined (:status ctx)))
+      (is (false? (:ran? d)))
+      (is (nil? (:timed-out? d))))))
 
 (deftest nothing-routed-to-a-fixable-layer-is-its-own-status
   ;; No finding was owed to any layer, so no fixer was launched. Distinct from a

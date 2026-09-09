@@ -473,9 +473,33 @@
                          row))
                      (vec rows)))))))
 
+(defn- fix-rows-with-a-fixer
+  "Every row of a fix phase that names a fixer the stage actually launched.
+
+   The phase keeps four lists and they are one account of the round's `:fix`
+   rulings, but only three of them are about a launch. `:fixes` and
+   `:rolled-back` are repairs a fixer wrote — kept and refused. `:declined` is a
+   fixer that wrote nothing, and `:ran?` is what splits it: a fixer that read
+   the findings, or one claude rejected before it took a turn. `:unattempted` is
+   excluded entirely — its `:handed` names what a layer was OWED when the stage
+   aborted below it, and nothing was handed to a fixer that never existed."
+  [ph]
+  (concat (:fixes ph) (:rolled-back ph) (filter :ran? (:declined ph))))
+
 (defn- fix-attempts
   "How many repairs the run DISPATCHED — one per finding per round it was handed
    to a fixer in, so a finding handed out in three rounds counts three times.
+
+   Counted off `:handed`, which every row naming a launched fixer carries and
+   which is the same list the fixer's prompt was built from. `:fixed-count` is
+   the wrong source and cannot be made right: only a LANDED fix carries it, so a
+   round whose fixer wrote nothing — because it refused, because the stack
+   rolled its repair back, or because its budget killed it mid-verification —
+   sums to zero, and two findings handed to a fixer that ran for thirty minutes
+   publish as `0 repairs dispatched`. That is the same conflation the naming
+   rule below guards against, reached from the other side: this field means
+   asked-for, and a source that only a completed repair writes can only ever
+   mean finished.
 
    Not how many defects were removed, which is a fact no stage in the loop
    produces. A fixer reporting success is a fixer's claim about its own work;
@@ -493,7 +517,8 @@
   (->> (:rounds report)
        (mapcat :phases)
        (filter #(= "fix" (:phase %)))
-       (keep :fixed-count)
+       (mapcat fix-rows-with-a-fixer)
+       (map #(count (:handed %)))
        (reduce + 0)))
 
 (def ^:private read-statuses
