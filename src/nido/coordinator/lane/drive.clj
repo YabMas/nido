@@ -421,8 +421,10 @@
      :workstream-id     ws-id
      :claude-session-id nil
      ;; The stage's own agents are launched by the loop it runs, each already
-     ;; bounded by tasks.nido-review/default-launch-budget. This bounds the whole
-     ;; stage, which can be many rounds of them.
+     ;; bounded by a wall clock sized from tasks.nido-review/default-launch-budget
+     ;; — a fixer's scales with what it was handed, up to
+     ;; nido.review.stages/fix-budget-ceiling. This bounds the whole stage, which
+     ;; can be many rounds of them, and it is the bound that ceiling answers to.
      :limits            {:budget "8h" :max-failures 3}
      :priority          0
      :session-profile   :full

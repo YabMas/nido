@@ -2365,6 +2365,65 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
   [findings]
   (mapv (fn [f] (or (:handle f) (:id f))) findings))
 
+(def ^:private fix-budget-ceiling
+  "The most wall clock one fixer launch may hold, however many findings it was
+   handed.
+
+   The scale below is per finding and the rounds above it are uncapped, so
+   without a ceiling one launch of one round can spend the budget of the whole
+   stage: `nido.coordinator.lane.drive` gives a driven review stage 8h to hold
+   however many rounds it takes, and the fix stage runs a fixer per layer inside
+   each of them.
+
+   Three times the loop's default, which is the whole of the measured range and
+   then some: the one fixer known to have overrun was killed at 30m on its final
+   verification lap, with its repairs written. Past here a fixer is not slow, it
+   has hung — which is the failure a wall clock exists for."
+  "90m")
+
+(defn- budget-str
+  "Milliseconds as `agent/parse-budget-ms` spells a duration: whole minutes where
+   the figure is one, seconds otherwise.
+
+   Seconds rather than a rounded minute, because `0m` is not a short budget. It
+   parses, arms the kill timer at zero, and destroys the agent before it has read
+   anything — so rounding a sub-minute budget down turns a test's `30s` into a
+   launch that cannot succeed."
+  [ms]
+  (let [s (max 1 (quot ms 1000))]
+    (if (zero? (mod s 60)) (str (quot s 60) "m") (str s "s"))))
+
+(defn- fix-budget
+  "The wall clock ONE fixer gets: the loop's per-launch budget for the lap it
+   ends on, and that budget again for each finding it was handed.
+
+   `:budget` is one wall for every agent a loop launches and it is calibrated on
+   the cheapest of them. The fixer is the only one that both edits and verifies:
+   on the run this is measured from, the warden answered in 34s and the design
+   verdict in 5m, while the fixer was killed at 30m mid-`kaocha` on its final
+   verification lap with both repairs already written. Rounds are deliberately
+   uncapped, so the per-launch wall is the only cap the loop has and it was set
+   by the stage that needs it least.
+
+   Scaled by the findings handed rather than raised flat, because that is what
+   sets a fixer's work: the repair, the ordered sweep and the account are per
+   finding, while the verification lap it ends on is paid once whatever it was
+   asked to do. `prompts/account-excerpt` sizes the other half of the same
+   asymmetry the same way.
+
+   Never below `budget` itself — a caller naming a longer wall for a slow project
+   is asking for more everywhere, and a fixer given less than the reviewers that
+   read for it is the defect this closes, upside down. And never a refusal: a
+   budget `agent/parse-budget-ms` cannot read is handed on untouched, so the
+   launch refuses it in the one place whose message names the caller."
+  [budget handed]
+  (if-let [base (try (agent/parse-budget-ms budget) (catch Exception _ nil))]
+    (-> (* base (inc (max 1 (long handed))))
+        (min (agent/parse-budget-ms fix-budget-ceiling))
+        (max base)
+        budget-str)
+    budget))
+
 (defn- unattempted-tail
   "The plan entries after `from`: layers a fixer was owed and never launched
    for, because the stage stopped on a conflict it could not roll back.
@@ -2477,6 +2536,12 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                        ;; finding coming back — because it holds one end of the
                        ;; join and discards the other.
                        handed (handed-ids findings)
+                       ;; This fixer's own wall, not the loop's. Bound here
+                       ;; because the rows below report it: once the wall varies
+                       ;; per launch, "killed on budget" no longer says which
+                       ;; budget, and the number is the whole of what a reader
+                       ;; would do about the kill.
+                       wall   (fix-budget budget (count findings))
                        {:keys [num-turns result-text timed-out?]}
                        (agent/launch!
                         {:run-id run-id :cwd cwd
@@ -2490,7 +2555,7 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                                           ;; own, and the row alone cannot say
                                           ;; where its own sits.
                                           :stack (:toc ctx)})
-                         :budget budget
+                         :budget wall
                          :claude-session-id (layer-fixer-session impl-session-id label)
                          :resume? (worked-before? (:history ctx)
                                                   (get-in ctx [:carry :fixer-declines] {})
@@ -2547,7 +2612,7 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                                         :fixed-count (count findings)}
                                  (not (str/blank? (str result-text)))
                                  (assoc :account (str result-text))
-                                 timed-out? (assoc :timed-out? true))
+                                 timed-out? (assoc :timed-out? true :budget wall))
                            ;; A fix lands by REWRITING its layer, so jj rebases
                            ;; every layer above it, and a rebase can conflict.
                            ;; Nothing asked. The markers rode up the stack in the
@@ -2639,7 +2704,7 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                                        ;; of time rather than on an argument.
                                        (cond-> {:layer label :ran? ran? :handed handed}
                                          result-text (assoc :reason (str result-text))
-                                         timed-out?  (assoc :timed-out? true)))
+                                         timed-out?  (assoc :timed-out? true :budget wall)))
                          ;; Into :carry, the only thing a round hands the next
                          ;; one. A refusal leaves its finding at :fix, so without
                          ;; this the argument reaches report.json and no reader —

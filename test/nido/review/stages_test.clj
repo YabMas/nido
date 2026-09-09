@@ -495,6 +495,89 @@
           "and it argued nothing: the account was still in the process when the
            budget destroyed it, and inventing one would put words in its mouth"))))
 
+(defn- fixer-wall
+  "The wall clock the fix stage hands one fixer, for a loop `budget` and `n`
+   findings all owed to the same layer.
+
+   Read off the launch rather than off `fix-budget`, so a scale that is right and
+   never reaches the agent still fails."
+  [budget n]
+  (let [seen (atom nil)]
+    (with-redefs [agent/launch! (fn [opts]
+                                  (reset! seen (:budget opts))
+                                  {:num-turns 0 :result-error? false :result-text ""})
+                  stages/working-copy-dirty? (fn [_] false)
+                  jj/jj! (fn [& _] {:exit 0 :out "" :err ""})]
+      ((:run stages/fix-stage)
+       {:config {:cwd "/w" :run-id "r1" :budget budget} :iter 1
+        :findings (mapv (fn [i] {:id (str "aa" i) :title "x" :disposition :fix})
+                        (range n))}))
+    @seen))
+
+(deftest a-fixer-buys-its-verification-lap-once-and-its-repairs-per-finding
+  ;; The loop's budget is one wall for every agent it launches and it is
+  ;; calibrated on the cheapest: on the run this is measured from, the warden
+  ;; answered in 34s and the design verdict in 5m, while the fixer — the only
+  ;; agent that edits AND verifies — was killed at exactly 30m mid-`kaocha`, on
+  ;; its final lap, with both its repairs already written.
+  (is (= "20m" (fixer-wall "10m" 1))
+      "the lap a fixer ends on is paid once whatever it was asked to do, so the
+       floor under a one-finding repair is the loop's budget twice over")
+  (is (= "30m" (fixer-wall "10m" 2))
+      "and the repair, its sweep and its account are per finding")
+  (is (= "40m" (fixer-wall "10m" 3)))
+  (is (= "90m" (fixer-wall "30m" 2))
+      "at the loop's own default, the two-finding repair that the 30m wall was
+       measured to be short for now has three times it"))
+
+(deftest a-fixer-handed-a-batch-is-still-bounded
+  ;; The scale is per finding and the rounds above it are uncapped, so without a
+  ;; ceiling one launch of one round can spend the 8h a driven review stage has
+  ;; for all of them.
+  (is (= "90m" (fixer-wall "30m" 9))
+      "nine findings buy no more than three: a fixer this far past the measured
+       range has hung, which is the failure a wall clock exists for"))
+
+(deftest the-ceiling-never-cuts-below-the-wall-the-caller-named
+  ;; A caller naming a longer budget — a project whose CI lap is slow — is asking
+  ;; for more everywhere. Capping the fixer under it would hand the one agent
+  ;; that edits and verifies less than the reviewers that only read, which is
+  ;; this defect upside down.
+  (is (= "120m" (fixer-wall "2h" 9))))
+
+(deftest a-sub-minute-budget-never-rounds-down-to-none
+  ;; `0m` is not a short budget: it parses, arms the kill timer at zero, and
+  ;; destroys the agent before it has read anything. Only a harness names a wall
+  ;; this short, and it must still get one the agent can run under.
+  (is (= "90s" (fixer-wall "45s" 1)))
+  (is (= "2s" (fixer-wall "1s" 1))))
+
+(deftest an-unreadable-budget-is-refused-by-the-launch-not-by-the-scale
+  ;; `agent/parse-budget-ms` refuses an undeclared or unreadable budget at the
+  ;; point of launch, under a message that names the caller and says what to
+  ;; declare. Scaling would move that refusal into a frame that knows neither.
+  (is (= "1w" (fixer-wall "1w" 1)))
+  (is (nil? (fixer-wall nil 1))))
+
+(deftest a-kill-says-which-wall-it-was-killed-on
+  ;; The wall varies per launch now, so `killed on budget` no longer carries the
+  ;; number by implication — and the number is the whole of what a reader does
+  ;; about the kill: raise it, or stop reading the fixer as merely slow.
+  (let [run (fn [dirty?]
+              (with-redefs [agent/launch! (fn [_] {:num-turns nil :result-error? false
+                                                   :result-text nil :timed-out? true})
+                            stages/working-copy-dirty? (fn [_] dirty?)
+                            layers/conflicted (fn [& _] [])
+                            jj/jj! (fn [& _] {:exit 0 :out "" :err ""})]
+                ((:run stages/fix-stage)
+                 {:config {:cwd "/w" :run-id "r1" :base "main" :budget "30m"} :iter 2
+                  :findings [{:id "aa11" :title "x" :disposition :fix}]})))]
+    (is (= "60m" (:budget (first (:fixes (run true)))))
+        "on the row for a repair the kill landed half-done")
+    (is (= "60m" (:budget (first (:declined (run false)))))
+        "and on the row for a kill that landed nothing, which is the one a
+         reader reaches for the number about")))
+
 (deftest a-fixer-that-never-started-does-not-land-a-tree-it-never-touched
   ;; The concession the kill buys is bounded by evidence that a fixer ran. A
   ;; launch claude rejected reports zero turns in a `result` event it did emit,

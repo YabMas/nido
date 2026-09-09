@@ -585,7 +585,8 @@
       (println "  → supersede the design record (/design §5) or accept it explicitly"))))
 
 (def default-launch-budget
-  "The wall clock every agent launch a review loop makes, when the caller names none.
+  "The wall clock a review loop's agent launches are sized from, when the caller
+   names none.
 
    A DEFAULT, not a cap on the run: the loops are deliberately uncapped in
    ROUNDS — they end when they converge, escalate, retreat or stall — and this
@@ -593,6 +594,12 @@
    uncapped, a single hung claude is the one failure the loop cannot detect on
    its own merits, because a round that never returns never reports anything to
    stall on.
+
+   Sized from rather than spent by, because one stage does not take it as given:
+   the reviewers, the warden and the verdict read and report, while the fixer
+   also edits and verifies, and `nido.review.stages/fix-budget` scales this by
+   the findings that fixer was handed. This figure is what a report-only launch
+   needs, which is the floor the fixer's is built on and not a wall it shares.
 
    It exists because agent/launch! now refuses an undeclared budget. Before that,
    omitting it here meant every warden, fixer and amender ran with no timer at
