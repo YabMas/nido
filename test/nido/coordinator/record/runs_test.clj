@@ -137,6 +137,28 @@
           (is (= run (runs/read-run (:id run))) "run.edn round-trips cleanly")))
       (finally (fs/delete-tree tmp)))))
 
+(deftest create-run-marks-and-reports-what-the-event-cannot-fill
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-root (constantly (str tmp))]
+        (let [err (java.io.StringWriter.)
+              run (binding [*err* err]
+                    (runs/create-run!
+                      {:project :brian
+                       :trigger {:name    :investigate-bug
+                                 :source  {:type :manual}
+                                 :skill   :investigate-bug
+                                 :payload "url={{event/url}} note={{event/note}}"}
+                       :payload {:url "https://x"}}
+                      {:fired-at "T" :fired-by "u"}))]
+          (is (= "/investigate-bug url=https://x note=?" (:first-message run))
+              "The message a session opens on is where the loss is visible, so the
+               gap has to be marked there and not only in a log")
+          (is (re-find #"\{\{event/note\}\}" (str err))
+              "A payload template lives outside the repo and cannot be checked
+               anywhere else; the fire is the moment an operator can be told")))
+      (finally (fs/delete-tree tmp)))))
+
 (deftest create-run-carries-priority
   (let [tmp (fs/create-temp-dir)]
     (try

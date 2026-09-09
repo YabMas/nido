@@ -257,6 +257,19 @@
       random-name)
     random-name))
 
+(defn- warn-payload-problems!
+  "Report on stderr — the daemon log — where a trigger's payload template and the
+   event it is being rendered against disagree. See `triggers/payload-problems`.
+
+   Reports rather than refuses. Both faults it can find are cosmetic in the run
+   itself: the session still opens, reads its artifacts and does the work. A fire
+   dropped over a lost number would cost the whole analysis of the run that lost
+   it, which is the one reader most likely to notice."
+  [trigger payload run-id]
+  (doseq [problem (triggers/payload-problems trigger payload)]
+    (binding [*out* *err*]
+      (println (str "WARN: trigger " (name (:name trigger)) " (" run-id "): " problem)))))
+
 (defn ^{:malli/schema [:=> [:cat :map :map] :Run]}
   create-run!
   "Build a :queued Run record from a fire request and persist run.edn.
@@ -266,6 +279,9 @@
         session-name (ticket-session-name trigger payload session-name)
         ;; First message format per spec §Agent launch: "/<skill> <interpolated-payload>".
         ;; The trigger's :payload holds just the skill args; the framework prepends "/<skill> ".
+        ;; `warn-payload-problems!` below is what holds a template to that, and to the keys
+        ;; the event carries: the template is read from the project's triggers.edn on disk
+        ;; and never travels with the code that builds the payload.
         message (str "/" (name (:skill trigger)) " "
                      (triggers/render-payload (:payload trigger) payload))
         run     {:id              run-id
@@ -294,6 +310,7 @@
                  :state-history   [{:at (clock/now-iso) :state :queued}]
                  :artifacts       []
                  :error           nil}]
+    (warn-payload-problems! trigger payload run-id)
     (fs/create-dirs (cstate/run-dir run-id))
     (fs/create-dirs (cstate/run-artifacts-dir run-id))
     (write-run! run)))

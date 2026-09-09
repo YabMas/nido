@@ -70,8 +70,47 @@
   (is (= "no placeholders here"
          (triggers/render-payload "no placeholders here" {:url "x"}))))
 
-(deftest render-payload-missing-key-renders-empty
-  (is (= "url=" (triggers/render-payload "url={{event/missing}}" {:url "x"}))))
+(deftest render-payload-marks-an-unfilled-placeholder
+  (is (= "url=?" (triggers/render-payload "url={{event/missing}}" {:url "x"}))
+      "A blank reads as a value that is genuinely empty; the reader of a rendered
+       payload has to be able to tell that nobody supplied one")
+  (is (= "n=0" (triggers/render-payload "n={{event/n}}" {:n 0}))
+      "A zero is a value and stays one — the mark is for absence alone"))
+
+(deftest payload-problems-names-a-template-restating-its-own-skill
+  (let [t (assoc minimal-trigger
+                 :skill   :analyze-review-loop
+                 :payload "/analyze-review-loop {{event/run-id}}")]
+    (is (= 1 (count (triggers/payload-problems t {:run-id "r1"}))))
+    (is (re-find #"/analyze-review-loop"
+                 (first (triggers/payload-problems t {:run-id "r1"})))
+        "The framework prepends the slash-command itself, so a template that
+         opens with it sends the skill its own name as an argument")))
+
+(deftest payload-problems-allows-a-skill-name-another-extends
+  (let [t (assoc minimal-trigger
+                 :skill   :triage-bug
+                 :payload "/triage-bugs {{event/url}}")]
+    (is (= [] (triggers/payload-problems t {:url "u"}))
+        "The restatement is the whole first token, not a prefix of it — otherwise
+         every skill whose name extends another's is falsely accused")))
+
+(deftest payload-problems-names-the-keys-the-event-does-not-carry
+  (let [t        (assoc minimal-trigger :payload "a={{event/a}} b={{event/b}}")
+        problems (triggers/payload-problems t {:a 1})]
+    (is (= 1 (count problems)))
+    (is (re-find #"\{\{event/b\}\}" (first problems)))
+    (is (not (re-find #"\{\{event/a\}\}" (first problems)))
+        "Only the unfilled keys are named: the point is to say which number went
+         missing, and a list of every placeholder says nothing")))
+
+(deftest payload-problems-is-empty-when-template-and-event-agree
+  (is (= [] (triggers/payload-problems minimal-trigger {:url "https://x"}))))
+
+(deftest payload-problems-treats-a-nil-value-as-unfilled
+  (is (seq (triggers/payload-problems minimal-trigger {:url nil}))
+      "A key present with no value renders exactly as an absent one does, so it
+       is the same fault and has to be reported as one"))
 
 (deftest schema-accepts-priority
   (is (m/validate triggers/Trigger

@@ -103,13 +103,61 @@
   (let [ks (mapv keyword (str/split path #"/"))]
     (get-in event ks)))
 
+(def ^:private unfilled-placeholder
+  "What a {{event/…}} the event carries no value for renders as.
+
+   A blank cannot be told apart from a value that is genuinely empty or zero,
+   and a payload template renders into the first message a session ever sees:
+   `Coverage:  targets read this run` reads as a sentence missing a word, not
+   as a number nobody supplied. `?` names the absence where the reader is."
+  "?")
+
 (defn ^{:malli/schema [:=> [:cat :string :map] :string]}
   render-payload
   "Replace {{event/path}} placeholders in template with values from event.
-   Missing values render as empty string."
+   A placeholder the event does not fill renders as `unfilled-placeholder`;
+   `payload-problems` is what says the same thing to an operator."
   [template event]
   (str/replace template placeholder-re
-               (fn [[_ path]] (str (lookup-path event path)))))
+               (fn [[_ path]]
+                 (if-some [v (lookup-path event path)]
+                   (str v)
+                   unfilled-placeholder))))
+
+(defn ^{:malli/schema [:=> [:cat :Trigger :map] [:vector :string]]}
+  payload-problems
+  "Pure. One sentence for each way this trigger's :payload template and the
+   framework's contract for it disagree, given the event about to be rendered
+   into it. Empty when they agree.
+
+   The template is the one part of a trigger nothing else can hold to anything.
+   It is read from ~/.nido/projects/<project>/triggers.edn, outside any repo,
+   and names payload keys that ship with the code — so an adapter and the
+   template that reads it can never land together, and a branch forked before a
+   key was renamed asks for keys its own payload does not build. Both faults are
+   otherwise silent: one loses a number, the other hands the skill its own name
+   as an argument.
+
+   Judged at FIRE, which is the only moment both halves exist: `load-for-project`
+   runs on every daemon tick and has no event to check against."
+  [{:keys [skill payload]} event]
+  (let [prefix   (str "/" (name skill))
+        unfilled (->> (re-seq placeholder-re payload)
+                      (map second)
+                      distinct
+                      (remove #(some? (lookup-path event %))))]
+    (cond-> []
+      ;; The framework prepends "/<skill> " itself — see `runs/create-run!`, where
+      ;; the contract is stated. A template that opens with the same token sends the
+      ;; skill a second copy of its own name as its first argument.
+      (= prefix (first (str/split payload #"\s" 2)))
+      (conj (str "payload opens with " prefix ", which the framework prepends anyway"
+                 " — the skill gets a second copy as its first argument"))
+
+      (seq unfilled)
+      (conj (str "payload asks for "
+                 (str/join ", " (map #(str "{{event/" % "}}") unfilled))
+                 ", which this event does not carry")))))
 
 (defn ^{:malli/schema [:=> [:cat :string] [:vector :keyword]]}
   placeholder-keys

@@ -33,9 +33,19 @@
     "The trigger with this name among ones already loaded, or nil."
     {:signature [:=> [:catn [:triggers [:vector Trigger]] [:name :keyword]] [:maybe Trigger]]})
   (Operation render-payload
-    "A payload template with its `{{event/…}}` placeholders filled from the event. A missing
-     value renders empty rather than throwing — the prompt is still worth sending."
+    "A payload template with its `{{event/…}}` placeholders filled from the event. A placeholder
+     the event does not fill renders as `?` rather than throwing — the prompt is still worth
+     sending, and a blank could not be told apart from a value that is genuinely empty."
     {:signature [:=> [:catn [:template :string] [:event :map]] :string]})
+  (Operation payload-problems
+    "One sentence for each way a trigger's payload template and the contract the framework states
+     for it disagree, given the event about to be rendered into it. Empty when they agree.
+
+     The template is the one part of a trigger nothing else can hold to anything: it is read from
+     the project's triggers.edn, outside any repo, and names payload keys that ship with the code,
+     so the two can never land together. Reports rather than refuses — both faults it can find
+     cost the message a number or a word, not the run."
+    {:signature [:=> [:catn [:trigger Trigger] [:event :map]] [:vector :string]]})
   (Operation placeholder-keys
     "The placeholder names a payload template asks for, in order — the fields a fire form has to
      collect. Top-level keys only: a slash-path is not addressable from a form."
