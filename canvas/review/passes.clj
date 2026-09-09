@@ -313,6 +313,14 @@
      park does either. Pure. The parks are a separate argument because they are the half a
      round's own findings cannot carry: a park is raised once and lives in the carry after."
     {:signature [:=> [:catn [:reviews :any] [:findings :any] [:parks :any]] :any]})
+  (Operation reopened-patches
+    "The patches of targets this round SKIPPED that something owed still names — the recorded
+     convergences this round has falsified. Pure. `converged-targets` over the complement, and
+     the half that was missing: only a target a reviewer READ ever rewrites its entry, so a
+     defect attributed to a layer whose patch was already converged was owed by a layer nothing
+     would look at again, and the attribution changed nothing. That layer is where a promotion
+     most often points — a sibling survives a sweep precisely where no reviewer has been."
+    {:signature [:=> [:catn [:skipped :any] [:findings :any] [:parks :any]] :any]})
   (Operation reviewed-statuses
     "Every reviewed target paired with the status its patch is left at — converged when it owes
      nothing, partial when it still does. Only the first is a skip; the second is the entry a
@@ -331,15 +339,28 @@
      round is the one least likely to hold anything: a run ends by finding nothing."
     {:signature [:=> [:catn [:label :any] [:rounds :any]] :any]})
   (Operation record-review!
-    "Write what this round left each reviewed target at into the cache: its status, and what
-     the run has settled about it."
+    "Write what this round left each target at into the cache: for the ones a reviewer read,
+     its status and what the run has settled about it; for the ones it skipped, the revocation
+     of any convergence the round has since falsified."
     {:signature [:=> [:catn [:cwd Path] [:ctx :map]] :any]
-     :delegates [reviewed-statuses answered-for deny-inherited-convergence unanswered-of]})
+     :delegates [reviewed-statuses reopened-patches answered-for
+                 deny-inherited-convergence unanswered-of]})
   (Operation resolve-handle "The identity a finding is filed under."
     {:signature [:=> [:catn [:handles :any] [:f Finding]] :any]})
   (Operation apply-rulings "The warden's per-finding rulings, merged in."
     {:signature [:=> [:catn [:findings :any] [:rulings :any] [:handles :any]] :any]
      :delegates [resolve-handle]})
+  (Operation promoted-findings
+    "The warden's `promote` entries as ruled findings of this round — a sibling a fixer named
+     and could not touch, placed on a layer and dispositioned `fix`, so it is handed out now
+     rather than waiting for a fresh reviewer to rediscover it.
+
+     The REPORTER is the fixer, and that bound is what keeps every finding one that something
+     which read the code raised: the fixer made the repair the sibling survived and diagnosed
+     it in its own account, and what the warden adds is the layer. An entry naming no place,
+     or naming a defect a finding of this round already reports, is refused."
+    {:signature [:=> [:catn [:handles :any] [:findings :any] [:promotions :any]] :any]
+     :delegates [resolve-handle finding-id]})
   (Operation seen-findings "Every finding an earlier round saw."
     {:signature [:=> [:catn [:history :any]] :any]})
   (Operation working-copy-dirty? "Whether the working copy has uncommitted changes."

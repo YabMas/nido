@@ -364,11 +364,19 @@
       ;; phase because the phase is the only place both facts sit, and a round
       ;; carrying only the overruled decision is the report contradicting the
       ;; run in its own words.
+      ;; :promoted is what the warden RAISED, as against what it ruled. It is on
+      ;; this phase because this is the only phase that can carry it: the review
+      ;; phase folded before these findings existed, and a ruling row is an id
+      ;; and a disposition — enough to say what was decided about a finding, not
+      ;; enough to say what the finding was. Without the title, file and line
+      ;; here, a defect the run raised, repaired and reported reads out of the
+      ;; report as a ruling on nothing.
       :warden (let [a (:warden ctx)]
                  (cond-> (assoc ph :decision (some-> (:decision a) name)
                                 :cause (some-> (:cause a) name)
                                 :reason (:reason a)
                                 :rulings (rulings (:findings ctx)))
+                   (seq (:promoted ctx)) (assoc :promoted (vec (:promoted ctx)))
                    (seq (:unfixable ctx)) (assoc :unfixable (vec (:unfixable ctx)))))
       ;; The finding ids a fixer was handed, not only how many. It is the join
       ;; every cross-round question needs — did this fix stop that finding coming

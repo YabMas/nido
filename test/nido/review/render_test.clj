@@ -248,6 +248,25 @@
                        {:id "c" :disposition :park}]))]
     (is (str/includes? s "2 fix, 1 park") "commonest first")))
 
+(deftest final-shows-a-finding-the-warden-promoted-out-of-an-account
+  ;; Read off the review phases alone, a defect this run raised, handed to a
+  ;; fixer and ruled on is absent from the one summary a human is shown — while
+  ;; its ruling sits in the same report saying something was decided about it.
+  (let [report (assoc-in (report-of [] [{:id "p1" :disposition :fix
+                                         :owner-layer "speech-transport"
+                                         :because "the round-1 fixer named it"}])
+                         [:rounds 0 :phases 1 :promoted]
+                         [{:id "p1" :priority 1 :from-layer "warden"
+                           :title "endpoint-only leaves the credentials in"
+                           :file "src/speech/transport.clj" :line-start 288
+                           :line-end 288}])
+        s      (render/final report)]
+    (is (str/includes? s "endpoint-only leaves the credentials in"))
+    (is (str/includes? s "→ fix"))
+    (is (str/includes? s "reported by warden")
+        "and it says who raised it, which is not a layer of the stack")
+    (is (str/includes? s "1 fix") "it counts toward what the run did")))
+
 (deftest final-shows-no-fate-when-no-warden-ruled
   ;; A run that died before its first warden has nothing to say about fates, and
   ;; must not invent one.

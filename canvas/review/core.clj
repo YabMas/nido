@@ -66,6 +66,14 @@
     "The cache with one patch's result folded in. Pure. The entry carries its own status, so a
      writer that does not say leaves a patch nothing will skip."
     {:signature [:=> [:catn [:cache :map] [:patch-hash :string] [:entry :map]] :map]})
+  (Operation reopen
+    "One patch's convergence revoked — `:partial`, keeping what the entry holds. Pure. This is
+     the only thing that falsifies a convergence without the content moving: a run learning
+     that something IS owed of a patch it was about to skip. `record` cannot express it, since
+     a skipped target has no review to write an entry from. `:answered` survives, because those
+     decisions are about this content and stay true of it."
+    {:signature [:=> [:catn [:cache :map] [:patch-hash :string] [:at :string]] :map]
+     :delegates [converged?]})
   (Operation write! "Persist the cache. Best-effort — a lost cache costs time, not correctness."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:cache :map]] :any]
      :delegates [path]}))

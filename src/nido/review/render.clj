@@ -365,10 +365,18 @@
    terminal status + where the full report lives."
   [report]
   (let [ruled    (rulings-by-id report)
-        findings (->> (:rounds report)
-                      (mapcat :phases)
-                      (filter #(= "review" (:phase %)))
-                      (mapcat :findings)
+        ;; Both phases that can raise one. A reviewer's findings come off the
+        ;; review phase; a sibling the warden promoted out of a fixer's account
+        ;; exists only on the warden phase, and reading the first alone would
+        ;; leave a defect this run raised, handed to a fixer and ruled on out of
+        ;; the one summary a human is shown at the end.
+        raised   (fn [phase k]
+                   (->> (:rounds report)
+                        (mapcat :phases)
+                        (filter #(= phase (:phase %)))
+                        (mapcat k)))
+        findings (->> (concat (raised "review" :findings)
+                              (raised "warden" :promoted))
                       distinct
                       (map (fn [f] (merge f (get ruled (:id f))))))]
     (str (frame report (Instant/parse (or (:ended-at report)

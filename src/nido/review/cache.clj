@@ -110,6 +110,29 @@
   [cache patch-hash entry]
   (assoc cache patch-hash entry))
 
+(defn ^{:malli/schema [:=> [:cat :map :string :string] :map]}
+  reopen
+  "Pure: the cache with `patch-hash`'s convergence revoked — `:partial`, stamped
+   at `at`, keeping everything else the entry holds.
+
+   Convergence is a claim that nothing is owed of this exact content, and this is
+   the one thing that can falsify it without the content moving: a run learning
+   that something IS owed of a patch it was about to skip. `record` cannot
+   express that, because a skipped target has no review to write an entry from —
+   the patch is unchanged, so what wants correcting is the status alone.
+
+   `:answered` survives the downgrade. Those decisions are about this content and
+   stay true of it, and a reopen that rewrote the entry would make the next round
+   re-argue everything an earlier one settled.
+
+   Only a converged entry is touched. A `:partial` one already owes something,
+   and an absent one is a patch this store has never seen — writing a status for
+   it would claim a review that nobody ran."
+  [cache patch-hash at]
+  (cond-> cache
+    (converged? cache patch-hash)
+    (update patch-hash assoc :status :partial :at at)))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :any]}
   write!
   "Persist the cache. Best-effort: a cache that cannot be written costs the next

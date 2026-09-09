@@ -37,8 +37,9 @@
 
 (deftest parse-warden-decision-stop-without-rulings
   (let [txt "```json\n{\"decision\":\"stop\",\"reason\":\"clean\"}\n```"]
-    (is (= {:decision :stop :reason "clean" :rulings []}
-           (stages/parse-warden-decision txt)))))
+    (is (= {:decision :stop :reason "clean" :rulings [] :promote []}
+           (stages/parse-warden-decision txt))
+        "an answer that promotes nothing promotes nothing, rather than nil")))
 
 (deftest parse-warden-decision-malformed-is-indeterminate
   (is (= :indeterminate (:decision (stages/parse-warden-decision "no json here"))))
@@ -807,6 +808,179 @@
                                   {"old1" "old1"})]
     (is (= ["new3"] (map :handle out))
         "an invented link welds two defects into one; its own id is the safe answer")))
+
+(defn- promotion
+  [overrides]
+  (merge {:title "endpoint-only strips the query string but not the credentials"
+          :file "/w/src/speech/transport.clj"
+          :line 288
+          :priority 1
+          :owner_layer "speech-transport"
+          :body "The redactor's sibling call reaches a telemere ERROR event."
+          :because "The round-1 fixer named this in its account and did not touch it."}
+         overrides))
+
+(deftest a-sibling-a-fixer-named-becomes-work-rather-than-prose
+  ;; The waste this closes: a sibling a fixer has already located and diagnosed
+  ;; used to convert only when a fresh reviewer independently rediscovered it —
+  ;; two of five did, each a round later, and three were still standing at the
+  ;; end of the run.
+  (let [[f :as out] (stages/promoted-findings {} [] [(promotion {})])]
+    (is (= 1 (count out)))
+    (is (= :fix (:disposition f))
+        "a promotion arrives ruled, so the fix stage hands it out this round")
+    (is (= "speech-transport" (:owner-layer f))
+        "the layer is what the warden adds and the fixer could not")
+    (is (= "warden" (:from-layer f))
+        "and no layer's reviewer reported it, which is what from-layer says")
+    (is (= 288 (:line-start f)) "the fixer is told where to go")
+    (is (false? (:sweep f))
+        "a promoted sibling is what a sweep already left; ordering another asks
+         for the search that produced it")
+    (is (= (codex/finding-id f) (:id f) (:handle f))
+        "identified by what it points at, exactly as a reviewer's finding is")))
+
+(deftest a-promotion-the-loop-cannot-place-is-not-a-finding
+  (testing "no title and no file name no place anything read"
+    (is (= [] (stages/promoted-findings {} [] [(promotion {:title "  "})])))
+    (is (= [] (stages/promoted-findings {} [] [(promotion {:file nil})]))))
+  (testing "a defect a reviewer already reported is that reviewer's finding"
+    ;; Promoting it too would put one defect in front of two fixers under two
+    ;; ids, and the warden's job on it is to rule rather than to raise.
+    (let [reported (assoc (select-keys (promotion {}) [:title :file])
+                          :line-start 288)
+          id (codex/finding-id reported)]
+      (is (= [] (stages/promoted-findings {} [(assoc reported :id id)]
+                                          [(promotion {})])))))
+  (testing "and the same sibling promoted twice in one answer is one finding"
+    (is (= 1 (count (stages/promoted-findings {} [] [(promotion {}) (promotion {})]))))))
+
+(deftest a-sibling-promoted-again-is-the-same-defect-and-not-a-fresh-one
+  ;; The give-up counter and the stall check key on the handle. A promotion that
+  ;; landed a new id every round would make a defect the loop cannot move look
+  ;; like a new one each time, and neither check would ever fire.
+  (let [r1    (first (stages/promoted-findings {} [] [(promotion {})]))
+        later (first (stages/promoted-findings {(:id r1) (:handle r1)} []
+                                               [(promotion {})]))]
+    (is (= (:id r1) (:id later)))
+    (is (= (:handle r1) (:handle later))))
+  (testing "and a promotion the warden says restates an earlier finding chains onto it"
+    (let [out (first (stages/promoted-findings {"old1" "old1"} []
+                                               [(promotion {:same_as "old1"})]))]
+      (is (= "old1" (:handle out))))))
+
+(deftest promoting-outranks-a-stop-in-the-same-answer
+  ;; Two fields answering one question — is there work — and the promotion is
+  ;; the specific one: it names the work, on a layer, for a fixer.
+  (let [answer (json/generate-string
+                {:decision "stop" :reason "nothing left" :findings []
+                 :promote [(promotion {})]})]
+    (with-redefs [agent/launch! (fn [_] {:num-turns 3 :result-error? false
+                                         :result-text (str "```json\n" answer "\n```")})
+                  stages/discover-design-record (fn [_] nil)
+                  stages/project+ws-from-cwd (fn [_] nil)]
+      (let [ctx ((:run stages/warden-stage)
+                 {:config {:cwd "/w" :run-id "r1"} :iter 1 :findings []})]
+        (is (= :continue (:control ctx)))
+        (is (= :stop (:decision (:warden ctx)))
+            "what the warden said is still recorded as what it said")
+        (is (= ["speech-transport"] (map :owner-layer (:findings ctx)))
+            "and the promotion is a finding of this round, on its layer")
+        (is (= 1 (count (:promoted ctx)))
+            "kept apart too, because a ruling row cannot say what was raised")))))
+
+(deftest a-round-that-promotes-nothing-decides-for-itself
+  (let [answer "```json\n{\"decision\":\"stop\",\"reason\":\"clean\",\"findings\":[]}\n```"]
+    (with-redefs [agent/launch! (fn [_] {:num-turns 3 :result-error? false
+                                         :result-text answer})
+                  stages/discover-design-record (fn [_] nil)
+                  stages/project+ws-from-cwd (fn [_] nil)]
+      (let [ctx ((:run stages/warden-stage)
+                 {:config {:cwd "/w" :run-id "r1"} :iter 1 :findings []})]
+        (is (= :stop (:control ctx)))
+        (is (empty? (:promoted ctx)))))))
+
+(deftest the-warden-is-offered-the-promote-field-only-where-an-account-exists
+  ;; Its premise is that a fixer read the code and named what its repair did not
+  ;; reach. With no account in front of it there is no such reader, and the
+  ;; field would be an invitation to invent findings.
+  (let [args {:findings [{:id "aa11" :title "t"}] :history [] :toc []}]
+    (is (not (str/includes? (prompts/warden-prompt args) "\"promote\"")))
+    (is (str/includes?
+         (prompts/warden-prompt
+          (assoc args :fixer-accounts
+                 [{:layer "speech-contract" :round 1 :commit "0c181d7"
+                   :findings [{:title "the redactor strips only the query string"}]
+                   :account "The surviving instance is at speech/transport.clj:288."}]))
+         "\"promote\""))))
+
+(deftest a-skipped-layer-something-owes-work-to-is-reopened
+  ;; The other half, and the one that made a correct placement worthless: only a
+  ;; target a reviewer READ ever rewrites its cache entry, so a defect attributed
+  ;; to a converged layer was owed by a patch nothing would look at again. One
+  ;; run carried an unrepaired credential leak through three rounds this way and
+  ;; ended `clean` with nothing open.
+  (let [skipped [{:label "speech-transport" :patch-hash "h-transport"}
+                 {:label "quiet" :patch-hash "h-quiet"}
+                 {:label "stack" :stack? true :patch-hash "h-stack"}]]
+    (is (= ["h-transport" "h-stack"]
+           (stages/reopened-patches
+            skipped [{:disposition :fix :owner-layer "speech-transport"}] []))
+        "the owning layer, and the composition, which converges only on nothing
+         being owed anywhere")
+    (is (= [] (stages/reopened-patches
+               skipped [{:disposition :closed :owner-layer "speech-transport"}] []))
+        "a settled finding owes nobody anything")
+    (is (= ["h-transport" "h-stack"]
+           (stages/reopened-patches
+            skipped [] [{:owner-layer "speech-transport"}]))
+        "a standing park holds a skipped layer exactly as an open finding does")
+    (is (= [] (stages/reopened-patches
+               skipped [] [{:owner-layer "speech-transport" :kind :misplaced-cut}]))
+        "and a park about the cut holds neither, as it holds neither in
+         converged-targets")))
+
+(deftest a-promotion-revokes-the-convergence-of-the-layer-nobody-read
+  ;; The two halves as the loop wires them. The promoted finding is owed of a
+  ;; layer this round skipped, so the entry that would have skipped it again is
+  ;; downgraded — while the layer the round did read and settled still converges.
+  (let [written (atom nil)
+        cached  {"h-transport" {:status :converged :label "speech-transport"
+                                :round 2 :at "2026-09-01T00:00:00Z"
+                                :answered [{:id "old" :disposition :declined}]}
+                 "h-contract"  {:status :partial :label "speech-contract"}}]
+    (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  cache/read-cache (fn [& _] cached)
+                  cache/write! (fn [_ _ c] (reset! written c) true)]
+      (stages/record-review!
+       "/w" {:iter 2 :history []
+             :reviews  [{:target {:label "speech-contract" :patch-hash "h-contract"}}]
+             :skipped  [{:label "speech-transport" :patch-hash "h-transport"}]
+             :findings [{:id "p1" :from-layer "warden" :disposition :fix
+                         :owner-layer "speech-transport"}]}))
+    (is (= :partial (:status (get @written "h-transport")))
+        "the placement now moves the layer, which is the whole of what it could
+         not do before")
+    (is (= [{:id "old" :disposition :declined}]
+           (:answered (get @written "h-transport")))
+        "and what an earlier run settled about this unmoved patch survives it")
+    (is (= :converged (:status (get @written "h-contract")))
+        "a reopen names the layers something is owed of, not every skipped one")))
+
+(deftest reopening-a-layer-keeps-what-was-settled-about-its-patch
+  ;; The patch has not moved, so the answers recorded against it are still about
+  ;; this content. A reopen that rewrote the entry would make the next round
+  ;; re-argue everything an earlier one decided.
+  (let [c {"h" {:status :converged :label "l" :round 2 :at "2026-09-01T00:00:00Z"
+                :answered [{:id "aa11" :disposition :declined :because "shipping it"}]}}
+        c' (cache/reopen c "h" "2026-09-08T00:00:00Z")]
+    (is (false? (cache/converged? c' "h")))
+    (is (= [{:id "aa11" :disposition :declined :because "shipping it"}]
+           (cache/answered c' "h")))
+    (is (= "2026-09-08T00:00:00Z" (:at (get c' "h")))
+        "stamped when the convergence was revoked, not when it was granted"))
+  (testing "a patch this store has never seen gains no status"
+    (is (= {} (cache/reopen {} "h" "2026-09-08T00:00:00Z")))))
 
 (deftest seen-findings-lists-each-earlier-finding-once-at-the-round-it-arrived
   (is (= [{:round 1 :id "aa11" :title "t"}

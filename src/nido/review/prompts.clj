@@ -1267,9 +1267,18 @@
 
    The warden is the reader with the stack's file lists in front of it, so
    attributing a named path to a layer is its job here exactly as it is for a
-   finding. It cannot raise a finding — every finding it rules on comes from a
-   reviewer — so what a named-and-unrepaired sibling is worth is a `reason` that
-   says so, and that is what the block asks for.
+   finding — and a sibling it can place, it PROMOTES: the `promote` entry becomes
+   a finding of this round, ruled `fix` on that attribution, handed to the named
+   layer's fixer, and holding that layer open whether or not the cache had its
+   patch converged.
+
+   That does not make the warden a reviewer, and the bound is what keeps the rest
+   of the loop's accounting true. A promotion's REPORTER is the fixer: it read
+   the code, made the repair the sibling survived, and diagnosed the sibling in
+   its own account. What the warden adds is the one thing the fixer could not —
+   which layer the path belongs to. A defect no account named is not promotable,
+   and neither is one no layer can be found for; those reach a human through
+   `reason` and nowhere else.
 
    The accounts were already in the warden's prompt before this block, whole and
    unlabelled, inside the `pr-str` of the round history: present in the bytes
@@ -1299,10 +1308,23 @@
          "These are CLAIMS about code a fixer edited, not a record of the tree.\n"
          "Two uses. When a finding below sits where an account says a repair did\n"
          "not reach, that is the same open work and it belongs to the layer whose\n"
-         "files hold those lines — say so in `because`. And a sibling named here\n"
-         "and never repaired is open work with no finding behind it and no\n"
-         "reviewer that will raise it: if you `stop` with one standing, name it\n"
-         "in your `reason`, which is the only place it reaches a human.\n\n")))
+         "files hold those lines — say so in `because`.\n"
+         "And a sibling named here and never repaired is open work with no\n"
+         "finding behind it: no reviewer raised it, and none will until one\n"
+         "happens to read that file again. PROMOTE it. Each `promote` entry\n"
+         "becomes a finding of THIS round, ruled `fix` on the layer you name and\n"
+         "handed to that layer's fixer — and it holds that layer open even if no\n"
+         "reviewer read it this round because its patch was already converged,\n"
+         "which is where a surviving sibling usually is.\n"
+         "Promote only what an account above NAMED and you can place. The fixer\n"
+         "read the code and diagnosed it; you are supplying the layer. A defect\n"
+         "you inferred yourself is not a promotion — everything else here was\n"
+         "read off code by something that read the code.\n"
+         "Do not promote what a finding below already reports: rule that one.\n"
+         "Promoting is deciding there IS work, so it overrides `stop` in the same\n"
+         "answer — say `continue`.\n"
+         "What you cannot place, name in your `reason`. That is still the only\n"
+         "place it reaches a human.\n\n")))
 
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   warden-prompt
@@ -1356,7 +1378,24 @@
    "                         already named. Unsure is true: a needless sweep\n"
    "                         costs one fixer some reading, a missed one costs\n"
    "                         a round>,\n"
-   "               \"because\": \"<one sentence>\"}]}\n"
+   "               \"because\": \"<one sentence>\"}]"
+   ;; Offered only when there is an account to promote OUT OF. The field's whole
+   ;; premise is that a fixer read the code and named what its repair did not
+   ;; reach; with no accounts in front of it there is no such reader, and a
+   ;; warden given the field anyway would be being invited to invent findings.
+   (if (seq fixer-accounts)
+     (str ",\n"
+          " \"promote\": [{\"title\": \"<the defect, as a finding title>\",\n"
+          "              \"file\": \"<absolute path>\", \"line\": <line or null>,\n"
+          "              \"priority\": <1|2|3>,\n"
+          (if layered?
+            "              \"owner_layer\": \"<layer label from the stack below>\",\n"
+            "")
+          "              \"body\": \"<what is wrong there, for the fixer>\",\n"
+          "              \"because\": \"<which account named it, and why it stands>\"}]}\n"
+          "Empty unless an account under WHAT THE FIXERS SAID names a defect no\n"
+          "finding below covers; that section says when to fill it.\n")
+     "}\n")
    "Every finding below must appear exactly once.\n\n"
    "DECISION:\n"
    "- continue: something is worth fixing now.\n"

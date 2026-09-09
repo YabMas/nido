@@ -906,10 +906,14 @@ layers, it is not yours"))
         "the named sibling is the whole reason this reader gets the account")
     (is (str/includes? out "[SWEEP]")
         "a sweep is where an unreachable sibling is expected, not incidental")
-    (is (str/includes? out "name it\n"))
-    (is (str/includes? out "`reason`")
-        "the warden cannot raise a finding, so its reason is where a named and
-         unrepaired sibling reaches a human")))
+    (is (str/includes? out "PROMOTE it")
+        "a sibling the warden can place becomes a finding of the round rather
+         than a sentence about one")
+    (is (str/includes? out "\"promote\"")
+        "and the field it goes in is offered, because there is an account to
+         promote out of")
+    (is (str/includes? out "What you cannot place, name in your `reason`")
+        "what stays prose is what no layer could be found for")))
 
 (deftest a-run-that-has-landed-no-fix-tells-the-warden-nothing-about-accounts
   ;; An empty heading reads as repairs the warden failed to be shown.

@@ -190,8 +190,15 @@
 
 (defn ^{:malli/schema [:=> [:cat :string] :map]}
   parse-warden-decision
-  "Last fenced ```json block in `text` -> {:decision :reason :rulings}.
-   Unparseable -> indeterminate."
+  "Last fenced ```json block in `text` -> {:decision :reason :rulings :promote}.
+   Unparseable -> indeterminate.
+
+   `:promote` is carried raw, exactly as the warden wrote it. A ruling names a
+   finding this round already holds, so the parser can decide on its own whether
+   it is a decision; a promotion names a defect that is not a finding yet, and
+   whether it can become one turns on what else the round holds — the ids
+   already raised, the layers in the stack. `promoted-findings` asks that, where
+   both are in scope."
   [text]
   (let [block (when (string? text) (last (re-seq fenced-json-re text)))]
     (if-let [body (second block)]
@@ -201,7 +208,8 @@
           (if (contains? #{:continue :stop :escalate} d)
             {:decision d
              :reason   (:reason m)
-             :rulings  (into [] (comp (filter :id) (map ruling)) (:findings m))}
+             :rulings  (into [] (comp (filter :id) (map ruling)) (:findings m))
+             :promote  (vec (:promote m))}
             {:decision :indeterminate :reason (str "unknown decision: " (:decision m))}))
         (catch Exception e
           {:decision :indeterminate :reason (str "unparseable: " (ex-message e))}))
@@ -903,7 +911,7 @@
         ;; makes the report of a round two reviewers died in reproducible.
         _        (when (seq failed)
                    (record-statuses! cwd (assoc ctx :cache cached)
-                                     (salvaged-statuses results))
+                                     (salvaged-statuses results) nil)
                    (throw (:failure (first failed))))
         ;; The whole-range target, and only what is a fact about that range:
         ;; where the review started from and which files it covered. NOT where a
@@ -1213,6 +1221,19 @@
   (let [k (:kind p)]
     (boolean (or (nil? k) (contains? halting-kinds (keyword k))))))
 
+(defn- owed-by
+  "What a round leaves OWED: every finding it did not settle, and every park
+   still blocking.
+
+   One derivation because `converged-targets` and `reopened-patches` are the same
+   rule read from opposite ends — a target the round read converges when nothing
+   here names it, and a target the round SKIPPED is reopened when something does.
+   Two spellings of it would be two rules, and the pair would disagree exactly
+   when a defect crosses from a layer under review to one that is not, which is
+   the case both exist for."
+  [findings parks]
+  (concat (remove settled? findings) (filter park-blocks? parks)))
+
 (defn ^{:malli/schema [:=> [:cat :any :any :any] :any]}
   converged-targets
   "Pure: the targets this round left with nothing OWED, paired with the patch
@@ -1254,7 +1275,7 @@
    case: it moves code between layers without changing `base-rev..@` by a byte,
    which is why that key folds in the cut as well; see `with-patch-hashes`."
   [reviews findings parks]
-  (let [owed   (concat (remove settled? findings) (filter park-blocks? parks))
+  (let [owed   (owed-by findings parks)
         owners (into #{} (map :owner-layer) owed)]
     (into []
           (comp (map :target)
@@ -1264,6 +1285,39 @@
                                  (empty? owed)
                                  (not (contains? owners (:label t))))))))
           reviews)))
+
+(defn ^{:malli/schema [:=> [:cat :any :any :any] :any]}
+  reopened-patches
+  "Pure: the patches of targets this round SKIPPED that something owed still
+   names — the ones whose recorded convergence this round has falsified.
+
+   `converged-targets` over the complement, and it is the half that was missing.
+   Only a target a reviewer READ ever rewrites its cache entry, so a defect
+   attributed to a layer whose patch the cache already held converged was owed by
+   a layer nothing would look at again: the warden could place it and the
+   placement changed nothing. One run named an unrepaired credential leak at a
+   converged layer's file in a fixer's account, quoted it in the next round's
+   warden reason and carried it as a follow-up of the design verdict, while that
+   layer sat skipped at an unmoved patch hash for all three rounds and the run
+   ended clean with nothing open.
+
+   That layer is where a promotion most often points, and it is not a
+   coincidence: a sibling survives a sweep precisely where no reviewer has been.
+
+   The skipped composition target reopens on ANYTHING owed, for the reason it
+   converges only on nothing being owed — its question is whether the pieces fit,
+   and a defect anywhere is a piece that has moved."
+  [skipped findings parks]
+  (let [owed   (owed-by findings parks)
+        owners (into #{} (map :owner-layer) owed)]
+    (into []
+          (comp (filter :patch-hash)
+                (filter (fn [t]
+                          (if (:stack? t)
+                            (boolean (seq owed))
+                            (contains? owners (:label t)))))
+                (map :patch-hash))
+          skipped)))
 
 (defn ^{:malli/schema [:=> [:cat :any :any :any] :any]}
   reviewed-statuses
@@ -1512,16 +1566,24 @@
    the loop's best outcome, and it was the only outcome it forgot, so
    re-reviewing an untouched patch cost a full fan-out every time.
 
-   Safe to call from either because it reads only `:reviews`, `:findings`, the
-   round history and the carried parks, all of which are set by then, and
-   because `reviewed-statuses` is pure.
+   The SKIPPED targets are written about too, and only when the round has
+   something to say about them: `reopened-patches` revokes the convergence of any
+   the round left owing work. Without that half, what the cache records of a
+   round is only ever about the targets a reviewer happened to read — so a defect
+   attributed to a layer nobody read was owed by a patch nothing would look at
+   again.
+
+   Safe to call from either stage because it reads only `:reviews`, `:skipped`,
+   `:findings`, the round history and the carried parks, all of which are set by
+   then, and because `reviewed-statuses` and `reopened-patches` are pure.
 
    Best-effort — a cache that cannot be written costs the next run some
    duplicated review and nothing else."
   [cwd ctx]
-  (record-statuses! cwd ctx
-                    (reviewed-statuses (:reviews ctx) (:findings ctx)
-                                       (vals (get-in ctx [:carry :parks] {})))))
+  (let [parks (vals (get-in ctx [:carry :parks] {}))]
+    (record-statuses! cwd ctx
+                      (reviewed-statuses (:reviews ctx) (:findings ctx) parks)
+                      (reopened-patches (:skipped ctx) (:findings ctx) parks))))
 
 (defn- record-statuses!
   "Write one cache entry per `[target status]` pair, each carrying what the run
@@ -1540,14 +1602,20 @@
    The inherited denial lands here rather than in `reviewed-statuses` because
    both derivations pass through it — a salvaged round grants `:converged` on a
    reviewer's clean bill alone, which is exactly the bill an unanswered
-   inheritance says is not the whole story."
-  [cwd ctx statuses]
+   inheritance says is not the whole story.
+
+   `reopen` is the patches of targets the round did NOT read and has nonetheless
+   learnt something about: their content has not moved, so there is no entry to
+   write from, and what wants correcting is the status alone. A salvaged round
+   passes none — no warden ruled on anything, so nothing is attributed to a layer
+   at all."
+  [cwd ctx statuses reopen]
   (when-let [[project ws-id] (project+ws-from-cwd cwd)]
     (let [rounds   (conj (mapv :findings (:history ctx)) (vec (:findings ctx)))
           statuses (deny-inherited-convergence
                     statuses
                     (unanswered-of (get-in ctx [:carry :inherited-open]) rounds))]
-      (when (seq statuses)
+      (when (or (seq statuses) (seq reopen))
         (let [now (str (java.time.Instant/now))
               c   (reduce (fn [c [t status]]
                             (cache/record c (:patch-hash t)
@@ -1557,7 +1625,8 @@
                                            :at       now
                                            :answered (answered-for (:label t) rounds)}))
                           (or (:cache ctx) (cache/read-cache project ws-id))
-                          statuses)]
+                          statuses)
+              c   (reduce (fn [c h] (cache/reopen c h now)) c reopen)]
           (cache/write! project ws-id c))))))
 
 (defn ^{:malli/schema [:=> [:cat :any :Finding] :any]}
@@ -1642,6 +1711,79 @@
               (advisory-ruling
                (assoc merged :handle (resolve-handle handles merged)))))
           findings)))
+
+(def ^:private promoted-by
+  "The `:from-layer` a promoted finding carries.
+
+   No layer of the stack, because no layer's reviewer reported it — and that
+   matters beyond the rendering: `answered-for` reads `:from-layer` to decide
+   what a TARGET reported and settled, and a promotion filed under the layer it
+   is aimed at would tell the next round that layer's reviewer had raised and
+   answered something it never saw.
+
+   The same shape the mechanical design reviewer already has: a reporter that
+   contributes findings and is no layer of the stack."
+  "warden")
+
+(defn ^{:malli/schema [:=> [:cat :any :any :any] :any]}
+  promoted-findings
+  "The warden's `promote` entries as ruled findings of this round.
+
+   A fixer told to sweep names the siblings its repair could not reach, and the
+   warden is the only reader holding the file lists those paths can be placed
+   against. Promotion is that placement made into work: the entry arrives here
+   already dispositioned `:fix` on the layer the warden named, so it is handed
+   out this round rather than waiting for a fresh reviewer to rediscover it —
+   which is what it waited for before, when it converted at all. Of five siblings
+   named across one run, two converted and each cost a round; the other three
+   were still standing at the end.
+
+   The reporter is the FIXER, and the two refusals here are what hold that line.
+   An entry with no `title` or no `file` names no place anything read, and an
+   entry whose coordinates are a finding this round already holds is that
+   finding — ruling it is what the warden is for, and promoting it as well would
+   put one defect in front of two fixers under two ids.
+
+   The id is derived exactly as a reviewer's is, from file, line and title. So a
+   sibling promoted from the same account in a later round lands on the same id
+   and `resolve-handle` files it under the same handle, which is what lets
+   `no-progress?` and the give-up counter see a promotion that keeps coming back
+   as one defect rather than as a fresh one each round.
+
+   `:sweep` is false and not offered. A promoted sibling is by construction what
+   is left of a class a fixer has already swept, so ordering another sweep of it
+   asks for the search that just produced it."
+  [handles findings promotions]
+  (:out
+   (reduce
+    (fn [{:keys [seen] :as acc} p]
+      (let [title (str/trim (str (:title p)))
+            file  (str/trim (str (:file p)))
+            line  (when (number? (:line p)) (long (:line p)))
+            f     {:title      title
+                   :body       (:body p)
+                   :priority   (if (number? (:priority p)) (long (:priority p)) 2)
+                   :file       file
+                   :line-start line
+                   :line-end   line
+                   :from-layer promoted-by}
+            id    (codex/finding-id f)]
+        (if (or (str/blank? title) (str/blank? file) (contains? seen id))
+          acc
+          (let [ruled (assoc f
+                             :id          id
+                             :same-as     (:same_as p)
+                             :owner-layer (:owner_layer p)
+                             :disposition :fix
+                             :authority   nil
+                             :of          nil
+                             :sweep       false
+                             :because     (:because p))]
+            {:seen (conj seen id)
+             :out  (conj (:out acc)
+                         (assoc ruled :handle (resolve-handle handles ruled)))}))))
+    {:seen (into #{} (map :id) findings) :out []}
+    promotions)))
 
 (defn ^{:malli/schema [:=> [:cat :any] :any]}
   seen-findings
@@ -1825,7 +1967,9 @@
       (assoc ctx :warden (merge decision (warden-failure launch decision))
              :control :stop
              :status :warden-indeterminate)
-      (let [ruled (apply-rulings (:findings ctx) (:rulings decision) handles)
+      (let [promoted (promoted-findings handles (:findings ctx) (:promote decision))
+            ruled (into (apply-rulings (:findings ctx) (:rulings decision) handles)
+                        promoted)
             parks (carried-parks (get-in ctx [:carry :parks] {}) ruled (:iter ctx))
             declines (carried-while-open (get-in ctx [:carry :fixer-declines] {}) ruled)
             ;; The same lifetime rule over the other channel a fixer leaves
@@ -1849,6 +1993,13 @@
             ctx' (assoc ctx
                         :warden  decision
                         :findings ruled
+                        ;; Kept beside the findings they are now part of,
+                        ;; because they are the one thing about the round that
+                        ;; the phases either side of this one cannot show: the
+                        ;; review phase folded before they existed, and a ruling
+                        ;; row carries an id and a disposition but not the title,
+                        ;; file and line that say what was raised.
+                        :promoted promoted
                         ;; The handles have to reach the next round, and
                         ;; :carry is the only thing here that does —
                         ;; every other key is rebuilt from :config,
@@ -1863,7 +2014,19 @@
                                       :parks parks
                                       :fixer-declines declines
                                       :rolled-back refused)
-                        :control  (:decision decision))
+                        ;; A promotion outranks a `stop` in the same answer.
+                        ;; They are two fields answering one question — is there
+                        ;; work — and the promotion is the specific one: it names
+                        ;; the work, on a layer, for a fixer. Honouring the stop
+                        ;; instead would end the run holding a finding it had
+                        ;; just created, which is the prose outcome this channel
+                        ;; exists to replace. `escalate` is untouched: a design
+                        ;; question outranks a repair, and the promoted finding
+                        ;; stays open for whoever answers it.
+                        :control (if (and (seq promoted)
+                                          (= :stop (:decision decision)))
+                                   :continue
+                                   (:decision decision)))
             ctx' (if stale
                    (assoc ctx' :control :stop :status :unfixable
                           :unfixable (vec stale))

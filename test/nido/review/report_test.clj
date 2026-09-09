@@ -184,6 +184,42 @@
     (is (= [{:layer "a" :commit "abc1234567"}] (:fixes fix)))
     (is (= 1 (:fixed-count fix)))))
 
+(deftest the-warden-phase-records-what-it-raised-as-well-as-what-it-ruled
+  ;; A ruling row is an id and a disposition — enough to say what was decided
+  ;; about a finding, not enough to say what the finding was. The review phase
+  ;; folded before a promotion existed, so without this the report holds a
+  ;; decision about a defect it never names.
+  (let [promoted {:id "p1" :title "endpoint-only leaves the credentials in"
+                  :file "src/speech/transport.clj" :line-start 288 :line-end 288
+                  :priority 1 :from-layer "warden"}
+        r (drive
+           [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+            {:event :phase-started :iter 1 :phase :review :at "t1"}
+            {:event :phase-finished :iter 1 :phase :review :at "t2"
+             :ctx {:findings [] :base-rev "B" :manifest "a"}}
+            {:event :phase-started :iter 1 :phase :warden :at "t3"}
+            {:event :phase-finished :iter 1 :phase :warden :at "t4"
+             :ctx {:warden {:decision :continue :reason "a sibling stands"}
+                   :promoted [promoted]
+                   :findings [(assoc promoted :disposition :fix :handle "p1"
+                                     :owner-layer "speech-transport" :sweep false)]}}])
+        warden (some #(when (= "warden" (:phase %)) %) (:phases (first (:rounds r))))]
+    (is (= [promoted] (:promoted warden)))
+    (is (= ["p1"] (map :id (:rulings warden)))
+        "and it is ruled on like any other finding of the round"))
+  (testing "a round that promoted nothing says nothing about promotions"
+    (let [r (drive
+             [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+              {:event :phase-started :iter 1 :phase :review :at "t1"}
+              {:event :phase-finished :iter 1 :phase :review :at "t2"
+               :ctx {:findings [] :base-rev "B" :manifest "a"}}
+              {:event :phase-started :iter 1 :phase :warden :at "t3"}
+              {:event :phase-finished :iter 1 :phase :warden :at "t4"
+               :ctx {:warden {:decision :stop :reason "clean"}
+                     :promoted [] :findings []}}])
+          warden (some #(when (= "warden" (:phase %)) %) (:phases (first (:rounds r))))]
+      (is (not (contains? warden :promoted))))))
+
 (deftest new-round-closes-the-previous-as-continued
   (let [r (drive
            [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
