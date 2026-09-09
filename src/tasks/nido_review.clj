@@ -254,15 +254,18 @@
       nil)))
 
 (defn- verdict-supports
-  "Which branch of the halt this run's design verdict already argues for, or nil
-   when there is no verdict to read.
+  "What this run's design verdict says about the design record, or nil when there
+   is no verdict to read.
 
-   A lookup rather than a judgment: the gate's question — does the design stand? —
-   is the verdict's own question, so the verdict's own vocabulary decides. One
-   that invalidates the record argues for superseding it; one that leaves it
-   standing argues for declining the findings; one that leaves it standing AND
-   names a repair argues for neither, and that third answer is the one the gate
-   could not express."
+   A lookup rather than a judgment: it reads the verdict's own vocabulary and
+   nothing else. One that invalidates the record says it should be superseded;
+   one that leaves it standing says the findings against it are answered; one
+   that leaves it standing AND names a repair says neither, and that third
+   answer is the one the gate could not express.
+
+   Whether any of it bears on the question the gate is asking is `gate-question`
+   and `gate-options`' business — on a park made on recurrence the verdict is an
+   answer to a question nobody asked."
   [v]
   (when v
     (cond (verdict/decision? v) :supersede
@@ -276,15 +279,148 @@
   [branch supported?]
   (cond-> branch supported? (assoc :recommended? true)))
 
+(defn- park-ground
+  "Which decision a set of parked findings is asking a human for.
+
+   `:recurrence` when every one of them carries `same-as` — the warden's mark
+   that this defect was already fixed in an earlier round and is back, which
+   `prompts/disposition-vocabulary` states needs no design record at all: it is
+   a fact about the run's own history and the warden is holding it. `:design`
+   otherwise, because one finding raised against a named invariant is a design
+   question however many recurrences stand beside it, and it is the question no
+   other branch can express.
+
+   A run with no design record parks on recurrence and nothing else, so reading
+   the ground off the ruling is what keeps the gate from asking whether a record
+   that does not exist still stands."
+  [parked]
+  (if (every? :same-as parked) :recurrence :design))
+
+(defn- parked-detail
+  "The parked findings as the gate shows them — each title with the warden's own
+   sentence for stopping there.
+
+   `because` is the only text in the run that says what is actually being
+   decided; a title says which defect. It reaches report.json and the `:review`
+   entry, and both of those are read by someone who already went looking — this
+   artifact is the one that arrives."
+  [parked]
+  (str/join "\n"
+            (for [{:keys [title because]} parked]
+              (str "- **" (or title "(untitled finding)") "**"
+                   (when-not (str/blank? because) (str " — " because))))))
+
+(defn- gate-question
+  "The `:needs` — what the human is being asked, in one paragraph.
+
+   The ground fixes the question and the verdict says how much of it is already
+   answered. On the design ground the verdict IS that question's answer, so the
+   gate states it rather than asking again. On the recurrence ground it answers
+   a different one, and only two of its three readings bear on this: a record
+   that does not stand says the remedy is a decision, and a repair the verdict
+   names is a move neither attempt made. A record that stands says nothing about
+   whether a third patch would hold, so it is not mentioned."
+  [ground supports verdict]
+  (case ground
+    :design
+    (if-not supports
+      (str "Each of these says the design is in question rather than its "
+           "execution, so the loop stopped rather than patching it away. "
+           "Does the design stand?")
+      (str "Each of these says the design is in question rather than its "
+           "execution. This run's design verdict answers that — "
+           (name (:verdict verdict)) ". "
+           (case supports
+             :repair    (str "The design stands and the verdict names the "
+                             "repair. Is that repair owed here?")
+             :stands    (str "The design stands and the verdict names no "
+                             "repair. Are these findings declined?")
+             :supersede (str "The design does not stand. Is the record "
+                             "superseded?"))))
+
+    :recurrence
+    (str "Each of these was fixed in an earlier round and came back, so the loop "
+         "stopped rather than making a third attempt at it. Is the remedy a "
+         "decision rather than another patch?"
+         (case supports
+           :repair    (str " This run's design verdict — " (name (:verdict verdict))
+                           " — names a repair neither attempt made.")
+           :supersede (str " This run's design verdict — " (name (:verdict verdict))
+                           " — puts the design record itself in question.")
+           ""))))
+
+(defn- gate-options
+  "The branches, in the order the gate letters them.
+
+   Two from the ground, plus a third when the verdict names a repair — the
+   answer neither of the first two can express, since on either ground they are
+   `leave it as it is` and `stop patching it`. Its summary is the repair
+   verbatim: `option-input` replays a chosen branch in full, so that is how the
+   remedy survives the click."
+  [ground supports verdict]
+  (cond-> (case ground
+            :design
+            [(recommend
+              {:label "The design stands"
+               :summary "The findings are answered by the design as written."
+               :consequence (str "They are declined on the record and stop being "
+                                 "re-raised. If that is wrong, the next round has "
+                                 "no way to tell.")}
+              (= :stands supports))
+             (recommend
+              {:label "The design is wrong"
+               :summary "Supersede the design record, then re-run the review."
+               :consequence (str "Everything judged against the old record is "
+                                 "judged again, including work already fixed.")}
+              (= :supersede supports))]
+
+            :recurrence
+            [{:label "It is still a repair"
+              :summary (str "Hand it back with the reason above and let a fixer make "
+                            "the third attempt.")
+              :consequence (str "Two repairs have already come back. A third differs "
+                                "from them only by what the reason above says they "
+                                "both missed.")}
+             (recommend
+              {:label "It is a decision, not a patch"
+               :summary (str "Settle what the code should do here, then re-run the "
+                             "review against that.")
+               :consequence (str "The defect stays on the branch until the decision "
+                                 "lands, and the rounds already spent narrowing it "
+                                 "bought nothing.")}
+              (= :supersede supports))])
+    (= :repair supports)
+    (conj {:label "Take the repair the verdict names"
+           :summary (:needs verdict)
+           :consequence (case ground
+                          :design     (str "The design record is untouched, so nothing "
+                                           "already fixed is judged again — but the "
+                                           "findings stay open until the repair lands.")
+                          :recurrence (str "It is the one move neither attempt made, so "
+                                           "it is a third attempt with something behind "
+                                           "it — but the findings stay open until it "
+                                           "lands."))
+           :recommended? true})))
+
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   parked-blocker
   "Pure: the halt a run holding parked findings owes a human, or nil.
 
-   A park is the one disposition whose answer is not the loop's to give — it
-   means the finding contradicts a named invariant, so the design is in question
-   rather than its execution. Until now that ended as a status the task printed
-   and a report nobody was told to open; a run that takes hours and finishes
-   while nobody is watching has told no one anything.
+   A park is the one disposition whose answer is not the loop's to give: it is a
+   decision rather than a repair. Until now that ended as a status the task
+   printed and a report nobody was told to open; a run that takes hours and
+   finishes while nobody is watching has told no one anything.
+
+   WHICH decision is `park-ground`'s answer, and the gate is a different question
+   on each. A finding raised against a named invariant asks whether the design
+   stands; one that two repairs did not settle asks whether the remedy is a
+   decision at all, on a run that may well have no design record to stand or
+   fall. Asking the first question about the second is how a gate offers to
+   supersede a record the run itself recorded as missing.
+
+   The warden's `because` goes in the summary under either question, because it
+   is the only sentence in the run that says what is being decided rather than
+   which defect is being decided about.
 
    The branches are stated as what taking each COSTS rather than as their names:
    a gate answered on a name alone is how the wrong branch gets taken by a click.
@@ -292,55 +428,18 @@
    essay, and rightly — an essay can only be answered by typing one back.
 
    `verdict` is this run's design verdict, or nil when the pass found nothing to
-   judge against, was skipped, or produced no answer. It is the answer to the
-   question this gate asks, so the gate carries it rather than asking again: the
-   branch it argues for is flagged, and a verdict that leaves the design standing
-   while naming a repair adds a THIRD branch whose summary is that repair
-   verbatim — the answer neither of the other two can express, since one declines
-   the findings and the other throws the record away. `option-input` replays a
-   chosen branch to the agent in full, so the remedy travels with the click."
+   judge against, was skipped, or produced no answer."
   [findings verdict]
   (when-let [parked (seq (filter #(= :park (:disposition %)) findings))]
-    (let [titles   (str/join "; " (map :title parked))
-          supports (verdict-supports verdict)]
+    (let [supports (verdict-supports verdict)
+          ground   (park-ground parked)]
       {:format  :blocker
        :summary (str "The review loop is holding " (count parked)
                      (if (= 1 (count parked)) " finding" " findings")
-                     " it has no move for: " titles)
-       :needs   (if-not supports
-                  (str "Each of these says the design is in question rather than its "
-                       "execution, so the loop stopped rather than patching it away. "
-                       "Does the design stand?")
-                  (str "Each of these says the design is in question rather than its "
-                       "execution. This run's design verdict answers that — "
-                       (name (:verdict verdict)) ". "
-                       (case supports
-                         :repair    (str "The design stands and the verdict names the "
-                                         "repair. Is that repair owed here?")
-                         :stands    (str "The design stands and the verdict names no "
-                                         "repair. Are these findings declined?")
-                         :supersede (str "The design does not stand. Is the record "
-                                         "superseded?"))))
-       :options (cond-> [(recommend
-                          {:label "The design stands"
-                           :summary "The findings are answered by the design as written."
-                           :consequence (str "They are declined on the record and stop being "
-                                             "re-raised. If that is wrong, the next round has "
-                                             "no way to tell.")}
-                          (= :stands supports))
-                         (recommend
-                          {:label "The design is wrong"
-                           :summary "Supersede the design record, then re-run the review."
-                           :consequence (str "Everything judged against the old record is "
-                                             "judged again, including work already fixed.")}
-                          (= :supersede supports))]
-                  (= :repair supports)
-                  (conj {:label "Take the repair the verdict names"
-                         :summary (:needs verdict)
-                         :consequence (str "The design record is untouched, so nothing already "
-                                           "fixed is judged again — but the findings stay open "
-                                           "until the repair lands.")
-                         :recommended? true}))})))
+                     " it has no move for:\n\n"
+                     (parked-detail parked))
+       :needs   (gate-question ground supports verdict)
+       :options (gate-options ground supports verdict)})))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   append-blocker!

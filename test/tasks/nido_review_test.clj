@@ -1129,6 +1129,85 @@
         "there is no remedy to carry, so there is no third answer")
     (is (true? (:recommended? (first (:options b)))))))
 
+(deftest the-gate-carries-the-wardens-reason-for-stopping
+  ;; The title says which defect; only `because` says what is being decided. It
+  ;; already reaches report.json and the :review entry, and both of those are
+  ;; read by someone who went looking — this is the artifact that arrives.
+  (let [b (t/parked-blocker
+           [{:disposition :park
+             :title "socket ownership"
+             :because (str "a client-side gate cannot cover the interval between the "
+                           "browser's decision and the handler's execution")}]
+           nil)]
+    (is (str/includes? (:summary b) "cannot cover the interval")
+        "a human deciding whether the remedy is a patch or a boundary needs the
+         reason, and the gate is the only place they are shown")
+    (is (= b (report/validate-event :blocker b)))))
+
+(deftest a-park-with-no-reason-still-names-the-finding
+  ;; `park` requires no `because` in the vocabulary, so a warden may omit it. The
+  ;; gate degrades to what it had before rather than rendering a dangling dash.
+  (let [b (t/parked-blocker [{:disposition :park :title "socket ownership"}] nil)]
+    (is (str/includes? (:summary b) "socket ownership"))
+    (is (not (str/includes? (:summary b) "—")))))
+
+(deftest a-recurrence-park-is-not-asked-as-a-design-question
+  ;; Ground (b): the warden set same_as, which the vocabulary says needs no design
+  ;; record at all. Asking whether the design stands is how the gate offered to
+  ;; supersede a record the run's own report listed as missing.
+  (let [b (t/parked-blocker
+           [{:disposition :park :title "start races the socket" :same-as "aeee857f"
+             :because "two repairs each narrowed the window and left a smaller one"}]
+           nil)]
+    (is (not (str/includes? (:needs b) "design")))
+    (is (str/includes? (:needs b) "third attempt")
+        "the question a recurrence park asks is whether the remedy is a decision,
+         and the human has to be able to tell which question they answered")
+    (is (not-any? #(str/includes? (:summary %) "Supersede") (:options b))
+        "no branch may offer to supersede a record this run never had")
+    (is (= 2 (count (:options b))))
+    (is (= b (report/validate-event :blocker b)))))
+
+(deftest one-park-raised-against-an-invariant-keeps-the-design-question
+  ;; The grounds are per finding and the gate is one artifact, so the ground has
+  ;; to be decided over the whole set. A design question present anywhere in it
+  ;; is the one no other branch can express, so it is the one that gets asked.
+  (let [b (t/parked-blocker
+           [{:disposition :park :title "start races the socket" :same-as "aeee857f"}
+            {:disposition :park :title "the aggregate rounds twice"}]
+           nil)]
+    (is (str/includes? (:needs b) "Does the design stand?"))))
+
+(deftest a-recurrence-gate-carries-a-verdicts-repair-as-the-third-branch
+  ;; A repair the verdict names is the one move neither attempt made, which is a
+  ;; direct answer to "is the remedy another patch?" — and the two ground
+  ;; branches can only say "try again" and "stop trying".
+  (let [b (t/parked-blocker
+           [{:disposition :park :title "start races the socket" :same-as "aeee857f"}]
+           {:verdict :strained :needs "let the server's start claim own transport liveness"})
+        third (last (:options b))]
+    (is (= 3 (count (:options b))))
+    (is (= "let the server's start claim own transport liveness" (:summary third))
+        "option-input replays the branch verbatim, so this is how the remedy
+         survives the click")
+    (is (true? (:recommended? third)))))
+
+(deftest a-recurrence-gate-flags-the-decision-branch-when-the-record-does-not-stand
+  ;; The only reading of a design verdict that bears on a recurrence park: a
+  ;; record that does not stand says the remedy is a decision. One that stands
+  ;; says nothing about whether a third patch would hold, so nothing is flagged.
+  (let [invalidated (t/parked-blocker
+                     [{:disposition :park :title "t" :same-as "aeee857f"}]
+                     {:verdict :invalidated :needs "the boundary has to move"})
+        sound       (t/parked-blocker
+                     [{:disposition :park :title "t" :same-as "aeee857f"}]
+                     {:verdict :sound})]
+    (is (true? (:recommended? (second (:options invalidated)))))
+    (is (nil? (:recommended? (first (:options invalidated)))))
+    (is (not-any? :recommended? (:options sound))
+        "a verdict that answers a different question must not appear to have
+         answered this one")))
+
 (deftest a-run-outside-a-session-says-what-it-cannot-reach
   ;; It runs — and should — but without the cache, the ledger, the design record
   ;; and the stance. It skips nothing, judges against no invariants, writes no
