@@ -1156,6 +1156,34 @@
                    "\n  " (:body f))))
        (str/join "\n\n")))
 
+(def invariant-citation-cue
+  "The word that turns a warden `because` into an appeal to the design.
+
+   Held here rather than beside the parser for the reason `disposition-vocabulary`
+   is: `design-block` publishes the quoting rule into the warden's prompt from
+   this var and `nido.review.stages` enforces it from the same one, so a parser
+   triggering on a word the warden was never given cannot happen."
+  "invariant")
+
+(defn- invariant-lines
+  "The invariants, each with the moment it holds.
+
+   A record written before phasing carries plain strings and means :always by
+   them; a phased one carries the Invariant map, and an :on-completion invariant
+   is deliberately false for the whole middle of a plan — a warden shown one
+   without the qualifier reads a designed intermediate state as a broken design.
+
+   Rendered rather than bulleted raw because this text is now checked against:
+   `stages/uncited-invariant` asks whether a quoted span appears in one of these
+   clauses, so the clause is what the warden has to be able to copy. An EDN map
+   printed at it is not one."
+  [invariants]
+  (bullets (map (fn [i]
+                  (let [{t :invariant h :holds} (report/invariant i)]
+                    (str t (when (= :on-completion h)
+                             "  [holds ON COMPLETION — not yet true mid-plan]"))))
+                invariants)))
+
 (defn- design-block
   "The design record, rendered for the warden. This is the yardstick: findings are
    judged against these invariants and nothing else. :rejected is included because
@@ -1178,7 +1206,16 @@
   [{:keys [shape invariants rejected standing layers seams]}]
   (str "THE DESIGN THIS CHANGE COMMITTED TO — judge the findings against this:\n"
        "Shape: " shape "\n"
-       "Invariants:\n" (bullets invariants) "\n"
+       "Invariants:\n" (invariant-lines invariants) "\n"
+       "QUOTE ONE, DO NOT RESTATE IT. A `because` using the word \""
+       invariant-citation-cue "\"\n"
+       "must carry the clause it leans on verbatim, in double quotes or\n"
+       "backticks, copied from the list above. The loop checks that span against\n"
+       "the list and, when it matches none, prefixes your sentence with a refusal\n"
+       "before the fixer reads it — so a paraphrase licenses nothing. Restating is\n"
+       "how an invariant gets WIDER: \"inside the method's own form\" restated as\n"
+       "\"in the file that writes the method\" is a different rule, and the fixer\n"
+       "obeys the one you wrote, not the one you were holding.\n\n"
        (when (seq layers)
          (str "CLAIMED DECOMPOSITION — one claim per layer, bottom to top. The stack\n"
               "you are judging should correspond to these, and a mismatch splits\n"

@@ -111,6 +111,35 @@
   (let [out (prompts/warden-prompt {:findings findings :history [] :design design})]
     (is (not (str/includes? out "DELIBERATE INCOMPLETENESS")))))
 
+(deftest warden-prompt-asks-for-the-invariant-clause-verbatim
+  ;; The rule the parser enforces has to be one the warden was told, and this is
+  ;; where it is told: `stages/uncited-invariant` refuses an appeal that quotes
+  ;; nothing, and a warden refused for breaking a rule nobody stated is failed
+  ;; rather than checked. The cue word comes off the same var both sides read.
+  (let [out (prompts/warden-prompt {:findings findings :history [] :design design})]
+    (is (str/includes? out (str "A `because` using the word \""
+                                prompts/invariant-citation-cue "\"")))
+    (is (str/includes? out "verbatim, in double quotes or\nbackticks"))
+    (is (str/includes? out "prefixes your sentence with a refusal")
+        "and what it costs to paraphrase, since nothing else reports it")))
+
+(deftest warden-prompt-renders-a-phased-invariant-as-a-clause-it-can-quote
+  ;; A record written after phasing carries {:invariant :holds} maps. Bulleted
+  ;; raw they reach the warden as printed EDN — unquotable, since the check
+  ;; compares a span against the clause and not against the map around it. The
+  ;; qualifier still has to survive: an :on-completion invariant is false for
+  ;; the whole middle of a plan, and a warden shown it bare escalates a decision
+  ;; that was already made.
+  (let [out (prompts/warden-prompt
+             {:findings findings :history []
+              :design (assoc design :invariants
+                             [{:invariant "a total is rounded exactly once" :holds :always}
+                              {:invariant "every read goes through the aggregate"
+                               :holds :on-completion}])})]
+    (is (str/includes? out "- a total is rounded exactly once\n"))
+    (is (not (str/includes? out ":holds")) "no EDN reaches the warden as prose")
+    (is (str/includes? out "every read goes through the aggregate  [holds ON COMPLETION"))))
+
 (deftest warden-prompt-ties-escalate-to-a-named-invariant
   (let [out (prompts/warden-prompt {:findings findings :history [] :design design})]
     (is (str/includes? out "CONTRADICTS A NAMED INVARIANT"))

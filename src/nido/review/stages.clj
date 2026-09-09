@@ -146,6 +146,87 @@
         (str ruled "on an " field " of \"" v "\", which is not one of "
              (str/join ", " one-of))))))
 
+(def ^:private min-citation-chars
+  "How much of an invariant a delimited span has to be before it counts as a
+   citation of one.
+
+   A citation is a CLAUSE. Below about four words a span is a word or an
+   identifier — `sweep`, `same_as` — and those occur inside almost any
+   invariant, so a lower threshold would let a `because` quoting its own
+   vocabulary pass as a citation of the design. Deliberately not published to
+   the warden: a warden told a character count pads to it."
+  20)
+
+(defn- citation-text
+  "One string reduced to what a substring test should compare on: case, run
+   lengths of whitespace and the typographic variants a model emits for quotes,
+   apostrophes and dashes it is copying are differences nobody intended."
+  [s]
+  (-> (str s)
+      (str/replace #"[‘’ʼ]" "'")
+      (str/replace #"[“”]" "\"")
+      (str/replace #"[‐-―]" "-")
+      str/lower-case
+      (str/replace #"\s+" " ")
+      str/trim))
+
+(defn- quoted-spans
+  "The delimited spans of `s` long enough to be a clause, as `citation-text`
+   compares them.
+
+   Double quotes and backticks both delimit: the warden is writing JSON, where
+   the first has to be escaped, and reaches for the second when it would rather
+   not. `min-citation-chars` is what keeps the backtick spelling from turning
+   every mention of a field name into a citation."
+  [s]
+  (->> (re-seq #"[\"`]([^\"`]+)[\"`]" s)
+       (map (comp str/trim second))
+       (filter #(>= (count %) min-citation-chars))))
+
+(defn- design-invariants
+  "The invariant clauses of `design`, as `citation-text` compares them. Empty
+   for a workstream with no record."
+  [design]
+  (into []
+        (comp (map report/invariant) (map :invariant) (map citation-text)
+              (remove str/blank?))
+        (:invariants design)))
+
+(defn- uncited-invariant
+  "Why this `because` does not establish the design invariant it appeals to, as
+   a sentence for the fixer, or nil when it appeals to none.
+
+   The word is the trigger and a verbatim quote is the discharge. A warden is
+   report-only and holds no tools, so almost nothing it asserts is falsifiable
+   by the loop — but an invariant is a text inside its own prompt, which makes
+   this the one claim a substring test settles at no agent cost.
+
+   What it is for: a `because` is the only sentence the loop carries from the
+   warden to the fixer, and `fix-prompt` renders it as the reviewer of the whole
+   stack speaking. A warden restated the invariant it was holding in a weaker
+   form there — an edge traced to a call inside a method's own FORM became every
+   candidate call being in the FILE that writes the method — the fixer took the
+   licence explicitly, and the post-loop verdict found the repair broke the very
+   invariant the ruling claimed to satisfy.
+
+   It fires on a MENTION rather than on a claim, so a `because` saying no
+   invariant is in play is refused too. That costs one sentence in front of a
+   sentence and the warden can avoid it by quoting or by not reaching for the
+   word; the alternative — a citation field the warden may simply omit — leaves
+   the paraphrase exactly as unchecked as it was."
+  [because invariants]
+  (when (string? because)
+    (let [text (citation-text because)]
+      (when (str/includes? text prompts/invariant-citation-cue)
+        (cond
+          (empty? invariants)
+          "the warden leaned on a design invariant and this workstream records none"
+
+          (not-any? (fn [q] (some #(str/includes? % q) invariants))
+                    (quoted-spans text))
+          (str "the warden leaned on a design invariant without quoting one the "
+               "record contains, so that ground is not a licence"))))))
+
 (defn- ruling
   "One per-finding ruling from the warden's JSON.
 
@@ -160,33 +241,50 @@
    The rejected field is dropped rather than carried, so no reader downstream
    renders a ground the loop refused; `:because` says what was rejected, in
    front of whatever the warden wrote, because that is the one channel that
-   reaches both the report and the fixer."
-  [r]
-  (let [d     (some-> (:disposition r) keyword)
-        d     (if (contains? dispositions d) d :fix)
-        unmet (unmet-requirement d r)
-        base  {:id          (:id r)
-               :same-as     (:same_as r)
-               :owner-layer (:owner_layer r)
-               :disposition d
-               :authority   (:authority r)
-               :of          (:of r)
-               ;; Whether this finding is one instance of a class the fixer
-               ;; should sweep. The warden recognises a recurring family
-               ;; unprompted — it says so in `because`, in prose, every time —
-               ;; and had no field to say it in.
-               :sweep       (boolean (:sweep r))
-               :because     (:because r)}]
-    (if-not unmet
-      base
-      (-> base
-          (assoc (get-in requirements [d :requires]) nil)
-          (assoc :disposition :fix
-                 :because (str "the warden " unmet
-                               ", so this is being fixed rather than settled"
-                               (let [b (:because r)]
-                                 (when (and (string? b) (not (str/blank? b)))
-                                   (str " — it said: " b)))))))))
+   reaches both the report and the fixer.
+
+   An unquoted appeal to a design invariant is refused through that same
+   channel and leaves the DISPOSITION alone. Demotion is the fail-safe for a
+   missing field because a settling ruling with one is a shrug, but the ruling
+   an unchecked invariant most often licenses is already `fix`, and demoting the
+   others would hand a design question to a fixer — which is the one move the
+   warden is told never to make about one. It is the ground that fails here,
+   not the ruling; see `uncited-invariant`."
+  [r invariants]
+  (let [d       (some-> (:disposition r) keyword)
+        d       (if (contains? dispositions d) d :fix)
+        unmet   (unmet-requirement d r)
+        uncited (uncited-invariant (:because r) invariants)
+        refused (str/join "; and " (remove nil?
+                                          [(when unmet
+                                             (str "the warden " unmet
+                                                  ", so this is being fixed rather than settled"))
+                                           uncited]))
+        base    {:id          (:id r)
+                 :same-as     (:same_as r)
+                 :owner-layer (:owner_layer r)
+                 :disposition d
+                 :authority   (:authority r)
+                 :of          (:of r)
+                 ;; Whether this finding is one instance of a class the fixer
+                 ;; should sweep. The warden recognises a recurring family
+                 ;; unprompted — it says so in `because`, in prose, every time —
+                 ;; and had no field to say it in.
+                 :sweep       (boolean (:sweep r))
+                 :because     (:because r)}]
+    ;; The demotion runs FIRST: the field it clears is sometimes `because`
+    ;; itself — a decline is not one without a reason — and clearing it after
+    ;; the refusal was written would drop the sentence explaining the demotion.
+    (cond-> base
+      unmet
+      (-> (assoc (get-in requirements [d :requires]) nil)
+          (assoc :disposition :fix))
+
+      (seq refused)
+      (assoc :because (str refused
+                           (let [b (:because r)]
+                             (when (and (string? b) (not (str/blank? b)))
+                               (str " — it said: " b))))))))
 
 (defn- standing-items
   "The warden's `standing` entries, normalised — what it says is open and is
@@ -211,7 +309,9 @@
               (distinct))
         xs))
 
-(defn ^{:malli/schema [:=> [:cat :string] :map]}
+(defn ^{:malli/schema [:function
+                       [:=> [:cat :string] :map]
+                       [:=> [:cat :string [:maybe :map]] :map]]}
   parse-warden-decision
   "Last fenced ```json block in `text` -> {:decision :reason :rulings :promote
    :standing}. Unparseable -> indeterminate.
@@ -224,23 +324,33 @@
    both are in scope.
 
    `:standing` is neither, and `standing-items` settles it here: it is what the
-   round is NOT acting on, so no other part of the round can contradict it."
-  [text]
-  (let [block (when (string? text) (last (re-seq fenced-json-re text)))]
-    (if-let [body (second block)]
-      (try
-        (let [m (json/parse-string body true)
-              d (keyword (:decision m))]
-          (if (contains? #{:continue :stop :escalate} d)
-            {:decision d
-             :reason   (:reason m)
-             :rulings  (into [] (comp (filter :id) (map ruling)) (:findings m))
-             :promote  (vec (:promote m))
-             :standing (standing-items (:standing m))}
-            {:decision :indeterminate :reason (str "unknown decision: " (:decision m))}))
-        (catch Exception e
-          {:decision :indeterminate :reason (str "unparseable: " (ex-message e))}))
-      {:decision :indeterminate :reason "no json decision block"})))
+   round is NOT acting on, so no other part of the round can contradict it.
+
+   `design` is the record the warden was SHOWN, and it is an argument rather
+   than a read so that `uncited-invariant` compares a quote against the very
+   text the prompt rendered. Re-reading the ledger here would let the two
+   diverge, and a quote failing to match would then mean either a restatement or
+   an amendment landing mid-run. Omitted, every appeal to an invariant is
+   refused — which is the answer for a workstream that records none."
+  ([text] (parse-warden-decision text nil))
+  ([text design]
+   (let [invariants (design-invariants design)
+         block      (when (string? text) (last (re-seq fenced-json-re text)))]
+     (if-let [body (second block)]
+       (try
+         (let [m (json/parse-string body true)
+               d (keyword (:decision m))]
+           (if (contains? #{:continue :stop :escalate} d)
+             {:decision d
+              :reason   (:reason m)
+              :rulings  (into [] (comp (filter :id) (map #(ruling % invariants)))
+                              (:findings m))
+              :promote  (vec (:promote m))
+              :standing (standing-items (:standing m))}
+             {:decision :indeterminate :reason (str "unknown decision: " (:decision m))}))
+         (catch Exception e
+           {:decision :indeterminate :reason (str "unparseable: " (ex-message e))}))
+       {:decision :indeterminate :reason "no json decision block"}))))
 
 (defn ^{:malli/schema [:=> [:cat :Path] :any]}
   project+ws-from-cwd
@@ -1953,6 +2063,10 @@
   [ctx]
   (let [{:keys [cwd run-id budget]} (:config ctx)
         handles (get-in ctx [:carry :handles] {})
+        ;; Read once and used twice: the block the warden is shown is the list
+        ;; its quotes are checked against, so a citation that does not match is
+        ;; a restatement rather than a stale read.
+        design (discover-design-record cwd)
         prompt (prompts/warden-prompt
                 {:findings (:findings ctx)
                  :seen     (seen-findings (:history ctx))
@@ -1968,7 +2082,7 @@
                                         (update :fixes
                                                 (partial mapv (fn [f] (dissoc f :account))))))
                                  (:history ctx))
-                 :design   (discover-design-record cwd)
+                 :design   design
                  :stance   (read-stance (first (project+ws-from-cwd cwd)))
                  :toc      (:toc ctx)
                  :parked   (vals (get-in ctx [:carry :parks] {}))
@@ -1988,7 +2102,7 @@
                         :first-message prompt :budget budget
                         :tools ""
                         :err-file (str (fs/path (cstate/run-dir run-id) "agent.err.log"))})
-        decision (parse-warden-decision result-text)]
+        decision (parse-warden-decision result-text design)]
     (if (or (zero? (or num-turns 0)) result-error?
             (= :indeterminate (:decision decision)))
       (assoc ctx :warden (merge decision (warden-failure launch decision))

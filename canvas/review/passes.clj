@@ -209,8 +209,17 @@
      The engine's give-up counter asks how many repairs were tried and failed, and it cannot
      read a disposition itself, so this is what the diff loop hands it."
     {:signature [:=> [:catn [:f Finding]] :boolean]})
-  (Operation parse-warden-decision "The warden's ruling out of what it said."
-    {:signature [:=> [:catn [:text :string]] :map]})
+  (Operation parse-warden-decision
+    "The warden's ruling out of what it said, judged against the design record it was shown.
+
+     The record is an argument rather than a read because the check it feeds is a substring
+     test: a `because` appealing to an invariant has to quote one, and the list quoted from
+     is the list the prompt rendered. Re-reading it here would let a failure to match mean
+     an amendment landing mid-run instead of a restatement. The one-argument arity is for
+     callers holding no record, where every such appeal is refused."
+    {:signature [:function
+                 [:=> [:catn [:text :string]] :map]
+                 [:=> [:catn [:text :string] [:design [:maybe :map]]] :map]]})
   (Operation warden-failure "Why a round has no ruling: no run, no answer, or no parse."
     {:signature [:=> [:catn [:launch :map] [:decision :map]] :map]})
   (Operation project+ws-from-cwd "The project and workstream a directory belongs to."

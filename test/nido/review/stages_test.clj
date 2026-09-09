@@ -709,6 +709,107 @@
   (is (= :closed (:disposition (sole-ruling {:disposition "closed" :authority "spun-out"})))
       "a named authority still closes — this refuses the shrug, not the close"))
 
+(def ^:private positional-attribution
+  "The invariant a warden restated in a weaker form, verbatim from the design
+   record it was shown (ws-20260908-9a9ec0, seq 45)."
+  (str "positional attribution never invents an edge that crosses a namespace "
+       "boundary: every cross-namespace :calls edge traces to a var with an "
+       "enclosing definition, or to a call inside a method's own form"))
+
+(def ^:private one-invariant-design
+  {:shape "..." :invariants [positional-attribution]})
+
+(defn- ruling-against
+  "The sole ruling of a one-finding warden answer, parsed against `design`."
+  [design r]
+  (first (:rulings (stages/parse-warden-decision (ruling-json r) design))))
+
+(deftest a-because-that-restates-an-invariant-is-refused-before-the-fixer-reads-it
+  ;; The `because` is the only sentence the loop carries from the warden to the
+  ;; fixer, and `fix-prompt` renders it as the reviewer of the whole stack
+  ;; speaking. A round-1 warden turned "a call inside a method's own form" into
+  ;; file-locality there, the fixer took the licence explicitly, and the
+  ;; post-loop verdict found the repair broke the invariant the ruling had
+  ;; claimed to satisfy. Nothing checked the sentence against the text it was
+  ;; restating — which sat in the warden's own prompt.
+  (let [r (ruling-against one-invariant-design
+                          {:disposition "fix"
+                           :because (str "a marker-bounded repair stays within the invariant "
+                                         "against invented cross-namespace edges because every "
+                                         "candidate call is in the file that writes the method")})]
+    (is (str/includes? (:because r) "without quoting one the record contains")
+        "the fixer is told the invariant ground was never established")
+    (is (str/includes? (:because r) "every candidate call is in the file")
+        "and still reads what the warden argued — the refusal is of the ground, not the sentence")))
+
+(deftest quoting-the-clause-verbatim-is-what-discharges-the-appeal
+  (let [quoted (ruling-against one-invariant-design
+                               {:disposition "fix"
+                                :because (str "this repair keeps the invariant that an edge traces "
+                                              "\"to a call inside a method's own form\"")})]
+    (is (= (:because (ruling-against one-invariant-design
+                                     {:disposition "fix" :because "the guard is off by one"}))
+           "the guard is off by one")
+        "a because that appeals to nothing is untouched — the word is the trigger")
+    (is (not (str/includes? (:because quoted) "without quoting"))
+        "a verbatim clause from the record is a citation, and the loop says nothing"))
+
+  (testing "the quote is compared the way a model copies one, not byte for byte"
+    (doseq [[what because]
+            {"case and wrapping"
+             (str "held: \"To A Call Inside\n  A Method's Own Form\" is what this repair stays within, "
+                  "so the invariant holds")
+             "curly quotes around a curly apostrophe"
+             "the invariant “to a call inside a method’s own form” still holds here"
+             "backticks, for a warden that would rather not escape a quote"
+             "the invariant `to a call inside a method's own form` still holds here"}]
+      (is (not (str/includes? (:because (ruling-against one-invariant-design
+                                                        {:disposition "fix" :because because}))
+                              "without quoting"))
+          what)))
+
+  (testing "a span too short to be a clause is not a citation"
+    ;; Every invariant contains the words a warden uses to talk about one, so a
+    ;; threshold is what keeps `the invariant \"own form\" holds` from passing.
+    (is (str/includes? (:because (ruling-against one-invariant-design
+                                                 {:disposition "fix"
+                                                  :because "the invariant `own form` holds"}))
+                       "without quoting one the record contains"))))
+
+(deftest a-refused-citation-does-not-move-the-ruling
+  ;; Demotion is the fail-safe for a missing FIELD, and it is the wrong one
+  ;; here: a park is how a finding that contradicts an invariant reaches a
+  ;; human, and demoting it to `fix` would hand a design question to a fixer —
+  ;; the one move the warden is told never to make about one.
+  (doseq [d ["park" "fix"]]
+    (is (= (keyword d)
+           (:disposition (ruling-against one-invariant-design
+                                         {:disposition d
+                                          :because "it contradicts the namespace-boundary invariant"})))
+        (str d " keeps its disposition; it is the ground that was refused"))))
+
+(deftest an-appeal-to-an-invariant-on-a-workstream-that-records-none-is-refused
+  ;; The warden is told in as many words that with no record there is nothing
+  ;; for a finding to contradict. A sentence that appeals to one anyway is
+  ;; appealing to nothing, and the fixer is the reader who needs to know.
+  (doseq [design [nil {:shape "..." :invariants []}]]
+    (is (str/includes? (:because (ruling-against design
+                                                 {:disposition "fix"
+                                                  :because "this respects the layering invariant"}))
+                       "this workstream records none")
+        (str "design " (pr-str design)))))
+
+(deftest a-refused-citation-and-a-missing-field-are-both-reported
+  ;; Two independent refusals of one ruling. Reporting only the first would tell
+  ;; the fixer the close lacked an authority and leave it believing the
+  ;; invariant argument stood.
+  (let [r (ruling-against one-invariant-design
+                          {:disposition "closed"
+                           :because "closed: the design invariant puts this behind a boundary"})]
+    (is (= :fix (:disposition r)) "the missing authority still demotes")
+    (is (str/includes? (:because r) "no `authority`"))
+    (is (str/includes? (:because r) "without quoting one the record contains"))))
+
 (deftest a-packaging-finding-cannot-be-handed-work-that-outlives-the-review
   ;; The two packaging kinds were ruled `fix` 2 times in 49 and accounted for 42
   ;; of the corpus's 46 parks — and a park standing four rounds stops the whole
