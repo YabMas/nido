@@ -919,3 +919,79 @@
     (is (= "continued" (get-in o [:rounds 0 :status])))
     (is (nil? (:reason o))
         "nothing was in flight, so there is no phase to name")))
+
+;; ---- coverage ------------------------------------------------------------
+
+(defn- reviewed-rows
+  "A report whose only round holds one review phase over `rows`."
+  [rows]
+  {:status "running"
+   :rounds [{:round 1 :status "running"
+             :phases [{:phase "review" :status "running" :layers rows}]}]})
+
+(deftest a-target-counts-as-read-only-once-a-reviewer-answered-for-it
+  ;; The three are the terminal states this run reached ITSELF: an answer, a
+  ;; failed reviewer, and an empty diff there was nothing to answer about.
+  (is (= {:reviewed 3 :skipped 0}
+         (report/coverage (reviewed-rows [{:label "a" :status "reviewed"}
+                                          {:label "b" :status "error"}
+                                          {:label "c" :status "nothing-to-review"}])))))
+
+(deftest a-target-a-run-never-got-to-is-not-a-target-it-read
+  ;; The miscount two gates spend an agent session on. A run killed inside its
+  ;; first review phase leaves the row it was on saying `running` and the rows
+  ;; behind it saying `pending`; counted as read, the briefing opens `1 targets
+  ;; read this run` about a run in which zero were.
+  (is (= {:reviewed 0 :skipped 0}
+         (report/coverage (reviewed-rows [{:label "stack" :status "running"}
+                                          {:label "a" :status "pending"}])))
+      "neither read here nor remembered from an earlier run — the two numbers
+       do not partition the targets, and inventing a partition is what put a
+       never-opened row into :reviewed")
+  (is (= {:reviewed 0 :skipped 0}
+         (report/coverage (reviewed-rows [{:label "stack" :status "orphaned"}])))
+      "and restamping the row terminal must not make it count: `orphaned` says
+       the run stopped, not that it answered"))
+
+(deftest a-target-the-cache-answered-for-in-every-round-is-skipped
+  (is (= {:reviewed 1 :skipped 1}
+         (report/coverage
+          {:rounds [{:phases [{:phase "review"
+                               :layers [{:label "a" :status "reviewed"}
+                                        {:label "b" :status "skipped"}]}]}
+                    {:phases [{:phase "review"
+                               :layers [{:label "a" :status "skipped"}
+                                        {:label "b" :status "skipped"}]}]}]}))
+      "a layer opened in any round carries this run's verdict; only one skipped
+       throughout is a verdict remembered from before"))
+
+;; ---- the orphan restamp reaches the rows ---------------------------------
+
+(deftest an-orphan-leaves-no-target-row-claiming-to-be-under-way
+  ;; `running` is what the renderer draws a spinner for and `pending` is what
+  ;; `coverage` used to count as read, so a row left in either is both a
+  ;; terminal report that animates and a run overstating what it covered.
+  (let [r (reviewed-rows [{:label "stack" :status "running"}
+                          {:label "a" :status "pending"}
+                          {:label "b" :status "skipped"}])
+        o (report/orphaned r "2026-06-30T14:06:00Z")
+        rows (get-in o [:rounds 0 :phases 0 :layers])]
+    (is (= ["orphaned" "orphaned" "skipped"] (mapv :status rows))
+        "only what was still in flight is restamped — a row the cache answered
+         for reached a status of its own, and overwriting it would lose it")
+    (is (= 3 (count rows))
+        "restamped rather than dropped: the round names every target before it
+         reviews any of them, so the rows are what say what this run set out to
+         read")))
+
+(deftest an-orphan-leaves-the-rows-of-a-phase-that-finished-alone
+  ;; It died in `fix`, so its reviewers had already answered. Restamping their
+  ;; rows would erase the one part of the run that did complete.
+  (let [r {:status "running"
+           :rounds [{:round 1 :status "running"
+                     :phases [{:phase "review" :status "ok"
+                               :layers [{:label "a" :status "reviewed" :findings 2}]}
+                              {:phase "fix" :status "running"}]}]}
+        o (report/orphaned r "2026-06-30T14:06:00Z")]
+    (is (= "reviewed" (get-in o [:rounds 0 :phases 0 :layers 0 :status])))
+    (is (= "orphaned" (get-in o [:rounds 0 :phases 1 :status])))))

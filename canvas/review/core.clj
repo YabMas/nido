@@ -24,11 +24,21 @@
 
    Best-effort by contract: the coordinator need not be running, because an envelope in the
    queue is picked up on the next drain — so a review run with the daemon down is analysed when
-   it comes back rather than lost."
+   it comes back rather than lost.
+
+   `worth-analysing?` is the ONLY gate, and a run reaches it from two places — the loop's own
+   exit and the reconciler that settles a run whose process died. A second gate at either call
+   site is a second place for the exclusion list to be incomplete, which is how an orphan that
+   read nothing came to buy a worktree and an hour of budget."
   (Operation payload "The envelope payload for one run's analysis. Pure."
     {:signature [:=> [:catn [:run :map]] :map]})
-  (Operation worth-analysing? "Whether a terminal outcome is worth analysing at all. Pure."
-    {:signature [:=> [:catn [:status :any] [:dry-run? :boolean] [:report? :boolean]] :boolean]})
+  (Operation worth-analysing?
+    "Whether a terminated run is worth an analysis session at all. Pure.
+
+     Takes the run rather than its status alone, because two of the exclusions are facts about
+     what the run DID: a dry run, and an orphan that stopped before a reviewer answered for any
+     target."
+    {:signature [:=> [:catn [:run :map] [:report? :boolean]] :boolean]})
   (Operation enqueue! "Queue one run's analysis."
     {:signature [:=> [:catn [:run :map]] [:maybe :any]]
      :delegates [worth-analysing? payload control/fire!]}))

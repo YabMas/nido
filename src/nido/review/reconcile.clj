@@ -151,8 +151,14 @@
    `:dry-run?` is not passed because the report does not record the flag. It
    costs nothing: a dry run stops at the fix stage without launching anybody, so
    the only orphaned dry run is one killed mid-review, and analysing it says
-   what any killed run's analysis says."
-  [{:keys [run-id report-path report]} reviewed]
+   what any killed run's analysis says.
+
+   `:in-flight` is passed for the GATE and nowhere else — `analysis/payload`
+   whitelists what it publishes and does not carry it. It is what tells
+   `worth-analysing?` the one orphan it must never refuse: the one that died in
+   `fix`, whose fixers outlived it and whose count of targets read says nothing
+   about the state it left the branch in."
+  [{:keys [run-id report-path report in-flight]} reviewed]
   (let [cover (report/coverage report)]
     (merge {:run-id           run-id
             :report-path      report-path
@@ -160,12 +166,19 @@
             :base             (get-in report [:target :base])
             :rounds           (or (get-in report [:summary :rounds]) 0)
             :fix-attempts     (or (get-in report [:summary :fix-attempts]) 0)
+            :in-flight        in-flight
             :targets-reviewed (:reviewed cover)
             :targets-skipped  (:skipped cover)}
            reviewed)))
 
 (defn- settle-one!
-  "Force one orphan terminal and hand it to the analysis.
+  "Force one orphan terminal and OFFER it to the analysis.
+
+   Offer, not enqueue: `analysis/worth-analysing?` is what decides, on the same
+   list a finished run is judged against, and `:analysis` is nil for an orphan
+   it refuses. Deciding here as well was a second gate on a shorter list — it
+   asked whether a round had been FOLDED, which `apply-event` satisfies the
+   instant `:phase-started` opens one, before any reviewer is launched.
 
    Best-effort, and the failure direction is the safe one: a report that could
    not be rewritten stays non-terminal, so the next claimant finds it again and
@@ -176,12 +189,7 @@
                              (str (Instant/ofEpochMilli (:last-write orphan))))
           o (assoc orphan :report r)]
       (report/persist! r (:report-path orphan))
-      ;; A run that folded no round launched no reviewer, so there is no loop
-      ;; behaviour in it to read — the same ground `analysis/worth-analysing?`
-      ;; excludes an empty-diff review on, and the same cost: a worktree and an
-      ;; hour of budget to report that nothing happened.
-      (cond-> o
-        (seq (:rounds r)) (assoc :analysis (analysis/enqueue! (analysis-run o reviewed)))))
+      (assoc o :analysis (analysis/enqueue! (analysis-run o reviewed))))
     (catch Exception e
       (assoc orphan :error (ex-message e)))))
 

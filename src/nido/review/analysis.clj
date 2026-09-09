@@ -121,10 +121,30 @@
     reviewed-session (assoc :reviewed-session reviewed-session)
     reviewed-ws-id   (assoc :reviewed-ws-id reviewed-ws-id)))
 
-(defn ^{:malli/schema [:=> [:cat :any :boolean :boolean] :boolean]}
+(defn- orphan-worth-reading?
+  "Whether a run whose process vanished left anything an analysis could read.
+
+   Two answers, and they are different questions. It read something: at least
+   one target reached a terminal read state, so there is reviewer behaviour in
+   the run to grade. Or it died in `fix`: that one left agents rewriting a
+   branch nobody was supervising, and what an analysis has to say about it is
+   not about coverage at all — it is the most important run in the record to
+   read, at any count.
+
+   `:targets-reviewed` is `report/coverage`'s `:reviewed`, which counts a target
+   only once a reviewer answered for it. Read off the count of ROUNDS instead —
+   which is what `reconcile/settle-one!` gated on — this says yes to every run
+   that got as far as opening a round, and a round opens on `:phase-started`,
+   before a reviewer is launched."
+  [{:keys [targets-reviewed in-flight]}]
+  (or (= "fix" (:phase in-flight))
+      (pos? (long (or targets-reviewed 0)))))
+
+(defn ^{:malli/schema [:=> [:cat :map :boolean] :boolean]}
   worth-analysing?
   "Pure. Every terminal outcome is worth a look EXCEPT a dry run, a run that
-   reviewed nothing, and a run that left no report to read.
+   reviewed nothing, an orphan that stopped before it read anything, and a run
+   that left no report to read.
 
    `:nothing-to-review` is the cheapest of all to exclude and the most obviously
    right: no reviewer read anything, so there is no loop behaviour in the run to
@@ -139,6 +159,13 @@
    reaches a human already — through the :review ledger entry that names the
    change ids, and through the lane escalating on the status.
 
+   An ORPHAN is excluded on exactly that ground and judged by `:targets-reviewed`
+   — see `orphan-worth-reading?`. `orphaned` is not a status the loop reaches; it
+   is stamped from outside, by whoever next takes the workstream's claim, and a
+   process killed seconds into its first review phase reaches this having read
+   nothing at all. Two such runs on one tree, alive 2.6s and 6.7s, each bought a
+   worktree and an hour of Opus to report that nothing happened.
+
    A dry run drove the stages without letting a fixer touch anything, so what it
    produced says how the loop behaves under a flag rather than how it behaves;
    analysing it would fill the record with runs that were never trying.
@@ -152,12 +179,21 @@
 
    Notably still included: `:review-failed`. A loop that could not review at all
    is the outcome most worth reading, and it still writes a report — the
-   frontend persists one as the events arrive, so the failure is in it."
-  [status dry-run? report?]
+   frontend persists one as the events arrive, so the failure is in it.
+
+   Takes the run map the enqueue site already holds rather than the status
+   alone, because two of the four exclusions are now facts about the run. That
+   is also what keeps this the ONLY gate: an orphan reaches the analysis through
+   `reconcile/settle-one!` and a finished one through `tasks.nido-review`, and a
+   second gate at either call site is a second place for the list above to be
+   incomplete."
+  [{:keys [status dry-run?] :as run} report?]
   (boolean (and status
                 (not (#{:nothing-to-review :stack-conflicted} (keyword status)))
                 (not dry-run?)
-                report?)))
+                report?
+                (or (not= :orphaned (keyword status))
+                    (orphan-worth-reading? run)))))
 
 (defn ^{:malli/schema [:=> [:cat :map] [:maybe :any]]}
   enqueue!
@@ -168,9 +204,8 @@
    not be running — an envelope sitting in the queue dir is picked up on the
    next drain, so a review run with the daemon down is analysed when it comes
    back up rather than lost."
-  [{:keys [status dry-run? report-path] :as run}]
-  (when (worth-analysing? status dry-run?
-                          (boolean (and report-path (fs/exists? (str report-path)))))
+  [{:keys [report-path] :as run}]
+  (when (worth-analysing? run (boolean (and report-path (fs/exists? (str report-path)))))
     (try
       (cstate/ensure-dirs!)
       (control/fire! (:project target) (:trigger target) (payload run))

@@ -154,7 +154,10 @@
 (defn- layer-glyph
   [status now]
   (case status
-    ("skipped" "pending" "nothing-to-review") "·"
+    ;; `orphaned` is here and not in the default arm, which is "✓". The status
+    ;; is stamped onto a row the run never got an answer for, so falling through
+    ;; would draw a target nobody opened as one reviewed clean.
+    ("skipped" "pending" "nothing-to-review" "orphaned") "·"
     "running"             (spinner now)
     "error"               "✗"
     "✓"))
@@ -166,6 +169,10 @@
     "pending" "queued"
     "running" "reviewing …"
     "error"   "failed"
+    ;; `queued` from the other end: a pending row is a run still going, and this
+    ;; one is a run that is not. `not read` rather than a finding count for the
+    ;; same reason `nothing-to-review` has none — see below.
+    "orphaned" "not read"
     ;; No count: there is no finding tally to report on a target nobody read,
     ;; and "0 findings" beside a ✓ is the reading this status exists to prevent.
     "nothing-to-review" "empty diff"

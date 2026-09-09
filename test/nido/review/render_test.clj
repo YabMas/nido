@@ -440,3 +440,18 @@
     (is (re-find #"launch failed" out))
     (is (re-find #"session limit" out)
         "so a reader is not sent to agent.log to find out the agent never ran")))
+
+(deftest a-target-an-orphaned-run-never-read-is-not-drawn-as-one-reviewed-clean
+  ;; The default arm of the glyph table is "✓". A row the run never got an
+  ;; answer for falls through to it unless the status is named, so a terminal
+  ;; report would show a tick against a target no reviewer opened.
+  (let [r {:target {:cwd "/x/feat/thing" :base "main" :layers 1 :files ["a"]}
+           :rounds [{:round 1 :status "orphaned"
+                     :phases [{:phase "review" :status "orphaned"
+                               :started-at "2026-01-01T00:00:00Z"
+                               :layers [{:label "stack" :stack? true :status "orphaned"}]}]}]}
+        s (render/frame r (java.time.Instant/parse "2026-01-01T00:00:10Z"))]
+    (is (not (str/includes? s "✓")))
+    (is (str/includes? s "not read")
+        "and it says which of the four quiet statuses it is: `queued` would
+         claim a run still going, `converged` a verdict from an earlier one")))

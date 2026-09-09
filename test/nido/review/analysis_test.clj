@@ -114,45 +114,84 @@
     (is (nil? (:reviewed-session p)))
     (is (str/includes? (:title p) "0 rounds"))))
 
+(defn- ended
+  "A run that reached `status`, having read a target. The gate takes the run map
+   the enqueue site holds, and everything but the status is beside the point for
+   a run that finished."
+  [status]
+  {:status status :dry-run? false :targets-reviewed 1})
+
 (deftest a-dry-run-is-not-analysed
   ;; It drove the stages without letting a fixer touch anything, so it says how
   ;; the loop behaves under a flag rather than how it behaves.
-  (is (not (analysis/worth-analysing? :converged true true))))
+  (is (not (analysis/worth-analysing? (assoc (ended :converged) :dry-run? true) true))))
 
 (deftest a-run-that-left-no-report-is-not-analysed
   ;; Queueing is cheap; what it queues is a worktree and an hour of budget for a
   ;; session whose first act is to open the report.
-  (is (not (analysis/worth-analysing? :converged false false))))
+  (is (not (analysis/worth-analysing? (ended :converged) false))))
 
 (deftest a-failed-review-is-analysed
   ;; It is the outcome nobody reads a report for, which is what makes it the one
   ;; most worth reading — and it still writes one.
-  (is (analysis/worth-analysing? :review-failed false true))
-  (is (analysis/worth-analysing? :no-progress false true))
-  (is (analysis/worth-analysing? :escalated false true)))
+  (is (analysis/worth-analysing? (ended :review-failed) true))
+  (is (analysis/worth-analysing? (ended :no-progress) true))
+  (is (analysis/worth-analysing? (ended :escalated) true)))
 
 (deftest a-run-with-no-terminal-status-is-not-analysed
-  (is (not (analysis/worth-analysing? nil false true))))
+  (is (not (analysis/worth-analysing? (ended nil) true))))
 
 (deftest a-run-that-reviewed-nothing-is-not-analysed
   ;; Every target came back with a blank manifest, so no reviewer read a line.
   ;; There is no loop behaviour in the run to say anything about, and left in it
   ;; would provision a worktree and an hour of budget on every empty-diff review.
-  (is (not (analysis/worth-analysing? :nothing-to-review false true)))
+  (is (not (analysis/worth-analysing? (ended :nothing-to-review) true)))
   ;; The status survives a round-trip through the report as a string, which is
   ;; the shape the enqueue site actually reads it in.
-  (is (not (analysis/worth-analysing? "nothing-to-review" false true))))
+  (is (not (analysis/worth-analysing? (ended "nothing-to-review") true))))
 
 (deftest a-run-that-stopped-on-a-conflicted-stack-is-not-analysed
   ;; The run exists to stop in a second rather than spend six agents on a branch
   ;; it cannot read; queueing a session with an hour of budget to say so would
   ;; give the saving straight back. What it found is a fact about the branch and
   ;; reaches a human through the ledger entry and the lane's escalation.
-  (is (not (analysis/worth-analysing? :stack-conflicted false true)))
-  (is (not (analysis/worth-analysing? "stack-conflicted" false true)))
+  (is (not (analysis/worth-analysing? (ended :stack-conflicted) true)))
+  (is (not (analysis/worth-analysing? (ended "stack-conflicted") true)))
   ;; The status the FIX stage produces is a different case: the loop ran, judged
   ;; and repaired, and how it got there is exactly what an analysis reads.
-  (is (analysis/worth-analysing? :fix-conflicted false true)))
+  (is (analysis/worth-analysing? (ended :fix-conflicted) true)))
+
+(deftest an-orphan-that-read-nothing-is-not-analysed
+  ;; The measured waste this gate exists for: two runs on one tree lived 2.6s
+  ;; and 6.7s, neither reaching a reviewer's first token, and each bought a
+  ;; worktree and an hour of Opus. `:orphaned` is stamped from outside, so it
+  ;; arrives as the string the report was persisted with.
+  (is (not (analysis/worth-analysing?
+            {:status "orphaned" :targets-reviewed 0
+             :in-flight {:round 1 :phase "review"}}
+            true)))
+  (is (not (analysis/worth-analysing?
+            {:status "orphaned" :targets-reviewed 0}
+            true))
+      "a run that died before its first phase reaches this with no in-flight
+       phase at all, and is the same nothing to read"))
+
+(deftest an-orphan-that-read-a-target-is-analysed
+  ;; It got far enough to produce loop behaviour, and how a run that was working
+  ;; came to stop is what an analysis is for.
+  (is (analysis/worth-analysing?
+       {:status "orphaned" :targets-reviewed 1
+        :in-flight {:round 1 :phase "warden"}}
+       true)))
+
+(deftest an-orphan-that-died-repairing-the-branch-is-analysed-at-any-count
+  ;; Its fixers outlived it and kept rewriting a branch nobody was supervising.
+  ;; Coverage is beside the point on that one: it is the run in the whole record
+  ;; most worth reading, and gating it on a count would drop exactly it.
+  (is (analysis/worth-analysing?
+       {:status "orphaned" :targets-reviewed 0
+        :in-flight {:round 1 :phase "fix"}}
+       true)))
 
 (defn- with-report
   "a-run pointed at a report file that actually exists — the enqueue gate now

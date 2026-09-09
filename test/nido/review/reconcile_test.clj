@@ -25,6 +25,12 @@
   [{:phase "review" :status "running" :started-at "t0" :ended-at nil
     :layers [{:label "a1" :status "running"}]}])
 
+(def ^:private read-one-then-died
+  "A run that got one layer's answer back and was killed on the next."
+  [{:phase "review" :status "running" :started-at "t0" :ended-at nil
+    :layers [{:label "a1" :status "reviewed" :findings 0}
+             {:label "stack" :stack? true :status "running"}]}])
+
 (def ^:private fixing
   [{:phase "review" :status "ok" :started-at "t0" :ended-at "t1"
     :layers [{:label "a1" :status "reviewed" :findings 2}]}
@@ -105,32 +111,62 @@
 
 ;; ---- settling ------------------------------------------------------------
 
-(deftest a-dead-run-is-forced-terminal-and-queued-for-analysis
+(deftest a-dead-run-is-forced-terminal-all-the-way-down
+  (in-tmp-home
+   (fn []
+     (with-redefs [queue/enqueue! (constantly "/q/1.edn")]
+       (write-run! (report-in "review-dead" tree reviewing) 0)
+       (let [out (reconcile/settle! {:cwd tree :run-id "review-mine"})
+             r   (read-back "review-dead")]
+         (is (= "orphaned" (:status r))
+             "the report is the only record the run leaves, and `running` in it
+              is a claim about a process that no longer exists")
+         (is (some? (:ended-at r)))
+         (is (= {:round 1 :phase "review"} (:orphaned (:reason r)))
+             "what it stopped ON, where a finished run carries its judgement")
+         (is (= "orphaned" (get-in r [:rounds 0 :status])))
+         (is (= "orphaned" (get-in r [:rounds 0 :phases 0 :status]))
+             "a phase left saying `running` makes the final frame animate a
+              stage that stopped hours ago")
+         (is (= "orphaned" (get-in r [:rounds 0 :phases 0 :layers 0 :status]))
+             "and the target rows with it: the same spinner argument reaches
+              them, and `coverage` reads them to say what the run covered")
+         (is (:proceed? out)
+             "it died reading the tree, so the branch is exactly what its
+              reviewers found and there is nothing to warn about"))))))
+
+(deftest an-orphan-whose-reviewers-never-answered-buys-no-analysis-session
+  ;; The measured waste: two runs on this very tree lived 2.6s and 6.7s, each
+  ;; killed inside its first review phase, and each provisioned a lite worktree
+  ;; and an hour of Opus to report that nothing happened. Settling it is still
+  ;; required — the refusal has to clear — but there is no loop behaviour in it.
   (in-tmp-home
    (fn []
      (let [queued (atom [])]
        (with-redefs [queue/enqueue! (fn [e] (swap! queued conj e) "/q/1.edn")]
          (write-run! (report-in "review-dead" tree reviewing) 0)
-         (let [out (reconcile/settle! {:cwd tree :run-id "review-mine"})
-               r   (read-back "review-dead")]
-           (is (= "orphaned" (:status r))
-               "the report is the only record the run leaves, and `running` in it
-                is a claim about a process that no longer exists")
-           (is (some? (:ended-at r)))
-           (is (= {:round 1 :phase "review"} (:orphaned (:reason r)))
-               "what it stopped ON, where a finished run carries its judgement")
-           (is (= "orphaned" (get-in r [:rounds 0 :status])))
-           (is (= "orphaned" (get-in r [:rounds 0 :phases 0 :status]))
-               "a phase left saying `running` makes the final frame animate a
-                stage that stopped hours ago")
-           (is (= 1 (count @queued))
-               "a run forced terminal is worth-analysing? by construction, and
-                the loops that die are the ones most worth reading")
-           (is (= {:project :nido :trigger :review-analysis}
-                  (:target (first @queued))))
-           (is (:proceed? out)
-               "it died reading the tree, so the branch is exactly what its
-                reviewers found and there is nothing to warn about")))))))
+         (let [out (reconcile/settle! {:cwd tree :run-id "review-mine"})]
+           (is (= 1 (count (:settled out))))
+           (is (empty? @queued))
+           (is (nil? (:analysis (first (:settled out))))
+               "the gate is `analysis/worth-analysing?`, so refusing shows up
+                here as no envelope rather than as a key nobody set")))))))
+
+(deftest an-orphan-that-got-an-answer-out-of-a-reviewer-is-analysed
+  ;; It produced loop behaviour, and how a run that was working came to stop is
+  ;; exactly what an analysis reads.
+  (in-tmp-home
+   (fn []
+     (let [queued (atom [])]
+       (with-redefs [queue/enqueue! (fn [e] (swap! queued conj e) "/q/1.edn")]
+         (write-run! (report-in "review-dead" tree read-one-then-died) 0)
+         (reconcile/settle! {:cwd tree :run-id "review-mine"})
+         (is (= 1 (count @queued)))
+         (is (= {:project :nido :trigger :review-analysis}
+                (:target (first @queued))))
+         (is (= 1 (get-in (first @queued) [:payload :targets-reviewed]))
+             "one target answered for, and the row the run died on is not a
+              second — the count the analysis is briefed on is the true one"))))))
 
 (deftest a-run-that-died-repairing-the-branch-refuses-the-next-one
   (in-tmp-home
@@ -187,7 +223,9 @@
      (let [queued (atom [])]
        (with-redefs [queue/enqueue! (fn [e] (swap! queued conj e) "/q/1.edn")]
          ;; No round at all: the fold opens one only when a phase starts, so
-         ;; this is a process that vanished before its first reviewer.
+         ;; this is a process that vanished before its first reviewer. It is
+         ;; refused by the same gate an orphan with an empty round is — nothing
+         ;; here treats a folded round as evidence a reviewer ran.
          (write-run! (assoc (report-in "review-stillborn" tree []) :rounds []) 0)
          (let [out (reconcile/settle! {:cwd tree :run-id "review-mine"})]
            (is (= "orphaned" (:status (read-back "review-stillborn"))))

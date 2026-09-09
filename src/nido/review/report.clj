@@ -434,8 +434,25 @@
 (def ^:private row-rank
   "How far along a row is. A row only ever moves forward: events cross threads
    and can be folded out of order, and a target that flickered back to `running`
-   after reporting would be the display lying about work that is done."
-  {"pending" 0 "running" 1 "reviewed" 2 "skipped" 2 "error" 2 "nothing-to-review" 2})
+   after reporting would be the display lying about work that is done.
+
+   Rank 2 is `this row has stopped`, and it is four different endings — an
+   answer, a cache hit, a failure, an empty diff — plus `orphaned-status`, which
+   no event produces: it is stamped from outside by `close-orphaned-round` when
+   the run holding the row died. Which of the five mean the run ANSWERED for the
+   target is `read-statuses`, a narrower question this map deliberately does not
+   answer."
+  {"pending" 0 "running" 1
+   "reviewed" 2 "skipped" 2 "error" 2 "nothing-to-review" 2 "orphaned" 2})
+
+(defn- terminal-row?
+  "Whether a target row has stopped moving.
+
+   A status `row-rank` does not name reads as still in flight, which is the safe
+   direction: the fold only ever moves a row forward, so an unknown status is
+   treated as one an answer may still overwrite."
+  [row]
+  (<= 2 (row-rank (:status row) 0)))
 
 (defn- move-target
   "Advance one target's row on the running review phase.
@@ -479,6 +496,18 @@
        (keep :fixed-count)
        (reduce + 0)))
 
+(def ^:private read-statuses
+  "The row statuses that say THIS run answered for the target: a reviewer came
+   back, a reviewer failed, or the diff was empty and there was nothing to come
+   back about.
+
+   Every other status is a target this run did not answer for, for one of two
+   reasons. `skipped` is the convergence cache answering instead. `pending`,
+   `running` and `orphaned` are a run that stopped before it could — and reading
+   them as read is what `not= \"skipped\"` did, which held only for as long as
+   every row reaching `coverage` had finished."
+  #{"reviewed" "error" "nothing-to-review"})
+
 (defn ^{:malli/schema [:=> [:cat :ReviewReport] :map]}
   coverage
   "How much of the stack this run READ, as `{:reviewed n :skipped n}` over
@@ -490,6 +519,13 @@
    from an earlier run rather than reached in this one. Skipped in EVERY round
    is what counts as skipped, because a layer re-read once and converged after
    was read here.
+
+   THE TWO DO NOT PARTITION THE TARGETS, and a run that stopped is where the gap
+   opens: a target left `pending`, `running` or `orphaned` was neither read here
+   nor remembered from before, so it is counted in neither number. `:reviewed`
+   is the load-bearing one — two gates spend an agent session on the strength of
+   it being positive — and inflating it with rows nobody ever opened is a claim
+   about work that did not happen.
 
    The pair is what separates a branch reviewed clean from one mostly remembered
    clean. Without it a `clean` verdict over three targets out of eight is
@@ -503,9 +539,11 @@
                       (filter #(= "review" (:phase %)))
                       (mapcat :layers)
                       (group-by :label))
-        read?    (fn [[_ rows]] (boolean (some #(not= "skipped" (:status %)) rows)))]
+        statuses (fn [[_ rows]] (map :status rows))
+        read?    (fn [group] (boolean (some read-statuses (statuses group))))
+        skipped? (fn [group] (every? #(= "skipped" %) (statuses group)))]
     {:reviewed (count (filter read? by-label))
-     :skipped  (count (remove read? by-label))}))
+     :skipped  (count (filter skipped? by-label))}))
 
 (defn- finalize
   [report status ctx at]
@@ -554,20 +592,32 @@
           (= "running" (:status ph)) (assoc :phase (:phase ph)))))))
 
 (defn- close-orphaned-round
-  "Close a round whose run never came back, and every phase still open in it.
+  "Close a round whose run never came back — every phase still open in it, and
+   every target row still in flight inside those phases.
 
-   The phases are restamped rather than left saying `running`, because `running`
-   is what the renderer draws a spinner for: left alone, the final frame of a
-   terminal report animates a stage that stopped hours ago."
+   Nothing is left saying `running`, because `running` is what the renderer
+   draws a spinner for: left alone, the final frame of a terminal report
+   animates a stage that stopped hours ago. That argument reaches the rows as
+   well as the phases, and it is not the only one that does. A row is also a
+   COUNT: `coverage` reads the rows to say how much of the stack this run
+   answered for, and a `pending` row inside a terminal report is a target
+   claimed as covered by a run that never opened it.
+
+   Restamped, not dropped. The round named every target before it reviewed any
+   of them, so the rows are what say what this run set out to read — which is
+   the one thing an orphan can still tell anybody."
   [round at]
-  (-> round
-      (assoc :status orphaned-status :ended-at at)
-      (update :phases
-              (fn [phases]
-                (mapv #(if (= "running" (:status %))
-                         (assoc % :status orphaned-status :ended-at at)
-                         %)
-                      phases)))))
+  (letfn [(close-row [row]
+            (cond-> row
+              (not (terminal-row? row)) (assoc :status orphaned-status)))
+          (close-phase [ph]
+            (if (= "running" (:status ph))
+              (cond-> (assoc ph :status orphaned-status :ended-at at)
+                (seq (:layers ph)) (update :layers #(mapv close-row %)))
+              ph))]
+    (-> round
+        (assoc :status orphaned-status :ended-at at)
+        (update :phases #(mapv close-phase %)))))
 
 (defn ^{:malli/schema [:=> [:cat :ReviewReport :string] :ReviewReport]}
   orphaned
