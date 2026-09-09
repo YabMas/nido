@@ -55,15 +55,24 @@
    unverified in the branch. Two remainders read alike in a list of titles and
    ask opposite things of whoever picks them up — one needs checking, the other
    needs doing. Empty for a list where nothing is owed and the question cannot
-   arise."
+   arise.
+
+   `:layer` is what makes this list joinable back onto a later run's targets —
+   `stages/prior-open` is the reader, and a label is the only identity that
+   survives the repair a `:fix` row is asking for. The warden's owner where it
+   assigned one, since that is where the repair goes whoever reported it; the
+   reviewer that raised it otherwise, which is the best available answer for a
+   finding no warden ruled on and still the layer whose reviewer read the code."
   [handed findings]
   (into []
-        (map (fn [{:keys [id title file line-start disposition because] :as f}]
+        (map (fn [{:keys [id title file line-start disposition because
+                          owner-layer from-layer] :as f}]
                (cond-> {:title (str (or title "(untitled finding)"))}
                  id          (assoc :id (str id))
                  file        (assoc :where (str file (when line-start (str ":" line-start))))
                  disposition (assoc :disposition (keyword disposition))
                  because     (assoc :because (str because))
+                 (or owner-layer from-layer) (assoc :layer (str (or owner-layer from-layer)))
                  (verdict/handed? handed f) (assoc :handed true))))
         findings))
 
@@ -140,11 +149,29 @@
    entry is where they have to be durable: report.json lives in a run dir that
    is routinely reclaimed, and both facts were reachable only inside it. A
    `workspace-drifted` entry named neither revision, and a run that folded two
-   layers reported no work at all about a branch it had rewritten."
+   layers reported no work at all about a branch it had rewritten.
+
+   `:open` also carries what the LAST run left owed that this one never answered,
+   each row marked `:inherited`. Without it a run whose reviewers were handed a
+   prior obligation and said nothing about it writes an entry holding nothing —
+   and that entry is the whole of what the run after gets, so the obligation
+   disappears at the first quiet run rather than at the run that settled it.
+   Deduped on the finding id, which is derived from file, line and title: a
+   defect this run raised again is this run's, and its own accounting decides
+   what is owed on it."
   [final report report-path]
   (let [handed   (verdict/handed-to-a-fixer final)
         refused  (refused-repairs final)
-        open     (ledger-findings handed (verdict/open-across-run final))
+        raised   (ledger-findings handed (verdict/open-across-run final))
+        seen     (into #{} (keep :id) raised)
+        ;; `:handed` does not survive the carry. It claims a repair is sitting in
+        ;; the branch that no reviewer has read, and the run writing this entry
+        ;; put the row in front of the reviewer of its own layer — so whatever
+        ;; is true of it now, unread is not.
+        open     (into raised
+                       (comp (remove #(contains? seen (:id %)))
+                             (map #(-> % (dissoc :handed) (assoc :inherited true))))
+                       (stages/unanswered-inherited final))
         kept     (ledger-findings #{} (verdict/kept-across-run final))
         repaired (count (filter :handed open))
         parked   (count (filter #(= :park (:disposition %)) open))

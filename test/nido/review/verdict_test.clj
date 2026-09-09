@@ -476,7 +476,25 @@
     (is (not (verdict/still-answers?
               standing {:status :converged :findings [] :history []}
               {:summary {:fix-attempts 2}}))
-        "a fixer edits code, and a repair that moves a boundary is what this pass exists to catch")))
+        "a fixer edits code, and a repair that moves a boundary is what this pass exists to catch")
+    (is (not (verdict/still-answers?
+              standing
+              {:status :clean :findings [] :history []
+               :carry {:inherited-open [{:id "a" :layer "core"
+                                         :title "the extent reader" :disposition :fix}]}}
+              rpt))
+        "the other three tests are all about this run — a run whose reviewers
+         said nothing over a defect an earlier one ruled :fix passes every one
+         of them, and carrying the verdict there republishes a :needs naming
+         the unrepaired defect as a thing to do")
+    (is (verdict/still-answers?
+         standing
+         {:status :clean :findings []
+          :history [{:iter 1 :findings [{:id "a" :title "t" :disposition :closed}]}]
+          :carry {:inherited-open [{:id "a" :layer "core" :title "t"}]}}
+         rpt)
+        "an inherited finding this run ruled on is answered, and the pass has
+         no new evidence to weigh")))
 
 (deftest a-decision-is-re-asked-rather-than-re-asserted
   ;; :invalidated and :standing-challenged are questions owed to a human.

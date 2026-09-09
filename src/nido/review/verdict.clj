@@ -473,6 +473,15 @@
      boundary is a thing no reviewer judged against the design — which is
      precisely what this pass exists to catch. A run that landed one has a tree
      the standing verdict never saw.
+   - The WORKSTREAM is holding nothing either. The first three tests are all
+     about this run, and the docstring's own argument — there is no evidence in
+     front of this pass that was not in front of the last one — is true of the
+     round and false of the workstream: a run whose reviewers said nothing over
+     a defect an earlier run ruled `:fix` passes every one of them. Carrying the
+     verdict there republishes a `:needs` naming that unrepaired defect as a
+     thing to do, on an entry claiming nothing is owed.
+     `stages/unanswered-inherited` is the same read the round's own `clean` and
+     the cache's `:converged` are refused on.
 
    A DECISION is never carried. :invalidated and :standing-challenged put a
    question to a human, and re-asserting one unlooked-at would keep escalating a
@@ -492,6 +501,7 @@
         (not (decision? prior))
         (empty? (open-across-run final))
         (empty? (kept-across-run final))
+        (empty? (stages/unanswered-inherited final))
         (zero? (or (get-in report [:summary :fix-attempts]) 0)))))
 
 (defn ^{:malli/schema [:=> [:cat :map :int] :map]}

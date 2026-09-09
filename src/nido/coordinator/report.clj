@@ -1335,7 +1335,19 @@
    [:because     {:optional true} [:maybe string?]]
    ;; A repair for this one is in the branch and nothing checked it. The rest
    ;; of the list needs doing; this needs reading. Present only when true.
-   [:handed      {:optional true} boolean?]])
+   [:handed      {:optional true} boolean?]
+   ;; Which layer owes it — the warden's owner where it assigned one, the
+   ;; reviewer that raised it otherwise. The one identity a repair cannot move:
+   ;; a patch hash is about content that a fix by definition changes, so a later
+   ;; run joining this list back onto its own targets has nothing else to join
+   ;; on. Absent on a branch with no layers and on a finding no layer owns.
+   [:layer       {:optional true} [:maybe string?]]
+   ;; This row is a PREVIOUS run's open finding that the run writing the entry
+   ;; neither raised nor answered. Present only when true, and never carried a
+   ;; second time: a defect whose owning layer was seeded to a reviewer and
+   ;; still went unreported is not evidence enough to hold the branch open for
+   ;; ever. It says to a reader that the last two runs were both asked.
+   [:inherited   {:optional true} boolean?]])
 
 (def ReviewReport
   "The review-loop outcome as one terminal ledger event (verdict + counts). Points
@@ -2635,15 +2647,22 @@
 
    `_(repaired, unverified)_` marks the one row that asks the opposite thing of
    a reader: a repair for it is already in the branch and nothing checked it, so
-   it wants reading rather than doing."
+   it wants reading rather than doing.
+
+   `_(carried from the previous run)_` marks a row this run did not raise. Its
+   reviewer was handed the finding and reported nothing, so the row is a
+   previous run's ruling standing unanswered rather than a fresh reading — which
+   is the difference between two people having seen the defect and one having
+   seen it twice."
   [heading findings]
   (str "\n## " heading "\n"
        (str/join "\n"
-                 (for [{:keys [title where disposition because handed]} findings]
+                 (for [{:keys [title where disposition because handed inherited]} findings]
                    (str "- " (when disposition (str "**" (name disposition) "** — "))
                         title
                         (when where (str "  `" where "`"))
                         (when handed "  _(repaired, unverified)_")
+                        (when inherited "  _(carried from the previous run)_")
                         (when because (str "\n  - " because)))))))
 
 (defn- review->markdown [{:keys [status base base-rev rounds findings-fixed

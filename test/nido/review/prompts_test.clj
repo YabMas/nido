@@ -915,3 +915,27 @@ layers, it is not yours"))
   (is (nil? (prompts/standing-needs-block nil)))
   (is (nil? (prompts/standing-needs-block {:round 1 :verdict :sound}))
       "saying \"nothing outstanding\" invites a reviewer to look for one"))
+
+(deftest an-earlier-runs-unmet-obligation-is-put-to-the-layers-reviewer
+  ;; Nothing else in a run knows the defect was ever ruled on, so a silence
+  ;; here is read as the defect being gone.
+  (let [out (prompts/prior-open-block
+             [{:id "cc56069f" :title "Preserve tagged-literal identity when reading extents"
+               :where "extraction/core.clj:122" :disposition :fix
+               :because "the reader drops the tag"}])]
+    (is (str/includes? out "Preserve tagged-literal identity when reading extents"))
+    (is (str/includes? out "extraction/core.clj:122")
+        "a reviewer sent to check a claim needs the site the claim was made at")
+    (is (str/includes? out "ruled fix"))
+    (is (str/includes? out "the reader drops the tag")
+        "the warden's reason is what says which defect this is, not just where")
+    (is (str/includes? out "still true is a question, not a fact")
+        "that run read a different tree; a reviewer that copies it back
+         unverified launders a stale claim into a fresh finding")
+    (is (str/includes? out "report it as a finding")
+        "a finding is the only currency a fixer can be handed")))
+
+(deftest a-run-inheriting-nothing-tells-the-reviewer-nothing
+  (is (nil? (prompts/prior-open-block nil)))
+  (is (nil? (prompts/prior-open-block []))
+      "an empty list rendered as a heading invites a reviewer to look for one"))

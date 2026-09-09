@@ -280,6 +280,13 @@
      about the range in front of it. The verdict read a different tree, so reporting it back
      unverified would launder an old claim into a fresh finding."
     {:signature [:=> [:catn [:standing :any]] [:maybe :string]]})
+  (Operation prior-open-block
+    "What an earlier RUN left owed against this exact layer, put to the reviewer of the code
+     that holds it — the same question `standing-needs-block` asks, about the other half of
+     what a run leaves behind. A settled ruling reaches a later run through the workstream
+     cache; an UNSETTLED one had no channel at all, so a defect ruled `fix` and never repaired
+     was invisible to the reviewer of its own file."
+    {:signature [:=> [:catn [:prior-open :any]] [:maybe :string]]})
   (Operation fix-prompt "The instruction to fix given findings."
     {:signature [:=> [:catn [:opts :map]] :string]})
   (Operation toc-block "The stack's table of contents."

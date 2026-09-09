@@ -748,7 +748,8 @@
                                       :design         {:seq 3}
                                       :design-verdict {:verdict :strained :design-seq 3
                                                        :round 4 :reason "pressure"
-                                                       :needs "close-turn! still tests (empty? open)"}))
+                                                       :needs "close-turn! still tests (empty? open)"}
+                                      nil))
                   codex/review! (fn [opts] (reset! seen opts)
                                   {:status :clean :findings []})]
       ((:run stages/review-stage) {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 1})
@@ -2420,7 +2421,8 @@
   (fn [_ _ kind]
     (case kind
       :design         {:seq 3}
-      :design-verdict verdict)))
+      :design-verdict verdict
+      nil)))
 
 (deftest a-standing-verdicts-unanswered-item-becomes-the-next-runs-question
   ;; The verdict pass runs after the loop returns, so nothing in the run that
@@ -2489,6 +2491,117 @@
       (is (= (:patch-hash cold) (:patch-hash warm))
           "a target skipped on a converged hash is one whose code nobody claims
            changed, and the standing item says nothing about the code"))))
+
+;; ── The last run's unmet obligations, back into this one ───────────────────
+
+(defn- review-ledger
+  "A ledger whose last :review entry holds `open`."
+  [open]
+  (fn [_ _ kind]
+    (when (= :review kind) {:format :review-report :open open})))
+
+(deftest the-last-runs-open-list-is-read-back
+  ;; Every run writes it and, until this, no run read it — so a finding ruled
+  ;; :fix and never repaired reached the next run through no channel at all.
+  (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                ws/latest-entry (review-ledger
+                                 [{:id "cc56069f" :layer "method-extraction"
+                                   :title "Preserve tagged-literal identity"
+                                   :where "core.clj:122" :disposition :fix}])]
+    (is (= ["cc56069f"] (mapv :id (stages/prior-open "/w")))))
+
+  (testing "a row an earlier run already inherited is not inherited again"
+    ;; The carry is one hop by construction. A defect whose owning layer was
+    ;; handed to a reviewer and still went unreported is not evidence enough to
+    ;; hold the branch open for ever, and a stale one would otherwise block
+    ;; every future run with no exit but a human.
+    (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry (review-ledger
+                                   [{:id "a" :layer "core" :title "t" :disposition :fix}
+                                    {:id "b" :layer "core" :title "u" :disposition :fix
+                                     :inherited true}])]
+      (is (= ["a"] (mapv :id (stages/prior-open "/w"))))))
+
+  (testing "a workstream with no review behind it seeds nothing"
+    (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry (fn [& _] nil)]
+      (is (empty? (stages/prior-open "/w"))))))
+
+(deftest an-inherited-obligation-reaches-the-reviewer-of-its-own-layer
+  (let [[core wiring stack]
+        (stages/with-prior-open
+          [{:label "core"} {:label "wiring"}
+           {:label "stack" :stack? true :composition {:layers [{:label "core"}]}}]
+          [{:id "a" :layer "core" :title "the extent reader" :disposition :fix}])]
+    (is (= ["a"] (mapv :id (:prior-open core)))
+        "matched on the label — a repair moves the patch a hash is taken over,
+         so the hash cannot carry an obligation across the repair it asks for")
+    (is (nil? (:prior-open wiring)) "a layer nothing is owed of is told nothing")
+    (is (nil? (:prior-open stack))
+        "the composition pass is asked whether the cut holds and told not to
+         answer with a defect at a line"))
+
+  (testing "a park is withheld: it is a question already put to a human"
+    ;; parked-blocker carries it to the gate. A reviewer asked to re-report it
+    ;; would have a fixer patch away the very question somebody is answering.
+    (let [[core] (stages/with-prior-open
+                   [{:label "core"}]
+                   [{:id "p" :layer "core" :title "t" :disposition :park}])]
+      (is (nil? (:prior-open core)))))
+
+  (testing "a run with nothing inherited changes nothing"
+    (let [targets [{:label "core"}]]
+      (is (= targets (stages/with-prior-open targets []))))))
+
+(deftest an-obligation-this-run-ruled-on-is-this-runs
+  ;; Answered means RULED, not repaired: from the moment a reviewer raises it
+  ;; again the run's own accounting decides what is owed, and carrying the
+  ;; inherited copy beside it would count one defect twice.
+  (let [inherited [{:id "a" :layer "core" :title "t"}
+                   {:id "b" :layer "core" :title "u"}]]
+    (is (= ["b"] (mapv :id (stages/unanswered-of
+                            inherited
+                            [[{:id "a" :title "t" :disposition :fix}]]))))
+    (is (= ["a" "b"] (mapv :id (stages/unanswered-of inherited [[]]))))))
+
+(deftest an-unanswered-obligation-denies-its-layer-the-irrevocable-mark
+  ;; cache.clj states :converged is not granted by an agent and cannot be
+  ;; revoked by one, so a layer that takes it while a known defect stands in it
+  ;; is exempt from the code lane until somebody happens to edit the file.
+  (let [core   {:label "core" :patch-hash "h1"}
+        wiring {:label "wiring" :patch-hash "h2"}]
+    (is (= [[core :partial] [wiring :converged]]
+           (stages/deny-inherited-convergence
+            [[core :converged] [wiring :converged]]
+            [{:id "a" :layer "core" :title "t"}])))
+    (is (= [[core :converged]]
+           (stages/deny-inherited-convergence [[core :converged]] []))
+        "nothing inherited is nothing to deny")))
+
+(deftest a-quiet-round-over-an-unanswered-obligation-is-not-clean
+  ;; The miss whole: the reviewer of the file holding an open :fix finding
+  ;; returned no findings, and the run published that nothing was owed.
+  (let [ctx {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 2
+             :carry {:quiet-once true
+                     :inherited-open [{:id "a" :layer "core" :title "t"}]}}]
+    (with-redefs [layers/patch-hash (fn [& _] nil)
+                  codex/merge-base  (fn [& _] "FORK")
+                  cache/read-cache  (fn [& _] {})
+                  conformance/findings (fn [& _] [])
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry (review-ledger [{:id "a" :layer "core" :title "t"
+                                                   :disposition :fix}])
+                  codex/review! (fn [_] {:status nil :findings []})]
+      (is (= :unresolved (:status ((:run stages/review-stage) ctx)))
+          "a quiet round is evidence about what the reviewers read, never
+           evidence that a defect somebody already ruled :fix has gone")
+
+      (testing "and a round that answered it earns clean back"
+        (is (= :clean
+               (:status ((:run stages/review-stage)
+                         (assoc ctx :history
+                                [{:iter 1 :findings [{:id "a" :title "t"
+                                                      :disposition :fix}]}])))))))))
 
 ;; ── Evidence that a round moved the code ───────────────────────────────────
 

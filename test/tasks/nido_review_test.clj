@@ -485,6 +485,66 @@
     (is (not (str/includes? (report/report->markdown (assoc ev :format :review-report))
                             "kept")))))
 
+(deftest an-open-finding-records-the-layer-that-owes-it
+  ;; The label is what a later run joins this list back onto its own targets
+  ;; by. A patch hash cannot: a `fix` row is asking for the repair that moves it.
+  (let [final {:status :escalated
+               :history [{:iter 1 :findings [{:id "f1" :title "the extent reader"
+                                              :from-layer "stack"
+                                              :owner-layer "method-extraction"
+                                              :disposition :fix}]}]
+               :findings []}
+        [o]   (:open (t/review-event final
+                                     {:summary {:rounds 1 :fix-attempts 0}
+                                      :target {:base "main" :base-rev "x"}}
+                                     "/runs/r/report.json"))]
+    (is (= "method-extraction" (:layer o))
+        "the warden's owner is where the repair goes, whoever reported it")))
+
+(deftest a-quiet-run-still-records-what-the-run-before-it-left-owed
+  ;; Otherwise the obligation disappears at the first quiet run rather than at
+  ;; the run that settles it: this entry is the whole of what the next run gets.
+  (let [final {:status :unresolved :history [] :findings []
+               :carry {:inherited-open
+                       [{:id "cc56069f" :layer "method-extraction"
+                         :title "Preserve tagged-literal identity"
+                         :where "core.clj:122" :disposition :fix :handed true}]}}
+        ev    (t/review-event final
+                              {:summary {:rounds 1 :fix-attempts 0}
+                               :target {:base "main" :base-rev "x"}}
+                              "/runs/r/report.json")
+        [o]   (:open ev)]
+    (is (= 1 (:findings-remaining ev)))
+    (is (= "cc56069f" (:id o)))
+    (is (true? (:inherited o))
+        "a reader has to be able to tell an obligation this run raised from one
+         it merely failed to answer")
+    (is (nil? (:handed o))
+        "the claim that a repair sits unread was the last run's; this run put
+         the row in front of the reviewer of its own layer")
+    (is (= ev (report/validate-event :review ev)))
+    (is (str/includes? (report/report->markdown (assoc ev :format :review-report))
+                       "carried from the previous run")
+        "two people having seen the defect and one having seen it twice are
+         different evidence, and the entry is where a human reads which"))
+
+  (testing "a finding this run raised again is not carried beside itself"
+    (let [final {:status :escalated
+                 :history [{:iter 1 :findings [{:id "cc56069f" :title "the extent reader"
+                                                :owner-layer "method-extraction"
+                                                :disposition :fix}]}]
+                 :findings []
+                 :carry {:inherited-open [{:id "cc56069f" :layer "method-extraction"
+                                           :title "Preserve tagged-literal identity"
+                                           :disposition :fix}]}}
+          ev    (t/review-event final
+                                {:summary {:rounds 1 :fix-attempts 0}
+                                 :target {:base "main" :base-rev "x"}}
+                                "/runs/r/report.json")]
+      (is (= 1 (:findings-remaining ev)) "one defect, counted once")
+      (is (= "the extent reader" (:title (first (:open ev))))
+          "the run that raised it owns it, and its own ruling is the current one"))))
+
 (deftest review-event-omits-open-when-nothing-is-owed
   (let [ev (t/review-event {:status :clean :history [] :findings []}
                            {:summary {:rounds 1 :fix-attempts 0}

@@ -264,6 +264,41 @@
      patch the question somebody was asked to answer."
     {:signature [:=> [:catn [:cwd Path]] [:maybe :map]]
      :delegates [discover-design-record discover-prior-verdict]})
+  (Operation prior-open
+    "What the LAST review of this workstream left owed, as ledger rows carrying the layer each
+     is owed of. Every run writes that list and, until this, no run read it — so an obligation
+     the loop itself recorded reached the next run through no channel: the reviewer of the
+     file holding it started blank, the layer took an irrevocable :converged mark over it, and
+     the design verdict was carried forward as though the run had produced no evidence. One
+     read, three refusals. The carry is one hop — a row an earlier run already inherited is
+     dropped — because a defect whose layer was handed to a reviewer and still went unreported
+     is not evidence enough to hold a branch open for ever."
+    {:signature [:=> [:catn [:cwd Path]] :any]})
+  (Operation with-prior-open
+    "Each layer's reviewer told what the last run left owed against THAT layer, matched by
+     label: a repair moves the patch a hash is taken over, so a hash cannot carry an
+     obligation across the repair it is asking for. A park is withheld — it is a question
+     already put to a human — and so is the composition pass, as with `with-standing-needs`."
+    {:signature [:=> [:catn [:targets :any] [:inherited :any]] :any]})
+  (Operation unanswered-of
+    "The inherited rows this run has said nothing about. Pure. Answered means RULED, not
+     repaired: from the moment a reviewer raises one again the run's own accounting decides
+     what is owed on it, and carrying the inherited copy beside it would count one defect
+     twice."
+    {:signature [:=> [:catn [:inherited :any] [:rounds :any]] :any]})
+  (Operation unanswered-inherited
+    "The same question asked of a terminal ctx — what the last run left owed that this whole
+     run neither raised nor answered. Three readers: the round that ends quiet may not call
+     itself clean while it holds one, the ledger entry carries them so the next run inherits
+     what this one could not settle, and the design verdict is not carried forward over one."
+    {:signature [:=> [:catn [:final :map]] :any]
+     :delegates [unanswered-of]})
+  (Operation deny-inherited-convergence
+    "The same [target status] pairs with :converged downgraded to :partial on every target an
+     unanswered inherited finding names. Pure. :converged is not granted by an agent and
+     cannot be revoked by one, so a layer that takes it while a known defect stands in it is
+     exempt from the code lane until somebody happens to edit the file."
+    {:signature [:=> [:catn [:statuses :any] [:unanswered :any]] :any]})
   (Operation stance-path "Where a project's stance text lives."
     {:signature [:=> [:catn [:project ProjectName]] Path]})
   (Operation read-stance "A project's stance text."
@@ -299,7 +334,7 @@
     "Write what this round left each reviewed target at into the cache: its status, and what
      the run has settled about it."
     {:signature [:=> [:catn [:cwd Path] [:ctx :map]] :any]
-     :delegates [reviewed-statuses answered-for]})
+     :delegates [reviewed-statuses answered-for deny-inherited-convergence unanswered-of]})
   (Operation resolve-handle "The identity a finding is filed under."
     {:signature [:=> [:catn [:handles :any] [:f Finding]] :any]})
   (Operation apply-rulings "The warden's per-finding rulings, merged in."

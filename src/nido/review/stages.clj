@@ -32,10 +32,14 @@
    lives in a test rather than in the enum itself.
 
    `:unfixable` is in both: the engine's give-up counter reaches it, and so does
-   the warden stage, over the warden's own head, when a park has stood too long."
+   the warden stage, over the warden's own head, when a park has stood too long.
+   `:unresolved` is in both for the same shape of reason — the engine reaches it
+   when a round stops holding something, and the review stage reaches it over a
+   round that found nothing while the last run's `:open` list still names a
+   layer nobody answered for."
   #{:stack-conflicted :nothing-to-review :clean :warden-indeterminate :unfixable
     :dry-run :workspace-drifted :fix-unrouted :fix-conflicted :fix-rolled-back
-    :fix-declined})
+    :fix-declined :unresolved})
 
 (def ^:private fenced-json-re #"(?s)```json\s*(\{.*?\})\s*```")
 
@@ -468,7 +472,7 @@
             targets))))
 
 ;; Defined below, with the other readings taken off the workstream's ledger.
-(declare standing-needs)
+(declare standing-needs prior-open)
 
 (defn ^{:malli/schema [:=> [:cat :any :any] :any]}
   with-standing-needs
@@ -493,6 +497,42 @@
     targets
     (mapv #(cond-> % (nil? (:composition %)) (assoc :standing standing))
           targets)))
+
+(defn ^{:malli/schema [:=> [:cat :any :any] :any]}
+  with-prior-open
+  "Hand each layer the findings the last run left OWED against it, so the one
+   reviewer that reads that code is told what is already known about it — see
+   `prior-open`.
+
+   Matched on the label, which is the only identity that survives the gap. The
+   patch hash cannot do it: a run that repairs a layer moves its patch, so the
+   answers hung off the hash are about content that no longer exists, and
+   `answered-by-layer` makes the same argument about the settled half of the
+   same history.
+
+   A PARK is withheld, and for the reason `with-standing-needs` withholds an
+   invalidating verdict's `:needs`: a park is a question put to a human — that
+   is what makes it a park — and `tasks.nido-review/parked-blocker` already
+   carries it to the gate. A reviewer asked to re-report it would have a fixer
+   patch away the very question somebody is being asked.
+
+   Never the composition pass, again as `with-standing-needs`: these are
+   defects at lines, and that pass is told not to answer with one. A flat
+   branch's whole-stack target has no `:composition` and does get them.
+
+   Nothing it adds reaches the cache key — `with-patch-hashes` builds that from
+   the range — which matters here for the same reason it matters there: the
+   inherited list is the same text every round of a run, and a target skipped on
+   a converged hash is one whose code nobody is claiming changed."
+  [targets inherited]
+  (let [by-layer (group-by :layer (remove #(= :park (:disposition %)) inherited))]
+    (if (empty? by-layer)
+      targets
+      (mapv (fn [t]
+              (if-let [owed (and (nil? (:composition t)) (seq (get by-layer (:label t))))]
+                (assoc t :prior-open (vec owed))
+                t))
+            targets))))
 
 (defn- composition-key
   "The composition target's identity: the patch it spans, plus the cut that
@@ -782,7 +822,7 @@
 ;; Defined below, beside the cache reasoning they belong with. `record-review!`
 ;; is called from both stages that can end a round — see its docstring — and
 ;; `record-statuses!` from the fan-out, for a round that ends by aborting.
-(declare record-review! record-statuses! salvaged-statuses)
+(declare record-review! record-statuses! salvaged-statuses unanswered-of)
 
 (defn- review-target!
   "One target's review, as a VALUE: the reviewer's result, or `{:target …
@@ -809,7 +849,8 @@
                        :label (:label t) :brief (:brief t)
                        :composition (:composition t)
                        :prior-fixes (:prior-fixes t)
-                       :standing (:standing t)})
+                       :standing (:standing t)
+                       :prior-open (:prior-open t)})
                      :target t)]
         (announce-target! ctx "reviewed" t {:findings (count (:findings r))})
         r)
@@ -831,12 +872,19 @@
         ;; rebase moved it out from under a run and nothing noticed, so the
         ;; round reviewed one state and tried to fix another.
         at      (layers/resolve-rev cwd "@")
+        ;; What the last run left owed, onto the carry so the stages after this
+        ;; one can be asked whether the run answered it. The carry is the only
+        ;; channel between rounds and it survives onto the terminal ctx, which
+        ;; is where the ledger entry and the design verdict read it from.
+        inherit (prior-open cwd)
+        ctx     (cond-> ctx (seq inherit) (assoc-in [:carry :inherited-open] inherit))
         all     (with-patch-hashes
                  cwd (-> (review-targets cwd base)
                          (with-composition-memory (:history ctx))
                          (with-fix-memory (:history ctx)
                                           (get-in ctx [:carry :rolled-back] {}))
-                         (with-standing-needs (standing-needs cwd))))
+                         (with-standing-needs (standing-needs cwd))
+                         (with-prior-open (get-in ctx [:carry :inherited-open]))))
         {:keys [review skipped]} (to-review cached all)
         targets review
         _       (announce-targets! ctx {:review review :skipped skipped})
@@ -908,12 +956,24 @@
             ;; cross-check between layers to stand in for the second round.
             first-quiet-round? (and (not nothing?)
                                     (not (:quiet-once (:carry ctx))))
+            ;; The last run left something owed, this run's reviewers were
+            ;; handed it, and nobody has said a word about it. A quiet round is
+            ;; evidence about what the reviewers read; it is not evidence that a
+            ;; defect somebody already ruled `:fix` has gone. `clean` published
+            ;; over one is the whole of the miss this read exists to close —
+            ;; the run says nothing is owed, and the entry it writes is what the
+            ;; run after reads. Terminal either way: a third pass over the same
+            ;; code by the same reviewers would produce the same silence, so
+            ;; what changes is the answer, not the effort.
+            unanswered (unanswered-of (get-in ctx [:carry :inherited-open])
+                                      (conj (mapv :findings (:history ctx)) []))
             ctx'     (cond-> (assoc ctx :findings [] :reviews results :skipped skipped
                                     :reviewed-at at :patch-hashes (content-hashes all)
                                     :control (if first-quiet-round? :continue :stop)
                                     :status (cond
                                               nothing?           :nothing-to-review
                                               first-quiet-round? nil
+                                              (seq unanswered)   :unresolved
                                               :else              :clean))
                        first-quiet-round?
                        (assoc :carry (assoc (:carry ctx) :quiet-once true))
@@ -1047,6 +1107,38 @@
       (when (and (not (report/verdict-invalidates (:verdict v)))
                  (not (str/blank? (str (:needs v)))))
         {:round (:round v) :verdict (:verdict v) :needs (:needs v)}))))
+
+(defn ^{:malli/schema [:=> [:cat :Path] :any]}
+  prior-open
+  "What the last review of this workstream left OWED, as ledger rows carrying
+   the layer each is owed of. Empty when the workstream has no `:review` entry,
+   when the last run finished owing nothing, or when cwd maps to no workstream.
+
+   THE ONE READ three things in this run depend on. Every run writes this list
+   and nothing has ever read it, so an obligation the loop itself recorded
+   reached the next run through no channel at all: a finding ruled `:fix` and
+   never repaired was invisible to the reviewer of its own file, the layer took
+   an irrevocable `:converged` mark over it, and the design verdict was carried
+   forward as though the run had produced no evidence. The three are one defect
+   — see `with-prior-open`, `deny-inherited-convergence` and
+   `nido.review.verdict/still-answers?` for what each does with it.
+
+   The LAST entry only, and rows it marks `:inherited` are dropped. That bounds
+   the carry to a single hop, which is what keeps this from becoming a trap: a
+   defect whose owning layer was handed to a reviewer and still went unreported
+   is not evidence enough to hold a branch open for ever, and a stale one would
+   otherwise block every future run with no way out but a human. One run of
+   extra attention is the same price `nido.review.cache` pays everywhere else
+   for leaning toward over-invalidating.
+
+   Rows are returned as the ledger holds them — the writer already trimmed them
+   to what a reader outside the run needs — so the two consumers that put them
+   back into a ledger entry can do it without a translation."
+  [cwd]
+  (when-let [[project ws-id] (project+ws-from-cwd cwd)]
+    (into []
+          (remove :inherited)
+          (:open (ws/latest-entry project ws-id :review)))))
 
 (def ^:private stance-char-cap 12000)
 
@@ -1279,6 +1371,67 @@
               (map #(select-keys % [:id :title :disposition :authority :because])))
         (latest-rulings rounds)))
 
+(defn ^{:malli/schema [:=> [:cat :any :any] :any]}
+  unanswered-of
+  "The rows of `inherited` this run has said nothing about — pure over the
+   inheritance and the run's rounds, oldest first.
+
+   Answered means RULED, not repaired. A run that raised the finding again owns
+   it from that point: its own accounting decides whether it is open, kept or
+   settled, and carrying the inherited copy beside it would count one defect
+   twice. What is left is the case the read exists for — a defect the last run
+   ruled on, that this run's reviewers were told about and did not report.
+
+   Joined on the finding id, which `codex/finding-id` derives from file, line
+   and title, so one defect at one site carries the same id whichever run raised
+   it. `merge-answered` joins the settled half of the same history the same way."
+  [inherited rounds]
+  (let [ruled (into #{} (keep :id) (latest-rulings rounds))]
+    (into [] (remove #(contains? ruled (:id %))) inherited)))
+
+(defn ^{:malli/schema [:=> [:cat :map] :any]}
+  unanswered-inherited
+  "What the last run left owed that this whole run neither raised nor answered,
+   off a terminal ctx. See `prior-open` for the read and `unanswered-of` for the
+   fold.
+
+   Three readers, one question. The round that ends quiet may not call itself
+   `clean` while it holds one of these; `tasks.nido-review/review-event` puts
+   them in the entry it writes, so the count and the list a human reads are
+   about the branch rather than about the run; and
+   `nido.review.verdict/still-answers?` will not carry a standing verdict over
+   one, because a verdict republished as though nothing were owed is how a
+   `:needs` naming an unrepaired defect gets restated as a thing to do."
+  [final]
+  (unanswered-of (get-in final [:carry :inherited-open])
+                 (conj (mapv :findings (:history final)) (vec (:findings final)))))
+
+(defn ^{:malli/schema [:=> [:cat :any :any] :any]}
+  deny-inherited-convergence
+  "Pure: the same `[target status]` pairs with `:converged` downgraded to
+   `:partial` on every target an unanswered inherited finding names.
+
+   `:converged` is the one mark that grants a skip, and `nido.review.cache`
+   states it is not granted by an agent and cannot be revoked by one — so a
+   layer that takes it while a known defect stands in it is exempt from the code
+   lane until somebody happens to edit the file. That is what happened: a
+   finding ruled `:fix` and never repaired sat in a layer the next run marked
+   converged at an unchanged hash, and nothing short of a human touching the
+   file would ever have re-opened it.
+
+   A downgrade, not a drop. The entry is still written and still carries what
+   the run settled about the target — the answers are worth recording whatever
+   the status, and `:partial` is exactly the entry a next run comes back to."
+  [statuses unanswered]
+  (let [owed (into #{} (keep :layer) unanswered)]
+    (if (empty? owed)
+      statuses
+      (mapv (fn [[t status :as pair]]
+              (if (and (= :converged status) (contains? owed (:label t)))
+                [t :partial]
+                pair))
+            statuses))))
+
 (defn- merge-answered
   "One row per finding, out of the two sources of answers about a target.
 
@@ -1382,10 +1535,18 @@
    The history plus this round's findings is the run's whole account, and it is
    assembled here rather than in `answered-for` so that function stays pure over
    what it is given. The fix stage appends a round to the history and the warden
-   runs before it, so the two never overlap."
+   runs before it, so the two never overlap.
+
+   The inherited denial lands here rather than in `reviewed-statuses` because
+   both derivations pass through it — a salvaged round grants `:converged` on a
+   reviewer's clean bill alone, which is exactly the bill an unanswered
+   inheritance says is not the whole story."
   [cwd ctx statuses]
   (when-let [[project ws-id] (project+ws-from-cwd cwd)]
-    (let [rounds (conj (mapv :findings (:history ctx)) (vec (:findings ctx)))]
+    (let [rounds   (conj (mapv :findings (:history ctx)) (vec (:findings ctx)))
+          statuses (deny-inherited-convergence
+                    statuses
+                    (unanswered-of (get-in ctx [:carry :inherited-open]) rounds))]
       (when (seq statuses)
         (let [now (str (java.time.Instant/now))
               c   (reduce (fn [c [t status]]

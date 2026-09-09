@@ -316,6 +316,11 @@
    reaches a layer or the flat branch but never the composition pass — see
    `stages/with-standing-needs`.
 
+   `prior-open` is what an earlier RUN left owed against this exact layer,
+   matched by label because a repair moves the patch a hash is taken over; it
+   reaches the same readers as `standing` and for the same reasons — see
+   `stages/with-prior-open`.
+
    The schema follows the primer and not the target: the composition variant
    demands a `kind` and the `layers` a defect spans, and asking that of a
    reviewer that was never taught the taxonomy is a contract nothing can meet.
@@ -325,7 +330,8 @@
    Codex pulls each file's diff itself and reads file content AT `to` — never
    from the working copy, which for a layer review sits at a different revision
    than the one under review."
-  [{:keys [cwd from to run-id iter label brief composition prior-fixes standing]}]
+  [{:keys [cwd from to run-id iter label brief composition prior-fixes standing
+           prior-open]}]
   (let [to       (or to "@")
         {:keys [exit out err]} (diff-name-only cwd from to)
         _        (when-not (zero? exit)
@@ -356,6 +362,7 @@
                              ;; how the range was bounded.
                              (prompts/prior-fixes-block prior-fixes)
                              (prompts/standing-needs-block standing)
+                             (prompts/prior-open-block prior-open)
                              "\nBase revision (use this exact value as <base> in the"
                              " commands above): " from "\n"
                              "Head revision (use this exact value as <head>): " to "\n"

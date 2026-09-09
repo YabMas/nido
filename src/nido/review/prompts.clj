@@ -222,6 +222,53 @@
      "  NOT report it back on the strength of this text; a finding nobody\n"
      "  verified costs the next round exactly what a real one does.\n\n")))
 
+(defn ^{:malli/schema [:=> [:cat :any] [:maybe :string]]}
+  prior-open-block
+  "What an earlier RUN left owed against this exact layer, put to the reviewer
+   of the code that holds it.
+
+   The half of the between-run channel that carries obligations. Its sibling
+   `prior-fixes-block` carries what a fixer already did to this layer WITHIN a
+   run, and the workstream cache carries what a warden SETTLED — a store of
+   answers, keyed on a patch hash that a repair moves. Nothing carried what was
+   still owed, so a finding ruled `fix` and never repaired reached the next run
+   through no channel at all: its file's reviewer started blank, found nothing,
+   and the run published that the branch was clean.
+
+   Stated as a previous run's ruling and put as a question, exactly as
+   `standing-needs-block` is and for the same reason. That run read a different
+   tree — a repair may have landed since, the lines may have moved — so whether
+   the defect is there is what this reviewer is being asked. A reviewer that
+   copies it back unverified launders a stale claim into a fresh finding, and
+   the round after inherits a defect nobody looked at.
+
+   Reporting it back when it IS still there is what turns it into work: a
+   finding is the only currency a fixer can be handed, and this list is the one
+   thing in the run that knows the defect was ever ruled on."
+  [prior-open]
+  (when (seq prior-open)
+    (str
+     "AN EARLIER RUN LEFT THESE OWED AGAINST THIS LAYER, AND NO REPAIR IS\n"
+     "RECORDED FOR THEM.\n\n"
+     (->> prior-open
+          (map (fn [{:keys [title where disposition because handed]}]
+                 (str "- " title
+                      (when where (str "  (" where ")"))
+                      (when disposition (str "\n  ruled " (name disposition)))
+                      (when handed
+                        (str "\n  a repair for it was landed and no reviewer has read it since"))
+                      (when-not (str/blank? (str because))
+                        (str "\n  the warden said: " because)))))
+          (str/join "\n"))
+     "\n\n"
+     "That run read a different tree than the one below, so whether each is\n"
+     "still true is a question, not a fact. Check it against the range:\n"
+     "- Still true: report it as a finding like any other, at the lines you\n"
+     "  found it. Nothing else in this run knows it was ever ruled on, so a\n"
+     "  silence here is read as the defect being gone.\n"
+     "- Repaired, or outside what you are reviewing: say nothing. Do NOT\n"
+     "  report it back on the strength of this text.\n\n")))
+
 (def disposition-vocabulary
   "What may become of a finding. One entry per destination: the word the warden
    answers with, what it means, and the extra field it may not omit.
