@@ -2,7 +2,12 @@
   "Prompt text for the review loop's codex + claude stages."
   (:require
    [clojure.java.io :as io]
-   [clojure.string :as str]))   ; used by warden-prompt / fix-prompt (Tasks 5–6)
+   [clojure.string :as str]     ; used by warden-prompt / fix-prompt (Tasks 5–6)
+   ;; For `seam-closure` only. The three ways a seam can be closed are a fact
+   ;; about the record's schema, which lives there; rendering them here in a
+   ;; second `case` would drop a fourth closure kind silently on whichever side
+   ;; was not edited.
+   [nido.coordinator.report :as report]))
 
 (def review-prompt
   "codex review-guidelines prompt (lifted from codex's review template)."
@@ -961,8 +966,16 @@
    see that the stack in front of it has three layers where the design named two
    — a mismatch that is a finding about the cut, and one nothing else in the loop
    can reach. `record.clj` already renders it this way for the record judge; the
-   warden was the reader that needed it and did not get it."
-  [{:keys [shape invariants rejected standing layers]}]
+   warden was the reader that needed it and did not get it.
+
+   :seams is the record's OTHER kind of answer, and it belongs here for the same
+   reason :rejected does. A rejected alternative says a remedy was considered and
+   refused; a seam says a gap was noticed and left, with what closes it. Either
+   makes a finding that names it answered rather than new — so a warden that
+   cannot see the seams rules `fix` on a gap the record argued for, and the fixer
+   builds the machinery the record decided against, which the next round then
+   reviews as new code."
+  [{:keys [shape invariants rejected standing layers seams]}]
   (str "THE DESIGN THIS CHANGE COMMITTED TO — judge the findings against this:\n"
        "Shape: " shape "\n"
        "Invariants:\n" (bullets invariants) "\n"
@@ -986,6 +999,23 @@
               "no longer holds:\n"
               (bullets (map #(str (:alternative %) " — rejected because "
                                   (:why-not %)) rejected))
+              "\n"))
+       (when (seq seams)
+         (str "DELIBERATE INCOMPLETENESS — what this change leaves open ON PURPOSE,\n"
+              "each with what closes it: an argument for leaving it permanently, or\n"
+              "a phase or a ref where the closure is scheduled elsewhere.\n"
+              "A finding that names one of these is ANSWERED, not new — the gap IS\n"
+              "the decision. Rule it `closed` on the authority `design`. Not `fix`:\n"
+              "the fixer would re-close a gap someone chose to leave open, and the\n"
+              "machinery it writes to do that is what the next round reviews. Not\n"
+              "`park`: a park puts to a human a question this record answers.\n"
+              "The exception is a finding showing harm OUTSIDE what the seam\n"
+              "declares, or that the seam is not visible the way the record claims\n"
+              "— that is new, and the seam does not answer it:\n"
+              (bullets (map #(str (:what %) " — visible as: " (:visible-how %)
+                                  (when-let [c (report/seam-closure %)]
+                                    (str "; " c)))
+                            seams))
               "\n"))
        (when standing
          (str "Relation to the project's stance: " (name (:relation standing))

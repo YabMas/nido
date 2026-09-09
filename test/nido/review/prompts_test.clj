@@ -41,6 +41,76 @@
     (is (str/includes? out "ANSWERED, not new")
         "a finding re-proposing a rejected alternative is answered, not a new problem")))
 
+(def ^:private design-with-seams
+  "One seam of each closure kind. The permanent one is the measured case: a human
+   wrote it to answer a park, naming the parked finding and arguing that a fourth
+   gate would buy nothing."
+  (assoc design
+         :seams
+         [{:what        "a client can POST startup after the audio socket has gone"
+           :visible-how "the handler logs the race and returns 409"
+           :closed-by   :permanent
+           :why         "three rounds narrowed the window twice and a fourth would buy nothing"}
+          {:what        "the legacy per-line path stays for invoices"
+           :visible-how "both writers are still registered"
+           :closed-by   :phase
+           :phase       "retire the per-line writer"}
+          {:what        "totals are not backfilled for archived orders"
+           :visible-how "the archive report shows a blank column"
+           :closed-by   :spun-out
+           :ref         "FU-41"}]))
+
+(deftest warden-prompt-carries-seams-as-answered
+  ;; A seam answers a defect in advance, exactly as a rejected alternative does.
+  ;; Unrendered, the warden reads the finding as new and rules `fix` on the gap
+  ;; the record argued for.
+  (let [out (prompts/warden-prompt {:findings findings :history []
+                                    :design design-with-seams})]
+    (is (str/includes? out "a client can POST startup after the audio socket has gone"))
+    (is (str/includes?
+         out
+         "permanent — three rounds narrowed the window twice and a fourth would buy nothing")
+        "a permanent seam closes on its own argument, so the argument is what the warden needs")
+    (is (str/includes? out "Rule it `closed` on the authority `design`.")
+        "a warden shown a seam and no destination still has to pick one")))
+
+(deftest warden-prompt-sends-no-seam-to-a-fixer-or-to-a-human
+  ;; The two ways a seam reopens. `fix` builds the machinery the record decided
+  ;; against; `park` puts to a human the question the seam is already the answer
+  ;; to — and a park is where this seam came from.
+  (let [out (prompts/warden-prompt {:findings findings :history []
+                                    :design design-with-seams})]
+    (is (str/includes? out "Not `fix`:"))
+    (is (str/includes? out "`park`: a park puts to a human a question this record answers."))
+    (is (str/includes? out "The exception is a finding showing harm OUTSIDE what the seam")
+        "a seam answers what it declares and no more, or it licenses anything near it")))
+
+(deftest warden-prompt-says-where-a-scheduled-seams-closure-lives
+  ;; What makes a :phase or :spun-out seam answered is that the closure is booked
+  ;; somewhere else, so the place is the whole of the answer. A seam written
+  ;; before :closed-by existed names no closure, and says so by absence: inventing
+  ;; one would put an answer in its author's mouth.
+  (let [out    (prompts/warden-prompt {:findings findings :history []
+                                       :design design-with-seams})
+        legacy (prompts/warden-prompt
+                {:findings findings :history []
+                 :design   (assoc design :seams
+                                  [{:what        "the old column is still written"
+                                    :visible-how "both columns appear in the schema"}])})]
+    (is (str/includes? out "closed by phase — retire the per-line writer"))
+    (is (str/includes? out "spun out as FU-41"))
+    (is (str/includes?
+         legacy
+         "- the old column is still written — visible as: both columns appear in the schema\n")
+        "the bullet ends where the record does")))
+
+(deftest warden-prompt-omits-the-seams-block-when-the-record-declares-none
+  ;; :seams is optional and most records carry none. A heading over an empty list
+  ;; asserts the change declared no incompleteness, which is not a claim the
+  ;; record made.
+  (let [out (prompts/warden-prompt {:findings findings :history [] :design design})]
+    (is (not (str/includes? out "DELIBERATE INCOMPLETENESS")))))
+
 (deftest warden-prompt-ties-escalate-to-a-named-invariant
   (let [out (prompts/warden-prompt {:findings findings :history [] :design design})]
     (is (str/includes? out "CONTRADICTS A NAMED INVARIANT"))
