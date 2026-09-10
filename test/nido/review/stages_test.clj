@@ -3359,3 +3359,34 @@
        {:label "lower" :from "a" :to "b"})
       (is (= [{:invariants ["x"]}] @seen)
           "the reviewer holds the design the round is judging against"))))
+
+(deftest the-fixer-model-is-the-fixers-alone
+  ;; The fixer is the one launch whose cost is dominated by generation —
+  ;; measured over 81 launches its wall is 69% API time and 62% of what it
+  ;; generates is thinking. The reviewers are codex and the warden answers in one
+  ;; turn, so a model named here says nothing about how the branch was judged.
+  (let [launches (atom [])]
+    (with-redefs [agent/launch! (fn [m] (swap! launches conj m)
+                                  {:num-turns 4 :result-error? false :result-text "done"})
+                  stages/working-copy-dirty? (fn [_] true)
+                  stages/session-stack (fn [_ _] two-layer-stack)
+                  lifecycle/session-from-cwd (fn [_] nil)
+                  jj/jj! (jj-scripted [[] []])]
+      ((:run stages/fix-stage)
+       {:config {:cwd "/w" :run-id "r1" :base "main" :fixer-model "sonnet"} :iter 1
+        :findings [{:id "aa11" :title "x" :disposition :fix :owner-layer "lower"}
+                   {:id "bb22" :title "y" :disposition :fix :owner-layer "upper"}]})
+      (is (= ["sonnet" "sonnet"] (mapv :model @launches))
+          "every fixer of the round, and nothing else in the loop")))
+  (let [launches (atom [])]
+    (with-redefs [agent/launch! (fn [m] (swap! launches conj m)
+                                  {:num-turns 4 :result-error? false :result-text "done"})
+                  stages/working-copy-dirty? (fn [_] true)
+                  stages/session-stack (fn [_ _] two-layer-stack)
+                  lifecycle/session-from-cwd (fn [_] nil)
+                  jj/jj! (jj-scripted [[] []])]
+      ((:run stages/fix-stage)
+       {:config {:cwd "/w" :run-id "r1" :base "main"} :iter 1
+        :findings [{:id "aa11" :title "x" :disposition :fix :owner-layer "lower"}]})
+      (is (= [nil] (mapv :model @launches))
+          "unnamed, the launch is exactly what it was before the key existed"))))

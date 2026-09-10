@@ -242,3 +242,14 @@
 (deftest build-cmd-omits-tools-when-absent
   (let [cmd (#'agent/build-cmd {:claude-bin "claude" :first-message "hi"})]
     (is (not (some #{"--tools"} cmd)) "no --tools flag when :tools is not given")))
+
+(deftest build-cmd-passes-a-model-only-when-one-is-named
+  ;; Omitting is not the same as naming the default: a launch that passes no
+  ;; model gets whatever the CLI would have chosen, which is what every caller
+  ;; had before the key existed.
+  (let [cmd (#'agent/build-cmd {:claude-bin "claude" :first-message "hi" :model "sonnet"})]
+    (is (= ["--model" "sonnet"]
+           (->> cmd (drop-while #(not= % "--model")) (take 2))))
+    (is (= "hi" (last cmd)) "the prompt is still the trailing positional"))
+  (is (not (some #{"--model"} (#'agent/build-cmd {:claude-bin "claude" :first-message "hi"})))
+      "no key, no flag"))

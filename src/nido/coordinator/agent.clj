@@ -63,7 +63,7 @@
    gate reply; otherwise it RECORDS under it (--session-id) — the first burst.
    first-message is the trailing positional argument."
   [{:keys [claude-bin first-message system-prompt claude-session-id resume?
-           mcp-config add-dirs tools]}]
+           mcp-config add-dirs tools model]}]
   (cond-> [claude-bin
            "--print"
            ;; Stream-json output requires --verbose per claude-code's
@@ -73,6 +73,11 @@
            "--dangerously-skip-permissions"]
     ;; --resume is dormant until gate-reply turns start passing :resume? true;
     ;; reactivates the moment a caller resumes a parked agent with new input.
+    ;; Omitted by default, which is not the same as naming the default: a launch
+    ;; passing no model gets whatever the CLI would have chosen, and that is the
+    ;; behaviour every caller had before this key existed. Naming one here would
+    ;; pin a choice nobody made.
+    model                                 (into ["--model" model])
     (and claude-session-id resume?)       (into ["--resume" claude-session-id])
     (and claude-session-id (not resume?)) (into ["--session-id" claude-session-id])
     system-prompt                          (into ["--append-system-prompt" system-prompt])
@@ -94,6 +99,10 @@
   launch!
   "Spawn claude headlessly for a Run. Blocks until the agent exits or the
    wall-clock budget is exceeded.
+
+   :model (opt) — an alias (`sonnet`, `opus`) or a full model name, passed
+   through as --model. Omitted when nil, which leaves the CLI's own choice
+   exactly as it was.
 
    :claude-session-id (opt) — pre-generated session id; passed as --session-id
    (record a new transcript) or --resume (continue the recorded one) per

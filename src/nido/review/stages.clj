@@ -2910,7 +2910,7 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
   [ctx]
   (if (:dry-run? (:config ctx))
     (assoc ctx :control :stop :status :dry-run)
-    (let [{:keys [cwd base run-id budget impl-session-id]} (:config ctx)
+    (let [{:keys [cwd base run-id budget impl-session-id fixer-model]} (:config ctx)
           stack (session-stack cwd base)
           ;; Once per stage rather than per launch: every fixer in the round
           ;; stands in the same worktree, so the answer cannot differ between
@@ -2983,6 +2983,11 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                        (agent/launch!
                         {:run-id run-id :cwd cwd
                          :system-prompt sys-prompt
+                         ;; nil unless a caller named one, and then it is the
+                         ;; FIXER's alone: the reviewers are codex and the warden
+                         ;; is a different launch, so a model chosen here says
+                         ;; nothing about how this branch was judged.
+                         :model fixer-model
                          :first-message (prompts/fix-prompt
                                          {:findings findings
                                           :layer (assoc (toc-row (:toc ctx) label)

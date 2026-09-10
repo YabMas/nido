@@ -1395,7 +1395,7 @@
   "The diff loop proper, on a cwd `no-yardstick` has already cleared. Split from
    `loop-cmd*` so the refusal reads as one branch rather than as a guard buried
    inside a forty-line binding."
-  [{:keys [cwd base max-iters dry-run? budget]}]
+  [{:keys [cwd base max-iters dry-run? budget fixer-model]}]
   (let [base       (or base "main")
         run-id     (str "review-" (random-uuid))
         clock      #(Instant/now)
@@ -1410,6 +1410,13 @@
                     ;; DOES default — see default-launch-budget.
                     :budget    (or budget default-launch-budget)
                     :dry-run?  (boolean dry-run?)
+                    ;; The FIXER's model, and nobody else's. It is here rather
+                    ;; than defaulted because the fixer is the one launch whose
+                    ;; cost is dominated by generation: measured over 81 launches
+                    ;; its wall is 69% API time, and 62% of what it generates is
+                    ;; thinking. Nothing else in the loop has that shape — the
+                    ;; reviewers are codex and the warden answers in one turn.
+                    :fixer-model fixer-model
                     :run-id    run-id
                     :clock     clock
                     ;; What the engine cannot ask for itself: it never looks
@@ -1479,7 +1486,7 @@
                :refused)))))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
-  loop-cmd* [{:keys [cwd base max-iters dry-run? budget]}]
+  loop-cmd* [{:keys [cwd base max-iters dry-run? budget fixer-model]}]
   (let [;; Through the home-aware resolution WHETHER OR NOT a cwd was named. A
         ;; session home is a place an agent legitimately stands, and passing one
         ;; explicitly used to skip worktree-from-cwd entirely — so the run
@@ -1498,7 +1505,8 @@
       (do (binding [*out* *err*] (run! println (:lines refusal)))
           (:reason refusal))
       (loop-cmd-run! {:cwd cwd :base base :max-iters max-iters
-                      :dry-run? dry-run? :budget budget}))))
+                      :dry-run? dry-run? :budget budget
+                      :fixer-model fixer-model}))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   loop-cmd [& args]
