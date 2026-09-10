@@ -1093,8 +1093,23 @@
    of them a read, and landed no edit before a person stopped it. Ordering the
    repair first is what makes the phase incremental, and a search cheap enough
    to come second is what lets the ordering hold. Restore the whole read and the
-   ordering goes with it. The ordering clause renders only where a finding is
-   swept, because with no search ordered there is no second.
+   ordering goes with it.
+
+   The ordering is UNCONDITIONAL, and it used to render only where a finding was
+   swept — on the reading that with no search ordered there is no second. There
+   is: the orienting read. Measured over eighty-one fixer launches, 37% of the
+   phase elapses before the first source edit against 23% after the last, and
+   the longest of those windows are whole-file `cat -n`s of files the finding
+   already names a line in. A sweep is the one case where the reading is ASKED
+   for, which made it the visible one; it was never the only one, and the reason
+   the clause gives — a kill lands whatever the tree holds — never mentioned
+   sweeps at all.
+
+   What stays conditional is the SWEEP half of the sentence. An ordering clause
+   pointing at a section of the prompt that was not rendered reads as a lookup
+   that failed, which is a reason to doubt the rest of the prompt rather than a
+   reason to obey it. Unswept, the clause orders the repair before the ORIENTING
+   read and names nothing that is not there.
 
    Saying what was searched for is what keeps the narrower search falsifiable —
    a signature that hit nothing is an answer, where a whole-file read leaves no
@@ -1135,13 +1150,19 @@
    "longer covers — and the next round finds that as a fresh defect. If restoring\n"
    "consistency would go past what you were asked for, say so in your final\n"
    "message rather than landing the contradiction.\n\n"
-   (when (some :sweep findings)
-     (str "ORDER — repair first, search second. Make every repair you were\n"
-          "handed before you do any of the searching a SWEEP below asks for.\n"
-          "You can be stopped at any moment, and a fixer killed on its budget\n"
-          "has whatever the tree holds at that instant committed as its repair\n"
-          "— so reading first means an early ending lands nothing at all for\n"
-          "findings a reviewer raised and the warden already settled.\n\n"))
+   "ORDER — repair first, everything else second.\n"
+   (if (some :sweep findings)
+     (str "Make every repair you were handed before any wider reading, and\n"
+          "before any of the searching a SWEEP below asks for.\n")
+     "Make every repair you were handed before any wider reading.\n")
+   "You can be stopped at any moment, and a fixer killed on its budget has\n"
+   "whatever the tree holds at that instant committed as its repair — so\n"
+   "orienting first means an early ending lands nothing at all for findings\n"
+   "a reviewer raised and the warden already settled.\n"
+   "Each finding below carries the file and lines it sits at and a\n"
+   "reviewer's account of what is wrong there. Start from those lines. It is\n"
+   "the ORIENTING read that is deferred here, not the re-read above: that one\n"
+   "belongs to finishing a repair, and this rule is about starting one.\n\n"
    (stacked-change-block stack layer)
    (settled-block settled)
    (->> findings

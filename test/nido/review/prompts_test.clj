@@ -734,19 +734,45 @@ layers, it is not yours"))
   ;; times.
   (let [out (prompts/fix-prompt
              {:findings [{:priority 1 :title "t" :body "b" :sweep true}]})]
-    (is (str/includes? out "ORDER — repair first, search second")
+    (is (str/includes? out "ORDER — repair first, everything else second")
         "what survives an early ending is what is already in the tree")
     (is (str/includes? out "Fix it and land that repair; only then")
         "the sweep block orders the same thing where the search is actually given")
     (is (< (.indexOf out "ORDER — repair first") (.indexOf out "SWEEP:"))
         "the fixer reads the ordering before it reads the search it governs")))
 
-(deftest a-fixer-with-nothing-to-sweep-is-not-told-what-to-do-second
-  ;; An ordering clause naming a SWEEP section that is not there reads as a
-  ;; lookup that failed, and there is no search to come second.
+(deftest every-fixer-is-ordered-to-repair-before-it-orients
+  ;; The ordering used to render only for a swept finding, on the reading that
+  ;; with no search ordered there is no second. There is: the orienting read.
+  ;; Over eighty-one fixer launches 37% of the phase elapsed before the first
+  ;; source edit — against 23% after the last — and the reason the clause gives,
+  ;; that a kill lands whatever the tree holds, never mentioned sweeps.
   (let [out (prompts/fix-prompt
              {:findings [{:priority 1 :title "t" :body "b"}]})]
-    (is (not (str/includes? out "ORDER — repair first, search second")))))
+    (is (str/includes? out "ORDER — repair first, everything else second"))
+    (is (str/includes? out "before any wider reading"))))
+
+(deftest a-fixer-with-nothing-to-sweep-is-not-pointed-at-a-sweep
+  ;; The ordering is unconditional; the half of its sentence that names a SWEEP
+  ;; section is not. Pointing at a section the prompt did not render reads as a
+  ;; lookup that failed — a reason to doubt the rest of it, not to obey it.
+  (let [out (prompts/fix-prompt
+             {:findings [{:priority 1 :title "t" :body "b"}]})]
+    (is (not (str/includes? out "SWEEP")))
+    (is (str/includes? out "before any wider reading.")
+        "the sentence ends where the swept variant would go on to name the search")))
+
+(deftest a-fixer-is-pointed-at-the-lines-the-finding-names
+  ;; The longest orientations measured were whole-file reads of files the
+  ;; finding already carries a line range in. The deferred read is the ORIENTING
+  ;; one — saying so is what keeps it off the whole-file re-read that MINIMAL
+  ;; asks for, which belongs to finishing a repair rather than starting one.
+  (let [out (prompts/fix-prompt
+             {:findings [{:priority 1 :title "t" :body "b"}]})]
+    (is (str/includes? out "Start from those lines"))
+    (is (str/includes? out "ORIENTING"))
+    (is (str/includes? out "Re-read\neach artifact you edit WHOLE before you finish")
+        "the finishing re-read is still asked for")))
 
 (deftest a-sweep-whose-class-already-came-back-asks-for-a-different-remedy
   ;; Enumerating the instances is the remedy the class has already survived. Of
