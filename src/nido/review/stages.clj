@@ -193,6 +193,38 @@
               (remove str/blank?))
         (:invariants design)))
 
+(defn- cite-invariants
+  "Hold each finding's `:contradicts` against the design's own clauses, and keep
+   only the ones that are actually there.
+
+   The reviewer prompt tells a reviewer the field is checked against the list, so
+   this is what makes that sentence true. A promise of a check that no code
+   performs is worse than no promise: it buys the compliance of whoever believed
+   it and none of the guarantee.
+
+   Same substring test, same normalisation and the same reason as
+   `uncited-invariant` one reader downstream: an invariant is a text inside the
+   prompt that quoted it, which makes this the one claim in the loop a string
+   comparison settles at no agent cost. And the same failure it exists for — a
+   clause restated slightly wider is a DIFFERENT rule, and everything after here
+   acts on the words the citation carries.
+
+   A citation that matches nothing is MOVED rather than dropped, to
+   `:miscited`. The reviewer's reading may be right even where its quoting was
+   sloppy, and the warden is the reader that can tell; deleting it would take
+   away the finding's whole account of why it thought the design was in question.
+   What it must not do is keep counting as a citation, because ground (a) turns
+   on one."
+  [findings design]
+  (let [clauses (design-invariants design)]
+    (mapv (fn [f]
+            (if-let [c (:contradicts f)]
+              (if (some #(str/includes? % (citation-text c)) clauses)
+                f
+                (-> f (dissoc :contradicts) (assoc :miscited c)))
+              f))
+          findings)))
+
 (defn- uncited-invariant
   "Why this `because` does not establish the design invariant it appeals to, as
    a sentence for the fixer, or nil when it appeals to none.
@@ -619,7 +651,7 @@
             targets))))
 
 ;; Defined below, with the other readings taken off the workstream's ledger.
-(declare standing-needs prior-open)
+(declare standing-needs prior-open discover-design-record)
 
 (defn ^{:malli/schema [:=> [:cat :any :any] :any]}
   with-standing-needs
@@ -994,6 +1026,7 @@
                       {:cwd cwd :run-id run-id :iter (:iter ctx)
                        :from (:from t) :to (:to t)
                        :label (:label t) :brief (:brief t)
+                       :design (:design ctx)
                        :composition (:composition t)
                        :prior-fixes (:prior-fixes t)
                        :standing (:standing t)
@@ -1025,6 +1058,11 @@
         ;; is where the ledger entry and the design verdict read it from.
         inherit (prior-open cwd)
         ctx     (cond-> ctx (seq inherit) (assoc-in [:carry :inherited-open] inherit))
+        ;; Once per round rather than per target: every reviewer of a round is
+        ;; judging one change against one design, so a second read could only
+        ;; differ by racing an author editing the ledger mid-round — which would
+        ;; put two reviewers of the same change on two yardsticks.
+        ctx     (assoc ctx :design (discover-design-record cwd))
         all     (with-patch-hashes
                  cwd (-> (review-targets cwd base)
                          (with-composition-memory (:history ctx))
@@ -1065,8 +1103,9 @@
         conform  (when project
                    {:target   {:label "design"}
                     :findings (conformance/findings project cwd)})
-        findings (collect-findings (cond-> (vec results)
-                                     (seq (:findings conform)) (conj conform)))]
+        findings (-> (collect-findings (cond-> (vec results)
+                                         (seq (:findings conform)) (conj conform)))
+                     (cite-invariants (:design ctx)))]
     (if (empty? findings)
       ;; Two different terminal rounds arrive here, and only one of them is a
       ;; review that found nothing.

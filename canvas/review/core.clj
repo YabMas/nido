@@ -311,6 +311,16 @@
 
    Assembled from blocks rather than written per pass, so what bounds a review — its subject,
    its lane, what is out of scope — says the same thing everywhere it appears."
+  (Operation design-yardstick-block
+    "The design record rendered for a REVIEWER — what the implementation is validated against.
+
+     The same record the warden is given, minus the fields that exist to CLOSE a finding. A
+     warden rules and needs everything that could make a finding answered rather than new; a
+     reviewer reports, and every closing field is one that can suppress a report. So the
+     invariants and the shape are here, the seams are here under the bound that makes them safe
+     (a defect the gap does not cover is still the reviewer's), and the refused remedies and the
+     claimed decomposition are not."
+    {:signature [:=> [:catn [:design [:maybe :map]]] [:maybe :string]]})
   (Operation layer-brief-block "The bounding brief for one layer."
     {:signature [:=> [:catn [:brief :map]] :string]})
   (Operation manifest-block

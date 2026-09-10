@@ -1259,12 +1259,19 @@
        (map (fn [f]
               (str "- id " (:id f) "  [P" (:priority f) "/"
                    (name (or (:reach f) :unclear)) "]"
+                   (when (:contradicts f) " · CONTRADICTS an invariant")
                    (when-let [l (:from-layer f)] (str " reported-by " l))
                    (when-let [k (:kind f)] (str " · " (name k)))
                    (when (seq (:layers f))
                      (str " · across " (str/join " + " (:layers f))))
                    "\n  " (:title f)
                    "\n  " (:file f) ":" (:line-start f) "-" (:line-end f)
+                   (when-let [c (:contradicts f)]
+                     (str "\n  it departs from, in the reviewer's own citation: " c))
+                   (when-let [c (:miscited f)]
+                     (str "\n  the reviewer said it departs from an invariant and quoted"
+                          " no clause on your list — this is its wording, and it"
+                          " cites nothing: " c))
                    "\n  " (:body f))))
        (str/join "\n\n")))
 
@@ -1295,6 +1302,88 @@
                     (str t (when (= :on-completion h)
                              "  [holds ON COMPLETION — not yet true mid-plan]"))))
                 invariants)))
+
+(defn- seam-lines
+  "The gaps the design noticed and left, each with how a reader is supposed to
+   see it.
+
+   `:visible-how` is rendered rather than dropped as bookkeeping, because it is
+   the half a reviewer can actually check. A seam claims incompleteness is
+   VISIBLE — that is what makes it a decision rather than a defect — and a seam
+   whose stated visibility is not in the code is a finding, not a licence."
+  [seams]
+  (bullets (map (fn [{:keys [what visible-how]}]
+                  (str what
+                       (when-not (str/blank? (str visible-how))
+                         (str "  [a reader sees it: " visible-how "]"))))
+                seams)))
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] [:maybe :string]]}
+  design-yardstick-block
+  "The design record rendered for a REVIEWER — what the implementation is to be
+   validated against.
+
+   `design-block` beside it renders the same record for the warden, and the two
+   differ because the readers do. The warden RULES, so it needs everything that
+   could make a finding answered rather than new. A reviewer REPORTS, and every
+   field that exists to close a finding is a field that can suppress one.
+
+   What is here and why:
+
+   `:shape` and `:invariants` — the yardstick itself. Without them a reviewer
+   judges the code against the surrounding code, which is how the intended shape
+   gets inferred from the very lines that depart from it.
+
+   `:seams` — a gap the design noticed and left. Shown for the same reason
+   `layer-brief-block` shows settled deviations: unshown, a reviewer reports the
+   deliberate gap every round and the warden spends the round closing it again.
+   It carries the same bounding sentence, because the bound is what makes it safe
+   — a defect the seam does not COVER is still the reviewer's, and the warden has
+   had to make that distinction by hand round after round (\"harm outside what the
+   dropped-audio seam declares\").
+
+   What is deliberately NOT here:
+
+   `:rejected` — a remedy considered and refused. It settles a finding for the
+   warden; for a reviewer it is an invitation to suppress a real DEFECT because
+   the obvious fix was ruled out. A reviewer reports defects, not remedies, and
+   is better off not knowing which remedies are off the table.
+
+   `:layers` — the claimed decomposition. It is a claim about how the branch was
+   CUT, which the collapse erases; the warden already holds it, and a layer
+   reviewer bounded to one layer cannot see the stack it would be checked
+   against.
+
+   nil when there is no record. `tasks.nido-review/no-yardstick` now refuses such
+   a run outright, so this is the second reader of the same fact rather than the
+   one that has to cope with it."
+  [{:keys [shape invariants seams]}]
+  (when (or (seq invariants) (not (str/blank? (str shape))))
+    (str
+     "THE DESIGN THIS CHANGE COMMITTED TO — your job is to validate the\n"
+     "implementation against it.\n\n"
+     (when-not (str/blank? (str shape)) (str "Shape: " shape "\n\n"))
+     (when (seq invariants)
+       (str "MUST REMAIN TRUE — the design states each of these:\n"
+            (invariant-lines invariants) "\n\n"
+            "Where the code departs from one, put THAT invariant in the finding's\n"
+            "`contradicts` field, copied VERBATIM and whole. Verbatim because the\n"
+            "field is checked against this list, and because a restated invariant\n"
+            "is a different rule — the reader downstream acts on the words you\n"
+            "wrote, not the ones you were holding. A paraphrase is refused and the\n"
+            "finding arrives as though you had named nothing.\n"
+            "It is not a severity and it does not change priority. It says the\n"
+            "DESIGN is what is in question here, which is a decision for a person\n"
+            "rather than a repair for a fixer, and nothing else in this review can\n"
+            "say it: you are the reader holding the code against the claim.\n"
+            "Most findings contradict nothing. Leave it null then.\n\n"))
+     (when (seq seams)
+       (str "KNOWN GAPS — noticed when this was designed and deliberately left:\n"
+            (seam-lines seams) "\n\n"
+            "Do not report these; they are decisions already taken. A defect they\n"
+            "do not COVER is still yours, including one at the same seam — say\n"
+            "what is outside what the gap declares. And a seam whose stated\n"
+            "visibility is not actually in the code is itself a finding.\n\n")))))
 
 (defn- design-block
   "The design record, rendered for the warden. This is the yardstick: findings are
@@ -1688,12 +1777,26 @@
    "still making progress. Guessing costs more than leaving it null: two defects\n"
    "welded together are reported as one, and the second is never fixed.\n\n"
    (disposition-block)
-   "Each finding carries a reach the reviewer assigned: local (a defect inside\n"
-   "the current design), structural (about where a boundary sits — the reviewer\n"
-   "could see shape but not intent), or unclear. It is not a severity.\n"
+   "Each finding carries a reach the reviewer assigned, and the reviewer was\n"
+   "holding the same design record you are: local (the design settles it and the\n"
+   "code departs from it), structural (the design is SILENT here — a question\n"
+   "about where a boundary sits that nothing stated answers), or unclear. It is\n"
+   "not a severity.\n"
    "A structural finding is where park and recut live, and it is the one you\n"
    "must NOT hand to a fixer when it contradicts an invariant below: patching a\n"
-   "design question makes it disappear without anyone deciding it.\n\n"
+   "design question makes it disappear without anyone deciding it.\n"
+   "A finding may also carry CONTRADICTS — the invariant the reviewer says the\n"
+   "code departs from, quoted from the same list you hold. That is a CLAIM and\n"
+   "not a ruling: the reviewer read the code against the clause, which is the one\n"
+   "reading you cannot redo, but whether the departure is real and what follows\n"
+   "from it are yours. Check it against the list; a citation that quotes no\n"
+   "clause on it is a paraphrase and licenses nothing.\n"
+   "The two are different answers and not alternatives. CONTRADICTS says the\n"
+   "design SPEAKS and the code disagrees — your park ground (a), where the\n"
+   "question is whether the design stands. `structural` with no citation says the\n"
+   "design is SILENT, and nothing in the record answers it: that is ground (c)\n"
+   "shaped like a boundary question, and handing it to a fixer asks for a minimal\n"
+   "edit to a hole in the design.\n\n"
    (if design
      (str (design-block design) "\n")
      (str "No design record on this workstream. Weigh the findings on their own\n"

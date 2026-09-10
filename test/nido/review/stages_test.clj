@@ -3304,3 +3304,58 @@
                {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 1})]
       (is (seq (:patch-hashes out)))
       (is (every? string? (:patch-hashes out))))))
+
+;; ── the reviewer's invariant citation ───────────────────────────────────────
+
+(deftest a-verbatim-citation-is-kept-and-a-paraphrase-is-demoted
+  ;; The reviewer prompt tells a reviewer the field is checked against the list,
+  ;; so something has to check it — a promise of a check no code performs buys
+  ;; the compliance of whoever believed it and none of the guarantee. Same
+  ;; failure this exists for as `uncited-invariant` one reader downstream: a
+  ;; clause restated slightly wider is a DIFFERENT rule, and park ground (a)
+  ;; turns on the citation.
+  (let [design {:invariants ["a caller never holds a connection across a reconnect"]}
+        out (#'stages/cite-invariants
+             [{:id "a" :contradicts "a caller never holds a connection across a reconnect"}
+              {:id "b" :contradicts "a caller must not keep a connection when reconnecting"}
+              {:id "c"}]
+             design)]
+    (is (= "a caller never holds a connection across a reconnect"
+           (:contradicts (first out)))
+        "quoted from the list, so it stands")
+    (is (nil? (:contradicts (second out)))
+        "a paraphrase stops counting as a citation")
+    (is (= "a caller must not keep a connection when reconnecting" (:miscited (second out)))
+        "and is MOVED rather than dropped — the reading may be right where the
+         quoting was sloppy, and the warden is the reader that can tell")
+    (is (= {:id "c"} (nth out 2)) "a finding citing nothing is left alone")))
+
+(deftest a-citation-survives-typographic-drift-in-what-the-reviewer-copied
+  ;; Curly quotes, dashes and run lengths of whitespace are differences nobody
+  ;; intended — `citation-text` normalises them for the warden's own citations
+  ;; and this reads the same list through the same lens.
+  (let [design {:invariants ["a caller never holds a connection - not across a reconnect"]}
+        out (#'stages/cite-invariants
+             [{:id "a" :contradicts "A caller never holds a connection — not   across a reconnect"}]
+             design)]
+    (is (some? (:contradicts (first out))))))
+
+(deftest a-citation-against-a-workstream-with-no-invariants-cites-nothing
+  (let [out (#'stages/cite-invariants [{:id "a" :contradicts "anything at all"}] nil)]
+    (is (nil? (:contradicts (first out))))
+    (is (= "anything at all" (:miscited (first out))))))
+
+(deftest a-reviewer-is-handed-the-rounds-design
+  ;; The wire itself. `fan-out-reviews` reads the record once per round — every
+  ;; reviewer is judging one change against one design, so a second read could
+  ;; only differ by racing an author editing the ledger mid-round, which would
+  ;; put two reviewers of the same change on two yardsticks — and this is where
+  ;; it reaches the reviewer.
+  (let [seen (atom [])]
+    (with-redefs [codex/review! (fn [m] (swap! seen conj (:design m))
+                                  {:findings [] :status nil})]
+      (#'stages/review-target!
+       {:config {:cwd "/w" :run-id "r1"} :iter 1 :design {:invariants ["x"]}}
+       {:label "lower" :from "a" :to "b"})
+      (is (= [{:invariants ["x"]}] @seen)
+          "the reviewer holds the design the round is judging against"))))

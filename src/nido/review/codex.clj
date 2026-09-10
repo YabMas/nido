@@ -64,6 +64,12 @@
              :file       (:absolute_file_path loc)
              :line-start (:start lr)
              :line-end   (:end lr)}
+      ;; Only when there is one, like :kind and :remedy beside it — a key
+      ;; present and nil is a citation the reviewer did not make, and every
+      ;; reader downstream tests the key. Blank counts as absent for the same
+      ;; reason: a reviewer holding no invariant answers "" as readily as null.
+      (not (str/blank? (str (:contradicts raw))))
+      (assoc :contradicts (str/trim (str (:contradicts raw))))
       (:kind raw)         (assoc :kind (keyword (:kind raw)))
       (:remedy raw)       (assoc :remedy (keyword (:remedy raw)))
       (seq (:layers raw)) (assoc :layers (vec (:layers raw))))))
@@ -336,7 +342,7 @@
    one layer at a time, and the flat union is the range in which the cut it is
    here to judge cannot be seen."
   [{:keys [cwd from to run-id iter label brief composition prior-fixes standing
-           prior-open]}]
+           prior-open design]}]
   (let [to       (or to "@")
         {:keys [exit out err]} (diff-name-only cwd from to)
         _        (when-not (zero? exit)
@@ -359,6 +365,13 @@
             log-path    (str (fs/path dir (artifact-name label iter ".log")))
             composed    (prompts/composition-block composition)
             prompt      (str prompts/review-prompt
+                             ;; BEFORE the layer brief, and above everything the
+                             ;; round itself carries. A layer's claims are what
+                             ;; this slice of the change asserts about itself;
+                             ;; the design is what the whole change committed to,
+                             ;; and a reviewer reading the narrower one first
+                             ;; reads the wider one as a qualification of it.
+                             "\n\n" (prompts/design-yardstick-block design)
                              "\n\n" (or (prompts/layer-brief-block brief) composed)
                              ;; Appended rather than folded into the brief block,
                              ;; because a layer with no brief still gets fixed and

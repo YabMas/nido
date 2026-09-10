@@ -17,6 +17,7 @@
           "confidence_score",
           "priority",
           "reach",
+          "contradicts",
           "code_location"
         ],
         "properties": {
@@ -71,6 +72,12 @@
                 }
               }
             }
+          },
+          "contradicts": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       }

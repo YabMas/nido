@@ -1193,3 +1193,76 @@ layers, it is not yours"))
     ;; The mandate is scoped to the list it is a mandate over. In the shared
     ;; prompt it reached the composition pass, which gets no list.
     (is (str/includes? b "MUST actually pull each changed file"))))
+
+;; ── the design a reviewer is given ──────────────────────────────────────────
+
+(def ^:private a-design
+  {:shape      "One recorder owns the timeline; connections attach to it."
+   :invariants ["a caller never holds a connection across a reconnect"]
+   :seams      [{:what "audio arriving during a reconnect does not reach the model"
+                 :visible-how "the recorder emits :dropped-audio for the gap"
+                 :closed-by :permanent :why "no provider supports it"}]
+   :rejected   [{:what "buffer the audio and replay it" :why "unbounded memory"}]
+   :layers     [{:claim "carry the timeline" :mode :mechanical}]})
+
+(deftest a-reviewer-is-given-the-design-to-validate-against
+  ;; The reviewer used to be told outright that it had NOT been given the design,
+  ;; and `reach` was the workaround for that blindness: a field for flagging
+  ;; "I cannot judge this" so a later reader could. Its whole job is validating
+  ;; the implementation against the design, so it gets the design.
+  (let [out (prompts/design-yardstick-block a-design)]
+    (is (str/includes? out "THE DESIGN THIS CHANGE COMMITTED TO"))
+    (is (str/includes? out "One recorder owns the timeline") "the shape")
+    (is (str/includes? out "a caller never holds a connection across a reconnect")
+        "the invariants, which are what a finding can contradict")))
+
+(deftest a-reviewer-is-shown-the-seams-and-what-they-do-not-cover
+  ;; Same reason `layer-brief-block` shows settled deviations: unshown, the
+  ;; deliberate gap is reported every round and the warden closes it every round.
+  ;; The bound is what makes it safe to show.
+  (let [out (prompts/design-yardstick-block a-design)]
+    (is (str/includes? out "KNOWN GAPS"))
+    (is (str/includes? out "the recorder emits :dropped-audio for the gap")
+        "how the gap is visible is the half a reviewer can check")
+    (is (str/includes? out "do not COVER is still yours")
+        "a defect outside what the gap declares is not settled by it")))
+
+(deftest a-reviewer-is-not-shown-the-remedies-that-were-refused
+  ;; :rejected settles a finding for the WARDEN. For a reviewer it is an
+  ;; invitation to suppress a real defect because its obvious fix was ruled out —
+  ;; and a reviewer reports defects, not remedies.
+  (let [out (prompts/design-yardstick-block a-design)]
+    (is (not (str/includes? out "buffer the audio")))
+    (is (not (str/includes? out "unbounded memory")))))
+
+(deftest a-reviewer-is-not-shown-the-claimed-decomposition
+  ;; A claim about how the branch was CUT, which the collapse erases. The warden
+  ;; holds it; a reviewer bounded to one layer cannot see the stack anyway.
+  (is (not (str/includes? (prompts/design-yardstick-block a-design)
+                          "carry the timeline"))))
+
+(deftest a-design-block-for-a-reviewer-demands-a-verbatim-citation
+  ;; The loop checks the field against this same list, so a paraphrase licenses
+  ;; nothing — and saying so is what stops a reviewer restating an invariant into
+  ;; a wider rule that the readers downstream then act on.
+  (let [out (prompts/design-yardstick-block a-design)]
+    (is (str/includes? out "`contradicts`"))
+    (is (str/includes? out "VERBATIM"))
+    (is (str/includes? out "Most findings contradict nothing"))))
+
+(deftest no-design-record-renders-no-yardstick
+  (is (nil? (prompts/design-yardstick-block nil)))
+  (is (nil? (prompts/design-yardstick-block {}))))
+
+(deftest the-warden-is-told-a-citation-is-a-claim-and-not-a-ruling
+  ;; The reviewer read the code against the clause, which is the one reading the
+  ;; warden cannot redo. Whether the departure is real, and what follows from it,
+  ;; stays the warden's.
+  (let [out (prompts/warden-prompt
+             {:findings [{:id "aa11" :title "t" :body "b"
+                          :contradicts "a caller never holds a connection across a reconnect"}]
+              :design a-design})]
+    (is (str/includes? out "CONTRADICTS an invariant") "flagged on the finding row")
+    (is (str/includes? out "That is a CLAIM and\nnot a ruling"))
+    (is (str/includes? out "design SPEAKS and the code disagrees")
+        "and it is distinguished from `structural`, which says the design is silent")))

@@ -1,11 +1,12 @@
 (ns nido.review.codex-test
   (:require
    [clojure.string :as str]
-   [clojure.test :refer [deftest is]]
+   [clojure.test :refer [deftest is use-fixtures]]
    [nido.review.codex :as codex]
    [nido.review.prompts :as prompts]
    [nido.vsdd.jj :as jj]
    [nido.coordinator.record.state :as cstate]
+   [nido.platform.core :as core]
    [babashka.fs :as fs]
    [cheshire.core :as json]
    [clojure.java.io :as io]))
@@ -62,6 +63,24 @@
   (doseq [r (keep :remedy prompts/composition-kinds)]
     (is (some #(= (name r) (:remedy %)) prompts/remedy-vocabulary)
         (str (name r) " is a remedy no composition finding can ask for"))))
+
+(defn- with-tmp-nido-root
+  "`review!` writes its schema, output and log under the run dir before it ever
+   reaches `run-codex!`, so a prompt-assembly test that does not move the root
+   creates directories in the real ~/.nido/runs — named for whatever run id the
+   test invented, beside the user's actual runs. Same hazard, and the same fix,
+   as `tasks.nido-review-test/with-tmp-nido-root`: redirect the root rather than
+   stub the one call that writes, because the next thing `review!` grows will
+   write there too."
+  [f]
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-root (constantly (str tmp))]
+        (cstate/ensure-dirs!)
+        (f))
+      (finally (fs/delete-tree tmp)))))
+
+(use-fixtures :each with-tmp-nido-root)
 
 (deftest schema-json-without-a-composition-is-the-plain-findings-schema
   (is (= (json/parse-string (slurp (io/resource "review/findings_schema.json")) true)
@@ -469,3 +488,38 @@
            report and the printed line, and ex-data reaches neither"))
     (is (= :review-failed (:reason (ex-data (run "ERROR: model stream closed\n"))))
         "an unclassifiable failure keeps the old reading rather than guessing")))
+
+(deftest the-assembled-review-prompt-carries-the-design-above-the-layer-brief
+  ;; A layer's claims are what one slice of the change asserts about ITSELF; the
+  ;; design is what the whole change committed to. A reviewer reading the
+  ;; narrower one first reads the wider one as a qualification of it — so the
+  ;; design goes above, and this is the assembly that puts it there.
+  (let [captured (atom nil)]
+    (with-redefs [codex/diff-name-only (fn [_ _ _] {:exit 0 :out "src/a.clj\n" :err ""})
+                  codex/run-codex! (fn [m] (reset! captured (:prompt m)) {:exit 1})]
+      (try
+        (codex/review! {:cwd "/w" :from "a" :to "b" :run-id "r-prompt" :iter 1
+                        :label "lower"
+                        :brief {:subject "lower" :claims "carries the timeline"}
+                        :design {:shape "one recorder owns the timeline"
+                                 :invariants ["a caller never holds a connection across a reconnect"]}})
+        (catch Throwable _ nil)))
+    (let [p @captured]
+      (is (some? p) "the reviewer was assembled a prompt")
+      (is (str/includes? p "a caller never holds a connection across a reconnect")
+          "the design reached the reviewer at all")
+      (is (< (.indexOf p "THE DESIGN THIS CHANGE COMMITTED TO")
+             (.indexOf p "THIS REVIEW IS BOUNDED TO ONE LAYER"))
+          "and it is above the layer brief, not below it"))))
+
+(deftest a-review-with-no-design-record-assembles-without-a-yardstick
+  ;; `tasks.nido-review/no-yardstick` refuses such a run outright, so this is a
+  ;; second reader of the same fact rather than the one that has to cope with it
+  ;; — but it must not render an empty heading either.
+  (let [captured (atom nil)]
+    (with-redefs [codex/diff-name-only (fn [_ _ _] {:exit 0 :out "src/a.clj\n" :err ""})
+                  codex/run-codex! (fn [m] (reset! captured (:prompt m)) {:exit 1})]
+      (try (codex/review! {:cwd "/w" :from "a" :to "b" :run-id "r-nod" :iter 1
+                           :label "lower" :design nil})
+           (catch Throwable _ nil)))
+    (is (not (str/includes? @captured "THE DESIGN THIS CHANGE COMMITTED TO")))))
