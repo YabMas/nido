@@ -240,8 +240,8 @@
     {:signature [:=> [:catn [:cwd Path]] :any]})
   (Operation session-stack "This session's layers, bottom first."
     {:signature [:=> [:catn [:cwd Path] [:base :any]] :any]})
-  (Operation in-parallel "Run thunks, at most n at once."
-    {:signature [:=> [:catn [:n :int] [:thunks :any]] :any]})
+  (Operation in-parallel "Run every thunk at once, preserving order."
+    {:signature [:=> [:catn [:thunks :any]] :any]})
   (Operation composition-of "What the whole-stack pass is given."
     {:signature [:=> [:catn [:cwd Path] [:targets :any]] :any]})
   (Operation review-targets "What this round reviews."

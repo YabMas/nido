@@ -375,34 +375,35 @@
       [])
     (catch Throwable _ [])))
 
-(def ^:private max-concurrent-reviews
-  "Reviews are codex processes that spend their life waiting on an API, so they
-   are cheap to hold open — but not free, and a wide stack should not open a
-   dozen at once."
-  6)
-
-(defn ^{:malli/schema [:=> [:cat :int :any] :any]}
+(defn ^{:malli/schema [:=> [:cat :any] :any]}
   in-parallel
-  "Run each thunk, at most `n` at a time, preserving order.
+  "Run every thunk at once, preserving order.
+
+   UNBOUNDED, and that is the point. These are codex processes that spend their
+   life waiting on an API, so the machine is not what a bound would protect —
+   and the bound that was here (six) cost more than it saved. It chunked with
+   `partition-all`, so chunk N+1 waited on the SLOWEST member of chunk N rather
+   than on a free slot: measured across the runs on disk, a round of nine
+   reviewed targets took 822s against a slowest single review of 442s, while a
+   round of six took 600s against a slowest of 599s. A stack pays that penalty
+   exactly when it is wide, which is when the parallelism was the whole reason
+   to cut it into layers.
 
    An exception in any thunk propagates carrying its ORIGINAL ex-data: a bare
    future deref wraps it in ExecutionException, which would hide the `:reason` a
    caller branches on and turn a handled failure into an unhandled crash.
 
    The review fan-out deliberately does NOT lean on that. A throw here abandons
-   the futures after it in the same chunk, and for a fan-out of codex reviews
-   those are results that have already been paid for — so `review-target!`
-   returns its failure as a value and the stage decides what to do with it."
-  [n thunks]
-  (into []
-        (mapcat (fn [chunk]
-                  (let [futs (mapv #(future (%)) chunk)]
-                    (mapv (fn [f]
-                            (try @f
-                                 (catch java.util.concurrent.ExecutionException e
-                                   (throw (or (.getCause e) e)))))
-                          futs))))
-        (partition-all n thunks)))
+   the results after it, and for a fan-out of codex reviews those are results
+   that have already been paid for — so `review-target!` returns its failure as
+   a value and the stage decides what to do with it."
+  [thunks]
+  (let [futs (mapv #(future (%)) thunks)]
+    (mapv (fn [f]
+            (try @f
+                 (catch java.util.concurrent.ExecutionException e
+                   (throw (or (.getCause e) e)))))
+          futs)))
 
 (def ^:private stack-label
   "The composition target's label — what its findings are stamped :from-layer
@@ -1033,8 +1034,7 @@
         {:keys [review skipped]} (to-review cached all)
         targets review
         _       (announce-targets! ctx {:review review :skipped skipped})
-        outcomes (in-parallel max-concurrent-reviews
-                              (map (fn [t] #(review-target! ctx t)) targets))
+        outcomes (in-parallel (map (fn [t] #(review-target! ctx t)) targets))
         failed   (filterv :failure outcomes)
         results  (filterv (complement :failure) outcomes)
         ;; The last point at which this round can leave anything behind: the

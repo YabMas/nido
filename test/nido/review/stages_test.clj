@@ -1296,15 +1296,18 @@
 ;; ---- fan-out: every layer plus the whole stack ---------------------------
 
 (deftest in-parallel-preserves-order
-  (is (= [1 2 3 4 5] (stages/in-parallel 2 (map (fn [n] #(do (Thread/sleep (- 20 (* 3 n))) n))
-                                                [1 2 3 4 5])))))
+  ;; Order is the contract, and it is not the order they FINISH in: the sleeps
+  ;; descend, so with the cap gone every thunk is in flight at once and 5 lands
+  ;; first.
+  (is (= [1 2 3 4 5] (stages/in-parallel (map (fn [n] #(do (Thread/sleep (- 20 (* 3 n))) n))
+                                              [1 2 3 4 5])))))
 
 (deftest in-parallel-propagates-the-original-ex-data
   ;; A bare future deref wraps in ExecutionException, which would hide the
   ;; :review-failed reason the engine branches on.
   (is (= :review-failed
-         (try (stages/in-parallel 2 [#(throw (ex-info "boom" {:reason :review-failed}))
-                                     (fn [] :ok)])
+         (try (stages/in-parallel [#(throw (ex-info "boom" {:reason :review-failed}))
+                                   (fn [] :ok)])
               nil
               (catch clojure.lang.ExceptionInfo e (:reason (ex-data e)))))))
 
