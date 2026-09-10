@@ -705,11 +705,48 @@ layers, it is not yours"))
              {:findings [{:priority 1 :title "t" :body "b" :sweep true}]})]
     (is (str/includes? out "over the defect CLASS, not over this")
         "the class is the search space; the diff is where the first instance happened to be")
-    (is (str/includes? out "read every file this change touched"))
     (is (not (str/includes? out "audit this layer"))
         "a layer is its diff, so bounding the search to it excludes pre-existing siblings")
     (is (str/includes? out "NAMED in your final message")
         "a sibling out of this fixer's reach reaches the next round only if it is said")))
+
+(deftest a-sweep-searches-by-signature-rather-than-reading-the-files-whole
+  ;; The whole-surface read is the prefix every swept finding's search shares,
+  ;; so a fixer holding several front-loads all of it: one handed three findings
+  ;; the warden had settled spent 42 tool calls, every one a read, and landed no
+  ;; edit before a person stopped it.
+  (let [out (prompts/fix-prompt
+             {:findings [{:priority 1 :title "t" :body "b" :sweep true}]})]
+    (is (str/includes? out "SEARCH for it rather than reading for it")
+        "the sibling is found by what the class has in common, not by re-reading the surface")
+    (is (str/includes? out "Name the signature the class shares")
+        "a search the fixer cannot state is one nothing downstream can check")
+    (is (str/includes? out "what you searched for")
+        "a signature that hit nothing is an answer; a read that found nothing leaves none")
+    (is (not (str/includes? out "read every file this change touched"))
+        "reading the whole surface costs the round the repairs were supposed to land in")))
+
+(deftest a-swept-repair-lands-before-the-search-that-follows-it
+  ;; A fixer killed on its budget has whatever the tree holds committed as its
+  ;; repair, so the phase is incremental only if the edits precede the reading.
+  ;; The per-finding prose alone did not hold it: with several findings the
+  ;; shared read came first and three adjudicated defects were repaired zero
+  ;; times.
+  (let [out (prompts/fix-prompt
+             {:findings [{:priority 1 :title "t" :body "b" :sweep true}]})]
+    (is (str/includes? out "ORDER — repair first, search second")
+        "what survives an early ending is what is already in the tree")
+    (is (str/includes? out "Fix it and land that repair; only then")
+        "the sweep block orders the same thing where the search is actually given")
+    (is (< (.indexOf out "ORDER — repair first") (.indexOf out "SWEEP:"))
+        "the fixer reads the ordering before it reads the search it governs")))
+
+(deftest a-fixer-with-nothing-to-sweep-is-not-told-what-to-do-second
+  ;; An ordering clause naming a SWEEP section that is not there reads as a
+  ;; lookup that failed, and there is no search to come second.
+  (let [out (prompts/fix-prompt
+             {:findings [{:priority 1 :title "t" :body "b"}]})]
+    (is (not (str/includes? out "ORDER — repair first, search second")))))
 
 (deftest a-sweep-whose-class-already-came-back-asks-for-a-different-remedy
   ;; Enumerating the instances is the remedy the class has already survived. Of

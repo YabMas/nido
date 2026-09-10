@@ -998,10 +998,10 @@
    two no longer stood.
 
    The reach is why the findings list cannot carry this. A sweep searches the
-   defect CLASS over whole files, and the self-consistency rule sends a fixer
-   back through every artifact it edits — both of them arrive at lines nobody
-   handed it, and a settled finding is such a line with a decision already on
-   it.
+   defect CLASS past the lines it was handed, and the self-consistency rule
+   sends a fixer back through every artifact it edits — both of them arrive at
+   lines nobody handed it, and a settled finding is such a line with a decision
+   already on it.
 
    Every SETTLING disposition, which is the set `nido.review.stages/settled?`
    reads off `disposition-vocabulary`. One list, so what a fixer is told is
@@ -1018,9 +1018,9 @@
          "defect is real and this branch is shipping it, or it is not this\n"
          "change's to fix.\n"
          "They are here because your reach is wider than the findings below — a\n"
-         "sweep reads whole files, and leaving an artifact self-consistent sends\n"
-         "you back through everything you edit — so a line you are about to\n"
-         "change may already carry a decision.\n"
+         "sweep searches past the lines you were handed, and leaving an artifact\n"
+         "self-consistent sends you back through everything you edit — so a line\n"
+         "you are about to change may already carry a decision.\n"
          (when (some #(= :deviation (:disposition %)) settled)
            (str "A `deviation` is the sharpest of these: a layer's stated CLAIM\n"
                 "and the code contradict each other and BOTH are being kept.\n"
@@ -1080,15 +1080,32 @@
    Two clauses then bound the reach the prompt would otherwise narrow itself,
    against one reading of it: that the fixer's subject is the patch.
 
-   A sweep searches the defect CLASS, over every file the change touched and not
-   over its diff. \"Audit this layer\" reads as the diff, so the sibling that
-   survives a sweep is the pre-existing line beside the one just edited. Where a
-   sibling is somewhere this fixer may not touch, naming it in the final message
-   is what puts it in front of the next round: that text lands on the fix row as
-   `:account`, and it reaches two readers — `prior-fixes-block` renders it to the
-   next reviewer of this layer, and `fixer-accounts-block` to the warden, which
-   is the only one holding the file lists a sibling in ANOTHER layer can be
-   placed against.
+   A sweep searches the defect CLASS and not this change's diff. \"Audit this
+   layer\" reads as the diff, so the sibling that survives a sweep is the
+   pre-existing line beside the one just edited. It searches by SIGNATURE — a
+   token the class shares, grepped over the files the change touched — and the
+   repair it was handed is in the tree before the search starts.
+
+   Those two are one remedy and neither holds alone. A whole-file read is a
+   prefix every swept finding's search shares, so a fixer holding several
+   front-loads all of the reading whatever order the sentences are in: one
+   handed three findings the warden had settled spent 42 tool calls, every one
+   of them a read, and landed no edit before a person stopped it. Ordering the
+   repair first is what makes the phase incremental, and a search cheap enough
+   to come second is what lets the ordering hold. Restore the whole read and the
+   ordering goes with it. The ordering clause renders only where a finding is
+   swept, because with no search ordered there is no second.
+
+   Saying what was searched for is what keeps the narrower search falsifiable —
+   a signature that hit nothing is an answer, where a whole-file read leaves no
+   artifact separating a sweep that found nothing from one that never happened.
+
+   Where a sibling is somewhere this fixer may not touch, naming it in the final
+   message is what puts it in front of the next round: that text lands on the
+   fix row as `:account`, and it reaches two readers — `prior-fixes-block`
+   renders it to the next reviewer of this layer, and `fixer-accounts-block` to
+   the warden, which is the only one holding the file lists a sibling in ANOTHER
+   layer can be placed against.
 
    MINIMAL says how much to change, not what may be left broken. For a
    declarative artifact — a spec, a schema, a policy table — the smallest edit
@@ -1118,6 +1135,13 @@
    "longer covers — and the next round finds that as a fresh defect. If restoring\n"
    "consistency would go past what you were asked for, say so in your final\n"
    "message rather than landing the contradiction.\n\n"
+   (when (some :sweep findings)
+     (str "ORDER — repair first, search second. Make every repair you were\n"
+          "handed before you do any of the searching a SWEEP below asks for.\n"
+          "You can be stopped at any moment, and a fixer killed on its budget\n"
+          "has whatever the tree holds at that instant committed as its repair\n"
+          "— so reading first means an early ending lands nothing at all for\n"
+          "findings a reviewer raised and the warden already settled.\n\n"))
    (stacked-change-block stack layer)
    (settled-block settled)
    (->> findings
@@ -1150,15 +1174,25 @@
                              "  and name what you looked at. That is an answer and it\n"
                              "  ends the class; a third enumeration is not.\n")
                         (str "  SWEEP: this is one instance of a recurring defect.\n"
-                             "  Fix it, then find its siblings and fix those too.\n"
+                             "  Fix it and land that repair; only then go and\n"
+                             "  find its siblings and fix those too.\n"
                              "  The search is over the defect CLASS, not over this\n"
-                             "  change's diff: read every file this change touched\n"
-                             "  WHOLE, because the sibling that survives a sweep is\n"
+                             "  change's diff: the sibling that survives a sweep is\n"
                              "  usually the pre-existing line beside the one you just\n"
-                             "  edited. Finding them one per round is what this is\n"
-                             "  here to stop — the minimal change rule does not apply\n"
-                             "  to the search, only to each edit. A sibling you may\n"
-                             "  not touch here — another layer's, or outside this\n"
+                             "  edited. So SEARCH for it rather than reading for it.\n"
+                             "  Name the signature the class shares — the call, the\n"
+                             "  identifier, the shape, the guard that is absent —\n"
+                             "  grep the files this change touched for it, and read\n"
+                             "  only around what it hits. Reading those files whole\n"
+                             "  finds the same class and spends the round doing it.\n"
+                             "  Say in your final message what you searched for: a\n"
+                             "  signature that hit nothing is an answer, and a class\n"
+                             "  that shares a requirement and no token is one too —\n"
+                             "  there, name what you read instead.\n"
+                             "  Finding them one per round is what this is here to\n"
+                             "  stop — the minimal change rule does not apply to the\n"
+                             "  search, only to each edit. A sibling you may not\n"
+                             "  touch here — another layer's, or outside this\n"
                              "  change — is to be NAMED in your final message, never\n"
                              "  silently left.\n")))
                     "  " (:body f))))
