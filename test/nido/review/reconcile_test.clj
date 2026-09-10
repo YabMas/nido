@@ -9,7 +9,9 @@
    [nido.platform.core :as core]
    [nido.review.reconcile :as reconcile]
    [nido.review.report :as report]
-   [nido.session.lifecycle :as lifecycle]))
+   [nido.session.lifecycle :as lifecycle])
+  (:import
+   [java.time Instant]))
 
 (def ^:private tree "/Users/x/Code/brian-worktrees/fix-thing")
 
@@ -38,18 +40,37 @@
    {:phase "fix" :status "running" :started-at "t2" :ended-at nil}])
 
 (defn- write-run!
-  "One run dir holding `report`, its files stamped `age-ms` old."
-  [report age-ms]
-  (let [dir (cstate/run-dir (:run-id report))
-        p   (str (fs/path dir "report.json"))]
-    (fs/create-dirs dir)
-    (spit p (json/generate-string report))
-    (fs/set-last-modified-time p (- (System/currentTimeMillis) age-ms))
-    (fs/set-last-modified-time dir (- (System/currentTimeMillis) age-ms))
-    p))
+  "One run dir holding `report`, plus an `agent-files` map of `{name age-ms}` —
+   the entries a run's own agents write, which are the only ones the quiet
+   window is measured over.
+
+   `age-ms` ages report.json AND the directory itself, because that pair is what
+   one `report/persist!` touches: it stages through `report.json.tmp` and renames
+   it over, and the rename creates and removes a directory entry. Stamped last so
+   writing the agent files does not bump it back to now."
+  ([report age-ms] (write-run! report age-ms {}))
+  ([report age-ms agent-files]
+   (let [dir (cstate/run-dir (:run-id report))
+         p   (str (fs/path dir "report.json"))
+         t   (System/currentTimeMillis)]
+     (fs/create-dirs dir)
+     (spit p (json/generate-string report))
+     (doseq [[nm age] agent-files]
+       (let [f (str (fs/path dir nm))]
+         (spit f "")
+         (fs/set-last-modified-time f (- t age))))
+     (fs/set-last-modified-time p (- t age-ms))
+     (fs/set-last-modified-time dir (- t age-ms))
+     p)))
 
 (defn- read-back [run-id]
   (json/parse-string (slurp (str (fs/path (cstate/run-dir run-id) "report.json"))) true))
+
+(defn- ended-ms-ago
+  "How long before now `run-id`'s settled report says it ended."
+  [run-id]
+  (- (System/currentTimeMillis)
+     (.toEpochMilli (Instant/parse (:ended-at (read-back run-id))))))
 
 (defn- in-tmp-home
   "Run `f` with ~/.nido pointed at a scratch dir, and with the workstream
@@ -209,12 +230,12 @@
                 invocation finds a terminal report and reviews the branch as it
                 now stands")))))))
 
-(deftest an-orphan-still-being-written-to-is-left-alone
+(deftest an-orphan-whose-agent-is-still-writing-is-left-alone
   (in-tmp-home
    (fn []
      (let [queued (atom [])]
        (with-redefs [queue/enqueue! (fn [e] (swap! queued conj e) "/q/1.edn")]
-         (write-run! (report-in "review-dead" tree fixing) 0)
+         (write-run! (report-in "review-dead" tree fixing) 0 {"agent.log" 0})
          (let [out (reconcile/settle! {:cwd tree :run-id "review-mine"})]
            (is (not (:proceed? out)))
            (is (= 1 (count (:writing out))))
@@ -226,6 +247,54 @@
            (is (= "running" (:status (read-back "review-dead")))
                "left non-terminal ON PURPOSE, so the refusal repeats for as long
                 as something is still rewriting the branch")))))))
+
+(deftest the-loops-own-persist-does-not-hold-an-orphan
+  (in-tmp-home
+   (fn []
+     (with-redefs [queue/enqueue! (constantly "/q/1.edn")]
+       ;; Ctrl-C reaps the fixers and THEN runs the shutdown hook, whose
+       ;; `:run-interrupted` folds to (or (interrupted report at) report) — for a
+       ;; run mid-repair the report is unchanged and persisted anyway. So all
+       ;; three things that persist touches carry the moment of the stop:
+       ;; report.json, the tmp it renames over, and the directory entry that
+       ;; rename creates and removes. Only agent.log says when a fixer last did
+       ;; anything, and here that was five minutes ago.
+       (let [p (write-run! (report-in "review-dead" tree fixing) 0
+                           {"agent.log" (* 5 60 1000)})]
+         (spit (str p ".tmp") "")
+         (let [out (reconcile/settle! {:cwd tree :run-id "review-mine"})]
+           (is (empty? (:writing out))
+               "the window exists to wait out a live fixer; counting the loop's
+                own dying write starts it a minute after the reap instead of at
+                it, and the loop is the thing that died")
+           (is (= 1 (count (:settled out))))
+           (is (not (:proceed? out))
+               "settled is not proceed — a branch left mid-repair still refuses
+                this caller, but once rather than for a minute")))))))
+
+(deftest an-orphan-is-dated-by-its-agents-last-write
+  (in-tmp-home
+   (fn []
+     (with-redefs [queue/enqueue! (constantly "/q/1.edn")]
+       (write-run! (report-in "review-dead" tree fixing) 0
+                   {"agent.log" (* 5 60 1000)})
+       (reconcile/settle! {:cwd tree :run-id "review-mine"})
+       (is (< (* 4 60 1000) (ended-ms-ago "review-dead"))
+           "`:ended-at` is a fact about the run, so it has to be when the run
+            stopped PRODUCING — dating it to the engine's dying write hands the
+            analysis a run that went on working after everything was reaped")))))
+
+(deftest an-orphan-whose-agents-never-wrote-is-dated-by-its-report
+  (in-tmp-home
+   (fn []
+     (with-redefs [queue/enqueue! (constantly "/q/1.edn")]
+       ;; A run killed before it launched anybody. There is no agent moment to
+       ;; name and the report's own mtime is the last thing anybody can say
+       ;; about it; left to a missing one, `:ended-at` would read 1970.
+       (write-run! (report-in "review-dead" tree reviewing) (* 5 60 1000))
+       (reconcile/settle! {:cwd tree :run-id "review-mine"})
+       (let [lag (ended-ms-ago "review-dead")]
+         (is (< (* 4 60 1000) lag (* 6 60 1000))))))))
 
 (deftest a-run-that-stopped-reading-is-settled-however-recently-it-wrote
   ;; The quiet window is only ever consulted about the fix phase. A dead
