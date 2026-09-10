@@ -1108,6 +1108,21 @@ layers, it is not yours"))
   (is (nil? (prompts/prior-open-block []))
       "an empty list rendered as a heading invites a reviewer to look for one"))
 
+(deftest layer-brief-block-shows-a-settled-deviation-as-settled
+  ;; The reviewer is told to attack the claim, so a claim already known to be too
+  ;; strong is what it is likeliest to find — and a deviation is the ruling that
+  ;; this one will not be repaired. Withheld, the round rediscovers it.
+  (let [b (prompts/layer-brief-block
+           {:subject "feat(x): y" :claims "the rename is uniform"
+            :deviations ["three sites got special handling"]})]
+    (is (str/includes? b "ALREADY KNOWN NOT TO HOLD"))
+    (is (str/includes? b "three sites got special handling"))
+    (is (str/includes? b "do not report them again"))))
+
+(deftest layer-brief-block-with-no-deviation-says-nothing-about-one
+  (let [b (prompts/layer-brief-block {:subject "s" :claims "c"})]
+    (is (not (str/includes? b "ALREADY KNOWN NOT TO HOLD")))))
+
 (deftest manifest-block-carries-the-mandate-over-its-own-list
   (let [b (prompts/manifest-block "src/a.clj\nsrc/b.clj")]
     (is (str/includes? b "Changed files:"))

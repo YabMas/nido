@@ -29,7 +29,8 @@ lowercase imperative subject, no trailing period, and the branch name. Cite the
 project's rule when the fix is a token; cite this when the fix is a judgement.
 
 **`/stack` §5 owns the skeleton** — subject, one to three sentences, the `Layer:`
-trailer, the `Claims` / `Verify` / `Lane` / `Out of scope` brief, the refs, and
+trailer, the `Claims` / `Verify` / `Lane` / `Out of scope` brief (plus the
+loop-written `Deviation`, §5), the refs, and
 the `Phase:` block when the change is phased. That is settled and this does not
 reopen it. **This doctrine governs what goes in those slots, and what stays out.**
 
@@ -145,7 +146,7 @@ design record at all.
 And drop the frame. *"This PR adds…"*, *"In this commit we…"*, *"I've updated…"*
 — the reader knows where they are. Write the claim.
 
-## 5. The brief's four fields are answers, not essays
+## 5. The brief's four authored fields are answers, not essays
 
 `/stack` §5 defines them; this bounds them. Each is one or two lines.
 
@@ -160,6 +161,12 @@ And drop the frame. *"This PR adds…"*, *"In this commit we…"*, *"I've update
 
 A field that needs a paragraph is almost always carrying §4 narration or §1
 restatement. Cut it there, not by trimming words evenly.
+
+A fifth field, `Deviation`, is written by `bb nido:review:loop` and never by
+you: one line per claim the loop found does not hold and decided not to repair.
+It is not part of the budget above and it is not yours to edit — `Claims` says
+what was intended, `Deviation` says what happened, and the pair is what tells a
+reader where to look. See `/stack` §5.
 
 ## 6. The budget is a smell, not a limit
 

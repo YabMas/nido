@@ -161,9 +161,10 @@
 
 (def ^:private brief-fields
   {"Layer" :mode "Claims" :claims "Verify" :verify
-   "Lane" :lane "Out of scope" :out-of-scope})
+   "Lane" :lane "Out of scope" :out-of-scope "Deviation" :deviation})
 
-(def ^:private field-re #"^(Layer|Claims|Verify|Lane|Out of scope):\s*(.*)$")
+(def ^:private field-re
+  #"^(Layer|Claims|Verify|Lane|Out of scope|Deviation):\s*(.*)$")
 (def ^:private continuation-re #"^\s+\S.*$")
 
 (defn ^{:malli/schema [:=> [:cat :string] :map]}
@@ -174,8 +175,9 @@
    Fields the message doesn't carry come back nil. That is the normal case for
    an ordinary commit written before the stack doctrine, and for a fixup commit
    sitting on a layer — neither is an error, so this never throws. A field's
-   value continues onto following indented lines, which is how the four brief
-   fields are written."
+   value continues onto following indented lines, which is how the brief fields
+   are written. A REPEATED field is a second entry rather than a replacement —
+   `Deviation` is written one line per claim that did not hold."
   [description]
   (when-not (str/blank? description)
     (let [lines  (str/split-lines description)
@@ -184,17 +186,36 @@
                        (fn [{:keys [current] :as st} line]
                          (if-let [[_ k v] (re-matches field-re line)]
                            (let [field (get brief-fields k)]
+                             ;; A repeated field opens a NEW entry rather than
+                             ;; replacing the one before it. It used to replace,
+                             ;; which is a silent drop — and `Deviation` repeats
+                             ;; by construction: one line per claim a run found
+                             ;; does not hold, and a layer accumulates them
+                             ;; across runs.
                              (-> st (assoc :current field)
-                                 (assoc-in [:out field] [v])))
+                                 (update-in [:out field] (fnil conj []) [v])))
                            (if (and current (re-matches continuation-re line))
-                             (update-in st [:out current] conj (str/trim line))
+                             ;; Onto the entry that is open, not alongside it:
+                             ;; an indented line continues the field line above
+                             ;; it, and which of several it continues is the
+                             ;; whole difference between two deviations and one.
+                             (update-in st [:out current]
+                                        #(conj (pop %) (conj (peek %) (str/trim line))))
                              (assoc st :current nil))))
                        {:current nil :out {}})
                       :out)
-          joined (into {} (map (fn [[k parts]]
-                                 [k (str/trim (str/join " " (remove str/blank? parts)))]))
-                       parsed)]
+          entries (update-vals parsed
+                               (fn [es]
+                                 (into []
+                                       (comp (map #(str/trim (str/join " " (remove str/blank? %))))
+                                             (remove str/blank?))
+                                       es)))
+          joined  (update-vals entries #(str/join " " %))]
       (cond-> (assoc joined
+                     ;; The one field whose entries are read apart as well as
+                     ;; together: each is a separate claim that did not hold,
+                     ;; and joined into a paragraph they stop being countable.
+                     :deviations (:deviation entries [])
                      :subject (first (remove str/blank? lines))
                      :raw     (str/trim description))
         (seq (:mode joined)) (update :mode #(keyword (str/lower-case (str/trim %))))))))
@@ -204,6 +225,91 @@
   "The review brief of the layer whose tip is `rev`, or nil."
   [cwd rev]
   (parse-brief (description cwd rev)))
+
+;; ---- recording a deviation on a layer ------------------------------------
+
+(defn- one-line
+  "Text folded onto one line, so a `Deviation:` value stays one field line."
+  [t]
+  (-> (str t) (str/replace #"\s+" " ") str/trim))
+
+(defn ^{:malli/schema [:=> [:cat :map] [:maybe :string]]}
+  deviation-line
+  "One deviation as its layer's commit message carries it, or nil when the
+   finding says nothing a reader could act on.
+
+   Title first and the claim second, because the two do different jobs: the
+   title is what did not hold, and `of` is the sentence in `Claims` it qualifies
+   — which is the half a reader needs to find, since the claim is still there
+   and still says what was intended. Both are kept, per the `deviation`
+   disposition: the claim is what we meant, the deviation is what happened."
+  [{:keys [title of]}]
+  (let [t (one-line title)
+        c (one-line of)]
+    (when-not (str/blank? t)
+      (if (str/blank? c) t (str t " — qualifies the claim: " c)))))
+
+(defn ^{:malli/schema [:=> [:cat :string [:sequential :string]] :string]}
+  with-deviations
+  "`description` with each new deviation line appended as its own `Deviation:`
+   field, and the ones it already carries left alone.
+
+   Idempotent on the LINE, not on a finding id — the message is the only record
+   there is, and a re-run of the same branch produces the same sentence from the
+   same finding. Appended at the end rather than beside `Claims:` so the brief's
+   authored fields keep the order `/stack` §5 gives them; `parse-brief` reads a
+   field wherever it sits."
+  [description lines]
+  (let [have (set (:deviations (parse-brief description) []))
+        new  (into [] (comp (remove str/blank?) (remove have) (distinct)) lines)]
+    (if (empty? new)
+      (str description)
+      (let [body (str/trimr (str description))
+            ;; Into the block that is already there, when there is one. A blank
+            ;; line between two `Deviation:` lines parses the same but reads as
+            ;; two lists, and a layer that deviates twice across two runs would
+            ;; grow one gap per run.
+            gap  (if (str/starts-with? (str/trim (last (str/split-lines body)))
+                                       "Deviation:")
+                   "\n" "\n\n")]
+        (str body gap
+             (str/join "\n" (map #(str "Deviation: " %) new))
+             "\n")))))
+
+(defn ^{:malli/schema [:=> [:cat :Path :any :any] :any]}
+  record-deviations!
+  "Write each finding the run settled as a `deviation` onto the layer whose
+   claim it qualifies. Returns the labels actually stamped.
+
+   A deviation is the one ruling that ends a finding by agreeing the layer's
+   stated claim was too strong, and until now it ended in nido's ledger alone —
+   while the false claim shipped, verbatim, in the layer's commit message and
+   from there into the PR body `/squash` synthesises from it. So the loop
+   recorded that a claim does not hold and then published the claim.
+
+   The commit message is the right destination precisely because it is the one
+   the PR is generated FROM: a reader of the PR is the person the claim was
+   written for, and they are the last person a note in a run report reaches.
+
+   Best-effort per layer. A stamp that cannot be written costs a reader a line
+   they would have liked; a throw here would take the run's whole record with
+   it, and the record is what everything downstream reads."
+  [cwd stack findings]
+  (let [by-label (into {} (map (juxt #(or (:slug %) (:bookmark %)) identity)) stack)]
+    (into []
+          (keep (fn [[label fs]]
+                  (when-let [layer (get by-label label)]
+                    (let [lines (into [] (keep deviation-line) fs)
+                          desc  (description cwd (:bookmark layer))]
+                      (when (and (seq lines) desc)
+                        (let [next-desc (with-deviations desc lines)]
+                          (when (not= (str/trim next-desc) (str/trim desc))
+                            (try
+                              (let [{:keys [exit]} (jj/jj! cwd "describe" "-r"
+                                                           (:bookmark layer) "-m" next-desc)]
+                                (when (zero? exit) label))
+                              (catch Throwable _ nil)))))))))
+          (group-by :owner-layer findings))))
 
 ;; ---- landing a fix on a layer -------------------------------------------
 

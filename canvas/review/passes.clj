@@ -161,6 +161,16 @@
     {:signature [:=> [:catn [:description :string]] :map]})
   (Operation brief "A layer's review brief."
     {:signature [:=> [:catn [:cwd Path] [:rev :any]] :map] :delegates [description parse-brief]})
+  (Operation deviation-line "One deviation as its layer's commit message carries it."
+    {:signature [:=> [:catn [:finding :map]] [:maybe :string]]})
+  (Operation with-deviations
+    "A layer message with the deviations it does not yet carry appended."
+    {:signature [:=> [:catn [:description :string] [:lines [:sequential :string]]] :string]})
+  (Operation record-deviations!
+    "Write each settled deviation onto the layer whose claim it qualifies, so the sentence
+     that says the claim did not hold ships in the same message as the claim."
+    {:signature [:=> [:catn [:cwd Path] [:stack :any] [:findings :any]] :any]
+     :delegates [deviation-line with-deviations description]})
   (Operation position-for-fix! "Put the working copy on a layer so a fix lands in it."
     {:signature [:=> [:catn [:cwd Path] [:layer :map]] :any]})
   (Operation land-fix! "Turn the working copy into the layer's new content."

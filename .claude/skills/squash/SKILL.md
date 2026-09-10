@@ -86,7 +86,7 @@ when you reach it. If the layer is already one commit, `jj squash` reports
 re-runnable.
 
 Then set the surviving commit's description to the layer commit format
-(`/stack` §5) — subject, body, `Layer:` trailer, and the four review-brief
+(`/stack` §5) — subject, body, `Layer:` trailer, and the review-brief
 fields. (The fold leaves it carrying the *lowest* commit's message, which is
 usually not the message the layer wants.)
 
@@ -105,6 +105,8 @@ Lane: <specialism>
 Out of scope: <what this layer's reviewer should not flag, and where it lives:
   a layer above, a spun-out ref, an explicit decline, or a citation of the
   design — "the record puts this behind the X boundary">
+Deviation: <copied forward verbatim from the pre-fold message, one line each;
+  never authored here — see below>
 
 Refs BR-####
 MSG
@@ -114,6 +116,20 @@ MSG
 - **Preserve the existing trailer and brief** where the layer already has them —
   they were authored when the layer was written, which is when the author knew
   most. Refresh only what the fold changed.
+- **Carry every `Deviation:` line forward verbatim.** The review loop writes
+  them (`/stack` §5) — one per claim it found does not hold and decided not to
+  repair — and the fold is where they are easiest to lose: `-u` keeps the
+  *lowest* commit's message, so a deviation stamped on the layer's tip is gone
+  the moment you squash. **Read the whole pre-fold range for them before you
+  fold**, not just the commit that survives:
+
+  ```bash
+  jj log -r "$LOW..$TIP" --no-graph -T 'description' | grep '^Deviation:'
+  ```
+
+  Do NOT edit `Claims:` to match one. The claim says what was intended and the
+  deviation says what happened; a claim quietly narrowed until it is true is the
+  one outcome that tells a reader nothing.
 - **A fold that changes what a layer claims is a signal, not a formality.** If
   the surviving commit asserts something the design record's `:layers` does not,
   the squash moved a decision — either the record needs amending or the fold was
@@ -287,7 +303,14 @@ this mirrors it.
 For each layer, replace the PR body **wholesale** — the quick body
 `prepare-draft-pr` wrote plus anything hand-typed — with one synthesized from the
 folded commit (subject, body, `Layer:` trailer, review brief), that layer's diff,
-and the ticket:
+and the ticket.
+
+**A `Deviation:` line goes in the body, next to the claim it qualifies.** This
+is the whole reason it is in the commit message: the loop's own record lives in
+nido's ledger, which nobody reviewing the PR opens, so this is the only place
+the finding reaches the person the claim was written for. Render the pair
+together — the claim, then what was found not to hold about it — rather than
+burying the deviation at the bottom.
 
 ```bash
 SLUG=$(jj git remote list | awk '/^origin/{print $2}' \

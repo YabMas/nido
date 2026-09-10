@@ -1229,6 +1229,41 @@
       (conj (str "  → " (or (diff-remedies status)
                             (str "unrecognised terminal status: " status)))))))
 
+(defn- record-deviations!
+  "Stamp the run's deviations onto their layers — see
+   `layers/record-deviations!` — and answer the labels it wrote.
+
+   Here rather than in a stage because it REWRITES layer commits, and a stage
+   doing that mid-run would move the tree out from under the round's own drift
+   guard, exactly as a reshape does; the reshape stage carries a re-pin for it
+   and this needs none, because the loop has ended. A dry run stamps nothing.
+
+   Scoped to findings the warden gave an `owner-layer`: the layer whose claim it
+   is, is the layer whose message says so. A deviation on an unlayered branch
+   has no such commit and is left to the ledger.
+
+   Best-effort, and SAYS SO when it fails. A throw here would take the run's
+   whole tail with it — the design verdict, the halt, the queued analysis — for
+   a line in a commit message; but swallowing it silently would leave a claim
+   the loop knows is false shipping to the PR with nothing anywhere saying the
+   stamp was attempted. The ledger entry is already written by this point and
+   still holds the finding, so the warning names what a reader has to do by
+   hand."
+  [cwd config final]
+  (try
+    (when-not (:dry-run? config)
+      (let [devs (into [] (filter #(= :deviation (:disposition %)))
+                       (verdict/kept-across-run final))]
+        (when (seq devs)
+          (layers/record-deviations!
+           cwd (stages/session-stack cwd (:base config)) devs))))
+    (catch Throwable e
+      (println (str "review-loop: ⚠ could not record this run's deviations on their"
+                    " layers — " (ex-message e)
+                    "\n  the findings are in the :review ledger entry; the layer"
+                    " commits still carry the claims they qualify"))
+      nil)))
+
 (defn- review-branch!
   "Drive the loop over the branch and record what it found, returning the
    terminal status.
@@ -1242,12 +1277,21 @@
                  {:report-atom report-atom :report-path report-path :clock clock}
                  (fn [emit] (rloop/run-loop (assoc config :emit emit))))
         status (:status final)
-        ws-id  (append-review-entry! cwd final @report-atom report-path)]
+        ws-id  (append-review-entry! cwd final @report-atom report-path)
+        ;; After the ledger entry, because the entry is the record everything
+        ;; downstream reads and this rewrites commits. Before the outcome lines,
+        ;; so what the run says it did includes it.
+        stamped (record-deviations! cwd config final)]
     ;; The status names the condition and `diff-remedies` says what it asks
     ;; of whoever ran this. A coordinator-driven round says it a second
     ;; time, through the lane's disposition and a gate entry; a round a
     ;; person ran themselves says it here or nowhere.
     (run! println (outcome-lines final @report-atom report-path))
+    (when (seq stamped)
+      (println (str "review-loop: recorded a Deviation on "
+                    (str/join ", " stamped)
+                    " — it ships in the layer's commit message and in the PR"
+                    " /squash generates from it")))
     ;; A side record that fails invisibly is how a whole class of run came
     ;; to leave no ledger entry at all: the ledger's status enum did not
     ;; admit :unfixable, every append on that status was refused, and the

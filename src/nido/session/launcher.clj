@@ -544,7 +544,7 @@
        "move the diff underneath a body written earlier, and on a squash-merge\n"
        "repo that body is what trunk keeps forever.\n"
        "\n"
-       "Full doctrine — the reachability table, what the four brief fields may\n"
+       "Full doctrine — the reachability table, what the brief fields may\n"
        "hold, the sources — at `~/Code/nido/docs/reference/descriptions.md`,\n"
        "after Google's eng-practices, the Linux kernel's SubmittingPatches, Beams\n"
        "and Pope. `/stack` §5 owns the skeleton and your project owns the\n"

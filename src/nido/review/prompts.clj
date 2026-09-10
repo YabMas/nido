@@ -36,7 +36,7 @@
    standing, held against what the layer changed. Phrase it as checks to run
    and a reviewer with the contradicted assertion open in front of it reports
    nothing: it has no reading of an instruction it cannot carry out."
-  [{:keys [subject mode claims verify lane out-of-scope]}]
+  [{:keys [subject mode claims verify lane out-of-scope deviations]}]
   (when (or claims verify out-of-scope)
     (str
      "THIS REVIEW IS BOUNDED TO ONE LAYER OF A STACKED CHANGE.\n\n"
@@ -73,7 +73,22 @@
      "  finding, and it goes red the moment anybody runs it.\n"
      "- A `mechanical` layer asserts uniformity: your job is to find the one\n"
      "  place that got special handling, not to reopen the decision. A\n"
-     "  `judgment` layer owns a decision: weigh it.\n\n")))
+     "  `judgment` layer owns a decision: weigh it.\n\n"
+     ;; The claim is the thing this reviewer is told to attack, so a claim
+     ;; already known to be too strong is the defect it is most likely to find —
+     ;; and a `deviation` is precisely the ruling that this one is not going to
+     ;; be repaired. Withheld, the reviewer spends the round rediscovering it and
+     ;; the warden spends another settling it again.
+     (when (seq deviations)
+       (str "WHERE THIS CLAIM IS ALREADY KNOWN NOT TO HOLD\n\n"
+            "A previous run found each of these, and it was decided the claim\n"
+            "was overstated rather than that the code was wrong. Both are kept:\n"
+            "the claim says what was intended, these say what happened. They are\n"
+            "SETTLED — do not report them again.\n\n"
+            (->> deviations (map #(str "- " % "\n")) (apply str))
+            "\n"
+            "A defect these do not cover is still yours, including one in the\n"
+            "same area. Say what is different about it.\n\n")))))
 
 (def ^:private fixer-account-chars
   "How much of a fixer's own account a reader is shown, PER FINDING the fixer was

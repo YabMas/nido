@@ -226,6 +226,81 @@
     (is (= "the new validation logic — that lands in the layer above."
            (:out-of-scope b)))))
 
+(deftest parse-brief-keeps-repeated-fields-apart
+  ;; A repeated field used to keep only the LAST line. `Deviation` repeats by
+  ;; construction — one per claim a run found does not hold.
+  (let [b (layers/parse-brief
+           (str "feat(x): y\n\nClaims: a\n"
+                "Deviation: the rename was not uniform — qualifies the claim: a\n"
+                "Deviation: a second thing\n  that continues onto this line\n"))]
+    (is (= ["the rename was not uniform — qualifies the claim: a"
+            "a second thing that continues onto this line"]
+           (:deviations b)))
+    (is (= "a" (:claims b)))))
+
+(deftest parse-brief-of-a-message-with-no-deviations-answers-empty
+  (is (= [] (:deviations (layers/parse-brief layer-message)))))
+
+;; ---- recording a deviation on a layer ------------------------------------
+
+(deftest deviation-line-names-the-defect-then-the-claim-it-qualifies
+  (is (= "Old interruptions discharge the new turn — qualifies the claim: the contract holds"
+         (layers/deviation-line {:title "Old interruptions discharge the new turn"
+                                 :of "the contract holds"})))
+  (is (= "Just the title" (layers/deviation-line {:title "Just the title"})))
+  (is (nil? (layers/deviation-line {:of "a claim with no finding"}))))
+
+(deftest deviation-line-folds-a-multi-line-claim-onto-one-line
+  ;; A `Deviation:` value that carried a newline would parse as two fields.
+  (is (= "T — qualifies the claim: a b c"
+         (layers/deviation-line {:title "T" :of "a\n  b\nc"}))))
+
+(deftest with-deviations-appends-and-is-idempotent-on-the-line
+  (let [once  (layers/with-deviations "feat(x): y\n\nClaims: a\n" ["one"])
+        twice (layers/with-deviations once ["one" "two"])]
+    (is (= ["one"] (:deviations (layers/parse-brief once))))
+    ;; "one" is already carried, so only "two" is added — and into the same
+    ;; block, not a second one.
+    (is (= ["one" "two"] (:deviations (layers/parse-brief twice))))
+    (is (str/includes? twice "Deviation: one\nDeviation: two"))
+    (is (= twice (layers/with-deviations twice ["one" "two"])))))
+
+(deftest with-deviations-of-nothing-leaves-the-message-alone
+  (is (= "feat(x): y" (layers/with-deviations "feat(x): y" [])))
+  (is (= "feat(x): y" (layers/with-deviations "feat(x): y" ["" "   "]))))
+
+(deftest record-deviations!-stamps-the-layer-its-warden-named
+  (let [described (atom [])]
+    (with-redefs [jj/jj! (fn [_dir & args]
+                           (case (first args)
+                             "log"      {:exit 0 :out "feat(a): one\n\nClaims: uniform\n" :err ""}
+                             "describe" (do (swap! described conj (vec args))
+                                            {:exit 0 :out "" :err ""})))]
+      (let [stack [{:bookmark "s--a" :slug "a" :tip "cA"}
+                   {:bookmark "s--b" :slug "b" :tip "cB"}]
+            done  (layers/record-deviations!
+                   "/w" stack
+                   [{:owner-layer "a" :title "not uniform" :of "uniform"}])]
+        (is (= ["a"] done))
+        (is (= 1 (count @described)))
+        (let [[_ _ bm _ msg] (first @described)]
+          (is (= "s--a" bm) "stamped by BOOKMARK of the layer the warden named")
+          (is (str/includes? msg "Deviation: not uniform — qualifies the claim: uniform")))))))
+
+(deftest record-deviations!-ignores-a-layer-this-stack-does-not-have
+  ;; A deviation on an unlayered branch, or one naming a layer a reshape folded
+  ;; away. There is no commit whose claim it is, so there is nothing to stamp.
+  (let [described (atom [])]
+    (with-redefs [jj/jj! (fn [_dir & args]
+                           (case (first args)
+                             "log"      {:exit 0 :out "feat(a): one\n" :err ""}
+                             "describe" (do (swap! described conj (vec args))
+                                            {:exit 0 :out "" :err ""})))]
+      (is (= [] (layers/record-deviations!
+                 "/w" [{:bookmark "s--a" :slug "a" :tip "cA"}]
+                 [{:owner-layer "gone" :title "t" :of "c"}])))
+      (is (empty? @described)))))
+
 (deftest parse-brief-tolerates-a-commit-with-no-brief
   ;; A fixup on a layer, or any commit predating the doctrine. Not an error.
   (let [b (layers/parse-brief "review-loop: iter 1 fixes")]

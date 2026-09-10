@@ -528,6 +528,8 @@ lifts this into the PR body; `/squash` regenerates it.
       changed alongside the rename.
     Lane: lane-malli
     Out of scope: the new validation logic — that lands in the layer above.
+    Deviation: three call sites got special handling — qualifies the claim:
+      the rename is uniform across all 40 call sites.
 
     Refs BR-####
 
@@ -574,7 +576,7 @@ a reviewer's first question is what state the system is being left in:
     While live: the old column is still written, so a revert is a config flip.
     Next phase opens when: one full billing cycle with no incident.
 
-### The four brief fields
+### The four brief fields you author
 
 - **Claims** — what this layer asserts about itself. It should be the `:claim`
   from the design record's `:layers`, verbatim or close to it; if you find
@@ -594,6 +596,22 @@ a reviewer's first question is what state the system is being left in:
 
 **Out of scope is the field that makes bounded review work.** Without it, every
 reviewer re-derives the whole change and the stack's benefit is lost.
+
+### `Deviation:` — written by the review loop, never by you
+
+A fifth field, and the only one in the brief you do not author: `bb
+nido:review:loop` appends one line per finding it settled as a **deviation** —
+the layer's stated claim is not true, and the decision was that the claim was
+overstated rather than that the code is wrong.
+
+**Both are kept, and that is the point.** `Claims:` says what was intended;
+`Deviation:` says what actually happened. Do not edit the claim to match — a
+claim silently narrowed until it is true tells a reader nothing, and the pair
+tells them exactly where to look.
+
+Preserve every `Deviation:` line through a fold or a rewrite. It is the only
+place the finding reaches the person the claim was written for: the loop's own
+record is in nido's ledger, which nobody reviewing the PR opens.
 
 ## 6. Restacking — you own the shape
 
