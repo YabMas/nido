@@ -10,6 +10,7 @@
    [nido.coordinator.record.session :as csession]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as ws]
+   [nido.coordinator.lane.pipeline :as pipeline]
    [nido.review.layers :as layers]
    [nido.review.loop :as rloop]
    [nido.review.record :as record]
@@ -39,7 +40,25 @@
         (f))
       (finally (fs/delete-tree tmp)))))
 
-(use-fixtures :each with-tmp-nido-root)
+(def ^:private gate
+  "The real `no-yardstick`, captured at load — before `with-a-design-record`
+   stubs the var for every other test in this namespace. The gate's own tests
+   are the ones that have to reach the implementation."
+  t/no-yardstick)
+
+(defn- with-a-design-record
+  "Clear `no-yardstick` for every test that is not about it.
+
+   The diff loop refuses a cwd with no design record to judge against, and every
+   test below drives the REAL command from a path that belongs to no workstream
+   — so without this each one asserts against the refusal instead of against
+   what it was written to check. Redefining the gate itself rather than the two
+   ledger reads underneath it keeps the stub off `project+ws-from-cwd`, which
+   several of these tests are genuinely about."
+  [f]
+  (with-redefs [t/no-yardstick (constantly nil)] (f)))
+
+(use-fixtures :each with-tmp-nido-root with-a-design-record)
 
 (defn- queued-envelopes
   "Envelopes sitting in the (temp) queue dir."
@@ -1589,3 +1608,73 @@
     (is (str/includes? out "wait for them to finish, or end them"))
     (is (not (str/includes? out "as it now stands"))
         "the branch is not going to stand still")))
+
+;; ── the yardstick gate ──────────────────────────────────────────────────────
+
+(deftest a-workstream-with-no-design-record-is-refused-before-anything-is-spent
+  ;; The loop judges an implementation against the design it committed to. With
+  ;; no record the warden is told the opposite of what the loop is for — "do NOT
+  ;; park anything for contradicting an invariant" — so the one clause that keeps
+  ;; a design question away from a fixer cannot fire. Measured before this
+  ;; refused: 36 of 108 reviewed workstreams held a record, and of the findings a
+  ;; reviewer marked `structural` with no composition kind to route them, 10 of
+  ;; 13 went to a fixer and none was ever parked.
+  (let [ran (atom false)]
+    (with-redefs [t/no-yardstick (constantly {:reason :no-design-record :lines ["nope"]})
+                  rloop/run-loop (fn [_] (reset! ran true) {:status :converged :history []})]
+      (let [out (with-out-str
+                  (binding [*err* *out*]
+                    (is (= :no-design-record (t/loop-cmd ":cwd" "/w")))))]
+        (is (false? @ran) "no reviewer is launched")
+        (is (str/includes? out "nope") "the refusal says why, on stderr")))
+    (is (empty? (queued-envelopes))
+        "and nothing is queued for analysis — there is no run to analyse")))
+
+(deftest a-refused-run-leaves-no-run-directory
+  ;; The refusal is taken before the run id, the report and the activity claim.
+  ;; One taken after them leaves a run dir and a claim for a review nobody
+  ;; performed, and `reconcile/orphans` then has to tell that from a run that
+  ;; died mid-flight.
+  (with-redefs [t/no-yardstick (constantly {:reason :no-workstream :lines []})]
+    (t/loop-cmd ":cwd" "/w")
+    (is (empty? (filter #(str/starts-with? (str (fs/file-name %)) "review-")
+                        (fs/list-dir (cstate/runs-dir))))
+        "nothing on disk names a run that never started")))
+
+(deftest a-refusal-exits-non-zero
+  ;; A driver reads the exit code to decide whether the stage it asked for
+  ;; happened. For these two it did not, and no report was written for it to
+  ;; find that out from.
+  (is (= 1 (t/exit-code :no-design-record)))
+  (is (= 1 (t/exit-code :no-workstream)))
+  (is (= 0 (t/exit-code :converged)) "an ordinary outcome is still a success"))
+
+(deftest the-gate-names-the-stage-the-ledger-says-is-due
+  ;; Guessing the remedy would tell a workstream that never got a baseline to go
+  ;; and write a design. The ledger already knows which stage it is owed.
+  (with-redefs [stages/project+ws-from-cwd (constantly [:p "ws-1"])
+                stages/discover-design-record (constantly nil)
+                pipeline/of (constantly {:next {:stage :write-baseline}})]
+    (let [{:keys [reason lines]} (gate "/w")]
+      (is (= :no-design-record reason))
+      (is (some #(str/includes? % "owed write-baseline") lines))))
+  (with-redefs [stages/project+ws-from-cwd (constantly [:p "ws-1"])
+                stages/discover-design-record (constantly nil)
+                pipeline/of (constantly {:next nil})]
+    (is (some #(str/includes? % "Write the design record first")
+              (:lines (gate "/w")))
+        "a workstream owed nothing still gets an actionable line")))
+
+(deftest a-workstream-holding-a-design-record-is-not-refused
+  (with-redefs [stages/project+ws-from-cwd (constantly [:p "ws-1"])
+                stages/discover-design-record (constantly {:seq 3 :shape "x"})]
+    (is (nil? (gate "/w")))))
+
+(deftest a-cwd-belonging-to-no-workstream-is-refused-with-its-own-remedy
+  ;; A different ground from a missing record, because there is nowhere for one
+  ;; to live — so the answer is to review from a session worktree, not to go and
+  ;; write a design somewhere.
+  (with-redefs [stages/project+ws-from-cwd (constantly nil)]
+    (let [{:keys [reason lines]} (gate "/w")]
+      (is (= :no-workstream reason))
+      (is (some #(str/includes? % "session worktree") lines)))))

@@ -43,7 +43,13 @@
    all is the only failure — whether the review broke or no reviewer could be
    run; escalated is a reported outcome, not an error."
   [status]
-  (if (#{:review-failed :reviewer-unavailable} status) 1 0))
+  (if (#{:review-failed :reviewer-unavailable
+         ;; `no-yardstick`'s refusals. A run that never started produced no
+         ;; review either, and the caller most likely to read this is a driver
+         ;; deciding whether the stage it asked for happened — which for these
+         ;; two it did not, and no report was written for it to find out from.
+         :no-design-record :no-workstream} status)
+    1 0))
 
 (defn- ledger-findings
   "Findings trimmed to what a reader of the workstream needs and nothing that
@@ -1108,6 +1114,65 @@
     {:has     (mapv first (filter second checks))
      :missing (mapv first (remove second checks))}))
 
+(defn ^{:malli/schema [:=> [:cat :any] [:maybe :map]]}
+  no-yardstick
+  "Why this cwd may not have its implementation reviewed, as `{:reason :lines}`,
+   or nil when it may.
+
+   The diff loop exists to judge an implementation against what it was supposed
+   to be, and the design record is that yardstick: `prompts/design-block` renders
+   it to the warden, and the warden's park grounds are written against its
+   invariants. Without one the warden is told the OPPOSITE of what the loop is
+   for — \"do NOT park anything for contradicting an invariant: with no stated
+   invariant there is nothing for a finding to contradict\" — so the one clause
+   that keeps a design question away from a fixer cannot fire.
+
+   What that cost, measured before this refused: of 108 workstreams that ran a
+   review, 36 held a design record. Of the findings a reviewer marked
+   `structural` — its own word for \"this is about where a boundary sits and I
+   have not been given the design to judge it against\" — and that carried no
+   composition kind to route them, 10 of 13 went to a fixer and not one was ever
+   parked. A design question patched into invisibility is the exact outcome
+   `review_prompt.md` names as the thing the `reach` field exists to prevent.
+
+   So the run is REFUSED rather than degraded. It used to print what it was
+   missing and review anyway, and the report it left was indistinguishable from
+   one produced against a design the change actually held to — same statuses,
+   same findings, same ledger entry, and no reader downstream could tell which
+   of the two they were holding.
+
+   Two grounds, because they have different remedies. A cwd belonging to no
+   workstream has nowhere for a record to live at all. A workstream without one
+   is owed a stage, and the ledger already knows which — `pipeline/of` is asked
+   rather than the remedy being guessed, so a workstream that never got a
+   baseline is not told to go and write a design.
+
+   The record loops are not gated by this and must not be: `bb nido:review:baseline`
+   and `bb nido:review:design` are how a workstream comes to HAVE a record, and
+   they run through `record-loop-cmd*`, not here."
+  [cwd]
+  (if-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
+    (when-not (stages/discover-design-record cwd)
+      (let [due (:stage (:next (pipeline/of project ws-id)))]
+        {:reason :no-design-record
+         :lines  (cond-> ["review-loop: REFUSED — this workstream holds no design record."
+                          ""
+                          "  The loop judges an implementation against the design it"
+                          "  committed to. With no record the warden holds no invariant to"
+                          "  weigh a finding against, so a finding that puts the DESIGN in"
+                          "  question is handed to a fixer as an ordinary defect — which"
+                          "  settles it by making it invisible."
+                          ""]
+                   due       (conj (str "  This workstream is owed " (name due)
+                                        " — run that, then review."))
+                   (nil? due) (conj "  Write the design record first, then review."))}))
+    {:reason :no-workstream
+     :lines  ["review-loop: REFUSED — this directory belongs to no nido workstream."
+              ""
+              "  There is no ledger here, so there is no design record to judge"
+              "  against and nowhere to write what the review found. Run this from"
+              "  a session worktree."]}))
+
 (def diff-remedies
   "The ways a diff run can end, and what each one asks of the reader.
 
@@ -1326,18 +1391,12 @@
     (queue-analysis! cwd final @report-atom report-path config ws-id)
     status))
 
-(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
-  loop-cmd* [{:keys [cwd base max-iters dry-run? budget]}]
-  (let [;; Through the home-aware resolution WHETHER OR NOT a cwd was named. A
-        ;; session home is a place an agent legitimately stands, and passing one
-        ;; explicitly used to skip worktree-from-cwd entirely — so the run
-        ;; resolved no workstream, took the claimless fallback, and two
-        ;; invocations given the same home both reviewed the same worktree with
-        ;; neither able to see the other. The record loops already resolve this
-        ;; way; the diff loop did not.
-        given      (or cwd (System/getProperty "user.dir"))
-        cwd        (or (lifecycle/worktree-from-cwd given) given)
-        base       (or base "main")
+(defn- loop-cmd-run!
+  "The diff loop proper, on a cwd `no-yardstick` has already cleared. Split from
+   `loop-cmd*` so the refusal reads as one branch rather than as a guard buried
+   inside a forty-line binding."
+  [{:keys [cwd base max-iters dry-run? budget]}]
+  (let [base       (or base "main")
         run-id     (str "review-" (random-uuid))
         clock      #(Instant/now)
         report-path (str (fs/path (cstate/run-dir run-id) "report.json"))
@@ -1418,6 +1477,28 @@
            (do (binding [*out* *err*]
                  (run! println (orphans-refusal-lines orphaned)))
                :refused)))))))
+
+(defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
+  loop-cmd* [{:keys [cwd base max-iters dry-run? budget]}]
+  (let [;; Through the home-aware resolution WHETHER OR NOT a cwd was named. A
+        ;; session home is a place an agent legitimately stands, and passing one
+        ;; explicitly used to skip worktree-from-cwd entirely — so the run
+        ;; resolved no workstream, took the claimless fallback, and two
+        ;; invocations given the same home both reviewed the same worktree with
+        ;; neither able to see the other. The record loops already resolve this
+        ;; way; the diff loop did not.
+        given      (or cwd (System/getProperty "user.dir"))
+        cwd        (or (lifecycle/worktree-from-cwd given) given)]
+    ;; BEFORE the run id, the report and the claim, because a refusal that has
+    ;; already minted those leaves a run directory and an activity record for a
+    ;; review nobody performed — and `reconcile/orphans` then has to tell that
+    ;; from a run that died. Nothing has been spent at this point and nothing is
+    ;; left behind.
+    (if-let [refusal (no-yardstick cwd)]
+      (do (binding [*out* *err*] (run! println (:lines refusal)))
+          (:reason refusal))
+      (loop-cmd-run! {:cwd cwd :base base :max-iters max-iters
+                      :dry-run? dry-run? :budget budget}))))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   loop-cmd [& args]

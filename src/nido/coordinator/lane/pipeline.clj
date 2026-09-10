@@ -712,6 +712,16 @@
    :judge-indeterminate  :escalate
    :no-record            :escalate  ; misconfigured: nothing of that kind to judge
    :no-workstream        :escalate
+   ;; The diff loop's own refusal: it will not review an implementation with no
+   ;; design record to judge it against. NOT :route-back, which is the reading
+   ;; the neighbours above invite — the earlier record IS at fault and the stage
+   ;; to go back to is nameable. But route-back derives its target by re-reading
+   ;; the ledger on the next tick, and this refusal WRITES NOTHING, so the
+   ;; position it would re-read is the one that just fired the review: the
+   ;; driver would fire it, be refused, and fire it again forever. Escalating
+   ;; parks a blocker, `fireable` then skips the workstream, and a person
+   ;; decides whether the answer is to write the design or to stop driving it.
+   :no-design-record     :escalate
    :unreadable-ledger    :escalate  ; standing is indeterminate, so nothing may proceed
    ;; A driver never asks for one, so a dry run reaching this table means
    ;; something upstream is misconfigured — which is a human's to see, not a

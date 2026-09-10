@@ -107,6 +107,19 @@
     {:signature [:=> [:catn [:final :map] [:report :map] [:report-path :string]]
                  [:sequential :string]]
      :delegates [refused-repairs]})
+  (Operation no-yardstick
+    "Why this cwd may not have its implementation reviewed, or nil when it may.
+
+     A REFUSAL, where `off-position-line` beside it is a line, and the two differ on whether an
+     override is a thing a caller can legitimately want. Naming a stage the ledger did not choose
+     is a person meaning something else; reviewing an implementation against no design is not a
+     stronger reading of the loop, it is a weaker one — the warden is told \"do NOT park anything
+     for contradicting an invariant\" and the one clause that keeps a design question away from a
+     fixer cannot fire.
+
+     Taken before the run id, the report and the activity claim, so a refusal leaves nothing on
+     disk for `reconcile` to mistake for a run that died."
+    {:signature [:=> [:catn [:cwd :any]] [:maybe :map]]})
   (Operation loop-cmd*
     "The `loop-cmd*` entry point."
     {:signature [:=> [:catn [:opts [:* :any]]] :any]})

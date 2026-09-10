@@ -463,6 +463,18 @@
     (is (contains? @#'p/disposition-of-status s)
         (str s " must be named in the table"))))
 
+(deftest the-diff-loops-yardstick-refusals-park-rather-than-loop
+  ;; `tasks.nido-review/no-yardstick` refuses to review an implementation with no
+  ;; design record to judge it against. Route-back is the tempting reading — an
+  ;; earlier record is at fault and the stage to go back to is nameable — but it
+  ;; derives its target by re-reading the ledger next tick, and the refusal
+  ;; writes nothing, so the position re-read is the one that just fired the
+  ;; review. The driver would fire, be refused, and fire again forever.
+  (doseq [s [:no-design-record :no-workstream]]
+    (is (= :escalate (p/disposition s)) (str s " parks rather than re-firing"))
+    (is (contains? @#'p/disposition-of-status s)
+        (str s " is classified, not defaulted"))))
+
 (deftest a-holder-that-left-no-terminal-is-retried-not-escalated
   (testing "a mechanical stage shares its workstream with whatever a person is
             running by hand, so it can attach to a holder that ends without a
