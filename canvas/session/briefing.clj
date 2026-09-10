@@ -46,6 +46,17 @@
     {:signature [:=> [:catn [:ctx :map] [:session-edn :map] [:run-dir [:maybe Path]]] :any]
      :delegates [claude-md-path agents-md-path mcp-path write-session-mcp!
                  read-project-briefing design/describe]})
+  (Operation live-services-prompt
+    "What is already RUNNING for a worktree, as a system-prompt block — nil when nothing is.
+
+     The briefing's own answer to this question, addressed to the one reader that cannot receive
+     the briefing. An agent launched with the worktree as its cwd discovers instruction files by
+     walking up from there, and what it finds is the PROJECT's — `agent-guidance` writes nido's
+     rules beside them only where the project ships none. So the system prompt is the only layer
+     left, and this is the part of the briefing that has to reach it: which services this session
+     already provisions, and on which ports."
+    {:signature [:=> [:catn [:instance-id InstanceId]] [:maybe :string]]
+     :delegates [sstate/read-session]})
   (Operation session-briefing "The briefing text, from persisted state and live readings."
     {:signature [:=> [:catn [:project-name ProjectName] [:session-name :string]
                             [:instance-id InstanceId]] :string]

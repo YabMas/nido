@@ -19,6 +19,7 @@
    [nido.review.digest :as digest]
    [nido.review.layers :as layers]
    [nido.review.prompts :as prompts]
+   [nido.session.launcher :as launcher]
    [nido.session.lifecycle :as lifecycle]
    [nido.vsdd.jj :as jj]))
 
@@ -2847,12 +2848,35 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                                   :sweep (boolean (:sweep f))})
                          findings)))
 
+(defn- fixer-system-prompt
+  "The live-session block a fixer is launched with, or nil.
+
+   A fixer's cwd is the WORKTREE, so the only nido guidance it can discover for
+   itself is whatever the project ships at that root — and a project with a real
+   CLAUDE.md there keeps it, by `agent-guidance/write!`'s own rule. The ports of
+   the services this session is already running therefore reach the fixer
+   through the system prompt or not at all, which is what this supplies.
+
+   Nil-tolerant on purpose, twice over: a review run outside a nido worktree
+   resolves to no session, and a session with no services renders no block. Both
+   launch exactly as before — the block is an addition to what a fixer knows,
+   never a precondition for running one."
+  [cwd]
+  (try
+    (some-> (:instance-id (lifecycle/session-from-cwd cwd))
+            launcher/live-services-prompt)
+    (catch Throwable _ nil)))
+
 (defn- run-fix-stage
   [ctx]
   (if (:dry-run? (:config ctx))
     (assoc ctx :control :stop :status :dry-run)
     (let [{:keys [cwd base run-id budget impl-session-id]} (:config ctx)
           stack (session-stack cwd base)
+          ;; Once per stage rather than per launch: every fixer in the round
+          ;; stands in the same worktree, so the answer cannot differ between
+          ;; them and the registry read is not worth repeating.
+          sys-prompt (fixer-system-prompt cwd)
           plan  (fix-plan stack (with-sweep-memory (:findings ctx) (:history ctx)))
           ;; The round's own rulings are conjoined on because the warden runs
           ;; inside it: the decision a fixer is about to walk into is usually
@@ -2919,6 +2943,7 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                        {:keys [num-turns result-text timed-out?]}
                        (agent/launch!
                         {:run-id run-id :cwd cwd
+                         :system-prompt sys-prompt
                          :first-message (prompts/fix-prompt
                                          {:findings findings
                                           :layer (assoc (toc-row (:toc ctx) label)

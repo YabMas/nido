@@ -1086,6 +1086,78 @@
           (catch Exception e
             (core/log-step (str "warning: run-shim: " (ex-message e)))))))))
 
+(defn ^{:malli/schema [:=> [:cat :InstanceId] [:maybe :string]]}
+  live-services-prompt
+  "The session's live services, as an --append-system-prompt block for a
+   headless agent launched with the WORKTREE as its cwd.
+
+   The session home's briefing already says all of this, and an agent standing
+   in the worktree never reads it: CLAUDE.md discovery walks up from cwd, and
+   the worktree's own is the PROJECT's. `agent-guidance/write!` exists to close
+   exactly that gap and correctly declines to, because a project that ships a
+   real CLAUDE.md at its root owns that file. So for a worktree-cwd launch the
+   only layer left above the project's own instructions is the system prompt,
+   which is what this renders.
+
+   What it costs to leave unrendered is measurable rather than theoretical. Over
+   nineteen review runs the fixers of a project whose CLAUDE.md opens its
+   testing section with `clojure -M:test -m kaocha.runner` shelled out to a cold
+   JVM 250 times and reached the live nREPL zero times — 222 minutes of tool
+   time against 22 for a project whose own guidance names the running nREPL, on
+   the same harness, with the nREPL up and its port in nido's registry both
+   times.
+
+   It does NOT say how to run this project's tests. brian routes full suites to
+   isolated Docker runners and forbids them on the dev nREPL — for good reason,
+   a namespace-level run there can replay the shared test schema out from under
+   every other worktree — so a harness-wide \"run the tests over the nREPL\"
+   would be wrong exactly where the project has thought hardest about it. The
+   claim here is only the one that is true of every nido session: the JVM is
+   already warm, so do not pay to start another.
+
+   Nil when the session provisions no services (a lite session, or one that is
+   down), because then there is nothing to connect to and the block would be
+   three headings over an empty fact list."
+  [instance-id]
+  (let [ctx        (:context (some-> instance-id state/read-session))
+        nrepl-port (get-in ctx [:repl :port])
+        app-port   (get-in ctx [:app :port])
+        app-url    (get-in ctx [:app :url])
+        pg-port    (get-in ctx [:pg :port])]
+    (when (or nrepl-port app-port pg-port)
+      (str
+       "# This worktree is a live nido session\n"
+       "\n"
+       "The services listed below are ALREADY RUNNING for this worktree and are\n"
+       "managed by nido. The rules here override any conflicting instruction in\n"
+       "this project's CLAUDE.md or AGENTS.md.\n"
+       "\n"
+       "- worktree: " (get-in ctx [:session :project-dir]) "\n"
+       (when nrepl-port (str "- nrepl port: " nrepl-port "\n"))
+       (when app-url    (str "- app: " app-url "\n"))
+       (when app-port   (str "- app port: " app-port "\n"))
+       (when pg-port    (str "- postgres port: " pg-port "\n"))
+       "\n"
+       "## Do not start your own\n"
+       "\n"
+       "Do not run a project task, script or dev workflow that boots a REPL, an\n"
+       "app server or a database for this worktree. Connect to what is listed\n"
+       "above; a service not listed is one this session does not provision.\n"
+       (when nrepl-port
+         (str "\n"
+              "## The JVM is already warm\n"
+              "\n"
+              "`clj-nrepl-eval -p " nrepl-port " '<form>'` evaluates against the running\n"
+              "nREPL (it reads stdin too, for a long form). Use it to reload a namespace\n"
+              "you changed and to exercise it.\n"
+              "\n"
+              "A `clojure -M:...`, `lein` or `bb` run starts a SECOND JVM and pays its\n"
+              "startup and classpath resolution every time — tens of seconds before any\n"
+              "of your code runs. Reach for one only for what the warm JVM cannot answer,\n"
+              "and where this project's own guidance names a path for full suites, follow\n"
+              "that: this rule is about not starting a JVM the session already has, not\n"
+              "about how this project runs its tests.\n"))))))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :string :InstanceId] :string]}
   session-briefing
   "Render the session briefing string from persisted state + links. Reusable as a

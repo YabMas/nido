@@ -14,6 +14,8 @@
    [nido.review.layers :as layers]
    [nido.review.prompts :as prompts]
    [nido.review.stages :as stages]
+   [nido.session.launcher :as launcher]
+   [nido.session.lifecycle :as lifecycle]
    [nido.vsdd.jj :as jj]))
 
 (deftest parse-warden-decision-reads-per-finding-rulings
@@ -371,6 +373,51 @@
         (is (nil? (:conflicted ctx))
             ":conflicted means the branch is holding markers right now, which is
              what sends a human to resolve them")))))
+
+(deftest every-fixer-is-launched-knowing-the-session-services-are-up
+  ;; A fixer's cwd is the WORKTREE, so the only nido guidance it can discover
+  ;; is whatever the project ships at that root — and `agent-guidance/write!`
+  ;; correctly declines to overwrite a project's own CLAUDE.md. Measured over
+  ;; nineteen review runs, the fixers of a project whose CLAUDE.md opens its
+  ;; testing section with a cold `clojure -M:test` went to a cold JVM 250 times
+  ;; and to the live nREPL zero, spending 222 minutes of tool time where a
+  ;; project naming its running nREPL spent 22. The nREPL was up both times and
+  ;; its port was in nido's registry both times.
+  (let [launches (atom [])]
+    (with-redefs [agent/launch! (fn [m] (swap! launches conj m)
+                                  {:num-turns 4 :result-error? false :result-text "done"})
+                  stages/working-copy-dirty? (fn [_] true)
+                  stages/session-stack (fn [_ _] two-layer-stack)
+                  lifecycle/session-from-cwd (fn [_] {:instance-id "p--s"})
+                  launcher/live-services-prompt (fn [id] (str "LIVE:" id))
+                  jj/jj! (jj-scripted [[] []])]
+      ((:run stages/fix-stage)
+       {:config {:cwd "/w" :run-id "r1" :base "main"} :iter 2
+        :findings [{:id "aa11" :title "x" :disposition :fix :owner-layer "lower"}
+                   {:id "bb22" :title "y" :disposition :fix :owner-layer "upper"}]})
+      (is (= ["LIVE:p--s" "LIVE:p--s"] (mapv :system-prompt @launches))
+          "every fixer of the round, not just the first — they stand in one
+           worktree and the answer cannot differ between them"))))
+
+(deftest a-fixer-outside-a-nido-session-still-launches
+  ;; The block is an addition to what a fixer knows, never a precondition for
+  ;; running one: a review run outside a nido worktree resolves to no session,
+  ;; and a session with no services renders nothing.
+  (let [launches (atom [])]
+    (with-redefs [agent/launch! (fn [m] (swap! launches conj m)
+                                  {:num-turns 4 :result-error? false :result-text "done"})
+                  stages/working-copy-dirty? (fn [_] true)
+                  stages/session-stack (fn [_ _] two-layer-stack)
+                  lifecycle/session-from-cwd (fn [_] (throw (ex-info "no registry" {})))
+                  jj/jj! (jj-scripted [[] []])]
+      (let [ctx ((:run stages/fix-stage)
+                 {:config {:cwd "/w" :run-id "r1" :base "main"} :iter 2
+                  :findings [{:id "aa11" :title "x" :disposition :fix :owner-layer "lower"}
+                             {:id "bb22" :title "y" :disposition :fix :owner-layer "upper"}]})]
+        (is (= [nil nil] (mapv :system-prompt @launches))
+            "no session, no block — and no throw out of the stage")
+        (is (= ["lower" "upper"] (mapv :layer (:fixes ctx)))
+            "both fixers still ran and both repairs still landed")))))
 
 (deftest each-fixer-writes-its-transcript-to-a-log-named-for-its-layer
   ;; A fixer's stdout used to go to the run's shared agent.log, beside the
