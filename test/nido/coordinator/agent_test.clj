@@ -1,6 +1,7 @@
 (ns nido.coordinator.agent-test
   (:require
    [babashka.fs :as fs]
+   [clojure.string :as str]
    [clojure.test :refer [deftest is]]
    [nido.platform.core :as core]
    [nido.coordinator.agent :as agent]
@@ -194,6 +195,41 @@
                         :budget "5m"
                         :claude-session-id "sid" :err-file err-path})
         (is (fs/exists? err-path) "stderr is captured to the given file")))))
+
+(deftest launch!-writes-its-transcript-to-out-file-when-given
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-root (constantly (str tmp))]
+        (fs/create-dirs (cstate/run-dir "r-out"))
+        (let [out-path (str (fs/path tmp "fix-lower-round-1.log"))
+              result   (agent/launch! {:run-id "r-out" :cwd (str tmp)
+                                       :first-message "/x" :claude-bin fake-claude
+                                       :budget "5m"
+                                       :env {"FAKE_CLAUDE_SESSION_ID" "s-out"}
+                                       :out-file out-path})]
+          (is (str/includes? (slurp out-path) "\"subtype\":\"init\"")
+              "the whole stream-json transcript goes to the named file")
+          (is (not (fs/exists? (cstate/run-agent-log "r-out")))
+              "and nothing goes to the run's shared log, where a second agent's
+               lines would merge with it beyond separating")
+          (is (= "s-out" (:claude-session-id result))
+              "redirecting the transcript must not cost the caller the events
+               launch! parses out of it")))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest launch!-without-out-file-still-writes-the-shared-agent-log
+  ;; The default is what every launch outside the fix stage relies on, including
+  ;; the coordinator runs `reconcile/agent-log-reached-result?` settles from.
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-root (constantly (str tmp))]
+        (fs/create-dirs (cstate/run-dir "r-default"))
+        (agent/launch! {:run-id "r-default" :cwd (str tmp)
+                        :first-message "/x" :claude-bin fake-claude
+                        :budget "5m" :env {"FAKE_CLAUDE_SESSION_ID" "s"}})
+        (is (str/includes? (slurp (cstate/run-agent-log "r-default")) "\"type\":\"result\"")
+            "an unredirected launch still lands in agent.log"))
+      (finally (fs/delete-tree tmp)))))
 
 (deftest build-cmd-tools-flag-disables-tools
   (let [cmd (#'agent/build-cmd {:claude-bin "claude" :first-message "hi" :tools ""})]

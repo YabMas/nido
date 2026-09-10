@@ -114,6 +114,15 @@
      :resume?       — optional; nil/false records a new transcript under
                       --session-id, true continues the recorded one via --resume
                       (a gate reply). Requires :claude-session-id.
+     :out-file      — optional; the file this agent's stdout transcript is
+                      written to, INSTEAD of the run's shared agent.log. Unlike
+                      :err-file it is not a child-process redirect — stdout is
+                      streamed and parsed here for the session id and the
+                      `result` event, so this only names where each line is
+                      copied. Pass one whenever several agents share a run and a
+                      later reader has to tell their transcripts apart: the run
+                      dir records no mapping from session id to launch, so
+                      interleaved lines cannot be attributed after the fact.
 
    Returns:
      {:exit-code <int> :claude-session-id <str-or-nil> :timed-out? <bool>
@@ -125,14 +134,14 @@
    \"Unknown command: /<skill>\". Callers use this to distinguish a real
    completion from a no-op exit (which must not be treated as success)."
   [{:keys [run-id cwd first-message system-prompt claude-bin env budget claude-session-id resume?
-           mcp-config add-dirs tools err-file]
+           mcp-config add-dirs tools err-file out-file]
     :or   {claude-bin "claude"}}]
   (let [;; BEFORE the spawn, and that ordering is the whole point. Parsed where
         ;; it used to be — beside the timer it arms — the refusal would fire with
         ;; claude already running and no timer to stop it, which is the exact
         ;; state being refused, now with an orphan attached.
         budget-ms (parse-budget-ms budget)
-        log-path  (cstate/run-agent-log run-id)
+        log-path  (or out-file (cstate/run-agent-log run-id))
         cmd       (build-cmd {:claude-bin claude-bin :first-message first-message
                               :system-prompt system-prompt :claude-session-id claude-session-id
                               :resume? resume? :mcp-config mcp-config :add-dirs add-dirs

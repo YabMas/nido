@@ -2773,6 +2773,24 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
         budget-str)
     budget))
 
+(defn- fixer-log
+  "Where one fixer's `suffix` log goes — per layer and per round, which is the
+   granularity at which two of them can be told apart.
+
+   The name is the ONLY record of which fixer wrote a file. A round on a layered
+   branch launches one fixer per layer, and nothing in the run dir maps a claude
+   session id back to the launch that made it: `layer-fixer-session` derives the
+   id from the impl session and the label, and the impl session id is written
+   nowhere the run dir can be read against. So lines that share a file with
+   another fixer's cannot be attributed to a layer afterwards at all — not
+   tediously, not at all."
+  [run-id label iter suffix]
+  (str (fs/path (cstate/run-dir run-id)
+                (format "fix-%s-round-%d%s"
+                        (codex/safe-label label)
+                        (or iter 1)
+                        suffix))))
+
 (defn- unattempted-tail
   "The plan entries after `from`: layers a fixer was owed and never launched
    for, because the stage stopped on a conflict it could not roll back.
@@ -2917,10 +2935,15 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                          :resume? (worked-before? (:history ctx)
                                                   (get-in ctx [:carry :fixer-declines] {})
                                                   label)
-                         :err-file (str (fs/path (cstate/run-dir run-id)
-                                                 (format "fix-%s-round-%d.err.log"
-                                                         (codex/safe-label label)
-                                                         (or (:iter ctx) 1))))})]
+                         :err-file (fixer-log run-id label (:iter ctx) ".err.log")
+                         ;; Its own transcript, not the run's shared agent.log.
+                         ;; A fixer emits an order of magnitude more than the
+                         ;; warden does, so the shared file was mostly one
+                         ;; fixer's lines with the warden's lost among them —
+                         ;; and how a fixer spent its budget is read off the
+                         ;; order of its own tool calls, which a merge of
+                         ;; several destroys.
+                         :out-file (fixer-log run-id label (:iter ctx) ".log")})]
                    ;; A KILL COUNTS AS HAVING RUN, and everything below turns on
                    ;; it. The budget timer destroys the process before claude
                    ;; emits its `result` event, so `num-turns` comes back nil for

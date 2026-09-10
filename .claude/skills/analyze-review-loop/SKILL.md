@@ -39,6 +39,8 @@ cat "<report-path>" | jq '{status: .status, rounds: .summary.rounds, target: .ta
 
 Also in the run dir: `agent.err.log` (the warden's stderr) and `*-round-N.err.log` per stage. A run that ended `:review-failed` or `:warden-indeterminate` has its whole story in those, not in the report.
 
+And one transcript per fixer, `fix-<layer>-round-N.log` — the stream-json of everything that fixer did, in order. It is where a question about *how* a repair was made gets answered: what the fixer read before it edited, whether it verified, where a killed one had got to. `agent.log` holds the rest of the run's agents, the warden among them.
+
 Read the reviewed workstream's ledger too — **nido-side, via the CLI, not by opening the worktree**:
 
 ```bash

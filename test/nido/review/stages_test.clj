@@ -372,6 +372,32 @@
             ":conflicted means the branch is holding markers right now, which is
              what sends a human to resolve them")))))
 
+(deftest each-fixer-writes-its-transcript-to-a-log-named-for-its-layer
+  ;; A fixer's stdout used to go to the run's shared agent.log, beside the
+  ;; warden's and beside every other fixer of the round. Nothing in the run dir
+  ;; maps a claude session id back to the layer it was launched for — the id is
+  ;; derived from the impl session, which the dir does not record — so on a
+  ;; layered branch the merged lines were not tedious to attribute but
+  ;; impossible.
+  (let [launches (atom [])]
+    (with-redefs [agent/launch! (fn [m] (swap! launches conj m)
+                                  {:num-turns 4 :result-error? false :result-text "done"})
+                  stages/working-copy-dirty? (fn [_] true)
+                  stages/session-stack (fn [_ _] two-layer-stack)
+                  jj/jj! (jj-scripted [[] []])]
+      ((:run stages/fix-stage)
+       {:config {:cwd "/w" :run-id "r1" :base "main"} :iter 2
+        :findings [{:id "aa11" :title "x" :disposition :fix :owner-layer "lower"}
+                   {:id "bb22" :title "y" :disposition :fix :owner-layer "upper"}]})
+      (is (= ["fix-lower-round-2.log" "fix-upper-round-2.log"]
+             (mapv #(fs/file-name (str (:out-file %))) @launches))
+          "the file name is the only record of which fixer wrote it, so it must
+           carry both the layer and the round")
+      (is (= (mapv #(str (:out-file %)) @launches)
+             (mapv #(str/replace (str (:err-file %)) #"\.err\.log$" ".log") @launches))
+          "stdout lands beside the stderr file the stage already named — one
+           name finds a fixer's whole output"))))
+
 (deftest a-rollback-that-does-not-take-still-stops-the-round-and-names-it
   ;; `restore-op!` is best-effort by design, so whether it took is asked rather
   ;; than assumed. When it did not, the markers are on the stack: the next round
