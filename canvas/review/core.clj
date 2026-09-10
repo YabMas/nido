@@ -313,6 +313,9 @@
    its lane, what is out of scope — says the same thing everywhere it appears."
   (Operation layer-brief-block "The bounding brief for one layer."
     {:signature [:=> [:catn [:brief :map]] :string]})
+  (Operation manifest-block
+    "The files a range-bounded review works from, and the mandate to open every one."
+    {:signature [:=> [:catn [:manifest :string]] :string]})
   (Operation composition-block "The primer for the pass that reviews the stack as a whole."
     {:signature [:=> [:catn [:opts :map]] :string]})
   (Operation prior-fixes-block

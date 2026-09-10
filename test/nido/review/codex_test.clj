@@ -199,6 +199,38 @@
     (is (= "/l.log" (str (:out-file opts))) "stdout goes to the log path")
     (is (= :out (:err opts)) "stderr merges into stdout")))
 
+(deftest review!-gives-the-composition-pass-no-flat-manifest
+  ;; The union of the layers' files is the one range in which no cut is visible,
+  ;; and the shared prompt's "pull each changed file's diff" is a MUST that beat
+  ;; the composition primer's narrowing clause — 40% of that pass's jj diff calls
+  ;; swept the whole branch. Each layer's files are on its own row instead.
+  (let [tmp      (str (fs/create-temp-dir))
+        captured (atom nil)]
+    (with-redefs [jj/jj!           (fn [_dir & args]
+                                     (if (= "diff" (first args))
+                                       {:exit 0 :out "src/a.clj\nsrc/b.clj" :err ""}
+                                       {:exit 0 :out "BASEREV\n" :err ""}))
+                  cstate/run-dir   (fn [_] tmp)
+                  codex/run-codex! (fn [opts]
+                                     (reset! captured (:prompt opts))
+                                     (spit (str (fs/path tmp "stack-round-1-out.json"))
+                                           sample-output)
+                                     {:exit 0})]
+      (codex/review! {:cwd "/w" :from "BASEREV" :run-id "r1" :label "stack"
+                      :composition {:layers [{:label "a" :from "F" :tip "cA"
+                                              :files ["src/a.clj"]}
+                                             {:label "b" :from "cA" :tip "cB"
+                                              :files ["src/b.clj"]}]}})
+      (is (str/includes? @captured "THIS IS THE COMPOSITION PASS")
+          "primed as a composition pass, not a wide layer review")
+      (is (not (str/includes? @captured "Changed files:"))
+          "no flat branch manifest")
+      (is (not (str/includes? @captured "MUST actually pull each changed file"))
+          "and not the mandate over one")
+      ;; The files are still there — one layer at a time, on that layer's row.
+      (is (str/includes? @captured "src/a.clj"))
+      (is (str/includes? @captured "src/b.clj")))))
+
 (deftest review!-explores-via-manifest-not-inlined-diff
   ;; The whole concatenated diff overflows codex's 1 MiB input limit. Instead the
   ;; prompt carries only the CHANGED-FILE MANIFEST (`jj diff --name-only`) plus

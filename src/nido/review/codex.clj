@@ -329,7 +329,12 @@
    inlined diff: the full concatenated diff overflows codex's 1 MiB input limit.
    Codex pulls each file's diff itself and reads file content AT `to` — never
    from the working copy, which for a layer review sits at a different revision
-   than the one under review."
+   than the one under review.
+
+   The composition pass is the exception and gets NO manifest — see
+   `prompts/composition-manifest-note`. Its files are already on the layer rows,
+   one layer at a time, and the flat union is the range in which the cut it is
+   here to judge cannot be seen."
   [{:keys [cwd from to run-id iter label brief composition prior-fixes standing
            prior-open]}]
   (let [to       (or to "@")
@@ -366,7 +371,13 @@
                              "\nBase revision (use this exact value as <base> in the"
                              " commands above): " from "\n"
                              "Head revision (use this exact value as <head>): " to "\n"
-                             "Changed files:\n" (str/trim manifest))]
+                             ;; The composition pass gets no flat manifest, and
+                             ;; not as an economy: the union of the layers' files
+                             ;; is the one view in which no cut is visible. See
+                             ;; `prompts/composition-manifest-note`.
+                             (if composed
+                               prompts/composition-manifest-note
+                               (prompts/manifest-block manifest)))]
         (spit schema-path (schema-json (some? composed)))
         (let [{:keys [exit]} (run-codex! {:cwd cwd :schema-path schema-path
                                           :out-path out-path :log-path log-path

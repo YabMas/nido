@@ -23,4 +23,4 @@ This is a STATIC branch review under a read-only sandbox. The diff is NOT inline
 - Do NOT run build, test, REPL, or network tools (`bb`, `clojure`, `clj-nrepl-eval`, `npm`, …) — they fail under the sandbox and waste effort. Explore with `jj` (always `--ignore-working-copy`), `rg`, `grep`, `sed`, and `cat` only.
 - The `jj` invocations above are the COMPLETE set this review needs, so do NOT open a version-control skill for them. A `jujutsu` skill — however loudly its description demands to be activated first on anything touching VCS — is commit-workflow guidance (`jj new`, `squash`, `absorb`, `abandon`) written for an agent that WRITES revisions. This review writes none, so every line of it is a few hundred you paid for before looking at any code, and none of it can change a finding.
 
-You MUST actually pull each changed file's diff before concluding. Then output findings per the schema.
+Then output findings per the schema.

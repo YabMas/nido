@@ -859,6 +859,48 @@
      "  tell which layer to change, and being able to tell is the entire value\n"
      "  of this pass.\n\n")))
 
+(defn ^{:malli/schema [:=> [:cat :string] :string]}
+  manifest-block
+  "The files a range-bounded review works from, and the mandate to open every
+   one of them.
+
+   The mandate belongs HERE, beside the list it is a mandate over, and not in
+   `review_prompt.md` where it used to sit. That prompt is shared by every
+   target, so \"you MUST actually pull each changed file's diff\" reached the
+   composition pass too — as a MUST, over a manifest of every file in the
+   branch, against the thousand words of `composition-block` telling that pass
+   its subject is the cut and not the code. A MUST beats a narrowing clause:
+   measured across 212 composition-pass logs, 40% of that pass's `jj diff` calls
+   swept the whole branch, which is the flat review it exists not to be."
+  [manifest]
+  (str "Changed files:\n" (str/trim (str manifest)) "\n\n"
+       "You MUST actually pull each changed file's diff before concluding."))
+
+(def composition-manifest-note
+  "What the composition pass gets where a range-bounded review gets its
+   manifest.
+
+   Not a shorter list — no list. Every layer's files are already on its own row
+   above, where each is attached to the layer that touches it; the union of them
+   is the one view that cannot show a cut, because `<base>`..`<head>` spans
+   every layer at once. Handing that union over and then asking for the cut is
+   asking two different questions with one set of coordinates, and the flat one
+   is the easier to answer."
+  (str "There is no flat list of this branch's files, and no whole-branch diff
+"
+       "to sweep. Each layer's files are on its row above, attached to the layer
+"
+       "that touches them, and `<base>`..`<head>` spans every layer at once —
+"
+       "the one range in which no cut is visible. Work from the per-layer
+"
+       "`--from`/`--to` pairs and the layer trees.\n\n"
+       "`<base>` and `<head>` are given below for the two things they are still
+"
+       "good for: the tree before any of this landed, and the tree the whole
+"
+       "stack leaves behind."))
+
 (defn- stacked-change-block
   "Where this fixer is standing in the stack, and which files are not its own.
 

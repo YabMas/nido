@@ -1107,3 +1107,11 @@ layers, it is not yours"))
   (is (nil? (prompts/prior-open-block nil)))
   (is (nil? (prompts/prior-open-block []))
       "an empty list rendered as a heading invites a reviewer to look for one"))
+
+(deftest manifest-block-carries-the-mandate-over-its-own-list
+  (let [b (prompts/manifest-block "src/a.clj\nsrc/b.clj")]
+    (is (str/includes? b "Changed files:"))
+    (is (str/includes? b "src/a.clj"))
+    ;; The mandate is scoped to the list it is a mandate over. In the shared
+    ;; prompt it reached the composition pass, which gets no list.
+    (is (str/includes? b "MUST actually pull each changed file"))))
