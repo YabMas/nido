@@ -152,17 +152,19 @@
         (is (= 1 (count (:findings ctx)))))))
 
   (testing "a project declaring no design leaves the round exactly as it was"
-    (with-redefs [layers/patch-hash (fn [& _] nil)
+    (with-redefs [layers/patch-hash (fn [& _] "h")
                   codex/merge-base (fn [& _] "BASEREV")
                   codex/review! (fn [_] {:status :clean :findings []})
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   cache/read-cache (fn [& _] {})
+                  cache/write! (fn [& _] true)
                   conformance/findings (fn [& _] [])]
       ;; Second round: a quiet round is a sample, so clean is earned by being
-      ;; quiet twice — see a-flat-branch-earns-clean-by-being-quiet-twice.
+      ;; quiet twice over the same content — see
+      ;; a-flat-branch-earns-clean-by-being-quiet-twice.
       (let [ctx ((:run stages/review-stage)
                  {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 2
-                  :carry {:quiet-once true}})]
+                  :carry {:quiet-once #{"h"}}})]
         (is (= :stop (:control ctx)))
         (is (= :clean (:status ctx)))))))
 
@@ -220,13 +222,13 @@
             "and nothing is published, so an absent key means unanswered")))))
 
 (deftest review-stage-clean-diff-stops
-  (with-redefs [layers/patch-hash (fn [& _] nil)
+  (with-redefs [layers/patch-hash (fn [& _] "h")
                 codex/merge-base (fn [& _] "BASEREV")
                 codex/review! (fn [_] {:status :clean :findings []})]
     ;; Second quiet round: one pass over a range is a sample, not a verdict.
     (let [ctx ((:run stages/review-stage)
                {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 2
-                :carry {:quiet-once true}})]
+                :carry {:quiet-once #{"h"}}})]
       (is (= :stop (:control ctx)))
       (is (= :clean (:status ctx))))))
 
@@ -1646,7 +1648,7 @@
   ;; verdict is most worth keeping: a reviewer withholding clearance on a layer
   ;; it found nothing in is the only trace of a doubt the loop is about to end on.
   (let [answers (fn [by-label]
-                  (with-redefs [layers/patch-hash    (fn [& _] nil)
+                  (with-redefs [layers/patch-hash    (fn [_ _ to] (str "h-" to))
                                 codex/merge-base     (fn [& _] "FORK")
                                 codex/changed-files  (fn [& _] [])
                                 stages/session-stack (fn [& _] [{:bookmark "s--a" :slug "a" :tip "cA"}
@@ -1655,12 +1657,13 @@
                                 codex/review!        (fn [{:keys [label]}]
                                                        {:status nil :findings []
                                                         :overall-correctness (by-label label)})]
-                    ;; The SECOND quiet round, since that is where a round with
-                    ;; no findings becomes terminal — see
+                    ;; The SECOND quiet round over the same content, since that
+                    ;; is where a round with no findings becomes terminal — see
                     ;; a-layered-stack-earns-clean-the-same-way.
-                    ((:run stages/review-stage)
-                     {:config {:cwd "/w" :base "main" :run-id "r"} :iter 2
-                      :carry {:quiet-once true}})))]
+                    (let [round #((:run stages/review-stage)
+                                  {:config {:cwd "/w" :base "main" :run-id "r"}
+                                   :iter %1 :carry %2})]
+                      (round 2 (:carry (round 1 nil))))))]
     (let [ctx (answers {"a" "correct" "b" "incorrect" "stack" "correct"})]
       (is (= :clean (:status ctx)) "no findings, so the round is still terminal")
       (is (= "incorrect" (:overall-correctness ctx))
@@ -1736,7 +1739,7 @@
   ;; One whole-diff pass over an unlayered branch is a sample, not a verdict:
   ;; the round that missed a change's only P1 found one of three pre-existing
   ;; defects and reported clean.
-  (with-redefs [layers/patch-hash (fn [& _] nil)
+  (with-redefs [layers/patch-hash    (fn [& _] "h")
                 codex/merge-base     (fn [& _] "FORK")
                 stages/session-stack (fn [& _] [])
                 codex/review!        (fn [_] {:status :clean :findings []})]
@@ -1756,7 +1759,7 @@
   ;; cut and told not to report what the layer reviews hold. A stack that stops
   ;; on one quiet round therefore closes on a single reading of every layer —
   ;; the sample a second quiet round exists to refuse.
-  (with-redefs [layers/patch-hash (fn [& _] nil)
+  (with-redefs [layers/patch-hash    (fn [_ _ to] (str "h-" to))
                 codex/merge-base     (fn [& _] "FORK")
                 stages/session-stack (fn [& _] [{:bookmark "s--a" :slug "a" :tip "cA"}
                                                 {:bookmark "s--b" :slug "b" :tip "cB"}])
@@ -1773,6 +1776,101 @@
           "a layer read once has been sampled, not verified")
       (is (= :clean (:status second-pass)))
       (is (= :stop (:control second-pass))))))
+
+(deftest quiet-twice-is-twice-over-the-same-content
+  ;; review-c4e53bfc: quiet at one patch, then a round that raised two findings
+  ;; and landed a 16-file repair, then one quiet reading of the repaired code —
+  ;; which published `clean` because a quiet round had once happened. Nobody but
+  ;; that last reviewer ever read what it cleared.
+  (let [content (atom "before")
+        answer  (atom [])]
+    (with-redefs [layers/patch-hash    (fn [& _] @content)
+                  codex/merge-base     (fn [& _] "FORK")
+                  stages/session-stack (fn [& _] [])
+                  codex/review!        (fn [_] {:status nil :findings @answer})]
+      (let [round #((:run stages/review-stage)
+                    {:config {:cwd "/w" :base "main" :run-id "r"} :iter %1 :carry %2})
+            quiet  (round 1 nil)
+            _      (reset! content "after")
+            moved  (round 2 (:carry quiet))]
+        (is (= #{"before"} (:quiet-once (:carry quiet)))
+            "the carry holds what the first quiet round read, not that it happened")
+        (is (nil? (:status moved))
+            "a quiet reading of code that moved since the first one is not its second")
+        (is (= :continue (:control moved)))
+        (is (= :clean (:status (round 3 (:carry moved))))
+            "and the reading after it, of the same content, is")
+
+        (testing "a round that found something ends the pair even when the code comes back"
+          (reset! content "before")
+          (reset! answer [{:title "x"}])
+          (let [noisy (round 2 (:carry quiet))]
+            (reset! answer [])
+            (is (not (contains? (:carry noisy) :quiet-once)))
+            (is (nil? (:status (round 3 (:carry noisy))))
+                "a repair reverted back to the first quiet round's content would
+                 otherwise pair a reading from before it with one from after")))))))
+
+(deftest a-round-whose-content-could-not-be-hashed-is-never-a-second-reading
+  ;; Unknown content is no evidence that two readings were of one thing, so
+  ;; the loop never claims it: `clean` is the claim that can only be earned.
+  (is (false? (stages/quiet-again? #{} [{:label "stack" :patch-hash nil}])))
+  (is (false? (stages/quiet-again? #{"a"} [{:label "core" :patch-hash "a"}
+                                           {:label "stack" :patch-hash nil}]))
+      "the part that hashed agreeing says nothing about the part that did not")
+  (is (false? (stages/quiet-again? #{} []))
+      "and a round with no targets read nothing")
+  (is (true? (stages/quiet-again? #{"a" "b"} [{:label "core" :patch-hash "a"}
+                                               {:label "stack" :patch-hash "b"}]))))
+
+(deftest a-first-quiet-round-grants-no-convergence-whichever-stage-records-it
+  ;; The review stage withheld its own write on a first quiet round and then
+  ;; handed the round to the warden, which wrote it unguarded: review-c4e53bfc's
+  ;; cache stamps a single quiet reading `:converged` at the warden's end.
+  (let [written (atom [])]
+    (with-redefs [layers/patch-hash          (fn [& _] "h")
+                  codex/merge-base           (fn [& _] "FORK")
+                  stages/session-stack       (fn [& _] [])
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  stages/discover-design-record (fn [_] nil)
+                  stages/read-stance         (fn [_] nil)
+                  cache/read-cache           (fn [& _] {})
+                  cache/write!               (fn [_ _ c] (swap! written conj c) true)
+                  conformance/findings       (fn [& _] [])
+                  codex/review!              (fn [_] {:status nil :findings []})
+                  agent/launch!              (fn [_] {:num-turns 1 :result-error? false
+                                                      :result-text "```json\n{\"decision\":\"stop\",\"reason\":\"nothing\"}\n```"})]
+      (let [ctx    {:config {:cwd "/w" :base "main" :run-id "r"} :iter 1}
+            quiet  ((:run stages/review-stage) ctx)
+            _      ((:run stages/warden-stage) quiet)]
+        (is (seq @written) "the round is still recorded — its answers are worth keeping")
+        (is (= #{:partial} (into #{} (map :status) (mapcat vals @written)))
+            "but a first reading is a sample, and nothing written of it grants a skip")
+
+        (testing "and the second reading of the same content does converge"
+          (reset! written [])
+          ((:run stages/review-stage) (assoc ctx :iter 2 :carry (:carry quiet)))
+          (is (= :converged (:status (get (last @written) "h")))))))))
+
+(deftest a-withheld-round-still-reopens-a-layer-something-is-owed-of
+  ;; Withholding keeps a sample from granting a skip; revoking one is the
+  ;; opposite direction, and a promotion out of a first quiet round is exactly
+  ;; the finding most likely to point at a layer the round skipped.
+  (let [written (atom nil)]
+    (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  cache/read-cache (fn [& _] {"h-transport" {:status :converged
+                                                             :label "speech-transport"}})
+                  cache/write! (fn [_ _ c] (reset! written c) true)]
+      (stages/record-review!
+       "/w" {:iter 2 :history [] :withhold-convergence? true
+             :reviews  [{:target {:label "speech-contract" :patch-hash "h-contract"}}]
+             :skipped  [{:label "speech-transport" :patch-hash "h-transport"}]
+             :findings [{:id "p1" :from-layer "warden" :disposition :fix
+                         :owner-layer "speech-transport"}]}))
+    (is (= :partial (:status (get @written "h-contract")))
+        "the layer read once owes nothing and is still not converged")
+    (is (= :partial (:status (get @written "h-transport")))
+        "the skipped layer the promotion names is reopened all the same")))
 
 ;; ---- convergence ---------------------------------------------------------
 
@@ -3383,11 +3481,12 @@
   ;; The miss whole: the reviewer of the file holding an open :fix finding
   ;; returned no findings, and the run published that nothing was owed.
   (let [ctx {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 2
-             :carry {:quiet-once true
+             :carry {:quiet-once #{"h"}
                      :inherited-open [{:id "a" :layer "core" :title "t"}]}}]
-    (with-redefs [layers/patch-hash (fn [& _] nil)
+    (with-redefs [layers/patch-hash (fn [& _] "h")
                   codex/merge-base  (fn [& _] "FORK")
                   cache/read-cache  (fn [& _] {})
+                  cache/write!      (fn [& _] true)
                   conformance/findings (fn [& _] [])
                   stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
                   ws/latest-entry (review-ledger [{:id "a" :layer "core" :title "t"

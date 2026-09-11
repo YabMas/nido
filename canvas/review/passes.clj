@@ -269,6 +269,14 @@
      A target nothing could hash contributes nothing, so a round jj could not diff produces the
      empty set rather than a false reading."
     {:signature [:=> [:catn [:targets :any]] :any]})
+  (Operation quiet-again?
+    "Whether a quiet round is the second reading of what the first quiet round read — the pair
+     `clean` is earned by is two readings of ONE content, so a round that read anything else is
+     a first reading however many quiet rounds came before it. Unknown content matches nothing:
+     a round with a target it could not hash is a first reading, because the part that hashed
+     agreeing says nothing about the part that did not."
+    {:signature [:=> [:catn [:carried :any] [:targets :any]] :boolean]
+     :delegates [content-hashes]})
   (Operation announce-targets! "Publish what this round is reviewing and what it skipped."
     {:signature [:=> [:catn [:ctx :map] [:split :map]] :any]})
   (Operation round-correctness
@@ -377,7 +385,9 @@
   (Operation record-review!
     "Write what this round left each target at into the cache: for the ones a reviewer read,
      its status and what the run has settled about it; for the ones it skipped, the revocation
-     of any convergence the round has since falsified."
+     of any convergence the round has since falsified. A round the review stage ruled a first
+     quiet reading grants no convergence, whichever stage records it — the ruling rides on the
+     ctx, because the stage that records that round is the warden."
     {:signature [:=> [:catn [:cwd Path] [:ctx :map]] :any]
      :delegates [reviewed-statuses reopened-patches answered-for
                  deny-inherited-convergence unanswered-of]})
