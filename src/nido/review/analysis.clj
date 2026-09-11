@@ -105,9 +105,10 @@
 
    `:standing` is the fourth and the one no count above touches at all: what the
    last warden knew was open and raised as nothing, so a run reports `0 still
-   open` over a list of it. An analysis asked whether the loop stopped for the
-   right reason is the reader that most needs it, and the reader least able to
-   go and look.
+   open` over a list of it — and, beside it, the inherited rows the last round
+   could place on no layer, which are counted and were handed to nobody. An
+   analysis asked whether the loop stopped for the right reason is the reader
+   that most needs it, and the reader least able to go and look.
 
    `:design-verdict` and `:verdict-implementation` are the design judge's answer,
    and they are here on the counts' own argument carried further. The pass judges

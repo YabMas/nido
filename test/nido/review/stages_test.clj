@@ -1047,12 +1047,18 @@
           :because "The round-1 fixer named this in its account and did not touch it."}
          overrides))
 
+(defn- promoted
+  "The findings `promoted-findings` makes on a branch with no layers, where there
+   is nothing to place a promotion against and the warden's layer stands."
+  [handles findings promotions]
+  (:findings (stages/promoted-findings "/w" [] handles findings promotions)))
+
 (deftest a-sibling-a-fixer-named-becomes-work-rather-than-prose
   ;; The waste this closes: a sibling a fixer has already located and diagnosed
   ;; used to convert only when a fresh reviewer independently rediscovered it —
   ;; two of five did, each a round later, and three were still standing at the
   ;; end of the run.
-  (let [[f :as out] (stages/promoted-findings {} [] [(promotion {})])]
+  (let [[f :as out] (promoted {} [] [(promotion {})])]
     (is (= 1 (count out)))
     (is (= :fix (:disposition f))
         "a promotion arrives ruled, so the fix stage hands it out this round")
@@ -1069,32 +1075,152 @@
 
 (deftest a-promotion-the-loop-cannot-place-is-not-a-finding
   (testing "no title and no file name no place anything read"
-    (is (= [] (stages/promoted-findings {} [] [(promotion {:title "  "})])))
-    (is (= [] (stages/promoted-findings {} [] [(promotion {:file nil})]))))
+    (is (= [] (promoted {} [] [(promotion {:title "  "})])))
+    (is (= [] (promoted {} [] [(promotion {:file nil})]))))
   (testing "a defect a reviewer already reported is that reviewer's finding"
     ;; Promoting it too would put one defect in front of two fixers under two
     ;; ids, and the warden's job on it is to rule rather than to raise.
     (let [reported (assoc (select-keys (promotion {}) [:title :file])
                           :line-start 288)
           id (codex/finding-id reported)]
-      (is (= [] (stages/promoted-findings {} [(assoc reported :id id)]
-                                          [(promotion {})])))))
+      (is (= [] (promoted {} [(assoc reported :id id)]
+                          [(promotion {})])))))
   (testing "and the same sibling promoted twice in one answer is one finding"
-    (is (= 1 (count (stages/promoted-findings {} [] [(promotion {}) (promotion {})]))))))
+    (is (= 1 (count (promoted {} [] [(promotion {}) (promotion {})]))))))
 
 (deftest a-sibling-promoted-again-is-the-same-defect-and-not-a-fresh-one
   ;; The give-up counter and the stall check key on the handle. A promotion that
   ;; landed a new id every round would make a defect the loop cannot move look
   ;; like a new one each time, and neither check would ever fire.
-  (let [r1    (first (stages/promoted-findings {} [] [(promotion {})]))
-        later (first (stages/promoted-findings {(:id r1) (:handle r1)} []
-                                               [(promotion {})]))]
+  (let [r1    (first (promoted {} [] [(promotion {})]))
+        later (first (promoted {(:id r1) (:handle r1)} []
+                               [(promotion {})]))]
     (is (= (:id r1) (:id later)))
     (is (= (:handle r1) (:handle later))))
   (testing "and a promotion the warden says restates an earlier finding chains onto it"
-    (let [out (first (stages/promoted-findings {"old1" "old1"} []
-                                               [(promotion {:same_as "old1"})]))]
+    (let [out (first (promoted {"old1" "old1"} []
+                               [(promotion {:same_as "old1"})]))]
       (is (= "old1" (:handle out))))))
+
+;; ── Placing what no reviewer raised ────────────────────────────────────────
+
+(def ^:private overlapping-toc
+  "Three layers, the upper two touching one file between them."
+  [{:label "contract"  :files ["src/speech/contract.clj"]}
+   {:label "transport" :files ["src/speech/transport.clj" "src/speech/shared.clj"]}
+   {:label "recording" :files ["src/speech/recording.clj" "src/speech/shared.clj"]}])
+
+(deftest a-finding-no-reviewer-raised-is-placed-by-its-file
+  (testing "a layer the stack still has wins, whatever file the finding is in"
+    (is (= "contract" (stages/placed-on "/w" overlapping-toc "contract"
+                                        "/w/src/speech/recording.clj"))
+        "whoever named the layer read more than a path"))
+  (testing "no layer named, or one the stack no longer has, falls to the file"
+    (is (= "transport" (stages/placed-on "/w" overlapping-toc nil
+                                         "/w/src/speech/transport.clj")))
+    (is (= "transport" (stages/placed-on "/w" overlapping-toc "resume-on-drop"
+                                         "/w/src/speech/transport.clj"))
+        "a label a fold or a rename removed matches no target, so it held nothing open"))
+  (testing "a file several layers touch goes to the highest of them"
+    (is (= "recording" (stages/placed-on "/w" overlapping-toc nil
+                                         "/w/src/speech/shared.clj"))
+        "nothing above that layer edits the file, so a repair made there is rebased
+         over no later edit to it — one made lower down collides with every one"))
+  (testing "a file no layer touches, or no file at all, places nowhere"
+    (is (nil? (stages/placed-on "/w" overlapping-toc nil "/w/vendor/lib.clj")))
+    (is (nil? (stages/placed-on "/w" overlapping-toc "gone" nil))))
+  (testing "a relative path is read against the worktree, as the file lists are"
+    (is (= "transport" (stages/placed-on "/w" overlapping-toc nil
+                                         "./src/speech/transport.clj")))))
+
+(def ^:private registry-toc
+  "review-c4e53bfc's stack, with a top layer that does not own the file."
+  [{:label "swiss-german-speaks-de-de" :files ["src/brian/speech/voices.clj"]}
+   {:label "names-from-the-registry"   :files ["src/brian/ui/modals.clj"]}
+   {:label "top"                       :files ["README.md"]}])
+
+(deftest a-promotion-with-no-layer-lands-on-the-layer-holding-its-file
+  ;; review-c4e53bfc: a promotion about names-from-the-registry's own
+  ;; ui/modals.clj arrived with owner_layer null. The layer was written
+  ;; converged while holding it, and the repair reached the right fixer only
+  ;; because the top layer happened to own the file.
+  (let [{[f] :findings standing :standing}
+        (stages/promoted-findings
+         "/w" registry-toc {} []
+         [(promotion {:owner_layer nil :file "/w/src/brian/ui/modals.clj"})])]
+    (is (= "names-from-the-registry" (:owner-layer f))
+        "the layer whose files hold the sibling is the one its convergence must wait on")
+    (is (empty? standing))
+    (is (str/includes? (:because f) "placed on names-from-the-registry by its file")
+        "and the ruling says the layer was derived rather than given"))
+
+  (testing "a layer the warden named that the stack has still wins"
+    (let [{[f] :findings} (stages/promoted-findings
+                           "/w" registry-toc {} []
+                           [(promotion {:owner_layer "top"
+                                        :file "/w/src/brian/ui/modals.clj"})])]
+      (is (= "top" (:owner-layer f)))
+      (is (= (:because (promotion {})) (:because f))
+          "a ruling the loop did not touch keeps the warden's words alone"))))
+
+(deftest a-promotion-no-layer-can-take-is-standing-rather-than-work
+  ;; The warden is told a sibling it cannot place goes in `standing`. Taken as a
+  ;; finding owed of no layer, it held no layer open and went to whichever
+  ;; fixer the fallback happened to choose.
+  (let [{:keys [findings standing]}
+        (stages/promoted-findings
+         "/w" registry-toc {} []
+         [(promotion {:owner_layer nil :file "/w/vendor/transport.clj"})])]
+    (is (empty? findings) "no layer's fixer is there to be handed it")
+    (is (= 1 (count standing)))
+    (is (str/includes? (:what (first standing)) "/w/vendor/transport.clj:288")
+        "the item says where, which is all a person has to go on")
+    (is (str/includes? (:why-no-finding (first standing))
+                       "no layer of this stack touches its file"))))
+
+(deftest a-promotion-with-no-layer-holds-the-layer-its-file-is-in-open
+  ;; The same run, through the warden stage and into the cache that outlives it:
+  ;; names-from-the-registry was read, raised nothing itself, and was written
+  ;; converged over an open :fix promotion about its own file.
+  (let [written (atom nil)
+        answer  (json/generate-string
+                 {:decision "continue" :reason "one sibling" :findings []
+                  :promote [(promotion {:owner_layer nil
+                                        :file "/w/src/brian/ui/modals.clj"})]})]
+    (with-redefs [agent/launch! (fn [_] {:num-turns 3 :result-error? false
+                                         :result-text (str "```json\n" answer "\n```")})
+                  stages/discover-design-record (fn [_] nil)
+                  stages/read-stance (fn [_] nil)
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  cache/read-cache (fn [& _] {})
+                  cache/write! (fn [_ _ c] (reset! written c) true)]
+      ((:run stages/warden-stage)
+       {:config {:cwd "/w" :run-id "r1"} :iter 3 :history [] :findings []
+        :toc registry-toc
+        :reviews [{:target {:label "names-from-the-registry" :patch-hash "h-7f8e"}}]
+        :skipped [{:label "swiss-german-speaks-de-de" :patch-hash "h-c3ed"}]}))
+    (is (= :partial (:status (get @written "h-7f8e")))
+        "a layer holding an open promotion about its own file owes something")))
+
+(deftest the-warden-stage-lists-a-promotion-it-could-not-place
+  (let [answer (json/generate-string
+                {:decision "stop" :reason "nothing left" :findings []
+                 :standing [{:what "bb format is red" :why_no_finding "not a fixer's work"}]
+                 :promote [(promotion {:owner_layer nil :file "/w/vendor/transport.clj"})]})]
+    (with-redefs [agent/launch! (fn [_] {:num-turns 3 :result-error? false
+                                         :result-text (str "```json\n" answer "\n```")})
+                  stages/discover-design-record (fn [_] nil)
+                  stages/project+ws-from-cwd (fn [_] nil)]
+      (let [ctx ((:run stages/warden-stage)
+                 {:config {:cwd "/w" :run-id "r1"} :iter 2 :findings []
+                  :toc registry-toc})]
+        (is (= ["bb format is red" (str (:title (promotion {})) " (/w/vendor/transport.clj:288)"
+                                        " — promoted by the warden out of a fixer's account")]
+               (mapv :what (:standing (:warden ctx))))
+            "beside what the warden listed, in the slot that reaches the ledger")
+        (is (empty? (:findings ctx)))
+        (is (= :stop (:control ctx))
+            "a promotion that is not work does not outrank the warden's stop")))))
 
 (deftest promoting-outranks-a-stop-in-the-same-answer
   ;; Two fields answering one question — is there work — and the promotion is
@@ -3502,6 +3628,80 @@
                          (assoc ctx :history
                                 [{:iter 1 :findings [{:id "a" :title "t"
                                                       :disposition :fix}]}])))))))))
+
+(deftest an-inherited-row-naming-no-live-layer-is-placed-by-its-file
+  ;; review-830f5aec read 33d8458e from an entry written with no :layer at all.
+  ;; Grouped under nil it reached no reviewer and denied no layer its
+  ;; convergence, while the run counted it open.
+  (let [toc [{:label "resume-on-drop"     :files ["src/babel/speech.clj"]}
+             {:label "resume-on-schedule" :files ["src/babel/schedule.clj"]}]
+        {:keys [rows unplaced]}
+        (stages/place-inherited
+         "/w" toc
+         [{:id "33d8458e" :title "t" :where "/w/src/babel/speech.clj:1342"}
+          {:id "folded" :title "u" :layer "name-refused-resumption"
+           :where "/w/src/babel/schedule.clj:10"}
+          {:id "named" :title "v" :layer "resume-on-drop"
+           :where "/w/src/babel/schedule.clj:3"}
+          {:id "outside" :title "w" :layer "gone" :where "/w/vendor/lib.clj:1"}])]
+    (is (= ["resume-on-drop" "resume-on-schedule" "resume-on-drop" "gone"]
+           (mapv :layer rows))
+        "no layer, or a folded one, goes by file; a live one stands; one that places
+         nowhere keeps what it named")
+    (is (= ["outside"] (mapv :id unplaced))
+        "and is set apart, so the run can say so instead of counting it in silence"))
+
+  (testing "a flat branch has one reviewer and every row is its"
+    (is (= ["stack" "stack"]
+           (mapv :layer (:rows (stages/place-inherited
+                                "/w" []
+                                [{:id "a" :title "t" :layer "resume-on-drop"}
+                                 {:id "b" :title "u"}])))))))
+
+(deftest a-row-owed-of-a-layer-the-stack-lost-reaches-the-layer-holding-its-file
+  ;; review-830f5aec, through the stage: a row no layer label matched was handed
+  ;; to no reviewer and denied no layer its convergence, and the run's 80 KB
+  ;; report never named it.
+  (let [handed  (atom {})
+        written (atom nil)
+        ledger  [{:id "33d8458e" :title "the drop path forgets the connection"
+                  :where "/w/src/babel/speech.clj:1342" :disposition :fix}
+                 {:id "e9" :title "a vendored copy" :where "/w/vendor/lib.clj:2"
+                  :disposition :fix}]]
+    (with-redefs [layers/patch-hash    (fn [_ _ to] (str "h-" to))
+                  codex/merge-base     (fn [& _] "FORK")
+                  stages/session-stack (fn [& _] [{:bookmark "s--drop" :slug "resume-on-drop" :tip "cA"}
+                                                  {:bookmark "s--sched" :slug "resume-on-schedule" :tip "cB"}])
+                  layers/brief         (fn [& _] nil)
+                  codex/changed-files  (fn [_ _ to] (case to
+                                                      "cA" ["src/babel/speech.clj"]
+                                                      "cB" ["src/babel/schedule.clj"]
+                                                      []))
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry      (review-ledger ledger)
+                  cache/read-cache     (fn [& _] {})
+                  cache/write!         (fn [_ _ c] (reset! written c) true)
+                  conformance/findings (fn [& _] [])
+                  codex/review!        (fn [{:keys [label prior-open]}]
+                                         (swap! handed assoc label (mapv :id prior-open))
+                                         {:status nil :findings []})]
+      (let [round  #((:run stages/review-stage)
+                     {:config {:cwd "/w" :base "main" :run-id "r"} :iter %1 :carry %2})
+            quiet  (round 1 nil)
+            again  (round 2 (:carry quiet))]
+        (is (= ["33d8458e"] (get @handed "resume-on-drop"))
+            "the reviewer of the file holding it is told what the last run left there")
+        (is (= [] (get @handed "resume-on-schedule")))
+        (is (= :partial (:status (get @written "h-cA")))
+            "and that layer takes no convergence over it")
+        (is (= :converged (:status (get @written "h-cB"))))
+        (is (= :unresolved (:status again)))
+        (is (= ["a vendored copy (/w/vendor/lib.clj:2) — left owed by the last review of this workstream"]
+               (mapv :what (:unplaced again)))
+            "a row no layer holds is named as the run's, rather than counted in silence")
+        (is (= ["resume-on-drop" "resume-on-schedule"] (mapv :label (:toc quiet)))
+            "a first quiet round carries the map too: its warden, handed none, is told
+             the branch is flat and never asked which layer a promotion belongs to")))))
 
 ;; ── Evidence that a round moved the code ───────────────────────────────────
 

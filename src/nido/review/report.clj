@@ -69,10 +69,18 @@
    and no handle, so nothing in the loop can settle one and a union could only
    grow. Which is why the warden is asked for the whole list every round, and
    why a later round dropping an item is that warden's answer rather than a
-   loss."
+   loss.
+
+   Beside the warden's list, `:unplaced`: what the last run left owed that the
+   terminal round could place on no layer of this stack — see
+   `nido.review.stages/placed-on`. The loop's own entries rather than a
+   warden's, because no warden is shown those rows, and a run that ends on a
+   quiet round has no warden at all; they are still counted open, and without
+   them here a row counted open would be named nowhere a person reads."
   [ctx]
   (let [parks    (get-in ctx [:carry :parks])
-        standing (get-in ctx [:warden :standing])]
+        standing (into [] (distinct) (concat (get-in ctx [:warden :standing])
+                                             (:unplaced ctx)))]
     (not-empty
      (cond-> {}
        (seq (:unfixable ctx))
@@ -82,7 +90,7 @@
        (assoc :drift (:drift ctx))
 
        (seq standing)
-       (assoc :standing (vec standing))
+       (assoc :standing standing)
 
        (seq parks)
        (assoc :parked (->> parks
@@ -363,10 +371,15 @@
       ;; what the stack looked like when the run last asked. A round that stopped
       ;; on it has no findings and no warden, so without it here the only two
       ;; facts left about the round say a reviewer read the branch and liked it.
+      ;; :unplaced is what the last run left owed that this round could place on
+      ;; no layer — handed to no reviewer, so it is in none of the rows above.
+      ;; Per round for the reason the warden's `standing` is: the terminal
+      ;; round's is what the run leaves, and the stack can move under the rest.
       :review (cond-> (assoc ph :overall-correctness (:overall-correctness ctx)
                              :findings (vec (:findings ctx))
                              :layers (review-layers ctx))
-                (seq (:conflicted ctx)) (assoc :conflicted (vec (:conflicted ctx))))
+                (seq (:conflicted ctx)) (assoc :conflicted (vec (:conflicted ctx)))
+                (seq (:unplaced ctx))   (assoc :unplaced (vec (:unplaced ctx))))
       ;; :cause as well as :reason, and they are not alternatives: a reason says
       ;; what was wrong with the answer, a cause says whether there WAS one. A
       ;; phase that kept only the first renders a 429 exactly like a malformed

@@ -318,6 +318,21 @@
      dropped — because a defect whose layer was handed to a reviewer and still went unreported
      is not evidence enough to hold a branch open for ever."
     {:signature [:=> [:catn [:cwd Path]] :any]})
+  (Operation placed-on
+    "The layer a finding NO REVIEWER RAISED is owed of: the layer it names when the stack still
+     has it, otherwise the highest layer whose files include its file, and nothing when neither
+     places it. Two kinds of finding arrive naming their layer rather than read off one — a
+     warden's promotion and a row the last run left open — and either can name a layer the
+     stack does not have, which leaves it counted open while no convergence is held and no
+     reviewer is told. Highest, for a file several layers touch, because nothing above that
+     layer changes the file: a repair made there is rebased over no later edit to it."
+    {:signature [:=> [:catn [:cwd Path] [:toc :any] [:named :any] [:file :any]] [:maybe :string]]})
+  (Operation place-inherited
+    "The last run's open rows placed on this round's stack, and the ones that place nowhere set
+     apart so the run can name them in its standing. A flat branch places every row on its one
+     reviewer."
+    {:signature [:=> [:catn [:cwd Path] [:toc :any] [:rows :any]] :map]
+     :delegates [placed-on]})
   (Operation with-prior-open
     "Each layer's reviewer told what the last run left owed against THAT layer, matched by
      label: a repair moves the patch a hash is taken over, so a hash cannot carry an
@@ -404,9 +419,15 @@
      The REPORTER is the fixer, and that bound is what keeps every finding one that something
      which read the code raised: the fixer made the repair the sibling survived and diagnosed
      it in its own account, and what the warden adds is the layer. An entry naming no place,
-     or naming a defect a finding of this round already reports, is refused."
-    {:signature [:=> [:catn [:handles :any] [:findings :any] [:promotions :any]] :any]
-     :delegates [resolve-handle finding-id]})
+     or naming a defect a finding of this round already reports, is refused.
+
+     The layer goes through `placed-on`, the rule the last run's open rows are placed by: the
+     warden's where the stack has it, the promotion's file otherwise. One neither places is
+     not a finding — it is returned as a standing entry, which is where the warden is told to
+     put a sibling it cannot place."
+    {:signature [:=> [:catn [:cwd Path] [:toc :any] [:handles :any] [:findings :any]
+                      [:promotions :any]] :map]
+     :delegates [resolve-handle finding-id placed-on]})
   (Operation seen-findings "Every finding an earlier round saw."
     {:signature [:=> [:catn [:history :any]] :any]})
   (Operation working-copy-dirty? "Whether the working copy has uncommitted changes."

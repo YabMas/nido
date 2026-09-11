@@ -115,8 +115,9 @@
     {:signature [:=> [:catn [:ctx :map]] :any]})
   (Operation stopped-on
     "What the run stopped ON, off its terminal context — the findings it gave up on, the
-     questions it parked, and what the last warden knew was open and handed to nobody — as
-     against :status, which is what it stopped AS.
+     questions it parked, and what was open and handed to nobody: the last warden's list, and
+     what the last run left owed that the terminal round could place on no layer — as against
+     :status, which is what it stopped AS.
 
      Public because two readers need the same answer: the report folds it in at
      :run-finalized, and the analysis payload carries it because a run dir is reclaimed

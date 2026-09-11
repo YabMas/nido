@@ -825,6 +825,35 @@
         "and per round, because a later warden may drop an item and a reader
          asking why needs the round it was last named in")))
 
+(deftest a-row-no-layer-holds-is-standing-even-with-no-warden-to-list-it
+  ;; review-830f5aec counted two inherited rows open that no layer label matched,
+  ;; and neither id appeared anywhere in its report. No warden is shown those
+  ;; rows, and a run that ends on a quiet round has no warden at all.
+  (let [unplaced {:what "a vendored copy (/w/vendor/lib.clj:2) — left owed by the last review of this workstream"
+                  :why-no-finding "it names no layer, and no layer of this stack touches its file"}
+        r  (drive
+            [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+             {:event :phase-started :iter 1 :phase :review :at "t1"}
+             {:event :phase-finished :iter 1 :phase :review :at "t2"
+              :ctx {:findings [] :unplaced [unplaced]}}
+             {:event :run-finalized :status :unresolved :at "t3"
+              :ctx {:findings [] :unplaced [unplaced]}}])
+        ph (first (:phases (first (:rounds r))))]
+    (is (= [unplaced] (get-in r [:reason :standing]))
+        "the run's standing is what reaches the ledger, and a quiet round is the one
+         most likely to end the run")
+    (is (= [unplaced] (:unplaced ph))
+        "and per round, because the stack can move under it"))
+
+  (testing "beside the warden's own list, once each"
+    (let [item {:what "bb format is red" :why-no-finding "not a fixer's work"}
+          r    (drive
+                [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+                 {:event :run-finalized :status :converged :at "t3"
+                  :ctx {:warden {:decision :stop :standing [item]}
+                        :unplaced [item {:what "x"}]}}])]
+      (is (= [item {:what "x"}] (get-in r [:reason :standing]))))))
+
 (deftest a-warden-that-leaves-nothing-standing-adds-no-key
   ;; Present-or-absent is the signal, as it is for every other key here: an
   ;; empty list on every clean run trains a reader to skip the section where it

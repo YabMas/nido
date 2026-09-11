@@ -173,7 +173,9 @@
    the warden had a slot for it the only copy was a sentence in a run dir that
    is routinely reclaimed. It is not part of `:findings-remaining`: nothing was
    raised, ruled or dispatched, and counting it would claim the loop had an
-   answer it declined to give.
+   answer it declined to give. The one exception is an inherited row the last
+   round could place on no layer, which is in `:open` and counted, and is named
+   here as well because no reviewer was handed it.
 
    `:open` also carries what the LAST run left owed that this one never answered,
    each row marked `:inherited`. Without it a run whose reviewers were handed a

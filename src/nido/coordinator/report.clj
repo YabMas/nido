@@ -1481,11 +1481,12 @@
    [:kept {:optional true} [:sequential ReviewFinding]]
    ;; What the run's last warden knew was open and was handing to nobody: no
    ;; finding covers it, no fixer was launched at it, so it appears in none of
-   ;; the lists above and in none of the counts. It is here because it is here
-   ;; or nowhere — a warden told its prose was the only channel wrote a
-   ;; ten-item list into a `reason` that reached the run's report.json and
-   ;; stopped, and that directory is routinely reclaimed before anyone reads
-   ;; the workstream.
+   ;; the lists above and in none of the counts. Beside it, the rows of `:open`
+   ;; the last round could place on no layer of the stack — counted, and handed
+   ;; to nobody all the same. It is here because it is here or nowhere — a
+   ;; warden told its prose was the only channel wrote a ten-item list into a
+   ;; `reason` that reached the run's report.json and stopped, and that
+   ;; directory is routinely reclaimed before anyone reads the workstream.
    ;;
    ;; `:why-no-finding` is what makes an item decidable rather than a worry:
    ;; outside the change, no layer owns it, not a fixer's work. Optional,

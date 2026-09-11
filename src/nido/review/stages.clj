@@ -688,6 +688,77 @@
     (mapv #(cond-> % (nil? (:composition %)) (assoc :standing standing))
           targets)))
 
+(defn ^{:malli/schema [:=> [:cat :Path :any :any :any] [:maybe :string]]}
+  placed-on
+  "The layer of `toc` a finding NO REVIEWER RAISED is owed of: `named` when that
+   is one of its layers, otherwise the highest layer whose files include `file`,
+   and nil when neither places it. `toc` is the round's, bottom→top — see
+   `build-toc`.
+
+   Two kinds of finding enter a run naming their layer instead of being read off
+   one: a warden's promotion, and a row the last run left open. Either can name
+   no layer the stack has — a warden that gave null, a label a rename or a fold
+   has since removed — and a finding owed of no layer holds no layer's
+   convergence open and reaches no layer's reviewer, while every count still
+   calls it open. Both are placed here, so the rule and its tie-break are stated
+   once for both.
+
+   A named layer the stack still has wins: whoever named it read more than a
+   path. A file several layers touch goes to the HIGHEST of them. Nothing above
+   that layer changes the file, so a repair made there is rebased over no later
+   edit to it, where one made lower down is rebased through every one of them —
+   the collision the fix stage rolls back.
+
+   Both paths are resolved against `cwd` before they are compared: a finding's
+   file is absolute, and the file lists are relative to the worktree."
+  [cwd toc named file]
+  (let [labels (into #{} (map :label) toc)
+        path   #(str (fs/normalize (fs/path (str cwd) (str %))))
+        target (when-not (str/blank? (str file)) (path file))]
+    (cond
+      (contains? labels named) named
+      target (some (fn [{:keys [label files]}]
+                     (when (some #(= target (path %)) files) label))
+                   (rseq (vec toc))))))
+
+(defn- where-file
+  "The file in a ledger row's `:where` — `file:line`, or the file alone when the
+   finding had no line."
+  [where]
+  (some->> where str (re-matches #"(.+?)(?::\d+)?") second))
+
+(defn- unplaced-item
+  "The `standing` entry for a finding `placed-on` put on no layer. `source` is how
+   it entered the run, which its title does not say."
+  [{:keys [title where layer]} source]
+  {:what           (str title (when where (str " (" where ")")) " — " source)
+   :why-no-finding (str (if (str/blank? (str layer))
+                          "it names no layer"
+                          (str "it names " layer ", which is no layer of this stack"))
+                        (if where
+                          ", and no layer of this stack touches its file"
+                          ", and it carries no file to place it by"))})
+
+(defn ^{:malli/schema [:=> [:cat :Path :any :any] :map]}
+  place-inherited
+  "The last run's open rows put onto this round's stack: `:rows` is every row,
+   each one `placed-on` places carrying that layer as its `:layer`, and
+   `:unplaced` is the rows it places nowhere, still naming what they named.
+
+   A row's file comes out of its `:where`, the only form the ledger keeps it in.
+
+   With no layers, every row is the whole-stack target's: a flat branch has
+   nowhere else for a defect to be, and nothing to place against."
+  [cwd toc rows]
+  (if (empty? toc)
+    {:rows (mapv #(assoc % :layer stack-label) rows) :unplaced []}
+    (reduce (fn [acc r]
+              (if-let [l (placed-on cwd toc (:layer r) (where-file (:where r)))]
+                (update acc :rows conj (assoc r :layer l))
+                (-> acc (update :rows conj r) (update :unplaced conj r))))
+            {:rows [] :unplaced []}
+            rows)))
+
 (defn ^{:malli/schema [:=> [:cat :any :any] :any]}
   with-prior-open
   "Hand each layer the findings the last run left OWED against it, so the one
@@ -698,7 +769,9 @@
    patch hash cannot do it: a run that repairs a layer moves its patch, so the
    answers hung off the hash are about content that no longer exists, and
    `answered-by-layer` makes the same argument about the settled half of the
-   same history.
+   same history. The label is the one `place-inherited` gave the row this round,
+   so a row that named a layer the stack no longer has still reaches the
+   reviewer of the layer holding its file.
 
    A PARK is withheld, and for the reason `with-standing-needs` withholds an
    invalidating verdict's `:needs`: a park is a question put to a human — that
@@ -879,8 +952,9 @@
   "The stack's table of contents — one entry per layer, bottom→top: what it
    claims, what it declared out of scope, and which files it touches. This is
    what the warden gets INSTEAD of the other layers' diffs, so it can attribute
-   deliberately without re-deriving them, and what a fixer gets so it can tell
-   its own files from the ones a layer above will be rebased over.
+   deliberately without re-deriving them, what a fixer gets so it can tell its
+   own files from the ones a layer above will be rebased over, and what
+   `placed-on` places a finding no reviewer raised against.
 
    EVERY layer, from the round's targets rather than from its results. Built
    from the results it named only the layers this round actually reviewed, so a
@@ -1085,11 +1159,19 @@
         ;; rebase moved it out from under a run and nothing noticed, so the
         ;; round reviewed one state and tried to fix another.
         at      (layers/resolve-rev cwd "@")
-        ;; What the last run left owed, onto the carry so the stages after this
-        ;; one can be asked whether the run answered it. The carry is the only
-        ;; channel between rounds and it survives onto the terminal ctx, which
-        ;; is where the ledger entry and the design verdict read it from.
-        inherit (prior-open cwd)
+        targets (review-targets cwd base)
+        ;; Before any reviewer runs, because the round needs the map before it
+        ;; has results: to place what the last run left open, just below, and
+        ;; for the warden of a round that found nothing — which, handed no map,
+        ;; is told the branch has no layers and so is never asked which one a
+        ;; promotion belongs to.
+        toc     (build-toc cwd targets)
+        ;; What the last run left owed, placed on this round's layers and put
+        ;; onto the carry so the stages after this one can be asked whether the
+        ;; run answered it. The carry is the only channel between rounds and it
+        ;; survives onto the terminal ctx, which is where the ledger entry and
+        ;; the design verdict read it from.
+        {inherit :rows unplaced-rows :unplaced} (place-inherited cwd toc (prior-open cwd))
         ctx     (cond-> ctx (seq inherit) (assoc-in [:carry :inherited-open] inherit))
         ;; Once per round rather than per target: every reviewer of a round is
         ;; judging one change against one design, so a second read could only
@@ -1097,7 +1179,7 @@
         ;; put two reviewers of the same change on two yardsticks.
         ctx     (assoc ctx :design (discover-design-record cwd))
         all     (with-patch-hashes
-                 cwd (-> (review-targets cwd base)
+                 cwd (-> targets
                          (with-composition-memory (:history ctx))
                          (with-fix-memory (:history ctx)
                                           (get-in ctx [:carry :rolled-back] {}))
@@ -1138,7 +1220,14 @@
                     :findings (conformance/findings project cwd)})
         findings (-> (collect-findings (cond-> (vec results)
                                          (seq (:findings conform)) (conj conform)))
-                     (cite-invariants (:design ctx)))]
+                     (cite-invariants (:design ctx)))
+        rounds   (conj (mapv :findings (:history ctx)) findings)
+        ;; What the last run left owed that this round could place on no layer
+        ;; and no reviewer has raised since, as the run's own `standing`: it is
+        ;; handed to nobody and still counted open, and a warden cannot list it
+        ;; for being shown none of it. See `placed-on`.
+        unplaced (mapv #(unplaced-item % "left owed by the last review of this workstream")
+                       (unanswered-of unplaced-rows rounds))]
     (if (empty? findings)
       ;; Two different terminal rounds arrive here, and only one of them is a
       ;; review that found nothing.
@@ -1188,10 +1277,10 @@
             ;; run after reads. Terminal either way: a third pass over the same
             ;; code by the same reviewers would produce the same silence, so
             ;; what changes is the answer, not the effort.
-            unanswered (unanswered-of (get-in ctx [:carry :inherited-open])
-                                      (conj (mapv :findings (:history ctx)) []))
+            unanswered (unanswered-of (get-in ctx [:carry :inherited-open]) rounds)
             ctx'     (cond-> (assoc ctx :findings [] :reviews results :skipped skipped
                                     :reviewed-at at :patch-hashes (content-hashes all)
+                                    :toc toc :unplaced unplaced
                                     :control (if first-quiet-round? :continue :stop)
                                     :status (cond
                                               nothing?           :nothing-to-review
@@ -1229,7 +1318,8 @@
              ;; quiet reading from before it beside one from after.
              :carry (dissoc (:carry ctx) :quiet-once)
              :cache cached
-             :toc (build-toc cwd all)
+             :toc toc
+             :unplaced unplaced
              :overall-correctness (round-correctness results)
              :base-rev (:base-rev whole)
              :manifest (:manifest whole)))))
@@ -1966,18 +2056,31 @@
    contributes findings and is no layer of the stack."
   "warden")
 
-(defn ^{:malli/schema [:=> [:cat :any :any :any] :any]}
+(defn ^{:malli/schema [:=> [:cat :Path :any :any :any :any] :map]}
   promoted-findings
-  "The warden's `promote` entries as ruled findings of this round.
+  "The warden's `promote` entries as ruled findings of this round, under
+   `:findings` — and under `:standing`, an entry for each one no layer of the
+   stack can take.
 
    A fixer told to sweep names the siblings its repair could not reach, and the
    warden is the only reader holding the file lists those paths can be placed
    against. Promotion is that placement made into work: the entry arrives here
-   already dispositioned `:fix` on the layer the warden named, so it is handed
-   out this round rather than waiting for a fresh reviewer to rediscover it —
-   which is what it waited for before, when it converted at all. Of five siblings
-   named across one run, two converted and each cost a round; the other three
-   were still standing at the end.
+   already dispositioned `:fix`, so it is handed out this round rather than
+   waiting for a fresh reviewer to rediscover it — which is what it waited for
+   before, when it converted at all. Of five siblings named across one run, two
+   converted and each cost a round; the other three were still standing at the
+   end.
+
+   Its layer is the warden's where that is a layer of `toc`, and otherwise the
+   one its file places it on — see `placed-on`, which the last run's open rows
+   are placed through as well. Taken verbatim, a null or a stale label would be
+   an owner nothing matches: the layer the sibling sits in would converge over
+   it, and `owned-by` would hand the repair to the top layer's fixer wherever
+   the file is. A promotion neither places is not a finding. It goes to
+   `standing`, where the warden is told to put a sibling it cannot place: a
+   promotion is work for a layer's fixer, and there is no layer to give it. A
+   branch with no layers has nothing to place against, and is the one place
+   every promotion goes.
 
    The reporter is the FIXER, and the two refusals here are what hold that line.
    An entry with no `title` or no `file` names no place anything read, and an
@@ -1994,8 +2097,8 @@
    `:sweep` is false and not offered. A promoted sibling is by construction what
    is left of a class a fixer has already swept, so ordering another sweep of it
    asks for the search that just produced it."
-  [handles findings promotions]
-  (:out
+  [cwd toc handles findings promotions]
+  (select-keys
    (reduce
     (fn [{:keys [seen] :as acc} p]
       (let [title (str/trim (str (:title p)))
@@ -2008,23 +2111,46 @@
                    :line-start line
                    :line-end   line
                    :from-layer promoted-by}
-            id    (codex/finding-id f)]
-        (if (or (str/blank? title) (str/blank? file) (contains? seen id))
+            id    (codex/finding-id f)
+            named (:owner_layer p)
+            owner (if (seq toc) (placed-on cwd toc named file) named)]
+        (cond
+          (or (str/blank? title) (str/blank? file) (contains? seen id))
           acc
-          (let [ruled (assoc f
-                             :id          id
-                             :same-as     (:same_as p)
-                             :owner-layer (:owner_layer p)
-                             :disposition :fix
-                             :authority   nil
-                             :of          nil
-                             :sweep       false
-                             :because     (:because p))]
-            {:seen (conj seen id)
-             :out  (conj (:out acc)
-                         (assoc ruled :handle (resolve-handle handles ruled)))}))))
-    {:seen (into #{} (map :id) findings) :out []}
-    promotions)))
+
+          (and (seq toc) (nil? owner))
+          (-> acc
+              (update :seen conj id)
+              (update :standing conj
+                      (unplaced-item {:title title
+                                      :where (str file (when line (str ":" line)))
+                                      :layer named}
+                                     "promoted by the warden out of a fixer's account")))
+
+          :else
+          (let [placed (when (not= owner named)
+                         (str "placed on " owner " by its file: the warden named "
+                              (if (str/blank? (str named))
+                                "no layer"
+                                (str named ", which is no layer of this stack"))))
+                ruled  (assoc f
+                              :id          id
+                              :same-as     (:same_as p)
+                              :owner-layer owner
+                              :disposition :fix
+                              :authority   nil
+                              :of          nil
+                              :sweep       false
+                              :because     (if placed
+                                             (str/join " — " (remove str/blank? [(:because p) placed]))
+                                             (:because p)))]
+            (-> acc
+                (update :seen conj id)
+                (update :findings conj
+                        (assoc ruled :handle (resolve-handle handles ruled))))))))
+    {:seen (into #{} (map :id) findings) :findings [] :standing []}
+    promotions)
+   [:findings :standing]))
 
 (defn ^{:malli/schema [:=> [:cat :any] :any]}
   seen-findings
@@ -2234,7 +2360,13 @@
       (assoc ctx :warden (merge decision (warden-failure launch decision))
              :control :stop
              :status :warden-indeterminate)
-      (let [promoted (promoted-findings handles (:findings ctx) (:promote decision))
+      (let [{promoted :findings unplaceable :standing}
+            (promoted-findings cwd (:toc ctx) handles (:findings ctx) (:promote decision))
+            ;; A sibling the warden could not place is one it is told to list
+            ;; in `standing`, so one it promoted anyway is listed there for it.
+            decision (cond-> decision
+                       (seq unplaceable)
+                       (update :standing #(into [] (distinct) (concat % unplaceable))))
             ruled (into (apply-rulings (:findings ctx) (:rulings decision) handles)
                         promoted)
             parks (carried-parks (get-in ctx [:carry :parks] {}) ruled (:iter ctx))
