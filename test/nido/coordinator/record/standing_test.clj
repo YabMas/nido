@@ -2,6 +2,7 @@
 (ns nido.coordinator.record.standing-test
   (:require
    [babashka.fs :as fs]
+   [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
    [nido.platform.core :as core]
    [nido.coordinator.record.standing :as standing]
@@ -371,3 +372,93 @@
         (let [st (standing/of-design :brian id (ws/entry-at-seq :brian id d))]
           (is (true? (:indeterminate? st)))
           (is (= :unreadable-ledger (:reason (:blocked st)))))))))
+
+;; ── A goal that moved ──────────────────────────────────────────────────────
+;; The half `standing` owns: records that ALREADY EXIST when the goal moves.
+;; The other half — a record written afterwards that stands on the replaced
+;; goal, however many citations away — is refused at the append boundary, and
+;; is tested there.
+
+(deftest a-design-serving-a-goal-superseded-after-it-does-not-stand
+  (with-tmp
+    (fn [_]
+      (let [[id add] (ledger)
+            b (add :baseline a-baseline)
+            _ (add :baseline-review {:format :baseline-review :verdict :sufficient
+                                     :baseline-seq b :reason "it holds"})
+            d (add :design (a-design b))
+            i2 (add :intent {:format :intent :goal "a wider goal" :done-when ["d"]
+                             :supersedes {:seq 1 :why "implementation found the scope wrong"}})
+            st (standing/of-design :brian id (ws/entry-at-seq :brian id d))]
+        (is (false? (:decidable? st)))
+        (is (= :goal-superseded (:reason (:blocked st))))
+        (is (= 1 (:seq (:blocked st))) "it names the goal that moved")
+        (is (str/includes? (:detail (:blocked st)) "a goal nobody holds"))
+        (is (= i2 (:goal-replaced-by (:premise st)))
+            "the survey was scoped for the same goal, so it is owed too — which
+             :blocked, naming the design's own goal first, cannot say")))))
+
+(deftest a-goal-superseded-before-the-design-leaves-it-standing
+  ;; The sequence guard, on the goal edge. A design written after the amendment
+  ;; cites the live goal; the replaced one is history, not a debt.
+  (with-tmp
+    (fn [_]
+      (let [[id add] (ledger)
+            i2 (add :intent {:format :intent :goal "a wider goal" :done-when ["d"]
+                             :supersedes {:seq 1 :why "the scope moved"}})
+            b  (add :baseline (assoc a-baseline :intent {:seq i2}))
+            _  (add :baseline-review {:format :baseline-review :verdict :sufficient
+                                      :baseline-seq b :reason "it holds"})
+            d  (add :design (assoc (a-design b) :intent {:seq i2}))
+            st (standing/of-design :brian id (ws/entry-at-seq :brian id d))]
+        (is (true? (:decidable? st)) "nothing supersedes the goal it serves")))))
+
+(deftest a-design-whose-baselines-goal-moved-does-not-stand
+  ;; Reached through the survey rather than directly: a baseline is scoped FOR a
+  ;; goal, so a design standing on one whose goal moved stands on a boundary
+  ;; drawn for something else. The design cites a SECOND, untouched goal here so
+  ;; its own edge stays live and only the premise's can fire.
+  (with-tmp
+    (fn [_]
+      (let [[id add] (ledger)
+            i2 (add :intent {:format :intent :goal "a second goal" :done-when ["d"]})
+            b  (add :baseline a-baseline)            ; scoped for goal 1
+            _  (add :baseline-review {:format :baseline-review :verdict :sufficient
+                                      :baseline-seq b :reason "it holds"})
+            d  (add :design (assoc (a-design b) :intent {:seq i2}))
+            _  (add :intent {:format :intent :goal "a wider goal" :done-when ["d"]
+                             :supersedes {:seq 1 :why "the scope moved"}})
+            st (standing/of-design :brian id (ws/entry-at-seq :brian id d))]
+        (is (false? (:decidable? st)))
+        (is (= :premise-goal-superseded (:reason (:blocked st))))
+        (is (= b (:seq (:blocked st))) "it names the survey, not the goal")))))
+
+(deftest a-verified-baseline-whose-goal-moved-is-verified-no-longer
+  ;; With NO design on the ledger, which is the case only the baseline can be
+  ;; asked about. The arc owes a design, and the append boundary refuses every
+  ;; design over this survey — so a sufficient verdict that went on counting
+  ;; would keep asking for the one record nothing may write.
+  (with-tmp
+    (fn [_]
+      (let [[id add] (ledger)
+            b      (add :baseline a-baseline)                     ; scoped for goal 1
+            _      (add :baseline-review {:format :baseline-review :verdict :sufficient
+                                          :baseline-seq b :reason "it holds"})
+            before (standing/of-baseline :brian id (ws/entry-at-seq :brian id b))
+            i2     (add :intent {:format :intent :goal "a wider goal" :done-when ["d"]
+                                 :supersedes {:seq 1 :why "the scope moved"}})
+            st     (standing/of-baseline :brian id (ws/entry-at-seq :brian id b))]
+        (is (true? (:verified? before)))
+        (is (true? (:sufficient? st)) "the verdict is still on the ledger")
+        (is (false? (:verified? st)) "and no longer verifies footing anyone needs")
+        (is (= :goal-superseded (:reason (:blocked st))))
+        (is (= i2 (:replaced-by (:blocked st)))
+            "it names the live goal — the citation the next survey carries")
+        (testing "a survey citing the amended goal is written, and verifies"
+          (let [b2  (add :baseline (assoc a-baseline :intent {:seq i2}
+                                          :supersedes {:seq b :why "the goal moved"}))
+                _   (add :baseline-review {:format :baseline-review :verdict :sufficient
+                                           :baseline-seq b2 :reason "it holds"})
+                st2 (standing/of-baseline :brian id (ws/entry-at-seq :brian id b2))]
+            (is (true? (:verified? st2)))
+            (is (nil? (:blocked st2)))))))))

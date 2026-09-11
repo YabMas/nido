@@ -343,7 +343,7 @@
    does: an :intent entry, or the :triage entry that already stated the goal on
    a workstream whose intent was written down when the ticket was triaged."
   [w kind payload]
-  (when (#{:retraction :design-approved :design :baseline} kind)
+  (when (#{:retraction :design-approved :design :baseline :intent} kind)
     (let [r (edn/read-string payload)]
       (case kind
         :retraction      (cites! w r [:retracts :seq]
@@ -355,7 +355,104 @@
         :baseline        (do (cites! w r [:supersedes :seq] #{:baseline}
                                      "Baseline :supersedes")
                              (cites! w r [:intent :seq] #{:intent :triage}
-                                     "Baseline :intent"))))))
+                                     "Baseline :intent"))
+        :intent          (cites! w r [:supersedes :seq] #{:intent}
+                                 "Intent :supersedes")))))
+
+(defn- superseded-goals
+  "Every :intent :seq that a later :intent says it replaces.
+
+   Read off the INDEX-resolved entries rather than a walk, because one hop is
+   all this question needs: a chain is built one append at a time and every link
+   was refused unless its target was live, so a superseded tip can only be
+   reached by a citation written before the replacement existed — and that
+   citation is exactly what the sequence guard in `standing` unseats on the read."
+  [w]
+  (into #{} (keep #(get-in (read-entry-at w (:seq %)) [:supersedes :seq]))
+        (filter #(= :intent (:kind %)) (:entries w))))
+
+(def ^:private rests-on
+  "Entry kind → the citations a record of that kind RESTS on, as paths into it.
+
+   A baseline's goal; a design's baseline and goal; and the subject of every
+   record that judges a rung of the arc. A :review names its design only where
+   it carries one.
+
+   Not every citation. :supersedes names what a record REPLACES, and a baseline
+   written because the goal moved supersedes one whose ground moved with it —
+   walking that edge would refuse the one append the amendment exists to make.
+   The trail's facts — :implementation-completed, :pr-opened, :merged — record
+   that something happened rather than that something holds, so they are absent."
+  {:baseline        [[:intent :seq]]
+   :design          [[:baseline :seq] [:intent :seq]]
+   :baseline-review [[:baseline-seq]]
+   :design-decision [[:design-seq]]
+   :design-verdict  [[:design-seq]]
+   :design-approved [[:design :seq]]
+   :review          [[:design :seq]]})
+
+(defn- goals-reached
+  "Every goal — an :intent, or the :triage that stated one — that `record`, of
+   `kind`, rests on through `rests-on`, however many citations away.
+
+   Follows the kind of the entry each citation resolves to, so a design reached
+   from an approval is walked as a design. A dangling or unreadable entry reaches
+   nothing, which `cites!` has already refused on the edges it checks."
+  [w kind record]
+  (loop [todo  (vec (keep #(get-in record %) (rests-on kind)))
+         seen  #{}
+         goals #{}]
+    (if-let [n (peek todo)]
+      (let [todo (pop todo)
+            k    (->> (:entries w) (filter #(= n (:seq %))) first :kind)]
+        (cond
+          (contains? seen n)       (recur todo seen goals)
+          (#{:intent :triage} k)   (recur todo (conj seen n) (conj goals n))
+          :else
+          (recur (into todo (keep #(get-in (read-entry-at w n) %) (rests-on k)))
+                 (conj seen n) goals)))
+      goals)))
+
+(defn- check-goal-is-live!
+  "Nothing a record stands on stands on a goal something has replaced.
+
+   The other half of the amendment rule, and it closes the direction the
+   sequence guard cannot. `standing` unseats records that ALREADY EXIST when a
+   goal moves, by noticing a replacement appended after them; it says nothing
+   about a record written AFTERWARDS. Append the amendment first and a design or
+   a survey may still name the goal it replaced — every citation resolves, every
+   kind is right, nothing postdates it, so nothing unseats it and it stands on a
+   goal nobody holds.
+
+   That is an authoring error rather than a propagation failure, so it is
+   refused where authoring errors are refused. An :intent's own :supersedes is
+   held to the same rule for a different reason: an amendment naming an
+   already-replaced tip forks the chain and leaves the walk two answers to take.
+
+   However many citations away, which is why this walks `goals-reached` rather
+   than reading the record's own goal: a design naming the live goal over a
+   baseline scoped for the replaced one, or a review of that baseline, stands on
+   the replaced goal exactly as much. A baseline that is itself superseded is not
+   refused here — that is a reading `standing` reports, not an authoring error.
+
+   Refused over the WHOLE ledger rather than its recent end, which this rule can
+   afford to claim because no intent on any ledger is superseded today — the
+   field arrives with this change, so every supersession that will ever exist is
+   appended under it."
+  [w kind payload]
+  (when (or (= :intent kind) (contains? rests-on kind))
+    (let [r     (edn/read-string payload)
+          goals (if (= :intent kind)
+                  (keep identity [(get-in r [:supersedes :seq])])
+                  (goals-reached w kind r))]
+      (when (seq goals)
+        (let [dead (superseded-goals w)]
+          (when-let [n (some dead goals)]
+            (throw (ex-info (str (str/capitalize (name kind)) " stands on the goal at entry "
+                                 n ", which a later intent has replaced"
+                                 (when (= :intent kind)
+                                   " — an amendment naming an already-replaced goal forks the chain"))
+                            {:seq n :kind kind :superseded (vec (sort dead))}))))))))
 
 (defn- check-seam-phase-ref!
   "A seam that says a phase closes it names that phase by its :claim. Malli sees
@@ -555,6 +652,7 @@
             [ext payload] (report/entry-payload (:kind entry) content)
             _     (check-baseline-citation! w (:kind entry) payload)
             _     (check-standing-citations! w (:kind entry) payload)
+            _     (check-goal-is-live! w (:kind entry) payload)
             _     (check-seam-phase-ref! (:kind entry) payload)
             _     (check-implementation-approved! w (:kind entry))
             fname (format "%04d-%s.%s" seq-n (name (:kind entry)) ext)
@@ -603,6 +701,7 @@
                 [ext payload] (report/entry-payload (:kind entry) content)
                 _     (check-baseline-citation! w (:kind entry) payload)
                 _     (check-standing-citations! w (:kind entry) payload)
+                _     (check-goal-is-live! w (:kind entry) payload)
                 _     (check-seam-phase-ref! (:kind entry) payload)
             _     (check-implementation-approved! w (:kind entry))
                 fname (format "%04d-%s.%s" seq-n (name (:kind entry)) ext)
