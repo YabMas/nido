@@ -343,7 +343,7 @@
   (let [a (p/arc (kinds->entries [:intent]))]
     (is (= p/workstream-stages (mapv :stage (:stages a)))
         "every stage renders, in arc order, whether or not it holds anything")
-    (is (= [:current :ahead :ahead :ahead :ahead :ahead :ahead :ahead]
+    (is (= [:current :ahead :ahead :ahead :ahead :ahead :ahead]
            (mapv :state (:stages a)))
         "the only staged entry names the current stage; the rest are unreached")))
 
@@ -357,10 +357,14 @@
   ;; A workstream can reach implementation having written no approval record. That
   ;; is not an error, and calling it :ahead would say a stage is still owed when
   ;; the work has gone past it.
-  (let [m (stage-map (kinds->entries [:intent :baseline :design :implementation-plan]))]
-    (is (= :skipped (:state (m :approval)))  "no record, and the trail is past it")
-    (is (= :ahead   (:state (m :review)))    "no record, and the trail has not reached it")
-    (is (= :current (:state (m :implementation))))))
+  ;; The set stops at the design so both states are demonstrable inside the
+  ;; unit's arc: the review used to be the `:ahead` example and is no longer a
+  ;; stage of either spine.
+  (let [m (stage-map (kinds->entries [:intent :design]))]
+    (is (= :skipped (:state (m :baseline)))        "no record, and the trail is past it")
+    (is (= :ahead   (:state (m :approval)))        "no record, and the trail has not reached it")
+    (is (= :ahead   (:state (m :implementation))))
+    (is (= :current (:state (m :design))))))
 
 (deftest arc-counts-entries-and-visits-separately
   ;; Nine records inside one uninterrupted stretch is one visit. The two numbers
@@ -389,9 +393,7 @@
 
 (deftest arc-keeps-excursions-out-of-the-spine
   (let [a (p/arc (kinds->entries [:intent :baseline :retraction :findings]))]
-    (is (every? #(contains? #{:intent :baseline :design :approval :implementation
-                              :review :publication :shipping} %)
-                (map :stage (:stages a)))
+    (is (every? (set p/workstream-stages) (map :stage (:stages a)))
         "a halt is something that happens to a workstream, not a place it reaches")
     (is (= [:retraction :findings] (mapv :stage (:excursions a))))))
 
@@ -444,7 +446,7 @@
   (let [m (stage-map (kinds->entries [:intent :baseline :baseline-review :design]))]
     (is (= [2 3] (:seqs (m :baseline))))
     (is (= 3 (:last-seq (m :baseline))))
-    (is (nil? (:seqs (m :review))) "a stage holding nothing carries no coordinates")))
+    (is (nil? (:seqs (m :approval))) "a stage holding nothing carries no coordinates")))
 
 ;; ── What a finished stage means ─────────────────────────────────────────────
 
@@ -696,20 +698,21 @@
         by  (fn [arc] (into {} (map (juxt :stage :state)) (:stages arc)))]
     (testing "with nothing owed the four original states are what they were"
       (let [s (by (p/arc es))]
-        (is (= :done (:implementation s)))
-        (is (= :current (:review s)))
+        (is (= :current (:implementation s))
+            "the review folds into the stage it reviews, so the newest record
+             leaves :implementation current rather than a stage of its own")
         (is (= :ahead (:publication s))
             "and the workstream's own spine still runs past it — this ledger has
              not landed yet, which is a different thing from having no such
              stage")
         (is (nil? (:publication (by (p/arc es {:stages p/unit-stages}))))
-            "while the unit's reading of the same ledger ends at the round that
-             reviews its implementation — a landing is the workstream's")))
+            "while the unit's reading of the same ledger ends at the
+             implementation — a landing is the workstream's")))
     (testing "and from the re-entry point upward they are stale"
       (let [s (by (p/arc es {:re-entry :implementation}))]
         (is (= :done (:approval s)) "below the line, untouched")
-        (is (= :stale (:implementation s)))
-        (is (= :stale (:review s)))
+        (is (= :stale (:implementation s))
+            "and the review is stale with it, being part of it")
         (is (= :ahead (:publication s))
             "and a stage the work never reached is not stale: staleness is a
              claim about records the ledger no longer stands behind, and there
@@ -773,6 +776,21 @@
         "both landing records sit beside the unit's arc")
     (is (= p/unit-stages (mapv :stage (:stages a)))
         "and nothing of them on it")))
+
+(deftest the-implementation-review-is-a-round-inside-the-implementation
+  ;; Five unit stages, as a baseline's and a design's review already fold into the
+  ;; stage they review. An analysis judges a RUN of the review loop rather than a
+  ;; rung of the arc, so it reads beside both spines and progresses neither.
+  (is (= [:intent :baseline :design :approval :implementation] p/unit-stages))
+  (let [es [{:kind :intent :seq 1} {:kind :implementation-completed :seq 2}
+            {:kind :review :seq 3} {:kind :review-analysis :seq 4}]]
+    (doseq [stages [p/unit-stages p/workstream-stages]]
+      (let [a (p/arc es {:stages stages})]
+        (is (= stages (mapv :stage (:stages a))))
+        (is (= [2 3] (:seqs (first (filter #(= :implementation (:stage %)) (:stages a))))))
+        (is (= [:analysis] (mapv :stage (:excursions a))))
+        (is (not-any? #{:current} (map :state (:stages a)))
+            "the trail ends on the analysis, which is no spine stage")))))
 
 (deftest the-workstream-spine-still-runs-through-shipping
   ;; The unit arc is a SECOND reading of the ledger, not a narrowing of the only

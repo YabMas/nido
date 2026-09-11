@@ -43,7 +43,7 @@
    that has to hold. `arc` indexes staleness by the spine it reads with, so a
    stage named here and absent there is one a re-entry marks nothing at: the
    clamp goes on working in `place` while the picture stops showing it."
-  [:intent :baseline :design :approval :implementation :review :publication :shipping])
+  [:intent :baseline :design :approval :implementation :publication :shipping])
 
 (def stages
   "The arc stages re-entry can name, innermost first.
@@ -52,7 +52,7 @@
    sends a workstream back to :intent or :baseline — those are established once
    and only an explicit retraction unseats them, which `place` already reports as
    its own position. The rest are the trail stages, which a later design unseats."
-  [:design :approval :implementation :review :publication :shipping])
+  [:design :approval :implementation :publication :shipping])
 
 (def trail-kinds
   "The entry kinds whose stage `place` passes by presence alone, each with the arc
@@ -63,7 +63,10 @@
    no entry here is a stage that can be passed and never un-passed, which is the
    whole defect this exists to close."
   {:implementation-completed :implementation
-   :review                   :review
+   ;; The implementation's review passes the stage it reviews, now that it folds
+   ;; into it. A stale implementation takes its review with it, which is what
+   ;; sending the work back to :implementation already meant.
+   :review                   :implementation
    :pr-opened                :publication
    :merged                   :shipping})
 

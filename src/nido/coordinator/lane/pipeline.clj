@@ -175,8 +175,16 @@
    :blocker-answered :halt
    :implementation-plan      :implementation
    :implementation-completed :implementation
-   :review          :review
-   :review-analysis :review
+   ;; A stage's review belongs to the stage it reviews. `:baseline-review` and
+   ;; `:design-decision` already folded that way; `:review` was the one held out,
+   ;; and the only reason it was is that its subject is a working copy rather
+   ;; than a record. That is a fact about what the round READS, not about where
+   ;; on the arc the round happened.
+   :review          :implementation
+   ;; NOT the implementation's review, despite the name. This judges a RUN of the
+   ;; review loop rather than a rung of the arc, stands on no record here, and
+   ;; belongs beside the arc rather than on it.
+   :review-analysis :analysis
    :findings        :findings
    ;; THE WORKSTREAM'S STAGES, and they keep their own names because whose they
    ;; are is a fact about the SUBJECT rather than about the vocabulary. A landing
@@ -224,7 +232,7 @@
    the spine it is reading with, so a stage re-entry can name and the spine cannot
    makes NOTHING stale — the clamp survives in `place` and silently leaves the
    picture alone, which is the one failure a reader cannot see."
-  [:intent :baseline :design :approval :implementation :review :publication :shipping])
+  [:intent :baseline :design :approval :implementation :publication :shipping])
 
 (def unit-stages
   "The stages ONE UNIT OF WORK travels, from the goal to the change that serves it.
@@ -232,9 +240,9 @@
    The same correspondence read to a different end, and that is the whole of the
    distinction: `stage-of-kind` says which stage a record belongs to, and a spine
    says which of those stages are its reader's business. A unit ends at the
-   implementation and the round that reviews it, because a LANDING is not one
-   unit's — one :pr-opened and one :merged can carry several units — so
-   :publication and :shipping lie off this spine.
+   implementation, each stage's own review folded into the stage it reviews,
+   because a LANDING is not one unit's — one :pr-opened and one :merged can carry
+   several units — so :publication and :shipping lie off this spine.
 
    What ARRIVES before a unit still reads at :intent: a ticket or a triage report
    is the workstream's record and `unit-of` says so, but the stage it belongs to
@@ -251,7 +259,7 @@
    `stage-of-kind` — a halt is something that happens TO a unit, not a place it
    got to, and a line that put it in sequence would say a blocked unit had
    advanced to blocked."
-  [:intent :baseline :design :approval :implementation :review])
+  [:intent :baseline :design :approval :implementation])
 
 (defn ^{:malli/schema [:=> [:cat :any [:? :map]] :any]}
   arc
@@ -269,10 +277,11 @@
    that changes what the answer is about rather than what it says. The default is
    `workstream-stages`, which is what a pane over a workstream wants. Pass
    `unit-stages` and the same entries read as one unit's arc: the stages it does
-   not name — a landing, a halt — fall to `:excursions`, because off the spine is
-   defined as whatever the spine does not name rather than listed separately. A
-   spine that listed its own exclusions would have to be kept in step with every
-   other spine, and the first one to drift would report a stage in neither place.
+   not name — a landing, a halt, an analysis — fall to `:excursions`, because off
+   the spine is defined as whatever the spine does not name rather than listed
+   separately. A spine that listed its own exclusions would have to be kept in
+   step with every other spine, and the first one to drift would report a stage
+   in neither place.
 
    `:visits` is the field that earns this over a list. It counts how many times
    the workstream ENTERED a stage, not how many records the stage holds, and it

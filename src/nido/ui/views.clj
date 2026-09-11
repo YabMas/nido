@@ -2031,7 +2031,6 @@
    :design         "Design"
    :approval       "Approval"
    :implementation "Implementation"
-   :review         "Review"
    :publication    "Publication"
    :shipping       "Shipping"})
 
