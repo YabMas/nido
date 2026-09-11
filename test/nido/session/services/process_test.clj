@@ -6,7 +6,8 @@
    [nido.platform.core :as core]
    [nido.platform.process :as proc]
    [nido.session.service :as service]
-   [nido.session.services.process]))
+   [nido.session.services.process]
+   [nido.session.state :as state]))
 
 ;; wait-for-port-file! used to collapse two very different endings into a bare
 ;; nil: "the process is gone" and "the process is still working, we ran out of
@@ -64,4 +65,44 @@
               "names process death as the cause")
           (is (not (str/includes? msg "Timed out"))
               "does not blame the timeout when the process died")))
+      (finally (fs/delete-tree tmp)))))
+
+;; A boot the `bb` running it never finished — killed, not merely failed — used
+;; to leave its JVM detached with no record: the pid was written only in
+;; session.edn, at the end. The pid file is written at spawn, before anything
+;; slow, and removed when the service is stopped.
+
+(deftest start-service-records-the-pid-before-waiting-and-stop-removes-it
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-home (constantly (str tmp))
+                    core/log-step (constantly nil)]
+        (let [ctx {:session {:project-name "proj"
+                             :project-dir (str tmp)
+                             :instance-id "inst-live"}}
+              svc {:type :process :name :repl :command "sleep 30"}
+              {:keys [state]} (service/start-service! svc ctx {})
+              pid-file (state/pid-file "inst-live" :repl)]
+          (try
+            (is (= pid-file (:pid-file state)) "the saved state names the pid file")
+            (is (= (str (:pid state)) (slurp pid-file)) "the file holds the spawned pid")
+            (service/stop-service! svc state)
+            (is (not (fs/exists? pid-file)) "stopping the service removes it")
+            (is (not (proc/process-alive? (:pid state))) "and the process is gone")
+            (finally (proc/stop-process! (:pid state))))))
+      (finally (fs/delete-tree tmp)))))
+
+(deftest start-service-removes-the-pid-file-of-a-process-that-died-at-boot
+  (let [tmp (fs/create-temp-dir)]
+    (try
+      (with-redefs [core/nido-home (constantly (str tmp))
+                    core/log-step (constantly nil)]
+        (let [ctx {:session {:project-name "proj"
+                             :project-dir (str tmp)
+                             :instance-id "inst-dead"}}
+              svc {:type :process :name :repl :command "exit 3"
+                   :port-file ".nrepl-port" :port-timeout-ms 15000}]
+          (is (thrown? clojure.lang.ExceptionInfo (service/start-service! svc ctx {})))
+          (is (not (fs/exists? (state/pid-file "inst-dead" :repl)))
+              "a failed boot leaves no pid file to be mistaken for a live process")))
       (finally (fs/delete-tree tmp)))))

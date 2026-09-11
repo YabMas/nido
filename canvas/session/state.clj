@@ -36,6 +36,11 @@
     {:signature [:=> [:catn [:instance-id InstanceId]] Path] :delegates [instance-state-dir]})
   (Operation log-file "One service's log within an instance."
     {:signature [:=> [:catn [:instance-id InstanceId] [:service-name :any]] Path] :delegates [log-dir]})
+  (Operation pid-file
+    "One process service's pid within an instance, written at spawn — before session.edn exists
+     to name it, so a boot killed half-way still leaves its detached process on record."
+    {:signature [:=> [:catn [:instance-id InstanceId] [:service-name :any]] Path]
+     :delegates [instance-state-dir]})
   (Operation pg-data-dir "An instance's own Postgres data directory."
     {:signature [:=> [:catn [:instance-id InstanceId]] Path] :delegates [instance-state-dir]})
   (Operation sessions-root "The session-home root."

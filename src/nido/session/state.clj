@@ -52,6 +52,18 @@
   [instance-id service-name]
   (str (fs/path (log-dir instance-id) (str (name service-name) ".log"))))
 
+(defn ^{:malli/schema [:=> [:cat :InstanceId :any] :Path]}
+  pid-file
+  "Pid of a named process service: ~/.nido/state/<instance-id>/<name>.pid
+
+   Written the moment the process spawns, which session.edn cannot be: that
+   record is only written once EVERY service is up, and the process is detached
+   long before then. A boot interrupted in between — the `bb` running it killed,
+   not merely failing — would otherwise leave a running JVM that nothing on disk
+   names."
+  [instance-id service-name]
+  (str (fs/path (instance-state-dir instance-id) (str (name service-name) ".pid"))))
+
 (defn ^{:malli/schema [:=> [:cat :InstanceId] :Path]}
   pg-data-dir
   "PostgreSQL data directory: ~/.nido/state/<instance-id>/pg-data/"

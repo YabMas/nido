@@ -84,13 +84,18 @@
           result (shell {:continue true :out :string :err :string
                          :dir project-dir :shutdown nil}
                         "bash" "-lc" cmd)
-          pid (some-> (:out result) str/trim parse-long)]
+          pid (some-> (:out result) str/trim parse-long)
+          pid-path (state/pid-file instance-id svc-name)]
       (when-not (zero? (:exit result))
         (throw (ex-info (str "Failed to start " (name svc-name))
                         {:error (:err result)})))
       (when-not (pos-int? pid)
         (throw (ex-info (str "Failed to parse pid for " (name svc-name))
                         {:output (:out result)})))
+      ;; Before anything slow. The process is detached now, and until the
+      ;; engine writes session.edn — after every other service is up — this
+      ;; file is the only thing on disk that names it.
+      (spit pid-path (str pid))
       (core/log-step (str "Started " (name svc-name) " process (pid " pid ")"))
 
       ;; Optionally wait for port file
@@ -99,6 +104,7 @@
                          {p :port outcome :outcome} (wait-for-port-file! pf pid port-timeout-ms)]
                      (when-not p
                        (proc/stop-process! pid)
+                       (fs/delete-if-exists pid-path)
                        (throw (ex-info (if (= :process-died outcome)
                                          (str (name svc-name) " process exited before writing "
                                               port-file)
@@ -110,16 +116,19 @@
                                         :log-tail (proc/log-tail log-path 20)})))
                      (core/log-step (str (name svc-name) " available on port " p))
                      p))]
-        {:state {:pid pid :port port :log-path log-path}
+        {:state {:pid pid :port port :log-path log-path :pid-file pid-path}
          :context (cond-> {:pid pid}
                     port (assoc :port port))}))))
 
 (defmethod service/stop-service! :process
   [_service-def saved-state]
-  (let [{:keys [pid]} saved-state]
+  (let [{:keys [pid pid-file]} saved-state]
     (when (and (pos-int? pid) (proc/process-alive? pid))
       (core/log-step (str "Stopping process (pid " pid ")"))
-      (proc/stop-process! pid))))
+      (proc/stop-process! pid))
+    ;; A pid file left behind would outlive its process and could name a
+    ;; recycled pid; state written before :pid-file existed has none to remove.
+    (when pid-file (fs/delete-if-exists pid-file))))
 
 (defmethod service/service-status :process
   [_service-def saved-state]
