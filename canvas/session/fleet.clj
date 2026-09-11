@@ -40,4 +40,8 @@
   (Operation over-budget? "Whether booting one more is projected to cross the budget."
     {:signature [:=> [:catn [:totals :map]] :boolean]})
   (Operation candidates "Sessions nobody appears to be driving, dearest first."
-    {:signature [:=> [:catn [:rows [:vector :map]]] [:vector :map]]}))
+    {:signature [:=> [:catn [:rows [:vector :map]]] [:vector :map]]})
+  (Operation occupancy
+    "Whether anyone but one session's own services is in it: vacant, occupied, or unknown when a
+     probe could not answer. It gates a STOP rather than a suggestion, so unknown is never vacant."
+    {:signature [:=> [:catn [:probe :map]] :keyword]}))

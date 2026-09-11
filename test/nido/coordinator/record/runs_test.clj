@@ -10,7 +10,9 @@
    [nido.coordinator.record.session :as session]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as workstream]
+   [nido.platform.process]
    [nido.session.engine]
+   [nido.session.fleet]
    [nido.session.launcher]
    [nido.session.lifecycle]
    [nido.session.state]))
@@ -656,3 +658,91 @@
                                     :payload {}
                                     :workstream-id "ws-does-not-exist"}
                                    {:fired-at "2026-08-30T00:00:00Z" :fired-by "test"})))))))
+
+;; ── stopping a parked run's session ─────────────────────────────────────────
+;; A parked run keeps its worktree and record so a reply can resume it, but its
+;; services are stopped: parked runs used to hold a JVM each until a human
+;; acted, and six brian smoke runs held theirs for days. Every guard below
+;; decides a STOP, so each is pinned in the direction that keeps a session up.
+
+(def ^:private parked-autonomy
+  {:skill :investigate-bug :first-message "m" :agent :claude :claude-session-id "sid"
+   :trigger :smoke :limits {} :priority 0 :uncapped? false :on-promote nil
+   :phase :parked :phase-history [] :error nil})
+
+(defn- parked-run [ws-id & {:as over}]
+  (merge {:id "r-park" :project :brian :trigger :smoke :skill :investigate-bug
+          :workstream-id ws-id :session-name "run-smoke-1"}
+         over))
+
+(defn- stop-with
+  "Run stop-session-for-parked-run! against one parked session whose record
+   carries `autonomy`, with the machine stubbed: `alive` pids, the probe's
+   successive `verdicts`. Returns {:downed [names] :probes n}."
+  [{:keys [autonomy run-over alive verdicts down!]
+    :or   {autonomy parked-autonomy alive #{4242} verdicts [:vacant]}}]
+  (let [tmp    (fs/create-temp-dir)
+        downed (atom [])
+        probes (atom 0)
+        left   (atom verdicts)]
+    (try
+      (with-redefs [core/nido-root (constantly (str tmp))
+                    nido.platform.config/read-projects (constantly {"brian" {:directory "/Code/brian"}})
+                    nido.session.lifecycle/worktree-path (fn [_ _ s] (str "/wt/" s))
+                    nido.session.engine/resolve-instance-id (constantly "brian--run-smoke-1")
+                    nido.session.state/read-session
+                    (constantly {:service-states {:pg {:mode :shared}
+                                                  :repl {:pid 4242 :port 5000}
+                                                  :app {:app-port 4600}}})
+                    nido.platform.process/process-alive? (fn [pid] (contains? alive pid))
+                    nido.session.fleet/occupancy
+                    (fn [probe]
+                      (swap! probes inc)
+                      (is (= #{4242} (:own-pids probe)) "its own JVM is excluded from presence")
+                      (is (= 5000 (:nrepl-port probe)))
+                      (let [v (or (first @left) (last verdicts))] (swap! left rest) v))
+                    nido.coordinator.record.runs/park-settle-ms 0
+                    nido.session.lifecycle/down!
+                    (or down! (fn [n _] (swap! downed conj n)))]
+        (let [w (workstream/create! :brian {:stage :triaging})]
+          (session/create! :brian (:id w) {:name "run-smoke-1" :weight :heavy :autonomy autonomy})
+          (is (nil? (runs/stop-session-for-parked-run! (apply parked-run (:id w) (mapcat identity run-over))))
+              "never returns anything a run's terminal path could trip on")
+          (is (= :live (:substrate (session/read-session :brian (:id w) "run-smoke-1")))
+              "the record survives, so the gate and a reply still find it")))
+      (finally (fs/delete-tree tmp)))
+    {:downed @downed :probes @probes}))
+
+(deftest a-vacant-parked-session-the-run-spawned-is-stopped
+  (is (= ["run-smoke-1"] (:downed (stop-with {})))))
+
+(deftest a-session-the-run-borrowed-is-never-stopped
+  ;; A merge or drive Run parks on the workstream's own session — the human's.
+  (is (= [] (:downed (stop-with {:run-over {:trigger :merge :skill :drive-home}}))))
+  (is (= [] (:downed (stop-with {:autonomy nil})))
+      "a session with no autonomy facet was started by a human"))
+
+(deftest a-provision-only-session-is-never-stopped
+  (is (= [] (:downed (stop-with {:run-over {:skill :plan-bug}
+                                 :autonomy (assoc parked-autonomy :skill :plan-bug)})))))
+
+(deftest a-session-with-no-running-process-is-left-alone
+  ;; A :lite session has no services: stopping it frees nothing and drops its home.
+  (let [{:keys [downed probes]} (stop-with {:alive #{}})]
+    (is (= [] downed))
+    (is (zero? probes) "not even probed")))
+
+(deftest an-occupied-or-unreadable-session-stays-up
+  (is (= [] (:downed (stop-with {:verdicts [:unknown]})))
+      "a blind probe is not an empty session")
+  (let [{:keys [downed probes]} (stop-with {:verdicts [:occupied]})]
+    (is (= [] downed) "someone working in it keeps it up")
+    (is (= 4 probes) "after re-probing, in case it was the agent's helpers leaving")))
+
+(deftest helpers-leaving-after-the-agent-do-not-keep-it-up
+  (let [{:keys [downed probes]} (stop-with {:verdicts [:occupied :occupied :vacant]})]
+    (is (= ["run-smoke-1"] downed))
+    (is (= 3 probes))))
+
+(deftest a-failed-stop-never-throws-into-the-run
+  (is (= [] (:downed (stop-with {:down! (fn [_ _] (throw (ex-info "worktree gone" {})))})))))

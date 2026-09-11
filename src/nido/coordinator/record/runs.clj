@@ -13,7 +13,9 @@
    [nido.coordinator.record.triggers :as triggers]
    [nido.coordinator.record.workstream :as cws]
    [nido.platform.io :as io]
+   [nido.platform.process :as proc]
    [nido.session.engine :as engine]
+   [nido.session.fleet :as fleet]
    [nido.session.launcher :as launcher]
    [nido.session.lifecycle :as session-lifecycle]
    [nido.session.state :as session-state]))
@@ -360,6 +362,11 @@
                (throw (ex-info "Re-hydration failed" {:reason :rehydrate-failed} t))))
         true)))
 
+(def ^:private provision-only-skills
+  "Skills whose run hands its session to a human: once provisioned it is their
+   workspace, so no run lifecycle event may stop or reclaim it."
+  #{:plan-bug :plan-github-issue})
+
 (defn ^{:malli/schema [:=> [:cat :Run] :any]}
   teardown-session-for-run!
   "Reclaim the session a Run spawned, once the Run reaches a resolved-terminal
@@ -369,9 +376,11 @@
    touched) and drops the per-session state-dir. Also removes the cosmetic
    session-home dir + the run's session-home link.
 
-   Deliberately NOT called for :awaiting-review — that session is the human's
-   review surface and must stay up. The run dir (artifacts, agent.log, run.edn)
-   under ~/.nido/runs is never touched, so a failed/done run stays inspectable.
+   Deliberately NOT called for :awaiting-review: a parked run can still be
+   resumed, so its worktree, its record and its home link must survive. Only its
+   services are stopped (stop-session-for-parked-run!). The run dir (artifacts,
+   agent.log, run.edn) under ~/.nido/runs is never touched, so a failed/done run
+   stays inspectable.
 
    NO-OP for provision-only runs (:plan-bug, :plan-github-issue): the impl session
    is HANDED to the human at provision — it's their workspace, not a
@@ -384,7 +393,7 @@
    Best-effort: a missing/already-gone session logs and returns nil rather than
    throwing — teardown must never re-fail a run that already reached terminal."
   [run]
-  (when-not (#{:plan-bug :plan-github-issue} (:skill run))
+  (when-not (provision-only-skills (:skill run))
    (let [{:keys [project session-name id workstream-id]} run]
     (try
       (session-lifecycle/destroy! session-name {:project project})
@@ -416,6 +425,94 @@
                          session-name " — " (ex-message e))))))
     nil)))
 
+(defn- run-worktree
+  "The worktree `run`'s session lives in, and that session's instance id."
+  [run]
+  (let [pname       (name (:project run))
+        project-dir (:directory (get (config/read-projects) pname))
+        worktree    (session-lifecycle/worktree-path pname project-dir (:session-name run))]
+    {:worktree worktree :instance-id (engine/resolve-instance-id worktree)}))
+
+(defn- owns-session?
+  "Did `run` spawn the session it names? Its session record says so when that
+   record's autonomy facet carries the run's trigger. A merge or drive Run
+   BORROWS the workstream's session — often the human's own — so a positive
+   claim is required: a session with no autonomy facet, or another trigger's,
+   is never this run's to stop."
+  [run]
+  (let [{:keys [project workstream-id session-name trigger]} run]
+    (boolean (and workstream-id
+                  (some-> (session/read-session project workstream-id session-name)
+                          (get-in [:autonomy :trigger])
+                          (= trigger))))))
+
+(def ^:private park-settle-ms
+  "Pause between presence probes when a parked session reads occupied. Its agent
+   has exited by the time the run parks, but the MCP servers it started in the
+   worktree can outlive it by a moment — and one probe would read them as a
+   person."
+  2000)
+
+(defn- settled-occupancy [probe]
+  (loop [attempt 0]
+    (let [v (fleet/occupancy probe)]
+      (if (and (= :occupied v) (< attempt 3))
+        (do (Thread/sleep park-settle-ms) (recur (inc attempt)))
+        v))))
+
+(defn ^{:malli/schema [:=> [:cat :Run] :any]}
+  stop-session-for-parked-run!
+  "Stop the services of the session `run` spawned, now that it has parked for
+   review — and nothing else. The worktree, the coordinator session record (still
+   :live, still :parked) and the run's home link survive; stopping removes the
+   home, so `home-present?` turns false and the next reply or open re-provisions
+   the session at the same path through ensure-session-home!. The conversation
+   is keyed by that path, so it resumes where it stopped.
+
+   Without this a parked session held its JVM until a human acted on it, and
+   nothing obliged anyone to: brian's :smoke-new-reports parked every run
+   within fifteen minutes and left six full sessions up for days.
+
+   Stops only what it can show is safe to stop:
+     - a session this run spawned (owns-session?), never one it borrowed;
+     - not a provision-only run's, which belongs to a human from the start;
+     - one with a service process actually running — a :lite session has none,
+       so stopping it would free nothing and still drop its home;
+     - one fleet/occupancy finds :vacant. :occupied (someone is in it) and
+       :unknown (the probe could not answer) both keep it up.
+
+   Best-effort: logs and returns nil; never throws into a run's terminal path."
+  [run]
+  (let [{:keys [project session-name skill]} run]
+    (try
+      (when (and (not (provision-only-skills skill)) (owns-session? run))
+        (let [{:keys [worktree instance-id]} (run-worktree run)
+              states (vals (:service-states (session-state/read-session instance-id)))
+              pids   (into #{} (comp (keep :pid) (filter proc/process-alive?)) states)]
+          (when (seq pids)
+            ;; :pid with :port is the repl JVM and only ever that: a private
+            ;; postgres records :pg-pid/:pg-port, so neither its pid nor its
+            ;; port can be read here as the session's own nREPL.
+            (let [verdict (settled-occupancy
+                           {:worktree   worktree
+                            :home       (session-state/session-home-dir (name project) session-name)
+                            :own-pids   pids
+                            :nrepl-port (some #(when (:pid %) (:port %)) states)})]
+              (if (= :vacant verdict)
+                (do (session-lifecycle/down! session-name {:project project})
+                    (println (str "nido coordinator: stopped parked session " session-name
+                                  " — a reply or an open brings it back up")))
+                (println (str "nido coordinator: kept parked session " session-name " up — "
+                              (if (= :unknown verdict)
+                                "the presence probe could not answer"
+                                "someone is working in it"))))))))
+      (catch Exception e
+        (binding [*err* *err*]
+          (.println ^java.io.PrintWriter *err*
+                    (str "nido coordinator: stopping parked session " session-name
+                         " failed — " (ex-message e))))))
+    nil))
+
 (defn ^{:malli/schema [:=> [:cat :Run] :map]}
   launch-context
   "Resolve the worktree cwd + injected launch context for a run's headless agent.
@@ -426,9 +523,7 @@
   [run]
   (let [{:keys [project session-name id]} run
         pname       (name project)
-        project-dir (:directory (get (config/read-projects) pname))
-        worktree    (session-lifecycle/worktree-path pname project-dir session-name)
-        instance-id (engine/resolve-instance-id worktree)
+        {:keys [worktree instance-id]} (run-worktree run)
         mcp         (let [p (session-state/session-mcp-path instance-id)]
                       (when (fs/exists? p) p))]
     {:cwd        worktree

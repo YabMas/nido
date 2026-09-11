@@ -16,7 +16,12 @@
    one moment a human can act on it — just before another session is added. The
    idle list rides along as context, and stays ADVISORY: nothing here stops or
    kills anything. That is deliberate. A wrong candidate costs a line of text;
-   a wrong reap costs a live nREPL and whatever was loaded in it."
+   a wrong reap costs a live nREPL and whatever was loaded in it.
+
+   One probe does gate a stop, elsewhere: the coordinator asks `occupancy`
+   before stopping a PARKED run's session, whose agent has already finished. It
+   is built for that direction — anything short of a clean :vacant keeps the
+   session up."
   (:require
    [babashka.fs :as fs]
    [babashka.process :refer [shell]]
@@ -325,3 +330,29 @@
   "Rows nobody appears to be driving, dearest first."
   [rows]
   (->> rows (filter :candidate?) (sort-by (comp - #(or % 0) :bytes)) vec))
+
+(defn ^{:malli/schema [:=> [:cat :map] :keyword]}
+  occupancy
+  "Whether anyone but a session's own services is in it right now: :vacant,
+   :occupied, or :unknown when a probe could not answer.
+
+   The one-session form of what `snapshot` asks of the fleet, for a caller about
+   to stop a session rather than merely name it. Occupied means a process sits
+   in the worktree or home that is not one of `own-pids` — a shell, an
+   interactive agent, an editor — or something holds a connection open on the
+   nREPL port.
+
+   :unknown is its own answer so that a caller cannot mistake it for :vacant,
+   and every caller must refuse on it. A blind `lsof` reports nobody present,
+   which is the veto disarmed by the very failure it exists to survive (see
+   `candidate?`)."
+  [{:keys [worktree home own-pids nrepl-port]}]
+  (let [cwds  (cwd-index)
+        socks (socket-index)]
+    (cond
+      (or (nil? cwds) (nil? socks)) :unknown
+      (or (pos? (foreign-count cwds (into #{} (map str) own-pids) (str worktree)
+                               (some-> home str)))
+          (established-on? socks nrepl-port))
+      :occupied
+      :else :vacant)))

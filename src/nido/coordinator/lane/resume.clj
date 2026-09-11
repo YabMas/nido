@@ -55,7 +55,8 @@
    home path, so re-provision at the same path re-anchors it). Then launches one
    bounded `claude --resume` turn, records the outcome on the session (`:error`
    cleared on success / set on failure, logged to *err* for operators), and
-   re-parks for re-review regardless.
+   re-parks for re-review regardless — stopping the session's services again
+   (runs/stop-session-for-parked-run!) once it is parked.
 
    `s` is the parked session map; `run` is the run record (may be nil for sessions
    not backed by a run.edn). Identity (`:claude-session-id`, `:budget`) is resolved
@@ -107,7 +108,11 @@
                            :reason  (or (:reason (ex-data t)) :resume-failed)
                            :message (ex-message t)}))
     (finally
-      (session/set-phase! project ws-id session-name :parked))))
+      (session/set-phase! project ws-id session-name :parked)
+      ;; Parked again, so stopped again: otherwise every session a reply ever
+      ;; reached would keep its JVM for good. The next reply re-provisions it
+      ;; through ensure-session-home!, above.
+      (when run (runs/stop-session-for-parked-run! run)))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :string] :any]}
   resume!

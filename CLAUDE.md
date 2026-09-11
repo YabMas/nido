@@ -329,6 +329,8 @@ There is no `restart` task — use `down` then `up` (or just `up`, since it's id
 
 Sessions stay up until explicitly stopped. There is no automatic idle-suspension — bring a session `down` yourself when you're done with it.
 
+The exception is a session the coordinator spawned for a Run. It is torn down when the Run finishes, and when the Run **parks for review** its services are stopped — the worktree, the parked gate and the conversation stay, and a reply or an open (TUI ↵, dashboard) brings the session back up. A parked session is kept up only when someone is working in it, or the presence probe can't tell. Promote (`impl-*`) sessions are yours from the start and are never stopped.
+
 Debug escape hatch: `bb nido:session:status` / `bb nido:session:list` stay scan-based and model-independent — they work even when the workstream model is wedged.
 
 ## Launcher artifacts

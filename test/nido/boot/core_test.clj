@@ -128,7 +128,8 @@
                     runs/launch-context (fn [_] {:cwd (str tmp) :briefing ""
                                                  :mcp-config nil :add-dirs []
                                                  :run-paths ""})
-                    runs/teardown-session-for-run! (fn [_] nil)]
+                    runs/teardown-session-for-run! (fn [_] nil)
+                    runs/stop-session-for-parked-run! (fn [_] nil)]
         (cstate/ensure-dirs!)
         (let [trigger  {:name    :t
                         :source  {:type :test}
@@ -200,6 +201,9 @@
       (with-redefs [nido-core/nido-root (constantly (str tmp))
                     project/list-projects (constantly test-projects)
                     runs/teardown-session-for-run! (fn [_] nil)
+                    ;; Same reason as teardown: stopping a parked run's session
+                    ;; reads the real instance state and probes the real machine.
+                    runs/stop-session-for-parked-run! (fn [_] nil)
                     profiles/resolve-profile (fn [_ _] {:worktree {:strategy :git-worktree}})]
         (cstate/ensure-dirs!)
         (f tmp))
@@ -576,13 +580,17 @@
 
 (deftest run-blocking-tears-down-session-on-terminal-not-on-park
   ;; Resolved-terminal runs (:done/:failed) must reclaim their session so it
-  ;; leaves the CLI list and frees PG/JVM/ports; a parked :awaiting-review run
-  ;; must KEEP its session up (the human's review surface).
+  ;; leaves the CLI list and frees PG/JVM/ports. A parked :awaiting-review run
+  ;; keeps its worktree and record — it can still be resumed — so it is NOT
+  ;; torn down; its services are stopped instead, since nothing obliges anyone
+  ;; to answer it.
   (gate-with-tmp
     (fn [_]
-      (let [torn (atom [])]
+      (let [torn    (atom [])
+            stopped (atom [])]
         (with-redefs [runs/spawn-session-for-run!     (fn [_] nil)
                       runs/teardown-session-for-run!   (fn [r] (swap! torn conj (:id r)))
+                      runs/stop-session-for-parked-run! (fn [r] (swap! stopped conj (:id r)))
                       cstate/run-session-home-link     (constantly "/tmp/nope")
                       status-file/read-status          (fn [_] nil)
                       anomaly/record-failure           (fn [det _] det)
@@ -603,7 +611,8 @@
             (#'core/run-blocking! "rdone"))
           (is (= :done (:state (runs/read-run "rdone"))))
           (is (some #{"rdone"} @torn) "a :done run is torn down")
-          ;; (2) parked at :awaiting-review ⇒ NOT torn down
+          (is (empty? @stopped) "a :done run is torn down, not merely stopped")
+          ;; (2) parked at :awaiting-review ⇒ NOT torn down, services stopped
           (reset! torn [])
           (tickets/open! :brian "BR-P" {:notion-page-id "p" :url "u" :title "T"
                                         :opened-by :triage-teacher-bugs :notion-last-edited-at "t"})
@@ -619,7 +628,8 @@
                         (fn [_] {:exit-code 0 :timed-out? false :num-turns 5})]
             (#'core/run-blocking! "rpark"))
           (is (= :awaiting-review (:state (runs/read-run "rpark"))))
-          (is (empty? @torn) "a parked :awaiting-review run keeps its session up"))))))
+          (is (empty? @torn) "a parked :awaiting-review run keeps its worktree and record")
+          (is (= ["rpark"] @stopped) "and its services are stopped until a reply or an open"))))))
 
 (deftest run-blocking-parks-triage-run-from-ticket-status
   (gate-with-tmp

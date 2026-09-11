@@ -731,13 +731,16 @@
         :done            (breakers/record-success! project trigger-name)
         :awaiting-review (breakers/record-success! project trigger-name)
         nil))
-    ;; Reclaim the session once the Run is resolved-terminal. :awaiting-review
-    ;; keeps its session up (the human's review surface); only terminal states
-    ;; tear down. Without this every completed/failed Run leaks its session
-    ;; (PG + JVM + ports + CLI list entry) — the cap is honored but sessions
-    ;; pile up unboundedly.
+    ;; Reclaim the session once the Run is resolved-terminal. Without this every
+    ;; completed/failed Run leaks its session (PG + JVM + ports + CLI list
+    ;; entry) — the cap is honored but sessions pile up unboundedly. A parked
+    ;; :awaiting-review Run is not torn down, since it can still be resumed, but
+    ;; the same leak applies to it for as long as nobody answers — so its
+    ;; services are stopped, and a reply or an open brings them back.
     (when (contains? #{:done :failed :halted} next-state)
-      (runs/teardown-session-for-run! run))))
+      (runs/teardown-session-for-run! run))
+    (when (= :awaiting-review next-state)
+      (runs/stop-session-for-parked-run! run))))
 
 (defn- process-envelope! [envelope triggers-by-project]
   (doseq [routed (events/route envelope triggers-by-project)]

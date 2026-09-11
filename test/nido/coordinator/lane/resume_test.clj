@@ -14,7 +14,10 @@
 (defn- with-tmp [f]
   (let [tmp (fs/create-temp-dir)]
     (try
-      (with-redefs [core/nido-root (constantly (str tmp))]
+      ;; Stopping the re-parked session reads real instance state and probes the
+      ;; real machine; tests that assert it override this with their own spy.
+      (with-redefs [core/nido-root (constantly (str tmp))
+                    runs/stop-session-for-parked-run! (fn [_] nil)]
         (cstate/ensure-dirs!)
         (f))
       (finally (fs/delete-tree tmp)))))
@@ -295,3 +298,40 @@
       (finally
         (when (fs/exists? home-tr) (fs/delete-tree home-tr))
         (fs/delete-tree home) (fs/delete-tree wt)))))
+
+;; A turn re-parks the session, so it stops it again: otherwise every session a
+;; reply ever reached would keep its JVM until someone remembered it.
+(deftest run-turn-stops-the-session-again-once-reparked
+  (with-tmp
+    (fn []
+      (let [w       (ws/create! :brian {:stage :triaging :external-refs []})
+            phase   (atom nil)
+            stopped (atom [])]
+        (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
+        (session/set-phase! :brian (:id w) "auto" :running)
+        (write-run! "r1" (:id w) "auto" "sid-9")
+        (with-redefs [runs/home-present? (fn [_] true)
+                      agent/launch! (fn [_] {:exit-code 0 :num-turns 1})
+                      runs/stop-session-for-parked-run!
+                      (fn [r]
+                        (reset! phase (get-in (first (session/list-sessions :brian (:id w)))
+                                              [:autonomy :phase]))
+                        (swap! stopped conj (:id r)))]
+          (let [s (first (session/list-sessions :brian (:id w)))]
+            (#'resume/run-turn! :brian (:id w) "auto" s (runs/read-run "r1") "x")))
+        (is (= ["r1"] @stopped) "the run's session is stopped after the turn")
+        (is (= :parked @phase) "only once it is parked again")))))
+
+(deftest run-turn-stops-even-when-the-turn-fails
+  (with-tmp
+    (fn []
+      (let [w       (ws/create! :brian {:stage :triaging :external-refs []})
+            stopped (atom [])]
+        (session/create! :brian (:id w) {:name "auto" :weight :heavy :autonomy autonomy-parked})
+        (write-run! "r1" (:id w) "auto" "sid-9")
+        (with-redefs [runs/home-present? (fn [_] true)
+                      agent/launch! (fn [_] (throw (ex-info "boom" {})))
+                      runs/stop-session-for-parked-run! (fn [r] (swap! stopped conj (:id r)))]
+          (let [s (first (session/list-sessions :brian (:id w)))]
+            (#'resume/run-turn! :brian (:id w) "auto" s (runs/read-run "r1") "x")))
+        (is (= ["r1"] @stopped))))))

@@ -132,3 +132,31 @@
               {:candidate? true  :bytes (* 4 gb) :instance-id "big"}]]
     (is (= ["big" "small"] (mapv :instance-id (sut/candidates rows)))
         "dearest first, and the non-candidate is absent whatever it holds")))
+
+;; occupancy gates a STOP, not a suggestion, so each way a probe can fail has to
+;; land on "keep it up". A blind lsof reports nobody present; if that read as
+;; :vacant, the failure would delete the veto it exists to survive.
+
+(def ^:private wt "/code/proj/.worktrees/run-a")
+(def ^:private home "/nido/sessions/proj/run-a")
+
+(defn- occupancy-with [cwds socks]
+  (with-redefs [nido.session.fleet/cwd-index    (constantly cwds)
+                nido.session.fleet/socket-index (constantly socks)]
+    (sut/occupancy {:worktree wt :home home :own-pids #{100} :nrepl-port 5000})))
+
+(deftest occupancy-refuses-to-call-a-blind-probe-vacant
+  (is (= :unknown (occupancy-with nil ["x:1->y:2"])) "no cwd index")
+  (is (= :unknown (occupancy-with [["100" wt]] nil)) "no socket index"))
+
+(deftest occupancy-ignores-the-sessions-own-services
+  (is (= :vacant (occupancy-with [["100" wt] ["7" "/elsewhere"]] ["localhost:6145->localhost:51000"]))
+      "its own JVM in the worktree, and a connection to some other port, are nobody"))
+
+(deftest occupancy-sees-a-process-in-the-worktree-or-home
+  (is (= :occupied (occupancy-with [["100" wt] ["200" (str wt "/src")]] [])))
+  (is (= :occupied (occupancy-with [["100" wt] ["300" home]] []))
+      "a shell opened at the session home is someone"))
+
+(deftest occupancy-sees-a-connection-held-on-the-nrepl
+  (is (= :occupied (occupancy-with [["100" wt]] ["localhost:5000->localhost:61234 (ESTABLISHED)"]))))
