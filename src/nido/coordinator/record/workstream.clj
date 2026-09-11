@@ -335,12 +335,13 @@
 (defn- check-standing-citations!
   "Every edge `standing` walks resolves to an entry of the kind it expects.
 
-   Four of them, and they arrived with this change: a :retraction's target and
-   a :design-approved's design are new kinds entirely, while a design's and a
-   baseline's :supersedes were both writable and neither was ever checked. That
-   last pair is why this exists at all — :supersedes was the one citation in
-   the ledger nothing had an opinion about, recorded in the baseline this change
-   was designed against as an invisibly-incomplete health observation."
+   Five of them. A :retraction's target and a :design-approved's design are
+   kinds of their own; a design's and a baseline's :supersedes were both
+   writable and neither was ever checked — that pair is why this exists at all,
+   :supersedes being the one citation in the ledger nothing had an opinion
+   about. A baseline's :intent is the fifth, and it accepts what a design's
+   does: an :intent entry, or the :triage entry that already stated the goal on
+   a workstream whose intent was written down when the ticket was triaged."
   [w kind payload]
   (when (#{:retraction :design-approved :design :baseline} kind)
     (let [r (edn/read-string payload)]
@@ -351,8 +352,10 @@
         :design-approved (cites! w r [:design :seq] #{:design} "Approval")
         :design          (cites! w r [:supersedes :seq] #{:design}
                                  "Design :supersedes")
-        :baseline        (cites! w r [:supersedes :seq] #{:baseline}
-                                 "Baseline :supersedes")))))
+        :baseline        (do (cites! w r [:supersedes :seq] #{:baseline}
+                                     "Baseline :supersedes")
+                             (cites! w r [:intent :seq] #{:intent :triage}
+                                     "Baseline :intent"))))))
 
 (defn- check-seam-phase-ref!
   "A seam that says a phase closes it names that phase by its :claim. Malli sees

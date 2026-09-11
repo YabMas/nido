@@ -16,7 +16,10 @@
       (finally (fs/delete-tree tmp)))))
 
 (def ^:private a-baseline
-  {:format :baseline :area "order totalling" :bounded-by "money on an order"
+  ;; :intent names entry 1: these fixtures append the goal to a fresh
+  ;; workstream before the survey, which is the order the boundary now requires.
+  {:format :baseline :intent {:seq 1}
+   :area "order totalling" :bounded-by "money on an order"
    :shape "one summing path"
    :modules [{:id "agg" :module "the aggregate" :hides "the summing order"
               :interface "an order's total"}]

@@ -806,6 +806,9 @@
 
 (def ^:private valid-baseline
   {:format       :baseline
+   ;; The goal this survey was scoped FOR. Required to write and absent from the
+   ;; pre-intent read shape, so a baseline written before the citation still reads.
+   :intent       {:seq 1}
    :area         "order totalling — calc, the aggregate, and the invoice reader"
    :bounded-by   "everything that reads or writes a money amount on an order; the
                   render layer is out, it only formats what it is handed"
@@ -946,7 +949,7 @@
   ;; Its era lasted hours and a record was written in it. A schema tightened
   ;; without a read shape does not error — latest-entry swallows the parse
   ;; failure, so the record stops being there.
-  (let [kind-era (assoc valid-baseline
+  (let [kind-era (assoc (dissoc valid-baseline :intent)
                         :modules (mapv #(dissoc % :id) (:modules valid-baseline))
                         :load-bearing [{:property "the aggregate is the only summing path"
                                         :kind :module-boundary
@@ -958,23 +961,13 @@
         "but still readable")
     (is (str/includes? (report/report->markdown kind-era)
                        "the aggregate is the only summing path"))))
-
-(deftest the-three-eras-are-told-apart-by-what-the-record-carries
-  (let [current  valid-baseline
-        kind-era (assoc valid-baseline
-                        :load-bearing [{:property "p" :kind :derived :falsified-by "q"}])
-        legacy   (-> valid-baseline
-                     (dissoc :modules :composition)
-                     (assoc :load-bearing [{:property "p" :evidence ["src/x.clj:1"]}]))]
-    (doseq [[label rec] {"current" current "kind-era" kind-era "legacy" legacy}]
-      (is (some? (report/parse-event :baseline rec)) (str label " must read")))))
 
 (deftest a-baseline-from-the-kind-era-still-reads
   ;; Its era lasted hours and a record was written in it — by someone else, on a
   ;; live workstream, minutes before the schema moved under them. A tightening
   ;; without a read shape does not error: latest-entry swallows the parse
   ;; failure, so the record stops being there.
-  (let [kind-era (assoc valid-baseline
+  (let [kind-era (assoc (dissoc valid-baseline :intent)
                         :modules (mapv #(dissoc % :id) (:modules valid-baseline))
                         :load-bearing [{:property "the aggregate is the only summing path"
                                         :kind :module-boundary
@@ -987,20 +980,29 @@
     (is (str/includes? (report/report->markdown kind-era)
                        "the aggregate is the only summing path"))))
 
-(deftest the-three-eras-are-told-apart-by-what-the-record-carries
-  (let [kind-era (assoc valid-baseline
+(deftest the-four-eras-are-told-apart-by-what-the-record-carries
+  (let [pre-intent (dissoc valid-baseline :intent)
+        kind-era (assoc (dissoc valid-baseline :intent)
                         :modules (mapv #(dissoc % :id) (:modules valid-baseline))
                         :load-bearing [{:property "p" :kind :derived :falsified-by "q"}])
         legacy   (-> valid-baseline
-                     (dissoc :modules :composition)
+                     (dissoc :modules :composition :intent)
                      (assoc :load-bearing [{:property "p" :evidence ["src/x.clj:1"]}]))]
-    (doseq [[label rec] {"current" valid-baseline "kind-era" kind-era "legacy" legacy}]
-      (is (some? (report/parse-event :baseline rec)) (str label " must read")))))
+    (doseq [[label rec] {"current"    valid-baseline
+                         "pre-intent" pre-intent
+                         "kind-era"   kind-era
+                         "legacy"     legacy}]
+      (is (some? (report/parse-event :baseline rec)) (str label " must read")))
+    ;; The dispatch order is what this pins: a legacy record has no :intent
+    ;; either, so testing for that field before the decomposition would read
+    ;; every legacy baseline as merely pre-intent and then fail it.
+    (is (thrown? clojure.lang.ExceptionInfo (report/validate-event :baseline pre-intent))
+        "pre-intent reads but no longer writes")))
 
 (deftest a-baseline-written-before-the-level-moved-still-reads
   ;; Entries are immutable, so the question is whether it was valid when written.
   (let [legacy (-> valid-baseline
-                   (dissoc :modules :composition)
+                   (dissoc :modules :composition :intent)
                    (assoc :load-bearing [{:property "the aggregate is the only summing path"
                                           :evidence ["src/order/aggregate.clj:12"]}]))]
     (is (thrown? clojure.lang.ExceptionInfo (report/validate-event :baseline legacy))
@@ -1509,7 +1511,7 @@
   ;; Optional is the load-bearing half: every baseline already written carries
   ;; none, and that absence is what stops a reader inferring the edge from
   ;; append order.
-  (let [b {:format :baseline :area "a" :bounded-by "b" :shape "s"
+  (let [b {:format :baseline :intent {:seq 1} :area "a" :bounded-by "b" :shape "s"
            :modules [{:id "m" :module "m" :hides "h" :interface "i"}]
            :composition "c"
            :load-bearing [{:id "c1" :property "p" :falsified-by "f"
