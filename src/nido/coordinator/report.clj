@@ -125,13 +125,16 @@
   "The design reading of a triage deepdive. :defect-layer is the bit that routes
    the work: :implementation means the design is right and the code doesn't honour
    it (a fix), :design means the code faithfully implements a design that is wrong
-   (a decision). :unknown is honest for a shallow route, which does not root-cause.
+   (a decision), and :intent means the design faithfully serves a GOAL that is
+   wrong — the layer below a decision, and the one a round could not report at all
+   until an intent could be superseded. :unknown is honest for a shallow route,
+   which does not root-cause.
 
    :governing cites the stance — what frames this area — because that is what makes
    :defect-layer answerable at all. :violated cites the checkable layer, because
    that is the only layer a diff can actually break."
   [:map {:closed true}
-   [:defect-layer [:enum :implementation :design :unknown]]
+   [:defect-layer [:enum :implementation :design :intent :unknown]]
    [:governing    {:optional true} [:vector string?]]
    [:violated     {:optional true} [:vector Violation]]
    [:note         {:optional true} string?]])
@@ -405,6 +408,13 @@
     :permanent (str "permanent — " why)
     nil))
 
+(def Supersedes
+  "Set when this record amends one the review found wrong. The superseded entry
+   stays in the ledger — a design is amended and cited, never silently rewritten."
+  [:map {:closed true}
+   [:seq int?]
+   [:why string?]])
+
 (def Intent
   "What the task is FOR, and what would make it done. Authored BEFORE the design
    that cites it, and closed against everything that needs the change to fill in
@@ -430,7 +440,18 @@
    [:format    [:= :intent]]
    [:goal      string?]
    [:done-when [:vector {:min 1} string?]]
-   [:context   {:optional true} string?]])
+   [:context   {:optional true} string?]
+   ;; The goal this one replaces, when it replaces one. The same {:seq :why} the
+   ;; other two foundations carry, and it arrives for the reason theirs did: a
+   ;; goal that moved mid-flight had no legal way to be recorded, so the only
+   ;; doors were a spin-out — wrong when the work stays here — or a retraction,
+   ;; which discards a design that may still be mostly right.
+   ;;
+   ;; It carries no classification of the amendment. What survives a goal change
+   ;; is not predicted by how far the goal moved: a narrowing can admit a cleaner
+   ;; interface and cost more than a widening does. So the record says what
+   ;; changed and why, and each rung above concludes for itself.
+   [:supersedes {:optional true} Supersedes]])
 
 (def IntentRelation
   "Which entry states what this change is for. :seq may name an :intent entry or
@@ -479,13 +500,6 @@
                  [:health-id string?]
                  [:to        [:= :declined]]
                  [:why       string?]]]])
-
-(def Supersedes
-  "Set when this record amends one the review found wrong. The superseded entry
-   stays in the ledger — a design is amended and cited, never silently rewritten."
-  [:map {:closed true}
-   [:seq int?]
-   [:why string?]])
 
 (def lenses
   "The borrowed perspectives a baseline may read a claim or a module through.
