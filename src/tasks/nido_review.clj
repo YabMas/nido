@@ -168,6 +168,12 @@
    `workspace-drifted` entry named neither revision, and a run that folded two
    layers reported no work at all about a branch it had rewritten.
 
+   `:errored` is the phase a throw ended the run in and what the throw said.
+   Every count above is read off the round as far as it got, so on such a run
+   they say how far that was, and this says why it went no further — the one
+   thing a reader needs before deciding whether to re-run, and otherwise
+   reachable only inside report.json.
+
    `:standing` is what the terminal warden knew was open and was handing to
    nobody — no finding covers it, so it appears in no other list here, and until
    the warden had a slot for it the only copy was a sentence in a run dir that
@@ -212,7 +218,8 @@
         ;; the entry, the artifact and the analysis payload are three readings
         ;; of one value — `report/stopped-on` — and cannot disagree about what
         ;; the run left behind.
-        standing (get-in report [:reason :standing])]
+        standing (get-in report [:reason :standing])
+        errored  (report/errored report)]
     (cond-> {:format             :review-report
              :status             (:status final)
              :base               (get-in report [:target :base])
@@ -238,6 +245,7 @@
       ;; the report lives in a run dir that is routinely gone by the time anyone
       ;; reads the workstream, and the reviewer's own log is gone with it.
       (:unavailable final) (assoc :unavailable (:unavailable final))
+      errored              (assoc :errored errored)
       ;; Only a run that ended on a conflicted stack has these, and it is the
       ;; run whose status a reader cannot act on without them: the conflict is
       ;; mid-stack, so `jj resolve --list` reports the branch clean and the ids
@@ -535,6 +543,9 @@
        :remaining-parked   (count (filter #(= :park (:disposition %)) open))
        :targets-reviewed   (:reviewed cover)
        :targets-skipped    (:skipped cover)
+       ;; Where a throw ended the run, which the payload titles as `died in` —
+       ;; see `analysis/payload`.
+       :errored            (report/errored report)
        :reviewed-project   project
        :reviewed-session   session
        :reviewed-ws-id     ws-id}
@@ -555,13 +566,16 @@
 
    So: a design carrying invariants is enough on its own. A review that did not
    happen has nothing to judge — whether it broke or no reviewer could be run —
-   and a dry run changed nothing to judge.
+   and a dry run changed nothing to judge. A run that ended because jj refused
+   a step on the stack has a review and no branch it can vouch for: the refusal
+   stopped it part-way through a step on the working copy, so what the pass
+   would read is wherever jj left it.
 
    Every status named here is a fact about the RUN. Whether the tree is legible
    is a fact about the WORKING COPY, no status answers it, and `unreadable-tree`
    asks the tree instead."
   [status final design]
-  (and (not (#{:review-failed :reviewer-unavailable :dry-run} status))
+  (and (not (#{:review-failed :reviewer-unavailable :stack-unmovable :dry-run} status))
        (boolean (or (seq (:findings final))
                     (seq (:history final))
                     (seq (:invariants design))))))
@@ -1235,7 +1249,10 @@
    :review-failed "the reviewer broke — this is not a clean bill, and the branch is unjudged"
    :reviewer-unavailable "the reviewer could not be run at all; nothing was reviewed and the branch is unjudged"
    :warden-indeterminate "the warden returned no decision, so nothing was attributed and no repair was attempted — re-run"
-   :workspace-drifted "the working copy moved after the reviewers read it, so no further repair could land on the tree they judged — the repairs that landed first are kept; re-run"})
+   :workspace-drifted "the working copy moved after the reviewers read it, so no further repair could land on the tree they judged — the repairs that landed first are kept; re-run"
+
+   ;; ── the branch was judged, and jj would not let the loop act on it ──
+   :stack-unmovable "jj refused a step the loop needed on the stack after the review and the rulings, which both stand, as do the repairs that landed first — the error above names the step and what jj said; clear that before re-running, or the re-run reviews whatever jj left"})
 
 (defn ^{:malli/schema [:=> [:cat :map :map :string] [:sequential :string]]}
   outcome-lines

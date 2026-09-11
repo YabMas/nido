@@ -149,6 +149,14 @@
      is the part a later claimant acts on: every phase but `fix` reads the tree, and `fix`
      launches agents that rewrite it."
     {:signature [:=> [:catn [:report ReviewReport]] [:maybe :map]]})
+  (Operation errored
+    "The phase whose throw ended a run the loop closed, and what it said — nil for a run no
+     phase of which threw.
+
+     `in-flight`'s counterpart for a run that finalized, asking it the same first question —
+     was it reading the branch or rewriting it. Public because two readers need it: the
+     `:review` entry carries the message, and the analysis payload titles the run by the phase."
+    {:signature [:=> [:catn [:report ReviewReport]] [:maybe :map]]})
   (Operation orphaned
     "The report forced terminal, for a run that stopped without writing one.
 

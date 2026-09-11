@@ -433,9 +433,10 @@
       ;; are what makes the phase add up to every :fix ruling it held.
       ;; :launch-failed is a layer whose fixer was launched and never started,
       ;; with the exit code — that and its err.log are all anyone has of why.
-      ;; :stranded is a fixer that ran and was never settled, because the
-      ;; workspace moved while it did: its repair is in no commit, so the row's
-      ;; :patch is the one copy of it the run keeps.
+      ;; :stranded is a fixer that ran and was never settled — the workspace
+      ;; moved while it did, or jj refused a step before its repair landed: the
+      ;; repair is on no layer, so the row's :patch is the one copy of it the run
+      ;; keeps.
       :fix    (let [h (last (filter #(= (:iter ctx) (:iter %)) (:history ctx)))]
                 (cond-> (assoc ph :fixes (vec (:fixes h)) :fixed-count (:fixed-count h))
                   (seq (:declined ctx))    (assoc :declined (vec (:declined ctx)))
@@ -535,9 +536,9 @@
    them are a fixer that ran: `:fixes` and `:rolled-back` are repairs it wrote —
    kept and refused — `:declined` is one that wrote nothing, and `:stranded` is
    one the stage stopped on before it could tell which, because the workspace
-   moved. The other two name no fixer. `:launch-failed` is a launch claude
-   refused before a turn, and `:unattempted` is what a layer was OWED when the
-   stage aborted below it.
+   moved or jj refused a step. The other two name no fixer. `:launch-failed` is
+   a launch claude refused before a turn, and `:unattempted` is what a layer was
+   OWED when the stage aborted below it.
 
    The same line `nido.review.stages/repair-attempted?` draws for the give-up
    counter, off the same reading in the fix stage: the count a run publishes and
@@ -703,6 +704,27 @@
         (cond-> {:round (:round round)}
           (= "running" (:status ph)) (assoc :phase (:phase ph)))))))
 
+(defn ^{:malli/schema [:=> [:cat :ReviewReport] [:maybe :map]]}
+  errored
+  "The phase whose throw ended this run, as `{:round :phase :message}` — nil
+   for a run no phase of which threw.
+
+   `in-flight`'s counterpart for a run that finalized: that one names where a
+   run stopped when nothing closed it, this one where it stopped when the loop
+   closed it on an error. Both answer the question a reader of either asks
+   first — was it READING the branch or rewriting it — and a run the loop
+   closed on a crash in `fix` leaves a branch its fixers rewrote and no later
+   round read.
+
+   The last round alone, because an error that reaches a phase ends the run in
+   the round it happened in."
+  [report]
+  (let [{:keys [round phases]} (last (:rounds report))]
+    (some (fn [ph]
+            (when (= "error" (:status ph))
+              {:round round :phase (:phase ph) :message (str (:error ph))}))
+          phases)))
+
 (defn- close-unfinished-round
   "Close a round whose run never came back — every phase still open in it, and
    every target row still in flight inside those phases, stamped `status`.
@@ -839,10 +861,19 @@
       :target-moved
       (move-target report ev)
 
+      ;; With the account the stage gave of itself on the way out, where it gave
+      ;; one, folded exactly as a finished phase is — so a fix phase that threw
+      ;; on its third layer still lists the two before it and the one it never
+      ;; reached. An errored phase with no account is just the error: the
+      ;; engine hands none over rather than the ctx the stage was given, which
+      ;; would overwrite the rows the phase already holds.
       :phase-errored
-      (update-current-phase report (name (:phase ev))
-                            #(assoc % :status "error" :error (:error ev)
-                                      :ended-at (:at ev)))
+      (let [ctx (some-> (:ctx ev) (assoc :iter (:iter ev)))]
+        (update-current-phase report (name (:phase ev))
+                              #(cond-> %
+                                 ctx  (finish-phase (:phase ev) ctx (:at ev))
+                                 true (assoc :status "error" :error (:error ev)
+                                             :ended-at (:at ev)))))
 
       :run-finalized
       (-> report

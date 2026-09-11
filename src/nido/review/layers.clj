@@ -329,7 +329,12 @@
    A STALE refusal gets a sentence of its own, ahead of the caller's, because
    it is the one refusal whose remedy is not to retry the command: every jj
    command in the workspace fails the same way until `jj workspace
-   update-stale` has run — the `jj new` a caller's remedy names included."
+   update-stale` has run — the `jj new` a caller's remedy names included.
+
+   Thrown as `:stack-unmovable`, which ends the run on that status, and not as
+   `:review-failed`, which says no review happened. Only the reshape and fix
+   stages let one reach the engine — the review stage's preflight catches its
+   own — so a round that ends on one has been reviewed and ruled on."
   ([what result data] (refusal what result data nil))
   ([what result data then]
    (ex-info (str what " — " (:err result)
@@ -338,7 +343,7 @@
                         " workspace's commit without updating its files. Run `jj"
                         " workspace update-stale` before anything else."))
                  (when then (str "\n" then)))
-            (assoc data :reason :review-failed :exit (:exit result)))))
+            (assoc data :reason :stack-unmovable :exit (:exit result)))))
 
 (defn- step!
   "One jj call on the fix path: its result, or its refusal thrown."

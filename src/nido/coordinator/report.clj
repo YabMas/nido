@@ -1409,6 +1409,14 @@
                                ;; `:unavailable` carries the sentence that said
                                ;; so.
                                :reviewer-unavailable
+                               ;; jj refused a step the loop needed on the stack
+                               ;; — landing a repair, reading what a fixer wrote,
+                               ;; putting the working copy back — after the
+                               ;; reviewers had read it and the warden had ruled.
+                               ;; Also split from :review-failed, and the other
+                               ;; way: the review happened and stands, and
+                               ;; `:errored` quotes jj.
+                               :stack-unmovable
                                ;; Every repair the fix stage produced conflicted
                                ;; the layers above it and was rolled back, so the
                                ;; branch is intact and unchanged. Distinct from
@@ -1606,6 +1614,17 @@
      ;; instant would be nido inventing a precision the source does not carry.
      ;; Absent when nothing said; a credential failure has no reset time.
      [:retry-at {:optional true} string?]]]
+   ;; The phase whose throw ended the run, and what it said — on every status a
+   ;; throw ends a run on, and nowhere else. The message is the whole diagnosis
+   ;; — what refused, in its own words, and the remedy nido appended — and
+   ;; without it here its only copy is report.json, in a run dir that is
+   ;; routinely reclaimed. `:phase` says whether the run was reading the branch
+   ;; or rewriting it when it stopped.
+   [:errored {:optional true}
+    [:map {:closed true}
+     [:round   int?]
+     [:phase   string?]
+     [:message string?]]]
    [:report-path        [:maybe string?]]
    ;; Dormant extension point: no caller populates :summary yet (review-event omits it).
    ;; Kept for a future emitter wanting a one-line human note on the timeline card.
@@ -2731,7 +2750,7 @@
                                  remaining-parked targets-reviewed targets-skipped
                                  report-path
                                  summary open kept conflicted drift reshaped
-                                 rolled-back launch-failed standing]}]
+                                 rolled-back launch-failed standing errored]}]
   (str/join "\n"
     (remove nil?
       [(str "# Review: " (name status))
@@ -2788,6 +2807,13 @@
               "the tree was at " (or (:now drift) "a revision jj would not name")
               " when the repairs were due"
               (when (:recover drift) (str "\n\n" (:recover drift)))))
+       ;; Under the header for the reason `drift` is: on a status a throw ended
+       ;; the run on, the message is what the status is ABOUT — which step, what
+       ;; refused it, and what to run first — and the counts beside it only say
+       ;; how far the round had got.
+       (when errored
+         (str "\nThe " (:phase errored) " phase of round " (:round errored)
+              " stopped on an error:\n\n" (:message errored)))
        ;; Above the findings, because it is a fact about the branch rather than
        ;; about the review: whoever reads this next is looking at a stack the
        ;; loop reshaped, and the counts below say nothing about that.

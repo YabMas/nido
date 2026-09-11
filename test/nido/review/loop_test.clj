@@ -121,6 +121,72 @@
     (is (some #(= :phase-errored (:event %)) @events))
     (is (= :review-failed (:status (last (filter #(= :run-finalized (:event %)) @events)))))))
 
+;; ── A round that throws ────────────────────────────────────────────────────
+
+(defn- ruled-round
+  "A review and a warden that both ran: two findings, one ruled fix, and a
+   standing note — everything a round has before its fix stage starts."
+  []
+  [(stage :review (fn [c] (assoc c :findings [{:handle "h1" :title "a"}
+                                               {:handle "h2" :title "b"}])))
+   (stage :warden (fn [c] (-> c
+                              (update :findings #(mapv (fn [f] (assoc f :disposition :fix)) %))
+                              (assoc :control :continue
+                                     :warden {:decision :continue
+                                              :standing [{:what "outside the change"}]}))))])
+
+(deftest a-round-that-throws-ends-on-the-round-it-was-in
+  ;; review-1e4b6342: the fix stage threw after three fixers had each reported
+  ;; success, and the run was finalized on the round as it stood before its
+  ;; review — no findings, no rulings, no standing, no repairs. Everything the
+  ;; report, the ledger entry and the analysis then published was read off that.
+  (let [[events emit] (capturing)
+        left {:fixes [{:layer "lower" :commit "c1" :handed ["h1"]}]
+              :unattempted [{:layer "upper" :handed ["h2"]}]}
+        pipe (conj (ruled-round)
+                   (stage :fix (fn [c]
+                                 (throw (ex-info "could not return the working copy to the top"
+                                                 {:reason :stack-unmovable
+                                                  :ctx (merge c left)})))))
+        out  (rloop/run-loop {:run-id "r1" :pipeline pipe :emit emit})]
+    (is (= :stack-unmovable (:status out))
+        "a status of its own: the review this round ran is not one that failed")
+    (is (= ["h1" "h2"] (mapv :handle (:findings out)))
+        "the round's findings, with the rulings the warden put on them")
+    (is (= [{:what "outside the change"}] (get-in out [:warden :standing]))
+        "and the warden's standing note, which no other channel carries")
+    (is (= (:fixes left) (:fixes out)) "what the stage landed before it threw")
+    (is (= (:unattempted left) (:unattempted out)) "and what it never reached")
+    (is (= "could not return the working copy to the top" (:error out)))
+    (let [errored (first (filter #(= :phase-errored (:event %)) @events))]
+      (is (= (:fixes left) (get-in errored [:ctx :fixes]))
+          "the phase event carries the stage's own account, so the report's fix
+           phase says what it did as well as that it failed"))))
+
+(deftest a-stage-with-no-account-of-its-own-ends-on-what-it-was-handed
+  ;; The stages before it ran and what they did is the round's; a throw that
+  ;; carries nothing must not take that with it.
+  (let [[events emit] (capturing)
+        pipe (conj (ruled-round)
+                   (stage :fix (fn [_] (throw (ex-info "refused" {:reason :stack-unmovable})))))
+        out  (rloop/run-loop {:run-id "r1" :pipeline pipe :emit emit})]
+    (is (= :stack-unmovable (:status out)))
+    (is (= [:fix :fix] (mapv :disposition (:findings out)))
+        "the warden's rulings survive a fix stage that said nothing")
+    (is (not (contains? (first (filter #(= :phase-errored (:event %)) @events)) :ctx))
+        "and the phase event carries no ctx: what the stage was HANDED is not an
+         account of what it did, and folded as one it would overwrite the rows
+         the phase already holds")))
+
+(deftest a-throw-no-stage-classified-still-crashes-the-loop
+  ;; Only a `:reason` the engine knows ends a run. Anything else is a defect,
+  ;; and finalizing on it would publish a verdict nobody reached.
+  (let [pipe (conj (ruled-round)
+                   (stage :fix (fn [c] (throw (ex-info "bug" {:reason :something-else
+                                                               :ctx c})))))]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"bug"
+                          (rloop/run-loop {:run-id "r1" :pipeline pipe})))))
+
 ;; ── The injected finding identity ──────────────────────────────────────────
 
 (deftest injected-finding-key-detects-a-stall-the-default-cannot

@@ -6,6 +6,7 @@
    [clojure.test :refer [deftest is testing use-fixtures]]
    [malli.core :as m]
    [nido.platform.core :as core]
+   [nido.coordinator.agent :as agent]
    [nido.coordinator.report :as report]
    [nido.coordinator.record.session :as csession]
    [nido.coordinator.record.state :as cstate]
@@ -18,6 +19,7 @@
    [nido.review.stages :as stages]
    [nido.review.verdict :as verdict]
    [nido.session.lifecycle :as lifecycle]
+   [nido.vsdd.jj :as jj]
    [tasks.nido-review :as t]))
 
 (defn- with-tmp-nido-root
@@ -225,7 +227,11 @@
   ;; A run with no reviewer produced no review, which is the same failure to a
   ;; caller gating on the exit code — /drive-home must not treat it as a branch
   ;; that was looked at and passed.
-  (is (= 1 (t/exit-code :reviewer-unavailable))))
+  (is (= 1 (t/exit-code :reviewer-unavailable)))
+  ;; jj refusing a step AFTER the review is not that failure: the branch was
+  ;; looked at, and the entry holds what was found, as it does for any other
+  ;; run that stopped short of converging.
+  (is (zero? (t/exit-code :stack-unmovable))))
 
 (deftest the-ledger-entry-carries-why-no-reviewer-ran
   ;; The only durable copy. report.json lives in a run dir that is routinely
@@ -728,6 +734,80 @@
     (is (= 0 (:defects-settled ev)))
     (is (= 0 (:findings-remaining ev)))
     (is (nil? (:base-rev ev)))))
+
+(defn- a-round-whose-fix-plan-jj-refuses
+  "Drive the real engine and the real fix stage over one ruled round on a
+   three-layer stack — the fix plan landing `lower`, jj refusing to read what
+   `middle`'s fixer wrote, `upper` never reached — folding every event into a
+   report as the frontend does. Answers `[final report]`.
+
+   The review and the warden are stubs because what is under test is what a
+   round that throws leaves behind, and the round they leave is the one the fix
+   stage walks into: three findings ruled `fix`, and a standing note."
+  []
+  (let [run-id (str "review-" (random-uuid))
+        rpt    (atom (rreport/init {:run-id run-id :cwd "/w" :base "main" :started-at "t0"}))
+        diffs  (atom 0)
+        stale  (str "Error: The working copy is stale (not updated since operation 87994e892b2b).\n"
+                    "Hint: Run `jj workspace update-stale` to update it.")
+        review {:name :review
+                :run  (fn [c] (assoc c :findings
+                                     (mapv (fn [l] {:handle (str "h-" l) :id (str "h-" l)
+                                                    :title (str l " defect") :file (str l ".clj")
+                                                    :line-start 1 :from-layer l})
+                                           ["lower" "middle" "upper"])))}
+        warden {:name :warden
+                :run  (fn [c] (-> c
+                                  (update :findings
+                                          (partial mapv #(assoc % :disposition :fix
+                                                                  :owner-layer (:from-layer %))))
+                                  (assoc :control :continue
+                                         :warden {:decision :continue
+                                                  :standing [{:what "a continuation's transcript basis grows without bound"}]})))}]
+    (with-redefs [agent/launch!        (fn [_] {:num-turns 4 :result-text "done"})
+                  stages/session-stack (fn [_ _] [{:bookmark "s--lower" :slug "lower"}
+                                                  {:bookmark "s--middle" :slug "middle"}
+                                                  {:bookmark "s--upper" :slug "upper"}])
+                  jj/jj!               (fn [_dir & args]
+                                         (if (= ["diff" "--git"] (vec args))
+                                           (if (= 1 (swap! diffs inc))
+                                             {:exit 0 :out "diff --git a/lower.clj b/lower.clj" :err ""}
+                                             {:exit 1 :out "" :err stale})
+                                           {:exit 0 :out "" :err ""}))]
+      (let [final (rloop/run-loop {:run-id run-id :cwd "/w" :base "main"
+                                   :pipeline [review warden stages/fix-stage]
+                                   :open? (complement stages/settled?)
+                                   :emit (fn [ev] (swap! rpt rreport/apply-event ev nil))})]
+        [final @rpt]))))
+
+(deftest a-round-that-throws-still-publishes-itself
+  ;; review-1e4b6342's fix stage threw on its third layer, after three fixers
+  ;; had each reported success, and the run was finalized on the round as it
+  ;; stood before its review. Its two :review entries read `0 defects settled
+  ;; (0 repairs dispatched) · 0 remaining` over a branch five fixers rewrote,
+  ;; under `review-failed`, which says no review happened — and neither held
+  ;; the error, the recovery hint or the warden's standing note.
+  (let [[final rpt] (a-round-whose-fix-plan-jj-refuses)
+        ev          (t/review-event final rpt "/runs/r/report.json")
+        md          (report/report->markdown ev)]
+    (is (= :stack-unmovable (:status ev))
+        "a status that says what failed, and not that the review did not happen")
+    (is (= ev (report/validate-event :review ev))
+        "the ledger's enum is closed, and an entry it refuses is swallowed")
+    (is (= 2 (:fix-attempts ev))
+        "the repair that landed and the fixer jj would not read were both
+         dispatched")
+    (is (= 3 (:findings-remaining ev)) "none of the three rulings was checked by a later round")
+    (is (= 1 (:remaining-handed ev)) "and one of them has a repair on the branch nobody read")
+    (is (= [{:what "a continuation's transcript basis grows without bound"}] (:standing ev))
+        "the warden's note reaches the entry, where before it reached report.json alone")
+    (is (= {:round 1 :phase "fix"} (select-keys (:errored ev) [:round :phase])))
+    (is (str/includes? (:message (:errored ev)) "jj workspace update-stale")
+        "the error names what to run first, in the copy a person opens")
+    (is (str/includes? md "jj workspace update-stale")
+        "and the ledger renders it rather than holding it")
+    (is (str/includes? (:title (analysis-payload-for final rpt)) "died in fix")
+        "the analysis is titled as a run that crashed mid-rewrite, which it is")))
 
 (deftest the-entry-counts-defects-removed-apart-from-repairs-dispatched
   ;; The two are different sizes and the entry published only the larger, under

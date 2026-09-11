@@ -570,6 +570,122 @@
                                                              :disposition :fix}]}))))))
     (is (nil? @declined) "no decline row exists for a repair nobody could read")))
 
+;; ── What a throw out of the fix plan carries ───────────────────────────────
+
+(def ^:private three-layer-stack
+  [{:bookmark "s--lower" :slug "lower" :tip "t1" :change "c1"}
+   {:bookmark "s--middle" :slug "middle" :tip "t2" :change "c2"}
+   {:bookmark "s--upper" :slug "upper" :tip "t3" :change "c3"}])
+
+(defn- one-finding-per-layer [labels]
+  (mapv (fn [l] {:handle (str "h-" l) :title l :disposition :fix :owner-layer l}) labels))
+
+(defn- carried
+  "What a fix stage's throw carried out of it — its ex-data, with the round it
+   got to under `:ctx` — or nil when it did not throw."
+  [ctx]
+  (try ((:run stages/fix-stage) ctx) nil
+       (catch clojure.lang.ExceptionInfo e (ex-data e))))
+
+(defn- refused [what]
+  (layers/refusal what {:exit 1 :out "" :err stale-err} {:cwd "/w"}))
+
+(deftest a-plan-that-throws-carries-the-round-it-got-to
+  ;; review-1e4b6342: a repair landed, a fixer's 52 turns that jj then refused to
+  ;; read, and a layer holding three of the round's seven rulings that never got
+  ;; a fixer — and the throw that ended the round carried none of it, so the run
+  ;; was published as `fix-attempts 0` with the unreached layer named nowhere.
+  (let [dirty (atom [true :refused])]
+    (with-redefs [agent/launch! (fn [_] {:num-turns 4 :result-text "done"})
+                  stages/working-copy-dirty? (fn [_]
+                                               (let [a (first @dirty)]
+                                                 (swap! dirty rest)
+                                                 (if (= :refused a)
+                                                   (throw (refused "could not read what the fixer wrote"))
+                                                   a)))
+                  stages/session-stack (fn [_ _] three-layer-stack)
+                  jj/jj! (jj-scripted [[] []])]
+      (let [data (carried {:config {:cwd "/w" :run-id "r1" :base "main"} :iter 1
+                           :findings (one-finding-per-layer ["lower" "middle" "upper"])})
+            left (:ctx data)]
+        (is (= :stack-unmovable (:reason data)))
+        (is (= ["lower"] (mapv :layer (:fixes left)))
+            "the repair that landed before the throw is on its layer, and says so")
+        (is (= [{:layer "middle" :handed ["h-middle"] :account "done"}] (:stranded left))
+            "the fixer that ran and was never settled is neither landed nor declined:
+             what it wrote is on no layer, and it was still a repair this run asked for")
+        (is (= [{:layer "upper" :handed ["h-upper"]}] (:unattempted left))
+            "the layer the plan never reached is owed, by the same key a fix row
+             names its findings under")
+        (is (= [1] (mapv :iter (:history left)))
+            "a round that landed a fix enters the history however it ended, so the
+             run's readers count the repair it made")
+        (is (= #{"lower" "middle"} (set (keys (get-in left [:carry :fixer-launches]))))
+            "and both sessions it opened are on the launch record")))))
+
+(deftest a-throw-reports-the-last-outcome-its-layer-reached
+  ;; The account is only what the stage KNEW when jj refused. Each point a
+  ;; layer's outcome changes class moves it; a throw between two of them reports
+  ;; the one before.
+  (let [finding (one-finding-per-layer ["lower"])
+        ctx     {:config {:cwd "/w" :run-id "r1" :base "main"} :iter 1 :findings finding}
+        restore-refused (fn [& _] (throw (refused "could not return the working copy to the top of the stack")))]
+    (testing "refused before its fixer was launched: still owed, and no session opened"
+      (with-redefs [agent/launch! (fn [_] (throw (ex-info "never launched" {})))
+                    layers/position-for-fix! (fn [& _] (throw (refused "could not position")))
+                    stages/session-stack (fn [_ _] two-layer-stack)
+                    jj/jj! (jj-scripted [])]
+        (let [left (:ctx (carried ctx))]
+          (is (= [{:layer "lower" :handed ["h-lower"]}] (:unattempted left)))
+          (is (empty? (get-in left [:carry :fixer-launches]))))))
+    (testing "landed, then the restore after it refused: a landed repair, not a stranded one"
+      (with-redefs [agent/launch! (fn [_] {:num-turns 4 :result-text "done"})
+                    stages/working-copy-dirty? (fn [_] true)
+                    layers/restore-top! restore-refused
+                    stages/session-stack (fn [_ _] two-layer-stack)
+                    jj/jj! (jj-scripted [])]
+        (let [left (:ctx (carried ctx))]
+          (is (= ["lower"] (mapv :layer (:fixes left))))
+          (is (empty? (:stranded left))
+              "its commit is on the layer; calling it stranded would send a reader
+               to a patch for an edit the branch already holds"))))
+    (testing "landed onto a conflict, then the re-read after the rollback refused"
+      (let [asked (atom 0)]
+        (with-redefs [agent/launch! (fn [_] {:num-turns 4 :result-text "done"})
+                      stages/working-copy-dirty? (fn [_] true)
+                      stages/session-stack (fn [_ _] two-layer-stack)
+                      jj/jj! (fn [_dir & args]
+                               (cond
+                                 (some #(str/includes? (str %) "conflicts()") args)
+                                 (if (= 1 (swap! asked inc))
+                                   {:exit 0 :out "xuspsuww" :err ""}
+                                   {:exit 1 :out "" :err stale-err})
+                                 (= "op" (first args)) {:exit 0 :out "0a1b2c3d" :err ""}
+                                 :else {:exit 0 :out "" :err ""}))]
+          (let [left (:ctx (carried ctx))]
+            (is (= ["xuspsuww"] (:conflicted left))
+                "whether the rollback took is exactly what jj would not say, so the
+                 conflict it last reported is what a person is sent to look at")))))
+    (testing "declined, then the restore refused: a decline, with its argument"
+      (with-redefs [agent/launch! (fn [_] {:num-turns 3 :result-text "the seam spans two layers"})
+                    stages/working-copy-dirty? (fn [_] false)
+                    layers/restore-top! restore-refused
+                    stages/session-stack (fn [_ _] two-layer-stack)
+                    jj/jj! (jj-scripted [])]
+        (let [left (:ctx (carried ctx))]
+          (is (= ["the seam spans two layers"] (mapv :reason (:declined left))))
+          (is (empty? (:stranded left)) "it wrote nothing, so there is nothing to strand")
+          (is (= "the seam spans two layers"
+                 (get-in left [:carry :fixer-declines "lower" :reason]))
+              "and the next warden is still told the case it made"))))
+    (testing "never started, then the restore refused: a launch failure"
+      (with-redefs [agent/launch! (fn [_] {:exit-code 1 :num-turns nil})
+                    layers/restore-top! restore-refused
+                    stages/session-stack (fn [_ _] two-layer-stack)
+                    jj/jj! (jj-scripted [])]
+        (let [left (:ctx (carried ctx))]
+          (is (= [{:layer "lower" :handed ["h-lower"] :exit-code 1}] (:launch-failed left))))))))
+
 (deftest a-launch-that-never-started-is-its-own-outcome-and-keeps-its-exit
   ;; Filed under :declined, the vocabulary's word for a fixer that read the
   ;; finding and refused, a launch claude killed at the door — `Session ID …
@@ -2411,7 +2527,7 @@
                   layers/current-op         (fn [_] "0a1b2c3d")
                   layers/position-for-fix!  (fn [_ layer]
                                               (throw (ex-info (str "cannot position " (:bookmark layer))
-                                                              {:reason :review-failed})))
+                                                              {:reason :stack-unmovable})))
                   layers/restore-top!       (fn [_ s] (swap! restored conj (:bookmark (last s))))
                   agent/launch!             (fn [_] {:num-turns 1})]
       (let [e (is (thrown? clojure.lang.ExceptionInfo
@@ -2426,7 +2542,7 @@
 (deftest fix-stage-restore-failure-never-masks-the-original-diagnosis
   (with-redefs [stages/session-stack     (fn [& _] [{:bookmark "sess--top" :slug "top" :tip "c1"}])
                 layers/current-op        (fn [_] "0a1b2c3d")
-                layers/position-for-fix! (fn [& _] (throw (ex-info "the real problem" {:reason :review-failed})))
+                layers/position-for-fix! (fn [& _] (throw (ex-info "the real problem" {:reason :stack-unmovable})))
                 layers/restore-top!      (fn [& _] (throw (ex-info "restore also failed" {})))
                 agent/launch!            (fn [_] {:num-turns 1})]
     (let [e (is (thrown? clojure.lang.ExceptionInfo

@@ -698,6 +698,13 @@
    ;; with the branch; the round just reviewed a state that stopped being
    ;; current, so the answer is to run it again, not to ask a human anything.
    :workspace-drifted    :retry
+   ;; jj refused a step on the stack after the review had run. Machinery, and
+   ;; not :retry, for :fix-launch-failed's reason and one of its own. What jj
+   ;; refuses — a stale copy, a bookmark it will not move — does not lift inside
+   ;; a five-second backoff, and every retry buys a round of reviewers to reach
+   ;; it. And the refusal can strand the working copy mid-stack, where a re-run
+   ;; reviews a truncated branch and reports it as the whole one.
+   :stack-unmovable      :escalate
 
    ;; The stage attached to a holder doing its work, and that run ended without
    ;; a readable terminal. Nothing was answered and the claim is gone, so the

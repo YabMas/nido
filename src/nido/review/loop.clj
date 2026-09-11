@@ -25,22 +25,28 @@
    their own too, and those are NOT here: they reach a different ledger event,
    under no enum this one can drift from."
   #{:converged :unresolved :escalated :unfixable :no-progress :max-iters
-    :review-failed :reviewer-unavailable})
+    :review-failed :reviewer-unavailable :stack-unmovable})
 
-(def ^:private review-failure-reasons
-  "The `:reason`s a review stage throws with — each of which is also the status
-   the run ends on.
+(def ^:private terminal-reasons
+  "The `:reason`s a stage throws with that END the run rather than crash it —
+   each of which is also the status the run ends on.
 
-   No review happened either way; they are split by whether the REVIEWER could be
-   run at all, which is the difference between a diff someone should open and a
-   quota or a credential they must clear first. `nido.review.codex/unavailability`
-   is what derives the second and carries the sentence that said so.
+   Split first by whether a review happened. `:review-failed` and
+   `:reviewer-unavailable` are a review stage that produced none, split again by
+   whether the REVIEWER could be run at all, which is the difference between a
+   diff someone should open and a quota or a credential they must clear first;
+   `nido.review.codex/unavailability` derives the second and carries the
+   sentence that said so. `:stack-unmovable` is jj refusing a step the loop
+   needed on the stack AFTER the reviewers had read it and the warden had ruled
+   — see `nido.review.layers/refusal`. That round's review stands; filed under
+   `:review-failed` it would read as one that never happened, and send its
+   reader to check a quota first.
 
    Read at two moments for one throw — the phase event that records what stopped
    the round, and the run's own terminal status — so a reason admitted by one and
    not the other would emit an error the report keeps and then crash the loop out
    from under it."
-  #{:review-failed :reviewer-unavailable})
+  #{:review-failed :reviewer-unavailable :stack-unmovable})
 
 (def default-pipeline
   "review (fan out) -> warden (fan in) -> reshape -> fix (serial).
@@ -224,7 +230,14 @@
    is the pipeline saying which of its stages produces the judgement a run may
    end on, and a run that ends there ends on a judgement rather than on a
    repair — so every repair it reports as failed was actually tested, and it
-   spends no round repairing a finding it is about to report as immovable."
+   spends no round repairing a finding it is about to report as immovable.
+
+   A throw on one of `terminal-reasons` leaves carrying the round it was in, as
+   `:ctx` on its ex-data: the ctx the stage put there itself, or else the one
+   the stage was handed — which holds everything the stages before it did this
+   round. Only the first reaches the phase event, because it is the stage's own
+   account of itself and the second is not: folded as one, it would overwrite
+   what the phase had already recorded with what the phase was given."
   [ctx pipeline emit clock judged-after end? open?]
   (reduce
    (fn [ctx stage]
@@ -233,11 +246,14 @@
      (let [ctx' (try
                   ((:run stage) ctx)
                   (catch clojure.lang.ExceptionInfo e
-                    (when (review-failure-reasons (:reason (ex-data e)))
-                      (emit {:event :phase-errored :iter (:iter ctx)
-                             :phase (:name stage) :error (ex-message e)
-                             :at (str (clock))}))
-                    (throw e)))]
+                    (let [data (ex-data e)]
+                      (if (terminal-reasons (:reason data))
+                        (do (emit (cond-> {:event :phase-errored :iter (:iter ctx)
+                                           :phase (:name stage) :error (ex-message e)
+                                           :at (str (clock))}
+                                    (:ctx data) (assoc :ctx (:ctx data))))
+                            (throw (ex-info (ex-message e) (update data :ctx #(or % ctx)) e)))
+                        (throw e)))))]
        (emit {:event :phase-finished :iter (:iter ctx') :phase (:name stage)
               :ctx ctx' :at (str (clock))})
        (cond
@@ -295,7 +311,11 @@
 
    A round's ctx is rebuilt from scratch. `:carry` is the only channel a stage
    has to reach the next round, and it survives onto the terminal ctx too — see
-   the comment on ctx0."
+   the comment on ctx0.
+
+   A stage that throws on one of `terminal-reasons` ends the run on that status
+   and on the round as far as it got: the ctx it puts on the ex-data as `:ctx`,
+   if it has an account of its own partial work to give — see `run-pipeline`."
   [{:keys [run-id max-iters pipeline emit clock finding-key attempt-key
            attempted? judged-after open? changed?] :as config
     :or   {emit (fn [_]) clock #(Instant/now)
@@ -337,12 +357,21 @@
                    (run-pipeline ctx0 pipeline emit clock judged-after end? open?)
                    (catch clojure.lang.ExceptionInfo e
                      (let [{:keys [reason] :as data} (ex-data e)]
-                       (if (review-failure-reasons reason)
+                       (if (terminal-reasons reason)
+                         ;; On the round the throw came out of, not on ctx0.
+                         ;; ctx0 is this round before any stage ran: finalized
+                         ;; on it, a fix stage that throws after three fixers
+                         ;; have reported success ends the run holding none of
+                         ;; the round's findings, rulings, repairs or standing,
+                         ;; and publishes `fix-attempts 0` over a branch they
+                         ;; rewrote.
+                         ;;
                          ;; `:unavailable` rides across opaque. The engine is
                          ;; told what stopped the run and carries the words
                          ;; without reading them, which is what keeps it shared
                          ;; with pipelines that have no reviewer at all.
-                         (merge (assoc ctx0 :status reason :error (ex-message e))
+                         (merge (assoc (or (:ctx data) ctx0)
+                                       :status reason :error (ex-message e))
                                 (select-keys data [:unavailable]))
                          (throw e)))))
             final (or (when (:status ctx) ctx)

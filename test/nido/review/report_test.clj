@@ -369,6 +369,59 @@
          layer the stop never reached")
     (is (= [row] (->> r :rounds first :phases (some #(when (= "fix" (:phase %)) %)) :stranded)))))
 
+(deftest a-fix-phase-that-threw-still-says-what-it-did
+  ;; review-1e4b6342's fix phase held one key, `error`, for a phase that ran
+  ;; 36 minutes and launched three fixers — and the summary read
+  ;; `fix-attempts 0` off it. The account the stage carried out is folded the
+  ;; way a finished phase's is, under the error rather than instead of it.
+  (let [msg "could not return the working copy to the top of the stack"
+        r   (drive
+             [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+              {:event :phase-started :iter 1 :phase :fix :at "t1"}
+              {:event :phase-errored :iter 1 :phase :fix :at "t2" :error msg
+               :ctx {:history [{:iter 1 :fixed-count 1
+                                :fixes [{:layer "lower" :commit "c1" :handed ["aa11"]
+                                         :fixed-count 1}]}]
+                     :fixes [{:layer "lower" :commit "c1" :handed ["aa11"] :fixed-count 1}]
+                     :stranded [{:layer "middle" :handed ["bb22"]}]
+                     :unattempted [{:layer "upper" :handed ["cc33" "dd44"]}]}}
+              {:event :run-finalized :status :stack-unmovable :ctx {} :at "t3"}])
+        fix (first (:phases (first (:rounds r))))]
+    (is (= "error" (:status fix)) "it is still the phase that failed")
+    (is (= msg (:error fix)))
+    (is (= ["lower"] (mapv :layer (:fixes fix))))
+    (is (= [{:layer "upper" :handed ["cc33" "dd44"]}] (:unattempted fix))
+        "the layer it never reached, rather than the absence of an err.log")
+    (is (= 2 (:fix-attempts (:summary r)))
+        "the landed repair and the stranded fixer were both dispatched; the owed
+         layer was not")
+    (is (= {:round 1 :phase "fix" :message msg} (report/errored r))
+        "and the run can name where it stopped, which is what its readers title it by")))
+
+(deftest an-errored-phase-with-no-account-keeps-the-rows-it-had
+  ;; The engine hands over no ctx for a stage that gave none. If it handed the
+  ;; one the stage was GIVEN, folding it would replace the rows the round seeded
+  ;; before any reviewer ran with the empty ones that ctx implies.
+  (let [r  (drive
+            [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+             {:event :phase-started :iter 1 :phase :review :at "t1"}
+             {:event :targets-resolved :iter 1 :base-rev "B" :files ["a.clj"]
+              :targets [{:label "lower" :index 1 :status "pending"}]}
+             {:event :phase-errored :iter 1 :phase :review :at "t2"
+              :error "codex review failed"}
+             {:event :run-finalized :status :review-failed :ctx {} :at "t3"}])
+        ph (first (:phases (first (:rounds r))))]
+    (is (= ["lower"] (mapv :label (:layers ph))))
+    (is (= {:round 1 :phase "review" :message "codex review failed"} (report/errored r)))))
+
+(deftest a-run-no-phase-of-which-threw-names-no-error
+  (is (nil? (report/errored
+             (drive [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+                     {:event :phase-started :iter 1 :phase :review :at "t1"}
+                     {:event :phase-finished :iter 1 :phase :review :at "t2"
+                      :ctx {:findings []}}
+                     {:event :run-finalized :status :clean :ctx {} :at "t3"}])))))
+
 (deftest a-report-that-filed-a-dead-launch-as-a-decline-still-counts-it-as-none
   ;; report.json outlives the code that wrote it, and a later run re-summarizes
   ;; one it settles as an orphan — so a launch that never started, recorded as a

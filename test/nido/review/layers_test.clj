@@ -96,9 +96,13 @@
       (layers/position-for-fix! "/w" nil)
       (is (= [] @calls)))))
 
-(deftest position-for-fix-throws-review-failed-when-jj-refuses
+(deftest position-for-fix-throws-stack-unmovable-when-jj-refuses
+  ;; Not :review-failed. A layer is positioned for a fixer after its round's
+  ;; reviewers have read it and the warden has ruled, and :review-failed is the
+  ;; status that says no review happened — the one that sends a reader to check
+  ;; a quota before they open anything.
   (with-redefs [jj/jj! (fn [& _] {:exit 1 :out "" :err "no such revision"})]
-    (is (= :review-failed
+    (is (= :stack-unmovable
            (try (layers/position-for-fix! "/w" {:bookmark "sess--l1" :tip "c2"})
                 nil
                 (catch clojure.lang.ExceptionInfo e (:reason (ex-data e))))))))
@@ -150,7 +154,7 @@
       (let [e (is (thrown? clojure.lang.ExceptionInfo
                            (layers/land-fix! "/w" {:bookmark "sess--l1"} "msg")))]
         (is (str/includes? (ex-message e) "move sess--l1 onto its fix"))
-        (is (= :review-failed (:reason (ex-data e))))))
+        (is (= :stack-unmovable (:reason (ex-data e))))))
     (is (not-any? #(= "log" (first %)) @calls)
         "no commit id is read for a landing that did not happen")))
 
@@ -384,7 +388,7 @@
   (with-redefs [jj/jj! (fn [& _] {:exit 1 :out "" :err "Revision doesn't exist"})]
     (let [e (is (thrown? clojure.lang.ExceptionInfo
                          (layers/restore-top! "/w" [{:bookmark "sess--top"}])))]
-      (is (= :review-failed (:reason (ex-data e))))
+      (is (= :stack-unmovable (:reason (ex-data e))))
       (is (str/includes? (ex-message e) "sess--top")))))
 
 (deftest restore-top-on-a-stale-copy-puts-the-update-before-its-own-remedy

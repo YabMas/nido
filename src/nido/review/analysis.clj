@@ -121,21 +121,25 @@
    zero, because a `sound` verdict over no implementation findings is the
    sentence that says the run is genuinely done.
 
-   `:died-in` is the phase an ORPHAN stopped in, and it is the whole of what
-   separates a harmless one from a dangerous one: a run killed while its fixers
-   were rewriting the branch left a tree nobody vouched for, and one killed while
-   a reviewer was reading left the tree exactly as it found it. `reconcile/settle!`
-   has always computed it — it refuses the next claimant on it — and until it
-   reached here both were filed under the same title."
+   `:died-in` is the phase a run stopped in without finishing it, and it is the
+   whole of what separates a harmless stop from a dangerous one: a run stopped
+   while its fixers were rewriting the branch left a tree nobody vouched for,
+   and one stopped while a reviewer was reading left the tree exactly as it
+   found it. Two ways to get there, and both are read. An ORPHAN's is
+   `reconcile/settle!`'s `:in-flight`, which refuses the next claimant on it; a
+   run the loop closed on a throw names its own, as the report's errored phase
+   (`report/errored`) — without which a run whose `fix` phase threw under three
+   fixers is titled like one that ended on a judgement."
   [{:keys [run-id report-path status rounds fix-attempts defects-settled
            findings-remaining findings-kept remaining-handed remaining-parked
            targets-reviewed targets-skipped unfixable parked standing
-           drift base in-flight design-verdict verdict-implementation
+           drift base in-flight errored design-verdict verdict-implementation
            reviewed-project reviewed-session reviewed-ws-id]}]
   ;; `:in-flight` is the reconciler's reading of an orphan's report and is the
   ;; same value `worth-analysing?` gates on; the phase is the half of it that
   ;; means something to a reader, so it is published and the round is not.
-  (let [died-in (:phase in-flight)
+  ;; `:errored` is the same half of a finished run's own report.
+  (let [died-in (or (:phase in-flight) (:phase errored))
         verdict (some-> design-verdict name)]
     (cond-> {:adapter            :review-run
              :id                 (str run-id)

@@ -83,7 +83,11 @@
   (is (not (nido-review/verdict-worth-running? :review-failed {:findings [{:title "x"}]} nil)))
   (is (not (nido-review/verdict-worth-running? :dry-run {:findings [{:title "x"}]} nil)))
   (is (not (nido-review/verdict-worth-running? :dry-run {} {:invariants ["x"]}))
-      "a dry run changed nothing, so there is nothing to confirm an invariant against"))
+      "a dry run changed nothing, so there is nothing to confirm an invariant against")
+  (is (not (nido-review/verdict-worth-running? :stack-unmovable {:findings [{:title "x"}]}
+                                               {:invariants ["x"]}))
+      "a run jj stopped mid-step left the working copy wherever the refusal did,
+       and the pass would judge that tree as the branch"))
 
 (deftest verdict-prompt-foregrounds-structural-findings
   (let [p (verdict/build-prompt

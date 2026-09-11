@@ -3235,10 +3235,11 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
       (try (spit path p) path (catch Throwable _ nil)))))
 
 (defn- stranded-row
-  "A fixer that ran and whose outcome the stage never settled, because the
-   workspace moved while it ran. Its repair is in no commit — the stage stopped
-   before `land-fix!` — so `:patch` is the only copy of it the run keeps, and
-   `:account` the only reading of it."
+  "A fixer that ran and whose outcome the stage never settled: the workspace
+   moved while it ran, or jj refused a step before its repair landed. Its
+   repair is on no layer — the stage stopped before `land-fix!` returned — so
+   `:patch` is the only copy of it the run keeps, and `:account` the only
+   reading of it."
   [label handed patch result-text timed-out? wall]
   (cond-> {:layer label :handed handed}
     patch                                (assoc :patch patch)
@@ -3326,6 +3327,49 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                                   :sweep (boolean (:sweep f))})
                          findings)))
 
+(defn- with-round-history
+  "`ctx` with this round entered in `:history` when it landed a fix — the only
+   channel that carries a round's account to the termination check and to the
+   readers of the run's final value. A round that landed nothing enters nothing,
+   and one that did enters it however the plan ended: run through, stopped, or
+   thrown out of part-way."
+  [ctx]
+  (if (seq (:fixes ctx))
+    (update ctx :history (fnil conj [])
+            {:iter (:iter ctx)
+             :fixes (:fixes ctx)
+             :fixed-count (reduce + 0 (map :fixed-count (:fixes ctx)))
+             :findings (:findings ctx)
+             ;; What the reviewers of THIS round read, so the next round can ask
+             ;; whether these fixes reached the code. See `round-changed?`.
+             :patch-hashes (:patch-hashes ctx)
+             :warden (:warden ctx)})
+    ctx))
+
+(defn- with-round-carried
+  "Run `f`, the fix plan, and let an ExceptionInfo out of it leave carrying
+   `@!left` — the round as the plan last knew it — on its ex-data as `:ctx`.
+
+   The engine ends a run on the round a terminal throw carries, and without one
+   it has only the round as this stage received it: before any fixer ran. A
+   plan that throws on its third layer after three fixers have each reported
+   success is then published as `fix-attempts 0`, with the landed repair, the
+   unsettled one and the layer never reached recorded nowhere. See
+   `nido.review.loop/run-pipeline`.
+
+   `!left` is written by the plan itself, each time a layer's outcome changes
+   class — owed, launched and unsettled, landed, landed onto a conflict,
+   declined, never started — so a throw between two of those points reports the
+   first. What a throw carries is therefore only what the stage knew, and every
+   layer after the one it stopped on is `:unattempted`."
+  [!left f]
+  (try
+    (f)
+    (catch clojure.lang.ExceptionInfo e
+      (if-let [left @!left]
+        (throw (ex-info (ex-message e) (assoc (ex-data e) :ctx (with-round-history left)) e))
+        (throw e)))))
+
 (defn- fixer-system-prompt
   "The live-session block a fixer is launched with, or nil.
 
@@ -3391,14 +3435,26 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
         ;; "the fixer never started" and "the fixer read it and said no", and a
         ;; reader could not tell which had happened.
         (assoc ctx :control :stop :status :fix-unrouted)
-        (let [ctx'
+        (let [;; The round as the plan last knew it, for a throw to carry out of
+              ;; the stage — see `with-round-carried`. `left!` records `a` with
+              ;; every plan entry from `from` on still owed, and answers `a`.
+              !left (volatile! nil)
+              left! (fn [a from]
+                      (vreset! !left (assoc a :unattempted (unattempted-tail plan from)))
+                      a)
+              ctx'
               (with-working-copy-restored
                cwd stack
-               #(reduce
+               (fn []
+                (with-round-carried
+                 !left
+                 #(reduce
                ;; Indexed, because where in the plan the stage stopped is the
                ;; only thing that says which fixers it never reached.
                (fn [acc [i {:keys [label layer findings]}]]
-                 (let [;; The point this attempt rolls back to, taken BEFORE the
+                 (let [;; Owed, with nothing launched for it yet.
+                       _      (left! acc i)
+                       ;; The point this attempt rolls back to, taken BEFORE the
                        ;; insert so that undoing it undoes the whole attempt —
                        ;; the inserted commit, the fixer's edits, the describe
                        ;; and the bookmark move — rather than half of one.
@@ -3491,6 +3547,14 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                        ;; within seconds of the insert.
                        patch  (when ran?
                                 (save-fixer-patch! cwd start run-id label (:iter ctx)))
+                       ;; Ran, and settled as nothing yet: what it wrote is in
+                       ;; `patch` and on no layer, until a branch below lands it
+                       ;; or finds it wrote nothing.
+                       stranded (when ran?
+                                  (left! (update acc :stranded (fnil conj [])
+                                                 (stranded-row label handed patch
+                                                               result-text timed-out? wall))
+                                         (inc i)))
                        moved  (when ran? (workspace-moved cwd seat))]
                    (cond
                      ;; The workspace moved while the fixer ran. Nothing below
@@ -3500,10 +3564,7 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                      ;; row of the round's account that is neither landed nor
                      ;; refused nor declined.
                      moved
-                     (reduced (drift-stop (update acc :stranded (fnil conj [])
-                                                  (stranded-row label handed patch
-                                                                result-text timed-out? wall))
-                                          (:reviewed-at ctx) moved plan (inc i)))
+                     (reduced (drift-stop stranded (:reviewed-at ctx) moved plan (inc i)))
 
                      :else
                    (if (and ran? (working-copy-dirty? cwd))
@@ -3511,7 +3572,6 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                                 cwd layer
                                 (str "review-loop: iter " (:iter ctx) " fixes"
                                      (when label (str " (" label ")"))))
-                           _   (layers/restore-top! cwd stack)
                            ;; :account is what the fixer SAID, kept on the
                            ;; branch where it landed something and not only where
                            ;; it refused. A repair and a blocked verification
@@ -3535,6 +3595,9 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                                  (not (str/blank? (str result-text)))
                                  (assoc :account (str result-text))
                                  timed-out? (assoc :timed-out? true :budget wall))
+                           ;; On its layer from here, whatever jj answers next.
+                           _   (left! (update acc :fixes (fnil conj []) fix) (inc i))
+                           _   (layers/restore-top! cwd stack)
                            ;; A fix lands by REWRITING its layer, so jj rebases
                            ;; every layer above it, and a rebase can conflict.
                            ;; Nothing asked. The markers rode up the stack in the
@@ -3560,7 +3623,14 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                          ;; bottom→top order true where it used to be merely
                          ;; intended: the layer that would have moved under the
                          ;; fixers above has been put back.
-                         (do (layers/restore-op! cwd op)
+                         ;;
+                         ;; Until the re-read below says whether the rollback
+                         ;; took, what the stage knows is the conflict.
+                         (do (left! (-> acc
+                                        (update :fixes (fnil conj []) fix)
+                                        (assoc :conflicted (vec bad)))
+                                    (inc i))
+                             (layers/restore-op! cwd op)
                              (if-let [still (seq (layers/conflicted cwd base))]
                                ;; `restore-op!` is best-effort by design, so whether
                                ;; it took is asked rather than assumed. It did not:
@@ -3602,13 +3672,15 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                        ;; Nothing is carried as an argument; the launch record is
                        ;; what tells the next warden, and `unlaunchable` what ends
                        ;; the run if it keeps happening.
-                       (do (layers/restore-top! cwd stack)
-                           (update acc :launch-failed (fnil conj [])
-                                   (cond-> {:layer label :handed handed}
-                                     (some? exit-code)
-                                     (assoc :exit-code exit-code)
-                                     (not (str/blank? (str result-text)))
-                                     (assoc :reason (str result-text)))))
+                       (let [acc (left! (update acc :launch-failed (fnil conj [])
+                                                (cond-> {:layer label :handed handed}
+                                                  (some? exit-code)
+                                                  (assoc :exit-code exit-code)
+                                                  (not (str/blank? (str result-text)))
+                                                  (assoc :reason (str result-text))))
+                                        (inc i))]
+                         (layers/restore-top! cwd stack)
+                         acc)
                      ;; The fixer ran and left the tree unchanged. That is a
                      ;; decision it made and explained, and the explanation was the
                      ;; only account of why a round did nothing — discarded here,
@@ -3618,60 +3690,50 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                            ;; and the argument it might have made was never
                            ;; emitted; carrying its empty account would tell the
                            ;; next warden a fixer had made a case nobody made.
-                           argued? (not (str/blank? (str result-text)))]
+                           argued? (not (str/blank? (str result-text)))
+                           acc
+                           (cond-> (update acc :declined (fnil conj [])
+                                           ;; :handed for the same reason it is on a
+                                           ;; landed fix and on an unattempted layer:
+                                           ;; the lists are one account of every :fix
+                                           ;; ruling the round held, and they add up
+                                           ;; only if the finding ids are under one
+                                           ;; key.
+                                           ;;
+                                           ;; :timed-out? is what makes a row with no
+                                           ;; `:reason` legible. Every other row of
+                                           ;; that shape is a fixer that ran and said
+                                           ;; nothing; this one is a fixer whose
+                                           ;; account was still in the process when
+                                           ;; the budget destroyed it, and the
+                                           ;; findings it was handed stand for want of
+                                           ;; time rather than on an argument.
+                                           (cond-> {:layer label :handed handed}
+                                             result-text (assoc :reason (str result-text))
+                                             timed-out?  (assoc :timed-out? true :budget wall)))
+                             ;; Into :carry, the only thing a round hands the next
+                             ;; one. A refusal leaves its finding at :fix, so without
+                             ;; this the argument reaches report.json and no reader —
+                             ;; not the warden that could settle it, not the session
+                             ;; that would otherwise have to build it again.
+                             argued?
+                             (assoc-in [:carry :fixer-declines label]
+                                       {:layer label
+                                        :since (:iter ctx)
+                                        :reason (str result-text)
+                                        ;; Named by handle where the warden gave one,
+                                        ;; exactly as :handed is, so the carry and the
+                                        ;; report row point at one finding rather than
+                                        ;; at two spellings of it a round apart.
+                                        :findings (mapv (fn [f]
+                                                          {:id (or (:handle f) (:id f))
+                                                           :title (:title f)})
+                                                        findings)}))]
+                       (left! acc (inc i))
                        (layers/restore-top! cwd stack)
-                       (cond-> (update acc :declined (fnil conj [])
-                                       ;; :handed for the same reason it is on a
-                                       ;; landed fix and on an unattempted layer:
-                                       ;; the lists are one account of every :fix
-                                       ;; ruling the round held, and they add up
-                                       ;; only if the finding ids are under one
-                                       ;; key.
-                                       ;;
-                                       ;; :timed-out? is what makes a row with no
-                                       ;; `:reason` legible. Every other row of
-                                       ;; that shape is a fixer that ran and said
-                                       ;; nothing; this one is a fixer whose
-                                       ;; account was still in the process when
-                                       ;; the budget destroyed it, and the
-                                       ;; findings it was handed stand for want of
-                                       ;; time rather than on an argument.
-                                       (cond-> {:layer label :handed handed}
-                                         result-text (assoc :reason (str result-text))
-                                         timed-out?  (assoc :timed-out? true :budget wall)))
-                         ;; Into :carry, the only thing a round hands the next
-                         ;; one. A refusal leaves its finding at :fix, so without
-                         ;; this the argument reaches report.json and no reader —
-                         ;; not the warden that could settle it, not the session
-                         ;; that would otherwise have to build it again.
-                         argued?
-                         (assoc-in [:carry :fixer-declines label]
-                                   {:layer label
-                                    :since (:iter ctx)
-                                    :reason (str result-text)
-                                    ;; Named by handle where the warden gave one,
-                                    ;; exactly as :handed is, so the carry and the
-                                    ;; report row point at one finding rather than
-                                    ;; at two spellings of it a round apart.
-                                    :findings (mapv (fn [f]
-                                                      {:id (or (:handle f) (:id f))
-                                                       :title (:title f)})
-                                                    findings)}))))))))
-                 ctx (map-indexed vector plan)))
-              ctx' (if (seq (:fixes ctx'))
-                     (update ctx' :history (fnil conj [])
-                             {:iter (:iter ctx')
-                              :fixes (:fixes ctx')
-                              :fixed-count (reduce + 0 (map :fixed-count (:fixes ctx')))
-                              :findings (:findings ctx')
-                              ;; What the reviewers of THIS round read, so the
-                              ;; next round can ask whether these fixes reached
-                              ;; the code. `:history` is the only channel that
-                              ;; carries a round's account to the termination
-                              ;; check; see `round-changed?`.
-                              :patch-hashes (:patch-hashes ctx')
-                              :warden (:warden ctx')})
-                     ctx')]
+                       acc))))))
+                 ctx (map-indexed vector plan)))))
+              ctx' (with-round-history ctx')]
           (cond
             ;; The plan stopped itself on a moved workspace, and the stop it
             ;; built is the account: every reading below would restate a round

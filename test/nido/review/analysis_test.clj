@@ -159,8 +159,20 @@
     (is (str/includes? (:title p) "died in review")))
   (let [p (analysis/payload a-run)]
     (is (not (contains? p :died-in))
-        "a run that closed its own rounds stopped in no phase — `:in-flight` is
-         the reconciler's reading of a report that never ended")))
+        "a run that closed its own rounds on a judgement stopped in no phase —
+         `:in-flight` is the reconciler's reading of a report that never ended")))
+
+(deftest a-run-the-loop-closed-on-a-crash-is-titled-as-one
+  ;; review-1e4b6342 was not an orphan: its fix stage threw and the loop closed
+  ;; the run cleanly on it. The title read like a run that had judged the branch,
+  ;; over a fix phase that had crashed under three fixers.
+  (let [p (analysis/payload (assoc a-run :status :stack-unmovable :rounds 1
+                                   :errored {:round 1 :phase "fix"
+                                             :message "could not read what the fixer wrote"}))]
+    (is (= "fix" (:died-in p)))
+    (is (str/includes? (:title p) "died in fix")
+        "the same words an orphan killed mid-rewrite gets, because the branch was
+         left the same way")))
 
 (deftest a-run-with-no-session-still-builds-a-payload
   ;; The loop runs anywhere `jj` does, including a checkout nido never
