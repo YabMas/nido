@@ -255,12 +255,15 @@
         (let [[id _] (ledger)]
           (is (= :pickup (:intake (p/of :brian id))))))
 
-      (testing "a triage entry states the goal, so a design may cite it"
+      (testing "a triage says HOW the work arrived, and states no goal"
         (let [[id add!] (ledger)]
           (add! :triage a-triage)
-          (is (= :triaged (:intake (p/of :brian id))))
-          (is (= :intent-stated (:at (p/of :brian id)))
-              "triage states the goal, so no separate intent is owed")))
+          (is (= :triaged (:intake (p/of :brian id)))
+              "how it arrived is still read off the triage — that is what
+               intake-kind is for, and it is a fact about the workstream")
+          (is (= :intake (:at (p/of :brian id)))
+              "but the goal is not: a triage proposes candidate directions, so a
+               triaged workstream still owes an intent before a unit begins")))
 
       (testing "a Slack proposal is a proposal, never a decision"
         (let [[id add!] (ledger)]
@@ -339,7 +342,7 @@
   (let [a (p/arc (kinds->entries [:intent]))]
     (is (= p/arc-stages (mapv :stage (:stages a)))
         "every stage renders, in arc order, whether or not it holds anything")
-    (is (= [:current :ahead :ahead :ahead :ahead :ahead :ahead :ahead]
+    (is (= [:current :ahead :ahead :ahead :ahead :ahead]
            (mapv :state (:stages a)))
         "the only staged entry names the current stage; the rest are unreached")))
 
@@ -424,8 +427,13 @@
   (let [es (kinds->entries [:intent :baseline :design])
         open   (into {} (map (juxt :stage :state)) (:stages (p/arc es)))
         closed (into {} (map (juxt :stage :state)) (:stages (p/arc es {:closed? true})))]
-    (is (= :ahead (open :shipping))   "still open: the arc has not reached it")
-    (is (= :skipped (closed :shipping)) "closed: it is over, record or no record")
+    (is (= :ahead (open :implementation))
+        "still open: the arc has not reached it")
+    (is (= :skipped (closed :implementation))
+        "closed: it is over, record or no record")
+    (is (nil? (open :shipping))
+        "and shipping is no stage of this arc at all — a landing is the
+         workstream's, never one unit's")
     (is (not-any? #(= :ahead %) (vals closed)))
     (is (= :current (open :design))   "still open: the trail ends on the design")
     (is (= :done (closed :design))
@@ -689,13 +697,14 @@
       (let [s (by (p/arc es))]
         (is (= :done (:implementation s)))
         (is (= :current (:review s)))
-        (is (= :ahead (:publication s)))))
+        (is (nil? (:publication s)))))
     (testing "and from the re-entry point upward they are stale"
       (let [s (by (p/arc es {:re-entry :implementation}))]
         (is (= :done (:approval s)) "below the line, untouched")
         (is (= :stale (:implementation s)))
         (is (= :stale (:review s)))
-        (is (= :ahead (:publication s)) "a stage holding nothing is not stale")))
+        (is (nil? (:publication s))
+            "publication left the unit's spine with shipping")))
     (testing "closure wins — a finished workstream owes nothing"
       (let [s (by (p/arc es {:re-entry :implementation :closed? true}))]
         (is (= :done (:implementation s)))))))
@@ -723,3 +732,30 @@
                 "and the redone work counts — the superseded entry beside it is
                  history, not a debt that can never be paid")
             (is (= :review-implementation (:stage (:next r))))))))))
+
+;; ── A unit spans intent to implementation ──────────────────────────────────
+
+(deftest a-landing-is-not-a-stage-of-the-unit-that-produced-it
+  ;; `/land` collapses a reviewed stack into ONE PR, so a landing can carry
+  ;; several units; `reopen!` clears :closed for the next one while every earlier
+  ;; :merged stays in the ledger. A stage a unit may hold zero, one or many of,
+  ;; about work that is not only its own, is not a stage of that unit.
+  (is (= :landing (p/stage-of :pr-opened)))
+  (is (= :landing (p/stage-of :merged)))
+  (is (= :landing (p/stage-of :ship-submitted)))
+  (is (not-any? #{:publication :shipping :landing} p/arc-stages)
+      "and none of them is on the spine")
+  ;; Where the spine ENDS is this layer's claim; where :review sits within it
+  ;; belongs to the layer that folds it, so this asserts the landing is gone
+  ;; rather than naming the last stage.
+  (is (not-any? #{:landing} (map p/stage-of p/arc-stages))
+      "and no stage on the spine is one a landing maps to"))
+
+(deftest a-landing-is-reported-beside-the-arc-rather-than-in-it
+  (let [a (p/arc [{:kind :intent :seq 1} {:kind :design :seq 2}
+                  {:kind :pr-opened :seq 3} {:kind :merged :seq 4}])]
+    (is (= [:landing] (mapv :stage (:excursions a)))
+        "one excursion holding both records")
+    (is (= 2 (:entries (first (:excursions a)))))
+    (is (not-any? #(= :landing (:stage %)) (:stages a))
+        "and nothing of it on the spine")))

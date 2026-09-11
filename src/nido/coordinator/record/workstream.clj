@@ -274,10 +274,14 @@
    the check belongs here — the one place that holds both the record and the
    ledger it is joining.
 
-   The intent citation accepts two kinds: an :intent entry, or a :triage entry
-   for a workstream whose intent was already written down when the ticket was
-   triaged. Anything else is refused, so a design can never cite a review, a
-   blocker or a baseline as the thing it is for.
+   The intent citation accepts ONE kind. A triage report is not a goal: it
+   proposes candidate directions — `report/Direction` calls each one a branch a
+   human picks BETWEEN — so one report stands for several possible units, and
+   reading it as one unit's goal collapses a fan-out into a scalar. It belongs to
+   the workstream, which is what holds the units a triage gives rise to.
+
+   Anything else is refused too, so a design can never cite a review, a blocker or
+   a baseline as the thing it is for.
 
    Rejecting a dangling ref matters more than it looks: the baseline is the whole
    yardstick, and a :seq pointing at nothing reads downstream exactly like one
@@ -297,14 +301,14 @@
         (check-routes-total! (read-entry-at w n) record))
       (when-let [n (get-in record [:intent :seq])]
         (let [e (->> (:entries w) (filter #(= n (:seq %))) first)]
-          (when-not (#{:intent :triage} (:kind e))
+          (when-not (= :intent (:kind e))
             (throw (ex-info (str "Design cites intent entry " n
-                                 ", which is neither an :intent nor a :triage "
-                                 "entry on this workstream")
+                                 ", which is not an :intent entry on this "
+                                 "workstream")
                             {:seq n
                              :kind (:kind e)
                              :citable (->> (:entries w)
-                                           (filter #(#{:intent :triage} (:kind %)))
+                                           (filter #(= :intent (:kind %)))
                                            (mapv (juxt :seq :kind)))}))))))))
 
 (defn- cites!
@@ -340,8 +344,11 @@
    writable and neither was ever checked — that pair is why this exists at all,
    :supersedes being the one citation in the ledger nothing had an opinion
    about. A baseline's :intent is the fifth, and it accepts what a design's
-   does: an :intent entry, or the :triage entry that already stated the goal on
-   a workstream whose intent was written down when the ticket was triaged."
+   does: an :intent entry and nothing else.
+
+   A :retraction still reaches a :triage, and that is not an exception to the
+   rule above. Retracting says a RECORD is untrue, which a triage report can be;
+   citing one as a goal says a unit is FOR it, which it cannot be."
   [w kind payload]
   (when (#{:retraction :design-approved :design :baseline :intent} kind)
     (let [r (edn/read-string payload)]
@@ -354,7 +361,7 @@
                                  "Design :supersedes")
         :baseline        (do (cites! w r [:supersedes :seq] #{:baseline}
                                      "Baseline :supersedes")
-                             (cites! w r [:intent :seq] #{:intent :triage}
+                             (cites! w r [:intent :seq] #{:intent}
                                      "Baseline :intent"))
         :intent          (cites! w r [:supersedes :seq] #{:intent}
                                  "Intent :supersedes")))))
@@ -392,7 +399,7 @@
    :review          [[:design :seq]]})
 
 (defn- goals-reached
-  "Every goal — an :intent, or the :triage that stated one — that `record`, of
+  "Every goal — an :intent, and only an :intent — that `record`, of
    `kind`, rests on through `rests-on`, however many citations away.
 
    Follows the kind of the entry each citation resolves to, so a design reached
@@ -407,7 +414,7 @@
             k    (->> (:entries w) (filter #(= n (:seq %))) first :kind)]
         (cond
           (contains? seen n)       (recur todo seen goals)
-          (#{:intent :triage} k)   (recur todo (conj seen n) (conj goals n))
+          (= :intent k)            (recur todo (conj seen n) (conj goals n))
           :else
           (recur (into todo (keep #(get-in (read-entry-at w n) %) (rests-on k)))
                  (conj seen n) goals)))
@@ -493,6 +500,92 @@
       ;; later reads as current.
       (cites! w r [:design :seq] #{:design}
               (str (str/capitalize (name kind)) " :design")))))
+
+(def ^:private stands-on
+  "Which citation on each kind reaches the record it stands on.
+
+   A record belongs to the unit its citations reach, so this is the whole of the
+   walk's knowledge about shape. A kind absent here reaches nothing, and every
+   absent kind roots nowhere — a `:triage`, a `:note`, a `:blocker`, a
+   `:review-analysis`. They are the WORKSTREAM's rather than any unit's, and
+   inventing a root for them would put records in units their authors never
+   placed them in."
+  {:intent          [[:supersedes :seq]]
+   :baseline        [[:intent :seq] [:supersedes :seq]]
+   :design          [[:baseline :seq] [:intent :seq] [:supersedes :seq]]
+   :baseline-review [[:baseline-seq]]
+   :design-decision [[:design-seq]]
+   :design-verdict  [[:design-seq]]
+   :design-approved [[:design :seq]]
+   :implementation-completed [[:design :seq]]
+   :review          [[:design :seq]]
+   :pr-opened       [[:design :seq]]
+   :merged          [[:design :seq]]})
+
+(defn- roots-of
+  "Every root this record reaches, as a set. A root is a goal citing no other —
+   an :intent that supersedes nothing. `#{}` means the record reaches none.
+
+   The same ONE kind a baseline's and a design's :intent may cite, and the two
+   sets have to stay equal. A goal kind the citation admits and this walk does
+   not root would make every arc written from it rootless; one this walk roots
+   and the citation refuses could never be reached at all.
+
+   ONE WALK WITH THREE ANSWERS — one root, several, or none — rather than a
+   rule beside the closure that could disagree with it about the same record.
+   Several is refused at the boundary. NONE means the record is the
+   workstream's: a triage report, a note, a blocker, or a record descending from
+   a design written before the citation existed.
+
+   Bounded by the entry count, so a citation cycle cannot spin here."
+  [w record kind]
+  (letfn [(step [k rec depth]
+            (if (or (nil? rec) (neg? depth))
+              #{}
+              (let [paths (get stands-on k)
+                    targets (keep #(get-in rec %) paths)]
+                (if (and (= :intent k) (empty? targets))
+                  ;; A goal citing nothing IS a root — the only kinds that can be.
+                  ;; A goal citing nothing IS a root, and :intent is the only
+                  ;; kind that can be one.
+                  #{(:seq rec)}
+                  (into #{}
+                        (mapcat (fn [n]
+                                  (when-let [e (->> (:entries w)
+                                                    (filter #(= n (:seq %))) first)]
+                                    (step (:kind e) (read-entry-at w n) (dec depth)))))
+                        targets)))))]
+    (step kind record (count (:entries w)))))
+
+(defn- check-one-root!
+  "A record's citations agree on at most one unit.
+
+   Reaching a root is not the same as reaching exactly one, and the difference is
+   the whole partition. A design may cite one intent while the baseline beneath
+   it was scoped for an unrelated other: every citation resolves, every kind is
+   right, and the record roots in two units at once. Nothing else can see that,
+   because every other check reads one citation at a time.
+
+   AT MOST ONE admits NONE, and none is not a defect. A decision or a trail
+   record naming a design from before `:intent` was required cites a record that
+   roots nowhere and inherits that — refusing it would strand every legacy design
+   mid-arc, unable to receive the decision its own rung is owed. Such a record is
+   in the workstream's PRE-CONTRACT REGION, addressed by the workstream because
+   no :seq addresses it.
+
+   Rootlessness is INHERITED and never spontaneous, which is what makes that a
+   boundary rather than a leak: an intent is its own root and so is a triage, a
+   baseline and a design must cite one of the two, and everything else reaches
+   whatever it names. So a rootless record written today descends from one
+   written before the contract, and no new unit is ever opened there."
+  [w kind payload]
+  (when (contains? stands-on kind)
+    (let [roots (roots-of w (edn/read-string payload) kind)]
+      (when (< 1 (count roots))
+        (throw (ex-info (str "This " (name kind) " reaches " (count roots)
+                             " goals — " (str/join ", " (sort roots))
+                             " — so it belongs to no single unit of work")
+                        {:kind kind :roots (vec (sort roots))}))))))
 
 (defn- check-seam-phase-ref!
   "A seam that says a phase closes it names that phase by its :claim. Malli sees
@@ -655,6 +748,27 @@
     (when-let [unindexed (seq (remove indexed (entry-filenames project ws-id)))]
       (vec unindexed))))
 
+(defn ^{:malli/schema [:=> [:cat :Workstream :int] [:maybe :int]]}
+  unit-of
+  "The unit the entry at `seq-n` belongs to, addressed by its root goal's :seq —
+   an :intent — or nil when it belongs to the workstream's
+   pre-contract region.
+
+   RESOLVED, never stored. The citations already connect a record to the goal it
+   descends from, so a field beside them would be a second answer to a question
+   the graph settles — and the one that drifts. It is the same refusal `place`,
+   `reentry` and `standing` all make about their own readings, for the same
+   reason.
+
+   Total over the ledger: every entry answers, and the two honest answers are a
+   :seq and nil. A kind that stands on nothing — a note, a blocker, a review
+   analysis — reaches no root and is reported as pre-contract rather than
+   assigned to whichever unit happens to surround it, because putting a record in
+   a unit its author never placed it in is the error this walk exists to refuse."
+  [w seq-n]
+  (when-let [e (->> (:entries w) (filter #(= seq-n (:seq %))) first)]
+    (first (roots-of w (read-entry-at w seq-n) (:kind e)))))
+
 (defn ^{:malli/schema [:=> [:cat :Workstream] [:maybe :int]]}
   live-design-seq
   "The :seq of the newest :design on `w`, or nil when it holds none.
@@ -731,6 +845,7 @@
             _     (check-standing-citations! w (:kind entry) payload)
             _     (check-goal-is-live! w (:kind entry) payload)
             _     (check-trail-attribution! w (:kind entry) payload)
+            _     (check-one-root! w (:kind entry) payload)
             _     (check-seam-phase-ref! (:kind entry) payload)
             _     (check-implementation-approved! w (:kind entry))
             fname (format "%04d-%s.%s" seq-n (name (:kind entry)) ext)
@@ -781,6 +896,7 @@
                 _     (check-standing-citations! w (:kind entry) payload)
                 _     (check-goal-is-live! w (:kind entry) payload)
                 _     (check-trail-attribution! w (:kind entry) payload)
+                _     (check-one-root! w (:kind entry) payload)
                 _     (check-seam-phase-ref! (:kind entry) payload)
             _     (check-implementation-approved! w (:kind entry))
                 fname (format "%04d-%s.%s" seq-n (name (:kind entry)) ext)

@@ -455,15 +455,18 @@
         (is (= 1 (count (:entries (ws/read-ws :brian (:id w)))))
             "refused before anything is written")))))
 
-(deftest a-baseline-may-cite-a-triage-entry-as-its-intent
-  ;; A workstream whose goal was written down when the ticket was triaged does
-  ;; not restate it — the same two kinds a design's intent citation accepts.
+(deftest a-baseline-may-not-cite-a-triage-entry-as-its-intent
+  ;; A triage report is not a goal. It proposes candidate DIRECTIONS, so one
+  ;; report stands for several possible units and belongs to the workstream that
+  ;; holds them; a unit begins where somebody states what this change is for.
   (with-tmp
     (fn [_]
       (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
         (ws/append-entry! :brian (:id w) {:kind :triage} (pr-str a-triage))
-        (is (some? (ws/append-entry! :brian (:id w) {:kind :baseline}
-                                     (pr-str a-baseline))))))))
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"Baseline :intent cites entry 1"
+             (ws/append-entry! :brian (:id w) {:kind :baseline}
+                               (pr-str a-baseline))))))))
 
 (deftest an-intent-may-supersede-an-earlier-one
   (with-tmp
@@ -668,16 +671,19 @@
         (is (ws/latest-entry :brian (:id w) :design)
             "every design record written before health existed still appends")))))
 
-(deftest a-design-may-cite-a-triage-entry-as-its-intent
+(deftest a-design-may-not-cite-a-triage-entry-as-its-intent
+  ;; The same rule the baseline is held to, and for the same reason: a goal is
+  ;; one kind on every edge — citation, rooting and amendment — so a goal that
+  ;; can be stated can always be amended rather than only abandoned.
   (with-tmp
     (fn [_]
       (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
         (seed-baseline! w)
         (ws/append-entry! :brian (:id w) {:kind :triage} (pr-str a-triage))
-        (ws/append-entry! :brian (:id w) {:kind :design} (pr-str (design-citing 2 3)))
-        (is (= 3 (get-in (ws/latest-entry :brian (:id w) :design) [:intent :seq]))
-            "a workstream whose intent was written down at triage does not
-             restate it")))))
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"not an :intent entry"
+             (ws/append-entry! :brian (:id w) {:kind :design}
+                               (pr-str (design-citing 2 3)))))))))
 
 (deftest a-design-citing-an-entry-that-states-no-intent-is-refused
   (with-tmp
@@ -687,7 +693,7 @@
         (ws/append-entry! :brian (:id w) {:kind :blocker}
                           (pr-str {:format :blocker :summary "s" :needs "n"}))
         (is (thrown-with-msg?
-             clojure.lang.ExceptionInfo #"neither an :intent nor a :triage"
+             clojure.lang.ExceptionInfo #"not an :intent entry"
              (ws/append-entry! :brian (:id w) {:kind :design}
                                (pr-str (design-citing 2 3)))))
         (is (= 3 (count (:entries (ws/read-ws :brian (:id w)))))
@@ -699,7 +705,7 @@
       (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
         (seed-baseline! w)
         (is (thrown-with-msg?
-             clojure.lang.ExceptionInfo #"neither an :intent nor a :triage"
+             clojure.lang.ExceptionInfo #"not an :intent entry"
              (ws/append-entry! :brian (:id w) {:kind :design}
                                (pr-str (design-citing 2 9)))))))))
 
@@ -1173,6 +1179,82 @@
              clojure.lang.ExceptionInfo #"Implementation-completed :design cites entry 2"
              (ws/append-entry! :brian id {:kind :implementation-completed}
                                (pr-str (assoc an-implementation :design {:seq 2})))))))))
+
+(deftest a-workstream-may-hold-two-units-and-every-record-is-in-one
+  (with-tmp
+    (fn [_]
+      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+            id (:id w)
+            add #(do (ws/append-entry! :brian id {:kind %1} (pr-str %2))
+                     (count (:entries (ws/read-ws :brian id))))]
+        ;; unit A, rooted at 1
+        (add :intent an-intent)                                          ; 1
+        (add :baseline a-baseline)                                       ; 2
+        (add :design (design-citing 2))                                  ; 3
+        ;; unit B, rooted at 4 — a second goal citing nothing opens one
+        (add :intent (assoc an-intent :goal "a different story"))        ; 4
+        (add :baseline (assoc a-baseline :intent {:seq 4}))              ; 5
+        (add :design (assoc (design-citing 5) :intent {:seq 4}))         ; 6
+        (let [w (ws/read-ws :brian id)]
+          (is (= [1 1 1 4 4 4] (mapv #(ws/unit-of w %) [1 2 3 4 5 6]))
+              "every record is in exactly one unit, and the two are told apart
+               by the goal each descends from")))))) 
+
+(deftest a-record-reaching-two-goals-is-refused
+  ;; Reaching a root is not reaching exactly one. Every citation resolves, every
+  ;; kind is right — and nothing else can see it, because every other check reads
+  ;; one citation at a time.
+  (with-tmp
+    (fn [_]
+      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+            id (:id w)
+            add #(ws/append-entry! :brian id {:kind %1} (pr-str %2))]
+        (add :intent an-intent)                                          ; 1
+        (add :baseline a-baseline)                                       ; 2  roots at 1
+        (add :intent (assoc an-intent :goal "a different story"))        ; 3  roots at 3
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"reaches 2 goals"
+             (add :design (assoc (design-citing 2) :intent {:seq 3})))
+            "a design over one unit's survey serving another unit's goal
+             belongs to neither")))))
+
+(deftest a-triage-roots-no-unit
+  ;; The kinds a survey's and a design's :intent may cite are the kinds the walk
+  ;; roots at, and that rule is unchanged — what changed is the set. It is
+  ;; `#{:intent}` on both sides, so a triage roots nothing and cannot be cited as
+  ;; a goal: one report proposes several candidate DIRECTIONS, so it stands for
+  ;; several possible units and belongs to the workstream that holds them.
+  (with-tmp
+    (fn [_]
+      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+            id (:id w)]
+        (ws/append-entry! :brian id {:kind :triage} (pr-str a-triage))
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"Baseline :intent cites entry 1"
+             (ws/append-entry! :brian id {:kind :baseline} (pr-str a-baseline)))
+            "a survey may not be scoped for a triage")
+        (is (nil? (ws/unit-of (ws/read-ws :brian id) 1))
+            "and the report itself is the workstream's — no :seq addresses it")))))
+(deftest a-record-that-stands-on-nothing-is-in-the-pre-contract-region
+  ;; The reachable half of `at most one admits none`. A note is beside the arc
+  ;; rather than on it, so it reaches no goal and is reported as pre-contract —
+  ;; never assigned to whichever unit happens to surround it, which is the error
+  ;; the walk exists to refuse.
+  ;;
+  ;; The other half — a legacy design that roots nowhere, and the decisions and
+  ;; trail records inheriting that — cannot be built through this boundary any
+  ;; more, because a design must cite a rooted goal. It exists only on ledgers
+  ;; written before the citation, which is exactly what makes the region a
+  ;; boundary rather than a leak: nothing new can be created inside it.
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :in-progress :external-refs []})]
+        (ws/append-entry! :brian (:id w) {:kind :intent} (pr-str an-intent))
+        (ws/append-entry! :brian (:id w) {:kind :note} "beside the arc")
+        (let [rec (ws/read-ws :brian (:id w))]
+          (is (= 1 (ws/unit-of rec 1)) "the goal roots itself")
+          (is (nil? (ws/unit-of rec 2))
+              "and the note reaches no goal, so no :seq addresses it"))))))
 
 (deftest a-workstream-that-never-designed-may-still-record-an-implementation
   ;; The guard, and the reason the rule is usable at all. Seven of the eighteen

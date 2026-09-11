@@ -178,9 +178,15 @@
    :review          :review
    :review-analysis :review
    :findings        :findings
-   :pr-opened       :publication
-   :ship-submitted  :shipping
-   :merged          :shipping})
+   ;; THE WORKSTREAM'S, not the unit's, and all three share one off-arc stage.
+   ;; A landing is never one unit's work: `/land` collapses a reviewed stack into
+   ;; a single PR, so one :pr-opened and one :merged can carry several units, and
+   ;; `reopen!` clears :closed for the next landing while every earlier :merged
+   ;; stays in the ledger for ever. A stage a unit may hold zero, one or many of,
+   ;; about work that is not only its own, is not a stage of that unit.
+   :pr-opened       :landing
+   :ship-submitted  :landing
+   :merged          :landing})
 
 (defn ^{:malli/schema [:=> [:cat :keyword] [:maybe :keyword]]}
   stage-of
@@ -204,17 +210,27 @@
 (def arc-stages
   "The stages of the arc, in the order a workstream travels them.
 
-   The spine only — somewhere work arrives, does something and leaves a record
-   behind. What is NOT here is in `off-arc`, and the distinction is the reason
-   this is a vector rather than the key set of `stage-of-kind`: a halt is
-   something that happens TO a workstream, not a place it got to, and a line that
-   put it in sequence would say a blocked workstream had advanced to blocked."
-  [:intent :baseline :design :approval :implementation :review :publication :shipping])
+   ONE UNIT OF WORK, from the goal to the change that serves it. It ends at the
+   implementation because a LANDING is not one unit's: `/land` collapses a
+   reviewed stack into a single PR, so one :pr-opened and one :merged can carry
+   several units, and `reopen!` clears :closed for the next landing while every
+   earlier :merged stays in the ledger for ever. Publication and shipping are the
+   workstream's, and are reported beside this rather than in it.
+
+   What is NOT here is in `off-arc`, and the distinction is the reason this is a
+   vector rather than the key set of `stage-of-kind`: a halt is something that
+   happens TO a unit, not a place it got to, and a line that put it in sequence
+   would say a blocked unit had advanced to blocked."
+  [:intent :baseline :design :approval :implementation :review])
 
 (def ^:private off-arc
-  "Stages that interrupt the arc rather than lying on it. Reported beside it and
-   never in it — see `arc-stages`."
-  #{:halt :retraction :findings})
+  "Stages that interrupt the arc rather than lying on it, or sit beside it
+   entirely. Reported beside the spine and never in it — see `arc-stages`.
+
+   `:landing` is the second kind: a halt is something that happens TO a unit,
+   while a landing is the WORKSTREAM's own business, carrying work that may not
+   be one unit's at all."
+  #{:halt :retraction :findings :landing})
 
 (defn ^{:malli/schema [:=> [:cat :any [:? :map]] :any]}
   arc
@@ -503,8 +519,12 @@
     (contains? ks :design)         :designed
     verified?                      :baseline-verified
     (contains? ks :baseline)       :baselined
-    (or (contains? ks :intent)
-        (contains? ks :triage))    :intent-stated
+    ;; A :triage is NOT a goal. It proposes candidate directions and belongs to
+    ;; the workstream; a unit begins where somebody states what this change is
+    ;; for. So a triaged workstream owes an :establish-intent it did not owe
+    ;; before, which is the price of a goal that can be amended rather than only
+    ;; abandoned.
+    (contains? ks :intent)         :intent-stated
 
     ;; A workstream that exists to HOLD a reading, not to do work. The review
     ;; loop mints one per analysed run and files one analysis into it; decisions
