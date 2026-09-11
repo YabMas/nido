@@ -33,11 +33,18 @@
    AGE-GUARDED, and the guard is load-bearing rather than cautious: a session's state directory
    exists for the whole of its boot BEFORE its registry entry is written, so a freshly-untracked
    directory may be a live boot in flight rather than garbage. The grace window is what tells
-   them apart."
-  (Operation reclaim-orphans! "Remove orphaned instance state older than the grace window."
+   them apart.
+
+   PROCESS-GUARDED too, past the window: a directory whose recorded pid still runs is kept,
+   whatever its age. A boot killed before it registered leaves exactly that — a detached JVM whose
+   pid the directory alone holds — and deleting the directory would leave the JVM running with
+   nothing in nido able to see it. Kept directories are returned so the sweep can say so."
+  (Operation reclaim-orphans!
+    "Remove orphaned instance state older than the grace window, sparing any whose recorded
+     process still runs — and return those, since nothing else records them."
     {:signature [:=> [:catn [:opts :map]] :map]
      :delegates [sstate/state-dir sstate/read-registry]})
-  (Operation reclaim! "List orphaned state directories, or delete them when told to."
+  (Operation reclaim! "List orphaned state directories, or delete the ones no running process holds."
     {:signature [:=> [:catn [:opts [:* :any]]] :any]}))
 
 (Module bench-memory

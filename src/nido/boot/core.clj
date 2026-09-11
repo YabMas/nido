@@ -156,12 +156,20 @@
   (when (>= (- now-ms @!last-reclaim-ms) (:reclaim-interval-ms defaults))
     (reset! !last-reclaim-ms now-ms)
     (try
-      (let [deleted (reclaim/reclaim-orphans! {:min-age-ms (:reclaim-min-age-ms defaults)
-                                               :now-ms     now-ms})]
+      (let [{:keys [deleted live]}
+            (reclaim/reclaim-orphans! {:min-age-ms (:reclaim-min-age-ms defaults)
+                                       :now-ms     now-ms})]
         (when (seq deleted)
           (println (str "nido coordinator: auto-reclaimed " (count deleted)
                         " orphan state dir(s): "
-                        (str/join ", " (map first deleted))))))
+                        (str/join ", " (map first deleted)))))
+        ;; Said every sweep, deliberately: each is a process that no session
+        ;; record claims, and this line is the only place it shows up.
+        (when (seq live)
+          (println (str "nido coordinator: kept " (count live)
+                        " orphan state dir(s) whose process still runs unclaimed: "
+                        (str/join ", " (for [[id _ pids] live]
+                                         (str id " (pid " (str/join "," (sort pids)) ")")))))))
       (catch Throwable t
         (binding [*err* *err*]
           (.println ^java.io.PrintWriter *err*
