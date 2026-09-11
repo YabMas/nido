@@ -1555,6 +1555,33 @@
               (apply str))
          "\n")))
 
+(defn- unstarted-block
+  "The layers whose last fixer launch never started — see
+   `nido.review.stages/unstarted-fixers` — and what that does and does not say
+   about the findings they were handed.
+
+   The warden is the reader weighing recurrence, and a finding handed to a
+   process that never took a turn recurs looking exactly like one a fixer failed
+   to move: same handle, same `:fix` ruling, no commit. Read that way it is
+   ground (b) for a park about a defect nobody tried to repair. One run's
+   wardens worked it out round after round from the absence of commits, in
+   prose nothing read."
+  [unstarted]
+  (when (seq unstarted)
+    (str "A FIXER WAS LAUNCHED FOR THESE AND NEVER STARTED\n"
+         "claude refused the launch before the fixer took a turn, so no one has\n"
+         "read these findings. They are untried, not resisted: that they are back\n"
+         "is not a fix that failed, and it is not ground (b). Rule on them as you\n"
+         "would a finding no fixer has seen. `fix` launches that layer again; if\n"
+         "its fixer fails to start twice in a row the run stops on the machinery.\n"
+         (->> unstarted
+              (map (fn [{:keys [layer round exit-code handed]}]
+                     (str "- " (or layer "the branch") ", round " round
+                          (when (some? exit-code) (str " (exit " exit-code ")"))
+                          ": " (str/join ", " handed) "\n")))
+              (apply str))
+         "\n")))
+
 (defn- fixer-accounts-block
   "Every repair this run landed and what the fixer said about it, addressed to
    the one reader that can place a sibling in a layer other than the one that
@@ -1646,7 +1673,7 @@
    to nobody. It is asked for on every answer, not only on a `stop`, because the
    round that turns out to be the last one is not knowable while it is running."
   [{:keys [findings history design stance toc answered seen parked fixer-declines
-           fixer-accounts]}]
+           unstarted fixer-accounts]}]
   ;; A branch with no layers is reviewed flat, and there is then no layer label
   ;; for a finding to be attributed to. Asked for one anyway, the warden supplied
   ;; the only stack-shaped thing it had — a file path — on every ruling of the
@@ -1835,6 +1862,7 @@
                (apply str))
           "\n"))
    (fixer-declines-block fixer-declines)
+   (unstarted-block unstarted)
    (fixer-accounts-block fixer-accounts)
    (seen-block seen)
    "History of prior rounds (findings + what was fixed):\n"

@@ -78,6 +78,11 @@
                ;; first fixer holds nothing else to tell them apart by.
                (seq (:unattempted ph))
                (str (count (:unattempted ph)) " layers never attempted")
+               ;; A fixer was launched and claude refused it before a turn: the
+               ;; tree is untouched because nothing ran, which "no changes" would
+               ;; state as a fixer having looked.
+               (seq (:launch-failed ph))
+               (str (count (:launch-failed ph)) " never started")
                ;; Also before "no changes", and for the same reason: the fixer
                ;; was working when its budget destroyed it, so the tree standing
                ;; where the reviewers left it is a fact about the clock rather

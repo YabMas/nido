@@ -75,6 +75,17 @@
     (is (str/includes? s "1 killed on budget"))
     (is (not (str/includes? s "no changes")))))
 
+(deftest a-fix-phase-whose-fixer-never-started-does-not-report-no-changes
+  ;; The tree is untouched because nothing ran, and "no changes" states that as
+  ;; a fixer having looked.
+  (let [r (assoc-in running-report [:rounds 0 :phases 1]
+                    {:phase "fix" :status "ok" :started-at "2026-06-30T14:00:30Z"
+                     :ended-at "2026-06-30T14:00:31Z"
+                     :launch-failed [{:layer "speech-contract" :handed ["aa11"] :exit-code 1}]})
+        s (render/frame r now)]
+    (is (str/includes? s "1 never started"))
+    (is (not (str/includes? s "no changes")))))
+
 (deftest frame-lists-every-layer-including-the-ones-it-skipped
   ;; A reader who cannot see that a layer was passed over has to take on trust
   ;; that passing over it was safe. Silent truncation reads as coverage.

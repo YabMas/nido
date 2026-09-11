@@ -40,7 +40,7 @@
    layer nobody answered for."
   #{:stack-conflicted :nothing-to-review :clean :warden-indeterminate :unfixable
     :dry-run :workspace-drifted :fix-unrouted :fix-conflicted :fix-rolled-back
-    :fix-declined :fix-timed-out :unresolved})
+    :fix-declined :fix-timed-out :fix-launch-failed :unresolved})
 
 (def ^:private fenced-json-re #"(?s)```json\s*(\{.*?\})\s*```")
 
@@ -98,14 +98,25 @@
    is no evidence that the loop cannot move the defect. Every other ruling
    either dispatches work or ends the finding.
 
+   And a dispatch is a repair only if a fixer RAN. The fix stage stamps
+   `:fixer-ran?` on every finding it handed to a launch, off the same reading
+   that files the launch (see `record-launch`), so a finding whose fixer claude
+   refused at the door reads false here exactly as it is left out of
+   `nido.review.report/fix-attempts`. Unstamped is a round the fix stage has not
+   reached yet — the counter is asked after the warden, before any fixer runs —
+   and there the ruling is all there is.
+
    Read by `nido.review.loop/run-loop`'s give-up counter, which asks how many
    repairs were tried and failed. It counted a parked round as a failure, so a
    defect repaired once and parked in the three rounds after it hit the counter
    at four — a round ahead of `park-persists-for`, and through a door
    `park-blocks?` does not gate, which is where the question of whether a
-   standing park should stop a run was decided."
+   standing park should stop a run was decided. A launch that never started is
+   bounded by `launch-failure-limit` instead, which ends the run on the
+   machinery rather than on the defect."
   [f]
-  (not= :park (:disposition f)))
+  (and (not= :park (:disposition f))
+       (not (false? (:fixer-ran? f)))))
 
 (def ^:private requirements
   "Per disposition, the field it is not a decision without and the values that
@@ -2099,6 +2110,27 @@
                {}
                prior)))
 
+(defn ^{:malli/schema [:=> [:cat :any] [:sequential :map]]}
+  unstarted-fixers
+  "The layers whose LATEST fixer launch never started, one row each, oldest
+   first: `:layer`, the `:round`, what it was `:handed`, and the `:exit-code`
+   where the process left one. Read off the launch record — see `record-launch`.
+
+   Latest, because a layer some later fixer ran on has been attempted since, and
+   the failure before it says nothing about what is open now. What remains is
+   the fact nothing else in the run states: findings the loop ruled `fix` and no
+   process ever read. The warden is shown it rather than left to infer it from a
+   missing commit, and the run's ledger entry carries it, because there the
+   status names the machinery and only this names where it failed."
+  [launches]
+  (->> launches
+       (keep (fn [[label rows]]
+               (let [r (peek (vec rows))]
+                 (when (and r (not (:ran? r)))
+                   (-> r (dissoc :ran?) (assoc :layer label))))))
+       (sort-by (juxt :round (comp str :layer)))
+       vec))
+
 (defn- run-warden-stage
   [ctx]
   (let [{:keys [cwd run-id budget]} (:config ctx)
@@ -2127,6 +2159,7 @@
                  :toc      (:toc ctx)
                  :parked   (vals (get-in ctx [:carry :parks] {}))
                  :fixer-declines (vals (get-in ctx [:carry :fixer-declines] {}))
+                 :unstarted (unstarted-fixers (get-in ctx [:carry :fixer-launches]))
                  ;; Chronological, and flat with the layer named on each row:
                  ;; the warden is being asked to place an account's contents
                  ;; against a layer OTHER than the one it is filed under, so the
@@ -2714,19 +2747,86 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
   (str (java.util.UUID/nameUUIDFromBytes
         (.getBytes (str impl-session-id "|" label) "UTF-8"))))
 
-(defn- worked-before?
-  "Has a fixer already worked this layer in an earlier round? Its session
-   resumes only then — a layer no fixer has opened starts a fresh one.
+(defn- record-launch
+  "`ctx` with one fixer launch entered in the run's launch record, and the
+   findings it was handed stamped with whether it ran.
 
-   A DECLINE counts, and reading only the landed fixes is what made it not.
-   A fixer that refuses changes nothing, so the round writes no history entry
-   for it at all, and the next round put the same finding to a new session
-   holding none of the argument the last one spent its turns building. It then
-   either rebuilt that argument from scratch or made the edit the round before
-   had explained it should not."
-  [history declines label]
-  (boolean (or (contains? declines label)
-               (some (fn [h] (some #(= label (:layer %)) (:fixes h))) history))))
+   The record is `:carry :fixer-launches`: per layer label, every launch the fix
+   stage has made on it this run, oldest first, as `{:round :handed :ran?}` plus
+   the `:exit-code` of one that did not run. It is the one account of whether a
+   fixer ran on a layer, written at launch by the only thing that launches
+   fixers. The outcome lists (`:fixes`, `:rolled-back`, `:declined`,
+   `:launch-failed`) say what a launch PRODUCED; each holds only some of the
+   launches that ran, so a reader asking whether one ran at all reconstructs the
+   answer from them and misses whichever list it did not read.
+
+   Never pruned. A session once opened stays opened whatever later becomes of
+   the findings it was opened for — which is why this is not one of the
+   channels `carried-while-open` trims.
+
+   The stamp, `:fixer-ran?` on each handed finding, is the same fact filed per
+   finding, because a finding is all the give-up counter is handed; see
+   `repair-attempted?`. Keyed by handle-or-id, as `:handed` is."
+  [ctx label handed ran? exit-code]
+  (let [ids (set handed)]
+    (-> ctx
+        (update-in [:carry :fixer-launches label] (fnil conj [])
+                   (cond-> {:round (:iter ctx) :handed handed :ran? ran?}
+                     (and (not ran?) (some? exit-code)) (assoc :exit-code exit-code)))
+        (update :findings
+                (partial mapv #(cond-> %
+                                 (contains? ids (or (:handle %) (:id %)))
+                                 (assoc :fixer-ran? ran?)))))))
+
+(defn- session-opened?
+  "Has a fixer on this layer opened its claude session this run? Its next launch
+   resumes that session only then, and records a new one otherwise.
+
+   This is a question about claude's session store, not about what the last
+   fixer produced: `--session-id` is refused for an id claude already holds and
+   `--resume` for one it has never seen, and either refusal kills the launch
+   before a turn. So it is read off the launch record, where every launch that
+   ran is entered whatever came of it — a landed repair, one the stack rolled
+   back, an argued refusal, a silent one, a fixer the budget killed. Read off
+   the outcome lists instead, a layer is re-issued an id claude already holds
+   whenever its last fixer's outcome is one the reader skipped or one that was
+   pruned when its findings settled, and every launch after that dies at the
+   door.
+
+   So a fixer the budget killed with nothing written RESUMES, carrying the lap
+   the kill cut short into its next launch. That is the price of one session per
+   layer: the only other launch on the same id is one that does not start.
+
+   A launch that took no turn is not counted as having opened anything. If it
+   did, the next launch is refused, and that refusal is a launch failure like
+   any other, bounded by `launch-failure-limit`."
+  [launches label]
+  (boolean (some :ran? (get launches label))))
+
+(def ^:private launch-failure-limit
+  "How many launches in a row on one layer may produce no running fixer before
+   the run stops over it, on `:fix-launch-failed`.
+
+   Needed because the give-up counter does not count such a launch — nothing
+   was tried, and `repair-attempted?` says so — so a layer whose fixer never
+   starts would otherwise be dispatched to in every round the rest of the stack
+   lands a repair in, with nothing to end the run over it. Two, because one can
+   be the machinery failing once, and the next launch is how anyone finds out;
+   two in a row on one layer is the machinery failing the same way, and a third
+   would spend a whole round learning it again."
+  2)
+
+(defn- unlaunchable
+  "The labels in `plan` whose last `launch-failure-limit` launches all failed to
+   start — the layers this machinery has shown it cannot put a fixer on."
+  [launches plan]
+  (into []
+        (comp (map :label)
+              (filter (fn [label]
+                        (<= launch-failure-limit
+                            (count (take-while (complement :ran?)
+                                               (rseq (vec (get launches label)))))))))
+        plan))
 
 (defn- with-working-copy-restored
   "Run `f`, and whatever happens put the working copy back on top of `stack`
@@ -2979,7 +3079,7 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                        ;; budget, and the number is the whole of what a reader
                        ;; would do about the kill.
                        wall   (fix-budget budget (count findings))
-                       {:keys [num-turns result-text timed-out?]}
+                       {:keys [num-turns result-text timed-out? exit-code]}
                        (agent/launch!
                         {:run-id run-id :cwd cwd
                          :system-prompt sys-prompt
@@ -3001,9 +3101,8 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                                           :settled (get decided label)})
                          :budget wall
                          :claude-session-id (layer-fixer-session impl-session-id label)
-                         :resume? (worked-before? (:history ctx)
-                                                  (get-in ctx [:carry :fixer-declines] {})
-                                                  label)
+                         :resume? (session-opened? (get-in acc [:carry :fixer-launches])
+                                                   label)
                          :err-file (fixer-log run-id label (:iter ctx) ".err.log")
                          ;; Its own transcript, not the run's shared agent.log.
                          ;; A fixer emits an order of magnitude more than the
@@ -3012,28 +3111,33 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                          ;; and how a fixer spent its budget is read off the
                          ;; order of its own tool calls, which a merge of
                          ;; several destroys.
-                         :out-file (fixer-log run-id label (:iter ctx) ".log")})]
-                   ;; A KILL COUNTS AS HAVING RUN, and everything below turns on
-                   ;; it. The budget timer destroys the process before claude
-                   ;; emits its `result` event, so `num-turns` comes back nil for
-                   ;; a fixer that made 32 edits and for one claude rejected at
-                   ;; the door alike, and `:timed-out?` is the only field that
-                   ;; separates them. Read only the count, and the tree is never
-                   ;; even asked: one killed fixer's completed repair was filed
-                   ;; as a fixer that never started and left on the working copy,
-                   ;; where `restore-top!` stranded it mid-stack as an
-                   ;; undescribed, unbookmarked commit inside the range of the
-                   ;; layer above.
-                   ;;
-                   ;; The count still vetoes a landing when the launch produced a
-                   ;; `result` event saying zero turns, and that is not the same
-                   ;; concession. There the agent demonstrably did nothing, so
-                   ;; anything the tree holds was already there — on an unstacked
-                   ;; branch `position-for-fix!` is a no-op and a session
-                   ;; worktree routinely carries a human's uncommitted work,
-                   ;; which landing would commit under a fixer's name.
-                   (if (and (or (pos? (or num-turns 0)) timed-out?)
-                            (working-copy-dirty? cwd))
+                         :out-file (fixer-log run-id label (:iter ctx) ".log")})
+                       ;; A KILL COUNTS AS HAVING RUN, and everything below turns
+                       ;; on it. The budget timer destroys the process before
+                       ;; claude emits its `result` event, so `num-turns` comes
+                       ;; back nil for a fixer that made 32 edits and for one
+                       ;; claude rejected at the door alike, and `:timed-out?` is
+                       ;; the only field that separates them. Read only the count,
+                       ;; and the tree is never even asked: one killed fixer's
+                       ;; completed repair was filed as a fixer that never started
+                       ;; and left on the working copy, where `restore-top!`
+                       ;; stranded it mid-stack as an undescribed, unbookmarked
+                       ;; commit inside the range of the layer above.
+                       ;;
+                       ;; The count still vetoes a landing when the launch
+                       ;; produced a `result` event saying zero turns, and that is
+                       ;; not the same concession. There the agent demonstrably
+                       ;; did nothing, so anything the tree holds was already
+                       ;; there — on an unstacked branch `position-for-fix!` is a
+                       ;; no-op and a session worktree routinely carries a human's
+                       ;; uncommitted work, which landing would commit under a
+                       ;; fixer's name.
+                       ran?   (boolean (or (pos? (or num-turns 0)) timed-out?))
+                       ;; Entered before the outcome is decided, so no branch
+                       ;; below can forget it: the session exists whatever becomes
+                       ;; of the repair.
+                       acc    (record-launch acc label handed ran? exit-code)]
+                   (if (and ran? (working-copy-dirty? cwd))
                      (let [cid (layers/land-fix!
                                 cwd layer
                                 (str "review-loop: iter " (:iter ctx) " fixes"
@@ -3118,40 +3222,52 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                                      (assoc-in [:carry :rolled-back label]
                                                (refused-carry row (:iter ctx)
                                                               findings))))))))
-                     ;; The fixer left the tree unchanged. That is a decision it
-                     ;; made and explained, and the explanation was the only
-                     ;; account of why a round did nothing — discarded here, so
-                     ;; a run could end on "no changes" with the reason it
-                     ;; declined stated nowhere. It is kept per layer, and
-                     ;; distinguishes a fixer that never ran from one that read
-                     ;; the finding and refused it.
-                     (let [ran?   (boolean (or (pos? (or num-turns 0)) timed-out?))
-                           ;; An argument, as against a no-show. A fixer that
-                           ;; ran no turns refused nothing and said nothing, and
-                           ;; carrying it would tell the next warden a fixer had
-                           ;; made a case nobody ever made. A killed one is the
-                           ;; same shape from the other direction: it ran, and
-                           ;; the argument it might have made was never emitted.
-                           argued? (and ran? (not (str/blank? (str result-text))))]
+                     (if-not ran?
+                       ;; No fixer ran: claude refused the launch — a session id
+                       ;; it already held, a flag it would not take, a credential
+                       ;; — or answered it having taken no turn. Its own outcome,
+                       ;; because every other list here is something a fixer DID,
+                       ;; and filed among them it reads as a fixer that looked at
+                       ;; the findings and refused. The exit code is kept because it
+                       ;; and the layer's err.log are all anyone has of why.
+                       ;; Nothing is carried as an argument; the launch record is
+                       ;; what tells the next warden, and `unlaunchable` what ends
+                       ;; the run if it keeps happening.
+                       (do (layers/restore-top! cwd stack)
+                           (update acc :launch-failed (fnil conj [])
+                                   (cond-> {:layer label :handed handed}
+                                     (some? exit-code)
+                                     (assoc :exit-code exit-code)
+                                     (not (str/blank? (str result-text)))
+                                     (assoc :reason (str result-text)))))
+                     ;; The fixer ran and left the tree unchanged. That is a
+                     ;; decision it made and explained, and the explanation was the
+                     ;; only account of why a round did nothing — discarded here,
+                     ;; so a run could end on "no changes" with the reason it
+                     ;; declined stated nowhere. It is kept per layer.
+                     (let [;; An argument, as against silence. A killed fixer ran,
+                           ;; and the argument it might have made was never
+                           ;; emitted; carrying its empty account would tell the
+                           ;; next warden a fixer had made a case nobody made.
+                           argued? (not (str/blank? (str result-text)))]
                        (layers/restore-top! cwd stack)
                        (cond-> (update acc :declined (fnil conj [])
                                        ;; :handed for the same reason it is on a
                                        ;; landed fix and on an unattempted layer:
-                                       ;; the four lists are one account of every
-                                       ;; :fix ruling the round held, and they add
-                                       ;; up only if the finding ids are under one
-                                       ;; key. This was the row that named a layer
-                                       ;; and nothing else.
+                                       ;; the lists are one account of every :fix
+                                       ;; ruling the round held, and they add up
+                                       ;; only if the finding ids are under one
+                                       ;; key.
                                        ;;
-                                       ;; :timed-out? is what makes `:ran? true`
-                                       ;; with no `:reason` legible. Every other
-                                       ;; row of that shape is a fixer that ran
-                                       ;; and said nothing; this one is a fixer
-                                       ;; whose account was still in the process
-                                       ;; when the budget destroyed it, and the
-                                       ;; findings it was handed stand for want
-                                       ;; of time rather than on an argument.
-                                       (cond-> {:layer label :ran? ran? :handed handed}
+                                       ;; :timed-out? is what makes a row with no
+                                       ;; `:reason` legible. Every other row of
+                                       ;; that shape is a fixer that ran and said
+                                       ;; nothing; this one is a fixer whose
+                                       ;; account was still in the process when
+                                       ;; the budget destroyed it, and the
+                                       ;; findings it was handed stand for want of
+                                       ;; time rather than on an argument.
+                                       (cond-> {:layer label :handed handed}
                                          result-text (assoc :reason (str result-text))
                                          timed-out?  (assoc :timed-out? true :budget wall)))
                          ;; Into :carry, the only thing a round hands the next
@@ -3171,7 +3287,7 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                                     :findings (mapv (fn [f]
                                                       {:id (or (:handle f) (:id f))
                                                        :title (:title f)})
-                                                    findings)}))))))
+                                                    findings)})))))))
                  ctx (map-indexed vector plan)))
               ctx' (if (seq (:fixes ctx'))
                      (update ctx' :history (fnil conj [])
@@ -3198,6 +3314,16 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
             (seq (:conflicted ctx'))
             (assoc ctx' :control :stop :status :fix-conflicted)
 
+            ;; A layer this machinery cannot put a fixer on. Its findings are
+            ;; untried rather than resisted, so the give-up counter never reaches
+            ;; them, and without this the round after re-dispatches to it for as
+            ;; long as the rest of the stack keeps landing repairs. Whatever else
+            ;; this round landed stays, as it does on a conflict: the stop is
+            ;; about one layer's launches, and the repairs above and below it are
+            ;; not in question.
+            (seq (unlaunchable (get-in ctx' [:carry :fixer-launches]) plan))
+            (assoc ctx' :control :stop :status :fix-launch-failed)
+
             ;; Every repair this round produced was refused by the stack and put
             ;; back, so the tree is exactly what the reviewers already read.
             ;; Distinct from :fix-declined, which is fixers reading the findings
@@ -3206,24 +3332,29 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
             (and (empty? (:fixes ctx')) (seq (:rolled-back ctx')))
             (assoc ctx' :control :stop :status :fix-rolled-back)
 
-            ;; Nothing landed, and which of the two happened is the difference
-            ;; between an answer and an interruption. :fix-declined is fixers
-            ;; reading the findings and saying no, which is a decision a human
-            ;; reads the reasons of; a kill decided nothing, and the run wants
-            ;; more room rather than a different answer. Collapsed onto the
-            ;; decline, a fixer that spent thirty minutes on two findings
-            ;; arrives as `fix-declined · 2 open` — the report asserting a
-            ;; refusal nobody made, in the words of the status just above.
+            ;; Nothing landed, and which of three things happened is the
+            ;; difference between an answer and an interruption. :fix-declined is
+            ;; fixers reading the findings and saying no, which is a decision a
+            ;; human reads the reasons of; a kill decided nothing, and the run
+            ;; wants more room rather than a different answer; a launch that
+            ;; never started decided nothing either, and what it wants is the
+            ;; machinery looked at. Collapsed onto the decline, a fixer that
+            ;; spent thirty minutes on two findings arrives as `fix-declined · 2
+            ;; open` — the report asserting a refusal nobody made, in the words of
+            ;; the status just above.
             ;;
             ;; After :fix-rolled-back, which is a stronger statement about the
             ;; same round: a rollback is a completed event with a commit id
             ;; behind it and a layer order to question, where a kill on a clean
-            ;; tree left nothing to look at.
+            ;; tree left nothing to look at. A launch failure goes before the
+            ;; kill because it is the one of the two where nothing was attempted
+            ;; at all.
             (empty? (:fixes ctx'))
             (assoc ctx' :control :stop
-                   :status (if (some :timed-out? (:declined ctx'))
-                             :fix-timed-out
-                             :fix-declined))
+                   :status (cond
+                             (seq (:launch-failed ctx'))         :fix-launch-failed
+                             (some :timed-out? (:declined ctx')) :fix-timed-out
+                             :else                               :fix-declined))
 
             :else ctx')))))))
 

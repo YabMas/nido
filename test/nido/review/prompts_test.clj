@@ -1112,6 +1112,24 @@ layers, it is not yours"))
   (let [out (prompts/warden-prompt {:findings findings :history []})]
     (is (not (str/includes? out "A FIXER WAS HANDED THESE")))))
 
+(deftest the-warden-is-told-a-fixer-never-started-and-what-that-does-not-mean
+  ;; Recurring with the same handle, the same ruling and no commit, a finding
+  ;; whose fixer never took a turn reads exactly like one a fixer failed to move
+  ;; — ground (b) for a park, about a defect nobody tried to repair.
+  (let [out (prompts/warden-prompt
+             {:findings findings :history []
+              :unstarted [{:layer "resume-across-connections" :round 2
+                           :handed ["71ca41c9"] :exit-code 1}]})]
+    (is (str/includes? out "NEVER STARTED"))
+    (is (str/includes? out "resume-across-connections, round 2 (exit 1): 71ca41c9")
+        "the layer, the round, the exit and the findings, so it joins to a finding below")
+    (is (str/includes? out "not ground (b)")
+        "the misreading the block exists to prevent, named against the rule it
+         would otherwise be read under"))
+  (is (not (str/includes? (prompts/warden-prompt {:findings findings :history []})
+                          "NEVER STARTED"))
+      "an empty heading reads as launches the warden failed to be shown"))
+
 (deftest the-reviewer-is-told-its-jj-commands-are-the-whole-set
   ;; A skill whose description demands first activation on anything VCS-shaped
   ;; gets opened before any code is read, and this reviewer never writes a

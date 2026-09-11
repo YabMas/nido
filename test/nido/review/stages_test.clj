@@ -533,21 +533,43 @@
           [d] (:declined ctx)]
       (is (= :stop (:control ctx)))
       (is (= :fix-declined (:status ctx)))
-      (is (true? (:ran? d)) "it ran")
+      (is (empty? (:launch-failed ctx)) "it ran, so it is no launch failure")
       (is (str/includes? (:reason d) "spans two layers")))))
 
-(deftest a-fixer-that-never-ran-is-not-a-fixer-that-refused
-  ;; Zero turns: the agent never got going. Same empty tree, a different fact
-  ;; about the loop, and one status for both told a reader neither.
-  (with-redefs [agent/launch! (fn [_] {:num-turns 0 :result-error? false :result-text ""})
-                stages/working-copy-dirty? (fn [_] false)
-                jj/jj! (fn [& _] {:exit 0 :out "" :err ""})]
-    (let [ctx ((:run stages/fix-stage)
-               {:config {:cwd "/w" :run-id "r1"} :iter 2
-                :findings [{:id "aa11" :title "x" :disposition :fix}]})
-          [d] (:declined ctx)]
-      (is (= :fix-declined (:status ctx)))
-      (is (false? (:ran? d)) "it never ran"))))
+(deftest a-launch-that-never-started-is-its-own-outcome-and-keeps-its-exit
+  ;; Filed under :declined, the vocabulary's word for a fixer that read the
+  ;; finding and refused, a launch claude killed at the door — `Session ID …
+  ;; is already in use`, a 74-byte err.log, a 0-byte transcript — read as a
+  ;; refusal with no reason given, and the exit code that said otherwise was
+  ;; discarded on the way in.
+  (testing "claude refused the launch outright"
+    (with-redefs [agent/launch! (fn [_] {:exit-code 1 :num-turns nil :result-error? false
+                                         :result-text nil :timed-out? false})
+                  stages/working-copy-dirty? (fn [_] false)
+                  jj/jj! (fn [& _] {:exit 0 :out "" :err ""})]
+      (let [ctx ((:run stages/fix-stage)
+                 {:config {:cwd "/w" :run-id "r1"} :iter 2
+                  :findings [{:id "aa11" :handle "h1" :title "x" :disposition :fix}]})]
+        (is (= [{:layer nil :handed ["h1"] :exit-code 1}] (:launch-failed ctx))
+            "the layer, what it was handed, and the exit — the one fact the run
+             dir keeps about why beside a 74-byte err.log")
+        (is (empty? (:declined ctx)) "nothing refused anything")
+        (is (empty? (get-in ctx [:carry :fixer-declines]))
+            "and nothing argued, so the next warden is not told a case was made")
+        (is (= :fix-launch-failed (:status ctx))
+            "a round that landed nothing because its fixer never started ends on
+             the machinery, not on a refusal"))))
+  (testing "claude answered having taken no turn"
+    (with-redefs [agent/launch! (fn [_] {:exit-code 0 :num-turns 0 :result-error? false
+                                         :result-text ""})
+                  stages/working-copy-dirty? (fn [_] false)
+                  jj/jj! (fn [& _] {:exit 0 :out "" :err ""})]
+      (let [ctx ((:run stages/fix-stage)
+                 {:config {:cwd "/w" :run-id "r1"} :iter 2
+                  :findings [{:id "aa11" :title "x" :disposition :fix}]})]
+        (is (= [{:layer nil :handed ["aa11"] :exit-code 0}] (:launch-failed ctx))
+            "no fixer ran either way, and a clean exit is still the exit")
+        (is (= :fix-launch-failed (:status ctx)))))))
 
 (deftest a-fixer-killed-on-its-budget-lands-what-it-wrote
   ;; The budget timer destroys the process before claude emits its `result`
@@ -591,7 +613,8 @@
                 :findings [{:id "aa11" :title "x" :disposition :fix}]})
           [d] (:declined ctx)]
       (is (= :fix-timed-out (:status ctx)))
-      (is (true? (:ran? d)) "it ran — for the whole of its budget")
+      (is (empty? (:launch-failed ctx))
+          "it ran — for the whole of its budget — so it is no launch failure")
       (is (true? (:timed-out? d)))
       (is (nil? (:reason d))
           "and it argued nothing: the account was still in the process when the
@@ -696,10 +719,10 @@
     (let [ctx ((:run stages/fix-stage)
                {:config {:cwd "/w" :run-id "r1"} :iter 2
                 :findings [{:id "aa11" :title "x" :disposition :fix}]})
-          [d] (:declined ctx)]
-      (is (= :fix-declined (:status ctx)))
-      (is (false? (:ran? d)))
-      (is (nil? (:timed-out? d))))))
+          [d] (:launch-failed ctx)]
+      (is (= :fix-launch-failed (:status ctx)))
+      (is (= ["aa11"] (:handed d))
+          "filed as the launch that never started, not as a repair"))))
 
 (deftest nothing-routed-to-a-fixable-layer-is-its-own-status
   ;; No finding was owed to any layer, so no fixer was launched. Distinct from a
@@ -1299,19 +1322,170 @@
           "records under this layer's own fixer session")
       (is (false? (:resume? @seen)) "first round (empty history) records, does not resume"))))
 
-(deftest fix-stage-resumes-implementer-session-later-rounds
-  (let [seen (atom nil)]
+(defn- round-two-launch
+  "The launch the round-2 fixer on a layer gets, when the round-1 fixer on the
+   same layer came back as `first` — round 2 standing on exactly the carry round
+   1 left, passed through `between`, which is what the stages in between may do
+   to it. Round 2 is handed a DIFFERENT finding, because the session belongs to
+   the layer and not to what it was first opened for."
+  [first & {:keys [dirty? conflicts between] :or {dirty? true conflicts [] between identity}}]
+  (let [cfg  {:cwd "/w" :run-id "r1" :base "main" :impl-session-id "impl-1"}
+        r1   (with-redefs [agent/launch! (fn [_] first)
+                           stages/working-copy-dirty? (fn [_] dirty?)
+                           jj/jj! (jj-scripted conflicts)]
+               ((:run stages/fix-stage)
+                {:config cfg :iter 1
+                 :findings [{:id "aa11" :title "x" :disposition :fix}]}))
+        seen (atom nil)]
     (with-redefs [agent/launch! (fn [opts] (reset! seen opts)
                                   {:num-turns 4 :result-error? false :result-text "done"})
                   stages/working-copy-dirty? (fn [_] true)
-                  jj/jj! (fn [& _] {:out "cid-2" :err "" :exit 0})]
+                  jj/jj! (jj-scripted [])]
       ((:run stages/fix-stage)
-       {:config {:cwd "/w" :run-id "r1" :impl-session-id "impl-1"} :iter 2
-        :history [{:iter 1 :fixes [{:layer nil :commit "cid-1"}]}]
-        :findings [{:id "aa11" :title "x" :disposition :fix}]})
-      (is (= (stages/layer-fixer-session "impl-1" nil) (:claude-session-id @seen))
-          "resumes this layer's own fixer session")
-      (is (true? (:resume? @seen)) "a layer fixed in an earlier round resumes"))))
+       {:config cfg :iter 2 :history (:history r1) :carry (between (:carry r1))
+        :findings [{:id "bb22" :title "y" :disposition :fix}]}))
+    @seen))
+
+(deftest a-layer-a-fixer-ran-on-resumes-whatever-came-of-the-repair
+  ;; claude refuses `--session-id` for an id it already holds, so a layer whose
+  ;; session exists and is re-issued one dies at the door: `Session ID … is
+  ;; already in use`, a 74-byte err.log and a 0-byte transcript. Reading which
+  ;; layers had worked off the landed fixes and the argued refusals missed the
+  ;; rollback — four launches in one run and two in another died that way — and
+  ;; the budget kill on a clean tree, and every launch after the first miss died
+  ;; the same way.
+  (let [done   {:num-turns 4 :result-error? false :result-text "done"}
+        argued {:num-turns 3 :result-error? false :result-text "no minimal edit here is right"}]
+    (is (= (stages/layer-fixer-session "impl-1" nil)
+           (:claude-session-id (round-two-launch done)))
+        "the layer's own session, the same id across rounds")
+    (is (true? (:resume? (round-two-launch done))) "after a landed repair")
+    (is (true? (:resume? (round-two-launch done :conflicts [["xuspsuww"] []])))
+        "after a repair the stack rolled back — the fixer opened its session as
+         surely as one whose repair survived")
+    (is (true? (:resume? (round-two-launch argued :dirty? false)))
+        "after an argued refusal, whose session holds the argument")
+    (is (true? (:resume? (round-two-launch {:num-turns nil :timed-out? true} :dirty? false)))
+        "after a fixer the budget killed with nothing written: it resumes, lap
+         and all, because the other launch on that id does not start")
+    (is (true? (:resume? (round-two-launch argued :dirty? false
+                                           :between #(dissoc % :fixer-declines :rolled-back))))
+        "and still once the warden has settled what that fixer was handed and
+         pruned the channel that carried it — a session does not close because
+         its finding did")))
+
+(deftest a-layer-no-fixer-has-run-on-records-a-new-session
+  ;; Resuming an id claude has never recorded is refused too, from the other
+  ;; side: `--resume` wants a transcript to continue.
+  (is (false? (:resume? (round-two-launch {:exit-code 1 :num-turns nil} :dirty? false)))
+      "a launch refused at the door opened nothing, so the next one records"))
+
+(defn- lower-never-starts
+  "A launch stub whose fixer on the `lower` layer is refused at the door and
+   whose fixer anywhere else lands its repair."
+  [{:keys [err-file]}]
+  (if (str/includes? (str err-file) "fix-lower-")
+    {:exit-code 1 :num-turns nil :result-error? false :result-text nil}
+    {:exit-code 0 :num-turns 4 :result-error? false :result-text "done"}))
+
+(deftest a-dispatch-whose-fixer-never-started-is-no-attempt-at-its-findings
+  ;; The give-up counter asks how many repairs were tried and failed, and it
+  ;; read the ruling alone: two runs ended `unfixable` on findings three launches
+  ;; were aimed at and one fixer ever read, while the same run's report counted
+  ;; the dispatches that had a fixer and published a different number.
+  (with-redefs [agent/launch! lower-never-starts
+                stages/working-copy-dirty? (fn [_] true)
+                stages/session-stack (fn [_ _] two-layer-stack)
+                jj/jj! (jj-scripted [])]
+    (let [ctx   ((:run stages/fix-stage)
+                 {:config {:cwd "/w" :run-id "r1" :base "main"} :iter 2
+                  :findings [{:id "aa11" :title "x" :disposition :fix :owner-layer "lower"}
+                             {:id "bb22" :title "y" :disposition :fix :owner-layer "upper"}
+                             {:id "cc33" :title "z" :disposition :park :owner-layer "upper"}]})
+          by-id (into {} (map (juxt :id identity)) (:findings ctx))]
+      (is (false? (stages/repair-attempted? (by-id "aa11")))
+          "ruled fix and handed to a fixer that never started: nothing was tried")
+      (is (true? (stages/repair-attempted? (by-id "bb22"))))
+      (is (not (contains? (by-id "cc33") :fixer-ran?))
+          "a finding no launch was handed is left to its ruling")
+      (is (= (:findings ctx) (:findings (last (:history ctx))))
+          "the round's history entry — which is what the counter reads in the
+           rounds after this one — holds the same answer")))
+  (testing "a round the fix stage has not reached is judged on its ruling"
+    ;; The counter is asked after the warden and before any fixer runs, so the
+    ;; current round's findings are unstamped; a ruling to fix is the round
+    ;; still aiming a repair.
+    (is (true? (stages/repair-attempted? {:disposition :fix})))
+    (is (false? (stages/repair-attempted? {:disposition :park :fixer-ran? true}))
+        "and a park is not an attempt whatever ran")))
+
+(deftest a-layer-whose-fixer-fails-to-start-twice-running-ends-the-run
+  ;; A launch that never started is not an attempt, so the give-up counter never
+  ;; reaches its findings. Without a bound of its own the layer is dispatched to
+  ;; in every round the rest of the stack lands a repair in, and nothing ends
+  ;; the run over it.
+  (let [run  (fn [prior]
+               (with-redefs [agent/launch! lower-never-starts
+                             stages/working-copy-dirty? (fn [_] true)
+                             stages/session-stack (fn [_ _] two-layer-stack)
+                             jj/jj! (jj-scripted [])]
+                 ((:run stages/fix-stage)
+                  {:config {:cwd "/w" :run-id "r1" :base "main"} :iter 3
+                   :carry {:fixer-launches {"lower" prior}}
+                   :findings [{:id "aa11" :title "x" :disposition :fix :owner-layer "lower"}
+                              {:id "bb22" :title "y" :disposition :fix :owner-layer "upper"}]})))
+        ran  {:round 1 :handed ["aa11"] :ran? true}
+        dead {:round 2 :handed ["aa11"] :ran? false :exit-code 1}]
+    (testing "the second in a row"
+      (let [ctx (run [ran dead])]
+        (is (= :stop (:control ctx)))
+        (is (= :fix-launch-failed (:status ctx))
+            "a status about the machinery, not about the defect it never reached")
+        (is (= ["upper"] (mapv :layer (:fixes ctx)))
+            "the repair that landed on the other layer stays")
+        (is (= [{:layer "lower" :round 3 :handed ["aa11"] :exit-code 1}]
+               (stages/unstarted-fixers (get-in ctx [:carry :fixer-launches])))
+            "and the layer it stopped over is named")))
+    (testing "the first"
+      (is (nil? (:control (run [ran])))
+          "one failure is how anyone finds out whether it is the machinery; the
+           round goes on on the repair that landed"))
+    (testing "not in a row"
+      (is (nil? (:control (run [dead ran])))
+          "a fixer ran between the two, so the machinery recovered once"))))
+
+(deftest only-a-layer-whose-latest-launch-never-started-is-standing
+  ;; A layer a later fixer ran on has been attempted since; its old failure
+  ;; says nothing about what is open now.
+  (is (= [{:layer "core" :round 2 :handed ["aa11"] :exit-code 1}]
+         (stages/unstarted-fixers
+          {"core"   [{:round 1 :handed ["aa11"] :ran? true}
+                     {:round 2 :handed ["aa11"] :ran? false :exit-code 1}]
+           "wiring" [{:round 1 :handed ["bb22"] :ran? false :exit-code 1}
+                     {:round 2 :handed ["bb22"] :ran? true}]})))
+  (is (= [] (stages/unstarted-fixers nil)) "a run that launched nothing has nothing standing"))
+
+(deftest the-warden-is-told-which-fixers-never-started
+  ;; A finding handed to a process that never took a turn recurs looking exactly
+  ;; like one a fixer failed to move. The wardens of one run worked it out round
+  ;; after round from the absence of commits, in prose nothing read.
+  (let [captured (atom nil)
+        ruling "```json\n{\"decision\":\"continue\",\"reason\":\"r\",\"findings\":[{\"id\":\"aa11\",\"disposition\":\"fix\",\"because\":\"untried\"}]}\n```"]
+    (with-redefs [agent/launch! (fn [{:keys [first-message]}]
+                                  (reset! captured first-message)
+                                  {:num-turns 3 :result-error? false :result-text ruling})
+                  stages/discover-design-record (fn [_] nil)
+                  stages/project+ws-from-cwd (fn [_] nil)]
+      (let [launches {"core" [{:round 2 :handed ["aa11"] :ran? false :exit-code 1}]}
+            ctx ((:run stages/warden-stage)
+                 {:config {:cwd "/w" :run-id "r1"} :iter 3
+                  :carry {:fixer-launches launches}
+                  :findings [{:id "aa11" :title "x"}]})]
+        (is (str/includes? @captured "core, round 2 (exit 1): aa11")
+            "off the launch record, which is the only thing that holds it")
+        (is (= launches (get-in ctx [:carry :fixer-launches]))
+            "and the warden leaves the record as it found it: ruling on a finding
+             does not close the session its fixer opened")))))
 
 (deftest warden-stage-launches-report-only
   (let [seen (atom nil)]
@@ -2967,19 +3141,6 @@
                {:config {:cwd "/w" :run-id "r1"} :iter 2
                 :findings [{:id "aa11" :title "x" :disposition :fix}]})]
       (is (empty? (get-in ctx [:carry :fixer-declines]))))))
-
-(deftest a-layer-whose-fixer-argued-resumes-rather-than-restarts
-  (let [seen (atom nil)]
-    (with-redefs [agent/launch! (fn [opts] (reset! seen opts)
-                                  {:num-turns 4 :result-error? false :result-text "done"})
-                  stages/working-copy-dirty? (fn [_] true)
-                  jj/jj! (fn [& _] {:out "cid-1" :err "" :exit 0})]
-      ((:run stages/fix-stage)
-       {:config {:cwd "/w" :run-id "r1" :impl-session-id "impl-1"} :iter 2
-        :carry {:fixer-declines {nil {:since 1 :reason "no minimal edit here is right"}}}
-        :findings [{:id "aa11" :title "x" :disposition :fix}]})
-      (is (true? (:resume? @seen))
-          "the session holding the argument is the one to put the finding back to"))))
 
 (deftest a-carried-decline-lives-exactly-as-long-as-the-finding-is-open
   (let [prior {"core" {:layer "core" :since 1 :reason "the bundle says otherwise"

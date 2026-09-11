@@ -109,6 +109,17 @@
                  (int? since) (assoc :round since)
                  commit      (assoc :commit (str commit)))))))
 
+(defn- launch-failures
+  "The layers whose last fixer launch never started, as the ledger's closed
+   schema admits them — see `stages/unstarted-fixers`. Off the carry, like
+   `refused-repairs`, because a ctx holds only the round it ended in."
+  [final]
+  (mapv (fn [{:keys [layer round exit-code handed]}]
+          (cond-> {:round round :handed (mapv str handed)}
+            layer          (assoc :layer (str layer))
+            (int? exit-code) (assoc :exit-code exit-code)))
+        (stages/unstarted-fixers (get-in final [:carry :fixer-launches]))))
+
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   review-event
   "Pure: build a :review ledger payload from the loop's terminal value `final`
@@ -175,6 +186,7 @@
   [final report report-path]
   (let [handed   (verdict/handed-to-a-fixer final)
         refused  (refused-repairs final)
+        unstarted (launch-failures final)
         raised   (ledger-findings handed (verdict/open-across-run final))
         seen     (into #{} (keep :id) raised)
         ;; `:handed` does not survive the carry. It claims a repair is sitting in
@@ -236,6 +248,11 @@
       ;; `:reshaped` are — the run dir holding report.json is routinely gone by
       ;; the time anyone reads the workstream.
       (seq refused)   (assoc :rolled-back refused)
+      ;; The other reason a finding above can be open with nothing tried on it:
+      ;; its fixer never started. On :fix-launch-failed this is the layer the
+      ;; status is about, and the run dir holding its err.log is routinely gone
+      ;; before anyone reads the entry.
+      (seq unstarted) (assoc :launch-failed unstarted)
       (:drift final)  (assoc :drift (:drift final))
       (seq standing)  (assoc :standing (vec standing))
       (seq reshaped)  (assoc :reshaped reshaped))))
@@ -1199,6 +1216,7 @@
    :no-progress "the round changed nothing the reviewers can see — the findings it left are what you get"
    :fix-declined "every fixer read what it was handed and said no — the findings stand, with their reasons beside them in the report"
    :fix-timed-out "a fixer was killed on its budget with the tree untouched — nothing was decided, so the findings stand for want of time and the run wants more room rather than a re-run"
+   :fix-launch-failed "a fixer was launched and claude refused it before a turn — nothing was attempted there, so the findings are untried rather than resisted; what is broken is the machinery, and the layer's fix-<layer>-round-N.err.log in the run dir says how"
    :fix-unrouted "no finding reached a layer a fixer can touch — what is in question is the routing, not any repair"
    :fix-rolled-back "every repair was refused by the rebase and put back, so the branch is exactly what was reviewed — a re-run earns the same refusal; what is in question is the layer order"
    :max-iters "the cap you passed was reached — this is not convergence, and the findings were still open"
@@ -1233,6 +1251,7 @@
   (let [status (:status final)
         {:keys [unavailable conflicted drift]} final
         refused  (refused-repairs final)
+        unstarted (stages/unstarted-fixers (get-in final [:carry :fixer-launches]))
         reshaped (report/applied-reshapes report)]
     (cond-> [(str "review-loop: " (name status) " · report " report-path)]
       ;; A reviewer that refused said what it wants — credits, a login, an hour
@@ -1289,6 +1308,17 @@
       (conj (str "  never attempted: "
                  (str/join ", " (map #(or (:layer %) "the branch")
                                      (:unattempted final)))))
+
+      ;; The layers claude would not start a fixer on. The remedy line says the
+      ;; machinery failed; which layer, and the exit it failed with, is what
+      ;; says which err.log to open.
+      (seq unstarted)
+      (conj (str "  never started: "
+                 (str/join ", "
+                           (for [{:keys [layer round exit-code]} unstarted]
+                             (str (or layer "the branch") " (round " round
+                                  (when (some? exit-code) (str ", exit " exit-code))
+                                  ")")))))
 
       :always
       (conj (str "  → " (or (diff-remedies status)

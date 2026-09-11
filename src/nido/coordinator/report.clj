@@ -1380,6 +1380,13 @@
                                ;; answer. A kill that HAD written to the tree is
                                ;; not this — its work lands and the round goes on.
                                :fix-timed-out
+                               ;; A fixer was launched and claude refused it
+                               ;; before a turn — on a round that landed nothing,
+                               ;; or twice running on one layer. Nothing was
+                               ;; attempted there, so it says the MACHINERY
+                               ;; failed, not that the defect resisted; the
+                               ;; entry's `:launch-failed` names the layer.
+                               :fix-launch-failed
                                :workspace-drifted
                                ;; The fix stage rewrote a lower layer and jj's
                                ;; rebase of the layers above it conflicted. The
@@ -1518,6 +1525,21 @@
       ;; The findings the refused repair was for, by the same handle-or-id
       ;; `:open` names them under, so a reader can join the two lists.
       [:handed     [:sequential string?]]]]]
+   ;; The layers whose last fixer launch never started — claude refused it
+   ;; before a turn, so the findings it was handed were never read by anything
+   ;; that could repair them. The status says the machinery failed on
+   ;; `:fix-launch-failed`; on any other status a row here is a layer whose
+   ;; open findings are untried rather than resisted. `:exit-code` and the
+   ;; round's fix-<layer>-round-N.err.log are what say why, and only the first
+   ;; outlives the run dir.
+   [:launch-failed {:optional true}
+    [:sequential
+     [:map {:closed true}
+      ;; Absent on a branch with no layers, as on `:rolled-back`.
+      [:layer     {:optional true} string?]
+      [:round     int?]
+      [:exit-code {:optional true} int?]
+      [:handed    [:sequential string?]]]]]
    ;; The two revisions on the one status that ends because they differ:
    ;; `:reviewed-at` is what the round pinned before it fanned out, `:now` is
    ;; what the fix stage found. The status says the tree moved and the pair says
@@ -2697,7 +2719,7 @@
                                  remaining-parked targets-reviewed targets-skipped
                                  report-path
                                  summary open kept conflicted drift reshaped
-                                 rolled-back standing]}]
+                                 rolled-back launch-failed standing]}]
   (str/join "\n"
     (remove nil?
       [(str "# Review: " (name status))
@@ -2807,6 +2829,21 @@
                                (when (seq conflicted)
                                  (str "\n  - conflicted "
                                       (str/join ", " (map #(str "`" % "`") conflicted))))
+                               (when (seq handed)
+                                 (str "\n  - handed " (str/join ", " handed))))))))
+       ;; Beside the refused repairs and for the same reason — it explains why a
+       ;; finding above is open — with the opposite reading: there a repair was
+       ;; written and refused, here nothing ever read the findings, so they are
+       ;; untried rather than resisted.
+       (when (seq launch-failed)
+         (str "\n## Fixers that never started\n"
+              "claude refused each launch before a turn, so no fixer read the"
+              " findings it was handed. The err.log for that layer and round, in"
+              " the run dir, says why.\n"
+              (str/join "\n"
+                        (for [{:keys [layer round exit-code handed]} launch-failed]
+                          (str "- **" (or layer "the branch") "** round " round
+                               (when (some? exit-code) (str "  exit " exit-code))
                                (when (seq handed)
                                  (str "\n  - handed " (str/join ", " handed))))))))
        ;; Above the summary and above the report link, because it is the one

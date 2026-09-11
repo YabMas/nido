@@ -228,10 +228,13 @@
     {:signature [:=> [:catn [:f Finding]] :boolean]})
   (Operation repair-attempted?
     "Whether the round that ruled a finding aimed a repair at it — false for a `park`, which
-     answers the finding by putting it to a human and launches nothing.
+     answers the finding by putting it to a human and launches nothing, and false for a finding
+     the fix stage handed to a fixer that never started, which it stamps as it files the launch.
 
      The engine's give-up counter asks how many repairs were tried and failed, and it cannot
-     read a disposition itself, so this is what the diff loop hands it."
+     read a disposition or a launch itself, so this is what the diff loop hands it. It draws
+     the line the report's published dispatch count draws, off the same reading: the count a
+     run publishes and the count that ends it are of one set of attempts."
     {:signature [:=> [:catn [:f Finding]] :boolean]})
   (Operation parse-warden-decision
     "The warden's ruling out of what it said, judged against the design record it was shown.
@@ -461,6 +464,15 @@
      code as it was, so without the carry each reaches the report and neither the warden that
      could settle it nor the next reviewer that would have to find it again."
     {:signature [:=> [:catn [:prior :any] [:ruled :any]] :any]})
+  (Operation unstarted-fixers
+    "The layers whose latest fixer launch never started, off the run's launch record — the one
+     account of whether a fixer ran on a layer, written by the fix stage at launch and never
+     pruned, since a session once opened stays opened whatever becomes of its findings. What it
+     names are findings ruled `fix` that no process ever read: untried, not resisted. Two
+     readers — the warden, which would otherwise read their recurrence as fixes that failed, and
+     the run's ledger entry, where a `fix-launch-failed` status names the machinery and only
+     this names the layer."
+    {:signature [:=> [:catn [:launches :any]] [:sequential :map]]})
   (Operation park-refused-recuts
     "A park for every recut the reshape stage could not act on, carrying its own refusal. The
      warden withholds a recut from the fixers on purpose, so a refusal leaves it with no path."

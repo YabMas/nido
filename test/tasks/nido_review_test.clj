@@ -82,7 +82,10 @@
       ;; config, a parked round silently counts as a failed repair again.
       (is (false? ((:attempted? @seen) {:disposition :park}))
           "the diff loop tells the engine a parked round attempted nothing")
-      (is (true? ((:attempted? @seen) {:disposition :fix}))))))
+      (is (true? ((:attempted? @seen) {:disposition :fix})))
+      (is (false? ((:attempted? @seen) {:disposition :fix :fixer-ran? false}))
+          "and that a round whose fixer never started attempted nothing either —
+           the reading two runs ended `unfixable` without"))))
 
 (defn- run-loop-writing-a-report
   "A stubbed engine that leaves a report where the real one would, so the
@@ -384,6 +387,36 @@
                             :target {:base "main" :base-rev "x"}}
                            "/runs/r/report.json")]
     (is (not (contains? ev :rolled-back)))))
+
+(deftest a-launch-that-never-started-reaches-the-ledger-and-the-terminal
+  ;; The status says the machinery failed; only the layer says where, and the
+  ;; err.log that says why lives in a run dir routinely gone before anyone reads
+  ;; the workstream.
+  (let [final {:status :fix-launch-failed
+               :history []
+               :findings [{:handle "91241c2a" :id "91241c2a" :title "t"
+                           :disposition :fix :owner-layer "speech-contract"}]
+               :carry {:fixer-launches
+                       {"speech-contract" [{:round 1 :handed ["91241c2a"] :ran? true}
+                                           {:round 2 :handed ["91241c2a"] :ran? false :exit-code 1}
+                                           {:round 3 :handed ["91241c2a"] :ran? false :exit-code 1}]
+                        "continuation-value" [{:round 3 :handed ["a56316bb"] :ran? true}]}}}
+        ev    (t/review-event final
+                              {:summary {:rounds 3 :fix-attempts 1}
+                               :target {:base "main" :base-rev "x"}}
+                              "/runs/r/report.json")]
+    (is (= [{:layer "speech-contract" :round 3 :exit-code 1 :handed ["91241c2a"]}]
+           (:launch-failed ev))
+        "the layer whose last launch never started, and only that one")
+    (is (= ev (report/validate-event :review ev))
+        "the ledger's schema is closed, so an unadmitted key erases the entry")
+    (is (str/includes? (report/report->markdown (assoc ev :format :review-report))
+                       "Fixers that never started")
+        "and the entry a person reads says so, not only the data")
+    (let [out (str/join "\n" (t/outcome-lines final {:rounds []} "/runs/r/report.json"))]
+      (is (str/includes? out "never started: speech-contract (round 3, exit 1)"))
+      (is (str/includes? out "what is broken is the machinery")
+          "the remedy sentence and the layer it is about, on the same screen"))))
 
 (deftest a-rolled-back-run-names-the-collision-on-the-terminal
   ;; The remedy line says the branch is unchanged and a re-run earns the same

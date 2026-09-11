@@ -666,6 +666,12 @@
    ;; minutes reaching the same wall, and the one thing that changes the outcome
    ;; is a person deciding whether this repair is worth more room.
    :fix-timed-out        :escalate
+   ;; A fixer launch claude refused before a turn. Machinery, and still not
+   ;; :retry, for the reason :reviewer-unavailable is not: what refuses a launch
+   ;; — a credential, a quota, a flag — does not lift inside a five-second
+   ;; backoff, and every retry buys a fresh round of reviewers to reach the same
+   ;; door. Someone has to read the layer's err.log.
+   :fix-launch-failed    :escalate
    ;; The fix stage's own rebase left the stack conflicted. A human has to
    ;; resolve it — nothing here can, and a retry would land more fixes onto a
    ;; branch that already does not parse.

@@ -408,11 +408,14 @@
       ;; :conflicted and :unattempted are the account of an abort: what the stack
       ;; is holding, and which layers the stage was still going to reach. Without
       ;; the second, the only record of a fixer that never ran is the ABSENCE of
-      ;; its fix-<layer>-round-N.err.log from the run dir — so the four lists
-      ;; together are what makes the phase add up to every :fix ruling it held.
+      ;; its fix-<layer>-round-N.err.log from the run dir — so the lists together
+      ;; are what makes the phase add up to every :fix ruling it held.
+      ;; :launch-failed is a layer whose fixer was launched and never started,
+      ;; with the exit code — that and its err.log are all anyone has of why.
       :fix    (let [h (last (filter #(= (:iter ctx) (:iter %)) (:history ctx)))]
                 (cond-> (assoc ph :fixes (vec (:fixes h)) :fixed-count (:fixed-count h))
                   (seq (:declined ctx))    (assoc :declined (vec (:declined ctx)))
+                  (seq (:launch-failed ctx)) (assoc :launch-failed (vec (:launch-failed ctx)))
                   (seq (:rolled-back ctx)) (assoc :rolled-back (vec (:rolled-back ctx)))
                   (seq (:conflicted ctx))  (assoc :conflicted (vec (:conflicted ctx)))
                   (seq (:unattempted ctx)) (assoc :unattempted (vec (:unattempted ctx)))))
@@ -501,17 +504,23 @@
                      (vec rows)))))))
 
 (defn- fix-rows-with-a-fixer
-  "Every row of a fix phase that names a fixer the stage actually launched.
+  "Every row of a fix phase that names a fixer which RAN.
 
-   The phase keeps four lists and they are one account of the round's `:fix`
-   rulings, but only three of them are about a launch. `:fixes` and
-   `:rolled-back` are repairs a fixer wrote — kept and refused. `:declined` is a
-   fixer that wrote nothing, and `:ran?` is what splits it: a fixer that read
-   the findings, or one claude rejected before it took a turn. `:unattempted` is
-   excluded entirely — its `:handed` names what a layer was OWED when the stage
-   aborted below it, and nothing was handed to a fixer that never existed."
+   The phase's lists are one account of the round's `:fix` rulings, and three of
+   them are a fixer that ran: `:fixes` and `:rolled-back` are repairs it wrote —
+   kept and refused — and `:declined` is one that wrote nothing. The other two
+   name no fixer. `:launch-failed` is a launch claude refused before a turn, and
+   `:unattempted` is what a layer was OWED when the stage aborted below it.
+
+   The same line `nido.review.stages/repair-attempted?` draws for the give-up
+   counter, off the same reading in the fix stage: the count a run publishes and
+   the count that ends it are of one set of attempts.
+
+   A `:declined` row carrying `:ran? false` is a launch that never started, in a
+   report.json written before those had a list of their own — and such a report
+   is still re-summarized, when a later run settles it as an orphan."
   [ph]
-  (concat (:fixes ph) (:rolled-back ph) (filter :ran? (:declined ph))))
+  (concat (:fixes ph) (:rolled-back ph) (remove #(false? (:ran? %)) (:declined ph))))
 
 (defn- fix-attempts
   "How many repairs the run DISPATCHED — one per finding per round it was handed

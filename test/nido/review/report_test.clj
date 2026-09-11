@@ -335,16 +335,32 @@
                               :fixes [{:layer "lower" :commit "c1" :handed ["aa11"]
                                        :fixed-count 1}]}]
                    :rolled-back [{:layer "middle" :handed ["bb22"] :conflicted ["x"]}]
-                   :declined [{:layer "upper" :ran? true :handed ["cc33" "dd44"]
-                               :timed-out? true}
-                              {:layer "top" :ran? false :handed ["ee55"]}]
+                   :declined [{:layer "upper" :handed ["cc33" "dd44"] :timed-out? true}]
+                   :launch-failed [{:layer "top" :handed ["ee55"] :exit-code 1}]
                    :unattempted [{:layer "highest" :handed ["ff66"]}]}}
             {:event :run-finalized :status :fix-conflicted :ctx {} :at "t5"}])]
     (is (= 4 (:fix-attempts (:summary r)))
         "one landed, one the stack rolled back and two handed to the fixer its
          budget killed — every one of them was a repair this run asked for. The
-         layer the abort never reached and the fixer that took no turn are not:
-         nothing was handed to a fixer that never ran")))
+         layer the abort never reached and the fixer claude refused at the door
+         are not: nothing was handed to a fixer that never ran")
+    (is (= [{:layer "top" :handed ["ee55"] :exit-code 1}]
+           (->> r :rounds first :phases (some #(when (= "fix" (:phase %)) %)) :launch-failed))
+        "and the launch that never started is on the phase, exit and all, rather
+         than nowhere")))
+
+(deftest a-report-that-filed-a-dead-launch-as-a-decline-still-counts-it-as-none
+  ;; report.json outlives the code that wrote it, and a later run re-summarizes
+  ;; one it settles as an orphan — so a launch that never started, recorded as a
+  ;; `:declined` row with `:ran? false`, must still count as no fixer.
+  (let [r (report/orphaned
+           {:run-id "r" :status "running"
+            :rounds [{:round 1 :status "running"
+                      :phases [{:phase "fix" :status "ok"
+                                :declined [{:layer "core" :ran? true :handed ["aa11"]}
+                                           {:layer "top" :ran? false :handed ["bb22"]}]}]}]}
+           "t9")]
+    (is (= 1 (:fix-attempts (:summary r))))))
 
 (deftest persist!-writes-atomic-valid-json
   (let [dir (str (fs/create-temp-dir))
