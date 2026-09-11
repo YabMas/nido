@@ -66,7 +66,12 @@
   []
   (let [id (:id (ws/create! :brian {:stage :in-progress :external-refs []}))]
     [id (fn [kind record]
-          (ws/append-entry! :brian id {:kind kind} (pr-str record))
+          ;; A clearance is written at a position — the one way the ledger
+          ;; takes one.
+          (if (= :design-cleared kind)
+            (ws/append-entry-at! :brian id (count (:entries (ws/read-ws :brian id)))
+                                 {:kind kind} (pr-str record))
+            (ws/append-entry! :brian id {:kind kind} (pr-str record)))
           (count (:entries (ws/read-ws :brian id))))]))
 
 (defn- add-past-the-refusal!
@@ -89,6 +94,14 @@
     (ws/write! (update w :entries conj
                        {:kind kind :seq seq-n :at "2026-08-21T00:00:00Z" :file rel}))
     seq-n))
+
+(defn- clear!
+  "A clearance of the design at `design-seq`, through `append-entry-at!` — the
+   only writer the ledger takes one from — at the position it compares."
+  [id design-seq]
+  (let [at (count (:entries (ws/read-ws :brian id)))]
+    (ws/append-entry-at! :brian id at {:kind :design-cleared}
+                         (pr-str {:format :design-cleared :design {:seq design-seq}}))))
 
 (defn- intent! [add!] (add! :intent {:format :intent :goal "g" :done-when ["d"]}))
 
@@ -126,8 +139,9 @@
 
             (add! :design-decision (a-decision d :proceed))
             (is (= :design-decided (:at (p/of :brian id))))
-            (is (= :human (:mode (:next (p/of :brian id))))
-                "a grant is nobody's but a human's until the auto-grant phase")
+            (is (= {:stage :clear-design :mode :mechanical} (:next (p/of :brian id)))
+                "a design owing nobody a grant is not a person's to grant — what
+                 is owed is the clearance the decision implies")
 
             (add! :design-approved {:format :design-approved :design {:seq d} :at-seq 5})
             (is (= :design-approved (:at (p/of :brian id))))
@@ -469,11 +483,13 @@
 (deftest every-record-loop-terminal-is-classified
   ;; The record pipelines' statuses and the outcomes a round that could not run
   ;; reports in their place. Gathered from what the loops actually set.
-  (doseq [s [:sufficient :proceed :disputed :underivable :retreated
+  (doseq [s [:sufficient :proceed :cleared :clearance-contended :nothing-to-clear
+             :disputed :underivable :retreated
              :amend-noop :amend-invalid :amend-touched-code :amend-unreadable
              :codex-failed :no-output :round-crashed :unusable-answer
-             :nothing-to-check :no-record :no-workstream :not-worth-running
+             :nothing-to-check :no-record :no-workstream
              :premise-unverified :premise-retracted :design-retracted
+             :premise-superseded :premise-goal-superseded :goal-superseded
              :no-premise :unreadable-ledger :dry-run]]
     (is (contains? @#'p/disposition-of-status s)
         (str s " must be named in the table"))))
@@ -497,6 +513,15 @@
             defaulted, it would park a blocker saying the stage escalated
             because somebody else was reviewing"
     (is (= :retry (p/disposition :detached)))))
+
+(deftest a-contended-clearance-advances-rather-than-retrying-the-round
+  (is (= :advance (p/disposition :clearance-contended))
+      "contention is not a grant owed, so it never parks as the design round's
+       ask — and not :retry, which re-runs a round whose decision is already on
+       the ledger and parks when the attempts run out")
+  (is (= :advance (p/disposition :nothing-to-clear))
+      "the ledger moved on after the clearance stage was fired; the next tick
+       reads where"))
 
 (deftest an-unknown-terminal-escalates-rather-than-advancing
   ;; The fail-safe direction. Advancing on an outcome nobody has understood is
@@ -622,7 +647,9 @@
         (let [b (add! :baseline a-baseline)]
           (add! :baseline-review {:format :baseline-review :verdict :sufficient
                                   :baseline-seq b :reason "holds"})
-          (let [d (add! :design (a-design b))]
+          ;; :challenges, so the grant nobody gave is one a person owes.
+          (let [d (add! :design (assoc (a-design b)
+                                       :standing {:relation :challenges :note "n"}))]
             (add! :design-decision (a-decision d :proceed))
             ;; Through the back door on purpose: the grant this test is about
             ;; is exactly what the ledger now demands before it will write one.
@@ -758,6 +785,16 @@
   (is (not-any? #{:landing} (map p/stage-of p/arc-stages))
       "and no stage on the spine is one a landing maps to"))
 
+(deftest a-review-loop-analysis-sits-beside-the-arc-rather-than-on-it
+  ;; Named for the review loop, not for the arc's review: it judges a RUN rather
+  ;; than a rung, and folding it into :implementation would report a reading
+  ;; about the machinery as work done on the change.
+  (let [a (p/arc [{:kind :intent :seq 1} {:kind :review-analysis :seq 2}])]
+    (is (= [:analysis] (mapv :stage (:excursions a))))
+    (is (not-any? #(= :current (:state %)) (:stages a))
+        "and no spine stage is current, which is what `arc` already says of a
+         trail ending on an excursion — the analysis is not where the work got to")))
+
 (deftest a-landing-is-reported-beside-the-arc-rather-than-in-it
   (let [a (p/arc [{:kind :intent :seq 1} {:kind :design :seq 2}
                   {:kind :pr-opened :seq 3} {:kind :merged :seq 4}])]
@@ -766,3 +803,146 @@
     (is (= 2 (:entries (first (:excursions a)))))
     (is (not-any? #(= :landing (:stage %)) (:stages a))
         "and nothing of it on the spine")))
+
+(deftest a-cleared-design-hands-straight-to-the-implementation
+  ;; The gate stops being unconditional. A round decided it, its declarations
+  ;; owed nobody, and the clearance it appended is what the fold reads — not the
+  ;; declarations, which would be a record trusted about itself.
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)]
+        (intent! add!)
+        (let [b (add! :baseline a-baseline)]
+          (add! :baseline-review {:format :baseline-review :verdict :sufficient
+                                  :baseline-seq b :reason "holds"})
+          (let [d (add! :design (a-design b))]
+            (add! :design-decision (a-decision d :proceed))
+            (is (= :design-decided (:at (p/of :brian id)))
+                "decided, and still at the gate until something clears it")
+            (clear! id d)
+            (let [r (p/of :brian id)]
+              (is (= :design-cleared (:at r)))
+              (is (= {:stage :implement :mode :working-copy} (:next r))
+                  "and no person is asked"))))))))
+
+(deftest a-grant-still-outranks-a-clearance
+  ;; A person having granted it is the stronger fact and keeps its own position:
+  ;; :design-approved is what the landing check and the surfaces report.
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)]
+        (intent! add!)
+        (let [b (add! :baseline a-baseline)]
+          (add! :baseline-review {:format :baseline-review :verdict :sufficient
+                                  :baseline-seq b :reason "holds"})
+          (let [d (add! :design (a-design b))]
+            (add! :design-decision (a-decision d :proceed))
+            (clear! id d)
+            (add! :design-approved {:format :design-approved :design {:seq d} :at-seq d})
+            (is (= :design-approved (:at (p/of :brian id))))))))))
+
+(deftest a-cleared-design-lets-the-work-advance-rather-than-looping
+  ;; The defect the re-entry clamp caused: it returned an empty trail whenever
+  ;; :approved-by was nil, so `place` ignored a completed implementation, handed
+  ;; back :design-cleared and pointed at :implement again — for ever, at the gate
+  ;; the clearance was supposed to have removed.
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)]
+        (intent! add!)
+        (let [b (add! :baseline a-baseline)]
+          (add! :baseline-review {:format :baseline-review :verdict :sufficient
+                                  :baseline-seq b :reason "holds"})
+          (let [d (add! :design (a-design b))]
+            (add! :design-decision (a-decision d :proceed))
+            (clear! id d)
+            (add! :implementation-completed {:format :implementation-completed
+                                             :summary "done" :artifacts []
+                                             :design {:seq d}})
+            (let [r (p/of :brian id)]
+              (is (= :implemented (:at r))
+                  "the completed work counts, with no grant anywhere")
+              (is (= :review-implementation (:stage (:next r)))))))))))
+
+(deftest a-clearance-naming-another-design-does-not-clear-this-one
+  ;; A bare presence test passed any workstream holding any clearance. Clear D1,
+  ;; then append a :challenges D2: D2 would place as :design-cleared and be sent
+  ;; to :implement without its own decision or grant.
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)]
+        (intent! add!)
+        (let [b (add! :baseline a-baseline)]
+          (add! :baseline-review {:format :baseline-review :verdict :sufficient
+                                  :baseline-seq b :reason "holds"})
+          (let [d1 (add! :design (a-design b))]
+            (add! :design-decision (a-decision d1 :proceed))
+            (clear! id d1)
+            (add! :design (assoc (a-design b)
+                                 :standing {:relation :challenges
+                                            :note "it moves the boundary"}
+                                 :supersedes {:seq d1 :why "recut"}))
+            (is (not= :design-cleared (:at (p/of :brian id)))
+                "the clearance names the design it cleared, and only that one")))))))
+
+;; ── A goal that moved under the survey ─────────────────────────────────────
+
+(defn- amend-goal!
+  "Replace the goal at entry 1, as an intent amendment does."
+  [add!]
+  (add! :intent {:format :intent :goal "g2" :done-when ["d2"]
+                 :supersedes {:seq 1 :why "the goal moved"}}))
+
+(deftest a-replaced-goal-sends-the-arc-back-to-the-survey-with-no-design
+  ;; A sufficient review of a survey whose goal has since moved verifies nothing:
+  ;; the boundary refuses a design over it and a review of it alike, so reading
+  ;; the review alone sent the arc to write the one record nobody may.
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)]
+        (intent! add!)
+        (let [b (add! :baseline a-baseline)]
+          (add! :baseline-review {:format :baseline-review :verdict :sufficient
+                                  :baseline-seq b :reason "holds"})
+          (is (= :baseline-verified (:at (p/of :brian id))) "before the goal moves")
+          (let [g2 (amend-goal! add!)
+                r  (p/of :brian id)]
+            (is (false? (p/baseline-verified? :brian id))
+                "verification is standing's answer, and the goal it was scoped for moved")
+            (is (= :goal-superseded (:at r)))
+            (is (= {:stage :rebaseline :mode :authoring} (:next r))
+                "a new survey, not a design over the old one and not a review of it")
+            (is (= g2 (get-in r [:re-entry :because :replaced-by]))
+                "the goal the new survey cites, read rather than taken from recency")
+            (is (= b (get-in r [:re-entry :because :baseline]))
+                "and the survey it supersedes")))))))
+
+(deftest a-replaced-goal-sends-the-arc-back-to-the-survey-under-a-design-too
+  (with-tmp
+    (fn [_]
+      (let [[id add!] (ledger)]
+        (intent! add!)
+        (let [b (add! :baseline a-baseline)]
+          (add! :baseline-review {:format :baseline-review :verdict :sufficient
+                                  :baseline-seq b :reason "holds"})
+          (let [d (add! :design (a-design b))]
+            (add! :design-decision (a-decision d :proceed))
+            (let [g2 (amend-goal! add!)
+                  r  (p/of :brian id)]
+              (is (= :goal-superseded (:at r))
+                  "not the design that cites the survey, and not a grant over it")
+              (is (= {:stage :rebaseline :mode :authoring} (:next r)))
+              (testing "and once the survey is re-done under the live goal"
+                (let [b2 (add! :baseline (assoc a-baseline :intent {:seq g2}
+                                                :supersedes {:seq b :why "the goal moved"}))]
+                  (is (= {:stage :verify-baseline :mode :mechanical}
+                         (:next (p/of :brian id)))
+                      "it is verified — the old design is not decided over it")
+                  (add! :baseline-review {:format :baseline-review :verdict :sufficient
+                                          :baseline-seq b2 :reason "holds"})
+                  (let [r (p/of :brian id)]
+                    (is (= :baseline-verified (:at r))
+                        "and a design is owed: the one that stood on the old goal
+                         does not stand, so nothing it was decided on places the
+                         workstream")
+                    (is (= {:stage :design :mode :authoring} (:next r)))))))))))))

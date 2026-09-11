@@ -189,18 +189,18 @@
      derived: a field beside the citations would be a second answer to a question the graph
      already settles, and the one that drifts."
     {:signature [:=> [:catn [:w Workstream] [:seq-n :int]] [:maybe :int]]})
-  (Operation live-design-seq
-    "The :seq of the newest :design on a workstream, or nil when it holds none — what a
-     trail record cites only where nothing names the design its work was done under.
+  (Operation holds-design?
+    "Whether a workstream holds a :design at all — a PRESENCE CHECK, and never a citation
+     source.
 
      Every trail record is about work, and cites what that work named: a PR the design its
-     publisher names, the merge poller the PR's own records, the review loop the design its
-     rounds judged against. The newest design is a different answer exactly when it matters —
-     after one is appended while the work was being done. PUBLIC because the merge poller and
-     the review loop fall back here when nothing names one, and a second implementation of
-     `which design is current` is how the ledger and its writers come to disagree about the
-     same entries."
-    {:signature [:=> [:catn [:w Workstream]] [:maybe :int]]})
+     publisher names, a merge the PR's own records, a review the design its rounds judged
+     against. When nothing names one the writer skips the record and says so, because append
+     order is not evidence of which design work was done under; all it needs to know is whether
+     a citation was owed at all. A boolean on purpose, so no writer can read it as `which
+     design`. PUBLIC because the :pr-opened writer, the merge poller and the review loop each
+     ask it, and three implementations of `does this ledger hold a design` would drift."
+    {:signature [:=> [:catn [:w Workstream]] :boolean]})
   (Operation engagement
     "Whether anyone is engaged with this workstream, from its own sessions."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :keyword]

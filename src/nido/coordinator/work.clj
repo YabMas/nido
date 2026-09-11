@@ -333,11 +333,12 @@
          ;; an answer to "should we build this", and offering it there invites it
          ;; to be read as one.
          ;; Gated on `grantable?`, which is the SAME reading approve! re-asks —
-         ;; passed in because this is pure and cannot read a ledger. Only :proceed
-         ;; is a question for a human: a round that answered :recut or :amend
-         ;; judged the RECORD rather than whether to build it, and the next move
-         ;; is the author's, so offering Approve there grants the design that
-         ;; round had just sent back.
+         ;; passed in because this is pure and cannot read a ledger. Only a
+         ;; decision that proceeds (`report/proceeds?`) is a question for a
+         ;; human: a round that answered :recut or :amend over anything but the
+         ;; advisory check judged the RECORD rather than whether to build it, and
+         ;; the next move is the author's, so offering Approve there grants the
+         ;; design that round had just sent back.
          ;;
          ;; Read off the LEDGER rather than off the report the button was
          ;; rendered from. The two are usually the same entry and come apart

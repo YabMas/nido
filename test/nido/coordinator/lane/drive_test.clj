@@ -298,6 +298,20 @@
         (is (nil? (ws/latest-entry :brian id :blocker))
             "nothing to tell a human about: somebody else is reviewing")))))
 
+(deftest a-contended-clearance-spends-no-attempt-and-parks-nothing
+  ;; The decision is on the ledger and only its clearance is unwritten. Retrying
+  ;; inside this Run would re-run the round and park when the attempts ran out —
+  ;; a person's gate made out of ledger contention, for a design owing nobody.
+  (with-tmp
+    (fn []
+      (let [id (a-ws)
+            f  (stage-returning [:clearance-contended])
+            r  ((:run f) :brian id)]
+        (is (= 1 @(:calls f)) "asked once; the next tick asks again")
+        (is (= [] @(:slept f)))
+        (is (= :advance (:disposition r)))
+        (is (nil? (ws/latest-entry :brian id :blocker)))))))
+
 (deftest a-decided-round-is-never-run-twice
   ;; :disputed is the round SAYING something. Retrying it would run a decided
   ;; stage again and could only produce the same answer.
@@ -420,10 +434,12 @@
         (ws/append-entry! :brian id {:kind :baseline-review}
                           (pr-str {:format :baseline-review :baseline-seq 2
                                    :verdict :sufficient :reason "r"}))
+        ;; :challenges, so a person IS owed the grant. A design owing nobody
+        ;; is handed to the clearance stage instead, which the driver fires.
         (ws/append-entry! :brian id {:kind :design}
                           (pr-str {:format :design :summary "s" :shape "sh"
                                    :invariants ["one summing path"]
-                                   :standing {:relation :conforms}
+                                   :standing {:relation :challenges :note "n"}
                                    :baseline {:seq 2 :relation :within}
                                    :intent {:seq 1} :effort :S}))
         (ws/append-entry! :brian id {:kind :design-decision}
@@ -445,8 +461,10 @@
   ;; them, so it cannot drift: `next-by-position` decides which stage is DUE and
   ;; `mechanical-stages` decides how it is RUN, nothing else compares them, and
   ;; a stage stamped :mechanical with no runner is a wall nobody wrote.
+  ;; `clearance` is the one next action `of` names outside the table.
   (is (empty? (->> pipeline/positions
                    (keep #(pipeline/next-action % :pickup))
+                   (cons @#'pipeline/clearance)
                    (filter #(= :mechanical (:mode %)))
                    (map :stage)
                    (remove drive/mechanical-stages)

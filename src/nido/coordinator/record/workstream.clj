@@ -350,7 +350,7 @@
    rule above. Retracting says a RECORD is untrue, which a triage report can be;
    citing one as a goal says a unit is FOR it, which it cannot be."
   [w kind payload]
-  (when (#{:retraction :design-approved :design :baseline :intent} kind)
+  (when (#{:retraction :design-approved :design-cleared :design :baseline :intent} kind)
     (let [r (edn/read-string payload)]
       (case kind
         :retraction      (cites! w r [:retracts :seq]
@@ -364,7 +364,8 @@
                              (cites! w r [:intent :seq] #{:intent}
                                      "Baseline :intent"))
         :intent          (cites! w r [:supersedes :seq] #{:intent}
-                                 "Intent :supersedes")))))
+                                 "Intent :supersedes")
+        :design-cleared  (cites! w r [:design :seq] #{:design} "Clearance")))))
 
 (defn- superseded-goals
   "Every :intent :seq that a later :intent says it replaces.
@@ -396,7 +397,8 @@
    :design-decision [[:design-seq]]
    :design-verdict  [[:design-seq]]
    :design-approved [[:design :seq]]
-   :review          [[:design :seq]]})
+   :review          [[:design :seq]]
+   :design-cleared  [[:design :seq]]})
 
 (defn- goals-reached
   "Every goal — an :intent, and only an :intent — that `record`, of
@@ -517,6 +519,7 @@
    :design-decision [[:design-seq]]
    :design-verdict  [[:design-seq]]
    :design-approved [[:design :seq]]
+   :design-cleared  [[:design :seq]]
    :implementation-completed [[:design :seq]]
    :review          [[:design :seq]]
    :pr-opened       [[:design :seq]]
@@ -613,9 +616,56 @@
                          :named        (mapv :phase orphan)
                          :phases       (vec claims)}))))))
 
+(defn- check-clearance-owed!
+  "A clearance is admitted only on the evidence that makes it one: the latest
+   decision naming its design recommended proceeding, and that design's own
+   declarations owe nobody a grant.
+
+   Asked of entries this lock can see and never of `standing`, which reads this
+   namespace. The third part — nothing blocked the design when it was cleared —
+   IS standing's answer, read by the writer at a position it hands
+   `append-entry-at!` — never stores — and that compare is what keeps the
+   reading true at the write. That is why `append-entry!`
+   refuses the kind outright: every reader that admits a design on a clearance
+   naming it trusts this record, so one written with no round behind it, or
+   over a design that owes a person the grant, is work nobody judged.
+
+   Fails closed on a decision nobody can parse, since the one unread may be the
+   latest and may not proceed."
+  [w kind payload]
+  (when (= :design-cleared kind)
+    (let [n         (get-in (edn/read-string payload) [:design :seq])
+          design    (read-entry-at w n)
+          decisions (->> (:entries w)
+                         (filter #(= :design-decision (:kind %)))
+                         (mapv #(read-entry-at w (:seq %))))
+          decision  (->> decisions (filter #(= n (:design-seq %))) last)
+          refuse!   (fn [why] (throw (ex-info (str "Clearance names the design at entry "
+                                                   n ", " why)
+                                              {:design n :decision (:seq decision)})))]
+      (cond
+        (or (nil? design) (some nil? decisions))
+        (refuse! "and an entry it rests on cannot be read")
+
+        (nil? decision)
+        (refuse! "which no decision round has judged")
+
+        (not (report/proceeds? decision))
+        (refuse! (str "whose latest decision recommends " (name (:recommend decision))
+                      " and does not proceed"))
+
+        (report/owes-a-person? design)
+        (refuse! "whose declarations owe a person the grant")))))
+
 (defn- check-implementation-approved!
-  "Refuse an implementation record on a workstream whose live design nobody
-   granted.
+  "Refuse an implementation record on a workstream whose live design nothing
+   cleared — neither a round nor a person.
+
+   TWO ways a design becomes implementable, because a grant is owed only when
+   the design says something high-level is at stake. A `:design-cleared` is a
+   round having found it implementable without one; a `:design-approved` is a
+   person granting it. Either satisfies this floor, and a design carrying
+   neither has had nobody and nothing say it may be built.
 
    ONLY when the workstream HAS a design, and that guard is the whole of the
    rule's aim. Measured across the live ledgers: of the 18 implementation
@@ -648,20 +698,97 @@
    this adds is the floor underneath that — the pipeline governs what nido
    TELLS a session to do, and a person who implements anyway can still be
    refused the record that would carry the arc past the grant they never got."
-  [w kind]
+  [w kind payload]
   (when (= :implementation-completed kind)
-    (when-let [design (->> (:entries w) (filter #(= :design (:kind %))) last)]
-      (let [granted (->> (:entries w)
-                         (filter #(= :design-approved (:kind %)))
-                         (keep #(get-in (read-entry-at w (:seq %)) [:design :seq]))
-                         set)]
-        (when-not (contains? granted (:seq design))
-          (throw (ex-info (str "No approval names the live design (entry "
+    ;; The design the record CITES, not the ledger's newest. Since a trail record
+    ;; names what it was made under, the two come apart exactly where it matters:
+    ;; work completed under a cleared D1 while an unjudged D2 sits above it is a
+    ;; fact about D1, so asking D2's clearance would refuse the truth and admit
+    ;; the lie. Falls back to the newest for a record citing none, which can only
+    ;; be a workstream holding no design at all.
+    (when-let [design (let [n (get-in (edn/read-string payload) [:design :seq])]
+                        (if n
+                          (->> (:entries w) (filter #(= n (:seq %))) first)
+                          (->> (:entries w) (filter #(= :design (:kind %))) last)))]
+      (let [named   (fn [k] (->> (:entries w)
+                                 (filter #(= k (:kind %)))
+                                 (keep #(get-in (read-entry-at w (:seq %)) [:design :seq]))
+                                 set))
+            granted (named :design-approved)
+            cleared (named :design-cleared)]
+        (when-not (or (contains? granted (:seq design))
+                      (contains? cleared (:seq design)))
+          (throw (ex-info (str "Nothing clears the live design (entry "
                                (:seq design) ") on " (:id w)
-                               " — grant it from the gate, or supersede it")
+                               " — a round must clear it, or a person grant it,"
+                               " or it must be superseded")
                           {:design    (:seq design)
                            :granted   (vec (sort granted))
+                           :cleared   (vec (sort cleared))
                            :ws-id     (:id w)})))))))
+
+(defn- refuse-unguarded-clearance!
+  "A `:design-cleared` goes through `append-entry-at!` and nowhere else.
+
+   A clearance is an answer read at a position, and only the guarded writer can
+   say that position has not moved since. Admitted here it would be a clearance
+   compared against nothing — and the implementation floor above trusts one as
+   it trusts a grant."
+  [kind]
+  (when (= :design-cleared kind)
+    (throw (ex-info "A :design-cleared is appended only through append-entry-at!"
+                    {:kind kind}))))
+
+(defn- check-clearance-earned!
+  "A `:design-cleared` records a round that ran, over a design that owes nobody,
+   at the position it was compared at.
+
+   Both are on the ledger or in hand under the lock, so each is asked rather
+   than trusted to the writer: a `:design-decision` naming the design that
+   recommends :proceed, and the design's own declarations
+   (`report/owes-a-person?`). Not `standing` — it reads this namespace, and
+   re-deriving it under the lock is the alternative the design turned down.
+   The stale refusal is what answers for standing: any append after the
+   writer's reading moves the position, so nothing can land in between.
+
+   The POSITION is not among them, and the record carries none. It is
+   `append-entry-at!`'s own argument, compared under this same lock, so a
+   clearance's place in the ledger IS the snapshot it was written against — a
+   field restating it could only ever agree or be wrong.
+
+   Without it a clearance was admitted on its kind alone, and an append supplied
+   the decision no round had reached."
+  [w kind payload at]
+  (when (= :design-cleared kind)
+    (let [r        (edn/read-string payload)
+          n        (get-in r [:design :seq])
+          proceeds (->> (:entries w)
+                        (filter #(= :design-decision (:kind %)))
+                        (map #(read-entry-at w (:seq %)))
+                        (some #(and (= n (:design-seq %))
+                                    (= :proceed (:recommend %)))))
+          design   (read-entry-at w n)]
+      (cond
+        (not proceeds)
+        (throw (ex-info (str "Clearance names the design at entry " n
+                             ", and no :design-decision on " (:id w)
+                             " recommends proceeding on it — a clearance records"
+                             " a round, and none reached it")
+                        {:design n :ws-id (:id w)}))
+
+        (nil? design)
+        (throw (ex-info (str "Clearance names the design at entry " n
+                             ", which cannot be read — its declarations are what"
+                             " say whether a grant is owed")
+                        {:design n :ws-id (:id w)}))
+
+        (report/owes-a-person? design)
+        (throw (ex-info (str "Clearance names the design at entry " n
+                             ", which declares :challenges or :revisit — it owes"
+                             " a person a grant, and no round can clear it")
+                        {:design n :ws-id (:id w)}))
+
+))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :Path]}
   append-lock-path
@@ -769,23 +896,24 @@
   (when-let [e (->> (:entries w) (filter #(= seq-n (:seq %))) first)]
     (first (roots-of w (read-entry-at w seq-n) (:kind e)))))
 
-(defn ^{:malli/schema [:=> [:cat :Workstream] [:maybe :int]]}
-  live-design-seq
-  "The :seq of the newest :design on `w`, or nil when it holds none.
+(defn ^{:malli/schema [:=> [:cat :Workstream] :boolean]}
+  holds-design?
+  "Does `w` hold a :design at all?
 
-   NOT what a trail record cites. Every one of them records work, and cites the
-   design that work named: a PR the one its publisher names, the merge poller
-   the PR's own records, the review loop the design its rounds judged against.
-   The newest is a different answer exactly when it matters — after a design is
-   appended while the work was being done. The two writers outside this
-   namespace fall back here only where nothing names one, which is why this is
-   public — a second implementation of `which design is current` is how the
-   ledger and its writers come to disagree.
+   A PRESENCE CHECK, and never a citation source. Every trail record records
+   work and cites the design that work named: a PR the one its publisher names,
+   a merge the PR's own records, a review the design its rounds judged against.
+   When nothing names one, the writer skips the record and says so rather than
+   filing it under the newest design — append order is not evidence of which
+   design work was done under. What those writers need is only whether a
+   citation was owed at all, which is this.
+
+   A boolean on purpose: an answer that cannot be read as `which design` is one
+   no writer can fall back to for a citation.
 
    Off the INDEX, so it parses nothing."
   [w]
-  (when-let [seqs (seq (keep #(when (= :design (:kind %)) (:seq %)) (:entries w)))]
-    (apply max seqs)))
+  (boolean (some #(= :design (:kind %)) (:entries w))))
 
 (defn- index-row
   "The index row for an entry: what `entry` carried, plus the ledger's own
@@ -825,8 +953,14 @@
    :seq is the identity every citation in the ledger is keyed on, so an
    unattended driver appending beside a session agent is exactly the condition
    under which `it does not in fact race` stops being a property of the system
-   and starts being a property of the operator."
+   and starts being a property of the operator.
+
+   A :design-cleared is refused here: it records a reading of the ledger at a
+   position, so it is written only through `append-entry-at!`."
   [project ws-id entry content]
+  (when (= :design-cleared (:kind entry))
+    (throw (ex-info "A :design-cleared is written at a position — through append-entry-at!"
+                    {:kind (:kind entry) :ws-id ws-id})))
   (io/with-file-lock
     (append-lock-path project ws-id)
     (fn []
@@ -841,13 +975,14 @@
             seq-n (inc (max (count (:entries w))
                             (highest-seq-on-disk project ws-id)))
             [ext payload] (report/entry-payload (:kind entry) content)
+            _     (refuse-unguarded-clearance! (:kind entry))
             _     (check-baseline-citation! w (:kind entry) payload)
             _     (check-standing-citations! w (:kind entry) payload)
             _     (check-goal-is-live! w (:kind entry) payload)
             _     (check-trail-attribution! w (:kind entry) payload)
             _     (check-one-root! w (:kind entry) payload)
             _     (check-seam-phase-ref! (:kind entry) payload)
-            _     (check-implementation-approved! w (:kind entry))
+            _     (check-implementation-approved! w (:kind entry) payload)
             fname (format "%04d-%s.%s" seq-n (name (:kind entry)) ext)
             rel   (str "entries/" fname)
             abs   (str (fs/path (cstate/workstream-dir project ws-id) rel))]
@@ -894,11 +1029,13 @@
                 [ext payload] (report/entry-payload (:kind entry) content)
                 _     (check-baseline-citation! w (:kind entry) payload)
                 _     (check-standing-citations! w (:kind entry) payload)
+                _     (check-clearance-owed! w (:kind entry) payload)
                 _     (check-goal-is-live! w (:kind entry) payload)
                 _     (check-trail-attribution! w (:kind entry) payload)
                 _     (check-one-root! w (:kind entry) payload)
                 _     (check-seam-phase-ref! (:kind entry) payload)
-            _     (check-implementation-approved! w (:kind entry))
+                _     (check-implementation-approved! w (:kind entry) payload)
+                _     (check-clearance-earned! w (:kind entry) payload latest)
                 fname (format "%04d-%s.%s" seq-n (name (:kind entry)) ext)
                 rel   (str "entries/" fname)
                 abs   (str (fs/path (cstate/workstream-dir project ws-id) rel))]
@@ -1036,7 +1173,7 @@
           skip (cond
                  (or (str/blank? url) (str/blank? title))
                  "carries no :url/:title"
-                 (and (nil? d) (live-design-seq w))
+                 (and (nil? d) (holds-design? w))
                  "names no :design, and no implementation record listing it does")]
       (if skip
         (binding [*err* *err*]

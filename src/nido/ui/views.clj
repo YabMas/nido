@@ -1704,6 +1704,7 @@
    :baseline-verified "Baseline verified"
    :designed          "Designed"
    :design-decided    "Decision made"
+   :design-cleared    "Cleared"
    :design-approved   "Approved"
    :implemented       "Implemented"
    :reviewed          "Reviewed"
@@ -1715,6 +1716,7 @@
    :premise-retracted "Premise retracted"
    :design-retracted  "Design retracted"
    :design-invalidated "Design invalidated"
+   :goal-superseded   "Goal moved"
    :unplaceable       "Cannot place"})
 
 (def ^:private stage-label

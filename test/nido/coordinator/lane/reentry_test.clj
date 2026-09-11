@@ -219,17 +219,22 @@
               d2 (add :design (a-design b d1))
               _  (add :design-approved {:format :design-approved :design {:seq d2}
                                         :at-seq d2})
-              w  (ws/read-ws :brian id)
-              d  (ws/latest-entry :brian id :design)
-              st (standing/of-design :brian id d)]
-          (is (= (reentry/of :brian id) (reentry/of* w d st))))))))
+              w   (ws/read-ws :brian id)
+              d   (ws/latest-entry :brian id :design)
+              st  (standing/of-design :brian id d)
+              bst (standing/of-baseline :brian id (ws/latest-entry :brian id :baseline))]
+          (is (= (reentry/of :brian id) (reentry/of* w d st bst))))))))
 
 (deftest an-indeterminate-standing-sends-it-back-to-the-design
   ;; Fails closed, like the standing under it: a ledger nobody can read is not a
   ;; workstream anybody may advance.
-  (is (= :design (:stage (reentry/of* {:entries []} {:seq 3}
-                                      {:indeterminate? true
-                                       :blocked {:reason :unreadable-ledger}})))))
+  (let [r (reentry/of* {:entries []} {:seq 3}
+                       {:indeterminate? true
+                        :blocked {:reason :unreadable-ledger}}
+                       nil)]
+    (is (= :design (:stage r)))
+    (is (true? (:indeterminate? r))
+        "and says so, so the fold does not read it as a design merely owed again")))
 
 (deftest redoing-the-work-clears-the-stage-and-leaves-the-ones-above-it-owed
   ;; The escape. Found by walking the whole arc rather than by a unit test: an

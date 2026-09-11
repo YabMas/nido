@@ -2864,9 +2864,12 @@
           (is (false? (boolean (:needs-you (row))))
               "nothing is owed while the next move is nido's own")
 
+          ;; :challenges, so a person IS owed the grant — a design owing nobody
+          ;; goes to the clearance stage, which is nido's own move.
           (let [d (add! :design
                         {:format :design :summary "s" :shape "sh"
-                         :invariants ["one path"] :standing {:relation :conforms}
+                         :invariants ["one path"]
+                         :standing {:relation :challenges :note "n"}
                          :baseline {:seq b :relation :within}
                          :intent {:seq 1} :effort :S})]
             (add! :design-decision

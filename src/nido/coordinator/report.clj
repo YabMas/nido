@@ -2231,6 +2231,95 @@
    [:at-seq  int?]
    [:note    {:optional true} string?]])
 
+(def DesignCleared
+  "A decision round found this design implementable without a person: it
+   recommended proceeding, nothing blocked it, and its own declarations owed
+   nobody a grant.
+
+   RECORDED rather than recomputed, and that is the whole of why it exists. The
+   three parts could be composed on demand from records that stay put — a
+   decision recommending :proceed, declarations frozen in the design — but the
+   composition does not survive its own ordering. A :conforms/:within design
+   starts its first round; a verdict invalidates it before the round appends;
+   the round then appends :proceed. Nothing was superseded, so a freshness test
+   accepts it — yet clearance was false before the append, because no decision
+   existed, and false after it, because an invalidating verdict stays unanswered
+   until an APPROVAL names the design and a proceeding decision is not one. The
+   composition reports a moment that never happened.
+
+   So the answer is appended when it is reached, exactly as a grant is, and
+   every later reader asks a citation instead of recomputing a predicate.
+
+   The position is NOT STORED. The reading and the write are two operations with
+   a ledger between them, so the append goes through `append-entry-at!` with the
+   position `standing` was read at: an unmoved ledger has an unmoved answer, and
+   one that moved takes the position and the write is refused rather than
+   recording a clearance for a design something has since reached. What that
+   makes true is that the entry's own place in the ledger IS the snapshot — a
+   stored copy would be a second one the append never compares, free to
+   disagree with the position it actually guarded."
+  [:map {:closed true}
+   [:format [:= :design-cleared]]
+   [:design [:map {:closed true} [:seq int?]]]])
+
+(defn ^{:malli/schema [:=> [:cat :map] :boolean]}
+  owes-a-person?
+  "Does this design record, on its own, say something high-level is at stake?
+
+   Over the RECORD ALONE and never the ledger, which is what lets the append
+   boundary and `standing` ask it without one calling the other. Two
+   declarations, both already required and both already carrying their
+   obligations: `:challenges` against the project stance needs a note,
+   `:revisit` against the baseline must name what it `:breaks`. A change that
+   declares neither is saying it lands on an existing extension point and adds
+   no commitment — which is the case a person was being asked about for no
+   reason.
+
+   The declarations decide whether a GRANT is owed. They never decide whether
+   the decision round runs: that round is what falsifies them against the
+   record, and a design no round has judged is not cleared by saying so about
+   itself."
+  [design]
+  (boolean (or (= :challenges (get-in design [:standing :relation]))
+               (= :revisit    (get-in design [:baseline :relation])))))
+
+(def ^:private advisory-check
+  "The one derived check that may not block, and the reason it is the only one.
+
+   `relation-honest`, `goal-served` and `routing-coherent` judge what the change
+   COMMITS TO. `decomposable` judges how the work will be sliced for review — and
+   layers do not survive: the stack is collapsed into one commit before it lands,
+   so a bad cut costs the attention of the reviewers reading it now and nothing
+   afterwards. By the time a round can report the cut is wrong, that attention is
+   already spent, and another round of re-cutting spends more than it saves.
+
+   Measured before this existed: `decomposable` was 143 of the 357 findings the
+   design round had produced, it was the sole complaint in 41 of 193
+   finding-bearing rounds, and it was the only check still open at the terminal
+   round of 16 of the 61 runs that ended badly. Two prompt-level bars against
+   over-splitting were already in place through all of that, which is why the
+   rule is enforced and not only asked for."
+  :decomposable)
+
+(defn ^{:malli/schema [:=> [:cat [:maybe :map]] :boolean]}
+  proceeds?
+  "Does this design decision let its design proceed?
+
+   It does when it recommends :proceed, and when everything the round found
+   broken is the advisory check, whatever it recommended — a complaint about the
+   cut alone may not hold a design. False when nothing broke on a round that did
+   not say :proceed: a clean round reads as its own recommendation.
+
+   ONE definition, over the record alone, for every reader that asks it: the
+   judge that ends the round, the clearance writer and the boundary that admits
+   its record, the position fold, and the gate that offers a grant. A reader
+   testing the recorded :recommend instead is how an advisory-only design came to
+   be parked for a person whose grant nothing then accepted."
+  [decision]
+  (let [broken (filter #(= :broken (:status %)) (:checks decision))]
+    (boolean (or (= :proceed (:recommend decision))
+                 (and (seq broken) (every? #(= advisory-check (:check %)) broken))))))
+
 (def event-schemas
   "Entry :kind → its Malli schema. Drives ledger-boundary validation + rendering.
    A :kind absent here is stored as verbatim markdown (legacy / freeform)."
@@ -2258,7 +2347,8 @@
    :improvement-claim-reserved ImprovementClaimReserved
    :proposed-ticket          ProposedTicket
    :retraction               Retraction
-   :design-approved          DesignApproved})
+   :design-approved          DesignApproved
+   :design-cleared           DesignCleared})
 
 (def read-schemas
   "Kinds whose READ contract is wider than their write contract, because records

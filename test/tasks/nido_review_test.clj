@@ -797,6 +797,30 @@
         (is (= :review (:kind (:entry @appended))))
         (is (str/includes? (:content @appended) ":review-report"))))))
 
+(deftest append-review-entry-refuses-to-infer-the-design-it-was-made-under
+  ;; Attribution is read, never inferred. A run that captured no design on a
+  ;; workstream holding one has a judgement nobody can attribute, and filing it
+  ;; under the newest design would record a review of a design no round read.
+  (let [appended (atom [])]
+    (with-redefs [lifecycle/session-from-cwd (fn [_] {:project "brian" :session "s1"})
+                  csession/workstream-id-for (fn [_ _] "ws-1")
+                  ws/read-ws (fn [_ _] {:id "ws-1" :entries [{:kind :design :seq 3}]})
+                  ws/append-entry! (fn [_ _ _ content] (swap! appended conj content) "/path")]
+      (binding [*err* (java.io.StringWriter.)]
+        (is (nil? (t/append-review-entry! "/w" {:status :converged :findings []}
+                                          {:summary {:rounds 1 :fix-attempts 0}
+                                           :target {:base "main" :base-rev "abc"}}
+                                          "/runs/r/report.json"))
+            "nil, so the caller reports that no entry reached the ledger"))
+      (is (empty? @appended) "nothing filed under the newest design")
+      (is (= "ws-1" (t/append-review-entry! "/w" {:status :converged :findings []
+                                                  :design {:seq 3}}
+                                            {:summary {:rounds 1 :fix-attempts 0}
+                                             :target {:base "main" :base-rev "abc"}}
+                                            "/runs/r/report.json")))
+      (is (str/includes? (first @appended) ":design {:seq 3}")
+          "the design the run captured is the citation"))))
+
 (deftest append-review-entry-noops-without-workstream
   (let [called (atom false)]
     (with-redefs [lifecycle/session-from-cwd (fn [_] nil)
@@ -1013,7 +1037,7 @@
            :disputed           "neither can settle it"
            :retreated          "below what its own round would check"
            :no-record          "author the design first"
-           :not-worth-running  "would not pay"
+           :clearance-contended "no round re-runs"
            :codex-failed       "NOT a clean result"}]
     (with-redefs [rloop/run-loop (fn [_] {:status status})]
       (let [out (with-out-str (t/design-cmd ":cwd" "/w"))]

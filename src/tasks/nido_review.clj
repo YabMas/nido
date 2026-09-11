@@ -245,21 +245,29 @@
   "Resolve cwd → session → workstream (the tasks.nido-ship path) and append one :review
    entry. Best-effort: a ledger-write failure must never turn a completed review
    into a failure exit — visibility is a side record, not part of the review. No-op
-   returning nil when cwd maps to no workstream or the append fails. Returns ws-id."
+   returning nil when cwd maps to no workstream, the append fails, or the run
+   captured no design on a workstream that holds one. Returns ws-id."
   [cwd final report report-path]
   (try
     (when-let [{:keys [project session]} (lifecycle/session-from-cwd cwd)]
       (when-let [ws-id (csession/workstream-id-for (keyword project) session)]
         ;; The design the run's last round JUDGED against, which it read at the
         ;; round's start — not the newest at append time, which a design written
-        ;; mid-run would make one no reviewer saw. The live one only for a run
-        ;; that died before any round read a design.
-        (let [d (or (get-in final [:design :seq])
-                    (ws/live-design-seq (ws/read-ws (keyword project) ws-id)))]
-          (ws/append-entry! (keyword project) ws-id {:kind :review}
-                            (pr-str (cond-> (review-event final report report-path)
-                                      d (assoc :design {:seq d})))))
-        ws-id))
+        ;; mid-run would make one no reviewer saw. That is the only citation:
+        ;; attribution is read, never inferred, so a run that captured none on
+        ;; a workstream holding a design has a judgement nobody can attribute,
+        ;; and it is reported rather than filed under whichever design is newest.
+        (let [d (get-in final [:design :seq])]
+          (if (or d (not (ws/holds-design? (ws/read-ws (keyword project) ws-id))))
+            (do (ws/append-entry! (keyword project) ws-id {:kind :review}
+                                  (pr-str (cond-> (review-event final report report-path)
+                                            d (assoc :design {:seq d}))))
+                ws-id)
+            (do (binding [*out* *err*]
+                  (println (str "review-loop: not appending the :review entry to " ws-id
+                                " — the run captured no design, and the workstream holds"
+                                " one, so there is no design this judgement was made under")))
+                nil)))))
     (catch Exception e
       (binding [*out* *err*]
         (println (str "review-loop: could not append :review ledger event — "
@@ -1807,10 +1815,10 @@
 
 (def ^:private design-remedies
   {:proceed "nothing derivable blocks it — what is left is the part only you can answer"
+   :clearance-contended "the design owes nobody a grant and the decision stands, but its clearance is not written yet — the clearance stage writes it, and no round re-runs"
    :underivable "a check has no yardstick to derive against, which is not a defect an amender can repair"
    :premise-unverified "verify the baseline it cites first — `bb nido:review:baseline :seq <that entry>` — then decide against it"
-   :no-record "author the design first"
-   :not-worth-running "the design declares it moves nothing structural, so a decision round would not pay"})
+   :no-record "author the design first"})
 
 (defn- design-remedy
   "A re-survey that did not hold reports under the nested loop's own terminal
@@ -1844,6 +1852,17 @@
                      :remedies    design-remedy
                      :epilogue    design-epilogue}
                     opts))
+
+(defn ^{:malli/schema [:=> [:cat :map] :keyword]}
+  clear-cmd*
+  "Write the clearance a proceeding decision already on the ledger implies — the
+   clear-design stage. No round, so no claim and no report: the write compares
+   its position inside the append lock, which is all the exclusion it needs."
+  [{:keys [cwd]}]
+  (let [given  (or cwd (System/getProperty "user.dir"))
+        status (record/clear! (or (lifecycle/worktree-from-cwd given) given))]
+    (println (str "clearance: " (name status)))
+    status))
 
 (defn ^{:malli/schema [:=> [:cat [:* :any]] :any]}
   baseline-cmd

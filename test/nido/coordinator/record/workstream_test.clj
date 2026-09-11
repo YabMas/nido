@@ -1100,10 +1100,12 @@
             "refused before anything is written")))))
 
 (deftest every-trail-kind-records-on-a-ledger-that-holds-a-design
-  ;; The merge poller and the review loop fall back to `live-design-seq`, so an
-  ;; answer that throws once a design exists costs each of them its event — the
-  ;; merge poller's for good, since it marks the PR seen afterwards. :pr-opened
-  ;; goes through its real writer, `add-ref!`, citing what its publisher names.
+  ;; Every trail writer cites the design its work named, and `holds-design?` is
+  ;; only the presence check that says a citation was owed — never a citation
+  ;; source. An append that throws once a design exists would cost each writer
+  ;; its event — the merge poller's for good, since it marks the PR seen
+  ;; afterwards. :pr-opened goes through its real writer, `add-ref!`, citing what
+  ;; its publisher names.
   (with-tmp
     (fn [_]
       (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
@@ -1112,7 +1114,7 @@
         (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2))) ; 3
         (ws/append-entry! :brian id {:kind :design-approved}
                           (pr-str {:format :design-approved :design {:seq 3} :at-seq 3}))
-        (is (= 3 (ws/live-design-seq (ws/read-ws :brian id))))
+        (is (ws/holds-design? (ws/read-ws :brian id)))
         (ws/append-entry! :brian id {:kind :implementation-completed}
                           (pr-str (assoc an-implementation :design {:seq 3})))
         (ws/append-entry! :brian id {:kind :review}
@@ -1275,7 +1277,7 @@
         (seed-baseline! w)                          ; intent 1, baseline 2
         (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2))) ; 3
         (is (thrown-with-msg?
-             clojure.lang.ExceptionInfo #"No approval names the live design \(entry 3\)"
+             clojure.lang.ExceptionInfo #"Nothing clears the live design \(entry 3\)"
              (ws/append-entry! :brian id {:kind :implementation-completed}
                                (pr-str (assoc an-implementation :design {:seq 3}))))
             "designed, never granted, and the refusal names the entry to grant")
@@ -1310,7 +1312,160 @@
                           (pr-str (assoc (design-citing 2)
                                          :supersedes {:seq 3 :why "the shape could not hold"})))
         (is (thrown-with-msg?
-             clojure.lang.ExceptionInfo #"No approval names the live design \(entry 5\)"
+             clojure.lang.ExceptionInfo #"Nothing clears the live design \(entry 5\)"
              (ws/append-entry! :brian id {:kind :implementation-completed}
                                (pr-str (assoc an-implementation :design {:seq 5}))))
             "the grant names entry 3, and entry 5 is what would be implemented")))))
+
+;; ── The gate is read, not reached ──────────────────────────────────────────
+
+(defn- decide!
+  "A decision round's record on the design at `n`, recommending `recommend`."
+  ([id n] (decide! id n :proceed))
+  ([id n recommend]
+   (ws/append-entry! :brian id {:kind :design-decision}
+                     (pr-str (cond-> {:format :design-decision :recommend recommend
+                                      :design-seq n :reason "r" :asks "worth it?"
+                                      :checks [{:check :relation-honest :status :held
+                                                :note "n"}]}
+                               (not= :proceed recommend)
+                               (assoc :findings [{:cites ["decomposable"]
+                                                  :claim "the cut does not hold"}]))))))
+
+(defn- clear!
+  "A clearance of the design at `n`, through the only writer that takes one and
+   at the position it compares.
+
+   The record stores no position of its own: the append succeeds only while the
+   reading's position is still the ledger's latest, so the entry's own place in
+   the ledger IS the snapshot it was written against."
+  [id n]
+  (let [at (count (:entries (ws/read-ws :brian id)))]
+    (ws/append-entry-at! :brian id at {:kind :design-cleared}
+                         (pr-str {:format :design-cleared :design {:seq n}}))))
+
+(deftest a-clearance-lets-the-implementation-through-without-a-grant
+  (with-tmp
+    (fn [_]
+      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+            id (:id w)]
+        (seed-baseline! w)                                                      ; 1, 2
+        (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2))) ; 3
+        (decide! id 3)                                                          ; 4
+        (clear! id 3)                                                           ; 5
+        (is (some? (ws/append-entry! :brian id {:kind :implementation-completed}
+                                     (pr-str (assoc an-implementation :design {:seq 3}))))
+            "a round proceeded and cleared it, so nobody was owed a grant")))))
+
+(deftest a-clearance-is-written-only-at-a-position
+  ;; Every reader that admits a design on a clearance trusts this record, so the
+  ;; unguarded append would let anyone write one past the reading it stands for.
+  (with-tmp
+    (fn [_]
+      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+            id (:id w)]
+        (seed-baseline! w)
+        (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2)))
+        (decide! id 3 :proceed)
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"through append-entry-at!"
+             (ws/append-entry! :brian id {:kind :design-cleared}
+                               (pr-str {:format :design-cleared :design {:seq 3}}))))
+        (is (= 4 (count (:entries (ws/read-ws :brian id)))) "and nothing is written")))))
+
+(deftest a-clearance-needs-a-proceeding-decision-on-its-design
+  (with-tmp
+    (fn [_]
+      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+            id (:id w)]
+        (seed-baseline! w)
+        (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2)))  ; 3
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"which no decision round has judged"
+             (clear! id 3))
+            "no round, so nothing judged the design")
+        (decide! id 3 :proceed)                                                 ; 4
+        (decide! id 3 :amend)                                                   ; 5
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"latest decision recommends amend"
+             (clear! id 3))
+            "the latest decision sent it back, so the earlier :proceed clears nothing")))))
+
+(deftest a-clearance-over-a-design-owing-a-person-is-refused
+  (with-tmp
+    (fn [_]
+      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+            id (:id w)]
+        (seed-baseline! w)
+        (ws/append-entry! :brian id {:kind :design}                             ; 3
+                          (pr-str (assoc (design-citing 2)
+                                         :standing {:relation :challenges
+                                                    :note "it moves the boundary"})))
+        (decide! id 3 :proceed)
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"owe a person the grant"
+             (clear! id 3))
+            "a :challenges design is granted by a person, whatever the round said")))))
+
+(deftest a-clearance-must-name-a-design
+  (with-tmp
+    (fn [_]
+      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+            id (:id w)]
+        (seed-baseline! w)
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"Clearance cites entry 2"
+             (clear! id 2)))))))
+
+(deftest a-clearance-belongs-to-the-unit-of-the-design-it-clears
+  ;; `stands-on` is the exhaustive registry the unit walk reads. A kind that
+  ;; validates its citation at the boundary but is absent from the registry is
+  ;; reported as pre-contract — a newly authored member of a unit, placed outside
+  ;; every unit.
+  (with-tmp
+    (fn [_]
+      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+            id (:id w)]
+        (seed-baseline! w)                                                     ; 1, 2
+        (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2))) ; 3
+        (decide! id 3)                                                         ; 4
+        (clear! id 3)                                                          ; 5
+        (let [rec (ws/read-ws :brian id)]
+          (is (= 1 (ws/unit-of rec 5)) "the same unit as the design it clears")
+          (is (= (ws/unit-of rec 3) (ws/unit-of rec 5))))))))
+
+(deftest a-completion-is-cleared-by-the-design-it-cites
+  ;; The guard read the ledger's newest design, which comes apart from the cited
+  ;; one exactly where it matters: work done under a cleared D1 while an unjudged
+  ;; D2 sits above it is a fact about D1.
+  (with-tmp
+    (fn [_]
+      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+            id (:id w)]
+        (seed-baseline! w)                                                     ; 1, 2
+        (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2))) ; 3
+        (decide! id 3)                                                         ; 4
+        (clear! id 3)                                                          ; 5
+        (ws/append-entry! :brian id {:kind :design}                            ; 6
+                          (pr-str (assoc (design-citing 2)
+                                         :supersedes {:seq 3 :why "recut"})))
+        (is (some? (ws/append-entry! :brian id {:kind :implementation-completed}
+                                     (pr-str (assoc an-implementation :design {:seq 3}))))
+            "a completion citing the cleared D1 is the truth, and is admitted")
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"Nothing clears the live design \(entry 6\)"
+             (ws/append-entry! :brian id {:kind :implementation-completed}
+                               (pr-str (assoc an-implementation :design {:seq 6}))))
+            "and D1's clearance does not admit a completion citing the uncleared D2")))))
+
+(deftest a-trail-citation-is-checked-even-with-no-design-on-the-ledger
+  ;; Only the REQUIREMENT is conditional. An unresolvable citation stored as
+  ;; `:under` reads as CURRENT to `trail-standing`, whose comparison is `>=`, so
+  ;; work recorded before any design would satisfy a design appended later.
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :scratch :external-refs []})]
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"Implementation-completed :design cites entry 999"
+             (ws/append-entry! :brian (:id w) {:kind :implementation-completed}
+                               (pr-str (assoc an-implementation :design {:seq 999})))))))))

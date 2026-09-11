@@ -28,6 +28,7 @@
   (:require
    [clojure.string :as str]
    [nido.coordinator.lane.reentry :as reentry]
+   [nido.coordinator.report :as report]
    [nido.coordinator.record.session :as csession]
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.tickets :as tickets]
@@ -57,11 +58,19 @@
    :design-retracted
    :premise-retracted
    :design-invalidated
+   ;; The goal the newest survey was scoped for was replaced — the survey is
+   ;; owed again, before anything that stands on it.
+   :goal-superseded
    :phase-landed
    :published
    :reviewed
    :implemented
    :design-approved
+   ;; A round decided it and its own declarations owed nobody a grant. BELOW
+   ;; :design-approved because a person having granted it is the stronger fact
+   ;; and stays worth its own position, and ABOVE :design-decided because a
+   ;; decided design that still owes a person has not got past the gate.
+   :design-cleared
    :design-decided
    :designed
    :baseline-verified
@@ -143,7 +152,7 @@
    does not, and it is the reason this set exists rather than a hypothetical."
   #{:ticket :triage :proposed-ticket :intent
     :baseline :baseline-review
-    :design :design-decision :design-verdict :design-approved
+    :design :design-decision :design-verdict :design-approved :design-cleared
     :implementation-plan :implementation-completed
     :review :review-analysis :improvement-decision :improvement-landed
     :blocker :blocker-answered :retraction
@@ -170,6 +179,8 @@
    :design-decision :design
    :design-verdict  :design
    :design-approved :approval
+   ;; The same rung passed without a person: a round found nobody was owed.
+   :design-cleared  :approval
    :retraction      :retraction
    :blocker         :halt
    :blocker-answered :halt
@@ -419,7 +430,16 @@
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :boolean]}
   baseline-verified?
-  "True when a review found the workstream's newest baseline sufficient.
+  "True when the workstream's newest baseline is still footing a design may be
+   written on: a review found it sufficient, and the goal it was scoped for has
+   not been replaced since.
+
+   STANDING'S ANSWER — `standing/of-baseline`'s :verified? — and never a presence
+   test of its own. A sufficient review of a survey whose goal has since moved
+   verifies nothing: a design over it, and a review of it, are both refused at
+   the boundary, so reading the review alone sends the arc to write the one
+   record nobody may. It fails closed with standing, too: a ledger it cannot read
+   is never verified.
 
    Public because the surface asks it too, and there must be one answer to it.
    A second implementation beside this one is how `verified` on a card and
@@ -429,18 +449,18 @@
    baselines and several reviews of them, and the review that matters is the one
    naming the baseline you are standing on."
   [project ws-id]
-  (when-let [b (ws/latest-entry project ws-id :baseline)]
-    (boolean (some #(and (= (:seq b) (:baseline-seq %))
-                         (contains? #{:sufficient :accurate} (:verdict %)))
-                   (ws/entries-of project ws-id :baseline-review)))))
+  (boolean (when-let [b (ws/latest-entry project ws-id :baseline)]
+             (:verified? (standing/of-baseline project ws-id b)))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :boolean]}
   design-decided?
-  "True when a decision round recommended proceeding on the newest design.
+  "True when a decision round let the newest design proceed.
 
-   Only :proceed counts. A round that answered :recut or :amend reached a
-   judgement about the record, not about whether to build it, and treating one
-   as a decision would advance a design its own round sent back.
+   Only a decision `report/proceeds?` counts: :proceed, or one whose only broken
+   check is the advisory one, which the round itself treats as proceeding. A
+   round that answered :recut or :amend over any other check reached a judgement
+   about the record, not about whether to build it, and treating one as a
+   decision would advance a design its own round sent back.
 
    PUBLIC because two things ask it and a second implementation would eventually
    answer differently: this module, to place a workstream in the arc, and the
@@ -458,8 +478,7 @@
     (boolean (some->> (ws/entries-of project ws-id :design-decision)
                       (filter #(= (:seq d) (:design-seq %)))
                       last
-                      :recommend
-                      (= :proceed)))))
+                      report/proceeds?))))
 
 ;; ── The fold ────────────────────────────────────────────────────────────────
 
@@ -472,7 +491,7 @@
    record trail underneath them; then implementation backwards from published;
    then the record arc. Each clause names a fact that is true of the ledger, so
    a position is always answerable by pointing at an entry."
-  [{:keys [closed? findings-open? blocker-seq retraction ks decided? approved?
+  [{:keys [closed? findings-open? blocker-seq retraction ks decided? approved? cleared?
            verified? re-entry]}]
   ;; THE CLAMP. The four trail clauses below place a stage by whether a kind is
   ;; present in the index, and an index is append-only — so each of them, once
@@ -488,7 +507,18 @@
   ;; A flag makes the first stale entry permanent: a workstream that redesigned,
   ;; re-approved and re-implemented would still be held at the implementation by
   ;; the record it had just superseded, and could never reach the review again.
-  (let [trail-ks (if re-entry (:trail re-entry) ks)]
+  ;;
+  ;; THE SECOND CLAMP, one rung down. Re-entry at the design rung says the design
+  ;; does not stand, and the two clauses that read the design by presence —
+  ;; decided, and merely designed — would still place the workstream on it: a
+  ;; design whose premise moved was sent to be decided, or to a grant nothing
+  ;; accepts. So neither may speak, and the fold goes on down to whichever rung
+  ;; is owed — the verification, or the design that replaces it. Indeterminate
+  ;; standing is exempt: nothing is owed on a ledger nobody can read, so the
+  ;; position stays where the design put it and the round refuses there.
+  (let [trail-ks       (if re-entry (:trail re-entry) ks)
+        design-stands? (not (and (= :design (:stage re-entry))
+                                 (not (:indeterminate? re-entry))))]
     (cond
     ;; :closed is the authority on `done`, and a :merged entry is NOT. They come
     ;; apart on exactly the case a phase plan creates: reopen! clears :closed for
@@ -515,6 +545,13 @@
     ;; since whenever the round ran.
     (= :design-invalidated (:reason (:because re-entry))) :design-invalidated
 
+    ;; The goal the newest survey was scoped for was replaced. The survey is
+    ;; owed again, and before anything written over it: a review of it and a
+    ;; design over it would both stand on a goal nobody holds, and the boundary
+    ;; refuses both. Below the judgements somebody derived about the design,
+    ;; which `reentry` already lets through first.
+    (= :baseline (:stage re-entry))      :goal-superseded
+
     ;; Merged and open again: a landing completed and somebody reopened it. That
     ;; is the phase plan working, and the next act is the next phase — which is
     ;; why this outranks :published, whose :pr-opened entry belongs to the
@@ -524,8 +561,18 @@
     (contains? trail-ks :review)         :reviewed
     (contains? trail-ks :implementation-completed) :implemented
     approved?                      :design-approved
-    decided?                       :design-decided
-    (contains? ks :design)         :designed
+    ;; The gate is READ rather than reached. A clearance is a record a round
+    ;; appended, so this is a citation like every other clause here — not a
+    ;; declaration being trusted about itself. What the declarations decided is
+    ;; whether the round had to ask a person at all.
+    ;;
+    ;; Asked of STANDING rather than of the index, because the question is
+    ;; whether THIS design is cleared. A bare presence test passes a workstream
+    ;; that cleared D1 and then appended a :challenges D2 straight to :implement
+    ;; on a clearance that names neither it nor anything it stands on.
+    cleared?                       :design-cleared
+    (and design-stands? decided?)  :design-decided
+    (and design-stands? (contains? ks :design)) :designed
     verified?                      :baseline-verified
     (contains? ks :baseline)       :baselined
     ;; A :triage is NOT a goal. It proposes candidate directions and belongs to
@@ -563,7 +610,8 @@
    no derivation the projection was not already making — and why the mode, not
    the disposition, is what the driver stamps onto a Run. Several stages run in
    :mechanical mode and all of them follow an :advance, so a disposition could
-   never select one.
+   never select one. One position has two: :design-decided is a person's only
+   when the design owes one, and `of` names `clearance` when it does not.
 
    The two terminal positions map to nil, and that is the answer rather than a
    gap: a published draft PR ends this arc — landing it is `nido ship` and stays
@@ -574,11 +622,18 @@
    :baselined          {:stage :verify-baseline         :mode :mechanical}
    :baseline-verified   {:stage :design                :mode :authoring}
    :designed          {:stage :decide-design         :mode :mechanical}
+   ;; A person's only when the design owes one. `of` names `clearance` instead
+   ;; for a standing design whose declarations owe nobody.
    :design-decided    {:stage :approve-design        :mode :human}
    :design-approved   {:stage :implement             :mode :working-copy}
+   :design-cleared    {:stage :implement             :mode :working-copy}
    :implemented       {:stage :review-implementation :mode :mechanical}
    :reviewed          {:stage :publish-draft-pr      :mode :working-copy}
    :premise-retracted {:stage :rebaseline              :mode :authoring}
+   ;; A survey under the amended goal, superseding the one scoped for the old
+   ;; goal. Both citations it carries are on the position's :re-entry :because —
+   ;; :baseline to supersede and :replaced-by to cite — read, never inferred.
+   :goal-superseded   {:stage :rebaseline              :mode :authoring}
    ;; A retracted DESIGN wants a new design, not a new survey. The premise was
    ;; never in question — somebody found the commitment untrue.
    :design-retracted  {:stage :design                 :mode :authoring}
@@ -614,6 +669,18 @@
     (cond-> a
       (= :establish-intent (:stage a)) (assoc :from kind))))
 
+(def ^:private clearance
+  "The next action at :design-decided for a design whose own declarations owe
+   nobody a grant, and which still stands.
+
+   Not :approve-design, because nobody is owed that: the decision is on the
+   ledger and the clearance it implies is not yet, which is a write still owed —
+   the round ended :clearance-contended. So the stage writes the clearance and
+   nothing else: no round re-runs and nothing is turned into a grant. Standing is
+   part of the condition because a design that does not stand owes no clearance
+   either, and a stage fired on one would find nothing to write, every tick."
+  {:stage :clear-design :mode :mechanical})
+
 ;; ── What a finished stage means ─────────────────────────────────────────────
 
 (def dispositions
@@ -644,7 +711,6 @@
    :sufficient           :advance   ; the baseline holds; a design may be decided against it
    :clean                :advance   ; the diff review found nothing
    :converged            :advance   ; it found things and they were all fixed
-   :not-worth-running    :advance   ; the records say this round would not pay — nothing to do
 
    ;; ── the machinery failed, not the work ──
    :codex-failed         :retry
@@ -656,6 +722,13 @@
    ;; ── an earlier record is at fault, and it is nameable ──
    :premise-unverified   :route-back  ; go verify the baseline this design cites
    :premise-retracted    :route-back
+   ;; Standing's reasons, which the round returns when the design stopped standing
+   ;; under it. The fold no longer places a design that does not stand, so the
+   ;; next tick reads the rung that is owed — the survey for a moved goal, the
+   ;; verification or the new design for a re-survey — and never the round again.
+   :premise-superseded   :route-back
+   :premise-goal-superseded :route-back
+   :goal-superseded      :route-back
    :design-retracted     :route-back
    :no-premise           :route-back  ; the design cites no baseline at all
    :nothing-to-check     :route-back  ; the baseline recorded nothing checkable; it is too thin
@@ -670,7 +743,8 @@
    :escalated            :route-back
 
    ;; ── only a human can settle it ──
-   :proceed              :escalate  ; the design round's ask; the whole point of it
+   :cleared              :advance   ; a proceeding decision that owed nobody a grant
+   :proceed              :escalate  ; the design round's ask, when a person IS owed one
    :disputed             :escalate  ; judge and amender deadlocked
    :underivable          :escalate  ; no yardstick to derive against
    :unfixable            :escalate  ; raised every round and never moved
@@ -721,6 +795,17 @@
    ;; with the branch; the round just reviewed a state that stopped being
    ;; current, so the answer is to run it again, not to ask a human anything.
    :workspace-drifted    :retry
+   ;; A proceeding decision on a design owing nobody, whose clearance the ledger
+   ;; kept moving under. Not :proceed — contention is not a grant being owed, and
+   ;; parking it would put back the gate the design's declarations removed. Not
+   ;; :retry either: that re-runs the round whose decision is already on the
+   ;; ledger, and parks when the attempts run out. The next tick reads
+   ;; :design-decided, whose next action for such a design is the clearance
+   ;; stage — which writes the clearance and nothing else, as often as it takes.
+   :clearance-contended  :advance
+   ;; The clearance stage found no proceeding decision on a design owing nobody:
+   ;; the ledger moved on after the stage was fired. The next tick reads where.
+   :nothing-to-clear     :advance
 
    ;; The stage attached to a holder doing its work, and that run ended without
    ;; a readable terminal. Nothing was answered and the claim is gone, so the
@@ -789,11 +874,16 @@
           br     (some #(when (= :notion (:adapter %)) (:id %)) (:external-refs w))
           design (ws/latest-entry project ws-id :design)
           st     (when design (standing/of-design project ws-id design))
+          ;; The newest baseline's own standing: whether it is verified, and
+          ;; whether the goal it was scoped for has moved. Read once, and both
+          ;; the re-entry and `:verified?` below are this one reading.
+          bl     (ws/latest-entry project ws-id :baseline)
+          bst    (when bl (standing/of-baseline project ws-id bl))
           ;; The pure arity, given what has already been read. `of*` would
           ;; otherwise re-read the workstream and re-run the standing closure —
           ;; the two most expensive things on this path, and the board runs this
           ;; once per rendered row.
-          re     (reentry/of* w design st)
+          re     (reentry/of* w design st bst)
           pos    (place {:closed?        (some? (:closed w))
                          :findings-open? (open-findings? w)
                          :blocker-seq    (unanswered-blocker project ws-id w)
@@ -805,12 +895,22 @@
                          ;; grant with any retraction since, and a second
                          ;; implementation of it is a second answer.
                          :approved?      (boolean (:decided? st))
+                         ;; Standing's answer again, never re-derived: nothing
+                         ;; blocks this design, and something said it may be
+                         ;; built — a grant, or a round that owed nobody.
+                         :cleared?       (boolean (:cleared? st))
                          :decided?       (design-decided? project ws-id)
-                         :verified?      (baseline-verified? project ws-id)})
+                         ;; `baseline-verified?`'s answer, from the reading
+                         ;; already in hand rather than a second closure.
+                         :verified?      (boolean (:verified? bst))})
           kind   (intake-kind w ks)]
       (cond->
        {:at     pos
-        :next   (next-action pos kind)
+        :next   (if (and (= :design-decided pos)
+                         (:decidable? st)
+                         (not (report/owes-a-person? design)))
+                  clearance
+                  (next-action pos kind))
         :intake kind
         ;; The re-entry point rides on the answer rather than only shaping it.
         ;; A reader shown a workstream clamped back to :design-approved has no

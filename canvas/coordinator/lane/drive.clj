@@ -7,6 +7,7 @@
             [canvas.coordinator.executor :as executor]
             [canvas.coordinator.record.runs :as runs :refer [Run]]
             [canvas.coordinator.record.session :as session :refer [Session]]
+            [canvas.coordinator.record.standing :as standing]
             [canvas.coordinator.record.state :as cstate :refer [Path RunId SessionName WorkstreamId]]
             [canvas.coordinator.record.tickets :as tickets :refer [TicketId]]
             [canvas.coordinator.record.workstream :as workstream :refer [Workstream]]
@@ -26,15 +27,19 @@
     {:signature [:=> [:catn [:kind :keyword]] [:maybe :keyword]]})
   (Operation arc "A ledger read as the arc it travelled."
     {:signature [:=> [:catn [:entries :any] [:opts [:? :map]]] :any] :delegates [stage-of]})
-  (Operation baseline-verified? "Whether a review found the newest baseline sufficient."
+  (Operation baseline-verified?
+    "Whether the newest baseline is still footing: found sufficient, and scoped for a goal
+     nothing has replaced since — standing's answer, never a presence test of its own."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :boolean]
-     :delegates [workstream/entries-of]})
+     :delegates [workstream/latest-entry standing/of-baseline]})
   (Operation design-decided?
-    "Whether a decision round recommended PROCEEDING on the newest design.
+    "Whether a decision round let the newest design PROCEED.
 
-     Only `:proceed` counts — a round that answered `:recut` or `:amend` judged the record
-     rather than whether to build it. Public because the gate asks it too: a grant offered on
-     any decision at all is a one-click approval of the design its own round sent back."
+     Only a decision `report/proceeds?` counts — `:proceed`, or one whose only broken check is
+     the advisory one; a round that answered `:recut` or `:amend` over any other check judged
+     the record rather than whether to build it. Public because the gate asks it too: a grant
+     offered on any decision at all is a one-click approval of the design its own round sent
+     back."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :boolean]
      :delegates [workstream/entries-of]})
   (Operation next-action "The stage to run next and the mode it runs in, or nil at a terminus."

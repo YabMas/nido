@@ -9,6 +9,7 @@
    [clojure.test :refer [deftest is testing use-fixtures]]
    [nido.platform.core :as core]
    [nido.coordinator.agent :as agent]
+   [nido.coordinator.report :as report]
    [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.standing :as standing]
    [nido.coordinator.record.workstream :as ws]
@@ -115,6 +116,26 @@
                                        :verdict :sufficient :baseline-seq 1}]))))
     (is (= 1 @launched))))
 
+(deftest a-design-declaring-it-moves-nothing-still-reaches-the-round
+  ;; The declarations decide whether a person's grant is additionally owed,
+  ;; never whether the round runs — and only a proceeding round writes the
+  ;; clearance such a design needs. Skipping the round left exactly those designs
+  ;; with nothing that could ever clear them.
+  (let [launched (atom 0)
+        modest   (assoc a-design :standing {:relation :conforms}
+                        :baseline {:seq 1 :relation :within} :effort :S)]
+    (with-redefs [stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/latest-entry (fn [_ _ k] (when (= :design k) modest))
+                  standing/of-design (constantly {:decidable? true})
+                  stages/discover-baseline (fn [_ _] nil)
+                  stages/read-stance (constantly nil)
+                  record/discover-intent (constantly nil)
+                  record/run-round! (fn [_] (swap! launched inc)
+                                      {:outcome :no-output :detail "stub"})]
+      (is (= :no-output (:outcome (record/design-decision!
+                                   {:cwd "/w" :run-id "r1" :label "l"}))))
+      (is (= 1 @launched)))))
+
 
 (defn- decision [recommend & {:keys [checks findings]}]
   (cond-> {:format :design-decision :design-seq 4 :recommend recommend
@@ -146,6 +167,103 @@
     (let [out (run record/design-judge-stage (ctx))]
       (is (= :escalate (:control out)))
       (is (= :proceed (:status out))))))
+
+(deftest a-clearance-the-ledger-kept-refusing-is-not-an-ask
+  ;; Contention is not a grant being owed. Escalating as :proceed would park a
+  ;; design whose declarations owe nobody on interference alone.
+  (with-redefs [record/design-decision! (fn [_] (decision :proceed))
+                record/append! (fn [_ _] :contended)]
+    (let [out (run record/design-judge-stage (ctx))]
+      (is (= :clearance-contended (:status out)))
+      (is (not= :escalate (:control out))))))
+
+(deftest a-clearance-still-owed-is-never-a-person-s-gate
+  ;; Contention is one way a clearance goes unwritten; a write that threw inside
+  ;; `append!` is another, and it answers nil like a design owing a person. Both
+  ;; are a write the clearance stage makes, and a design that no longer stands
+  ;; goes where standing says — neither parks as the round's ask.
+  (let [modest   (assoc a-design :standing {:relation :conforms}
+                        :baseline {:seq 1 :relation :within})
+        run-with (fn [design st]
+                   (with-redefs [record/design-decision! (fn [_] (decision :proceed))
+                                 record/append! (fn [_ _] nil)
+                                 stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                                 ws/entries-of (constantly [])
+                                 ws/entry-at-seq (constantly design)
+                                 standing/of-design (constantly st)]
+                     (run record/design-judge-stage (ctx))))]
+    (testing "owing nobody and still standing: the clearance stage takes it"
+      (let [out (run-with modest {:decidable? true})]
+        (is (= :clearance-contended (:status out)))
+        (is (not= :escalate (:control out)))))
+    (testing "owing nobody and no longer standing: standing's own reason"
+      (let [out (run-with modest {:decidable? false
+                                  :blocked {:reason :premise-retracted :detail "d"}})]
+        (is (= :premise-retracted (:status out)))
+        (is (not= :escalate (:control out)))))
+    (testing "and a design that owes a person is still the round's ask"
+      (let [out (run-with a-design {:decidable? true})]
+        (is (= :proceed (:status out)))
+        (is (= :escalate (:control out)))))))
+
+(deftest the-clearance-stage-writes-the-clearance-and-runs-no-round
+  ;; The round that ended :clearance-contended already appended its decision, so
+  ;; what is left is one write, made as often as it takes. Nothing here may
+  ;; re-run the round, turn the write into a grant, or clear a design that no
+  ;; proceeding decision names.
+  (let [ledger (fn [standing]
+                 (let [id   (:id (ws/create! :brian {:stage :in-progress :external-refs []}))
+                       add! (fn [kind record]
+                              (ws/append-entry! :brian id {:kind kind} (pr-str record))
+                              (count (:entries (ws/read-ws :brian id))))
+                       _    (add! :intent {:format :intent :goal "g" :done-when ["d"]})
+                       b    (add! :baseline
+                                  {:format :baseline :intent {:seq 1}
+                                   :area "a" :bounded-by "b" :shape "s"
+                                   :modules [{:id "m" :module "m" :hides "h" :interface "i"}]
+                                   :composition "c"
+                                   :load-bearing [{:id "c1" :property "p" :falsified-by "f"
+                                                   :evidence ["src/a.clj:1"]}]
+                                   :read ["src/a.clj"]})
+                       _    (add! :baseline-review {:format :baseline-review :verdict :sufficient
+                                                    :baseline-seq b :reason "holds"})
+                       d    (add! :design {:format :design :summary "s" :shape "sh"
+                                           :invariants ["one path"] :standing standing
+                                           :baseline {:seq b :relation :within}
+                                           :intent {:seq 1} :effort :S})]
+                   [id #(add! :design-decision
+                              {:format :design-decision :recommend :proceed :design-seq d
+                               :reason "r" :asks "worth it?"
+                               :checks [{:check :relation-honest :status :held :note "n"}]})]))
+        clearances #(count (ws/entries-of :brian % :design-cleared))]
+    (with-redefs [record/run-round! (fn [_] (throw (ex-info "no round may run" {})))]
+      (testing "a design owing nobody"
+        (let [[id decide!] (ledger {:relation :conforms})]
+          (with-redefs [stages/project+ws-from-cwd (fn [_] [:brian id])]
+            (is (= :nothing-to-clear (record/clear! "/w")) "no decision, nothing to clear")
+            (decide!)
+            (is (= :cleared (record/clear! "/w")))
+            (is (= 1 (clearances id)))
+            (is (= :cleared (record/clear! "/w")) "asked again, it answers")
+            (is (= 1 (clearances id)) "without writing a second clearance"))))
+      (testing "a design owing a person is not the clearance stage's to clear"
+        (let [[id decide!] (ledger {:relation :challenges :note "n"})]
+          (with-redefs [stages/project+ws-from-cwd (fn [_] [:brian id])]
+            (decide!)
+            (is (= :nothing-to-clear (record/clear! "/w")))
+            (is (zero? (clearances id)))))))))
+
+(deftest clearance-gives-up-with-an-answer-rather-than-silence
+  (let [writes (atom 0)]
+    (with-redefs [ws/read-ws (constantly {:entries []})
+                  ws/entry-at-seq (constantly (assoc a-design
+                                                     :standing {:relation :conforms}
+                                                     :baseline {:seq 1 :relation :within}))
+                  standing/of-design (constantly {:decidable? true})
+                  ws/append-entry-at! (fn [& _] (swap! writes inc) {:refused :stale})]
+      (binding [*err* (java.io.StringWriter.)]
+        (is (= :contended (@#'record/clear-if-owed-nobody! :nido "ws-1" 4))))
+      (is (< 100 @writes) "every refusal was asked again before it gave up"))))
 
 (deftest a-layering-complaint-alone-does-not-hold-a-design-round
   ;; Layers do not survive: the stack is collapsed into one commit before it
@@ -187,10 +305,28 @@
 (deftest a-clean-round-is-not-the-advisory-case
   ;; `every?` over an empty sequence is true, so a round with nothing broken
   ;; would otherwise take the guard's branch rather than its own recommendation.
-  (is (false? (@#'record/advisory-only? [])))
-  (is (true?  (@#'record/advisory-only? [(check :decomposable :broken)])))
-  (is (false? (@#'record/advisory-only? [(check :decomposable :broken)
-                                      (check :goal-served :broken)]))))
+  (is (false? (report/proceeds? (decision :amend :checks [(check :goal-served :held)]))))
+  (is (true?  (report/proceeds? (decision :amend :checks [(check :decomposable :broken)]))))
+  (is (false? (report/proceeds? (decision :amend :checks [(check :decomposable :broken)
+                                                          (check :goal-served :broken)])))))
+
+(deftest an-advisory-only-decision-on-a-design-owing-nobody-is-cleared-not-parked
+  ;; The judge treats it as proceeding, so the clearance path has to as well —
+  ;; testing the recorded :recommend instead parked it for a person whose grant
+  ;; `grantable?`, reading the same :amend, would then refuse.
+  (let [modest (assoc a-design :standing {:relation :conforms}
+                      :baseline {:seq 1 :relation :within})]
+    (with-redefs [record/design-decision!
+                  (fn [_] (decision :amend :checks [(check :decomposable :broken)]))
+                  record/append! (fn [_ _] nil)
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  ws/entries-of (constantly [])
+                  ws/entry-at-seq (constantly modest)
+                  standing/of-design (constantly {:decidable? true})]
+      (let [out (run record/design-judge-stage (ctx))]
+        (is (= :clearance-contended (:status out))
+            "owed nobody, so what is owed is the clearance write")
+        (is (not= :escalate (:control out)))))))
 
 (deftest only-broken-checks-become-findings
   (with-redefs [record/design-decision!
@@ -228,7 +364,7 @@
                            (ctx :history (vec (repeat 2 {:disputes [{:key k :claim "c" :because "b"}]}))))))))))
 
 (deftest a-round-that-could-not-run-keeps-its-own-name
-  (doseq [outcome [:codex-failed :no-record :not-worth-running :unusable-answer]]
+  (doseq [outcome [:codex-failed :no-record :premise-unverified :unusable-answer]]
     (with-redefs [record/design-decision! (fn [_] {:outcome outcome :detail "d"})
                   record/append! (fn [_ _] nil)]
       (is (= outcome (:status (run record/design-judge-stage (ctx))))))))
@@ -286,16 +422,18 @@
     (is (= fixed (read-string appended)))
     (is (= [] (:retreats out)))))
 
-(deftest a-design-amended-below-its-own-threshold-is-a-retreat
-  ;; Declare :within on the baseline, :conforms on the stance, a modest effort
-  ;; and everything routed :fix-here, and the design round refuses to run at all
-  ;; — which reads as success from every angle except this one.
+(deftest a-design-amended-to-claim-it-moves-nothing-is-still-judged
+  ;; Declaring :within, :conforms and a modest effort used to stop the loop here,
+  ;; because the round would then have refused to run. The round is never
+  ;; skipped now, so the amended design goes back to the judge — and the
+  ;; weakening still reaches the human, on the retreats and the trajectory.
   (let [gutted (assoc a-design :baseline {:seq 1 :relation :within}
                       :standing {:relation :conforms} :effort :M)
         [out _] (with-amend {:writes (fn [p] (spit p (pr-str {:record gutted})))}
                             (ctx :findings [(check :relation-honest :broken)]
                                  :record (decision :amend)))]
-    (is (= :retreated (:status out)))
+    (is (nil? (:status out)) "the loop continues to another round")
+    (is (true? (:amended? out)))
     (is (contains? (set (map :what (:retreats out))) :effort-lowered))))
 
 (deftest recut-and-amend-are-given-different-jobs

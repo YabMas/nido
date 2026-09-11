@@ -151,8 +151,9 @@
             oks  (readable project ws-id w :design-approved)
             bls  (readable project ws-id w :baseline)
             vs   (readable project ws-id w :design-verdict)
-            ins  (readable project ws-id w :intent)]
-        (if (some #{::unreadable} [rs revs oks bls vs ins])
+            ins  (readable project ws-id w :intent)
+            clr  (readable project ws-id w :design-cleared)]
+        (if (some #{::unreadable} [rs revs oks bls vs ins clr])
           {:indeterminate? true
            :blocked {:reason :unreadable-ledger
                      :detail (str "an entry standing depends on could not be read on "
@@ -162,6 +163,13 @@
                 design-seq  (:seq design)
                 premise-seq (get-in design [:baseline :seq])
                 approval    (->> oks
+                                 (filter #(= design-seq (get-in % [:design :seq])))
+                                 last)
+                ;; A round having found this design implementable without a
+                ;; person. Keyed on THIS design's :seq for the reason the grant
+                ;; is: a clearance naming a design that has since been superseded
+                ;; says nothing about the one standing now.
+                clearance   (->> clr
                                  (filter #(= design-seq (get-in % [:design :seq])))
                                  last)
                 sufficient? (boolean
@@ -275,13 +283,25 @@
             ;; DECIDABLE — and the absence of an approval is deliberately not in
             ;; it. The premise gate reads this before a human has had anything
             ;; to approve, and a gate that refused an unapproved design would
-            ;; make the design round unreachable. What wants both is the landing
-            ;; check, and it composes them itself.
+            ;; make the design round unreachable. What wants both is :cleared?
+            ;; below, and every reader that gates on the arc asks that.
             (cond-> {:live?       (nil? (retracted design-seq))
                      :premise     premise
                      :approved-by (:seq approval)
+                     ;; BESIDE :approved-by, never folded into it. `:decided?`
+                     ;; goes on meaning `nothing blocks this and a person granted
+                     ;; it`, which is what `work` and the dashboard report. What
+                     ;; GATES — `place`, `reentry`, the implementation floor and
+                     ;; `tasks/nido_land.clj` — asks :cleared?, and may, because
+                     ;; the append boundary admits a clearance only over a
+                     ;; proceeding decision on a design that owes nobody.
+                     :cleared-by  (:seq clearance)
                      :decidable?  (nil? blocked)
-                     :decided?    (and (nil? blocked) (some? approval))}
+                     :decided?    (and (nil? blocked) (some? approval))
+                     ;; What the arc asks: nothing blocks it, and something said
+                     ;; it may be built — a grant, or a round that owed nobody.
+                     :cleared?    (and (nil? blocked)
+                                       (or (some? approval) (some? clearance)))}
               blocked (assoc :blocked blocked))))))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map] :map]}
@@ -301,9 +321,11 @@
    review nothing may write.
 
    :blocked's :replaced-by is the live goal, and it is the citation a baseline
-   written under the amended goal carries. Whoever writes that survey reads the
-   answer here rather than taking the newest intent, which is the recency the
-   intent citation exists to refuse.
+   written under the amended goal carries; its :baseline is the survey that one
+   `:supersedes`. Whoever writes that survey reads both here rather than taking
+   the newest intent, which is the recency the intent citation exists to refuse.
+   The pipeline routes on this reading — `baseline-verified?` is its :verified?,
+   and `reentry` sends the arc back to the baseline rung on its :blocked.
 
    Fails closed like `of-design`: a review or an intent the index claims and
    nobody can parse leaves verification indeterminate, never granted."
@@ -332,6 +354,10 @@
               moved (assoc :blocked
                            {:reason :goal-superseded :seq goal-seq
                             :replaced-by moved
+                            ;; What the survey under the amended goal
+                            ;; `:supersedes` — the two citations it carries are
+                            ;; both read here, never taken from recency.
+                            :baseline seq-n
                             :detail (str "the baseline at entry " seq-n
                                          " was scoped for the goal at entry " goal-seq
                                          ", superseded at entry " moved

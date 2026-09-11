@@ -171,7 +171,7 @@
   (try
     (let [w (ws/read-ws project ws-id)
           d (merge-design project w id url)]
-      (if (and (nil? d) (ws/live-design-seq w))
+      (if (and (nil? d) (ws/holds-design? w))
         (warn (str "github-merge: merged PR " id " on " ws-id " names no :design —"
                    " neither its own records nor the shipment's :pr-opened cite one, and"
                    " append order is not evidence; skipping the :merged ledger event"))

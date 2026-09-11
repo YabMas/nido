@@ -133,6 +133,10 @@
   (Operation design-cmd*
     "Decide, against the latest design record, whether this should be executed —"
     {:signature [:=> [:catn [:opts [:* :any]]] :any]})
+  (Operation clear-cmd*
+    "Write the clearance a proceeding decision already on the ledger implies — the clear-design
+     stage, which re-runs no round."
+    {:signature [:=> [:catn [:opts :map]] :keyword]})
   (Operation baseline-cmd
     "The `baseline-cmd` entry point."
     {:signature [:=> [:catn [:args [:* :any]]] :any]})
