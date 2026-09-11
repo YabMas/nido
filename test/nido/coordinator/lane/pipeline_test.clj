@@ -342,7 +342,7 @@
   (let [a (p/arc (kinds->entries [:intent]))]
     (is (= p/arc-stages (mapv :stage (:stages a)))
         "every stage renders, in arc order, whether or not it holds anything")
-    (is (= [:current :ahead :ahead :ahead :ahead :ahead]
+    (is (= [:current :ahead :ahead :ahead :ahead]
            (mapv :state (:stages a)))
         "the only staged entry names the current stage; the rest are unreached")))
 
@@ -356,10 +356,14 @@
   ;; A workstream can reach implementation having written no approval record. That
   ;; is not an error, and calling it :ahead would say a stage is still owed when
   ;; the work has gone past it.
-  (let [m (stage-map (kinds->entries [:intent :baseline :design :implementation-plan]))]
-    (is (= :skipped (:state (m :approval)))  "no record, and the trail is past it")
-    (is (= :ahead   (:state (m :review)))    "no record, and the trail has not reached it")
-    (is (= :current (:state (m :implementation))))))
+  ;; The set stops at the design so both states are demonstrable inside the
+  ;; unit's arc: publication used to be the `:ahead` example and is no longer a
+  ;; stage of it.
+  (let [m (stage-map (kinds->entries [:intent :design]))]
+    (is (= :skipped (:state (m :baseline)))        "no record, and the trail is past it")
+    (is (= :ahead   (:state (m :approval)))        "no record, and the trail has not reached it")
+    (is (= :ahead   (:state (m :implementation))))
+    (is (= :current (:state (m :design))))))
 
 (deftest arc-counts-entries-and-visits-separately
   ;; Nine records inside one uninterrupted stretch is one visit. The two numbers
@@ -695,14 +699,17 @@
         by  (fn [arc] (into {} (map (juxt :stage :state)) (:stages arc)))]
     (testing "with nothing owed the four original states are what they were"
       (let [s (by (p/arc es))]
-        (is (= :done (:implementation s)))
-        (is (= :current (:review s)))
-        (is (nil? (:publication s)))))
+        (is (= :current (:implementation s))
+            "the review folds into the stage it reviews, so the newest record
+             leaves :implementation current rather than a stage of its own")
+        (is (nil? (:publication s))
+            "and publication is no stage of this arc — a landing is the
+             workstream's")))
     (testing "and from the re-entry point upward they are stale"
       (let [s (by (p/arc es {:re-entry :implementation}))]
         (is (= :done (:approval s)) "below the line, untouched")
-        (is (= :stale (:implementation s)))
-        (is (= :stale (:review s)))
+        (is (= :stale (:implementation s))
+            "and the review is stale with it, being part of it")
         (is (nil? (:publication s))
             "publication left the unit's spine with shipping")))
     (testing "closure wins — a finished workstream owes nothing"
