@@ -1,6 +1,7 @@
 ;; test/nido/review/layers_test.clj
 (ns nido.review.layers-test
   (:require
+   [babashka.fs :as fs]
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
    [nido.review.layers :as layers]
@@ -505,3 +506,73 @@
                                     "log" {:exit 0 :out "" :err ""}} calls)]
       (is (:ok? (layers/reorder! "/w" "main" {:bookmark "s--upper"} {:bookmark "s--lower"}))))
     (is (some #{["rebase" "-r" "s--upper" "--insert-before" "s--lower"]} @calls))))
+
+;; ---- a working copy jj refuses -------------------------------------------
+
+(defn- edited-workspace!
+  "A real repo and a secondary workspace `work` parked on top of it, the way a
+   session worktree is, whose files then take three edits jj never records: a
+   changed file, a new one and a deleted one. Answers {:root :work :home :from},
+   `:from` being the commit the edits were made on."
+  []
+  (let [root (fs/create-temp-dir {:prefix "nido-layers-stale"})
+        home (str (fs/path root "repo"))
+        work (str (fs/path root "work"))]
+    (jj/jj! (str root) "git" "init" "repo")
+    (doseq [f ["base" "keep" "fix"]] (spit (str (fs/path home (str f ".txt"))) (str f "\n")))
+    (jj/jj! home "commit" "-m" "base")
+    (jj/jj! home "bookmark" "create" "main" "-r" "@-")
+    (jj/jj! home "workspace" "add" "--name" "work" work)
+    (let [from (layers/resolve-rev work "@")]
+      (spit (str (fs/path work "fix.txt")) "fixed\n")
+      (spit (str (fs/path work "added.txt")) "new\n")
+      (fs/delete (fs/path work "keep.txt"))
+      {:root (str root) :work work :home home :from from})))
+
+(defn- rewrite-under!
+  "Change `main`'s content from the default workspace, which rebases `work`'s
+   commit onto the result and leaves its files as they were: stale."
+  [home]
+  (jj/jj! home "new" "main")
+  (spit (str (fs/path home "outside.txt")) "outside\n")
+  (jj/jj! home "squash" "--into" "main"))
+
+(deftest a-workspace-rewritten-from-elsewhere-is-stale
+  (let [{:keys [root work home]} (edited-workspace!)]
+    (try
+      (is (false? (layers/stale? work)) "nothing has touched it yet")
+      (rewrite-under! home)
+      (is (true? (layers/stale? work)))
+      (is (false? (layers/descends-from? work "@"))
+          "the descent check reads the same refusal as a move, which is why
+           staleness is asked apart from it")
+      (finally (fs/delete-tree root)))))
+
+(deftest the-edits-of-a-stale-workspace-are-still-read-without-jj
+  ;; `jj diff` is refused on a stale working copy, and the edits in it are not
+  ;; in any commit — so a copy has to be read off the disk, or there is none.
+  (let [{:keys [root work home from]} (edited-workspace!)]
+    (try
+      (rewrite-under! home)
+      (is (not (zero? (:exit (jj/jj! work "diff" "--git")))) "the precondition: jj refuses")
+      (let [p (layers/working-copy-patch work from)]
+        (is (str/includes? p "+fixed") "a changed file")
+        (is (re-find #"(?s)new file mode.*\+new" p) "a new file, whole")
+        (is (re-find #"(?s)deleted file mode.*-keep" p) "a deleted file")
+        (is (not (str/includes? p "outside"))
+            "what the other workspace wrote is not on this disk, so not in the patch")
+        (is (not (str/includes? p ".jj/")) "jj's own state is not an edit"))
+      (finally (fs/delete-tree root)))))
+
+(deftest a-workspace-nothing-was-written-to-patches-to-nothing
+  ;; "" and nil are different answers: nothing was written, as against no
+  ;; reading could be taken.
+  (let [root (fs/create-temp-dir {:prefix "nido-layers-clean"})
+        dir  (str root)]
+    (try
+      (jj/jj! dir "git" "init" ".")
+      (spit (str (fs/path dir "a.txt")) "a\n")
+      (jj/jj! dir "commit" "-m" "a")
+      (is (= "" (layers/working-copy-patch dir (layers/resolve-rev dir "@"))))
+      (is (nil? (layers/working-copy-patch dir nil)) "no starting commit, no reading")
+      (finally (fs/delete-tree root)))))

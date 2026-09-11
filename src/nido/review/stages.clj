@@ -3070,12 +3070,17 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
   "Run `f`, and whatever happens put the working copy back on top of `stack`
    before returning or before the failure propagates.
 
-   The invariant this defends is that the fix stage NEVER hands back a working
-   copy parked mid-stack. A fix inserts onto its own layer, so a plan that dies
-   part-way through — a layer that will not position, a fixer that blows its
-   budget — leaves `@` somewhere inside the stack, and from there `<base>..@`
-   no longer spans the branch. The next run would then review a truncated stack
-   without ever saying so.
+   The invariant this defends is that the fix stage never hands back a working
+   copy parked mid-stack WITHOUT SAYING SO. A fix inserts onto its own layer, so
+   a plan that dies part-way through — a layer that will not position, a fixer
+   that blows its budget — leaves `@` somewhere inside the stack, and from there
+   `<base>..@` no longer spans the branch. The next run would then review a
+   truncated stack without ever saying so.
+
+   A drift stop is the one exit that leaves the working copy where it is, and it
+   is not a failure: somebody else moved the tree, so moving it again is either
+   refused (a stale copy) or lands on top of whatever they did. Its `:drift`
+   record says where it was left — see `drift-stop`.
 
    The restore is best-effort BECAUSE it runs on the failure path: a restore
    that also fails must not replace the diagnosis the caller is about to see."
@@ -3170,8 +3175,9 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                         suffix))))
 
 (defn- unattempted-tail
-  "The plan entries after `from`: layers a fixer was owed and never launched
-   for, because the stage stopped on a conflict it could not roll back.
+  "The plan entries from `from` on: layers a fixer was owed and never launched
+   for, because the stage stopped before reaching them — on a conflict it could
+   not roll back, or on the workspace moving under it.
 
    The one thing that recorded a skipped layer before this was the ABSENCE of
    its `fix-<layer>-round-N.err.log` from the run dir. In the report a finding
@@ -3187,6 +3193,101 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
   (mapv (fn [{:keys [label findings]}]
           {:layer label :handed (handed-ids findings)})
         (subvec plan from)))
+
+(defn- workspace-moved
+  "How the working copy has left `pin`, the place the stage last held it — or
+   nil while it has not.
+
+   `{:stale? true :now nil}` when jj refuses the working copy as stale, asked
+   first because that refusal fails the descent check too and is the one case
+   whose remedy must be named. `{:now <rev>}` when jj answers and `@` is no
+   longer at or above `pin`. A nil `pin`, a round that could not pin, is still
+   asked about staleness, which needs none.
+
+   Asked at the top of the stage and again the moment each fixer returns. The
+   stage holds the workspace for as long as its fixers take — 24 and 36 minutes
+   on the branch whose working copy went stale under two consecutive runs, by
+   operations that were not the loop's, since its fixers ran no jj at all."
+  [cwd pin]
+  (cond
+    (layers/stale? cwd)
+    {:stale? true :now nil}
+
+    (and pin (not (layers/descends-from? cwd pin)))
+    {:now (layers/resolve-rev cwd "@")}))
+
+(defn- save-fixer-patch!
+  "Copy what a fixer left on the disk since `from` to its
+   `fix-<layer>-round-N.patch` in the run dir, and answer the path — nil when
+   no copy could be read or written.
+
+   Taken before anything that can refuse it. The edits exist only as files
+   until jj records them, and a working copy that went stale while the fixer
+   ran refuses every jj command, `jj diff` included: a repair lost that way was
+   re-derived by the next run, identically, in the same 19 turns.
+   `layers/working-copy-patch` is the route that needs no jj.
+
+   Written even when empty, so a missing file means the stage never got to
+   look, not that the fixer wrote nothing."
+  [cwd from run-id label iter]
+  (when-let [p (layers/working-copy-patch cwd from)]
+    (let [path (fixer-log run-id label iter ".patch")]
+      (try (spit path p) path (catch Throwable _ nil)))))
+
+(defn- stranded-row
+  "A fixer that ran and whose outcome the stage never settled, because the
+   workspace moved while it ran. Its repair is in no commit — the stage stopped
+   before `land-fix!` — so `:patch` is the only copy of it the run keeps, and
+   `:account` the only reading of it."
+  [label handed patch result-text timed-out? wall]
+  (cond-> {:layer label :handed handed}
+    patch                                (assoc :patch patch)
+    (not (str/blank? (str result-text))) (assoc :account (str result-text))
+    timed-out?                           (assoc :timed-out? true :budget wall)))
+
+(defn- recovery
+  "What a person does about a drift stop, or nil when a re-run is the whole
+   answer — the tree moved before any fixer ran, and jj still answers for it.
+
+   The stale sentence leads because nothing else can run until it has. The
+   warning that the update takes a stranded fixer's edits off the disk is
+   measured on jj 0.45: it records them as a divergent copy of the working-copy
+   commit and checks out the other copy, so the patch is the clean way back."
+  [{:keys [stale?]} stranded]
+  (let [{:keys [layer patch]} (first stranded)
+        who (or layer "the branch")]
+    (not-empty
+     (str/join
+      " "
+      (remove nil?
+              [(when stale?
+                 (str "jj refuses this working copy as stale: another operation rewrote"
+                      " its commit without updating its files. Run `jj workspace"
+                      " update-stale` before anything else."))
+               (when (seq stranded)
+                 (str "The fixer on " who " had not committed its edits"
+                      (if patch (str "; they are in " patch) ", and no copy of them could be read")
+                      (when (and stale? patch) ", and the update takes them off the disk")
+                      "."
+                      (when (and stale? layer)
+                        (str " The working copy is on " layer "'s fix, not the stack's top."))))])))))
+
+(defn- drift-stop
+  "Stop the stage on `:workspace-drifted` with what it has: whatever `acc` has
+   landed, the plan from entry `from` on as never attempted, and a `:drift`
+   record naming the revisions and, where there is something to do, what.
+
+   Keeps the fixes already landed, as the conflict stop does — they are
+   committed on their layers whatever moved the tree afterwards. The working
+   copy is left where the move found it; see `with-working-copy-restored`."
+  [acc reviewed-at moved plan from]
+  (let [recover (recovery moved (:stranded acc))]
+    (assoc acc :control :stop :status :workspace-drifted
+           :drift (cond-> {:now (:now moved)}
+                    reviewed-at     (assoc :reviewed-at reviewed-at)
+                    (:stale? moved) (assoc :stale? true)
+                    recover         (assoc :recover recover))
+           :unattempted (unattempted-tail plan from))))
 
 (defn- refused-repair
   "The record of a repair the stack would not take, as it stood BEFORE
@@ -3261,28 +3362,26 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
           ;; until the fixes have landed.
           decided (settled-by-layer stack
                                     (conj (mapv :findings (:history ctx))
-                                          (vec (:findings ctx))))]
+                                          (vec (:findings ctx))))
+          ;; SOMEBODY ELSE moved the tree between the review and the repair —
+          ;; or rewrote it from another workspace, leaving this one stale.
+          ;; Every finding this round holds was found in a state that is no
+          ;; longer what `@` means, so landing fixes now writes them onto code
+          ;; nobody reviewed.
+          ;;
+          ;; Somebody else, because the loop's own rewrites move the pin with
+          ;; them — `run-reshape-stage` re-pins after it reshapes, and without
+          ;; that this guard fires on every round the reshape stage acted in.
+          moved (workspace-moved cwd (:reviewed-at ctx))]
       (cond
-        ;; SOMEBODY ELSE moved the tree between the review and the repair. Every
-        ;; finding this round holds was found in a state that is no longer what
-        ;; `@` means, so landing fixes now writes them onto code nobody reviewed.
-        ;; Refusing names both revisions, which is what makes it actionable
-        ;; instead of the `fix-noop` this used to end as.
-        ;;
-        ;; Somebody else, because the loop's own rewrites move the pin with them
-        ;; — `run-reshape-stage` re-pins after it reshapes, and without that this
-        ;; guard fires on every round the reshape stage acted in.
-        (and (:reviewed-at ctx) (not (layers/descends-from? cwd (:reviewed-at ctx))))
-        (assoc ctx :control :stop :status :workspace-drifted
-               :drift {:reviewed-at (:reviewed-at ctx)
-                       :now (layers/resolve-rev cwd "@")}
-               ;; The whole plan, from the first entry: this stops before any
-               ;; fixer is positioned, so every layer it was owed is a layer
-               ;; nobody was launched for. Without it the phase reports `fixes
-               ;; []` with nothing beside it, which is the same shape a round
-               ;; with no work at all produces — and the round that stopped here
-               ;; is the one whose repairs a reader most needs named.
-               :unattempted (unattempted-tail plan 0))
+        ;; The whole plan, from the first entry: this stops before any fixer is
+        ;; positioned, so every layer it was owed is a layer nobody was
+        ;; launched for. Without it the phase reports `fixes []` with nothing
+        ;; beside it, which is the same shape a round with no work at all
+        ;; produces — and the round that stopped here is the one whose repairs
+        ;; a reader most needs named.
+        moved
+        (drift-stop ctx (:reviewed-at ctx) moved plan 0)
 
         :else
         (if (empty? plan)
@@ -3305,6 +3404,17 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                        ;; and the bookmark move — rather than half of one.
                        op     (layers/current-op cwd)
                        _      (layers/position-for-fix! cwd layer)
+                       ;; Where this fixer starts, twice over. `start` is the
+                       ;; commit its edits are measured against. `seat` is the
+                       ;; change the stage expects the working copy still to be
+                       ;; on when the fixer returns — the change, because the
+                       ;; snapshot that records the fixer's edits rewrites the
+                       ;; commit, and a commit-id pin reads every fixer that
+                       ;; wrote anything as the tree having moved. Both are taken
+                       ;; here rather than from the round's pin, which the
+                       ;; stage's own insert has just moved `@` off.
+                       start  (layers/resolve-rev cwd "@")
+                       seat   (not-empty (jj/current-change-id cwd))
                        ;; What this fixer was HANDED, named rather than counted.
                        ;; The count alone cannot answer the question every
                        ;; cross-round read wants — did this commit stop that
@@ -3374,7 +3484,28 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                        ;; Entered before the outcome is decided, so no branch
                        ;; below can forget it: the session exists whatever becomes
                        ;; of the repair.
-                       acc    (record-launch acc label handed ran? exit-code)]
+                       acc    (record-launch acc label handed ran? exit-code)
+                       ;; Before the check below, whose first jj call is the one
+                       ;; a stale copy refuses. Only for a fixer that ran: a
+                       ;; launch that never started wrote nothing, and returned
+                       ;; within seconds of the insert.
+                       patch  (when ran?
+                                (save-fixer-patch! cwd start run-id label (:iter ctx)))
+                       moved  (when ran? (workspace-moved cwd seat))]
+                   (cond
+                     ;; The workspace moved while the fixer ran. Nothing below
+                     ;; may run: every step would read a tree the stage does not
+                     ;; hold, and on a stale copy every step is refused. What
+                     ;; the fixer wrote is in `patch`, and its layer is the one
+                     ;; row of the round's account that is neither landed nor
+                     ;; refused nor declined.
+                     moved
+                     (reduced (drift-stop (update acc :stranded (fnil conj [])
+                                                  (stranded-row label handed patch
+                                                                result-text timed-out? wall))
+                                          (:reviewed-at ctx) moved plan (inc i)))
+
+                     :else
                    (if (and ran? (working-copy-dirty? cwd))
                      (let [cid (layers/land-fix!
                                 cwd layer
@@ -3414,10 +3545,10 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                            ;; before been terminal, the run would have reported
                            ;; ten fixes on a branch whose tests do not read.
                            ;;
-                           ;; Not covered by the :workspace-drifted guard: that
-                           ;; compares the pinned :reviewed-at against @ once, at
-                           ;; the top of the stage, so a conflict the stage
-                           ;; itself creates is invisible to it.
+                           ;; Not covered by the :workspace-drifted guard, which
+                           ;; asks whether somebody ELSE moved the tree: a
+                           ;; conflict the stage creates itself is invisible
+                           ;; to it.
                            bad (layers/conflicted cwd base)]
                        (if (empty? bad)
                          (update acc :fixes (fnil conj []) fix)
@@ -3525,7 +3656,7 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                                     :findings (mapv (fn [f]
                                                       {:id (or (:handle f) (:id f))
                                                        :title (:title f)})
-                                                    findings)})))))))
+                                                    findings)}))))))))
                  ctx (map-indexed vector plan)))
               ctx' (if (seq (:fixes ctx'))
                      (update ctx' :history (fnil conj [])
@@ -3542,6 +3673,12 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
                               :warden (:warden ctx')})
                      ctx')]
           (cond
+            ;; The plan stopped itself on a moved workspace, and the stop it
+            ;; built is the account: every reading below would restate a round
+            ;; that did not finish as one that did.
+            (:drift ctx')
+            ctx'
+
             ;; Reached only when the rollback above could not clear the conflict,
             ;; so the stack really is holding markers. Stop with it named rather
             ;; than reviewing it again: the next round would read those markers as

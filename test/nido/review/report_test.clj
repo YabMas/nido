@@ -349,6 +349,26 @@
         "and the launch that never started is on the phase, exit and all, rather
          than nowhere")))
 
+(deftest a-fixer-stranded-by-a-moved-workspace-was-still-dispatched
+  ;; review-1e4b6342 published `0 repairs dispatched` over three fixers that ran
+  ;; for 36 minutes. A fixer the stage stopped on before settling is a repair the
+  ;; run asked for, whatever became of it, and its row is where its patch is.
+  (let [row {:layer "middle" :handed ["bb22" "cc33"] :patch "/runs/r/fix-middle-round-1.patch"}
+        r   (drive
+             [{:event :run-started :run-id "r" :cwd "/w" :base "main" :at "t0"}
+              {:event :phase-started :iter 1 :phase :fix :at "t1"}
+              {:event :phase-finished :iter 1 :phase :fix :at "t2"
+               :ctx {:history [{:iter 1 :fixed-count 1
+                                :fixes [{:layer "lower" :commit "c1" :handed ["aa11"]
+                                         :fixed-count 1}]}]
+                     :stranded [row]
+                     :unattempted [{:layer "upper" :handed ["dd44"]}]}}
+              {:event :run-finalized :status :workspace-drifted :ctx {} :at "t3"}])]
+    (is (= 3 (:fix-attempts (:summary r)))
+        "the landed one and both findings the stranded fixer was handed; not the
+         layer the stop never reached")
+    (is (= [row] (->> r :rounds first :phases (some #(when (= "fix" (:phase %)) %)) :stranded)))))
+
 (deftest a-report-that-filed-a-dead-launch-as-a-decline-still-counts-it-as-none
   ;; report.json outlives the code that wrote it, and a later run re-summarizes
   ;; one it settles as an orphan — so a launch that never started, recorded as a

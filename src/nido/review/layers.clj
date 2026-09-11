@@ -19,6 +19,8 @@
    merge-base subtlety that `nido.review.codex` documents applies to diffing,
    not to enumerating."
   (:require
+   [babashka.fs :as fs]
+   [babashka.process :as process]
    [clojure.string :as str]
    [nido.review.digest :as digest]
    [nido.session.lifecycle :as lifecycle]
@@ -661,3 +663,65 @@
                                      "--no-graph")]
       (and (zero? exit) (boolean (not-empty (str/trim (or out ""))))))
     (catch Throwable _ true)))
+
+(defn ^{:malli/schema [:=> [:cat :Path] :boolean]}
+  stale?
+  "Does jj refuse this workspace's working copy as stale — its commit rewritten
+   by another operation that left the files on disk as they were?
+
+   Asked with a command that snapshots, because the snapshot is what a stale
+   copy refuses; a read that skips it answers for the rewritten commit and
+   never notices. Separate from `descends-from?`, which reads any refusal as the
+   tree having moved and so cannot say that this one needs `jj workspace
+   update-stale` before any other jj command will run.
+
+   False when jj cannot be run at all, which is `descends-from?`'s reading of
+   an unaskable workspace."
+  [cwd]
+  (try
+    (lifecycle/workspace-stale? (jj/jj! cwd "log" "-r" "@" "--no-graph" "-T" "commit_id"))
+    (catch Throwable _ false)))
+
+(defn ^{:malli/schema [:=> [:cat :Path [:maybe :string]] [:maybe :string]]}
+  working-copy-patch
+  "The files on disk against commit `from`'s tree as a git patch — \"\" when they
+   match — read without asking jj to snapshot; nil when it cannot be read.
+
+   Without jj because this is the reading a stale working copy still allows.
+   Every jj command that looks at the files snapshots them first, and a stale
+   copy refuses the snapshot, so `jj diff` fails at exactly the moment a
+   fixer's unrecorded edits most need copying out. jj names the git store
+   behind the repo without touching the working copy, and git diffs the disk
+   against a throwaway index read from `from`: the repo's own index is never
+   opened, a new file enters as intent-to-add so no blob is written to the
+   shared store, and `.gitignore` decides what counts as an edit, as it does
+   for jj.
+
+   `from` is the commit the edits were made on — a fixer's starting `@` — so
+   the patch holds what was written since, whatever has become of `@`."
+  [cwd from]
+  (when from
+    (try
+      (let [ask  #(let [{:keys [exit out]} (jj/jj! cwd "--ignore-working-copy" %1 %2)]
+                    (when (and (zero? exit) (not (str/blank? out))) out))
+            root (ask "workspace" "root")
+            git-dir (ask "git" "root")]
+        (when (and root git-dir)
+          (let [tmp (fs/create-temp-dir {:prefix "nido-fix-index"})]
+            (try
+              (let [env {"GIT_DIR" git-dir "GIT_WORK_TREE" root
+                         "GIT_INDEX_FILE" (str (fs/path tmp "index"))}
+                    ;; fsmonitor off: a daemon started from this call would
+                    ;; outlive it, watching a worktree it was never asked about.
+                    git #(apply process/shell {:dir root :extra-env env :continue true
+                                               :out :string :err :string}
+                                "git" "-c" "core.fsmonitor=false" %&)]
+                (when (and (zero? (:exit (git "read-tree" from)))
+                           ;; --ignore-removal, or a deleted file is staged away
+                           ;; from the index and drops out of the diff below.
+                           (zero? (:exit (git "add" "--intent-to-add" "--ignore-removal"
+                                              "--" "." ":(exclude).jj"))))
+                  (let [{:keys [exit out]} (git "diff" "--binary")]
+                    (when (zero? exit) out))))
+              (finally (fs/delete-tree tmp))))))
+      (catch Throwable _ nil))))

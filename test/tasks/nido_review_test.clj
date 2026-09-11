@@ -1582,6 +1582,44 @@
       (is (str/includes? md "8f1c0a3d"))
       (is (str/includes? md "2b7e49c1")))))
 
+(def ^:private stale-drift
+  "A drift stop on a working copy jj refused as stale, in a round that could
+   not pin the revision its reviewers read — the shape with the least in it."
+  {:now nil :stale? true
+   :recover (str "jj refuses this working copy as stale: another operation rewrote"
+                 " its commit without updating its files. Run `jj workspace"
+                 " update-stale` before anything else. The fixer on middle had not"
+                 " committed its edits; they are in /runs/r/fix-middle-round-1.patch.")})
+
+(deftest a-stale-stop-tells-the-terminal-what-to-run-before-the-re-run
+  ;; The remedy line says re-run, and on a stale copy the re-run cannot start:
+  ;; every jj command fails until the update has run. The patch is the only copy
+  ;; of a fixer's uncommitted edits, and the run dir holding it is reclaimed.
+  (let [out (t/outcome-lines {:status :workspace-drifted :drift stale-drift}
+                             {:rounds []} "/runs/r/report.json")
+        at  #(first (keep-indexed (fn [i l] (when (str/includes? l %) i)) out))]
+    (is (at "jj workspace update-stale"))
+    (is (at "/runs/r/fix-middle-round-1.patch"))
+    (is (< (at "update-stale") (at "→ "))
+        "said before the remedy line, since it has to be done before it")
+    (is (not (some #(str/includes? % "reviewed at") out))
+        "no pinned revision, and no line pretending there was one")))
+
+(deftest a-stale-stop-reaches-the-ledger-with-its-recovery
+  (let [ev (t/review-event {:status :workspace-drifted :history [] :findings []
+                            :drift stale-drift}
+                           {:summary {:rounds 1 :fix-attempts 3}
+                            :target {:base "main" :base-rev "deadbee"}}
+                           "/runs/r/report.json")]
+    (is (= stale-drift (:drift ev)))
+    (is (= ev (report/validate-event :review ev))
+        "a closed schema that refused the new keys would swallow the entry whole,
+         and with it the one sentence saying what to run")
+    (let [md (report/report->markdown (assoc ev :format :review-report))]
+      (is (str/includes? md "jj workspace update-stale"))
+      (is (str/includes? md "/runs/r/fix-middle-round-1.patch"))
+      (is (not (str/includes? md "reviewed at "))))))
+
 (deftest the-ledger-entry-says-the-loop-reshaped-the-stack
   ;; A run that squashed two layers together reported `0 fixed` and said nothing
   ;; about the rewrite. Whoever picks the branch up next is reading a stack the

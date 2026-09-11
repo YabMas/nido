@@ -60,7 +60,9 @@
    revision the reviewers read and the one it found, refuses on the difference,
    and until this key existed neither number left the ctx. Which revision moved
    is the whole of what a reader can act on, and reconstructing it meant reading
-   the stage source.
+   the stage source. A stale working copy has no second revision to name, so
+   the record says `:stale?` instead, and `:recover` is the stage's sentence on
+   what to do — present whenever a re-run alone is not the answer.
 
    `:standing` is the last warden's own list of what it knows is open and handed
    to nobody — no finding covers it, no fixer was launched at it, so nothing
@@ -431,11 +433,15 @@
       ;; are what makes the phase add up to every :fix ruling it held.
       ;; :launch-failed is a layer whose fixer was launched and never started,
       ;; with the exit code — that and its err.log are all anyone has of why.
+      ;; :stranded is a fixer that ran and was never settled, because the
+      ;; workspace moved while it did: its repair is in no commit, so the row's
+      ;; :patch is the one copy of it the run keeps.
       :fix    (let [h (last (filter #(= (:iter ctx) (:iter %)) (:history ctx)))]
                 (cond-> (assoc ph :fixes (vec (:fixes h)) :fixed-count (:fixed-count h))
                   (seq (:declined ctx))    (assoc :declined (vec (:declined ctx)))
                   (seq (:launch-failed ctx)) (assoc :launch-failed (vec (:launch-failed ctx)))
                   (seq (:rolled-back ctx)) (assoc :rolled-back (vec (:rolled-back ctx)))
+                  (seq (:stranded ctx))    (assoc :stranded (vec (:stranded ctx)))
                   (seq (:conflicted ctx))  (assoc :conflicted (vec (:conflicted ctx)))
                   (seq (:unattempted ctx)) (assoc :unattempted (vec (:unattempted ctx)))))
       ;; What the stage decided about each recut, whether or not it could act.
@@ -525,11 +531,13 @@
 (defn- fix-rows-with-a-fixer
   "Every row of a fix phase that names a fixer which RAN.
 
-   The phase's lists are one account of the round's `:fix` rulings, and three of
+   The phase's lists are one account of the round's `:fix` rulings, and four of
    them are a fixer that ran: `:fixes` and `:rolled-back` are repairs it wrote —
-   kept and refused — and `:declined` is one that wrote nothing. The other two
-   name no fixer. `:launch-failed` is a launch claude refused before a turn, and
-   `:unattempted` is what a layer was OWED when the stage aborted below it.
+   kept and refused — `:declined` is one that wrote nothing, and `:stranded` is
+   one the stage stopped on before it could tell which, because the workspace
+   moved. The other two name no fixer. `:launch-failed` is a launch claude
+   refused before a turn, and `:unattempted` is what a layer was OWED when the
+   stage aborted below it.
 
    The same line `nido.review.stages/repair-attempted?` draws for the give-up
    counter, off the same reading in the fix stage: the count a run publishes and
@@ -539,7 +547,8 @@
    report.json written before those had a list of their own — and such a report
    is still re-summarized, when a later run settles it as an orphan."
   [ph]
-  (concat (:fixes ph) (:rolled-back ph) (remove #(false? (:ran? %)) (:declined ph))))
+  (concat (:fixes ph) (:rolled-back ph) (:stranded ph)
+          (remove #(false? (:ran? %)) (:declined ph))))
 
 (defn- fix-attempts
   "How many repairs the run DISPATCHED — one per finding per round it was handed

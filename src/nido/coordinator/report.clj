@@ -1547,11 +1547,22 @@
    ;; WHICH move, which is the difference between an entry a reader can act on
    ;; and one that sends them to read the stage source. `:now` is maybe-string
    ;; because a workspace that cannot be asked answers nothing, and a guard is
-   ;; not allowed to fail on its own inability to run.
+   ;; not allowed to fail on its own inability to run. `:reviewed-at` is absent
+   ;; on a round that could not pin one, which the staleness check still stops.
+   ;;
+   ;; `:stale?` is jj refusing the working copy outright — another operation
+   ;; rewrote its commit — so no jj command, re-running the review included,
+   ;; works until `jj workspace update-stale` has. `:recover` is the stage's
+   ;; own sentence on what to do, present whenever a re-run alone is not the
+   ;; answer: it names that command, and the patch holding a fixer's edits
+   ;; that no commit does. The patch sits in the run dir, which is routinely
+   ;; reclaimed, so naming it here is what tells a reader to save it first.
    [:drift {:optional true}
     [:map {:closed true}
-     [:reviewed-at string?]
-     [:now [:maybe string?]]]]
+     [:reviewed-at {:optional true} string?]
+     [:now [:maybe string?]]
+     [:stale? {:optional true} boolean?]
+     [:recover {:optional true} string?]]]
    ;; What the loop did to the BRANCH, as against what it found in it. A recut
    ;; the reshape stage carried out rewrote the layers the reader is about to
    ;; look at, and it reached report.json and stopped — so the entry said `0
@@ -2773,9 +2784,10 @@
        ;; content: `workspace-drifted` names a difference between two revisions
        ;; and the entry used to carry neither of them.
        (when drift
-         (str "reviewed at " (:reviewed-at drift)
-              " · the tree was at " (or (:now drift) "a revision jj would not name")
-              " when the repairs were due"))
+         (str (when (:reviewed-at drift) (str "reviewed at " (:reviewed-at drift) " · "))
+              "the tree was at " (or (:now drift) "a revision jj would not name")
+              " when the repairs were due"
+              (when (:recover drift) (str "\n\n" (:recover drift)))))
        ;; Above the findings, because it is a fact about the branch rather than
        ;; about the review: whoever reads this next is looking at a stack the
        ;; loop reshaped, and the counts below say nothing about that.

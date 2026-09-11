@@ -1235,7 +1235,7 @@
    :review-failed "the reviewer broke — this is not a clean bill, and the branch is unjudged"
    :reviewer-unavailable "the reviewer could not be run at all; nothing was reviewed and the branch is unjudged"
    :warden-indeterminate "the warden returned no decision, so nothing was attributed and no repair was attempted — re-run"
-   :workspace-drifted "the working copy moved after the reviewers read it, so no repair could land on the tree they judged — re-run"})
+   :workspace-drifted "the working copy moved after the reviewers read it, so no further repair could land on the tree they judged — the repairs that landed first are kept; re-run"})
 
 (defn ^{:malli/schema [:=> [:cat :map :map :string] [:sequential :string]]}
   outcome-lines
@@ -1286,8 +1286,14 @@
       ;; themselves from one another session made, which decides whether a
       ;; re-run is the whole answer.
       drift
-      (conj (str "  reviewed at " (:reviewed-at drift)
-                 ", tree now at " (or (:now drift) "a revision jj would not name")))
+      (conj (str "  " (when (:reviewed-at drift) (str "reviewed at " (:reviewed-at drift) ", "))
+                 "tree now at " (or (:now drift) "a revision jj would not name")))
+
+      ;; What to do before the re-run the remedy line asks for, when that is
+      ;; not the whole answer: on a stale working copy the re-run cannot start,
+      ;; and a fixer's uncommitted edits exist only in the patch it names.
+      (:recover drift)
+      (conj (str "  " (:recover drift)))
 
       ;; The loop rewrote the branch. Said here because the status is about the
       ;; REVIEW and this is about the code the operator is standing in — a run

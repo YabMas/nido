@@ -218,7 +218,16 @@
     "Whether the working copy is still at or above a revision — false means somebody moved the
      tree under a round in flight. TRUE when the workspace cannot be asked: a guard that cannot
      run must not become a failure of the thing it guards."
-    {:signature [:=> [:catn [:cwd Path] [:rev :string]] :boolean]}))
+    {:signature [:=> [:catn [:cwd Path] [:rev :string]] :boolean]})
+  (Operation stale?
+    "Whether jj refuses the working copy as stale — its commit rewritten by another operation
+     that left the files as they were. Asked apart from descent, whose check reads the same
+     refusal as a move and so cannot say that this one needs `jj workspace update-stale`."
+    {:signature [:=> [:catn [:cwd Path]] :boolean]})
+  (Operation working-copy-patch
+    "The files on disk against a commit's tree as a git patch, read without jj — the one
+     reading a stale working copy still allows, and the only copy of edits no commit holds."
+    {:signature [:=> [:catn [:cwd Path] [:from [:maybe :string]]] [:maybe :string]]}))
 
 (Module review-stages
   "What a round reviews, in what order, and what it does with the rulings.

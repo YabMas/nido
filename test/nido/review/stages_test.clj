@@ -6,6 +6,7 @@
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
    [nido.coordinator.agent :as agent]
+   [nido.coordinator.record.state :as cstate]
    [nido.coordinator.record.workstream :as ws]
    [nido.platform.core :as core]
    [nido.review.cache :as cache]
@@ -3119,6 +3120,146 @@
                 :reviewed-at nil
                 :findings [{:id "aa11" :title "x" :disposition :fix}]})]
       (is (not= :workspace-drifted (:status ctx))))))
+
+(deftest a-stale-copy-stops-the-stage-before-a-fixer-is-positioned-pin-or-none
+  ;; Staleness needs no pin to be seen, and a round that could not pin one is
+  ;; exactly the round whose jj was already refusing it.
+  (with-redefs [stages/session-stack (fn [& _] two-layer-stack)
+                layers/stale? (fn [_] true)
+                layers/descends-from? (fn [& _] (throw (ex-info "never asked" {})))
+                agent/launch! (fn [_] (throw (ex-info "no fixer should launch" {})))]
+    (let [ctx ((:run stages/fix-stage)
+               {:config {:cwd "/w" :run-id "r1"} :iter 2 :reviewed-at nil
+                :findings [{:id "aa11" :title "x" :disposition :fix :owner-layer "lower"}]})]
+      (is (= :workspace-drifted (:status ctx)))
+      (is (= {:now nil :stale? true} (dissoc (:drift ctx) :recover))
+          "no revision to name on either side, and nothing pretending to be one")
+      (is (str/includes? (get-in ctx [:drift :recover]) "jj workspace update-stale")
+          "the one command that lifts it, since every other one fails the same way"))))
+
+(deftest a-fixer-returning-to-a-moved-tree-is-copied-out-and-nothing-lands
+  ;; The tree can move without going stale — somebody in the same workspace
+  ;; checking out another commit — and then every jj call answers, for a tree
+  ;; the stage no longer holds. The copy is taken first because the check is
+  ;; the first thing that touches jj.
+  (let [seen (atom [])]
+    (with-redefs [stages/session-stack (fn [& _] two-layer-stack)
+                  agent/launch! (fn [_] (swap! seen conj :fixer)
+                                  {:num-turns 7 :result-text "fixed; suite green"})
+                  jj/current-change-id (fn [_] "seatchange")
+                  layers/working-copy-patch (fn [_ _] (swap! seen conj :patch) "+fixed\n")
+                  layers/stale? (fn [_] (swap! seen conj :guard) false)
+                  layers/descends-from? (fn [_ pin] (not= "seatchange" pin))
+                  layers/resolve-rev (fn [_ _] "ELSEWHERE")
+                  layers/land-fix! (fn [& _] (throw (ex-info "nothing may land" {})))
+                  stages/working-copy-dirty? (fn [_] (throw (ex-info "nothing may be read" {})))
+                  jj/jj! (fn [& _] {:exit 0 :out "" :err ""})]
+      (let [home (fs/create-temp-dir {:prefix "nido-drift-home"})]
+        (try
+          (with-redefs [core/nido-root (constantly (str home))]
+            (fs/create-dirs (cstate/run-dir "r1"))
+            (let [ctx ((:run stages/fix-stage)
+                       {:config {:cwd "/w" :run-id "r1"} :iter 2 :reviewed-at "THENREV"
+                        :findings [{:handle "h-1" :id "a" :title "x" :disposition :fix
+                                    :owner-layer "lower"}
+                                   {:handle "h-2" :id "b" :title "y" :disposition :fix
+                                    :owner-layer "upper"}]})]
+              (is (= :workspace-drifted (:status ctx)))
+              (is (= [:guard :fixer :patch :guard] @seen)
+                  "the round's own guard, the fixer, its copy, then the check")
+              (is (= [{:layer "upper" :handed ["h-2"]}] (:unattempted ctx)))
+              (is (= "+fixed\n" (slurp (:patch (first (:stranded ctx))))))
+              (is (= {:reviewed-at "THENREV" :now "ELSEWHERE"}
+                     (dissoc (:drift ctx) :recover)))
+              (is (str/includes? (get-in ctx [:drift :recover]) (:patch (first (:stranded ctx)))))
+              (is (not (str/includes? (get-in ctx [:drift :recover]) "update-stale"))
+                  "jj answered, so its remedy for refusing is not this stop's")))
+          (finally (fs/delete-tree home)))))))
+
+(defn- probe-workspaces!
+  "A real three-layer jj stack — `sess--lower`, `sess--middle`, `sess--upper`
+   over `main` — seen from two workspaces of one repo: `:work`, a secondary
+   workspace parked on top of the stack the way a session worktree is, and
+   `:elsewhere`, the repo's default workspace, standing in for whoever else
+   shares it."
+  []
+  (let [root (fs/create-temp-dir {:prefix "nido-stale-fix"})
+        home (str (fs/path root "repo"))
+        work (str (fs/path root "work"))]
+    (jj/jj! (str root) "git" "init" "repo")
+    (spit (str (fs/path home "base.txt")) "base\n")
+    (jj/jj! home "commit" "-m" "base")
+    (jj/jj! home "bookmark" "create" "main" "-r" "@-")
+    (doseq [l ["lower" "middle" "upper"]]
+      (spit (str (fs/path home (str l ".txt"))) (str l "\n"))
+      (jj/jj! home "commit" "-m" (str l " layer"))
+      (jj/jj! home "bookmark" "create" (str "sess--" l) "-r" "@-"))
+    (jj/jj! home "workspace" "add" "--name" "work" work)
+    {:root (str root) :work work :elsewhere home}))
+
+(defn- rewrite-main-from!
+  "Change what `main` contains, from workspace `dir`. Everything above it is
+   rebased, including every OTHER workspace's working-copy commit — whose files
+   nobody updates, which is what leaves that workspace stale.
+
+   `dir` is brought up to date first. The stage's own landings rewrite its
+   working-copy commit too, so by the time a later fixer runs it is stale
+   itself — the branch this reproduces went stale, was re-synced, and went
+   stale again. Every step must succeed, or the test reproduces nothing."
+  [dir]
+  (doseq [args [["workspace" "update-stale"] ["new" "main"] :write ["squash" "--into" "main"]]]
+    (if (= :write args)
+      (spit (str (fs/path dir "outside.txt")) "from outside\n")
+      (let [{:keys [exit err]} (apply jj/jj! dir args)]
+        (when-not (zero? exit)
+          (throw (ex-info (str "outside rewrite failed: " err) {:args args})))))))
+
+(deftest a-workspace-that-goes-stale-under-a-fixer-stops-the-stage-with-what-it-has
+  ;; review-1e4b6342 and review-ce58e5fa: a fixer returned a verified repair into
+  ;; a working copy another operation had rewritten while it ran. The first run
+  ;; read jj's refusal as "nothing written"; the second crashed under a hint
+  ;; that could not run; in both, the edits went nowhere a later run could read.
+  ;; Here the bottom layer's repair lands, the middle fixer is the one the
+  ;; rewrite catches, and the top layer is never reached.
+  (let [{:keys [root work elsewhere]} (probe-workspaces!)
+        findings (mapv (fn [l] {:handle (str "h-" l) :id (str "h-" l) :disposition :fix
+                                :owner-layer l :priority "P2" :file (str l ".txt") :line 1
+                                :title (str "[P2] " l " is wrong")})
+                       ["lower" "middle" "upper"])]
+    (try
+      (with-redefs [core/nido-root (constantly (str (fs/path root "home")))
+                    stages/session-stack (fn [cwd base] (layers/stack cwd "sess" base))
+                    agent/launch! (fn [{:keys [err-file]}]
+                                    (let [l (second (re-find #"fix-(.+)-round-" err-file))]
+                                      (spit (str (fs/path work (str l ".txt"))) (str "fixed " l "\n"))
+                                      (when (= "middle" l) (rewrite-main-from! elsewhere))
+                                      {:num-turns 19 :result-text (str "fixed " l "; suite green")}))]
+        (fs/create-dirs (cstate/run-dir "r1"))
+        (let [out ((:run stages/fix-stage)
+                   {:config {:cwd work :base "main" :run-id "r1"} :iter 1
+                    :reviewed-at (layers/resolve-rev work "@") :toc []
+                    :findings findings})
+              [s] (:stranded out)]
+          (is (= :workspace-drifted (:status out)))
+          (is (= ["lower"] (mapv :layer (:fixes out)))
+              "the repair that landed before the move stays landed")
+          (is (= [{:layer "upper" :handed ["h-upper"]}] (:unattempted out))
+              "the layer the stop never reached, owed and named")
+          (is (= ["middle" ["h-middle"] "fixed middle; suite green"]
+                 [(:layer s) (:handed s) (:account s)])
+              "the fixer the move caught is neither a landing nor a decline")
+          (is (str/includes? (slurp (:patch s)) "+fixed middle")
+              "its edits, copied out although jj refuses every command here")
+          (is (= (cstate/run-dir "r1") (str (fs/parent (:patch s))))
+              "in the run dir, beside the fixer's logs")
+          (is (true? (get-in out [:drift :stale?])))
+          (is (str/includes? (get-in out [:drift :recover]) "jj workspace update-stale"))
+          (is (str/includes? (get-in out [:drift :recover]) (:patch s))
+              "the recovery names where the edits are, since the update takes
+               them off the disk")
+          (is (= "fixed middle\n" (slurp (str (fs/path work "middle.txt"))))
+              "and nothing the stage did after the move touched the files")))
+      (finally (fs/delete-tree root)))))
 
 ;; ---- what an aborted round leaves behind ---------------------------------
 
