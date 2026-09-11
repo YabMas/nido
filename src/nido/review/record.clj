@@ -25,10 +25,12 @@
       diff to be wrong about will otherwise produce fluent, unfalsifiable
       findings forever.
 
-   3. NO EVIDENCE, NO ROUND. `worth-running?` refuses where the records say a
-      round would not pay — the same rule verdict-worth-running? already applies,
-      for the same reason: paying an agent to conclude nothing makes the answer
-      noise rather than signal.
+   3. NO EVIDENCE, NO ROUND — for the baseline. `baseline-round-worth-running?`
+      refuses a baseline that recorded nothing checkable — the same rule
+      verdict-worth-running? already applies, for the same reason: paying an agent
+      to conclude nothing makes the answer noise rather than signal. The decision
+      round is never skipped: a design's declarations decide whether a person's
+      grant is additionally owed, never whether the round runs.
 
    The design round is deliberately SINGLE-PASS. It emits a decision, not
    findings to iterate on, so it never reaches the engine's no-progress check —
@@ -65,28 +67,6 @@
   (boolean (and baseline
                 (or (seq (:load-bearing baseline))
                     (seq (:health baseline))))))
-
-(defn ^{:malli/schema [:=> [:cat :map] :boolean]}
-  design-round-worth-running?
-  "The decision round costs a human's attention at the end of it, so it runs
-   where the records themselves say it would pay.
-
-   The trigger is read from what the design already declares, rather than from a
-   new heuristic: a change declaring :within on the baseline AND :conforms on the
-   stance is claiming it moves nothing structural — cheap to spot-check, not
-   worth a decision round. :extends, :revisit, :challenges, a large effort, or
-   any health observation routed anywhere other than :fix-here are each a reason
-   the answer is not obvious.
-
-   Deliberately readable off the record: a reader can see from the design itself
-   why a round did or did not run."
-  [design]
-  (boolean
-   (and design
-        (or (not= :within   (get-in design [:baseline :relation]))
-            (not= :conforms (get-in design [:standing :relation]))
-            (contains? #{:L :XL} (:effort design))
-            (some #(not= :fix-here (:to %)) (:routes design))))))
 
 (defn ^{:malli/schema [:=> [:cat :Path :map] [:maybe :map]]}
   discover-intent
@@ -941,42 +921,180 @@
 
    Single-pass on purpose: it emits a decision, not findings to iterate on.
 
-   Three of the no-verdict outcomes are read out of the records before a judge is
-   launched, and cost nothing: no design, a design that says it moves nothing
-   structural, and a design standing on a baseline nobody verified. Only the last
-   is new, and it is the one that was previously discovered by paying for the
-   round — see `unverified-premise`."
+   Two of the no-verdict outcomes are read out of the records before a judge is
+   launched, and cost nothing: no design, and a design standing on a baseline
+   nobody verified. The second is the one that was previously discovered by
+   paying for the round — see `unverified-premise`.
+
+   A design declaring it moves nothing structural is NOT one of them. The round
+   is never skipped: what the declarations decide is whether a person's grant is
+   additionally owed, and that is read after a proceeding decision, by the
+   clearance `append!` writes. Skipping the round here would leave exactly the
+   designs that owe nobody a grant with no decision to clear them on."
   [{:keys [cwd code-cwd run-id label disputes]}]
   (if-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
     (if-let [design (ws/latest-entry project ws-id :design)]
-      (if (design-round-worth-running? design)
-        (or (unverified-premise project ws-id design)
-            (judged (run-round!
-                     {:cwd (or code-cwd cwd) :run-id run-id :kind :design-decision
-                      :label label
-                      :prompt (design-prompt
-                               {:design   design
-                                :baseline (stages/discover-baseline cwd design)
-                                :stance   (stages/read-stance project)
-                                :intent   (discover-intent cwd design)
-                                :disputes disputes})})
-                    #(parse-design-decision % (:seq design))))
-        {:outcome :not-worth-running
-         :detail "the design declares :within on its baseline and :conforms on the stance at a modest effort, with nothing routed away from :fix-here"})
+      (or (unverified-premise project ws-id design)
+          (judged (run-round!
+                   {:cwd (or code-cwd cwd) :run-id run-id :kind :design-decision
+                    :label label
+                    :prompt (design-prompt
+                             {:design   design
+                              :baseline (stages/discover-baseline cwd design)
+                              :stance   (stages/read-stance project)
+                              :intent   (discover-intent cwd design)
+                              :disputes disputes})})
+                  #(parse-design-decision % (:seq design))))
       {:outcome :no-record :detail "this workstream has no :design entry"})
     {:outcome :no-workstream :detail (str "cwd resolves to no nido session: " cwd)}))
+
+(defn- cleared?
+  "Does a `:design-cleared` on this workstream name the design at `design-seq`?
+
+   Asked AFTER the decision is appended, because that append is what may have
+   written one. It is the difference between a round that owed a person and one
+   that did not, and the driver has no other way to tell them apart: a `:proceed`
+   is the design round's ask, and an ask nobody is owed is not an escalation."
+  [cwd design-seq]
+  (boolean
+   (when-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
+     (some #(= design-seq (get-in % [:design :seq]))
+           (ws/entries-of project ws-id :design-cleared)))))
+
+(defn- clear-if-owed-nobody!
+  "Append a `:design-cleared` for the design a decision just recommended
+   proceeding on, when that design's own declarations owe nobody a grant.
+
+   TAKES ITS SUBJECT, and keeps it across retries. Reading `latest-entry :design`
+   instead would clear whatever is newest: if D2 is appended after D1's
+   proceeding decision but before this reads, it would check D2's declarations
+   and clear D2, which no round has judged. `standing`'s `:decidable?` does not
+   ask whether a decision exists — that is the round's own answer — so nothing
+   downstream would have caught it.
+
+   READ AND WRITE AS ONE OPERATION, over the boundary the ledger already has for
+   exactly this question. Appending the answer at the moment it is reached is not
+   yet reporting a moment that happened: the standing reading and the write are
+   two operations with a ledger between them, and a verdict landing in that gap
+   would leave a clearance naming a design something has already reached. So the
+   write goes through `append-entry-at!`, which compares the position INSIDE the
+   append lock and refuses as :stale rather than writing. The position it
+   compares is the ENTRY COUNT, which is not the last entry's `:seq` — the
+   sequence is sparse by design, and passing the wrong one refuses every
+   clearance for ever on any ledger that has a gap.
+
+   A REFUSAL IS NOT A FAILURE, and re-asking is the whole of the answer to it.
+   Only standing can have moved: the decision is already appended and no round
+   re-runs, and the declarations are frozen in the record being cleared. So the
+   retry is the same operation repeated. Interference must not decide anything —
+   a bounded budget that gave up would let five unrelated notes create the human
+   gate this exists to remove — so the loop ends on an ANSWER: cleared, or
+   standing come back unclean, and then no clearance is owed because a design
+   that does not stand is not implementable on any reading. The cap is a
+   runaway guard rather than a policy, and reaching it answers `:contended` —
+   the question still open, never a grant owed — which the round reports as a
+   status the clearance stage (`clear!`) takes up rather than one it parks for a
+   person."
+  [project ws-id design-seq]
+  (loop [attempts 0]
+    (let [w      (ws/read-ws project ws-id)
+          design (ws/entry-at-seq project ws-id design-seq)
+          at     (count (:entries w))]
+      (cond
+        (nil? design) nil
+        (report/owes-a-person? design) nil
+        (> attempts 100)
+        (do (binding [*out* *err*]
+              (println (str "clearance: gave up re-reading " ws-id " for the design at "
+                            design-seq " after 100 interruptions — it still owes nobody"
+                            " a grant, so the clearance is to be asked again")))
+            :contended)
+        :else
+        (let [st (standing/of-design project ws-id design)]
+          (when (:decidable? st)
+            (let [res (ws/append-entry-at!
+                       project ws-id at {:kind :design-cleared}
+                       (pr-str {:format :design-cleared
+                                :design {:seq design-seq}}))]
+              (when (= :stale (:refused res))
+                (recur (inc attempts))))))))))
 
 (defn ^{:malli/schema [:=> [:cat :Path :map] :any]}
   append!
   "Append a round's record to the workstream ledger. Best-effort, for the same
    reason the review path's appends are: a round that produced an answer must not
-   turn into a failure because the side record could not be written."
+   turn into a failure because the side record could not be written.
+
+   A decision that proceeds (`report/proceeds?`) may also CLEAR the design, and
+   that happens here rather than in either loop so that no round can append a
+   decision and forget the clearance it implies. Returns `:contended` when that
+   clearance was
+   still owed and could not be written. Nothing this returns means `a person is
+   owed the grant` — a write that threw answers nil too — so a caller asks the
+   design itself, as `proceeding-status` does."
   [cwd record]
   (try
     (when (:format record)
       (when-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
-        (ws/append-entry! project ws-id {:kind (:format record)} (pr-str record))))
+        (ws/append-entry! project ws-id {:kind (:format record)} (pr-str record))
+        (when (and (= :design-decision (:format record))
+                   (report/proceeds? record))
+          (clear-if-owed-nobody! project ws-id (:design-seq record)))))
     (catch Exception _ nil)))
+
+(defn- proceeding-status
+  "The status a decision that `report/proceeds?` ends on, once the clearance it
+   may imply has been asked for; `answer` is what asking returned.
+
+     :cleared              a clearance names the design
+     :proceed              a person is owed the grant — the round's ask
+     :clearance-contended  it owes nobody and the clearance is still unwritten
+     standing's reason     it owes nobody, but no longer stands
+
+   Only :proceed parks for a person. A clearance still owed is a write, not an
+   ask, whatever kept it from landing — contention, or a write that threw inside
+   `append!` — and the clearance stage makes it. A design that no longer stands
+   owes nobody anything until what moved under it is repaired, so it goes where
+   standing says rather than onto a person's gate."
+  [cwd record answer]
+  (let [n               (:design-seq record)
+        [project ws-id] (stages/project+ws-from-cwd cwd)
+        design          (when project (ws/entry-at-seq project ws-id n))]
+    (cond
+      (cleared? cwd n)                                  :cleared
+      (= :contended answer)                             :clearance-contended
+      (or (nil? design) (report/owes-a-person? design)) :proceed
+      :else (let [st (standing/of-design project ws-id design)]
+              (if (:decidable? st)
+                :clearance-contended
+                (or (:reason (:blocked st)) :premise-unverified))))))
+
+(defn ^{:malli/schema [:=> [:cat :Path] :keyword]}
+  clear!
+  "Write the clearance a proceeding decision already on the ledger implies, and
+   nothing else — the stage a round that ended :clearance-contended hands on to.
+
+   No round runs, no decision is appended and nothing becomes a grant: the
+   decision is recorded and the declarations are frozen in the design, so the
+   one thing left open is the write. Its subject is the design the latest
+   proceeding decision names, and only while that is the newest design — a
+   design appended since has had no round, and clearing it would clear work
+   nobody judged. Anything else answers :nothing-to-clear: the ledger moved on
+   after the stage was fired, and the next reading of it says where."
+  [cwd]
+  (if-let [[project ws-id] (stages/project+ws-from-cwd cwd)]
+    (let [design   (ws/latest-entry project ws-id :design)
+          decision (some->> (ws/entries-of project ws-id :design-decision)
+                            (filter #(= (:seq design) (:design-seq %)))
+                            last)]
+      (cond
+        (or (nil? design)
+            (not (report/proceeds? decision))
+            (report/owes-a-person? design)) :nothing-to-clear
+        (cleared? cwd (:seq design))        :cleared
+        :else (proceeding-status cwd decision
+                                 (clear-if-owed-nobody! project ws-id (:seq design)))))
+    :no-workstream))
 
 ;; ── The baseline round as a loop ────────────────────────────────────────────
 ;;
@@ -1518,33 +1636,6 @@
   [record]
   (vec (filter #(= :broken (:status %)) (:checks record))))
 
-(def ^:private advisory-check
-  "The one derived check that may not block, and the reason it is the only one.
-
-   `relation-honest`, `goal-served` and `routing-coherent` judge what the change
-   COMMITS TO. `decomposable` judges how the work will be sliced for review — and
-   layers do not survive: the stack is collapsed into one commit before it lands,
-   so a bad cut costs the attention of the reviewers reading it now and nothing
-   afterwards. By the time a round can report the cut is wrong, that attention is
-   already spent, and another round of re-cutting spends more than it saves.
-
-   Measured before this existed: `decomposable` was 143 of the 357 findings the
-   design round had produced, it was the sole complaint in 41 of 193
-   finding-bearing rounds, and it was the only check still open at the terminal
-   round of 16 of the 61 runs that ended badly. Two prompt-level bars against
-   over-splitting were already in place through all of that, which is why the
-   rule is enforced here and not only asked for."
-  :decomposable)
-
-(defn- advisory-only?
-  "Whether everything the round found broken is the advisory check.
-
-   False when nothing broke — a clean round is not this case, and reads as
-   :proceed on its own recommendation. False as soon as one other check breaks,
-   because then the commitment is in question and the layering rides along."
-  [broken]
-  (boolean (and (seq broken) (every? #(= advisory-check (:check %)) broken))))
-
 (defn ^{:malli/schema [:=> [:cat :map] :any]}
   underivable-checks
   "The derivations the round could not make at all.
@@ -1684,16 +1775,30 @@
           (assoc ctx :record record :status (:outcome record)))
 
       ;; The judge's own recommendation, or — whatever it recommended — a round
-      ;; whose only broken check is the advisory one. The second is a guard and
-      ;; not a courtesy: the routing lives in the prompt, so without it the rule
-      ;; is a third soft bar beside the two that have already failed here. The
-      ;; broken check stays on the record, so the human still reads the
-      ;; complaint; what it stops doing is spending a round on an amender.
-      (or (= :proceed (:recommend record))
-          (advisory-only? (broken-checks record)))
-      (final! (assoc ctx :record record :findings []
-                     :underivable (underivable-checks record)
-                     :control :escalate :status :proceed))
+      ;; whose only broken check is the advisory one: `report/proceeds?`, the
+      ;; same answer the clearance, the position and the grant read. The second
+      ;; is a guard and not a courtesy: the routing lives in the prompt, so
+      ;; without it the rule is a third soft bar beside the two that have already
+      ;; failed here. The broken check stays on the record, so the human still
+      ;; reads the complaint; what it stops doing is spending a round on an
+      ;; amender.
+      (report/proceeds? record)
+      ;; Appending a proceeding decision is what may clear the design, so the
+      ;; escalation is decided AFTER the append: a design whose own
+      ;; declarations owed nobody has just been cleared, and parking it for a
+      ;; person would put back the gate the clearance removed — the driver maps
+      ;; :proceed to :escalate and would append a blocker that outranks the
+      ;; clearance on the next tick. A clearance still owed and never written is
+      ;; a write, not an ask, for the same reason — see `proceeding-status`.
+      (let [answer (append! cwd (cond-> record (seq traj) (assoc :trajectory traj)))
+            status (proceeding-status cwd record answer)]
+        (assoc ctx :record record :findings []
+               :underivable (underivable-checks record)
+               :status status
+               :control (case status
+                          :cleared :advance
+                          :proceed :escalate
+                          :stop)))
 
       :else
       (let [findings (mapv #(assoc % :disputed-n
@@ -1723,7 +1828,10 @@
   "Derive everything derivable, and stop the moment nothing is left.
 
    Four ways to end here and only one of them is convergence-shaped. :proceed
-   escalates because the ask is the point. A run whose only remaining checks are
+   escalates because the ask is the point — unless nobody is owed one: a design
+   the round cleared advances, and one whose clearance is still unwritten ends
+   :clearance-contended, which the clearance stage finishes without re-running
+   this round. A run whose only remaining checks are
    underivable also escalates, because there is nothing an amender could do about
    a missing yardstick. A finding stated a third time after two objections
    escalates. Everything else is another round."
@@ -1852,14 +1960,12 @@
                          (catch Exception e (ledger-refusal e)))]
             (if err
               (assoc ctx :control :stop :status :amend-invalid :amend-error err)
-              (let [retreats (retreat/design-retreats prev record)
-                    ctx' (assoc ctx
-                                :retreats retreats
-                                :disputes disputes
-                                :history (conj (vec (:history ctx)) (entry retreats true)))]
-                (if (design-round-worth-running? record)
-                  (assoc ctx' :amended? true)
-                  (assoc ctx' :amended? true :control :stop :status :retreated))))))))))
+              (let [retreats (retreat/design-retreats prev record)]
+                (assoc ctx
+                       :amended? true
+                       :retreats retreats
+                       :disputes disputes
+                       :history (conj (vec (:history ctx)) (entry retreats true)))))))))))
 
 (defn- run-design-amend-stage
   [ctx]

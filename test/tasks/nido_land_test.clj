@@ -33,10 +33,28 @@
 
 (deftest a-standing-approved-design-lands
   (let [[code out] (run {:session? true :design a-design
-                         :standing {:decided? true :approved-by 7}})]
+                         :standing {:decided? true :cleared? true :approved-by 7}})]
     (is (zero? code))
     (is (str/includes? out "ok"))
-    (is (str/includes? out "entry 7"))))
+    (is (str/includes? out "approved at entry 7"))))
+
+(deftest a-cleared-design-lands-without-a-grant
+  ;; A design owing nobody a grant never gets one, so a gate asking :decided?
+  ;; would refuse every design the round was built to let through.
+  (let [[code out] (run {:session? true :design a-design
+                         :standing {:decidable? true :decided? false
+                                    :cleared? true :cleared-by 6}})]
+    (is (zero? code))
+    (is (str/includes? out "cleared at entry 6"))))
+
+(deftest a-cleared-design-nobody-granted-lands
+  ;; The arc let it through on a clearance, so refusing it here as unapproved
+  ;; would re-impose the grant the round found nobody was owed.
+  (let [[code out] (run {:session? true :design a-design
+                         :standing {:decidable? true :decided? false
+                                    :cleared? true :cleared-by 8}})]
+    (is (zero? code))
+    (is (str/includes? out "cleared at entry 8"))))
 
 (deftest a-workstream-with-no-design-lands
   ;; Most have none — scratch workstreams, pickups mid-flight — and a gate that

@@ -1,7 +1,8 @@
 (ns nido.review.record-test
-  "The pure half of a round over a record: whether it is worth running, what the
-   prompt puts in front of the judge, and what an answer has to look like to be
-   recorded. The codex call itself is a seam and is not exercised here."
+  "The pure half of a round over a record: whether a baseline round is worth
+   running, what the prompt puts in front of the judge, and what an answer has to
+   look like to be recorded. The codex call itself is a seam and is not exercised
+   here."
   (:require
    [cheshire.core :as json]
    [clojure.string :as str]
@@ -57,28 +58,6 @@
   (is (not (record/baseline-round-worth-running?
             (dissoc (assoc baseline :load-bearing []) :health)))
       "nothing to refute means a round could only produce prose"))
-
-(deftest a-design-claiming-it-moves-nothing-gets-no-decision-round
-  (is (not (record/design-round-worth-running? design))
-      ":within + :conforms + modest effort is a claim that is cheap to
-       spot-check; paying for a decision round there is the cost this guards"))
-
-(deftest every-declared-reason-to-doubt-triggers-the-round
-  (is (record/design-round-worth-running?
-       (assoc design :baseline {:seq 3 :relation :revisit
-                                :breaks ["the aggregate is the only summing path"]
-                                :note "the boundary has to move"})))
-  (is (record/design-round-worth-running?
-       (assoc design :standing {:relation :challenges :note "money needs mutability"})))
-  (is (record/design-round-worth-running? (assoc design :effort :L)))
-  (is (record/design-round-worth-running?
-       (assoc design :routes [{:health-id "invoice-resums" :to :spin-out
-                               :why "revealed, not created" :ref "FU-88"}]))
-      "an observation routed anywhere but fix-here is a scope decision, and
-       scope decisions are what the round exists to put to a human")
-  (is (not (record/design-round-worth-running?
-            (assoc design :routes [{:health-id "invoice-resums" :to :fix-here}])))
-      "routing everything to fix-here decides nothing that needs deciding"))
 
 ;; ── What the judge is shown ─────────────────────────────────────────────────
 
@@ -198,11 +177,6 @@
   "A :design from before the baseline event: no :baseline, and still readable."
   {:format :design :summary "s" :shape "sh" :invariants ["i"]
    :standing {:relation :conforms} :effort :M})
-
-(deftest a-legacy-design-qualifies-for-a-round
-  (is (record/design-round-worth-running? legacy-design)
-      "its absent baseline relation is not :within, so it qualifies — which is
-       exactly why the prompt has to survive it"))
 
 (deftest a-legacy-design-does-not-crash-the-prompt
   (let [p (record/design-prompt {:design legacy-design})]

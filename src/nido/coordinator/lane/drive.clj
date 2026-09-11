@@ -185,7 +185,11 @@
    ;; `nido.review.loop/terminal-statuses` is a closed set of eight and every
    ;; one of them is an explicit row in that table, so this needed no new
    ;; vocabulary — only the wire.
-   :review-implementation {:task 'tasks.nido-review/loop-cmd* :label "diff review"}})
+   :review-implementation {:task 'tasks.nido-review/loop-cmd* :label "diff review"}
+   ;; Not a loop and no agent at all: the one write a proceeding decision on a
+   ;; design owing nobody still owes. Contention ADVANCES rather than retrying,
+   ;; so it spends no attempt here and is re-asked on the next tick.
+   :clear-design    {:task 'tasks.nido-review/clear-cmd* :label "clearance"}})
 
 (defn ^{:malli/schema [:=> [:cat :any] :map]}
   fireable

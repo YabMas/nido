@@ -61,6 +61,29 @@
     "The backward-compatible triage validator — `(validate-event :triage report)`."
     {:signature [:=> [:catn [:report LedgerEvent]] LedgerEvent]
      :performs  [:throws]})
+  (Operation owes-a-person?
+    "Whether a design record, ON ITS OWN, says something high-level is at stake: a
+     `:challenges` against the project stance, or a `:revisit` against its baseline.
+
+     Over the RECORD ALONE and never the ledger, which is what lets the append boundary and
+     `standing` both ask it without either calling the other. Both declarations are already
+     required and already carry their obligations — `:challenges` needs a note, `:revisit`
+     must name what it `:breaks` — so the gate reads what the author already had to say
+     rather than asking a question of its own.
+
+     It decides whether a GRANT is owed, never whether the decision round runs. That round is
+     what falsifies the declarations against the record, and a design no round has judged is
+     not cleared by saying so about itself."
+    {:signature [:=> [:catn [:design :map]] :boolean]})
+  (Operation proceeds?
+    "Whether a design decision lets its design proceed: it recommends `:proceed`, or everything
+     it found broken is the advisory `decomposable` check, whatever it recommended.
+
+     ONE definition over the record alone, read by every reader that asks — the judge ending
+     the round, the clearance writer and the boundary admitting its record, the position fold,
+     and the gate offering a grant. A reader testing `:recommend` itself parks an advisory-only
+     design for a person whose grant nothing then accepts."
+    {:signature [:=> [:catn [:decision [:maybe :map]]] :boolean]})
   (Operation entry-payload
     "For a ledger append: given an entry `kind` and raw `content`, the [extension payload] pair
      to write. A registered kind parses and validates; an unregistered one is markdown."

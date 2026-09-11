@@ -1673,3 +1673,19 @@
             (report/report->markdown {:format :design-verdict :verdict :sound
                                       :round 1 :reason "clean"})
             "no reviewer raised"))))
+
+(deftest the-declarations-decide-whether-a-person-is-owed
+  ;; Both are already required and already carry their obligations, so the gate
+  ;; reads what the author had to say rather than asking a question of its own.
+  (is (false? (report/owes-a-person? {:standing {:relation :conforms}
+                                      :baseline {:relation :within}}))
+      "nothing high-level is at stake, and nobody was ever asked about it")
+  (is (false? (report/owes-a-person? {:standing {:relation :conforms}
+                                      :baseline {:relation :extends}}))
+      "landing on an existing extension point extends the design")
+  (is (true? (report/owes-a-person? {:standing {:relation :challenges}
+                                     :baseline {:relation :within}}))
+      "challenging the stance is a person's decision")
+  (is (true? (report/owes-a-person? {:standing {:relation :conforms}
+                                     :baseline {:relation :revisit}}))
+      "and so is asking the core to move"))

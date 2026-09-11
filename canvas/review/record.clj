@@ -12,9 +12,11 @@
   "The decision rounds over a workstream's own records: does this baseline hold, and does the
    design it supports still stand.
 
-   Both rounds are GATED on being worth running, and the gate is economic rather than
-   defensive — a round costs an agent turn, so a baseline nothing cites and a design nothing
-   changed are not worth re-deciding.
+   The baseline round is GATED on being worth running, and the gate is economic rather than
+   defensive — a round costs an agent turn, so a baseline that recorded nothing checkable is not
+   worth verifying. The decision round is never skipped: what a design declares decides whether
+   a person's grant is additionally owed, and only a round that proceeded can clear a design
+   that owes nobody one.
 
    Disputes carry across rounds. A finding raised, answered and raised again is not the same as
    one raised once, which is why the counts are folded in rather than the findings being treated
@@ -22,8 +24,6 @@
    noticing they are repeating themselves."
   (Operation baseline-round-worth-running? "Whether a baseline is worth verifying."
     {:signature [:=> [:catn [:baseline :map]] :boolean]})
-  (Operation design-round-worth-running? "Whether a design is worth re-deciding."
-    {:signature [:=> [:catn [:design :map]] :boolean]})
   (Operation discover-intent "The intent a design cited."
     {:signature [:=> [:catn [:cwd Path] [:design :map]] [:maybe :map]]})
   (Operation known-ids "Every id a baseline actually defines."
@@ -60,6 +60,10 @@
      :delegates [design-prompt parse-design-decision]})
   (Operation append! "Append a round's record to the ledger."
     {:signature [:=> [:catn [:cwd Path] [:record :map]] :any]})
+  (Operation clear!
+    "Write the clearance a proceeding decision already on the ledger implies, and nothing else —
+     no round re-runs and nothing becomes a grant."
+    {:signature [:=> [:catn [:cwd Path]] :keyword]})
   (Operation baseline-finding-base-key "What makes two baseline findings the same finding."
     {:signature [:=> [:catn [:f :map]] :any]})
   (Operation dispute-aware "A key that folds in how many times a finding has been disputed."
