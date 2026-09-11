@@ -657,11 +657,14 @@
          (sort-by (juxt #(or (:round %) 0) (comp str :layer)))
          vec)))
 
-(defn ^{:malli/schema [:=> [:cat :any :any] :any]}
+(defn ^{:malli/schema [:=> [:cat :any :any :any] :any]}
   with-fix-memory
   "Hand each target its own layer's rows of `outcomes` — a `fix-outcomes` —
    where a fixer RAN: a repair that landed, one the stack put back, and an
-   argument for writing none.
+   argument for writing none. And, marked `:above`, every repair that landed on
+   a HIGHER layer for a finding this target reported, carrying only the findings
+   it reported. `rounds` is each round's findings, oldest first; reported means
+   raised under the repaired handle in one of them.
 
    Every reviewer starts cold and is shown a diff, so nothing else in the loop
    asks whether a fix closed what it was handed. A swept defect came back at the
@@ -679,22 +682,49 @@
    and the ids it was handed name nothing in a reviewer's vocabulary; the warden
    and the design judge are its readers.
 
+   The `:above` rows are the one repair a reviewer cannot see from its own
+   range. The warden files a finding under the layer that owns it, which need
+   not be the layer whose reviewer read it, and the repair lands up there — while
+   the reporting layer is still read at its own head, beneath it, where the
+   defect is genuinely present. So it comes back every round, under a new id
+   whenever the anchor drifts a line or the title is reworded, and one round
+   sent a fixer after it that found the repair already in. The stack collapses
+   at land time, so nothing structural closes that; the memory has to follow
+   the finding. Landed rows only, and higher layers only: a refusal or a
+   decline moved nothing, and a repair below is in the tree this reviewer
+   reads.
+
+   A warden promotion is reported by no layer, so the first time a layer raises
+   one is not matched: that report is what ties the two. Nor is a report made
+   in a round that landed nothing, which the history does not keep.
+
    Keyed on the layer label, which is what `fix-plan` groups by and what the
    commit is recorded under — except on a branch with no layers, where the two
-   sides spell the same thing differently; see `fix-label`.
+   sides spell the same thing differently; see `fix-label`. Heights are the
+   targets' order, bottom→top; the whole-stack target has none, since every
+   repair is inside its range.
 
    Like `with-composition-memory`, nothing it adds reaches the cache key —
    `with-patch-hashes` builds that from the range, so a value that changes every
    round cannot switch the cache off by living here."
-  [targets outcomes]
-  (let [by-label (group-by :layer (remove #(= :unstarted (:outcome %)) outcomes))]
-    (if (empty? by-label)
-      targets
-      (mapv (fn [t]
-              (if-let [prior (seq (get by-label (fix-label t)))]
-                (assoc t :prior-fixes (vec prior))
-                t))
-            targets))))
+  [targets outcomes rounds]
+  (let [rows     (remove #(= :unstarted (:outcome %)) outcomes)
+        height   (into {} (map-indexed (fn [i t] [(:label t) i])) (remove :stack? targets))
+        reported (reduce (fn [m f]
+                           (update m (:from-layer f) (fnil conj #{}) (or (:handle f) (:id f))))
+                         {} (apply concat rounds))
+        above    (fn [t {:keys [outcome layer findings] :as row}]
+                   (let [h    (height (:label t))
+                         up   (height layer)
+                         mine (filterv (comp (get reported (:label t) #{}) :id) findings)]
+                     (when (and h up (< h up) (= :landed outcome) (seq mine))
+                       (assoc row :above true :findings mine))))]
+    (mapv (fn [t]
+            (if-let [prior (seq (keep #(if (= (fix-label t) (:layer %)) % (above t %))
+                                      rows))]
+              (assoc t :prior-fixes (vec prior))
+              t))
+          targets)))
 
 ;; Defined below, with the other readings taken off the workstream's ledger.
 (declare standing-needs prior-open discover-design-record)
@@ -1216,7 +1246,8 @@
         all     (with-patch-hashes
                  cwd (-> targets
                          (with-composition-memory (:history ctx))
-                         (with-fix-memory (fix-outcomes (:history ctx) (:carry ctx)))
+                         (with-fix-memory (fix-outcomes (:history ctx) (:carry ctx))
+                                          (mapv :findings (:history ctx)))
                          (with-standing-needs (standing-needs cwd))
                          (with-prior-open (get-in ctx [:carry :inherited-open]))))
         {:keys [review skipped]} (to-review cached all)

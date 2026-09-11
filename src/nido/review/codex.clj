@@ -315,7 +315,8 @@
    composition has no single brief to be bounded by.
 
    `prior-fixes` is what a fixer already did to this exact target earlier in the
-   run — a repair landed or put back, or an argument for writing none; see
+   run — a repair landed or put back, or an argument for writing none — plus any
+   repair a higher layer took for something this target reported; see
    `stages/with-fix-memory`. It is orthogonal to both: a layer and the
    composition alike can have been worked on, and neither reviewer is told so by
    anything else.

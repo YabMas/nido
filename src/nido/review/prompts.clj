@@ -264,12 +264,22 @@
    decided to ship, and one word for both reads a fixer's refusal as a
    decision; see `fixer-declines-block`.
 
+   An ABOVE entry landed, but on a higher layer, for a finding this layer's
+   reviewer raised. It is the inverse of REFUSED: the edit is in the merged tree
+   and not in the range, so the finding under it is still true of the code this
+   reviewer reads and already closed where the stack lands. Unsaid, that reads
+   as a defect nobody has touched, and one layer re-raised a defect repaired
+   above it in every round after the repair. Its commit IS shown, beside the
+   layer that holds it: it is in the branch, and opening it is how this reader
+   checks the claim.
+
    Each marker is explained only where an entry carries it. The block is paid
    for on every round of every layer a fixer touched, and most of them hold
    only landed repairs."
   [prior-fixes]
   (when (seq prior-fixes)
-    (let [has? (set (map :outcome prior-fixes))]
+    (let [has?   (set (map :outcome prior-fixes))
+          above? (some :above prior-fixes)]
       (str
        "A FIXER ALREADY WORKED ON WHAT YOU ARE REVIEWING, EARLIER IN THIS RUN.\n\n"
        "Each entry is what a fixer was handed, what it did about it, and the fixer's\n"
@@ -285,15 +295,24 @@
               "handed, changed nothing, and said why, so the code you are reading is\n"
               "what that round read. Its account is where the fixer looked and why it\n"
               "stopped — evidence to check against the code, not a ruling on it.\n\n"))
+       (when above?
+         (str "An entry marked ABOVE is a repair for something reported from THIS\n"
+              "layer that landed on a HIGHER one. You read this layer at its own\n"
+              "head, beneath that repair, so the defect is still in the range below\n"
+              "— and gone in the merged tree. Its commit is in the branch, not in\n"
+              "your range; read it there if you need to see what it changed.\n\n"))
        (->> prior-fixes
-            (map (fn [{:keys [outcome round commit findings account conflicted]}]
+            (map (fn [{:keys [outcome round commit findings account conflicted layer above]}]
                    (str "- round " round
                         (case outcome
                           :refused  (str ", REFUSED"
                                          (when (seq conflicted)
                                            (str " — it conflicted " (str/join ", " conflicted))))
                           :declined ", ARGUED — no edit was written"
-                          (when commit (str ", landed " commit)))
+                          (cond
+                            above  (str ", ABOVE — landed on " layer
+                                        (when commit (str " at " commit)))
+                            commit (str ", landed " commit)))
                         (when (seq findings) " — handed:") "\n"
                         (apply str (map handed-line findings))
                         (when-not (str/blank? (str account))
@@ -317,6 +336,10 @@
               "is what the fixer's argument claims to settle, and you are reading the\n"
               "code it is about — a finding it argued away that still stands is yours\n"
               "to report, with what the argument missed.\n"))
+       (when above?
+         (str "Under an ABOVE one, still true here is expected and is NOT a finding:\n"
+              "reporting it again re-opens a defect the stack has already closed.\n"
+              "What is yours is anything at those lines the repair does not reach.\n"))
        "\n"))))
 
 (defn ^{:malli/schema [:=> [:cat :any] [:maybe :string]]}

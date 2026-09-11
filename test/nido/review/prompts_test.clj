@@ -986,6 +986,35 @@ layers, it is not yours"))
         "a marker no entry carries is not explained: the block is paid for on
          every round of every layer a fixer touched")))
 
+(deftest a-repair-that-landed-above-says-the-defect-is-still-in-range
+  ;; A layer is read at its own head, so a repair for what it reported that
+  ;; landed higher up is not in its range and the defect is. Shown as a bare
+  ;; landed entry, it reads as a repair that failed; not shown, as a defect
+  ;; nobody touched — one layer re-raised such a defect every round after.
+  (let [out (prompts/prior-fixes-block
+             [{:outcome :landed :above true :layer "splice-recordings" :round 2
+               :commit "c0815bd9"
+               :findings [{:title "carry the continuation through the collector"}]
+               :account "close-session! records the continuation in the same swap"}])]
+    (is (str/includes? out "ABOVE — landed on splice-recordings at c0815bd9")
+        "which layer holds the repair, and the commit to open, since this range
+         cannot show it")
+    (is (str/includes? out "still in the range below")
+        "the reviewer will see the defect, and has to be told that is expected")
+    (is (str/includes? out "gone in the merged tree"))
+    (is (str/includes? out "NOT a finding")
+        "reporting it again re-opens a defect the stack has already closed")
+    (is (str/includes? out "close-session! records the continuation in the same swap")
+        "the account is what says how far the repair reaches")
+    (is (not (str/includes? out ", landed c0815bd9"))
+        "a bare landed commit is a claim the edit is inside the range")
+    (is (not (str/includes? out "An entry marked REFUSED"))))
+
+  (testing "a block with no such entry does not explain the marker"
+    (is (not (str/includes? (prompts/prior-fixes-block
+                             [{:outcome :landed :round 1 :commit "c1" :findings [{:title "t"}]}])
+                            "ABOVE")))))
+
 (deftest a-target-no-fixer-touched-is-told-nothing
   ;; nil, not an empty heading: a block saying a fixer worked here and naming
   ;; nothing reads as a repair the reviewer failed to be shown.

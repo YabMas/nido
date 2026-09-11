@@ -490,8 +490,13 @@
      none. Nothing else in the loop asks whether a repair closed what it was handed: the
      reviewer that would is shown a diff and no history, so a swept defect comes back at the
      lines the fix was made on, and a REFUSED repair or a DECLINED one leaves the range
-     byte-identical with nothing at all to notice."
-    {:signature [:=> [:catn [:targets :any] [:outcomes :any]] :any]})
+     byte-identical with nothing at all to notice.
+
+     And each told of a repair that landed on a HIGHER layer for a finding it reported, which
+     is why it reads the rounds: the warden files a finding under the layer that owns it, the
+     reporting layer is still read at its own head beneath the repair, and keyed on the landing
+     layer alone its reviewer re-raises the repaired defect under a new id every round."
+    {:signature [:=> [:catn [:targets :any] [:outcomes :any] [:rounds :any]] :any]})
   (Operation with-standing-needs
     "Each code-reading reviewer told what the last run's verdict left outstanding — never the
      composition pass, which is asked whether the cut holds and is told not to report what the

@@ -3476,7 +3476,8 @@
                               :sweep true}]}]
         [core wiring] (stages/with-fix-memory
                         [{:label "core"} {:label "wiring"}]
-                        (stages/fix-outcomes history nil))
+                        (stages/fix-outcomes history nil)
+                        (mapv :findings history))
         [prior] (:prior-fixes core)]
     (is (= 1 (:round prior)))
     (is (= :landed (:outcome prior)))
@@ -3597,7 +3598,8 @@
   (let [history [{:iter 1 :fixes [{:layer nil :commit "c1" :handed ["h1"]}]
                   :findings [{:handle "h1" :title "the defect"}]}]
         [whole] (stages/with-fix-memory
-                  [{:label "stack" :stack? true}] (stages/fix-outcomes history nil))]
+                  [{:label "stack" :stack? true}] (stages/fix-outcomes history nil)
+                  (mapv :findings history))]
     (is (= ["the defect"] (mapv :title (:findings (first (:prior-fixes whole)))))))
 
   (testing "and a stacked branch's composition target is not the flat one"
@@ -3605,14 +3607,16 @@
                     :findings [{:handle "h1" :title "the defect"}]}]
           [whole] (stages/with-fix-memory
                     [{:label "stack" :stack? true :composition {:layers [{:label "core"}]}}]
-                    (stages/fix-outcomes history nil))]
+                    (stages/fix-outcomes history nil)
+                    (mapv :findings history))]
       (is (nil? (:prior-fixes whole))))))
 
 (deftest a-run-with-no-landed-fix-changes-nothing
   (let [targets [{:label "core"}]]
-    (is (= targets (stages/with-fix-memory targets (stages/fix-outcomes [] nil))))
+    (is (= targets (stages/with-fix-memory targets (stages/fix-outcomes [] nil) [])))
     (is (= targets (stages/with-fix-memory
-                     targets (stages/fix-outcomes [{:iter 1 :fixes [] :findings []}] {}))))))
+                     targets (stages/fix-outcomes [{:iter 1 :fixes [] :findings []}] {})
+                     [[]])))))
 
 (deftest fix-memory-does-not-move-the-cache-key
   ;; A value that changes every round folded into the key switches the cache
@@ -3755,7 +3759,8 @@
             {"lower" {:layer "lower" :since 1 :conflicted ["lktsqrrn"]
                       :account "added the digest to all five contracts"
                       :findings [{:id "h1" :title "the digest is not in the contracts"
-                                  :sweep true}]}}}))
+                                  :sweep true}]}}})
+          [])
         [prior] (:prior-fixes lower)]
     (is (= [:refused ["lktsqrrn"]] ((juxt :outcome :conflicted) prior))
         "the refusal travels with the row, so the reviewer is not left to infer
@@ -3774,7 +3779,8 @@
                     [{:iter 2 :fixes [{:layer "core" :commit "c2" :handed ["h2"]}]
                       :findings [{:handle "h2" :title "the second"}]}]
                     {:rolled-back {"core" {:layer "core" :since 1 :conflicted ["x1"]
-                                           :findings [{:id "h1" :title "the first"}]}}}))]
+                                           :findings [{:id "h1" :title "the first"}]}}})
+                   [])]
       (is (= [1 2] (mapv :round (:prior-fixes core)))
           "one list of what has already been tried here, oldest first")
       (is (= [:refused :landed] (mapv :outcome (:prior-fixes core)))
@@ -3823,12 +3829,109 @@
                   {:fixer-declines {"core" {:layer "core" :since 2
                                             :reason "the integration test passes as written"
                                             :findings [{:id "h1" :title "t"}]}}
-                   :fixer-launches {"core" [{:round 1 :handed ["h0"] :ran? false}]}}))]
+                   :fixer-launches {"core" [{:round 1 :handed ["h0"] :ran? false}]}})
+                 [])]
     (is (= [:declined] (mapv :outcome (:prior-fixes core)))
         "a decline moved nothing, so the reviewer of the unchanged patch is the
          one reader that can check the argument against the code — and a launch
          that never started wrote nothing, said nothing, and names its findings
          by ids this reader has never seen")))
+
+(deftest a-layer-is-told-of-a-repair-that-landed-above-it-for-what-it-reported
+  ;; The warden files a finding under the layer that owns it, and the layer that
+  ;; reported it is still read at its own head, beneath the repair. Keyed on the
+  ;; landing layer alone, that reviewer never heard of it: one run re-raised a
+  ;; repaired defect a line lower and reworded, and another sent a fixer after
+  ;; one that found the repair already in and wrote nothing.
+  (let [history [{:iter 2
+                  :fixes [{:layer "splice" :commit "c0815bd9" :handed ["b065c965" "324b4dd1"]
+                           :account "close-session! records the continuation"}]
+                  :findings [{:handle "b065c965" :id "b065c965" :from-layer "splice"
+                              :title "advance the splice timeline without flooring"}
+                             {:handle "324b4dd1" :id "324b4dd1" :from-layer "warden"
+                              :title "carry the continuation through the collector"}]}
+                 {:iter 3
+                  :fixes [{:layer "splice" :commit "c44f0b4e" :handed ["09efe791"]}]
+                  :findings [{:handle "324b4dd1" :id "be951974" :from-layer "lifecycle"
+                              :title "preserve continuations in the recording collector too"
+                              :disposition :closed :authority :false-positive}
+                             {:handle "324b4dd1" :id "5d1c0a2e" :from-layer "stack"
+                              :title "completed sessions drop their continuation"}
+                             {:handle "09efe791" :id "09efe791" :from-layer "splice"
+                              :title "advance splice boundaries by whole samples"}]}]
+        [lifecycle middle splice whole]
+        (stages/with-fix-memory
+          [{:label "lifecycle"} {:label "middle"} {:label "splice"}
+           {:label "stack" :stack? true :composition {:layers []}}]
+          (stages/fix-outcomes history nil)
+          (mapv :findings history))
+        [prior & more] (:prior-fixes lifecycle)]
+    (is (= [:landed true "splice" "c0815bd9" 2]
+           ((juxt :outcome :above :layer :commit :round) prior))
+        "the repair, marked as one that is not in this layer's range, and where
+         it is instead")
+    (is (nil? more) "and only the repair aimed at what this layer reported")
+    (is (= ["324b4dd1"] (mapv :id (:findings prior)))
+        "only the finding this layer raised: the other one that repair closed was
+         never in its range, and the block says what it lists still is")
+    (is (= "close-session! records the continuation" (:account prior))
+        "the fixer's account is the only reading of the repair this reviewer gets")
+    (is (nil? (:prior-fixes middle)) "a layer that reported none of it is told nothing")
+    (is (= [[2 nil] [3 nil]] (mapv (juxt :round :above) (:prior-fixes splice)))
+        "the layer the repairs landed on keeps them as its own, unmarked")
+    (is (nil? (:prior-fixes whole))
+        "the whole-stack pass reads every layer's repairs in its own range, so
+         telling it one is out of range would be false")))
+
+(deftest only-a-repair-landed-above-its-reporter-is-filed-under-it
+  (testing "a repair on a lower layer is in the tree the reporter reads"
+    (let [history [{:iter 1 :fixes [{:layer "lower" :commit "c1" :handed ["h1"]}]
+                    :findings [{:handle "h1" :id "aa11" :from-layer "upper" :title "t"}]}]
+          [_ upper] (stages/with-fix-memory
+                      [{:label "lower"} {:label "upper"}]
+                      (stages/fix-outcomes history nil)
+                      (mapv :findings history))]
+      (is (nil? (:prior-fixes upper)))))
+
+  (testing "a refusal or a decline above moved nothing the reporter is not reading"
+    (let [rounds [[{:handle "h1" :id "aa11" :from-layer "lower" :title "t"}
+                   {:handle "h2" :id "bb22" :from-layer "lower" :title "u"}]]
+          [lower] (stages/with-fix-memory
+                    [{:label "lower"} {:label "upper"}]
+                    (stages/fix-outcomes
+                     []
+                     {:rolled-back    {"upper" {:layer "upper" :since 1 :conflicted ["x1"]
+                                                :findings [{:id "h1" :title "t"}]}}
+                      :fixer-declines {"upper" {:layer "upper" :since 1 :reason "no"
+                                                :findings [{:id "h2" :title "u"}]}}})
+                    rounds)]
+      (is (nil? (:prior-fixes lower))
+          "the merged tree holds what the reporter reads, so there is nothing it
+           cannot see from here"))))
+
+(deftest the-review-stage-hands-a-lower-layer-the-repair-that-landed-above-it
+  ;; The rows are only derivable if the call site hands over the rounds, and a
+  ;; `with-fix-memory` that is right while it is handed none is the same
+  ;; silence with more code.
+  (let [seen (atom {})]
+    (with-redefs [layers/patch-hash    (fn [& _] nil)
+                  codex/merge-base     (fn [& _] "FORK")
+                  codex/changed-files  (fn [& _] [])
+                  stages/session-stack (fn [& _] [{:bookmark "s--lower" :slug "lower" :tip "cL"}
+                                                  {:bookmark "s--upper" :slug "upper" :tip "cU"}])
+                  layers/brief         (fn [& _] nil)
+                  codex/review!        (fn [opts]
+                                         (swap! seen assoc (:label opts) opts)
+                                         {:status :clean :findings []})]
+      ((:run stages/review-stage)
+       {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 2
+        :history [{:iter 1 :fixes [{:layer "upper" :commit "c1" :handed ["h1"]}]
+                   :findings [{:handle "h1" :id "aa11" :from-layer "lower"
+                               :owner-layer "upper" :title "the defect"}]}]})
+      (is (= [[true "upper" ["the defect"]]]
+             (mapv (juxt :above :layer (comp (partial mapv :title) :findings))
+                   (get-in @seen ["lower" :prior-fixes])))
+          "the reviewer that raised it, reading beneath the repair, is told"))))
 
 (deftest a-carried-refusal-is-dropped-once-the-finding-is-settled
   ;; Same lifetime rule as a decline: the entry is about a finding, so it is
