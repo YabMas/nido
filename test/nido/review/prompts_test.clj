@@ -231,6 +231,20 @@
   (let [out (prompts/warden-prompt {:findings findings :history [] :design design})]
     (is (str/includes? out "is read as `fix`"))))
 
+(deftest every-field-an-authority-goes-on-to-require-is-in-the-answer-shape
+  ;; The parser demotes a `duplicate` that names no finding. A field the warden
+  ;; is held to and not given a slot for is a close it cannot make.
+  (let [out (prompts/warden-prompt {:findings findings :history [] :design design})]
+    (is (some :and-requires prompts/disposition-vocabulary)
+        "the loop below is not vacuous: `duplicate` requires its original")
+    (doseq [{:keys [and-requires]} prompts/disposition-vocabulary
+            [v field] and-requires]
+      (is (str/includes? out (str "\"" (name field) "\":"))
+          (str (name field) " has a slot in the answer shape"))
+      (is (str/includes? out (str "or closes as `" v "` without naming the finding in `"
+                                  (name field) "`"))
+          (str "and a `" v "` without it is named among the rulings read as `fix`")))))
+
 (deftest the-sweep-criterion-is-on-the-field-the-warden-writes-it-in
   ;; `sweep` is the one field a warden can answer without deciding — an omitted
   ;; boolean is false — so a criterion thirty-five lines below the field is a

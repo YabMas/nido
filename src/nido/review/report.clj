@@ -326,8 +326,14 @@
    that repaired a line and a round that repaired a shape, so it is what the
    round after it has to be read against — a sibling reported next round is the
    sweep's scope being wrong, and an instance reported next round is the sweep
-   not having happened."
-  [:id :handle :same-as :owner-layer :disposition :authority :of :because :sweep])
+   not having happened.
+
+   :duplicate-of is the finding a `duplicate` close repeats. The close holds its
+   layer open for as long as that finding is owed, so whether the layer should
+   have converged is answered by the target's ruling, and this is how a reader
+   gets from one to the other."
+  [:id :handle :same-as :owner-layer :disposition :authority :of :duplicate-of
+   :because :sweep])
 
 (defn- rulings
   "One entry per finding the warden's decision was applied to, projected to

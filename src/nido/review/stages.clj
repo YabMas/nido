@@ -127,7 +127,7 @@
    stated is a rule the warden is failed by without being told."
   (into {}
         (comp (filter :requires)
-              (map (juxt :disposition #(select-keys % [:requires :one-of]))))
+              (map (juxt :disposition #(select-keys % [:requires :one-of :and-requires]))))
         prompts/disposition-vocabulary))
 
 (defn- unmet-requirement
@@ -141,12 +141,19 @@
 
    A settling disposition is the loop deciding a finding is owed to nobody, so
    the cost of accepting a bad one is a defect that leaves the run looking
-   answered. That is the asymmetry the demotion trades on."
+   answered. That is the asymmetry the demotion trades on.
+
+   The field a value goes on to require is held to a non-blank string and
+   nothing more. Whether a `duplicate_of` names a finding the round holds is
+   asked where the round is in scope — see `owed-by` — and not here, where one
+   ruling is."
   [d r]
-  (when-let [{:keys [requires one-of]} (get requirements d)]
+  (when-let [{:keys [requires one-of and-requires]} (get requirements d)]
     (let [v     (get r requires)
           ruled (str "ruled `" (name d) "` ")
-          field (str "`" (name requires) "`")]
+          field (str "`" (name requires) "`")
+          then  (get and-requires v)
+          w     (when then (get r then))]
       (cond
         (or (nil? v) (and (string? v) (str/blank? v)))
         (str ruled "with no " field)
@@ -156,7 +163,12 @@
 
         (and one-of (not (some #{v} one-of)))
         (str ruled "on an " field " of \"" v "\", which is not one of "
-             (str/join ", " one-of))))))
+             (str/join ", " one-of))
+
+        (and then (or (not (string? w)) (str/blank? w)))
+        (str ruled "as `" v "` with "
+             (if (or (nil? w) (string? w)) "no " (str (pr-str w) " in "))
+             "`" (name then) "`")))))
 
 (def ^:private min-citation-chars
   "How much of an invariant a delimited span has to be before it counts as a
@@ -310,6 +322,13 @@
                  :disposition d
                  :authority   (:authority r)
                  :of          (:of r)
+                 ;; Only on the ground that asks for it. The answer shape offers
+                 ;; the field on every ruling, and a pointer filled in beside
+                 ;; any other authority would have `owed-by` hold a layer open
+                 ;; over the template.
+                 :duplicate-of (when (= :duplicate_of
+                                        (get-in requirements [d :and-requires (:authority r)]))
+                                 (:duplicate_of r))
                  ;; Whether this finding is one instance of a class the fixer
                  ;; should sweep. The warden recognises a recurring family
                  ;; unprompted — it says so in `because`, in prose, every time —
@@ -322,6 +341,7 @@
     (cond-> base
       unmet
       (-> (assoc (get-in requirements [d :requires]) nil)
+          (assoc :duplicate-of nil)
           (assoc :disposition :fix))
 
       (seq refused)
@@ -1536,17 +1556,39 @@
     (boolean (or (nil? k) (contains? halting-kinds (keyword k))))))
 
 (defn- owed-by
-  "What a round leaves OWED: every finding it did not settle, and every park
-   still blocking.
+  "What a round leaves OWED: every finding it did not settle, every duplicate of
+   one that is still owed, and every park still blocking.
 
    One derivation because `converged-targets` and `reopened-patches` are the same
    rule read from opposite ends — a target the round read converges when nothing
    here names it, and a target the round SKIPPED is reopened when something does.
    Two spellings of it would be two rules, and the pair would disagree exactly
    when a defect crosses from a layer under review to one that is not, which is
-   the case both exist for."
+   the case both exist for.
+
+   A `duplicate` close settles the finding and not the defect. The defect is the
+   finding `:duplicate-of` names, and the layer that reported the copy saw it
+   too, so the copy is owed for exactly as long as its target is — followed down
+   a chain of copies to the one that is not a copy. Settled on its own, a copy of
+   a recut the reshape went on to refuse converged its layer, while the only
+   thing still holding the defect was a park that names no layer.
+
+   A target this round does not hold, or a chain that comes back on itself, is
+   owed: nothing here shows the defect settled. Holding a layer one round too
+   long costs a review; converging it wrongly writes the finding out of a store
+   that only grows."
   [findings parks]
-  (concat (remove settled? findings) (filter park-blocks? parks)))
+  (let [by-id (into {} (map (juxt :id identity)) findings)
+        owed? (fn owed? [f seen]
+                (cond
+                  (not (settled? f))       true
+                  (nil? (:duplicate-of f)) false
+                  :else
+                  (let [t (get by-id (:duplicate-of f))]
+                    (or (nil? t)
+                        (contains? seen (:id t))
+                        (owed? t (conj seen (:id f)))))))]
+    (concat (filter #(owed? % #{}) findings) (filter park-blocks? parks))))
 
 (defn ^{:malli/schema [:=> [:cat :any :any :any] :any]}
   converged-targets
@@ -1554,10 +1596,11 @@
    they were reviewed at.
 
    Owed, not unfixed. A target converges when every finding naming it was
-   SETTLED — decided, by a disposition that ends it — not merely when none of
-   them was handed to a fixer. Those two differ for every disposition that is neither,
-   and the difference is not academic: a finding the loop has no move for is
-   still open, and marking its target converged writes that patch into a store
+   SETTLED — decided, by a disposition that ends it, and a duplicate only once
+   what it repeats is — not merely when none of them was handed to a fixer.
+   Those two differ for every disposition that is neither, and the difference is
+   not academic: a finding the loop has no move for is still open, and marking
+   its target converged writes that patch into a store
    that only grows, so a later run at the same content skips the target and the
    finding is gone. `nido.review.cache` leans toward over-invalidating for
    exactly this reason — over-invalidating costs one review, and reading
@@ -2036,6 +2079,7 @@
                                  :disposition (or (:disposition r) :fix)
                                  :authority   (:authority r)
                                  :of          (:of r)
+                                 :duplicate-of (:duplicate-of r)
                                  :sweep       (boolean (:sweep r))
                                  :because     (or (:because r)
                                                   (when-not r "the warden did not rule on this finding"))})]

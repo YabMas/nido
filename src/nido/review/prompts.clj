@@ -394,6 +394,13 @@
    parser for the same reason the words are: a set of grounds the warden is
    offered and the parser refuses is a destination that silently becomes `fix`.
 
+   `:and-requires` names, per value of that field, a further field the value is
+   not a ground without, and is enforced the same way. `duplicate` is the one
+   authority whose meaning is another finding, so it has to say which: the close
+   settles the finding but not its defect, and `nido.review.stages` holds a
+   duplicate open for as long as the finding it names is. With nothing named
+   there is nothing to hold it by, and the close settles unconditionally.
+
    `:settles?` marks a disposition that ENDS a finding: it was decided, nobody
    owes anything further, and a later round re-raising it has found nothing new.
    It is what convergence, the carried answers and the run's remainder all read,
@@ -415,11 +422,13 @@
     :settles? true
     :requires :authority
     :one-of ["duplicate" "out-of-scope" "design" "spun-out" "false-positive"]
+    :and-requires {"duplicate" :duplicate_of}
     :means (str "no fix, AND you name the authority — duplicate (of another id\n"
-                "  in this round), out-of-scope (a layer's Out of scope names it),\n"
-                "  design (the record puts it behind a boundary), spun-out (it is\n"
-                "  already filed as a ref), false-positive (the reviewer is wrong;\n"
-                "  say what they missed).")}
+                "  in this round, which you put in `duplicate_of`; it stays open\n"
+                "  for as long as that one does), out-of-scope (a layer's Out of\n"
+                "  scope names it), design (the record puts it behind a boundary),\n"
+                "  spun-out (it is already filed as a ref), false-positive (the\n"
+                "  reviewer is wrong; say what they missed).")}
    {:disposition :deviation
     :settles? true
     :kept? true
@@ -564,6 +573,12 @@
        "take one: a ruling that omits its field, or closes on an authority\n"
        "outside\n"
        "  " (clojure.string/join ", " (values-for :authority)) "\n"
+       (->> disposition-vocabulary
+            (mapcat (comp seq :and-requires))
+            (map (fn [[v field]]
+                   (str "or closes as `" v "` without naming the finding in `"
+                        (name field) "`,\n")))
+            (apply str))
        "is read as `fix` and handed to a fixer. If you cannot name the field,\n"
        "the answer is `fix` — say so yourself, and put your reasoning in\n"
        "`because`, where the fixer reads it.\n\n"
@@ -1706,6 +1721,8 @@
    (clojure.string/join "|" (values-for :authority))
    "\",\n"
    "               \"of\": \"<the claim a deviation departs from>\",\n"
+   "               \"duplicate_of\": \"<id of the finding in this round a\n"
+   "                                  duplicate close repeats>\",\n"
    ;; The criterion rides on the field rather than in the SWEEP section below,
    ;; because `sweep` is the one field a warden can answer without deciding: an
    ;; omitted boolean is `false`, so the default is a ruling nobody made. Two

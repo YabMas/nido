@@ -27,7 +27,7 @@
         d   (stages/parse-warden-decision txt)]
     (is (= :continue (:decision d)))
     (is (= [{:id "aa11" :same-as nil :owner-layer "drop-legacy" :disposition :fix
-             :authority nil :of nil :sweep false :because "real"}]
+             :authority nil :of nil :duplicate-of nil :sweep false :because "real"}]
            (:rulings d))
         "sweep defaults false — a ruling that does not claim a class is not one")))
 
@@ -761,10 +761,13 @@
 (defn- sole-ruling [ruling] (first (:rulings (stages/parse-warden-decision (ruling-json ruling)))))
 
 (defn- satisfying
-  "A value that discharges `:requires` for a vocabulary entry — the first
-   permitted authority where the field is enumerated, prose where it is not."
-  [{:keys [one-of]}]
-  (or (first one-of) "because I say so"))
+  "The fields that discharge a vocabulary entry's requirements: `:requires`,
+   as the first permitted value where it is enumerated and prose where it is
+   not, plus whatever that value goes on to require."
+  [{:keys [requires one-of and-requires]}]
+  (let [v (or (first one-of) "because I say so")]
+    (cond-> {requires v}
+      (get and-requires v) (assoc (get and-requires v) "bb22"))))
 
 (deftest every-disposition-the-warden-is-offered-is-one-the-parser-accepts
   ;; The accepted half of the contract. A word offered to the warden that the
@@ -773,7 +776,7 @@
   ;; without, which is the only form of it that is a decision at all.
   (doseq [{:keys [disposition requires] :as entry} prompts/disposition-vocabulary]
     (let [r (cond-> {:disposition (name disposition)}
-              requires (assoc requires (satisfying entry)))]
+              requires (merge (satisfying entry)))]
       (is (= disposition (:disposition (sole-ruling r)))
           (str (name disposition) " survives the parser")))))
 
@@ -806,6 +809,38 @@
           "and the rejected ground is dropped, not carried into the report")))
   (is (= :closed (:disposition (sole-ruling {:disposition "closed" :authority "spun-out"})))
       "a named authority still closes — this refuses the shrug, not the close"))
+
+(deftest a-duplicate-close-that-names-no-finding-is-not-a-decision
+  ;; `duplicate` is the one authority whose meaning is another finding, and the
+  ;; close is only as settled as that finding is. Unnamed, nothing can ask — one
+  ;; run closed a P1 as the duplicate of a recut the reshape then refused, and
+  ;; its layer converged over it and was skipped for fifteen rounds.
+  (doseq [bad [nil "" "  " true]]
+    (let [r (sole-ruling {:disposition "closed" :authority "duplicate"
+                          :duplicate_of bad
+                          :because "same one-frame-two-terminals defect as 457d7bc2"})]
+      (is (= :fix (:disposition r))
+          (str "duplicate_of " (pr-str bad) " names no finding, so the close is a shrug"))
+      (is (nil? (:authority r))
+          "the refused ground is dropped with it, so no reader renders `closed (duplicate)`")
+      (is (nil? (:duplicate-of r)))
+      (is (str/includes? (:because r) "`duplicate_of`")
+          "the fixer is told which field was missing")
+      (is (str/includes? (:because r) "457d7bc2")
+          "and still reads what the warden said, which is where it named the finding")))
+  (let [r (sole-ruling {:disposition "closed" :authority "duplicate" :duplicate_of "457d7bc2"})]
+    (is (= [:closed "457d7bc2"] [(:disposition r) (:duplicate-of r)])
+        "a named original closes, and the ruling carries the pointer `owed-by` follows")))
+
+(deftest a-pointer-beside-any-other-ground-is-not-carried
+  ;; The answer shape offers `duplicate_of` on every ruling, and a warden fills
+  ;; in a template. A pointer on a false-positive would hold its layer open for
+  ;; as long as some unrelated finding is owed.
+  (doseq [[d a] [["closed" "false-positive"] ["fix" nil] ["declined" nil]]]
+    (let [r (sole-ruling (cond-> {:disposition d :duplicate_of "bb22" :because "x"}
+                           a (assoc :authority a)))]
+      (is (= (keyword d) (:disposition r)) (str d " is untouched by the stray field"))
+      (is (nil? (:duplicate-of r)) (str "and carries no pointer on " d)))))
 
 (def ^:private positional-attribution
   "The invariant a warden restated in a weaker form, verbatim from the design
@@ -2055,6 +2090,81 @@
            (map :label (stages/converged-targets
                         reviews [{:disposition :declined :owner-layer "a"}] [])))
         "so is a decline: the finding is true and we said we are leaving it")))
+
+(deftest a-duplicate-holds-its-layer-while-the-finding-it-repeats-is-owed
+  ;; review-cec1e058, round 1: 7975e026 (P1, completed-turns) closed as the
+  ;; duplicate of 457d7bc2, ruled `recut` on conversation-recording. The
+  ;; reshape refused the recut and parked it on no layer, so completed-turns
+  ;; converged over a P1 nobody had settled and five later runs skipped it.
+  (let [reviews [{:target {:label "completed-turns" :patch-hash "h-ct"}}
+                 {:target {:label "conversation-recording" :patch-hash "h-cr"}}
+                 {:target {:label "stack" :patch-hash "h-s" :stack? true}}]
+        copy    {:id "7975e026" :disposition :closed :authority "duplicate"
+                 :duplicate-of "457d7bc2" :owner-layer "completed-turns"}
+        target  (fn [d] {:id "457d7bc2" :disposition d :owner-layer "conversation-recording"})]
+    (is (= [] (map :label (stages/converged-targets reviews [copy (target :recut)] [])))
+        "the copy is owed while its original is, so the layer that saw it stays open")
+    (is (= ["completed-turns" "conversation-recording" "stack"]
+           (map :label (stages/converged-targets
+                        reviews [copy (assoc (target :closed) :authority "false-positive")] [])))
+        "and settles when it does: a copy of a false positive is no defect either")
+    (is (= ["conversation-recording"]
+           (map :label (stages/converged-targets
+                        reviews [(assoc copy :duplicate-of "gone0000")
+                                 (target :declined)] [])))
+        "a copy of a finding this round does not hold cannot be shown settled")))
+
+(deftest a-chain-of-duplicates-is-owed-by-the-finding-at-its-end
+  (let [reviews [{:target {:label "a" :patch-hash "h-a"}}
+                 {:target {:label "b" :patch-hash "h-b"}}
+                 {:target {:label "c" :patch-hash "h-c"}}]
+        dup     (fn [id of layer] {:id id :disposition :closed :authority "duplicate"
+                                   :duplicate-of of :owner-layer layer})]
+    (is (= ["c"] (map :label (stages/converged-targets
+                              reviews [(dup "a1" "b1" "a") (dup "b1" "c1" "b")
+                                       {:id "c1" :disposition :park :owner-layer "a"}] [])))
+        "every layer that reported a copy waits on the original, however far down")
+    (is (= ["c"] (map :label (stages/converged-targets
+                              reviews [(dup "a1" "b1" "a") (dup "b1" "a1" "b")] [])))
+        "two copies of each other name no original, and neither is settled by it")
+    (is (= ["b" "c"] (map :label (stages/converged-targets
+                                  reviews [(dup "a1" "a1" "a")] [])))
+        "nor is a copy of itself")))
+
+(deftest a-duplicate-the-warden-names-reaches-convergence-through-the-merge
+  ;; The pieces as the warden stage wires them. The pointer has to survive
+  ;; `apply-rulings` onto the finding, or `owed-by` never sees one and every
+  ;; duplicate settles unconditionally again.
+  (let [text    (str "```json\n"
+                     (json/generate-string
+                      {:decision "continue"
+                       :findings [{:id "7975e026" :owner_layer "completed-turns"
+                                   :disposition "closed" :authority "duplicate"
+                                   :duplicate_of "457d7bc2" :because "same defect"}
+                                  {:id "457d7bc2" :owner_layer "conversation-recording"
+                                   :disposition "recut" :because "a misplaced seam"}]})
+                     "\n```")
+        ruled   (stages/apply-rulings [{:id "7975e026" :title "t1"} {:id "457d7bc2" :title "t2"}]
+                                      (:rulings (stages/parse-warden-decision text))
+                                      {})
+        reviews [{:target {:label "completed-turns" :patch-hash "h-ct"}}]]
+    (is (= "457d7bc2" (:duplicate-of (first ruled))))
+    (is (= [["completed-turns" :partial]]
+           (map (fn [[t s]] [(:label t) s]) (stages/reviewed-statuses reviews ruled [])))
+        "the layer is left to be read again, not written converged into the cache")))
+
+(deftest a-skipped-layer-holding-a-copy-of-an-owed-finding-is-reopened
+  ;; The other end of the same derivation. The copy carries its owner layer, so
+  ;; once it counts as owed the cache entry that would skip that layer again is
+  ;; revoked with no further wiring.
+  (let [skipped [{:label "completed-turns" :patch-hash "h-ct"}]
+        copy    {:id "7975e026" :disposition :closed :authority "duplicate"
+                 :duplicate-of "457d7bc2" :owner-layer "completed-turns"}]
+    (is (= ["h-ct"] (stages/reopened-patches
+                     skipped [copy {:id "457d7bc2" :disposition :recut}] [])))
+    (is (= [] (stages/reopened-patches
+               skipped [copy {:id "457d7bc2" :disposition :deviation :of "x"}] []))
+        "and left alone once the original is settled")))
 
 (deftest converged-targets-hold-the-stack-for-a-finding-that-names-no-layer
   ;; The warden may rule on a finding without giving it an owner. It then names
