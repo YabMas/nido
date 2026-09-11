@@ -29,6 +29,11 @@
     {:signature [:=> [:catn [:p :any]] Path]})
   (Operation session-from-cwd "Which session a directory belongs to, via the worktree registry."
     {:signature [:=> [:catn [:cwd [:? :any]]] [:maybe :map]] :delegates [canonical sstate/read-registry]})
+  (Operation workspace-stale?
+    "Whether a jj result is the stale-working-copy refusal — the one jj failure that names its
+     own remedy. Whether running that remedy is safe is the caller's call: it is where the
+     workspace holds nothing jj has not recorded, and not where it may hold an agent's edits."
+    {:signature [:=> [:catn [:result :map]] :boolean]})
   (Operation create-symlink-worktree!
     "Point a worktree at an existing checkout. Refuses when something is already there — a lite
      session must never overwrite a real worktree."

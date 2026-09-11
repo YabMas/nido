@@ -579,8 +579,8 @@
    which files happened to conflict.
 
    A workspace that cannot be asked reads as legible. `layers/conflicted`
-   already takes a non-zero exit for `[]`, so the only thing left to throw is jj
-   not running at all — and a branch with no jj holds none of jj's markers.
+   throws whenever jj will not answer, and the case that decides the reading is
+   jj not running at all — a branch with no jj holds none of jj's markers.
    Refusing there would cost every plain-git project the run's most valuable
    artifact to guard against a state it cannot be in."
   [cwd base]

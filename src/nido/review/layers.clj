@@ -21,6 +21,7 @@
   (:require
    [clojure.string :as str]
    [nido.review.digest :as digest]
+   [nido.session.lifecycle :as lifecycle]
    [nido.vsdd.jj :as jj]))
 
 (def ^:private row-template
@@ -313,6 +314,38 @@
 
 ;; ---- landing a fix on a layer -------------------------------------------
 
+(defn ^{:malli/schema [:=> [:cat :string :map :map [:? [:maybe :string]]] :any]}
+  refusal
+  "The exception for a jj call on the fix path that exited non-zero: what the
+   stage was doing, jj's own words, then `then` — the caller's remedy — if any.
+
+   Every such call throws through here rather than reading its `:out`. `jj!`
+   never throws, so a caller that reads only the output hears a refusal as an
+   answer: a stale working copy made `jj diff` say that a fixer reporting two
+   verified repairs had written nothing, and the round filed them as a decline.
+
+   A STALE refusal gets a sentence of its own, ahead of the caller's, because
+   it is the one refusal whose remedy is not to retry the command: every jj
+   command in the workspace fails the same way until `jj workspace
+   update-stale` has run — the `jj new` a caller's remedy names included."
+  ([what result data] (refusal what result data nil))
+  ([what result data then]
+   (ex-info (str what " — " (:err result)
+                 (when (lifecycle/workspace-stale? result)
+                   (str "\nThe working copy is stale: another operation rewrote this"
+                        " workspace's commit without updating its files. Run `jj"
+                        " workspace update-stale` before anything else."))
+                 (when then (str "\n" then)))
+            (assoc data :reason :review-failed :exit (:exit result)))))
+
+(defn- step!
+  "One jj call on the fix path: its result, or its refusal thrown."
+  [cwd layer what & args]
+  (let [r (apply jj/jj! cwd args)]
+    (if (zero? (:exit r))
+      r
+      (throw (refusal (str "could not " what) r {:cwd cwd :layer layer})))))
+
 (defn ^{:malli/schema [:=> [:cat :Path :map] :any]}
   position-for-fix!
   "Put the working copy on `layer` so a fixer's edits land there rather than on
@@ -331,12 +364,9 @@
    bookmark still names the right commit because jj carries it along."
   [cwd layer]
   (when layer
-    (let [{:keys [exit err]} (jj/jj! cwd "new" "--insert-after"
-                                     (or (:bookmark layer) (:tip layer)))]
-      (when-not (zero? exit)
-        (throw (ex-info (str "could not position the working copy on layer "
-                             (:bookmark layer) " — " err)
-                        {:reason :review-failed :cwd cwd :layer layer}))))))
+    (step! cwd layer (str "position the working copy on layer " (:bookmark layer))
+           "new" "--insert-after" (or (:bookmark layer) (:tip layer)))
+    nil))
 
 (defn ^{:malli/schema [:=> [:cat :Path :map :string] :any]}
   land-fix!
@@ -353,14 +383,22 @@
    uses `--insert-after`: `commit` creates an empty child, and mid-stack that
    child is a SECOND child, which forks the stack.
 
+   Throws at the first step jj refuses. Returning instead hands the stage a
+   commit id — or the empty string a refused `log` prints — for a landing that
+   did not happen, and a skipped bookmark move is exactly the silent failure
+   the paragraph above describes.
+
    With no layer this degrades to the flat-branch behaviour it replaces."
   [cwd layer msg]
   (if layer
-    (do (jj/jj! cwd "describe" "-m" msg)
-        (jj/jj! cwd "bookmark" "set" (:bookmark layer) "-r" "@")
-        (:out (jj/jj! cwd "log" "-r" "@" "-T" "commit_id" "--no-graph")))
-    (do (jj/jj! cwd "commit" "-m" msg)
-        (:out (jj/jj! cwd "log" "-r" "@-" "-T" "commit_id" "--no-graph")))))
+    (let [bm (:bookmark layer)]
+      (step! cwd layer (str "describe the fix commit for " bm) "describe" "-m" msg)
+      (step! cwd layer (str "move " bm " onto its fix") "bookmark" "set" bm "-r" "@")
+      (:out (step! cwd layer "read the fix commit's id"
+                   "log" "-r" "@" "-T" "commit_id" "--no-graph")))
+    (do (step! cwd nil "commit the fix" "commit" "-m" msg)
+        (:out (step! cwd nil "read the fix commit's id"
+                     "log" "-r" "@-" "-T" "commit_id" "--no-graph")))))
 
 (defn ^{:malli/schema [:=> [:cat :Path :any] :any]}
   restore-top!
@@ -380,17 +418,21 @@
    corrupts the next one: the working copy stays parked mid-stack, so every
    later `<base>..@` read sees a TRUNCATED stack and silently reviews fewer
    layers than the branch has. A crash is recoverable; a review that quietly
-   skipped half the stack while reporting success is not."
+   skipped half the stack while reporting success is not.
+
+   The remedy it names is `jj new <top>`, which is this call — so on a stale
+   working copy, where that fails as it just did, `refusal` puts `jj workspace
+   update-stale` in front of it."
   [cwd stack]
   (when-let [top (last stack)]
-    (let [{:keys [exit err]} (jj/jj! cwd "new" (:bookmark top))]
-      (when-not (zero? exit)
-        (throw (ex-info (str "could not return the working copy to the top of the stack ("
-                             (:bookmark top) ") — " err
-                             "\nThe working copy is parked mid-stack: move it back with"
+    (let [r (jj/jj! cwd "new" (:bookmark top))]
+      (when-not (zero? (:exit r))
+        (throw (refusal (str "could not return the working copy to the top of the stack ("
+                             (:bookmark top) ")")
+                        r {:cwd cwd :layer top}
+                        (str "The working copy is parked mid-stack: move it back with"
                              " `jj new " (:bookmark top) "` before reviewing again,"
-                             " or the next run will see a truncated stack.")
-                        {:reason :review-failed :cwd cwd :layer top}))))))
+                             " or the next run will see a truncated stack.")))))))
 
 ;; ── Reshaping the stack ─────────────────────────────────────────────────────
 ;;
@@ -430,14 +472,17 @@
    is itself the top layer and its conflict is the one worth knowing about.
    That is what `~ (@ & empty())` buys over `<base>..@-`, which drops the
    second case too — measured on jj 0.45 against a probe stack whose conflicted
-   top layer was `@`."
+   top layer was `@`.
+
+   Throws when jj will not answer, because [] is an answer: the stack was read
+   and holds no markers. The fix stage lands the next repair on the strength of
+   it, so a refusal read as [] is a landing onto markers it was told were not
+   there. A caller that can proceed without knowing catches, and says so."
   [cwd base]
-  (let [{:keys [exit out]} (jj/jj! cwd "log" "-r"
-                                   (str "conflicts() & (" base "..@) ~ (@ & empty())")
-                                   "--no-graph" "-T" "change_id.short() ++ \"\\n\"")]
-    (if (zero? exit)
-      (vec (remove str/blank? (str/split-lines out)))
-      [])))
+  (let [r (step! cwd nil "read the stack's conflicts"
+                 "log" "-r" (str "conflicts() & (" base "..@) ~ (@ & empty())")
+                 "--no-graph" "-T" "change_id.short() ++ \"\\n\"")]
+    (vec (remove str/blank? (str/split-lines (:out r))))))
 
 (defn ^{:malli/schema [:=> [:cat :Path :string] :any]}
   restore-op!
@@ -470,7 +515,10 @@
       (do (restore-op! cwd op)
           {:ok? false :reason (str "jj refused it: " (first (str/split-lines (str err))))})
 
-      (seq (conflicted cwd base))
+      ;; Kept when jj cannot say. The reshape stage still reads an unaskable
+      ;; workspace as a clean one; guarding it against a tree that moved is
+      ;; FU-98, and the fix stage, where the answer lands a repair, does not.
+      (seq (try (conflicted cwd base) (catch clojure.lang.ExceptionInfo _ nil)))
       (do (restore-op! cwd op)
           {:ok? false :reason (str "it conflicts: the layers depend on each other, "
                                    "so the order they are in is the order they need")})

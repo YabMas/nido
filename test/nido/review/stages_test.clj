@@ -538,6 +538,37 @@
       (is (empty? (:launch-failed ctx)) "it ran, so it is no launch failure")
       (is (str/includes? (:reason d) "spans two layers")))))
 
+(def ^:private stale-err
+  "jj 0.45's refusal of a working copy another operation rewrote, verbatim."
+  (str "Error: The working copy is stale (not updated since operation 87994e892b2b).\n"
+       "Hint: Run `jj workspace update-stale` to update it."))
+
+(deftest working-copy-dirty-refuses-to-answer-for-a-copy-jj-refused
+  ;; `jj!` never throws, and an unread exit left an empty `:out` answering "the
+  ;; fixer wrote nothing" — the guard disarmed by the very failure it exists for.
+  (with-redefs [jj/jj! (fn [& _] {:exit 1 :out "" :err stale-err})]
+    (let [e (is (thrown? clojure.lang.ExceptionInfo (stages/working-copy-dirty? "/w")))]
+      (is (str/includes? (ex-message e) "jj workspace update-stale")))))
+
+(deftest a-fixer-whose-work-jj-cannot-read-is-never-filed-as-a-decline
+  ;; review-1e4b6342: a fixer returned after 52 turns reporting both findings
+  ;; fixed and 1763 tests green, `jj diff` was refusing a stale working copy, and
+  ;; the round recorded a fixer that read the findings and let them stand.
+  (let [declined (atom nil)]
+    (with-redefs [agent/launch! (fn [_] {:num-turns 52 :result-error? false
+                                         :result-text "Both findings fixed; suite green"})
+                  jj/jj! (fn [_dir & args]
+                           (if (= ["diff" "--git"] (vec args))
+                             {:exit 1 :out "" :err stale-err}
+                             {:exit 0 :out "" :err ""}))]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"could not read what the fixer wrote"
+                            (reset! declined
+                                    (:declined ((:run stages/fix-stage)
+                                                {:config {:cwd "/w" :run-id "r1"} :iter 1
+                                                 :findings [{:id "aa11" :title "x"
+                                                             :disposition :fix}]}))))))
+    (is (nil? @declined) "no decline row exists for a repair nobody could read")))
+
 (deftest a-launch-that-never-started-is-its-own-outcome-and-keeps-its-exit
   ;; Filed under :declined, the vocabulary's word for a fixer that read the
   ;; finding and refused, a launch claude killed at the door — `Session ID …

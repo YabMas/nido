@@ -394,12 +394,20 @@
     (str branch "@origin")
     ref))
 
-(defn- workspace-stale?
-  "True when a non-zero jj result is the stale-working-copy failure: the
-   invoking (default) workspace lags the shared op log. jj's message is
-   `The working copy is stale (not updated since operation …). … Run
-   `jj workspace update-stale` to update it.` This is the one jj failure
-   nido can mechanically self-heal — every other non-zero exit propagates."
+(defn ^{:malli/schema [:=> [:cat :map] :boolean]}
+  workspace-stale?
+  "True when a non-zero jj result is the stale-working-copy failure: another
+   operation rewrote the invoking workspace's working-copy commit and the files
+   on disk were never updated to match. jj's message is `The working copy is
+   stale (not updated since operation …). … Run `jj workspace update-stale` to
+   update it.`
+
+   The one jj failure that names its own remedy, and whether running the remedy
+   is safe is the caller's to decide. `jj-workspace-add!` runs it, because the
+   workspace it snapshots holds nothing jj has not recorded. A caller whose
+   files on disk may be an agent's unrecorded edits must not: jj 0.45's update
+   records them as a divergent copy of the working-copy commit and checks the
+   other copy out, so the edits leave the disk."
   [result]
   (and (not (zero? (:exit result)))
        (str/includes? (str (:err result)) "working copy is stale")))

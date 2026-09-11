@@ -2504,9 +2504,16 @@ Called the arbiter until it absorbed the stage in front of it — a per-layer
   "True when jj reports working-copy changes in cwd.
 
    Answers `is there anything uncommitted`, which is what the diff fixer needs:
-   it starts from a restored copy, so anything at all means its fixer wrote."
+   it starts from a restored copy, so anything at all means its fixer wrote.
+
+   Throws when jj will not answer, since false is an answer: that the fixer
+   wrote nothing. A stale working copy got that answer for a fixer reporting two
+   verified repairs and a green suite, and the round filed them as a decline."
   [cwd]
-  (not (str/blank? (:out (jj/jj! cwd "diff" "--git")))))
+  (let [r (jj/jj! cwd "diff" "--git")]
+    (if (zero? (:exit r))
+      (not (str/blank? (:out r)))
+      (throw (layers/refusal "could not read what the fixer wrote" r {:cwd cwd})))))
 
 (defn ^{:malli/schema [:=> [:cat :Path] :map]}
   working-copy-state

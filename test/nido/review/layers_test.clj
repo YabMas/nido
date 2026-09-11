@@ -125,6 +125,62 @@
       (is (= ["commit" "-m" "msg"] (first @calls)))
       (is (some #{"@-"} (second @calls))))))
 
+(def ^:private stale-err
+  "jj 0.45's refusal of a working copy another operation rewrote, verbatim."
+  (str "Error: The working copy is stale (not updated since operation 87994e892b2b).\n"
+       "Hint: Run `jj workspace update-stale` to update it."))
+
+(defn- refusing
+  "jj/jj! stub that refuses the command whose first arg is `verb` with `err`,
+   answers everything else with `out`, and records every call."
+  [verb err out calls]
+  (fn [_dir & args]
+    (swap! calls conj (vec args))
+    (if (= verb (first args))
+      {:exit 1 :out "" :err err}
+      {:exit 0 :out out :err ""})))
+
+(deftest land-fix-throws-when-the-bookmark-move-is-refused
+  ;; The move its own docstring calls not optional. Read by exit code nowhere,
+  ;; a refused move returned the commit id as though the fix had landed, and the
+  ;; repair then rode up into the layer above under a PR that showed nothing.
+  (let [calls (atom [])]
+    (with-redefs [jj/jj! (refusing "bookmark" "Error: Refusing to move bookmark" "abc" calls)]
+      (let [e (is (thrown? clojure.lang.ExceptionInfo
+                           (layers/land-fix! "/w" {:bookmark "sess--l1"} "msg")))]
+        (is (str/includes? (ex-message e) "move sess--l1 onto its fix"))
+        (is (= :review-failed (:reason (ex-data e))))))
+    (is (not-any? #(= "log" (first %)) @calls)
+        "no commit id is read for a landing that did not happen")))
+
+(deftest land-fix-stops-at-the-first-step-jj-refuses
+  (let [calls (atom [])]
+    (with-redefs [jj/jj! (refusing "describe" stale-err "abc" calls)]
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (layers/land-fix! "/w" {:bookmark "sess--l1"} "msg")))
+      (is (= [["describe" "-m" "msg"]] @calls)
+          "the bookmark is never moved onto a commit jj would not describe"))))
+
+(deftest land-fix-on-a-flat-branch-reads-its-exits-too
+  (with-redefs [jj/jj! (refusing "commit" stale-err "abc" (atom []))]
+    (is (thrown? clojure.lang.ExceptionInfo (layers/land-fix! "/w" nil "msg")))))
+
+(deftest a-stale-refusal-names-the-command-that-lifts-it
+  ;; Every jj command fails identically on a stale working copy, the one a hint
+  ;; would otherwise prescribe included — so the hint has to be jj's own.
+  (with-redefs [jj/jj! (fn [& _] {:exit 1 :out "" :err stale-err})]
+    (let [e (is (thrown? clojure.lang.ExceptionInfo
+                         (layers/position-for-fix! "/w" {:bookmark "sess--l1"})))]
+      (is (str/includes? (ex-message e) "Run `jj workspace update-stale` before anything else")))))
+
+(deftest a-refusal-that-is-not-staleness-prescribes-no-update
+  (with-redefs [jj/jj! (fn [& _] {:exit 1 :out "" :err "Error: Revision doesn't exist"})]
+    (let [e (is (thrown? clojure.lang.ExceptionInfo
+                         (layers/position-for-fix! "/w" {:bookmark "sess--l1"})))]
+      (is (not (str/includes? (ex-message e) "update-stale"))
+          "update-stale is jj's remedy for one failure, and naming it for another
+           sends a person to run a command that says there is nothing to do"))))
+
 ;; ---- restoring -----------------------------------------------------------
 
 (deftest restore-top-news-onto-the-top-layers-bookmark
@@ -330,6 +386,20 @@
       (is (= :review-failed (:reason (ex-data e))))
       (is (str/includes? (ex-message e) "sess--top")))))
 
+(deftest restore-top-on-a-stale-copy-puts-the-update-before-its-own-remedy
+  ;; Its remedy is `jj new <top>`, which is the call that just failed. On a
+  ;; stale working copy that remedy fails identically, and jj's own
+  ;; `update-stale` sat in the quoted text above a sentence telling the reader
+  ;; to run the other one.
+  (with-redefs [jj/jj! (fn [& _] {:exit 1 :out "" :err stale-err})]
+    (let [e   (is (thrown? clojure.lang.ExceptionInfo
+                           (layers/restore-top! "/w" [{:bookmark "sess--top"}])))
+          msg (ex-message e)
+          at  #(str/index-of msg %)]
+      (is (< (at "Run `jj workspace update-stale` before anything else")
+             (at "`jj new sess--top`"))
+          "the update first — nothing after it can run until it has"))))
+
 (deftest restore-top-is-a-no-op-on-an-empty-stack
   (let [calls (atom [])]
     (with-redefs [jj/jj! (stub-log "" calls)]
@@ -370,6 +440,22 @@
       (layers/conflicted "/w" "main"))
     (is (= "conflicts() & (main..@) ~ (@ & empty())" (nth (first @calls) 2))
         "`..@-` would exclude the working copy even when it is the top layer")))
+
+(deftest conflicted-refuses-to-answer-for-a-workspace-jj-refused
+  ;; [] says the stack was read and holds no markers, and the fix stage lands
+  ;; its next repair on that. A refusal read as [] is a landing onto markers the
+  ;; stage was told were not there.
+  (with-redefs [jj/jj! (fn [& _] {:exit 1 :out "" :err stale-err})]
+    (is (thrown? clojure.lang.ExceptionInfo (layers/conflicted "/w" "main")))))
+
+(deftest a-reshape-whose-conflicts-jj-will-not-read-is-still-kept
+  ;; The reshape stage's reading of an unaskable workspace, unchanged by the fix
+  ;; stage's: whether a reshape should roll back on it is its own guard (FU-98).
+  (let [calls (atom [])]
+    (with-redefs [jj/jj! (scripted {"op"  {:exit 0 :out "op42" :err ""}
+                                    "log" {:exit 1 :out "" :err stale-err}} calls)]
+      (is (:ok? (layers/attempt-reshape! "/w" "main" (fn [] {:exit 0 :out "" :err ""})))))
+    (is (not-any? #{["op" "restore" "op42"]} @calls))))
 
 (deftest a-reshape-that-conflicts-leaves-the-stack-as-it-was
   (let [calls (atom [])]

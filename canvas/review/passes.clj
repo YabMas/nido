@@ -171,6 +171,12 @@
      that says the claim did not hold ships in the same message as the claim."
     {:signature [:=> [:catn [:cwd Path] [:stack :any] [:findings :any]] :any]
      :delegates [deviation-line with-deviations description]})
+  (Operation refusal
+    "The failure a jj call on the fix path throws when jj exits non-zero — never an answer read
+     off its empty output. A stale refusal names `jj workspace update-stale` ahead of any other
+     remedy, since until it has run every jj command fails the same way."
+    {:signature [:=> [:catn [:what :string] [:result :map] [:data :map]
+                            [:then [:? [:maybe :string]]]] :any]})
   (Operation position-for-fix! "Put the working copy on a layer so a fix lands in it."
     {:signature [:=> [:catn [:cwd Path] [:layer :map]] :any]})
   (Operation land-fix! "Turn the working copy into the layer's new content."
