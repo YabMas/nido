@@ -224,8 +224,9 @@
 
 (defn ^{:malli/schema [:=> [:cat :any] [:maybe :string]]}
   prior-fixes-block
-  "What a fixer already aimed at the range under review, the findings it was
-   handed, what it said about them, and whether the repair is in the code.
+  "What a fixer already did to the range under review — rows of
+   `nido.review.stages/fix-outcomes` — the findings it was handed, what it said
+   about them, and whether any edit of its is in the code.
 
    The reviewer starts cold every round and is shown a diff, never a history, so
    nobody in the loop is ever asked the one question a repair raises: did that
@@ -248,40 +249,75 @@
    round before it read and the finding is untouched. It is the one entry here
    whose findings are still true by construction, and saying so is the whole
    point of carrying it — the round that had none of this re-read a
-   byte-identical patch and returned `correct` on the P2 it was hiding."
+   byte-identical patch and returned `correct` on the P2 it was hiding. Its
+   commit is not shown: this reader cannot look at it, and a change id beside a
+   landed one would read as a claim that the edit is in the range.
+
+   An ARGUED entry wrote no edit at all, so the range is again what the round
+   before read, and the account is the fixer's argument for leaving it — where
+   it looked and why it stopped. That can be the most decisive evidence a run
+   holds: one such account recorded an integration test executed and the
+   refusal firing on exactly the case its finding described, and the reviewer
+   of that byte-identical patch was shown none of it. It is an argument, not a
+   verdict on the code, for the reason an account is a claim. ARGUED and not
+   declined, because `declined` is the warden's word for a defect the branch
+   decided to ship, and one word for both reads a fixer's refusal as a
+   decision; see `fixer-declines-block`.
+
+   Each marker is explained only where an entry carries it. The block is paid
+   for on every round of every layer a fixer touched, and most of them hold
+   only landed repairs."
   [prior-fixes]
   (when (seq prior-fixes)
-    (str
-     "A FIXER ALREADY WORKED ON WHAT YOU ARE REVIEWING, EARLIER IN THIS RUN.\n\n"
-     "Each entry is a repair a fixer wrote, what it was handed, and the fixer's\n"
-     "own words about it. Those words are a CLAIM about the code, not a record\n"
-     "of it — check them against the range below rather than accepting them.\n\n"
-     "An entry marked REFUSED is NOT in the range below. The rebase would not\n"
-     "take that repair and it was put back, so the code you are reading is\n"
-     "unchanged and every finding under it is still true. Its account says\n"
-     "where the fixer looked, not what the code now does.\n\n"
-     (->> prior-fixes
-          (map (fn [{:keys [round commit findings account refused]}]
-                 (str "- round " round
-                      (if (seq refused)
-                        (str ", REFUSED — it conflicted " (str/join ", " refused))
-                        (when commit (str ", landed " commit)))
-                      (when (seq findings) " — handed:") "\n"
-                      (apply str (map handed-line findings))
-                      (when-not (str/blank? (str account))
-                        (str (if (seq refused)
-                               "  the fixer said of the edit that was put back: "
-                               "  the fixer says: ")
-                             (account-excerpt account (count findings))
-                             "\n")))))
-          (str/join "\n"))
-     "\n"
-     "A finding here that is STILL TRUE is the most valuable thing you can\n"
-     "return: say which one, and what you saw that the repair did not reach. A\n"
-     "SWEEP was told to fix its instance and then audit for the rest, so a\n"
-     "sibling it missed is at these same lines and is yours to find. Under a\n"
-     "REFUSED repair they are all still true, and nothing else in this run\n"
-     "knows it.\n\n")))
+    (let [has? (set (map :outcome prior-fixes))]
+      (str
+       "A FIXER ALREADY WORKED ON WHAT YOU ARE REVIEWING, EARLIER IN THIS RUN.\n\n"
+       "Each entry is what a fixer was handed, what it did about it, and the fixer's\n"
+       "own words about it. Those words are a CLAIM about the code, not a record\n"
+       "of it — check them against the range below rather than accepting them.\n\n"
+       (when (has? :refused)
+         (str "An entry marked REFUSED is NOT in the range below. The rebase would not\n"
+              "take that repair and it was put back, so the code you are reading is\n"
+              "unchanged and every finding under it is still true. Its account says\n"
+              "where the fixer looked, not what the code now does.\n\n"))
+       (when (has? :declined)
+         (str "An entry marked ARGUED wrote no edit. The fixer read what it was\n"
+              "handed, changed nothing, and said why, so the code you are reading is\n"
+              "what that round read. Its account is where the fixer looked and why it\n"
+              "stopped — evidence to check against the code, not a ruling on it.\n\n"))
+       (->> prior-fixes
+            (map (fn [{:keys [outcome round commit findings account conflicted]}]
+                   (str "- round " round
+                        (case outcome
+                          :refused  (str ", REFUSED"
+                                         (when (seq conflicted)
+                                           (str " — it conflicted " (str/join ", " conflicted))))
+                          :declined ", ARGUED — no edit was written"
+                          (when commit (str ", landed " commit)))
+                        (when (seq findings) " — handed:") "\n"
+                        (apply str (map handed-line findings))
+                        (when-not (str/blank? (str account))
+                          (str (case outcome
+                                 :refused  "  the fixer said of the edit that was put back: "
+                                 :declined "  the fixer's argument for changing nothing: "
+                                 "  the fixer says: ")
+                               (account-excerpt account (count findings))
+                               "\n")))))
+            (str/join "\n"))
+       "\n"
+       "A finding here that is STILL TRUE is the most valuable thing you can\n"
+       "return: say which one, and what you saw that the repair did not reach. A\n"
+       "SWEEP was told to fix its instance and then audit for the rest, so a\n"
+       "sibling it missed is at these same lines and is yours to find.\n"
+       (when (has? :refused)
+         (str "Under a REFUSED repair they are all still true, and nothing else in\n"
+              "this run knows it.\n"))
+       (when (has? :declined)
+         (str "Under an ARGUED one nothing moved either: whether they are still true\n"
+              "is what the fixer's argument claims to settle, and you are reading the\n"
+              "code it is about — a finding it argued away that still stands is yours\n"
+              "to report, with what the argument missed.\n"))
+       "\n"))))
 
 (defn ^{:malli/schema [:=> [:cat :any] [:maybe :string]]}
   standing-needs-block
@@ -1559,14 +1595,57 @@
          "finding, or reject it and say what the fixer missed. Handing it back\n"
          "unchanged buys another refusal from the same session:\n"
          (->> declines
-              (map (fn [{:keys [layer since findings reason]}]
-                     (str "- " (or layer "the branch") ", refused in round " since "\n"
+              (map (fn [{:keys [layer round findings account]}]
+                     (str "- " (or layer "the branch") ", refused in round " round "\n"
                           (->> findings
                                (map (fn [{:keys [id title]}]
                                       (str "    · " id " " title "\n")))
                                (apply str))
-                          (when-not (str/blank? (str reason))
-                            (str "  its argument: " reason "\n")))))
+                          (when-not (str/blank? (str account))
+                            (str "  its argument: " account "\n")))))
+              (apply str))
+         "\n")))
+
+(defn- refused-repairs-block
+  "The repairs a fixer WROTE for these findings that the stack would not take —
+   rebasing the layers above onto the edit conflicted, and the loop put it back.
+
+   From the warden's seat a refused repair looks exactly like a defect no fixer
+   could move: the same handle, the same `fix` ruling, no commit. Read that way
+   it is ground (b) for a park, about a finding whose repair exists — in the
+   operation log — and was stopped by the layer order rather than by the code.
+   One warden, not shown this, wrote that no fixer account for a layer existed
+   while the refused row held a 2.6 KB one naming the repair, the test that
+   discriminates it and the REPL check.
+
+   The facts only, and no remedy. What the loop does with a repair the cut
+   refuses is a decision still open (FU-141), and a block telling the warden
+   what to rule would be taking it. Headed PUT BACK rather than refused: the
+   block beside it says a fixer refused, and one verb for two actors invites
+   the warden to conflate them."
+  [refused]
+  (when (seq refused)
+    (str "A FIXER REPAIRED THESE AND THE REPAIR WAS PUT BACK\n"
+         "The edit was written, and rebasing the layers above it onto the edit\n"
+         "conflicted with the changes named, so the loop put it back. The code\n"
+         "is exactly what the reviewers read, and every finding under it is\n"
+         "still true — not because a repair failed, but because it never reached\n"
+         "the code. That is not ground (b). What is in question is the layer\n"
+         "order, not the repair:\n"
+         (->> refused
+              (map (fn [{:keys [layer round conflicted findings account]}]
+                     (str "- " (or layer "the branch") ", round " round
+                          (when (seq conflicted)
+                            (str ", conflicted " (str/join ", " conflicted)))
+                          "\n"
+                          (->> findings
+                               (map (fn [{:keys [id title]}]
+                                      (str "    · " id " " title "\n")))
+                               (apply str))
+                          (when-not (str/blank? (str account))
+                            (str "  the fixer said of the edit that was put back: "
+                                 (account-excerpt account (count findings))
+                                 "\n")))))
               (apply str))
          "\n")))
 
@@ -1590,10 +1669,10 @@
          "would a finding no fixer has seen. `fix` launches that layer again; if\n"
          "its fixer fails to start twice in a row the run stops on the machinery.\n"
          (->> unstarted
-              (map (fn [{:keys [layer round exit-code handed]}]
+              (map (fn [{:keys [layer round exit-code findings]}]
                      (str "- " (or layer "the branch") ", round " round
                           (when (some? exit-code) (str " (exit " exit-code ")"))
-                          ": " (str/join ", " handed) "\n")))
+                          ": " (str/join ", " (map :id findings)) "\n")))
               (apply str))
          "\n")))
 
@@ -1687,15 +1766,21 @@
    rather than a dispatch: what it knows to be open that this round is handing
    to nobody. It is asked for on every answer, not only on a `stop`, because the
    round that turns out to be the last one is not knowable while it is running."
-  [{:keys [findings history design stance toc answered seen parked fixer-declines
-           unstarted fixer-accounts]}]
+  [{:keys [findings history design stance toc answered seen parked fix-outcomes]}]
   ;; A branch with no layers is reviewed flat, and there is then no layer label
   ;; for a finding to be attributed to. Asked for one anyway, the warden supplied
   ;; the only stack-shaped thing it had — a file path — on every ruling of the
   ;; run, and the loop absorbed the nonsense silently. Asking only where an
   ;; answer exists is cheaper than validating one that never should have been
   ;; requested.
-  (let [layered? (boolean (seq toc))]
+  (let [layered? (boolean (seq toc))
+        ;; `nido.review.stages/fix-outcomes`, whole. Each outcome gets a block of
+        ;; its own because each asks something different of the warden — place
+        ;; a sibling, answer an argument, see that a repair exists, see that no
+        ;; one looked. An outcome given no block here reaches the warden only as
+        ;; a missing commit, which is the misreading every one of them is for.
+        {fixer-accounts :landed fixer-declines :declined
+         refused :refused unstarted :unstarted} (group-by :outcome fix-outcomes)]
    (str
    "You are the WARDEN of an automated code-review loop over "
    (if layered? "a STACK of layers.\n" "a single unlayered branch.\n")
@@ -1879,6 +1964,7 @@
                (apply str))
           "\n"))
    (fixer-declines-block fixer-declines)
+   (refused-repairs-block refused)
    (unstarted-block unstarted)
    (fixer-accounts-block fixer-accounts)
    (seen-block seen)

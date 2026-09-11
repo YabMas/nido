@@ -314,9 +314,11 @@
    target is one layer or the composition of several, never both, and a
    composition has no single brief to be bounded by.
 
-   `prior-fixes` is what a fixer already landed on this exact target earlier in
-   the run, and it is orthogonal to both: a layer and the composition alike can
-   have been repaired, and neither reviewer is told so by anything else.
+   `prior-fixes` is what a fixer already did to this exact target earlier in the
+   run — a repair landed or put back, or an argument for writing none; see
+   `stages/with-fix-memory`. It is orthogonal to both: a layer and the
+   composition alike can have been worked on, and neither reviewer is told so by
+   anything else.
 
    `standing` is what an earlier RUN's design verdict left outstanding, and it
    reaches a layer or the flat branch but never the composition pass — see

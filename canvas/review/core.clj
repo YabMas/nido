@@ -338,7 +338,8 @@
   (Operation composition-block "The primer for the pass that reviews the stack as a whole."
     {:signature [:=> [:catn [:opts :map]] :string]})
   (Operation prior-fixes-block
-    "What a fixer already landed on this target, put to the reviewer as a claim to check."
+    "What a fixer already did to this target — a repair landed or put back, or an argument
+     for writing none — put to the reviewer as a claim to check."
     {:signature [:=> [:catn [:prior-fixes :any]] [:maybe :string]]})
   (Operation standing-needs-block
     "What an earlier run's design verdict left outstanding, put to the reviewer as a question

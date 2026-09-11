@@ -141,16 +141,100 @@
          "  reach the verdict that follows from it.\n"
          "Overturning it is allowed. Re-deriving it from scratch is not.\n")))
 
+(defn- not-landed
+  "The rows of a `stages/fix-outcomes` whose fixer got nothing into the code.
+   The landed rest reach this pass inside the round history, accounts and all."
+  [fix-outcomes]
+  (remove #(= :landed (:outcome %)) fix-outcomes))
+
+(defn- not-landed-section
+  "What the loop's fixers were handed and did not get into the code — a
+   `not-landed` — or nil when there is none.
+
+   The judge reads the code, so a finding whose repair was written and put back
+   is, to it, a finding nobody repaired: it finds the defect in the tree and
+   prescribes the fix. One judge did exactly that on a `fix-rolled-back` run, in
+   nearly the words of the account the refused fixer had written. A refused
+   row's commit is the one thing it needs and the reviewers could not use — it
+   has tools, and `jj show` on the commit is the edit.
+
+   Accounts are rendered whole, as the landed ones are in the round history:
+   cutting these would make the repairs this reader cannot see the ones it reads
+   least of. A fixer's refusal is ARGUED, never declined: this reader holds the
+   warden's `declined` rulings too, and `prompts/fixer-declines-block` says
+   what one word for both costs."
+  [rows]
+  (when (seq rows)
+    (str "\nNOT IN THE CODE — what the loop's fixers were handed and did not land.\n"
+         "A finding still true in the tree you read may be one of these.\n"
+         "- REFUSED: the repair was written, rebasing the layers above it onto\n"
+         "  the edit conflicted, and it was put back. `jj show <commit>` is the\n"
+         "  edit. Where one is what the branch needs, say \"recover the repair at\n"
+         "  <commit>\" in `needs` rather than describing how to build it again.\n"
+         "- ARGUED: a fixer read the findings and argued for changing nothing.\n"
+         "  The argument is evidence to weigh, not a ruling.\n"
+         "- NEVER STARTED: no fixer read the findings at all. They are untried,\n"
+         "  not resisted — their coming back is no pressure on the design.\n\n"
+         (->> rows
+              (map (fn [{:keys [outcome layer round commit conflicted exit-code
+                                findings account]}]
+                     (str "- " (or layer "the branch") ", round " round ", "
+                          (case outcome
+                            :refused   (str "REFUSED"
+                                            (when commit (str " — commit " commit))
+                                            (when (seq conflicted)
+                                              (str ", conflicted "
+                                                   (str/join ", " conflicted))))
+                            :declined  "ARGUED — no edit was written"
+                            :unstarted (str "NEVER STARTED"
+                                            (when (some? exit-code)
+                                              (str " (exit " exit-code ")"))
+                                            " — no fixer read these")
+                            (name outcome))
+                          "\n"
+                          (->> findings
+                               (map (fn [{:keys [id title]}]
+                                      (str "    · " id (when title (str " " title)) "\n")))
+                               (apply str))
+                          (when-not (str/blank? (str account))
+                            (str (if (= :declined outcome)
+                                   "  the fixer's argument for changing nothing: "
+                                   "  the fixer said of the edit that was put back: ")
+                                 account "\n")))))
+              (apply str)))))
+
+(defn- opening
+  "The sentence the judge starts from: how the loop ended, and whether what it
+   wanted repaired is in the code it is about to read.
+
+   The status is named, not glossed. Its glosses are
+   `tasks.nido-review/diff-remedies`, addressed to an operator and out of this
+   band's reach, and a second copy here would drift from them. Whether the
+   repairs are in is read off the fix record rather than off the status,
+   because it is a fact about the record: a run can stop on a status that says
+   nothing about repairs while an earlier round's refusal or decline still
+   stands."
+  [status not-landed]
+  (str "You are judging whether a DESIGN survived a code review, not whether the code\n"
+       "is correct. The review loop has finished"
+       (when status (str ", on `" (name status) "`"))
+       ".\n"
+       (if (seq not-landed)
+         (str "What its fixers landed is in the code. Not everything they were handed\n"
+              "is — see NOT IN THE CODE below.\n\n")
+         "What its fixers landed is in the code.\n\n")))
+
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   build-prompt
   "The verdict prompt. `design` is the workstream's :design record, `baseline` the
    :baseline record it cited (nil when it predates them), `findings` the findings
    still open at the end, `history` the per-round digest, `prior` the last
-   verdict against this same design record (nil when there is none)."
-  [{:keys [design baseline stance findings history rounds prior]}]
+   verdict against this same design record (nil when there is none), `status`
+   the run's terminal status, and `fix-outcomes` the run's
+   `stages/fix-outcomes`."
+  [{:keys [design baseline stance findings history rounds prior status fix-outcomes]}]
   (str
-   "You are judging whether a DESIGN survived a code review, not whether the code\n"
-   "is correct. The review loop has finished; the fixes it wanted are already in.\n\n"
+   (opening status (not-landed fix-outcomes))
    "Read the code where you need to — you have tools, and the question cannot be\n"
    "answered from the diff summary alone.\n\n"
    "THE DESIGN THIS CHANGE COMMITTED TO:\n"
@@ -177,7 +261,9 @@
      (str "PROJECT STANCE — framing only, never cite it against a specific\n"
           "finding:\n" stance "\n\n"))
    "Rounds run: " rounds "\n"
-   "Round history (findings + what was fixed):\n" (pr-str history) "\n\n"
+   "Round history (findings + what was fixed):\n" (pr-str history) "\n"
+   (not-landed-section (not-landed fix-outcomes))
+   "\n"
    "Findings still open at the end. Each carries the reach the reviewer assigned:\n"
    "local (a defect inside the current design), structural (about where a\n"
    "boundary sits — the reviewer saw shape without intent), or unclear. The\n"
@@ -187,6 +273,10 @@
      (->> findings
           (map-indexed (fn [i f] (str i ": [P" (:priority f) "/"
                                       (name (or (:reach f) :unclear)) "] "
+                                      ;; What NOT IN THE CODE names a finding by,
+                                      ;; and a launch that never started names
+                                      ;; its findings by nothing else.
+                                      (when-let [h (or (:handle f) (:id f))] (str h " "))
                                       (:title f) " — " (:body f))))
           (str/join "\n"))
      "(none)")
@@ -586,6 +676,8 @@
                        :stance (stages/read-stance (first (stages/project+ws-from-cwd cwd)))
                        :findings (still-open (:findings final))
                        :history (mapv #(dissoc % :findings :patch-hashes) (:history final))
+                       :fix-outcomes (stages/fix-outcomes (:history final) (:carry final))
+                       :status (:status final)
                        :rounds rounds
                        :prior prior})
               {:keys [num-turns result-error? result-text]}

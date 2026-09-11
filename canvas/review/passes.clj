@@ -472,21 +472,26 @@
     "The whole-stack target, told what it has already reported. Without it the composition pass
      re-derives the same seam every round from an empty memory."
     {:signature [:=> [:catn [:targets :any] [:history :any]] :any]})
-  (Operation fix-accounts
-    "Every repair this run landed, grouped by the layer it landed on: the round, the commit,
-     the findings that commit was handed, and what the fixer said. Two readers, which is why
-     it is a step of its own — the target's own layer's entries go to that layer's next
-     reviewer, and ALL of them go to the warden, because a sibling a fixer names in an account
-     is by construction somewhere its own layer's reviewer cannot go."
-    {:signature [:=> [:catn [:history :any]] :any]})
+  (Operation fix-outcomes
+    "What the fix stage has recorded of its fixers this run, one row per outcome — a repair
+     that landed, one the stack refused and put back, a fixer's argument for writing nothing,
+     a launch that never started — each with its layer, its round, the findings it was handed
+     and what the fixer said. Off the history for what landed and the carry for the rest,
+     because a round enters the history only when a fix landed.
+
+     ONE record for every reader of these — the next reviewer of a layer, the warden, the
+     design judge — because a reader reasons as if what it is not shown did not happen. Each
+     renders the part it can use; none is wired to a subset."
+    {:signature [:=> [:catn [:history :any] [:carry :any]] [:sequential :map]]
+     :delegates [unstarted-fixers]})
   (Operation with-fix-memory
-    "Each target told what a fixer already aimed at it in this run — the repairs that landed
-     and the ones the stack put back — and what the fixer said about each. Nothing else in the
-     loop asks whether a repair closed what it was handed: the reviewer that would is shown a
-     diff and no history, so a swept defect comes back at the lines the fix was made on, and a
-     REFUSED repair leaves the range byte-identical with nothing at all to notice."
-    {:signature [:=> [:catn [:targets :any] [:history :any] [:refused :any]] :any]
-     :delegates [fix-accounts]})
+    "Each target told what a fixer already did to it in this run — its layer's rows of
+     `fix-outcomes` where a fixer ran: a repair landed, one put back, an argument for writing
+     none. Nothing else in the loop asks whether a repair closed what it was handed: the
+     reviewer that would is shown a diff and no history, so a swept defect comes back at the
+     lines the fix was made on, and a REFUSED repair or a DECLINED one leaves the range
+     byte-identical with nothing at all to notice."
+    {:signature [:=> [:catn [:targets :any] [:outcomes :any]] :any]})
   (Operation with-standing-needs
     "Each code-reading reviewer told what the last run's verdict left outstanding — never the
      composition pass, which is asked whether the cut holds and is told not to report what the
@@ -514,10 +519,10 @@
     "The layers whose latest fixer launch never started, off the run's launch record — the one
      account of whether a fixer ran on a layer, written by the fix stage at launch and never
      pruned, since a session once opened stays opened whatever becomes of its findings. What it
-     names are findings ruled `fix` that no process ever read: untried, not resisted. Two
-     readers — the warden, which would otherwise read their recurrence as fixes that failed, and
-     the run's ledger entry, where a `fix-launch-failed` status names the machinery and only
-     this names the layer."
+     names are findings ruled `fix` that no process ever read: untried, not resisted. Read
+     through `fix-outcomes` by the warden and the design judge, either of which would otherwise
+     read their recurrence as fixes that failed, and directly by the run's ledger entry, where
+     a `fix-launch-failed` status names the machinery and only this names the layer."
     {:signature [:=> [:catn [:launches :any]] [:sequential :map]]})
   (Operation park-refused-recuts
     "A park for every recut the reshape stage could not act on, carrying its own refusal. The

@@ -585,84 +585,99 @@
   [t]
   (if (and (:stack? t) (not (:composition t))) nil (:label t)))
 
-(defn ^{:malli/schema [:=> [:cat :any] :any]}
-  fix-accounts
-  "Every repair this run landed, grouped by the layer it landed on: the round,
-   the commit, the findings that commit was handed, and what the fixer said.
+;; Defined below, beside the other readings of the carry.
+(declare unstarted-fixers)
 
-   Titles come from the round the fix was in rather than from the round asking:
-   a finding is handed by handle-or-id and a later round rewords it, so the
-   words the fixer actually saw are the ones on that round's findings.
+(defn ^{:malli/schema [:=> [:cat :any :any] [:sequential :map]]}
+  fix-outcomes
+  "What the fix stage has recorded of its fixers this run, one row per outcome,
+   oldest round first. `:outcome` is one of four:
 
-   One derivation with two readers, which is the point of it being here rather
-   than inside either. `with-fix-memory` gives a target its own layer's entries;
-   `run-warden-stage` takes all of them, because a sibling a fixer names in an
-   account is by construction somewhere its own layer's reviewer cannot go and
-   the warden is the only reader holding the file lists to place it against."
-  [history]
-  (reduce
-   (fn [acc {:keys [iter fixes findings]}]
-     (let [by-id (into {} (map (juxt #(or (:handle %) (:id %)) identity))
-                       findings)]
-       (reduce (fn [a {:keys [layer commit handed account]}]
-                 (update a layer (fnil conj [])
-                         {:round iter
-                          :commit commit
-                          :account account
-                          :findings (mapv (fn [h]
-                                            (let [f (get by-id h)]
-                                              {:title (or (:title f) h)
-                                               :sweep (boolean (:sweep f))}))
-                                          handed)}))
-               acc
-               fixes)))
-   {}
-   history))
+     :landed    — a repair in the branch, at `:commit`
+     :refused   — a repair the stack put back; `:conflicted` is what the rebase
+                  collided with, and `:commit` names an edit that is not in the
+                  branch, reachable only through the operation log
+     :declined  — no edit, and the fixer's argument for writing none
+     :unstarted — a launch that never took a turn; `:exit-code` where it left one
 
-(defn- refused-accounts
-  "The repairs the stack REFUSED, grouped by layer in the shape `fix-accounts`
-   produces, so that both reach a reviewer as one list of what a fixer has
-   already tried on the code in front of it.
+   Every row carries `:layer` (nil on a branch with no layers), `:round`, and the
+   `:findings` it was handed as `{:id :title :sweep}`, named by handle where the
+   warden gave one, as `:handed` is. `:account` is what the fixer said, where it
+   said anything. An unstarted row's findings have ids only: the launch record
+   holds nothing else.
 
-   Off the carry rather than the history: a round appends a history entry only
-   when a fix landed, and the round this exists for landed one repair and had
-   another put back.
+   ONE derivation for every reader of these — the next reviewer of a layer, the
+   warden, the design judge — because a reader reasons as if what it is not
+   shown did not happen. Each takes the whole record and renders what it can
+   use, so none is left with whatever subset was wired to it.
 
-   `:refused` is what tells the two apart, and it holds the change ids the
-   rebase collided with rather than a bare flag — a reviewer asking why the
-   repair is not in front of it gets the answer in the same row. The commit the
-   repair was on does NOT ride along: this reader cannot look at it, and a
-   change id beside a landed one would read as a claim that the edit is in the
-   range."
-  [carried]
-  (reduce-kv (fn [acc label {:keys [since account findings conflicted]}]
-               (assoc acc label
-                      [{:round since
-                        :account account
-                        :refused (vec conflicted)
-                        :findings (mapv #(select-keys % [:title :sweep]) findings)}]))
-             {}
-             carried))
+   Flat, with the layer a field of each row rather than a grouping over them:
+   the warden is asked to place an account's contents against a layer OTHER
+   than the one it is filed under, so the label has to be something it reads.
 
-(defn ^{:malli/schema [:=> [:cat :any :any :any] :any]}
+   Landed rows come off `history`, the rest off `carry`, and each keeps the
+   lifetime its channel gives it: a refusal or a decline lives while its
+   findings are open (see `carried-while-open`), an unstarted launch until a
+   later fixer on its layer runs (see `unstarted-fixers`), and a landed repair
+   for the whole run, because it is in the code whatever became of its finding.
+   Titles on a landed row come from the round the fix was in: a later round
+   rewords a finding, and the words the fixer saw are that round's."
+  [history carry]
+  (let [carried  (fn [findings] (mapv #(select-keys % [:id :title :sweep]) findings))
+        landed   (for [{:keys [iter fixes findings]} history
+                       :let [by-id (into {} (map (juxt #(or (:handle %) (:id %)) identity))
+                                         findings)]
+                       {:keys [layer commit handed account]} fixes]
+                   (cond-> {:outcome :landed :layer layer :round iter
+                            :findings (mapv (fn [h]
+                                              (let [f (get by-id h)]
+                                                {:id h
+                                                 :title (or (:title f) h)
+                                                 :sweep (boolean (:sweep f))}))
+                                            handed)}
+                     commit                             (assoc :commit commit)
+                     (not (str/blank? (str account)))   (assoc :account (str account))))
+        refused  (for [[label {:keys [since commit account conflicted findings]}]
+                       (:rolled-back carry)]
+                   (cond-> {:outcome :refused :layer label :round since
+                            :conflicted (vec conflicted)
+                            :findings (carried findings)}
+                     commit                             (assoc :commit commit)
+                     (not (str/blank? (str account)))   (assoc :account (str account))))
+        declined (for [[label {:keys [since reason findings]}] (:fixer-declines carry)]
+                   (cond-> {:outcome :declined :layer label :round since
+                            :findings (carried findings)}
+                     (not (str/blank? (str reason)))    (assoc :account (str reason))))
+        unstarted (for [{:keys [layer round handed exit-code]}
+                        (unstarted-fixers (:fixer-launches carry))]
+                    (cond-> {:outcome :unstarted :layer layer :round round
+                             :findings (mapv (fn [id] {:id id}) handed)}
+                      (some? exit-code) (assoc :exit-code exit-code)))]
+    (->> (concat landed refused declined unstarted)
+         (sort-by (juxt #(or (:round %) 0) (comp str :layer)))
+         vec)))
+
+(defn ^{:malli/schema [:=> [:cat :any :any] :any]}
   with-fix-memory
-  "Hand each target the repairs a fixer already aimed at it in this run — the
-   ones that landed, and the ones the stack put back.
+  "Hand each target its own layer's rows of `outcomes` — a `fix-outcomes` —
+   where a fixer RAN: a repair that landed, one the stack put back, and an
+   argument for writing none.
 
-   Every reviewer starts cold and is shown a diff, so nothing in the loop ever
-   asks whether a fix closed what it was handed. The fix stage has recorded the
-   join since `:handed` was added — the commit, and the findings that commit was
-   for — and no reader used it to go and check. A swept defect came back at the
+   Every reviewer starts cold and is shown a diff, so nothing else in the loop
+   asks whether a fix closed what it was handed. A swept defect came back at the
    same window in rounds 2, 3 and 4 of one run, each time as a fresh finding,
    because the reviewer reading those lines had never been told a repair for
    them had already landed there.
 
-   A refused repair is here for the mirror-image reason. The code is exactly
-   what the round before read, so the finding is untouched and its reviewer has
-   no diff to notice — one round re-read a byte-identical patch and returned
-   `correct` on a P2 the round before had ruled `fix`. Both kinds are one list
-   in round order, because they answer one question: what has already been tried
-   here.
+   A refused repair and a decline are here for the mirror-image reason. Neither
+   moved the code, so the reviewer reading it next has no diff to notice — one
+   round re-read a byte-identical patch and returned `correct` on a P2 the round
+   before had ruled `fix`. All three are one list in round order, because they
+   answer one question: what has a fixer already tried here.
+
+   A launch that never started is not in it. It wrote nothing and said nothing,
+   and the ids it was handed name nothing in a reviewer's vocabulary; the warden
+   and the design judge are its readers.
 
    Keyed on the layer label, which is what `fix-plan` groups by and what the
    commit is recorded under — except on a branch with no layers, where the two
@@ -671,13 +686,13 @@
    Like `with-composition-memory`, nothing it adds reaches the cache key —
    `with-patch-hashes` builds that from the range, so a value that changes every
    round cannot switch the cache off by living here."
-  [targets history refused]
-  (let [by-label (merge-with into (fix-accounts history) (refused-accounts refused))]
+  [targets outcomes]
+  (let [by-label (group-by :layer (remove #(= :unstarted (:outcome %)) outcomes))]
     (if (empty? by-label)
       targets
       (mapv (fn [t]
               (if-let [prior (seq (get by-label (fix-label t)))]
-                (assoc t :prior-fixes (vec (sort-by #(or (:round %) 0) prior)))
+                (assoc t :prior-fixes (vec prior))
                 t))
             targets))))
 
@@ -1201,8 +1216,7 @@
         all     (with-patch-hashes
                  cwd (-> targets
                          (with-composition-memory (:history ctx))
-                         (with-fix-memory (:history ctx)
-                                          (get-in ctx [:carry :rolled-back] {}))
+                         (with-fix-memory (fix-outcomes (:history ctx) (:carry ctx)))
                          (with-standing-needs (standing-needs cwd))
                          (with-prior-open (get-in ctx [:carry :inherited-open]))))
         {:keys [review skipped]} (to-review cached all)
@@ -2381,17 +2395,7 @@
                  :stance   (read-stance (first (project+ws-from-cwd cwd)))
                  :toc      (:toc ctx)
                  :parked   (vals (get-in ctx [:carry :parks] {}))
-                 :fixer-declines (vals (get-in ctx [:carry :fixer-declines] {}))
-                 :unstarted (unstarted-fixers (get-in ctx [:carry :fixer-launches]))
-                 ;; Chronological, and flat with the layer named on each row:
-                 ;; the warden is being asked to place an account's contents
-                 ;; against a layer OTHER than the one it is filed under, so the
-                 ;; label has to be a field it reads rather than the grouping it
-                 ;; reads under.
-                 :fixer-accounts (sort-by (juxt :round (comp str :layer))
-                                          (for [[label rows] (fix-accounts (:history ctx))
-                                                row rows]
-                                            (assoc row :layer label)))
+                 :fix-outcomes (fix-outcomes (:history ctx) (:carry ctx))
                  :answered (answered-by-layer ctx)})
         {:keys [num-turns result-error? result-text] :as launch}
         (agent/launch! {:run-id run-id :cwd cwd

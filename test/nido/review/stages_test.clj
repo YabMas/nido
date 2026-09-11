@@ -1444,11 +1444,20 @@
     (is (not (str/includes? (prompts/warden-prompt args) "\"promote\"")))
     (is (str/includes?
          (prompts/warden-prompt
-          (assoc args :fixer-accounts
-                 [{:layer "speech-contract" :round 1 :commit "0c181d7"
+          (assoc args :fix-outcomes
+                 [{:outcome :landed :layer "speech-contract" :round 1 :commit "0c181d7"
                    :findings [{:title "the redactor strips only the query string"}]
                    :account "The surviving instance is at speech/transport.clj:288."}]))
-         "\"promote\""))))
+         "\"promote\""))
+    (is (not (str/includes?
+              (prompts/warden-prompt
+               (assoc args :fix-outcomes
+                      [{:outcome :declined :layer "speech-contract" :round 1
+                        :findings [{:id "h1" :title "t"}]
+                        :account "speech/transport.clj:288 already strips it"}]))
+              "\"promote\""))
+        "an argument for changing nothing is not an account of a repair, and
+         what it names is the warden's to rule on rather than to promote")))
 
 (deftest a-skipped-layer-something-owes-work-to-is-reopened
   ;; The other half, and the one that made a correct placement worthless: only a
@@ -3466,11 +3475,13 @@
                   :findings [{:handle "h1" :id "aa11" :title "bad enum reaches the insert"
                               :sweep true}]}]
         [core wiring] (stages/with-fix-memory
-                        [{:label "core"} {:label "wiring"}] history {})
+                        [{:label "core"} {:label "wiring"}]
+                        (stages/fix-outcomes history nil))
         [prior] (:prior-fixes core)]
     (is (= 1 (:round prior)))
+    (is (= :landed (:outcome prior)))
     (is (= "4d52d218" (:commit prior)))
-    (is (= [{:title "bad enum reaches the insert" :sweep true}] (:findings prior))
+    (is (= [{:id "h1" :title "bad enum reaches the insert" :sweep true}] (:findings prior))
         "the words the fixer saw, from the round it saw them in")
     (is (= "fixed the enum check; V243 is untouched" (:account prior)))
     (is (nil? (:prior-fixes wiring)) "a layer no fixer touched is told nothing")))
@@ -3586,7 +3597,7 @@
   (let [history [{:iter 1 :fixes [{:layer nil :commit "c1" :handed ["h1"]}]
                   :findings [{:handle "h1" :title "the defect"}]}]
         [whole] (stages/with-fix-memory
-                  [{:label "stack" :stack? true}] history {})]
+                  [{:label "stack" :stack? true}] (stages/fix-outcomes history nil))]
     (is (= ["the defect"] (mapv :title (:findings (first (:prior-fixes whole)))))))
 
   (testing "and a stacked branch's composition target is not the flat one"
@@ -3594,13 +3605,14 @@
                     :findings [{:handle "h1" :title "the defect"}]}]
           [whole] (stages/with-fix-memory
                     [{:label "stack" :stack? true :composition {:layers [{:label "core"}]}}]
-                    history {})]
+                    (stages/fix-outcomes history nil))]
       (is (nil? (:prior-fixes whole))))))
 
 (deftest a-run-with-no-landed-fix-changes-nothing
   (let [targets [{:label "core"}]]
-    (is (= targets (stages/with-fix-memory targets [] {})))
-    (is (= targets (stages/with-fix-memory targets [{:iter 1 :fixes [] :findings []}] {})))))
+    (is (= targets (stages/with-fix-memory targets (stages/fix-outcomes [] nil))))
+    (is (= targets (stages/with-fix-memory
+                     targets (stages/fix-outcomes [{:iter 1 :fixes [] :findings []}] {}))))))
 
 (deftest fix-memory-does-not-move-the-cache-key
   ;; A value that changes every round folded into the key switches the cache
@@ -3642,9 +3654,33 @@
                 {nil {:layer nil :since 1 :conflicted ["lktsqrrn"]
                       :account "added the digest to all five contracts"
                       :findings [{:id "h1" :title "the digest is not in the contracts"}]}}}})
-      (is (= ["lktsqrrn"] (:refused (first (:prior-fixes @seen))))
+      (is (= [:refused ["lktsqrrn"]]
+             ((juxt :outcome :conflicted) (first (:prior-fixes @seen))))
           "the reviewer about to read the unchanged code is the one reader that
            can turn a refused repair back into a finding"))))
+
+(deftest the-review-stage-hands-the-reviewer-a-decline-off-the-carry
+  ;; A decline leaves the patch byte-identical, so the reviewer who reads it
+  ;; next is the one reader that can check the fixer's evidence against the
+  ;; code — one such account held an integration test executed and the refusal
+  ;; firing on the very case its finding described.
+  (let [seen (atom nil)]
+    (with-redefs [layers/patch-hash (fn [& _] nil)
+                  codex/merge-base (fn [& _] "BASEREV")
+                  codex/review! (fn [opts] (reset! seen opts)
+                                  {:status :clean :findings []})]
+      ((:run stages/review-stage)
+       {:config {:cwd "/w" :base "main" :run-id "r1"} :iter 4
+        :history []
+        :carry {:fixer-declines
+                {nil {:layer nil :since 3
+                      :reason "ran the integration test: 4 assertions, 0 failures"
+                      :findings [{:id "h1" :title "a drag order reaches a single choice"}]}}}})
+      (let [[prior] (:prior-fixes @seen)]
+        (is (= :declined (:outcome prior))
+            "the reader of the code the fixer argued about, told that it argued")
+        (is (= "ran the integration test: 4 assertions, 0 failures" (:account prior))
+            "with its evidence, put to the one reader that can check it against the code")))))
 
 (deftest a-fixer-that-refuses-names-what-it-was-handed
   ;; :handed on the decline row for the same reason it is on a landed fix and on
@@ -3713,17 +3749,19 @@
   (let [[lower upper]
         (stages/with-fix-memory
           [{:label "lower"} {:label "upper"}]
-          []
-          {"lower" {:layer "lower" :since 1 :conflicted ["lktsqrrn"]
-                    :account "added the digest to all five contracts"
-                    :findings [{:id "h1" :title "the digest is not in the contracts"
-                                :sweep true}]}})
+          (stages/fix-outcomes
+           []
+           {:rolled-back
+            {"lower" {:layer "lower" :since 1 :conflicted ["lktsqrrn"]
+                      :account "added the digest to all five contracts"
+                      :findings [{:id "h1" :title "the digest is not in the contracts"
+                                  :sweep true}]}}}))
         [prior] (:prior-fixes lower)]
-    (is (= ["lktsqrrn"] (:refused prior))
+    (is (= [:refused ["lktsqrrn"]] ((juxt :outcome :conflicted) prior))
         "the refusal travels with the row, so the reviewer is not left to infer
          from a missing commit that the repair is absent")
     (is (= "added the digest to all five contracts" (:account prior)))
-    (is (= [{:title "the digest is not in the contracts" :sweep true}]
+    (is (= [{:id "h1" :title "the digest is not in the contracts" :sweep true}]
            (:findings prior))
         "the words the fixer saw, which is what a reviewer matches its own
          reading of those lines against")
@@ -3732,14 +3770,65 @@
   (testing "a layer that had one repair land and one refused gets both, in round order"
     (let [[core] (stages/with-fix-memory
                    [{:label "core"}]
-                   [{:iter 2 :fixes [{:layer "core" :commit "c2" :handed ["h2"]}]
-                     :findings [{:handle "h2" :title "the second"}]}]
-                   {"core" {:layer "core" :since 1 :conflicted ["x1"]
-                            :findings [{:id "h1" :title "the first"}]}})]
+                   (stages/fix-outcomes
+                    [{:iter 2 :fixes [{:layer "core" :commit "c2" :handed ["h2"]}]
+                      :findings [{:handle "h2" :title "the second"}]}]
+                    {:rolled-back {"core" {:layer "core" :since 1 :conflicted ["x1"]
+                                           :findings [{:id "h1" :title "the first"}]}}}))]
       (is (= [1 2] (mapv :round (:prior-fixes core)))
           "one list of what has already been tried here, oldest first")
-      (is (= [["x1"] nil] (mapv :refused (:prior-fixes core)))
+      (is (= [:refused :landed] (mapv :outcome (:prior-fixes core)))
           "and each row says for itself whether the edit is in the range"))))
+
+(deftest every-outcome-the-fix-stage-records-is-a-row-of-one-record
+  ;; A reader handed a subset reasons from what it was not handed: a warden
+  ;; wrote that no fixer account existed for a layer whose refused row held
+  ;; one. One derivation makes what each reader sees a choice rather than an
+  ;; accident of when its channel was wired.
+  (let [rows (stages/fix-outcomes
+              [{:iter 1 :fixes [{:layer "core" :commit "c1" :handed ["h1"]
+                                 :account "guarded the insert"}]
+                :findings [{:handle "h1" :id "aa11" :title "the insert is unguarded"}]}]
+              {:rolled-back    {"wiring" {:layer "wiring" :since 2 :commit "f89f411b"
+                                          :conflicted ["rzummpkt"]
+                                          :account "made the gate connection-valued"
+                                          :findings [{:id "h2" :title "the gate is boolean"
+                                                      :sweep false}]}}
+               :fixer-declines {"ui" {:layer "ui" :since 2
+                                      :reason "the handler already refuses it"
+                                      :findings [{:id "h3" :title "a drag order is taken"}]}}
+               :fixer-launches {"api" [{:round 3 :handed ["h4"] :ran? false :exit-code 1}]}})]
+    (is (= [[:landed "core" 1] [:declined "ui" 2] [:refused "wiring" 2] [:unstarted "api" 3]]
+           (mapv (juxt :outcome :layer :round) rows))
+        "all four, oldest round first, each saying which it is and whose")
+    (is (= {:commit "f89f411b" :conflicted ["rzummpkt"]
+            :account "made the gate connection-valued"}
+           (select-keys (nth rows 2) [:commit :conflicted :account]))
+        "a refusal keeps its commit: the judge can open it, and it is the whole
+         of what `recover the repair at <commit>` needs")
+    (is (= "the handler already refuses it" (:account (nth rows 1)))
+        "a decline's argument sits where every other row keeps what its fixer said")
+    (is (= [{:id "h4"}] (:findings (nth rows 3)))
+        "a launch that never started names what it was handed by id — the
+         launch record holds nothing else")
+    (is (= 1 (:exit-code (nth rows 3))))
+    (is (= [{:id "h1" :title "the insert is unguarded" :sweep false}] (:findings (first rows)))
+        "a landed row names its findings by handle, as the carried ones do")))
+
+(deftest a-reviewer-is-told-what-its-fixer-argued-and-not-what-never-started
+  (let [[core] (stages/with-fix-memory
+                 [{:label "core"}]
+                 (stages/fix-outcomes
+                  []
+                  {:fixer-declines {"core" {:layer "core" :since 2
+                                            :reason "the integration test passes as written"
+                                            :findings [{:id "h1" :title "t"}]}}
+                   :fixer-launches {"core" [{:round 1 :handed ["h0"] :ran? false}]}}))]
+    (is (= [:declined] (mapv :outcome (:prior-fixes core)))
+        "a decline moved nothing, so the reviewer of the unchanged patch is the
+         one reader that can check the argument against the code — and a launch
+         that never started wrote nothing, said nothing, and names its findings
+         by ids this reader has never seen")))
 
 (deftest a-carried-refusal-is-dropped-once-the-finding-is-settled
   ;; Same lifetime rule as a decline: the entry is about a finding, so it is
@@ -3824,6 +3913,33 @@
             "the argument reaches the reader that can settle the finding")
         (is (empty? (get-in ctx [:carry :fixer-declines]))
             "and stops being carried the moment it has")))))
+
+(deftest the-warden-is-shown-a-repair-the-stack-refused
+  ;; A refused repair leaves no commit, so without its row the warden reads the
+  ;; returning finding as one no fixer could move: one wrote that no fixer
+  ;; account for the layer existed while the refused row held 2.6 KB of one.
+  (let [captured (atom nil)
+        ruling "```json\n{\"decision\":\"continue\",\"reason\":\"r\",\"findings\":[{\"id\":\"aa11\",\"disposition\":\"fix\",\"because\":\"b\"}]}\n```"]
+    (with-redefs [agent/launch! (fn [{:keys [first-message]}]
+                                  (reset! captured first-message)
+                                  {:num-turns 3 :result-error? false :result-text ruling})
+                  stages/discover-design-record (fn [_] nil)
+                  stages/project+ws-from-cwd (fn [_] nil)]
+      ((:run stages/warden-stage)
+       {:config {:cwd "/w" :run-id "r1"} :iter 4
+        :carry {:rolled-back
+                {"resume-across-connections"
+                 {:layer "resume-across-connections" :since 1 :commit "797b4fef"
+                  :conflicted ["sptvtsxnvzzu"]
+                  :account "repaired; recording_test.clj:453 now fails without it"
+                  :findings [{:id "71ca41c9" :title "the first connection is guessed"}]}}}
+        :findings [{:id "aa11" :handle "71ca41c9" :title "the first connection is guessed"}]})
+      (is (str/includes? @captured "THE REPAIR WAS PUT BACK")
+          "a refused repair reaches the reader that rules on its finding")
+      (is (str/includes? @captured "recording_test.clj:453 now fails without it")
+          "with the fixer's account, which is the evidence the repair exists")
+      (is (str/includes? @captured "sptvtsxnvzzu")
+          "and what it collided with, which is where the layer order is wrong"))))
 
 (deftest a-verdict-against-a-superseded-design-record-is-not-a-standing-answer
   ;; The pass is asked whether THIS design survived. A verdict reached against

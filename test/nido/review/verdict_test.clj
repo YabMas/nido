@@ -152,6 +152,97 @@
     (is (str/includes? p "line totals are computed per-item")
         "the legacy :assumes still reaches it, so an old workstream is not left blind")))
 
+;; ── What the fixers did not get into the code ──────────────────────────────
+
+(deftest a-rolled-back-run-tells-the-judge-the-repair-is-not-in-the-code
+  ;; A judge that believes the loop's fixes are in finds a put-back repair's
+  ;; defect in the tree and prescribes the repair afresh — one did, on a
+  ;; `fix-rolled-back` run, in nearly the words of the account it never saw.
+  (let [p (verdict/build-prompt
+           {:design design :findings [] :history [] :rounds 4
+            :status :fix-rolled-back
+            :fix-outcomes [{:outcome :refused :layer "resume-on-drop" :round 4
+                            :commit "f89f411b" :conflicted ["rzummpktxmum" "mnrvzmsrqlon"]
+                            :findings [{:id "40d93891" :title "the delivered window is untranscribed"}
+                                       {:id "4a3f5b01" :title "first-connection is guessed"}]
+                            :account "delivering-fn answers which connection the input reaches"}]})]
+    (is (not (str/includes? p "already in"))
+        "a run holding a repair that is not in the code is never told its fixes are in")
+    (is (str/includes? p "finished, on `fix-rolled-back`")
+        "the opening names how the loop ended")
+    (is (str/includes? p "Not everything they were handed\nis — see NOT IN THE CODE below"))
+    (is (str/includes? p "REFUSED — commit f89f411b, conflicted rzummpktxmum, mnrvzmsrqlon")
+        "the commit is what `recover the repair at` needs, and this reader can open it")
+    (is (str/includes? p "40d93891 the delivered window is untranscribed")
+        "with the findings the repair was handed, so the judge can join it to the tree")
+    (is (str/includes? p "recover the repair at")
+        "and the words `needs` should use instead of describing the repair again")
+    (is (str/includes? p "delivering-fn answers which connection the input reaches")
+        "the account is the only reading anyone has of an edit nobody reviewed")))
+
+(deftest a-run-whose-repairs-all-landed-lists-nothing-beside-them
+  (let [p (verdict/build-prompt
+           {:design design :findings [] :history [] :rounds 2 :status :converged
+            :fix-outcomes [{:outcome :landed :layer "core" :round 1 :commit "c1"
+                            :findings [{:id "h1" :title "t"}]}]})]
+    (is (str/includes? p "finished, on `converged`.\nWhat its fixers landed is in the code.\n\n"))
+    (is (not (str/includes? p "NOT IN THE CODE"))
+        "a landed repair is in the round history already, and an empty heading
+         reads as repairs the judge failed to be shown")))
+
+(deftest a-judge-is-told-what-was-argued-and-what-nobody-tried
+  ;; One judge read a defect ruled `fix` three rounds running with no commit on
+  ;; its layer as pressure on the design. One repair had been written and put
+  ;; back, and no fixer had started in the other two rounds.
+  (let [p (verdict/build-prompt
+           {:design design :history [] :rounds 4 :status :unfixable
+            :findings [{:handle "71ca41c9" :priority 1 :reach :local
+                        :title "the first connection is guessed" :body "b"}]
+            :fix-outcomes [{:outcome :declined :layer "gate" :round 3
+                            :findings [{:id "h2" :title "a drag order is taken"}]
+                            :account "the handler refuses it; the integration test passes"}
+                           {:outcome :unstarted :layer "resume" :round 3 :exit-code 1
+                            :findings [{:id "71ca41c9"}]}]})]
+    (is (str/includes? p "gate, round 3, ARGUED — no edit was written")
+        "ARGUED, because this reader also holds the warden's `declined` rulings")
+    (is (str/includes? p "the handler refuses it; the integration test passes")
+        "the argument is evidence about the finding the judge is classifying")
+    (is (str/includes? p "resume, round 3, NEVER STARTED (exit 1) — no fixer read these"))
+    (is (str/includes? p "untried,\n  not resisted")
+        "the reading a judge needs before it calls a recurrence design pressure")
+    (is (str/includes? p "[P1/local] 71ca41c9 the first connection is guessed")
+        "an open finding carries the id a launch that never started names it by,
+         or the two lists cannot be joined")))
+
+(deftest the-pass-reads-the-runs-fix-record-off-its-carry
+  ;; A round enters the history only when a fix landed, so the judge's record
+  ;; of a repair put back in the last round has to come off the carry.
+  (let [seen (atom nil)]
+    (with-redefs [stages/discover-design-record (fn [_] design)
+                  stages/discover-prior-verdict (fn [_ _] nil)
+                  stages/discover-baseline (fn [_ _] nil)
+                  stages/read-stance (fn [_] nil)
+                  stages/project+ws-from-cwd (fn [_] [:nido "ws-1"])
+                  agent/launch! (fn [{:keys [first-message]}]
+                                  (reset! seen first-message)
+                                  {:num-turns 1
+                                   :result-text (fenced "{\"verdict\":\"sound\",\"reason\":\"r\"}")})]
+      (verdict/run! {:cwd "/w" :run-id "r" :budget "30m"
+                     :final {:status :fix-rolled-back
+                             :findings [{:handle "40d93891" :title "t" :body "b"
+                                         :disposition :fix}]
+                             :history []
+                             :carry {:rolled-back
+                                     {"resume-on-drop"
+                                      {:layer "resume-on-drop" :since 4 :commit "f89f411b"
+                                       :conflicted ["rzummpktxmum"]
+                                       :findings [{:id "40d93891" :title "t"}]}}}}
+                     :report {:summary {:rounds 4 :fix-attempts 1}}})
+      (is (str/includes? @seen "REFUSED — commit f89f411b")
+          "the judge is handed the run's whole fix record, not only the rounds
+           that landed something")
+      (is (str/includes? @seen "finished, on `fix-rolled-back`")))))
+
 (deftest parses-load-bearing-verdict-fields
   (let [v (verdict/parse
            (fenced (str "{\"verdict\": \"invalidated\","

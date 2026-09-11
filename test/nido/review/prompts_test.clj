@@ -938,7 +938,8 @@ layers, it is not yours"))
   ;; true. One round-2 reviewer re-read exactly such a patch with nothing to
   ;; show it and returned `correct` on a P2 the round before had ruled `fix`.
   (let [out (prompts/prior-fixes-block
-             [{:round 1 :refused ["lktsqrrn" "llqpmolo"]
+             [{:outcome :refused :round 1 :commit "f89f411b"
+               :conflicted ["lktsqrrn" "llqpmolo"]
                :findings [{:title "add the digest to the owning contracts"}]
                :account "added the digest to all five contracts"}])]
     (is (str/includes? out "REFUSED")
@@ -954,7 +955,36 @@ layers, it is not yours"))
         "stated in the past, about an edit that is gone: present tense would
          make the account a claim about the code in front of the reviewer")
     (is (not (str/includes? out ", landed "))
-        "nothing landed, and a change id beside a landed one reads as one")))
+        "nothing landed, and a change id beside a landed one reads as one")
+    (is (not (str/includes? out "f89f411b"))
+        "the refused commit rides on the row for the readers that can open it,
+         and this one cannot")))
+
+(deftest a-fixer-that-changed-nothing-is-shown-with-its-argument
+  ;; A decline leaves the range byte-identical, exactly as a refusal does, and
+  ;; its account can be the run's most decisive evidence: one recorded an
+  ;; integration test executed and the refusal firing on the case its finding
+  ;; described, and the next reviewer of that patch was shown none of it.
+  (let [out (prompts/prior-fixes-block
+             [{:outcome :declined :round 3
+               :findings [{:title "a drag order reaches a single-choice question"}]
+               :account "ran the integration test: the handler refuses the drag_order post"}])]
+    (is (str/includes? out "ARGUED — no edit was written")
+        "read as an attempt that wrote nothing, not as a repair to look for")
+    (is (not (re-find #"(?i)declined" out))
+        "`declined` is the warden's word for a defect the branch decided to
+         ship; one word for both reads a fixer's refusal as that decision")
+    (is (str/includes? out "a drag order reaches a single-choice question"))
+    (is (str/includes? out "the handler refuses the drag_order post")
+        "where the fixer looked and why it stopped, which is what the reviewer checks")
+    (is (str/includes? out "evidence to check against the code, not a ruling")
+        "a reviewer that takes the argument as settled has been talked out of
+         the code, which is worse than never being told")
+    (is (not (str/includes? out ", landed "))
+        "nothing landed")
+    (is (not (str/includes? out "An entry marked REFUSED"))
+        "a marker no entry carries is not explained: the block is paid for on
+         every round of every layer a fixer touched")))
 
 (deftest a-target-no-fixer-touched-is-told-nothing
   ;; nil, not an empty heading: a block saying a fixer worked here and naming
@@ -1062,8 +1092,8 @@ layers, it is not yours"))
   ;; read by nobody.
   (let [out (prompts/warden-prompt
              {:findings findings :history []
-              :fixer-accounts
-              [{:layer "github-outcomes" :round 1 :commit "44249c19"
+              :fix-outcomes
+              [{:outcome :landed :layer "github-outcomes" :round 1 :commit "44249c19"
                 :findings [{:title "the hotfix path skips the recorder" :sweep true}]
                 :account (str "closed all three call sites. Siblings I did not "
                               "touch — outside this change: "
@@ -1112,9 +1142,9 @@ layers, it is not yours"))
   ;; that could settle it never reads the argument the last fixer built.
   (let [out (prompts/warden-prompt
              {:findings findings :history []
-              :fixer-declines [{:layer "teacher-diary-section" :since 1
-                                :findings [{:id "5cb720f4" :title "$ is not bound per element"}]
-                                :reason "Datastar 1.0.2 ships one global signal root"}]})]
+              :fix-outcomes [{:outcome :declined :layer "teacher-diary-section" :round 1
+                              :findings [{:id "5cb720f4" :title "$ is not bound per element"}]
+                              :account "Datastar 1.0.2 ships one global signal root"}]})]
     (is (str/includes? out "A FIXER WAS HANDED THESE AND CHANGED NOTHING"))
     (is (str/includes? out "teacher-diary-section"))
     (is (str/includes? out "5cb720f4"))
@@ -1126,14 +1156,42 @@ layers, it is not yours"))
   (let [out (prompts/warden-prompt {:findings findings :history []})]
     (is (not (str/includes? out "A FIXER WAS HANDED THESE")))))
 
+(deftest the-warden-is-told-a-repair-exists-that-the-stack-refused
+  ;; Same handle, same `fix` ruling, no commit: a refused repair reads to the
+  ;; warden exactly like a defect no fixer could move, and back a third time it
+  ;; reads as ground (b) — over a repair sitting in the operation log.
+  (let [out (prompts/warden-prompt
+             {:findings findings :history []
+              :fix-outcomes [{:outcome :refused :layer "resume-across-connections"
+                              :round 1 :commit "797b4fef" :conflicted ["sptvtsxnvzzu"]
+                              :findings [{:id "71ca41c9" :title "the first connection is guessed"}]
+                              :account "repaired; recording_test.clj:453 fails without it"}]})]
+    (is (str/includes? out "A FIXER REPAIRED THESE AND THE REPAIR WAS PUT BACK")
+        "put back, not refused: the block beside it says `refused` of a fixer,
+         and one verb for two actors is a warden conflating them")
+    (is (str/includes? out "resume-across-connections, round 1, conflicted sptvtsxnvzzu")
+        "the layer, the round and what the rebase collided with")
+    (is (str/includes? out "71ca41c9 the first connection is guessed")
+        "by id, so it joins to a finding below")
+    (is (str/includes? out "recording_test.clj:453 fails without it")
+        "the account is the evidence the repair was written and what it proved")
+    (is (str/includes? out "That is not ground (b)")
+        "the misreading the block exists to prevent, named against its rule")
+    (is (str/includes? out "What is in question is the layer\norder")
+        "a fact about where the obstacle is — and no remedy, which is a decision
+         still open"))
+  (is (not (str/includes? (prompts/warden-prompt {:findings findings :history []})
+                          "THE REPAIR WAS PUT BACK"))
+      "an empty heading reads as refusals the warden failed to be shown"))
+
 (deftest the-warden-is-told-a-fixer-never-started-and-what-that-does-not-mean
   ;; Recurring with the same handle, the same ruling and no commit, a finding
   ;; whose fixer never took a turn reads exactly like one a fixer failed to move
   ;; — ground (b) for a park, about a defect nobody tried to repair.
   (let [out (prompts/warden-prompt
              {:findings findings :history []
-              :unstarted [{:layer "resume-across-connections" :round 2
-                           :handed ["71ca41c9"] :exit-code 1}]})]
+              :fix-outcomes [{:outcome :unstarted :layer "resume-across-connections"
+                              :round 2 :findings [{:id "71ca41c9"}] :exit-code 1}]})]
     (is (str/includes? out "NEVER STARTED"))
     (is (str/includes? out "resume-across-connections, round 2 (exit 1): 71ca41c9")
         "the layer, the round, the exit and the findings, so it joins to a finding below")
