@@ -175,8 +175,6 @@
                 ;; cite a :triage entry as its intent while its baseline cites
                 ;; an :intent — two edges to one question.
                 goal-seq    (get-in design [:intent :seq])
-                premise-rec (->> bls (filter #(= premise-seq (:seq %))) first)
-                base-goal   (get-in premise-rec [:intent :seq])
                 goal-moved  #(goal-replaced ins % design-seq)
                 premise {:seq premise-seq
                          :retracted-by (retracted premise-seq)
@@ -190,12 +188,11 @@
                          :superseded-after (when (and replaced-by
                                                      (> replaced-by design-seq))
                                              replaced-by)
-                         ;; Set even where :blocked reports the design's OWN goal
-                         ;; first, because only this says whether the survey is
-                         ;; owed too: a design and its baseline may cite different
-                         ;; goal entries — an :intent and a :triage — and lose one
-                         ;; while keeping the other.
-                         :goal-replaced-by (goal-moved base-goal)}
+                         ;; The goal the design serves, and the goal its baseline
+                         ;; was scoped for, are one chain: root agreement refuses a
+                         ;; design whose baseline roots elsewhere. So one answer
+                         ;; says whether the survey is owed too.
+                         :goal-replaced-by (goal-moved goal-seq)}
                 invalidated (invalidating-verdict vs oks design-seq)
                 blocked (cond
                           (retracted design-seq)
@@ -222,6 +219,14 @@
                           ;; whose point has changed. Below the two clauses that
                           ;; name a judgement about THIS design, for the reason
                           ;; those already give — somebody derived those.
+                          ;; ONE goal edge, not two. An earlier cut also asked
+                          ;; whether the goal the BASELINE was scoped for had
+                          ;; moved, which was reachable only while a design could
+                          ;; cite a :triage as its intent — its baseline could
+                          ;; then be scoped for a different goal. With :intent the
+                          ;; only goal kind, root agreement refuses a design whose
+                          ;; baseline roots elsewhere, so the two edges always name
+                          ;; one chain and this clause answers for both.
                           (goal-moved goal-seq)
                           {:reason :goal-superseded :seq goal-seq
                            :replaced-by (goal-moved goal-seq)
@@ -229,19 +234,6 @@
                                         ", which was superseded at entry "
                                         (goal-moved goal-seq) " after this design"
                                         " was written — it serves a goal nobody holds")}
-
-                          ;; The same fact reached through the baseline. A survey
-                          ;; is scoped FOR a goal, so a design standing on a
-                          ;; survey whose goal moved is standing on a boundary
-                          ;; drawn for something else.
-                          (goal-moved base-goal)
-                          {:reason :premise-goal-superseded :seq premise-seq
-                           :replaced-by (goal-moved base-goal)
-                           :detail (str "the baseline at entry " premise-seq
-                                        " was scoped for the goal at entry " base-goal
-                                        ", superseded at entry " (goal-moved base-goal)
-                                        " — the survey bounds an area chosen for a"
-                                        " goal nobody holds")}
 
                           (nil? premise-seq)
                           {:reason :no-premise

@@ -172,6 +172,23 @@
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:ref :map]
                             [:opts [:? [:maybe :map]]]] Workstream]
      :delegates [read-ws write! append-entry!]})
+  (Operation unit-of
+    "The unit an entry belongs to, addressed by its root goal's `:seq` — or nil for the
+     workstream's PRE-CONTRACT REGION.
+
+     A workstream may hold more than one goal-to-implementation unit, and this is what tells
+     them apart. The unit is the citation closure rooted at a goal — an `:intent`, or the
+     `:triage` that stated one, the same two kinds a baseline's and a design's `:intent` may
+     cite: a baseline cites its goal, a design cites its baseline and its goal, a trail record
+     cites its design, and an intent citing `:supersedes` continues its unit while one citing
+     nothing, like every triage, opens another. The append boundary refuses a record whose
+     citations reach more than one, so the partition is established by CONSTRUCTION rather
+     than asserted here.
+
+     Resolved and never stored, for the reason every other reading over this ledger is
+     derived: a field beside the citations would be a second answer to a question the graph
+     already settles, and the one that drifts."
+    {:signature [:=> [:catn [:w Workstream] [:seq-n :int]] [:maybe :int]]})
   (Operation live-design-seq
     "The :seq of the newest :design on a workstream, or nil when it holds none — what a
      trail record cites only where nothing names the design its work was done under.
