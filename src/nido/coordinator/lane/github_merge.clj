@@ -117,19 +117,71 @@
   [ref]
   (or (:page-id ref) (pickup/extract-page-id (:url ref))))
 
+(defn- names-pr?
+  "True when the trail record `r` is about the PR `id` at `url`: a :pr-opened for
+   that URL, or an implementation listing the PR among its :artifacts. The id is
+   compared case-insensitively, for the reason `find-ws-by-github-id` gives."
+  [r id url]
+  (or (and url (= url (:url r)))
+      (some #(and (= :pr (:kind %))
+                  (or (= (str/lower-case id) (some-> (:ref %) str/lower-case))
+                      (and url (= url (:url %)))))
+            (:artifacts r))))
+
+(defn- merge-design
+  "The design the merged PR was made under: what the newest record of its own
+   work names — the :pr-opened for it, or an implementation listing it — else
+   what the workstream's :pr-opened names, while no landing has followed it.
+
+   The second is a stack's case, and the common one. A stack ships once, so its
+   :pr-opened is filed for the BOTTOM layer's PR, while `/land` collapses the
+   stack into its TOP PR and merges that — which nothing names until the
+   implementation record lists it, often after this poll. The :pr-opened is the
+   shipment's mark, so what it names is what the shipment was made under; once a
+   :merged follows it, that shipment has landed and this is another.
+
+   NOT the newest design, which is what the poll would see. It observes a landing
+   minutes or days after the PR was opened, and a design appended in between is
+   one the PR was never made under: citing it would record work done under D1 as
+   shipping D2, which `reentry/trail-standing` then reads as D2 shipped.
+
+   nil when nothing names a design for this shipment, and never the newest in its
+   place: that is append order, which is exactly the attribution the citation
+   exists to refuse. `record-merge!` says so rather than guessing."
+  [project w id url]
+  (let [shipment (->> (:entries w) (filter #(#{:pr-opened :merged} (:kind %))) last)]
+    (or (->> (:entries w)
+             (filter #(and (:under %) (#{:pr-opened :implementation-completed} (:kind %))))
+             (filter #(names-pr? (ws/entry-at-seq project (:id w) (:seq %)) id url))
+             last
+             :under)
+        (when (= :pr-opened (:kind shipment)) (:under shipment)))))
+
 (defn- record-merge!
   "Append the terminal :merged event to the workstream's ledger. Best-effort and
    deliberately AFTER close! — a ledger write that fails must not cost the close
-   or the Notion nudge. Everything it needs came back from `gh pr list`, which is
-   why this is the one lifecycle event that cannot go missing."
+   or the Notion nudge.
+
+   Skipped (loudly) on a ledger holding a design when nothing names the one the
+   PR was made under — `record-pr-opened!`'s rule, for its reason: the append
+   would refuse the record, and a citation guessed from append order is the thing
+   it refuses. The warning names the PR, so the missing citation is visible
+   rather than papered over with the newest design."
   [project ws-id id {:keys [url title merged-at]}]
   (try
-    (ws/append-entry! project ws-id {:kind :merged}
-                      (pr-str {:format    :merged
-                               :pr        id
-                               :url       url
-                               :title     title
-                               :merged-at merged-at}))
+    (let [w (ws/read-ws project ws-id)
+          d (merge-design project w id url)]
+      (if (and (nil? d) (ws/live-design-seq w))
+        (warn (str "github-merge: merged PR " id " on " ws-id " names no :design —"
+                   " neither its own records nor the shipment's :pr-opened cite one, and"
+                   " append order is not evidence; skipping the :merged ledger event"))
+        (ws/append-entry! project ws-id {:kind :merged}
+                          (pr-str (cond-> {:format    :merged
+                                           :pr        id
+                                           :url       url
+                                           :title     title
+                                           :merged-at merged-at}
+                                    d (assoc :design {:seq d}))))))
     (catch Throwable t
       (warn (str "github-merge: ledger append failed for " ws-id " (" id ") — " (.getMessage t))))))
 

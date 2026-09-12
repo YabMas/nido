@@ -222,11 +222,23 @@ cat > /tmp/impl-completed.edn <<'EDN'
 {:format    :implementation-completed
  :summary   "<one-line: what shipped; CI green; Codex answered; landed / on the queue>"
  :artifacts [{:kind :pr :ref "<owner>/<repo>#<number>" :url "<pr-url>"}]
+ :design       {:seq <seq of the design this work was done under>}
  :design-delta {:held? true}}
 EDN
 bb nido:ticket:append :project <project> :br <BR-####> :kind implementation-completed \
   :file /tmp/impl-completed.edn
 ```
+
+### `:design` — which design this work was done under
+
+**Required whenever the workstream has a `:design` record** (`bb nido:workstream:show`);
+omit the key when there is none — the append refuses a citation that resolves to
+no design. Name the design you actually built against — for approved work, the
+one the `:design-approved` entry names, which is the record `/continue-ticket`
+builds from. **Do not copy the newest `:design` seq off the ledger**: that is
+append order dressed up as a citation, and it is wrong exactly when it matters,
+after a design is appended mid-work. If you cannot say which design the work was
+done under, that is a finding for your report, not a seq to guess.
 
 ### `:design-delta` — did what landed match what we said?
 
@@ -265,6 +277,7 @@ cat > /tmp/impl-completed.edn <<'EDN'
  :artifacts [{:kind :pr :ref "<owner>/<repo>#<n1>" :url "<pr-url-1>"}
              {:kind :pr :ref "<owner>/<repo>#<n2>" :url "<pr-url-2>"}
              {:kind :pr :ref "<owner>/<repo>#<n3>" :url "<pr-url-3>"}]
+ :design       {:seq <seq of the design this work was done under>}
  :design-delta {:held? true}}
 EDN
 bb nido:ticket:append :project <project> :br <BR-####> :kind implementation-completed \

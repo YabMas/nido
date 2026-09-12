@@ -522,6 +522,14 @@
              (ws/append-entry! :brian (:id w) {:kind :design-approved}
                                (pr-str {:format :design-approved :design {:seq 3} :at-seq 4})))
             "a grant of a design that served it")
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"stands on the goal at entry 1"
+             (ws/append-entry! :brian (:id w) {:kind :review}
+                               (pr-str {:format :review-report :status :converged :base "main"
+                                        :base-rev "abc123" :rounds 1 :fix-attempts 0
+                                        :defects-settled 0 :findings-remaining 0
+                                        :report-path "/tmp/report.json" :design {:seq 3}})))
+            "a review judged against that design")
         (is (some? (ws/append-entry! :brian (:id w) {:kind :baseline}
                                      (pr-str (assoc a-baseline :intent {:seq 4}
                                                     :supersedes {:seq 2 :why "the goal moved"}))))
@@ -1039,6 +1047,133 @@
    :summary   "Rounded the total at the aggregate."
    :artifacts [{:kind :commit :ref "abc1234"}]})
 
+(deftest a-trail-record-names-the-design-it-was-made-under
+  (with-tmp
+    (fn [_]
+      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+            id (:id w)]
+        (seed-baseline! w)                                                     ; 1, 2
+        (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2))) ; 3
+        (ws/append-entry! :brian id {:kind :design-approved}
+                          (pr-str {:format :design-approved :design {:seq 3} :at-seq 3}))
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"must name the design it was made under"
+             (ws/append-entry! :brian id {:kind :implementation-completed}
+                               (pr-str an-implementation)))
+            "append order is not evidence once a design exists")
+        (ws/append-entry! :brian id {:kind :implementation-completed}
+                          (pr-str (assoc an-implementation :design {:seq 3})))
+        (is (= 3 (:under (last (:entries (ws/read-ws :brian id)))))
+            "and the citation is mirrored onto the index, so the re-entry clamp
+             reads it without parsing every trail entry")))))
+
+(deftest a-trail-record-on-a-workstream-with-no-design-cites-nothing
+  ;; The refusal `reentry/generation` already makes, at the boundary: work done
+  ;; before any design exists cannot be attributed to one, and demanding a
+  ;; citation there would be inventing a generation to blame.
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :scratch :external-refs []})]
+        (is (some? (ws/append-entry! :brian (:id w) {:kind :implementation-completed}
+                                     (pr-str an-implementation))))
+        (is (nil? (:under (last (:entries (ws/read-ws :brian (:id w)))))))))))
+
+(deftest a-supplied-citation-must-resolve-even-where-none-is-required
+  ;; Only the REQUIREMENT is conditional on the ledger. A citation naming nothing
+  ;; would be stored as `:under`, and the moment a real design is written
+  ;; `trail-standing`'s `>=` reads it as work done under that design.
+  (with-tmp
+    (fn [_]
+      (let [w (ws/create! :brian {:stage :scratch :external-refs []})]
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo
+             #"Implementation-completed :design cites entry 999, which is not on this workstream"
+             (ws/append-entry! :brian (:id w) {:kind :implementation-completed}
+                               (pr-str (assoc an-implementation :design {:seq 999})))))
+        (is (empty? (:entries (ws/read-ws :brian (:id w))))
+            "refused before anything is written")))))
+
+(deftest every-trail-kind-records-on-a-ledger-that-holds-a-design
+  ;; The merge poller and the review loop fall back to `live-design-seq`, so an
+  ;; answer that throws once a design exists costs each of them its event — the
+  ;; merge poller's for good, since it marks the PR seen afterwards. :pr-opened
+  ;; goes through its real writer, `add-ref!`, citing what its publisher names.
+  (with-tmp
+    (fn [_]
+      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+            id (:id w)]
+        (seed-baseline! w)                                                     ; 1, 2
+        (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2))) ; 3
+        (ws/append-entry! :brian id {:kind :design-approved}
+                          (pr-str {:format :design-approved :design {:seq 3} :at-seq 3}))
+        (is (= 3 (ws/live-design-seq (ws/read-ws :brian id))))
+        (ws/append-entry! :brian id {:kind :implementation-completed}
+                          (pr-str (assoc an-implementation :design {:seq 3})))
+        (ws/append-entry! :brian id {:kind :review}
+                          (pr-str {:format :review-report :status :converged :base "main"
+                                   :base-rev "abc123" :rounds 1 :fix-attempts 0
+                                   :defects-settled 0 :findings-remaining 0
+                                   :report-path "/tmp/report.json" :design {:seq 3}}))
+        (ws/add-ref! :brian id {:adapter :github :id "o/r#1"
+                                :url "https://gh/1" :title "Round the total"}
+                     {:design 3})
+        (ws/append-entry! :brian id {:kind :merged}
+                          (pr-str {:format :merged :pr "o/r#1" :url "https://gh/1"
+                                   :title "Round the total" :merged-at "2026-09-11T10:00:00Z"
+                                   :design {:seq 3}}))
+        (is (= {:implementation-completed 3 :review 3 :pr-opened 3 :merged 3}
+               (into {} (keep #(when (:under %) [(:kind %) (:under %)]))
+                     (:entries (ws/read-ws :brian id)))))))))
+
+(deftest a-pr-cites-the-design-its-work-was-done-under-not-the-newest
+  ;; D1's work, published after D2 was appended. D2 is the newest design, and
+  ;; citing it would record D1's work as published under D2 — and, once the
+  ;; merge poller copies the citation, as shipped under it.
+  (with-tmp
+    (fn [_]
+      (let [pr     {:adapter :github :id "o/r#1" :url "https://gh/1" :title "Round the total"}
+            d1-d2! (fn [impl]
+                     (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+                           id (:id w)]
+                       (seed-baseline! w)                                                      ; 1, 2
+                       (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2))) ; 3 — D1
+                       (ws/append-entry! :brian id {:kind :design-approved}
+                                         (pr-str {:format :design-approved :design {:seq 3} :at-seq 3}))
+                       (when impl
+                         (ws/append-entry! :brian id {:kind :implementation-completed} (pr-str impl)))
+                       (ws/append-entry! :brian id {:kind :design}                             ; D2
+                                         (pr-str (assoc (design-citing 2)
+                                                        :supersedes {:seq 3 :why "the shape could not hold"})))
+                       id))
+            opened (fn [id] (first (filter #(= :pr-opened (:kind %))
+                                           (:entries (ws/read-ws :brian id)))))
+            named  (d1-d2! nil)
+            listed (d1-d2! (assoc an-implementation :design {:seq 3}
+                                  :artifacts [{:kind :pr :ref "o/r#1"}]))
+            none   (d1-d2! nil)]
+        (ws/add-ref! :brian named pr {:design 3})
+        (is (= 3 (:under (opened named))) "the design its publisher names")
+        (ws/add-ref! :brian listed pr)
+        (is (= 3 (:under (opened listed))) "the design the implementation listing it names")
+        (ws/add-ref! :brian none pr)
+        (is (nil? (opened none)) "nothing names one, so the event is skipped, not guessed")
+        (is (= [pr] (:external-refs (ws/read-ws :brian none)))
+            "and the ref the merge poller correlates on is stamped regardless")))))
+
+(deftest a-trail-record-citing-something-that-is-not-a-design-is-refused
+  (with-tmp
+    (fn [_]
+      (let [w  (ws/create! :brian {:stage :in-progress :external-refs []})
+            id (:id w)]
+        (seed-baseline! w)
+        (ws/append-entry! :brian id {:kind :design} (pr-str (design-citing 2)))
+        (ws/append-entry! :brian id {:kind :design-approved}
+                          (pr-str {:format :design-approved :design {:seq 3} :at-seq 3}))
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo #"Implementation-completed :design cites entry 2"
+             (ws/append-entry! :brian id {:kind :implementation-completed}
+                               (pr-str (assoc an-implementation :design {:seq 2})))))))))
+
 (deftest a-workstream-that-never-designed-may-still-record-an-implementation
   ;; The guard, and the reason the rule is usable at all. Seven of the eighteen
   ;; implementation records in the live ledgers are on workstreams carrying no
@@ -1060,7 +1195,7 @@
         (is (thrown-with-msg?
              clojure.lang.ExceptionInfo #"No approval names the live design \(entry 3\)"
              (ws/append-entry! :brian id {:kind :implementation-completed}
-                               (pr-str an-implementation)))
+                               (pr-str (assoc an-implementation :design {:seq 3}))))
             "designed, never granted, and the refusal names the entry to grant")
         (is (= 3 (count (:entries (ws/read-ws :brian id))))
             "refused before anything is written")))))
@@ -1075,7 +1210,7 @@
         (ws/append-entry! :brian id {:kind :design-approved}
                           (pr-str {:format :design-approved :design {:seq 3} :at-seq 3}))
         (is (some? (ws/append-entry! :brian id {:kind :implementation-completed}
-                                     (pr-str an-implementation))))))))
+                                     (pr-str (assoc an-implementation :design {:seq 3})))))))))
 
 (deftest a-design-superseded-after-its-grant-needs-granting-again
   ;; The case worth catching rather than an awkward edge: redesigning is how a
@@ -1095,5 +1230,5 @@
         (is (thrown-with-msg?
              clojure.lang.ExceptionInfo #"No approval names the live design \(entry 5\)"
              (ws/append-entry! :brian id {:kind :implementation-completed}
-                               (pr-str an-implementation)))
+                               (pr-str (assoc an-implementation :design {:seq 5}))))
             "the grant names entry 3, and entry 5 is what would be implemented")))))

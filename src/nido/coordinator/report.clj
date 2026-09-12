@@ -1204,7 +1204,13 @@
                             [:ref  string?]
                             [:url  {:optional true} string?]]]]
    [:design-delta {:optional true} DesignDelta]
-   [:open         {:optional true} [:vector string?]]])
+   [:open         {:optional true} [:vector string?]]
+   ;; The design this work was done under. OPTIONAL in the schema and REQUIRED at
+   ;; the append boundary whenever the workstream holds a design, because the rule
+   ;; is conditional on the ledger and a schema sees one record. Absent on every
+   ;; record written before the citation existed, which is what keeps those
+   ;; readable; `reentry/generation` is their attribution and only theirs.
+   [:design {:optional true} [:map {:closed true} [:seq int?]]]])
 
 (def Attempt
   "One thing the machinery already did about this halt, before it gave up.
@@ -1331,7 +1337,13 @@
    [:format  [:= :pr-opened]]
    [:url     string?]
    [:title   string?]
-   [:summary {:optional true} string?]])
+   [:summary {:optional true} string?]
+   ;; The design this work was done under. OPTIONAL in the schema and REQUIRED at
+   ;; the append boundary whenever the workstream holds a design, because the rule
+   ;; is conditional on the ledger and a schema sees one record. Absent on every
+   ;; record written before the citation existed, which is what keeps those
+   ;; readable; `reentry/generation` is their attribution and only theirs.
+   [:design {:optional true} [:map {:closed true} [:seq int?]]]])
 
 (def Merged
   "The landing, appended by the GitHub poller at the moment it closes the
@@ -1347,7 +1359,13 @@
    [:pr        string?]                      ; owner/repo#number — the correlation key
    [:url       string?]
    [:title     string?]
-   [:merged-at {:optional true} [:maybe string?]]])
+   [:merged-at {:optional true} [:maybe string?]]
+   ;; The design this work was done under. OPTIONAL in the schema and REQUIRED at
+   ;; the append boundary whenever the workstream holds a design, because the rule
+   ;; is conditional on the ledger and a schema sees one record. Absent on every
+   ;; record written before the citation existed, which is what keeps those
+   ;; readable; `reentry/generation` is their attribution and only theirs.
+   [:design {:optional true} [:map {:closed true} [:seq int?]]]])
 
 (def ShipSubmitted
   "The branch handed to the merge lane by `nido ship`. Carries no judgement — the
@@ -1614,7 +1632,13 @@
    [:report-path        [:maybe string?]]
    ;; Dormant extension point: no caller populates :summary yet (review-event omits it).
    ;; Kept for a future emitter wanting a one-line human note on the timeline card.
-   [:summary            {:optional true} string?]])
+   [:summary            {:optional true} string?]
+   ;; The design this work was done under. OPTIONAL in the schema and REQUIRED at
+   ;; the append boundary whenever the workstream holds a design, because the rule
+   ;; is conditional on the ledger and a schema sees one record. Absent on every
+   ;; record written before the citation existed, which is what keeps those
+   ;; readable; `reentry/generation` is their attribution and only theirs.
+   [:design {:optional true} [:map {:closed true} [:seq int?]]]])
 
 (def ReviewReportPreSettled
   "The shape :review was written in while the dispatch count was called

@@ -161,11 +161,29 @@
      would expect — the ref is load-bearing, so it always landed; the ledger event was merely
      informative, so it was dropped on more than half the PRs. One fact, one call.
 
+     The event cites the design the PUBLISHED work was done under — the one the publisher names
+     in `:opts`, else the one an implementation record listing the PR names — and never the
+     newest design, which may have been appended while that work was being done. Where nothing
+     names one on a ledger holding a design, the ref is stamped and the event skipped rather
+     than guessed.
+
      `:opts` is OPTIONAL rather than a second arity: the two-arity form is a defaults chain, and
      `[:?]` describes the contract where `[:function …]` would describe the implementation."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId] [:ref :map]
                             [:opts [:? [:maybe :map]]]] Workstream]
      :delegates [read-ws write! append-entry!]})
+  (Operation live-design-seq
+    "The :seq of the newest :design on a workstream, or nil when it holds none — what a
+     trail record cites only where nothing names the design its work was done under.
+
+     Every trail record is about work, and cites what that work named: a PR the design its
+     publisher names, the merge poller the PR's own records, the review loop the design its
+     rounds judged against. The newest design is a different answer exactly when it matters —
+     after one is appended while the work was being done. PUBLIC because the merge poller and
+     the review loop fall back here when nothing names one, and a second implementation of
+     `which design is current` is how the ledger and its writers come to disagree about the
+     same entries."
+    {:signature [:=> [:catn [:w Workstream]] [:maybe :int]]})
   (Operation engagement
     "Whether anyone is engaged with this workstream, from its own sessions."
     {:signature [:=> [:catn [:project ProjectName] [:ws-id WorkstreamId]] :keyword]

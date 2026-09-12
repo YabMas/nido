@@ -69,6 +69,124 @@
                   :title "Fix rounding" :merged-at "2026-08-20T10:00:00Z"}
                  (dissoc (ws/latest-entry :brian (:id w) :merged) :seq :at))))))))
 
+(def ^:private a-baseline
+  {:format       :baseline
+   :intent       {:seq 1}
+   :area         "order totalling"
+   :bounded-by   "everything that reads or writes a money amount on an order"
+   :shape        "The aggregate is the only thing that sums lines."
+   :modules      [{:id "mod-the-order-aggregate" :module "the order aggregate"
+                   :hides "the order in which lines are summed"
+                   :interface "an order's total"}]
+   :composition  "Only the aggregate can see the lines, so only it can sum them."
+   :load-bearing [{:id "c1" :property "the aggregate is the only summing path"
+                   :falsified-by "a caller outside the aggregate that reads lines and sums them"
+                   :readings [{:lens :parnas/dependency :verdict :on-interface
+                               :because "callers take the total, never the lines"}]
+                   :evidence ["src/order/aggregate.clj:12"]}]
+   :read         ["src/order/aggregate.clj"]})
+
+(def ^:private a-design
+  {:format     :design
+   :summary    "Round on the total."
+   :shape      "One rounding boundary at the aggregate."
+   :invariants ["a total is rounded exactly once"]
+   :standing   {:relation :conforms}
+   :baseline   {:seq 2 :relation :within}
+   :intent     {:seq 1}
+   :effort     :M})
+
+(deftest a-merge-names-the-design-its-pr-was-opened-under
+  ;; The poll sees a landing after the fact. A design appended between the PR
+  ;; opening and that poll is one the PR was never made under, so citing the
+  ;; newest would record D1's work as shipping D2.
+  (with-tmp
+    (fn [_]
+      (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
+      (let [id   (:id (ws/create! :brian {:stage :in-progress :external-refs []}))
+            add! #(ws/append-entry! :brian id {:kind %1} (pr-str %2))]
+        (add! :intent {:format    :intent
+                       :goal      "Totals match the invoice."
+                       :done-when ["a multi-line order's total equals the sum of its invoice lines"]})
+        (add! :baseline a-baseline)                                                   ; 2
+        (add! :design a-design)                                                       ; 3 — D1
+        (add! :design-approved {:format :design-approved :design {:seq 3} :at-seq 3})
+        (ws/add-ref! :brian id {:adapter :github :id "brian-study/brian#5"
+                                :url "https://gh/5" :title "Fix rounding"}
+                     {:design 3})                                                    ; :pr-opened under D1
+        (add! :design (assoc a-design :summary "Round per invoice line."))           ; 6 — D2
+        (with-redefs [gh/list-merged-prs (fn [_] {:status :ok
+                                                  :prs [{:number 5 :url "https://gh/5"
+                                                         :title "Fix rounding" :merged-at "2026-09-11T10:00:00Z"
+                                                         :base "main"}]})
+                      notion/keychain-token (constantly nil)]
+          (gm/poll-and-react! :brian cfg)
+          (is (= {:seq 3} (:design (ws/latest-entry :brian id :merged)))
+              "D1, which the PR's own :pr-opened names — not D2, the newest when the poll saw it"))))))
+
+(deftest a-collapsed-stack-lands-under-the-design-its-shipment-was-opened-under
+  ;; `/land` merges a stack's TOP PR, and the :pr-opened was filed for the
+  ;; BOTTOM one — so no record names the PR that lands, and the poll must not
+  ;; fall through to the newest design for it.
+  (with-tmp
+    (fn [_]
+      (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
+      (let [id   (:id (ws/create! :brian {:stage :in-progress :external-refs []}))
+            add! #(ws/append-entry! :brian id {:kind %1} (pr-str %2))]
+        (add! :intent {:format    :intent
+                       :goal      "Totals match the invoice."
+                       :done-when ["a multi-line order's total equals the sum of its invoice lines"]})
+        (add! :baseline a-baseline)                                                   ; 2
+        (add! :design a-design)                                                       ; 3 — D1
+        (add! :design-approved {:format :design-approved :design {:seq 3} :at-seq 3})
+        (ws/add-ref! :brian id {:adapter :github :id "brian-study/brian#5"
+                                :url "https://gh/5" :title "[1/2] Round the total"}
+                     {:design 3})                                                    ; :pr-opened under D1
+        (ws/add-ref! :brian id {:adapter :github :id "brian-study/brian#6"
+                                :url "https://gh/6" :title "[2/2] Round the total"})
+        (add! :design (assoc a-design :summary "Round per invoice line."))           ; 6 — D2
+        (with-redefs [gh/list-merged-prs (fn [_] {:status :ok
+                                                  :prs [{:number 6 :url "https://gh/6"
+                                                         :title "[2/2] Round the total"
+                                                         :merged-at "2026-09-11T10:00:00Z"
+                                                         :base "main"}]})
+                      notion/keychain-token (constantly nil)]
+          (gm/poll-and-react! :brian cfg)
+          (is (= {:seq 3} (:design (ws/latest-entry :brian id :merged)))
+              "D1, which the shipment's :pr-opened names — not D2, the newest when the poll saw it"))))))
+
+(deftest a-merge-nothing-cites-is-reported-rather-than-attributed-by-append-order
+  ;; The publisher named no design, so `record-pr-opened!` skipped its event and
+  ;; no record names the PR. D2 appended before the poll must not be handed the
+  ;; landing: the workstream still closes, the :merged is withheld, and the
+  ;; warning says why.
+  (with-tmp
+    (fn [_]
+      (sstate/write-state! "github-brian" {:type :github-merge :project :brian :reacted #{}})
+      (let [id   (:id (ws/create! :brian {:stage :in-progress :external-refs []}))
+            add! #(ws/append-entry! :brian id {:kind %1} (pr-str %2))]
+        (add! :intent {:format    :intent
+                       :goal      "Totals match the invoice."
+                       :done-when ["a multi-line order's total equals the sum of its invoice lines"]})
+        (add! :baseline a-baseline)                                                   ; 2
+        (add! :design a-design)                                                       ; 3 — D1
+        (binding [*err* (java.io.PrintWriter. (java.io.StringWriter.))]
+          (ws/add-ref! :brian id {:adapter :github :id "brian-study/brian#7"
+                                  :url "https://gh/7" :title "Fix rounding"}))      ; no :pr-opened
+        (add! :design (assoc a-design :summary "Round per invoice line."))           ; 5 — D2
+        (let [sw (java.io.StringWriter.)]
+          (with-redefs [gh/list-merged-prs (fn [_] {:status :ok
+                                                    :prs [{:number 7 :url "https://gh/7"
+                                                           :title "Fix rounding" :merged-at "2026-09-11T10:00:00Z"
+                                                           :base "main"}]})
+                        notion/keychain-token (constantly nil)]
+            (binding [*err* (java.io.PrintWriter. sw true)] (gm/poll-and-react! :brian cfg)))
+          (is (= :done (-> (ws/read-ws :brian id) :closed :outcome)) "the close does not wait on a citation")
+          (is (nil? (ws/latest-entry :brian id :merged))
+              "no :merged under D2, which nothing says the PR was made under")
+          (is (re-find #"brian-study/brian#7 .* names no :design" (str sw))
+              "the missing citation is reported, naming the PR"))))))
+
 (deftest a-stack-lands-one-merge-event
   ;; N layer PRs merge; the first closes the workstream and the rest hit the
   ;; already-closed no-op — so the timeline reads as one shipment, not N.
