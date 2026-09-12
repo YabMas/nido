@@ -26,6 +26,9 @@
    through `report/parse-event`, so an invalid one is not a bad baseline, it is no baseline."
   [scope]
   (cond-> {:format       :baseline
+           ;; Entry 1 on every ledger `baselined-workstream!` builds: the survey
+           ;; names the goal it was scoped for, and the boundary resolves it.
+           :intent       {:seq 1}
            :area         "the work plane's lanes"
            :bounded-by   "everything that advances a workstream from one stage to the next"
            :shape        "one namespace per verb, over the record layer"
@@ -43,9 +46,15 @@
          (finally (fs/delete-tree tmp)))))
 
 (defn- baselined-workstream!
-  "A workstream carrying one baseline entry. Returns its id."
+  "A workstream carrying an intent and the baseline scoped for it. Returns its id.
+
+   The intent goes on first because the baseline cites it, and a citation can
+   only name an entry already on the ledger."
   [project scope]
   (let [w (ws/create! project {:stage :triaging})]
+    (ws/append-entry! project (:id w) {:kind :intent}
+                      (pr-str {:format :intent :goal "advance a workstream"
+                               :done-when ["a lane moves it to the next stage"]}))
     (ws/append-entry! project (:id w) {:kind :baseline} (pr-str (a-baseline scope)))
     (:id w)))
 

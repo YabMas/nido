@@ -675,37 +675,11 @@
   [{:keys [health]}]
   (or (< (count health) 2) (apply distinct? (map :id health))))
 
-(def Baseline
-  "An area's current design, as it is — the yardstick every later judgement in the
-   workstream is made against. Authored BEFORE the design record and independent
-   of it, which is the whole point: an inference made by someone who already knows
-   the fix is an inference bent toward the fix.
-
-   :health is the one field that is a judgement rather than a reading, and it is
-   still an `is`: whether what is here holds, not whether it should be different.
-   It never carries a destination — routing needs the change, and a baseline by
-   someone who already knows the change is worth nothing. The design record that
-   cites this baseline is what routes them.
-
-   THE TEST FOR WHAT BELONGS HERE: every field must be fillable without knowing the
-   change. That is why nothing about effort, direction or intended shape appears —
-   those are the design record's business, and a field that needs them has crossed
-   from `is` to `ought`.
-
-   Scoped to the design that GOVERNS the behaviour, not to the files a change would
-   touch. Those differ, and the difference is where design flaws hide: the blast
-   radius is defined by the fix, while the flaw is routinely upstream of it. Hence
-   :bounded-by — the scoping decision is the first claim this record makes, and the
-   only guard against both failure modes (reading the whole codebase, and reading
-   three files and calling it a design).
-
-   Per workstream, and never written into the codebase. A checked-in current design
-   rots and then lies, which is worse than one that is absent, because it is
-   citable. /design §4 anticipates harvesting a written one from records like these
-   later; this is not that."
-  [:and
-   [:map {:closed true}
-    [:format           [:= :baseline]]
+(def ^:private baseline-fields
+  "The fields a :baseline carries in every era from the decomposition onward.
+   Spliced rather than repeated, so the pre-intent read shape and the current
+   write shape cannot drift in anything but the one field that separates them."
+  [[:format           [:= :baseline]]
     [:area             string?]
     [:bounded-by       string?]
     ;; The same boundary decision as `:bounded-by`, made RUNNABLE. `:bounded-by` says in prose
@@ -747,11 +721,54 @@
     ;; round has since repaired had no way to be told which record would
     ;; re-establish its premise. Same {:seq :why} a design already carries: an
     ;; author names what they superseded, and nobody derives it.
-    [:supersedes       {:optional true} Supersedes]]
+    [:supersedes       {:optional true} Supersedes]])
+
+(defn- baseline-shape
+  "One baseline era: the common fields plus what that era adds, under the two
+   uniqueness checks every era is held to."
+  [extra]
+  [:and (into [:map {:closed true}] (concat baseline-fields extra))
    [:fn {:error/message "health observation ids must be unique within a baseline"}
     distinct-health-ids?]
    [:fn {:error/message "claim and module ids must be unique within a baseline"}
     distinct-record-ids?]])
+
+(def BaselinePreIntent
+  "READ SHAPE — a baseline from before it named the intent it was scoped for.
+   Identical to the current shape but for that one field, which is why both are
+   built from `baseline-fields`. Not writable: a survey whose subject is
+   remembered rather than recorded is what the citation exists to end."
+  (baseline-shape []))
+
+(def Baseline
+  "An area's current design, as it is — the yardstick every later judgement in the
+   workstream is made against. Authored BEFORE the design record and independent
+   of it, which is the whole point: an inference made by someone who already knows
+   the fix is an inference bent toward the fix.
+
+   :health is the one field that is a judgement rather than a reading, and it is
+   still an `is`: whether what is here holds, not whether it should be different.
+   It never carries a destination — routing needs the change, and a baseline by
+   someone who already knows the change is worth nothing. The design record that
+   cites this baseline is what routes them.
+
+   THE TEST FOR WHAT BELONGS HERE: every field must be fillable without knowing the
+   change. That is why nothing about effort, direction or intended shape appears —
+   those are the design record's business, and a field that needs them has crossed
+   from `is` to `ought`.
+
+   Scoped to the design that GOVERNS the behaviour, not to the files a change would
+   touch. Those differ, and the difference is where design flaws hide: the blast
+   radius is defined by the fix, while the flaw is routinely upstream of it. Hence
+   :bounded-by — the scoping decision is the first claim this record makes, and the
+   only guard against both failure modes (reading the whole codebase, and reading
+   three files and calling it a design).
+
+   Per workstream, and never written into the codebase. A checked-in current design
+   rots and then lies, which is worse than one that is absent, because it is
+   citable. /design §4 anticipates harvesting a written one from records like these
+   later; this is not that."
+  (baseline-shape [[:intent IntentRelation]]))
 
 (def LoadBearingLegacy
   "READ SHAPE — a property from before the baseline moved up a level, carrying a
@@ -894,21 +911,29 @@
     distinct-health-ids?]])
 
 (def BaselineAny
-  "The READ contract for :baseline — three eras.
+  "The READ contract for :baseline — four eras.
 
    Dispatch reads the record rather than trusting a version marker: a
-   decomposition means it is not the oldest shape, and a :kind on any property
-   means it predates readings."
+   decomposition means it is not the oldest shape, a :kind on any property means
+   it predates readings, and an absent :intent means it predates the citation.
+
+   The :intent clause is LAST of the four because it is the only one that asks
+   after a field the newer shape adds rather than one an older shape still
+   carries: a legacy baseline has no :intent either, and testing for it first
+   would read every one of them as merely pre-intent and then fail on the
+   decomposition it has never had."
   [:multi {:dispatch (fn [b]
                        (cond
                          (not (contains? b :modules))            :legacy
                          (some :kind (:load-bearing b))          :kind-era
                          (not-every? :id (:load-bearing b))      :no-ids
+                         (not (contains? b :intent))             :pre-intent
                          :else                                   :current))}
-   [:current  Baseline]
-   [:no-ids   BaselineNoIds]
-   [:kind-era BaselineKindEra]
-   [:legacy   BaselineLegacy]])
+   [:current    Baseline]
+   [:pre-intent BaselinePreIntent]
+   [:no-ids     BaselineNoIds]
+   [:kind-era   BaselineKindEra]
+   [:legacy     BaselineLegacy]])
 
 (def BaselineRelation
   "How this change relates to the area's CURRENT design — the layer-2 question,

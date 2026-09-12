@@ -880,7 +880,8 @@
        membership hazard documented on that set is why this is pinned"))
 
 (def ^:private approvable-baseline
-  {:format :baseline :area "a" :bounded-by "b" :shape "s"
+  ;; :intent names entry 1 — the goal is appended before the survey it scopes.
+  {:format :baseline :intent {:seq 1} :area "a" :bounded-by "b" :shape "s"
    :modules [{:id "m" :module "m" :hides "h" :interface "i"}]
    :composition "c"
    :load-bearing [{:id "c1" :property "p" :falsified-by "f" :evidence ["src/a.clj:1"]}]
@@ -1477,20 +1478,25 @@
           (is (nil? (:report d)) "and no report until the reader opens one"))))))
 
 (defn- design-ledger!
-  "Seed a workstream whose ledger a :design record may legally join: a :baseline
-   at seq 1 and an :intent at seq 2, the two entries check-baseline-citation!
-   makes every design cite. Returns the ws-id."
+  "Seed a workstream whose ledger a :design record may legally join: an :intent
+   at seq 1 and a :baseline at seq 2, the two entries check-baseline-citation!
+   makes every design cite. Returns the ws-id.
+
+   The goal is appended FIRST because the survey now cites it, and a citation
+   can only name an entry already on the ledger. That order is the record model
+   made observable: a baseline is scoped for a goal, so the goal exists first."
   [id]
+  (workstream/append-entry! :brian id {:kind :intent}
+    (pr-str {:format :intent :goal "the goal" :done-when ["it is done"]}))
   (workstream/append-entry! :brian id {:kind :baseline}
-    (pr-str {:format :baseline :area "the area" :bounded-by "the bound" :shape "the shape"
+    (pr-str {:format :baseline :intent {:seq 1}
+             :area "the area" :bounded-by "the bound" :shape "the shape"
              :modules [{:id "mod-m" :module "m" :hides "how p is stored" :interface "p"}]
              :composition "m is the only reader of p, so p holds"
              :load-bearing [{:id "c1" :property "p holds"
                              :falsified-by "a caller that reads p without going through m"
                              :evidence ["src/x.clj:1"]}]
              :read ["src/x.clj"]}))
-  (workstream/append-entry! :brian id {:kind :intent}
-    (pr-str {:format :intent :goal "the goal" :done-when ["it is done"]}))
   id)
 
 (defn- design-entry
@@ -1502,8 +1508,8 @@
                     :summary    summary
                     :shape      "the shape"
                     :standing   {:relation :conforms}
-                    :baseline   {:seq 1 :relation :within}
-                    :intent     {:seq 2}
+                    :baseline   {:seq 2 :relation :within}
+                    :intent     {:seq 1}
                     :invariants ["the thing holds"]
                     :effort     :S}
              amends (assoc :supersedes {:seq amends :why "the premise moved"})))))
@@ -2846,7 +2852,8 @@
             row  #(first (filter (comp #{id} :ws-id) (work/list-workstreams :brian)))]
         (add! :intent {:format :intent :goal "g" :done-when ["d"]})
         (let [b (add! :baseline
-                      {:format :baseline :area "a" :bounded-by "b" :shape "s"
+                      {:format :baseline :intent {:seq 1}
+                       :area "a" :bounded-by "b" :shape "s"
                        :modules [{:id "m" :module "m" :hides "h" :interface "i"}]
                        :composition "c"
                        :load-bearing [{:id "c1" :property "p" :falsified-by "f"
