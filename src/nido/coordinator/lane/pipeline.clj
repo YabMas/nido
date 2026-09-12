@@ -175,8 +175,16 @@
    :blocker-answered :halt
    :implementation-plan      :implementation
    :implementation-completed :implementation
-   :review          :review
-   :review-analysis :review
+   ;; A stage's review belongs to the stage it reviews. `:baseline-review` and
+   ;; `:design-decision` already folded that way; `:review` was the one held out,
+   ;; and the only reason it was is that its subject is a working copy rather
+   ;; than a record. That is a fact about what the round READS, not about where
+   ;; on the arc the round happened.
+   :review          :implementation
+   ;; NOT the implementation's review, despite the name. This judges a RUN of the
+   ;; review loop rather than a rung of the arc, stands on no record here, and
+   ;; belongs beside the arc rather than on it.
+   :review-analysis :analysis
    :findings        :findings
    ;; THE WORKSTREAM'S, not the unit's, and all three share one off-arc stage.
    ;; A landing is never one unit's work: `/land` collapses a reviewed stack into
@@ -221,16 +229,17 @@
    vector rather than the key set of `stage-of-kind`: a halt is something that
    happens TO a unit, not a place it got to, and a line that put it in sequence
    would say a blocked unit had advanced to blocked."
-  [:intent :baseline :design :approval :implementation :review])
+  [:intent :baseline :design :approval :implementation])
 
 (def ^:private off-arc
   "Stages that interrupt the arc rather than lying on it, or sit beside it
    entirely. Reported beside the spine and never in it — see `arc-stages`.
 
-   `:landing` is the second kind: a halt is something that happens TO a unit,
-   while a landing is the WORKSTREAM's own business, carrying work that may not
-   be one unit's at all."
-  #{:halt :retraction :findings :landing})
+   Two kinds, and the difference is whose business the stage is. A halt or a
+   retraction happens TO a unit. A `:landing` is the WORKSTREAM's own, carrying
+   work that may not be one unit's at all, and an `:analysis` judges a run of the
+   review loop rather than any rung of the arc."
+  #{:halt :retraction :findings :landing :analysis})
 
 (defn ^{:malli/schema [:=> [:cat :any [:? :map]] :any]}
   arc
