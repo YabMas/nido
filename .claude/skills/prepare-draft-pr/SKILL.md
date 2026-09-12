@@ -147,12 +147,22 @@ poller needs to react when the PR later merges.
    bb nido:workstream:ref:add :project <project> :ws-id <workstream-id> \
      :adapter github :id "<owner>/<repo>#<number>" :url "<pr-url>" :title "<pr-title>" \
      :summary "<one line, in design terms: what this makes true of the system —
-                the record's :summary, not a restatement of the diff. Refs BR-####>"
+                the record's :summary, not a restatement of the diff. Refs BR-####>" \
+     :design <seq of the design this work was done under>
    ```
 
-   One fact, one call. `:summary` is the only part nido cannot write for itself,
-   which is why it rides here rather than in a second step you could forget — and
-   for a stack, only the first ref emits the event (see Publishing a stack).
+   One fact, one call. `:summary` and `:design` are the parts nido cannot write
+   for itself, which is why they ride here rather than in a second step you could
+   forget — and for a stack, only the first ref emits the event (see Publishing a
+   stack).
+
+   **`:design` is required whenever the workstream has a `:design` record**
+   (`bb nido:workstream:show`); omit it when there is none. Name the design you
+   built against — for approved work, the one the `:design-approved` entry names.
+   **Do not copy the newest `:design` seq off the ledger**: a design appended
+   while you worked is one this PR was never made under. Without it on a designed
+   workstream the ref is still stamped but the `:pr-opened` event is skipped, and
+   the merge poller then has no citation of this PR to copy onto the landing.
 
 7. **Optional — record the PR on the Notion ticket.** If you have the ticket's
    Notion page-id (from the `:notion` external-ref on the workstream, visible in
@@ -367,15 +377,19 @@ the base of a stacked PR.
 
 The merge poller correlates by these and matches *any* ref on the workstream, so
 all N are needed. Stamp the **bottom PR first** and give that call the `:summary`
-— nido files one `:pr-opened` from the first `:github` ref a workstream receives
-and stays silent for the rest, so the timeline reads as one shipment rather than
-N while the refs keep the per-layer detail:
+and the `:design` (step 6 of the single-PR path says which design) — nido files
+one `:pr-opened` from the first `:github` ref of a shipment and stays silent for
+the rest, so the timeline reads as one shipment rather than N while the refs keep
+the per-layer detail. (A workstream that already landed and reopened is on its
+NEXT shipment, so its bottom ref files a fresh `:pr-opened` and needs the
+`:design` just as much.)
 
 ```bash
 cd ..
 bb nido:workstream:ref:add :project <project> :ws-id <workstream-id> \
   :adapter github :id "<owner>/<repo>#<bottom-number>" :url "<bottom-pr-url>" :title "<stack title>" \
-  :summary "<one line: what the stack does; N layers: <slug>, <slug>, <slug>; refs BR-####>"
+  :summary "<one line: what the stack does; N layers: <slug>, <slug>, <slug>; refs BR-####>" \
+  :design <seq of the design this work was done under>
 ```
 
 Then repeat without `:summary` for every remaining PR in the stack.
@@ -450,8 +464,8 @@ the fix is a **new** PR — not an edit of the merged one:
   `:delivery-claim` config** — both write a line no automation honours.
 - **Stamping only one `:github` ref for a stack** — the poller needs one per PR.
 - **Stamping a stack's layers before its bottom PR** — the first `:github` ref
-  is the one that files `:pr-opened`, so the bottom PR (and its `:summary`) goes
-  first; the rest are silent.
+  of a shipment is the one that files `:pr-opened`, so the bottom PR (and its
+  `:summary` and `:design`) goes first; the rest are silent.
 - **Publishing layers whose commits lack a `Layer:` trailer or review brief** —
   the PR bodies are generated from them; fix the descriptions first.
 - **Pushing the session bookmark** — only `<session>--*` goes up.

@@ -454,6 +454,46 @@
                                    " — an amendment naming an already-replaced goal forks the chain"))
                             {:seq n :kind kind :superseded (vec (sort dead))}))))))))
 
+(def ^:private trail-kinds
+  "The records that say something HAPPENED, each of which names the design it
+   happened under. The same four `reentry/trail-kinds` attributes, and the two
+   lists have to stay in step: a kind that gains a monotone clause there and no
+   citation here is a kind attributed by append order for ever."
+  #{:implementation-completed :review :pr-opened :merged})
+
+(defn- check-trail-attribution!
+  "A trail record names the design it was made under, whenever there is one to
+   name.
+
+   CONDITIONAL ON THE LEDGER, which is why it is here and not in the schema: a
+   workstream that holds no design has nothing for the record to cite, and work
+   done before any design exists cannot be attributed to one. Calling that a
+   violation would be inventing a generation to blame — the same refusal
+   `reentry/generation` already makes by answering nil.
+
+   Where a design DOES exist the citation is required, because the alternative is
+   what the ledger did before: `:implementation-completed`, `:review`,
+   `:pr-opened` and `:merged` cited nothing, so append order was the whole of the
+   evidence. That is a fact about how the ledger was written rather than about
+   what the records say, and it cannot survive a workstream holding more than one
+   unit — `:merged` least of all, since `reopen!` clears `:closed` for the next
+   landing and every earlier one stays in the ledger for ever."
+  [w kind payload]
+  (when (contains? trail-kinds kind)
+    (let [designs (filter #(= :design (:kind %)) (:entries w))
+          r       (edn/read-string payload)]
+      (when (and (seq designs) (nil? (get-in r [:design :seq])))
+        (throw (ex-info (str "A " (name kind) " must name the design it was made"
+                             " under — this workstream holds " (count designs)
+                             ", so append order is not evidence")
+                        {:kind kind :designs (mapv :seq designs)})))
+      ;; Only the REQUIREMENT is conditional on a design existing. A citation
+      ;; that is supplied must resolve whatever the ledger holds, or a record on
+      ;; a design-less ledger carries an invented :under that `trail-standing`
+      ;; later reads as current.
+      (cites! w r [:design :seq] #{:design}
+              (str (str/capitalize (name kind)) " :design")))))
+
 (defn- check-seam-phase-ref!
   "A seam that says a phase closes it names that phase by its :claim. Malli sees
    the seam and the phase list in the same record but cannot express \"this string
@@ -615,6 +655,43 @@
     (when-let [unindexed (seq (remove indexed (entry-filenames project ws-id)))]
       (vec unindexed))))
 
+(defn ^{:malli/schema [:=> [:cat :Workstream] [:maybe :int]]}
+  live-design-seq
+  "The :seq of the newest :design on `w`, or nil when it holds none.
+
+   NOT what a trail record cites. Every one of them records work, and cites the
+   design that work named: a PR the one its publisher names, the merge poller
+   the PR's own records, the review loop the design its rounds judged against.
+   The newest is a different answer exactly when it matters — after a design is
+   appended while the work was being done. The two writers outside this
+   namespace fall back here only where nothing names one, which is why this is
+   public — a second implementation of `which design is current` is how the
+   ledger and its writers come to disagree.
+
+   Off the INDEX, so it parses nothing."
+  [w]
+  (when-let [seqs (seq (keep #(when (= :design (:kind %)) (:seq %)) (:entries w)))]
+    (apply max seqs)))
+
+(defn- index-row
+  "The index row for an entry: what `entry` carried, plus the ledger's own
+   stamps, plus the design it names.
+
+   `:under` MIRRORS the record's `:design :seq` onto the index, and is the one
+   field here that comes out of the payload. It is a citation the author wrote,
+   copied the way `:kind` already is — not a conclusion, which is what the index
+   may never hold. It is mirrored because `reentry/trail-standing` reads the
+   index and parses nothing, deliberately: that is what keeps the re-entry clamp
+   affordable on a board computing a position per rendered row, and an
+   attribution only readable by parsing every trail entry would have cost exactly
+   that. Absent on rows written before the citation existed, where
+   `reentry/generation` is still the answer."
+  [entry seq-n payload rel]
+  (let [under (when (contains? trail-kinds (:kind entry))
+                (get-in (edn/read-string payload) [:design :seq]))]
+    (cond-> (assoc entry :seq seq-n :at (clock/now-iso) :file rel)
+      under (assoc :under under))))
+
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map :string] :Path]}
   append-entry!
   "Write an immutable entry file under entries/ and record it in :entries.
@@ -653,6 +730,7 @@
             _     (check-baseline-citation! w (:kind entry) payload)
             _     (check-standing-citations! w (:kind entry) payload)
             _     (check-goal-is-live! w (:kind entry) payload)
+            _     (check-trail-attribution! w (:kind entry) payload)
             _     (check-seam-phase-ref! (:kind entry) payload)
             _     (check-implementation-approved! w (:kind entry))
             fname (format "%04d-%s.%s" seq-n (name (:kind entry)) ext)
@@ -661,7 +739,7 @@
         (refuse-if-taken! abs seq-n)
         (io/write-text! abs payload)
         (write! (update w :entries (fnil conj [])
-                        (assoc entry :seq seq-n :at (clock/now-iso) :file rel)))
+                        (index-row entry seq-n payload rel)))
         abs))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :int :map :string] :map]}
@@ -702,6 +780,7 @@
                 _     (check-baseline-citation! w (:kind entry) payload)
                 _     (check-standing-citations! w (:kind entry) payload)
                 _     (check-goal-is-live! w (:kind entry) payload)
+                _     (check-trail-attribution! w (:kind entry) payload)
                 _     (check-seam-phase-ref! (:kind entry) payload)
             _     (check-implementation-approved! w (:kind entry))
                 fname (format "%04d-%s.%s" seq-n (name (:kind entry)) ext)
@@ -710,7 +789,7 @@
             (refuse-if-taken! abs seq-n)
             (io/write-text! abs payload)
             (write! (update w :entries (fnil conj [])
-                            (assoc entry :seq seq-n :at (clock/now-iso) :file rel)))
+                            (index-row entry seq-n payload rel)))
             abs))))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :keyword] [:maybe :LedgerEntry]]}
@@ -792,26 +871,66 @@
       (->> (fs/list-dir d) (filter fs/directory?) (mapv #(str (fs/file-name %))))
       [])))
 
+(defn- published-design
+  "The design the work a PR publishes was done under: what the publisher names,
+   else what an implementation record listing this PR among its :artifacts names.
+   nil when neither does.
+
+   NEVER the newest design. A PR publishes work already done, and a design
+   appended while it was being done is one the work was never made under — citing
+   the newest would record D1's work as published under D2, and the merge poller
+   copies this citation onto the landing."
+  [w {:keys [id url]} design]
+  (or design
+      (->> (:entries w)
+           (filter #(and (:under %) (= :implementation-completed (:kind %))))
+           (filter (fn [e]
+                     (some #(and (= :pr (:kind %))
+                                 (or (and id (= (str/lower-case id)
+                                                (some-> (:ref %) str/lower-case)))
+                                     (and url (= url (:url %)))))
+                           (:artifacts (read-entry-at w (:seq e))))))
+           last
+           :under)))
+
 (defn- record-pr-opened!
-  "Append the :pr-opened event for a freshly-stamped :github ref, unless this
-   workstream already carries one. Stacks stamp one ref per layer but ship once,
-   so the FIRST layer's ref is the shipment's mark on the timeline and the rest
-   are silent — the per-layer detail already lives in the refs themselves and in
+  "Append the :pr-opened event for a freshly-stamped :github ref, unless a
+   shipment is already OUTSTANDING — a :pr-opened with no :merged after it.
+   Stacks stamp one ref per layer but ship once, so the FIRST layer's ref is
+   that shipment's mark on the timeline and the rest are silent — the per-layer
+   detail already lives in the refs themselves and in
    :implementation-completed's :artifacts.
 
-   Skipped (loudly) without a :url and :title, which PrOpened requires. The ref
-   is already written by then: correlation is what the merge poller needs, and it
-   must never be lost to a malformed event."
-  [project w {:keys [url title]} summary]
-  (when-not (some #(= :pr-opened (:kind %)) (:entries w))
-    (if (or (str/blank? url) (str/blank? title))
-      (binding [*err* *err*]
-        (.println ^java.io.PrintWriter *err*
-                  (str "WARN: github ref on " (:id w)
-                       " carries no :url/:title; skipping the :pr-opened ledger event")))
-      (append-entry! project (:id w) {:kind :pr-opened}
-                     (pr-str (cond-> {:format :pr-opened :url url :title title}
-                               (not (str/blank? summary)) (assoc :summary summary)))))))
+   Outstanding rather than \"carries one at all\", because `reopen!` keeps the
+   entries: a workstream that landed and came back is on its NEXT shipment, and
+   suppressing that one discards the citation the publisher handed us. Nothing
+   else holds it — `github-merge/merge-design` reads the shipment's :pr-opened
+   when no record of the new PR names a design yet — so the later landing would
+   be skipped for naming none, after the workstream had already closed on it.
+
+   Skipped (loudly) without a :url and :title, which PrOpened requires, and on a
+   ledger holding a design when nothing names the one the work was done under —
+   the append would refuse it, and a guessed citation is the thing it refuses.
+   The ref is already written by then: correlation is what the merge poller
+   needs, and it must never be lost to a malformed event."
+  [project w {:keys [url title] :as ref} {:keys [summary design]}]
+  (when-not (= :pr-opened (:kind (last (filter #(#{:pr-opened :merged} (:kind %))
+                                               (:entries w)))))
+    (let [d    (published-design w ref design)
+          skip (cond
+                 (or (str/blank? url) (str/blank? title))
+                 "carries no :url/:title"
+                 (and (nil? d) (live-design-seq w))
+                 "names no :design, and no implementation record listing it does")]
+      (if skip
+        (binding [*err* *err*]
+          (.println ^java.io.PrintWriter *err*
+                    (str "WARN: github ref on " (:id w) " " skip
+                         "; skipping the :pr-opened ledger event")))
+        (append-entry! project (:id w) {:kind :pr-opened}
+                       (pr-str (cond-> {:format :pr-opened :url url :title title}
+                                 (not (str/blank? summary)) (assoc :summary summary)
+                                 d (assoc :design {:seq d}))))))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId :map [:? [:maybe :map]]] :Workstream]}
   add-ref!
@@ -823,9 +942,10 @@
    expect — the ref is load-bearing (the merge poller correlates on it) so it
    always landed, while the ledger event, being merely informative, was dropped on
    more than half the PRs. One fact, one call, nothing left to remember. `opts`
-   may carry a :summary — the one part of the event nido cannot synthesize."
+   may carry the two parts of the event nido cannot synthesize: a :summary, and
+   the :design seq the published work was done under."
   ([project ws-id ref] (add-ref! project ws-id ref nil))
-  ([project ws-id ref {:keys [summary]}]
+  ([project ws-id ref opts]
    (let [w (or (read-ws project ws-id)
                (throw (ex-info "Workstream not found" {:project project :ws-id ws-id})))
          dup? (some #(and (= (:adapter %) (:adapter ref)) (= (:id %) (:id ref)))
@@ -834,7 +954,7 @@
        w
        (let [w' (write! (update w :external-refs (fnil conj []) ref))]
          (when (= :github (:adapter ref))
-           (record-pr-opened! project w' ref summary))
+           (record-pr-opened! project w' ref opts))
          w')))))
 
 (defn ^{:malli/schema [:=> [:cat :ProjectName :WorkstreamId] :any]}

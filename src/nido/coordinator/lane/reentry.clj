@@ -65,11 +65,18 @@
   "The :seq of the newest design appended BEFORE `n` — which design a record
    written at `n` was made under.
 
-   Positional, and that is a seam rather than an oversight: `:implementation-
-   completed`, `:review` and `:pr-opened` cite nothing at all, so append order is
-   the only thing that can attribute them. It is the same evidence a person
-   reading the timeline would use, and the answer rides on the result so a reader
-   can disagree with it.
+   THE PRE-CONTRACT READING, and only that. A trail record now NAMES the design
+   it was made under and the index carries that citation as `:under`, so append
+   order is no longer evidence about anything written since. What remains is
+   every record written before the citation existed, which carries none and can
+   be attributed no other way — so this is kept for them, and no writer may
+   produce a record it applies to.
+
+   Positional, which is what made it a seam while it was the only answer: it
+   reports a fact about the ORDER entries were written in rather than about what
+   the records say. Over the pre-contract region that is the same evidence a
+   person reading the timeline would use, and the answer rides on the result so a
+   reader can disagree with it.
 
    nil when no design precedes `n`. That is a refusal, not a default: work done
    before any design exists cannot be attributed to one, and calling it stale
@@ -101,9 +108,14 @@
                      (map :seq)
                      sort
                      vec)
+        ;; The citation first, the walk only for rows that predate it. The two
+        ;; cannot disagree: a row carrying `:under` was written under this
+        ;; contract, where append order stopped being evidence, and one without
+        ;; it was written before the field existed at all.
         graded  (into []
                       (keep (fn [e]
-                              (when-let [g (generation designs (:seq e))]
+                              (when-let [g (or (:under e)
+                                               (generation designs (:seq e)))]
                                 {:kind (:kind e) :seq (:seq e) :under g})))
                       (filter #(trail-kinds (:kind %)) (:entries w)))]
     {:current (into #{} (comp (filter #(>= (:under %) current)) (map :kind)) graded)

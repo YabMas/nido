@@ -115,12 +115,13 @@
 (deftest an-approved-design-with-a-current-trail-needs-no-re-entry
   (with-tmp
     (fn [_]
-      (let [[id _] (approved!)]
+      (let [[id _ d1] (approved!)]
         (is (nil? (reentry/of :brian id)))
         (testing "and still none once work is done UNDER that design"
           (ws/append-entry! :brian id {:kind :implementation-completed}
                             (pr-str {:format :implementation-completed
-                                     :summary "done" :artifacts []}))
+                                     :summary "done" :artifacts []
+                                     :design {:seq d1}}))
           (is (nil? (reentry/of :brian id))))))))
 
 (deftest a-workstream-with-no-design-has-nothing-to-come-back-to
@@ -166,7 +167,8 @@
     (fn [_]
       (let [[id add d1] (approved!)]
         (add :implementation-completed {:format :implementation-completed
-                                        :summary "done" :artifacts []})
+                                        :summary "done" :artifacts []
+                                        :design {:seq d1}})
         (is (nil? (reentry/of :brian id)) "current while the design is")
         (let [b (get-in (ws/latest-entry :brian id :design) [:baseline :seq])
               d2 (add :design (a-design b d1))
@@ -191,7 +193,8 @@
     (fn [_]
       (let [[id add d1] (approved!)]
         (add :implementation-completed {:format :implementation-completed
-                                        :summary "done" :artifacts []})
+                                        :summary "done" :artifacts []
+                                        :design {:seq d1}})
         (let [b  (get-in (ws/latest-entry :brian id :design) [:baseline :seq])
               d2 (add :design (a-design b d1))]
           (is (= :approval (:stage (reentry/of :brian id)))
@@ -210,7 +213,8 @@
     (fn [_]
       (let [[id add d1] (approved!)]
         (add :implementation-completed {:format :implementation-completed
-                                        :summary "done" :artifacts []})
+                                        :summary "done" :artifacts []
+                                        :design {:seq d1}})
         (let [b  (get-in (ws/latest-entry :brian id :design) [:baseline :seq])
               d2 (add :design (a-design b d1))
               _  (add :design-approved {:format :design-approved :design {:seq d2}
@@ -236,15 +240,17 @@
     (fn [_]
       (let [[id add d1] (approved!)]
         (add :implementation-completed {:format :implementation-completed
-                                        :summary "first" :artifacts []})
-        (add :pr-opened {:format :pr-opened :url "u" :title "t"})
+                                        :summary "first" :artifacts []
+                                        :design {:seq d1}})
+        (add :pr-opened {:format :pr-opened :url "u" :title "t" :design {:seq d1}})
         (let [b  (get-in (ws/latest-entry :brian id :design) [:baseline :seq])
               d2 (add :design (a-design b d1))]
           (add :design-approved {:format :design-approved :design {:seq d2} :at-seq d2})
           (is (= :implementation (:stage (reentry/of :brian id)))
               "both the implementation and the PR are behind")
           (add :implementation-completed {:format :implementation-completed
-                                          :summary "redone" :artifacts []})
+                                          :summary "redone" :artifacts []
+                                          :design {:seq d2}})
           (let [r (reentry/of :brian id)]
             (is (= :publication (:stage r))
                 "the implementation is current again, so the PR is what is owed")
