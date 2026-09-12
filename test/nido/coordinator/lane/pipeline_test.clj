@@ -578,7 +578,8 @@
       (add! :design-decision (a-decision d :proceed))
       (add! :design-approved {:format :design-approved :design {:seq d} :at-seq d})
       (add! :implementation-completed {:format :implementation-completed
-                                       :summary "done" :artifacts []})
+                                       :summary "done" :artifacts []
+                                       :design {:seq d}})
       [b d])))
 
 (deftest an-implementation-under-a-superseded-design-no-longer-reads-as-implemented
@@ -615,8 +616,9 @@
             ;; is exactly what the ledger now demands before it will write one.
             (add-past-the-refusal! id :implementation-completed
                                    {:format :implementation-completed
-                                    :summary "done" :artifacts []})
-            (add! :pr-opened {:format :pr-opened :url "u" :title "t"})
+                                    :summary "done" :artifacts []
+                                    :design {:seq d}})
+            (add! :pr-opened {:format :pr-opened :url "u" :title "t" :design {:seq d}})
             (let [r (p/of :brian id)]
               (is (= :design-decided (:at r))
                   "a draft PR does not stand in for the grant nobody gave")
@@ -707,14 +709,15 @@
     (fn [_]
       (let [[id add!] (ledger)
             [b d1] (approved-and-implemented! add!)]
-        (add! :pr-opened {:format :pr-opened :url "u" :title "t"})
+        (add! :pr-opened {:format :pr-opened :url "u" :title "t" :design {:seq d1}})
         (is (= :published (:at (p/of :brian id))))
         (let [d2 (add! :design (assoc (a-design b) :supersedes {:seq d1 :why "recut"}))]
           (add! :design-decision (a-decision d2 :proceed))
           (add! :design-approved {:format :design-approved :design {:seq d2} :at-seq d2})
           (is (= :design-approved (:at (p/of :brian id))) "back to the implementation")
           (add! :implementation-completed {:format :implementation-completed
-                                           :summary "redone" :artifacts []})
+                                           :summary "redone" :artifacts []
+                                           :design {:seq d2}})
           (let [r (p/of :brian id)]
             (is (= :implemented (:at r))
                 "and the redone work counts — the superseded entry beside it is

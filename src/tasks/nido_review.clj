@@ -277,8 +277,15 @@
   (try
     (when-let [{:keys [project session]} (lifecycle/session-from-cwd cwd)]
       (when-let [ws-id (csession/workstream-id-for (keyword project) session)]
-        (ws/append-entry! (keyword project) ws-id {:kind :review}
-                          (pr-str (review-event final report report-path)))
+        ;; The design the run's last round JUDGED against, which it read at the
+        ;; round's start — not the newest at append time, which a design written
+        ;; mid-run would make one no reviewer saw. The live one only for a run
+        ;; that died before any round read a design.
+        (let [d (or (get-in final [:design :seq])
+                    (ws/live-design-seq (ws/read-ws (keyword project) ws-id)))]
+          (ws/append-entry! (keyword project) ws-id {:kind :review}
+                            (pr-str (cond-> (review-event final report report-path)
+                                      d (assoc :design {:seq d})))))
         ws-id))
     (catch Exception e
       (binding [*out* *err*]
