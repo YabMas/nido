@@ -720,6 +720,30 @@
       (is (str/includes? p "principles: one; two"))
       (is (str/includes? p "because: the stance is wrong here")))))
 
+(deftest a-judging-round-is-shown-no-provenance
+  ;; The rule the two judging prompts kept by accident. Both transcribed a record
+  ;; field by field and never reached for :supersedes, so nothing said the
+  ;; omission was intended — and an amendment is the first thing on this arc that
+  ;; carries a delta at all. A round told it is looking at an amendment judges the
+  ;; delta: it reads a small change as small and stops asking whether the whole
+  ;; record still serves the goal that moved.
+  (let [d (assoc a-design :supersedes {:seq 41 :why "the goal moved"})
+        b {:format :baseline :area "the arc" :bounded-by "the vocabulary"
+           :supersedes {:seq 40 :why "corrected against the code"}}]
+    (testing "the decision prompt"
+      (let [p (record/design-prompt {:design d :baseline b})]
+        (is (not (str/includes? p "41")))
+        (is (not (str/includes? p "the goal moved")))
+        (is (not (str/includes? p "corrected against the code")))
+        (is (str/includes? p "rounding moves to one point")
+            "and the record itself is still shown — this withholds provenance,
+             not the subject")))
+    (testing "the verification prompt"
+      (let [p (record/baseline-prompt {:baseline b})]
+        (is (not (str/includes? p "corrected against the code")))
+        (is (str/includes? p "the arc")
+            "same: the area is shown, that it replaced an earlier survey is not")))))
+
 (deftest an-extends-declaration-says-where-it-lands
   (let [d (assoc a-design :baseline {:seq 3 :relation :extends
                                      :at "the lens registry" :note "a new lens"})

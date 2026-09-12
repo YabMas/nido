@@ -322,6 +322,25 @@
                "and not whether the baseline is: a defect in either is a different\n"
                "round's finding.\n")))))
 
+(defn- judged-alone
+  "A record with its provenance taken off, for a prompt that JUDGES it.
+
+   A judging round is shown the current record and the current foundation, and is
+   never shown that either replaced an earlier one. A round told it is looking at
+   an amendment judges the delta — it reads a small change as a small change, and
+   stops asking whether the whole record still serves the goal that moved. The
+   delta is what an AUTHORING handler needs and exactly what a judging one must
+   not see, which is why `amend-prompt` and `design-amend-prompt` do not go
+   through here and `design-amend-prompt` tells its author to set `:supersedes`.
+
+   By NAME, and that is the whole of what this adds: both judging prompts already
+   omitted the field, but they omitted it by transcribing a record field by field
+   and never reaching for it. Two independent transcriptions of one shape keep a
+   rule only until someone adds a field to both, and an amendment is the first
+   thing on this arc that carries a delta at all."
+  [record]
+  (dissoc record :supersedes))
+
 (defn ^{:malli/schema [:=> [:cat :map] :string]}
   baseline-prompt
   "The verification prompt.
@@ -333,7 +352,8 @@
    counterexample that would refute it, so the question is never `is this any
    good` but `does that specific thing exist`."
   [{:keys [baseline disputes confirmed stance]}]
-  (str
+  (let [baseline (judged-alone baseline)]
+   (str
    "You are checking whether a BASELINE of an area is TRUE, and whether it is\n"
    "ENOUGH. You are NOT designing anything, you are not reviewing the code for\n"
    "defects, and you are not judging whether the area is good.\n\n"
@@ -464,7 +484,7 @@
           "only. It tells you what the project considers essential versus\n"
           "accidental and what a boundary is FOR. Read the decomposition through\n"
           "it; never cite it against a line of code.\n\n" stance "\n"))
-   (level-reminder)))
+   (level-reminder))))
 
 (defn- baseline-block
   "The baseline the design was made against, at the level the design round needs it.
@@ -558,7 +578,9 @@
   design-prompt
   "The decision prompt. Derives what can be derived; hands the rest over."
   [{:keys [design baseline stance intent disputes]}]
-  (str
+  (let [design   (judged-alone design)
+        baseline (judged-alone baseline)]
+   (str
    "You are deciding whether a change should be EXECUTED, before any code is\n"
    "written. This is the last cheap moment to say it should not be.\n\n"
    "You do not make the decision. A human does. Your job is to derive\n"
@@ -686,7 +708,7 @@
    "has to answer, in one or two sentences, with everything you derived already\n"
    "taken off the table. Never answer it yourself."
    (disputes-block disputes)
-   (level-reminder :commitment)))
+   (level-reminder :commitment))))
 
 ;; ── Running a round ─────────────────────────────────────────────────────────
 
